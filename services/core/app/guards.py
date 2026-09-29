@@ -4553,16 +4553,54 @@ def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim 
 # wrongly-corrected honest reply makes the guard the liar). Neither reads the
 # owner's message (owner ruling 2026-09-27: no phrase matchers on his words).
 # Both run in core's event loop on every reply, so neither does work per match
-# that grows with the reply: each cut is found once per line or clause and
+# that grows with the reply: every cut is found once per line or clause and
 # compared by position.
+#
+# Fix round 1 (2026-09-29, the adversarial review of bc89e231) tightened both,
+# because a "do it now" nudge turns a false fire into an ACTION nobody asked
+# for — the review drove a proposal ("I would run `device_run […]`") into a
+# real recursive delete, and a recap ("today I opened Notepad") into a
+# relaunch:
+#   * written_call fires only on a call inside CODE formatting that is framed
+#     as HER action NOW (C2); prose, examples, proposals, questions, negations
+#     and recaps are never calls;
+#   * device_completion reads only ACTION claims about THIS turn by HER (C2),
+#     and backs one only with a successful span she called, of a tool that
+#     performs that action, on the device she named (C1) — never a read, a
+#     connectivity fact or a backend check.
+
+# A claim or a call about an EARLIER time is a recap, never "done now". The
+# family's _PRIOR_TIME, plus the recap framings the review found: "today", "this
+# morning", "at 15:56", "on Monday", "in our last chat", "here is what we did".
+_WEEKDAY = r"(?:mon|tues|wednes|thurs|fri|satur|sun)day"
+_RECAP_TIME = re.compile(
+    r"\b(?:today|tonight|this\s++(?:morning|afternoon|evening|week)"
+    r"|at\s++\d{1,2}(?::\d{2})?+(?:\s*+[ap]\.?m\.?)?+(?![\w:])"
+    rf"|on\s++(?:the\s++)?{_WEEKDAY}|on\s++the\s++\d{{1,2}}(?:st|nd|rd|th)"
+    r"|(?:last|previous|earlier)\s++(?:time|turn|chat|conversation|session|message|reply)"
+    r"|in\s++our\s++(?:last|previous|earlier)\s++(?:chat|conversation|session|talk)"
+    r"|here(?:['’]s|\s++is)\s++what\s++(?:we|I)\s++(?:did|ran|have\s++done)"
+    r"|what\s++(?:we|I)\s++did|so\s++far)\b",
+    re.I,
+)
+
+
+def _recap(text: str) -> bool:
+    """A past-time or recap framing anywhere in `text`."""
+    return _PRIOR_TIME.search(text) is not None or _RECAP_TIME.search(text) is not None
+
+
+# A markdown list item: its framing is its list's, not its own.
+_LIST_ITEM = re.compile(r"^\s*+(?:[-*+•]|\d{1,3}[.)])\s")
 
 
 @dataclass(frozen=True)
 class WrittenCallClaim:
-    """Her reply wrote a call to one of her own tools as text, and no span of
-    that tool ran this turn. `tools` names each such tool once, in the order
-    written; `phrase` is the first such call as written, for the guard span.
-    There is no argument field on purpose: nothing may run what she wrote."""
+    """Her reply wrote a call to one of her own tools as text, framed as her
+    action now, and no span of that tool ran this turn. `tools` names each
+    such tool once, in the order written; `phrase` is the first such call as
+    written, for the guard span. There is no argument field on purpose:
+    nothing may run what she wrote."""
 
     tools: tuple[str, ...]
     phrase: str
@@ -4587,25 +4625,63 @@ _CALL_ARGS = (
     r"|[ \t]++(?:[\"'“‘]|--[A-Za-z]))"
 )
 # An EXAMPLE, which is an explanation of a tool and not a call to it: "e.g.",
-# "for example", "such as", "an example", or a label — "Example:", "**Usage**:",
-# "Syntax:" — or a heading that names examples. Read on the call's own line
-# before it, and on the lines just above (a fence's intro sits above its
-# opener). "usage" and "syntax" count only as a label or "the syntax is": bare,
-# they are "disk usage" and "a syntax error", the very lines a real check
-# follows.
+# "for example", "such as", "like", "an example", a label ("Example:",
+# "**Usage**:", "Syntax:"), a heading that names examples, or a verb of showing
+# ("let me show you what it looks like"). "usage" and "syntax" count only as a
+# label or "the syntax is": bare, they are "disk usage" and "a syntax error".
 _EXAMPLE_INTRO = re.compile(
     r"(?<![\w.])(?:e\.g\.|i\.e\.)"
     r"|\bfor\s++(?:example|instance)\b"
-    r"|\bsuch\s++as\b"
+    r"|\bsuch\s++as\b|\blike\b"
     r"|\b(?:an?|another|this|that|the)\s++example\b"
     r"|\bexamples?\s++(?:calls?|of|usage)\b"
     r"|\b(?:examples?|usage|syntax|signature)\W{0,3}:"
     r"|\b(?:syntax|signature|usage)\s++(?:is|would\s++be|looks\s++like)\b"
+    r"|\b(?:show|explain|describe|illustrate|demonstrate)\b"
     r"|^\s*+#{1,6}\s[^\n]*\bexamples?\b",
     re.I,
 )
-# How many non-blank lines above a call may introduce it as an example.
-_WRITTEN_CALL_INTRO_LINES = 2
+# HER ACTION NOW, the one framing that makes code a call (C2): a first-person
+# intent ("I'll…", "let me…"), a first-person present of doing ("I'm running…"),
+# or a clause that opens on the doing ("Now…", "Running…", "Launching…").
+_WRITTEN_CALL_LEAD = re.compile(
+    r"\b(?:I['’]ll|I\s++will|I['’]m\s++going\s++to|I\s++am\s++going\s++to|I['’]m\s++gonna"
+    r"|let\s++me|let['’]s)\b"
+    r"|\bI(?:['’]m|\s++am)\s++(?:now\s++)?(?:running|calling|executing|launching|opening|starting"
+    r"|sending|checking|trying|using|invoking)\b"
+    r"|^[\W_]*+(?:\d{1,3}[.)]\s*+)?[\W_]*+(?:now|running|launching|calling|executing|opening"
+    r"|starting|sending|checking|invoking|triggering)\b",
+    re.I,
+)
+# What makes code NOT her action now, read on its framing:
+#   * a negation governing the doing — "do not run", "I have not run", "I will
+#     never call", "without running" (a bare "no" is an interjection: "No
+#     problem — I'll run…" still commits);
+_WRITTEN_CALL_NEGATION = re.compile(
+    r"\b(?:not|never|don['’]t|didn['’]t|haven['’]t|hasn['’]t|won['’]t|shouldn['’]t|mustn['’]t"
+    r"|can['’]t|cannot|without|instead\s++of|avoid)\s++(?:\w+\s++){0,2}?"
+    r"(?:run|ran|running|call|called|calling|use|used|using|execute|executed|executing|launch"
+    r"|launched|launching|open|opened|invoke|invoked|type|typed|try|tried|do|did)\b",
+    re.I,
+)
+#   * a hedge or a condition — "I would/could/might", "I'd", "if you…", "want me
+#     to", "shall/should I", "would you like", "do you want";
+_WRITTEN_CALL_HEDGE = re.compile(
+    r"\b(?:I|we)\s++(?:would|could|might|may)\b|\bI['’]d\b|\bif\s++you\b|\bwant\s++me\s++to\b"
+    r"|\b(?:shall|should)\s++I\b|\bwould\s++you\s++like\b|\bdo\s++you\s++want\b"
+    r"|\bwhen(?:ever)?+\s++you\b",
+    re.I,
+)
+#   * a proposal — "I can…", "you can…", "you would…", "happy to…".
+_WRITTEN_CALL_PROPOSAL = re.compile(
+    r"\b(?:I|we|you)\s++(?:can|could)\b|\byou\s++(?:would|might|may|should|need\s++to)\b"
+    r"|\b(?:happy|glad)\s++to\b",
+    re.I,
+)
+# Her own simple past of doing: a report, not a call now.
+_WRITTEN_CALL_PAST = re.compile(
+    r"\b(?:I|we)\s++(?:ran|used|called|executed|tried|typed|launched|opened|sent)\b", re.I
+)
 
 
 @lru_cache(maxsize=16)
@@ -4630,52 +4706,77 @@ def _call_as_written(line: str, start: int) -> str:
     return rest.strip()[:80]
 
 
-def _line_layout(line: str) -> tuple[list[int], list[bool], list[int]]:
-    """Where each sentence of `line` starts, whether it is a question, and where
-    each clause starts — read ONCE per line (the family's own splitters), so a
-    line holding many calls costs one pass, never one per call."""
-    sentence_starts: list[int] = []
-    questions: list[bool] = []
-    clause_starts: list[int] = []
-    offset = 0
-    for sentence in _sentences(line):
-        sentence_starts.append(offset)
-        questions.append(sentence.rstrip().endswith("?"))
-        clause_starts.append(offset)
-        clause_starts.extend(offset + sep.end() for sep in _CLAUSE_SPLIT.finditer(sentence))
-        offset += len(sentence)
-    return sentence_starts, questions, clause_starts
+def _framing_verdict(sentence: str) -> tuple[int | None, int | None, bool]:
+    """One sentence's reading, once: where its first lead is (None if it has
+    none), where its first blocker before a call could be (a negation, a
+    proposal, an example, her own past, a relay), and whether the WHOLE
+    sentence rules a call out (a question, a hedge, a recap). A call in it is
+    framed as her action now when a lead comes before it and no blocker does
+    (`_framed_as_her_action_now`)."""
+    lead = _WRITTEN_CALL_LEAD.search(sentence)
+    blockers = [
+        found.start()
+        for pattern in (
+            _WRITTEN_CALL_NEGATION,
+            _WRITTEN_CALL_PROPOSAL,
+            _EXAMPLE_INTRO,
+            _WRITTEN_CALL_PAST,
+            _REPORTED,
+        )
+        if (found := pattern.search(sentence)) is not None
+    ]
+    whole = (
+        sentence.rstrip().endswith("?")
+        or _WRITTEN_CALL_HEDGE.search(sentence) is not None
+        or _recap(sentence)
+    )
+    return (lead.start() if lead else None), (min(blockers) if blockers else None), whole
+
+
+def _framed_as_her_action_now(verdict: tuple[int | None, int | None, bool], at: int) -> bool:
+    """Whether code starting at offset `at` of a sentence is framed as HER
+    call NOW (fix round 1, C2): a lead before it, no blocker before it, and
+    nothing in the sentence that rules it out."""
+    lead, blocker, whole = verdict
+    return lead is not None and lead < at and (blocker is None or blocker >= at) and not whole
+
+
+def _last_sentence(line: str) -> str:
+    """The sentence of `line` that introduces what follows it: its last one
+    with any words in it ("I haven't opened it yet. Let me launch it now:")."""
+    sentences = [sentence for sentence in _sentences(line) if sentence.strip()]
+    return sentences[-1] if sentences else line
 
 
 def written_call_check(
     reply_text: str, spans: Sequence[Any], available_tools: Sequence[str]
 ) -> WrittenCallClaim | None:
-    """A call to one of her own tools, written as text, that never ran.
+    """A call to one of her own tools, written as text, framed as her action
+    now, that never ran.
 
     Fires when the reply writes the EXACT name of a tool advertised this turn
-    followed by argument syntax (see `_CALL_ARGS`) — in a fence, in inline code
-    or in prose — and no span of that tool, successful or attempted
-    (`_attempted`: a refused markup call is not an attempt), ran this turn.
+    followed by argument syntax (`_CALL_ARGS`) INSIDE CODE FORMATTING — a
+    fence, or an inline code span — framed as her action now: "I'll confirm…:",
+    "Let me check:", "Launching Teams…" introducing the fence (its intro line's
+    last sentence) or before the code in its sentence; or a fence that IS the
+    answer, with nothing before it. And no span of that tool, successful or
+    attempted (`_attempted`: a refused markup call is not an attempt), ran this
+    turn.
 
-    Silent, by construction or by a cut:
-      * an explanation or a mention of a tool — no argument syntax follows its
-        name ("device_run runs a program", "`device_run`", a signature);
-      * a report of a call that ran — its span exists;
-      * a question — the call's sentence ends with "?";
-      * relayed or quoted text — `_REPORTED` before it in its clause, an open
-        double quote before it on its line, or a blockquote line;
-      * an example — introduced as one (`_EXAMPLE_INTRO`), on its line or just
-        above, or above the fence it sits in;
-      * a table row — a table documents tools, it does not run them.
+    Silent (fix round 1, C2 and I1): a call in prose (`two notices "Backup
+    failed"` names a tool as a word); an explanation, an example or a list of
+    tools; a proposal ("I can…", "I would run…"); a question or an offer ("want
+    me to…?"); a negation ("Do not run `…`", "I have not run `…` — I only wrote
+    it as text"); a recap ("here is what I ran at 15:56: `…`"); relayed or
+    quoted text; a blockquote; a table.
 
     Returns every such tool once, in order, with the first call as written;
     never its arguments. Nothing may execute what she wrote (markup_calls'
-    ruling): the redirect asks her to make the call.
+    ruling): the redirect asks her to make the call, or to keep her reply.
 
-    Measured before it shipped over every real reply on record (998: 392
-    messages, 606 eval replies, each against its own turn's spans; 43 of them
-    name a registered tool): it fires on the owner's two turns and nothing
-    else."""
+    Every line is read once: its sentences, their verdicts and its backticks
+    are found in one pass each and compared by position, so a long line of
+    calls costs one pass, never one per call."""
     if not reply_text or not reply_text.strip():
         return None
     names = tuple(sorted({name for name in available_tools if isinstance(name, str) and name}))
@@ -4685,156 +4786,322 @@ def written_call_check(
     found: list[str] = []
     phrase = ""
     backed: dict[str, bool] = {}
-    recent: list[str] = []  # the last few non-blank lines, oldest first
+    last_prose: str | None = None  # the nearest non-blank line outside a fence
     in_fence = False
-    fence_is_example = False
+    fence_framed = False
     for line in reply_text.split("\n"):
         if _FENCE.match(line):
             if not in_fence:
-                fence_is_example = any(
-                    _EXAMPLE_INTRO.search(prior) for prior in recent[-_WRITTEN_CALL_INTRO_LINES:]
-                )
+                # A fence's framing is the prose just above it; a fence with
+                # NOTHING before it is the answer itself.
+                if last_prose is None:
+                    fence_framed = True
+                else:
+                    intro = _last_sentence(last_prose)
+                    fence_framed = _framed_as_her_action_now(_framing_verdict(intro), len(intro))
             in_fence = not in_fence
             continue
         stripped = line.strip()
+        if not in_fence and stripped:
+            last_prose = line
+        if not stripped or stripped.startswith(">"):
+            continue  # a blockquote is someone else's words
+        if len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|"):
+            continue  # a table documents tools, it does not run them
+        if in_fence and not fence_framed:
+            continue
         matches = [m for m in pattern.finditer(line) if m.group("name") not in found]
-        if matches and not (
-            stripped.startswith(">")  # a blockquote: someone else's words
-            or (len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|"))
-        ):
-            introduced = (in_fence and fence_is_example) or any(
-                _EXAMPLE_INTRO.search(prior) for prior in recent[-_WRITTEN_CALL_INTRO_LINES:]
-            )
-            marker = _EXAMPLE_INTRO.search(line)
-            sentence_starts, questions, clause_starts = _line_layout(line)
-            reported = list(_REPORTED.finditer(line))
-            reported_starts = [r.start() for r in reported]
-            quotes = 0  # double quotes before the current match, counted once
-            opened = closed = 0
-            cursor = 0
-            for m in matches:
-                name, start = m.group("name"), m.start()
-                quotes += line.count('"', cursor, start)
-                opened += line.count("“", cursor, start)
-                closed += line.count("”", cursor, start)
-                cursor = start
-                if name in found:
+        if not matches:
+            continue
+        if not in_fence:
+            ticks = [i for i, char in enumerate(line) if char == "`"]
+            quotes = [i for i, char in enumerate(line) if char == '"']
+            opens = [i for i, char in enumerate(line) if char == "“"]
+            closes = [i for i, char in enumerate(line) if char == "”"]
+            starts: list[int] = []
+            verdicts: list[tuple[int | None, int | None, bool]] = []
+            offset = 0
+            for sentence in _sentences(line):
+                starts.append(offset)
+                verdicts.append(_framing_verdict(sentence))
+                offset += len(sentence)
+        for m in matches:
+            name, start = m.group("name"), m.start()
+            if name in found:
+                continue
+            if not in_fence:
+                before = bisect_right(ticks, start - 1)
+                if before % 2 == 0:
+                    continue  # prose, not code: a word, never a call (C2)
+                index = bisect_right(starts, start) - 1
+                opener = ticks[before - 1] - starts[index]  # the code span's backtick
+                if not _framed_as_her_action_now(verdicts[index], opener):
                     continue
-                if introduced or (marker is not None and marker.start() < start):
-                    continue  # an example: an explanation of the tool, not a call
-                if questions[bisect_right(sentence_starts, start) - 1]:
-                    continue  # a question about her tools
-                clause_start = clause_starts[bisect_right(clause_starts, start) - 1]
-                first = bisect_right(reported_starts, clause_start - 1)
-                if first < len(reported) and reported[first].end() <= start:
-                    continue  # relayed: "you said device_run(…) failed"
-                if quotes % 2 or opened > closed:
-                    continue  # inside a double quotation: someone else's text
-                if name not in backed:
-                    backed[name] = _attempted(frozenset({name}), spans)
-                if backed[name]:
-                    continue  # the call was made this turn: a report of it
-                found.append(name)
-                phrase = phrase or _call_as_written(line, start)
-        if stripped:
-            recent.append(line)
-            del recent[:-_WRITTEN_CALL_INTRO_LINES]
+                if bisect_right(quotes, start - 1) % 2 or bisect_right(
+                    opens, start - 1
+                ) > bisect_right(closes, start - 1):
+                    continue  # inside a double quotation: someone else's call
+            if name not in backed:
+                backed[name] = _attempted(frozenset({name}), spans)
+            if backed[name]:
+                continue  # the call was made this turn: a report of it
+            found.append(name)
+            phrase = phrase or _call_as_written(line, start)
     if not found:
         return None
     return WrittenCallClaim(tools=tuple(found), phrase=phrase)
 
 
+# -- the device-action completion claim ----------------------------------------
+
+
+@dataclass(frozen=True)
+class DeviceFailure:
+    """A call she made this turn, of a tool that performs the claimed action,
+    on the claimed device, that FAILED — with the reason its span recorded."""
+
+    tool: str
+    device: str | None
+    reason: str
+
+
 @dataclass(frozen=True)
 class DeviceCompletionClaim:
     """A claim that an action happened on a device — "Notepad is now open on
-    your DELL-XPS-8950", "I opened Teams" — with no span this turn that could
-    have done it. `phrase` is the claim as she wrote it (the redirect nudge
-    and the honest note quote it back); `device` is the device she named, as
-    written, or None for a first-person claim that named none."""
+    your DELL-XPS-8950", "I opened Teams" — that no successful span of a tool
+    performing it backs.
+
+    `phrase` is the claim as she wrote it (the nudge and the correction quote
+    it back); `device` the device she named, as written, or None; `kind` the
+    action ("launch", "write", "notify", "run"); `tools` the advertised tools
+    that perform it; `failed` the call of one of them that she made this turn
+    and that failed, when there is one — then the failure, with its reason, is
+    what the turn says (fix round 1, I1), never "nothing ran"."""
 
     phrase: str
     device: str | None = None
+    kind: str = "launch"
+    tools: tuple[str, ...] = ()
+    failed: DeviceFailure | None = None
+    # True when the device she named is a word for any machine ("your PC"),
+    # not one of hers by name: the wording then says no device.
+    generic: bool = False
 
 
-# The states an action on a device leaves behind — an app open or running, a
-# service stopped, a file saved, a notification sent. Connectivity words are
-# the state guard's (online/offline/connected), and "installed" is not here: it
-# names what a machine holds, not what she did to it.
-_ACTION_STATE = (
-    r"(?:open|opened|opening|running|up\s++and\s++running|launched|launching|started"
-    r"|starting|closed|stopped|shut\s++down|saved|written|created|deleted|removed|killed"
-    r"|terminated|restarted|restarting|rebooted|rebooting|sent|shown|showing|displayed)"
+# Which registered device tools PERFORM each kind of action. A verb names an
+# action and a tool performs one; the registry has no field that says which,
+# and must not grow one (test_no_approvals pins Tool's fields). So the mapping
+# is kept here and pinned against the LIVE registry
+# (tests/test_device_completion_guard.py): every tool in it is a registered
+# device tool that changes something (reads_only False), and every such
+# registered tool is in it — rename or add one and that pin turns red.
+# device_run performs them all: a shell command can open an app, write a file
+# or show a notification.
+DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
+    "launch": ("device_launch_app", "device_run"),
+    "write": ("device_write_file", "device_run"),
+    "notify": ("device_notify", "device_run"),
+    "run": ("device_run",),
+}
+# What a failed call of each kind did not do, and the word a claim of it must
+# not use — for the honest failure wording (I1): "— it did not open", "do not
+# claim it opened".
+ACTION_NOT_DONE = {
+    "launch": "it did not open",
+    "write": "nothing was saved",
+    "notify": "it was not sent",
+    "run": "it did not run",
+}
+ACTION_DONE_WORD = {"launch": "opened", "write": "saved", "notify": "sent", "run": "ran"}
+
+# The words of each action, as a claim writes them.
+_KIND_WORDS: dict[str, tuple[str, ...]] = {
+    "launch": (
+        "open",
+        "opened",
+        "opening",
+        "launched",
+        "launching",
+        "started",
+        "starting",
+        "running",
+        "up and running",
+        "active",
+    ),
+    "write": ("saved", "saving", "written", "wrote", "created"),
+    "notify": ("sent", "sending", "shown", "showing", "displayed"),
+    "run": (
+        "closed",
+        "closing",
+        "stopped",
+        "stopping",
+        "killed",
+        "terminated",
+        "quit",
+        "restarted",
+        "restarting",
+        "rebooted",
+        "rebooting",
+        "shut down",
+        "shutting down",
+        "deleted",
+        "deleting",
+        "removed",
+        "removing",
+        "moved",
+        "moving",
+        "ran",
+        "run",
+        "executed",
+        "installed",
+        "uninstalled",
+    ),
+}
+_KIND_OF_WORD = {word: kind for kind, words in _KIND_WORDS.items() for word in words}
+# An ACTION's participle or progressive — the only states that are claims (C1).
+_ACTION_PARTICIPLE = (
+    r"(?:opened|launched|started|stopped|closed|killed|terminated|restarted|rebooted"
+    r"|shut\s++down|saved|written|created|deleted|removed|moved|sent|run|executed|installed"
+    r"|uninstalled)"
 )
-# "Notepad is now open", "Teams has been launched", "it's running", "the file
-# was saved": a subject word, a copula, optional adverbs, a state. "was" counts
-# here, unlike in the state guard: a past ACTION is still a claim that it
-# happened. "not" and "no longer" are not among the adverbs — a negated state
-# claims nothing happened — and a copula can only be entered from the word
-# before it, so a run of padding is never re-entered at every position.
+_ACTION_PROGRESSIVE = (
+    r"(?:opening|launching|starting|restarting|rebooting|closing|stopping|shutting\s++down"
+    r"|saving|deleting|removing|moving|sending)"
+)
+# A plain STATE ("Notepad is open", "your agents are running") is not a claim
+# that anything was done — the state guard's business (C1, 212b9f8b) — unless
+# "now" marks it as the change she made: "Notepad is now open".
+_NOW_STATE = r"(?:open|running|up\s++and\s++running|active|showing|displayed)"
+# "Notepad is now open", "Teams has been launched", "the file was saved": a
+# subject, a copula, adverbs, the action. The copula is entered only from the
+# end of the subject ("Notepad++", "C#" and a closing bracket end one too), so
+# a run of padding is never re-entered at every position.
 _ACTION_CLAIM = re.compile(
-    r"(?<=\w)(?:\s++(?:is|are|was|were|has\s++been|have\s++been|has|have)|['’]s)"
-    r"(?:\s++(?:now|already|successfully|currently|all|just))*+"
-    rf"\s++{_ACTION_STATE}\b",
+    r"(?<=[\w+#)\]`])(?P<copula>\s++(?:is|are|was|were|has\s++been|have\s++been|has|have)"
+    r"|['’]s)"
+    r"(?P<adverbs>(?:\s++(?:now|already|successfully|all|just|finally|also))*+)"
+    rf"\s++(?P<word>{_ACTION_PARTICIPLE}|{_ACTION_PROGRESSIVE}|{_NOW_STATE})\b",
     re.I,
 )
 _ACTION_VERB = (
     r"(?:opened|launched|started|stopped|closed|killed|restarted|rebooted|terminated|quit"
     r"|shut\s++down|installed|uninstalled|ran|executed|saved|wrote|created|deleted|removed"
-    r"|sent)"
+    r"|moved|sent)"
 )
-# "I opened Teams", "I've stopped the service", "I just ran the script": her own
-# completed action. "I'll", "I can", "I couldn't" never reach a verb here —
+# "I opened Teams", "I've gone ahead and opened…", "I just ran the script": her
+# own completed action. "I'll", "I can", "I couldn't" never reach a verb here —
 # precision comes from the lead, as in the deferral guard.
 _FIRST_PERSON_ACTION = re.compile(
-    r"\bI(?:['’]ve|\s++have|\s++just|\s++already|\s++successfully|\s++also"
-    rf"|\s++went\s++ahead\s++and)*+\s++(?P<verb>{_ACTION_VERB})\b",
+    r"\bI(?:['’]ve|\s++have|\s++just|\s++already|\s++successfully|\s++also|\s++now"
+    r"|\s++finally|\s++(?:went|gone)\s++ahead\s++and)*+"
+    rf"\s++(?P<verb>{_ACTION_VERB})(?:\s++up)?+\b",
     re.I,
 )
-# "Launched brave on DELL-XPS-8950." at the head of a clause — the shape of the
-# tool's own old report, which is exactly what a fabrication imitates.
-_HEAD_ACTION = re.compile(rf"^\s*+(?:[-*•]\s++)?(?P<verb>{_ACTION_VERB})\b", re.I)
+# "Launched brave on DELL-XPS-8950." and "Successfully launched…" at the head of
+# a clause — the old tool text's shape, which a fabrication imitates.
+_HEAD_ACTION = re.compile(
+    r"^[\W_]*+(?:(?:done|ok(?:ay)?|sure|great|perfect|all\s++set|successfully|just|now|finally"
+    rf"|also)[\W_]++)*+(?P<verb>{_ACTION_VERB})\b",
+    re.I,
+)
+# "Done — Notepad opened on your DELL-XPS-8950": a subject and an app's
+# lifecycle verb, no copula.
+_SUBJECT_ACTION = re.compile(
+    r"(?<=[\w+#)\]`])\s++(?P<verb>opened|launched|started|closed|stopped|restarted|rebooted"
+    r"|shut\s++down)\b",
+    re.I,
+)
 # With no device named, a first-person claim counts only for an app's
 # lifecycle ("opened", "launched", "stopped"…) and an object that names an app
 # (a capitalised name) or a word for one — never "the page", "a timer", "the
-# notes", which are other tools' objects.
+# notes", which are other tools' objects — or a pronoun, when a call that
+# performs it was made this turn ("I launched it." after a launch that failed).
 _LIFECYCLE_VERBS = frozenset(
     {"opened", "launched", "started", "stopped", "closed", "killed", "restarted", "terminated"}
     | {"quit", "shut down"}
 )
 # A capitalised word may carry inner dots ("Node.js") but never a trailing one:
 # that is the sentence's own period.
-_APP_WORD = r"[A-Z][\w+&-]*+(?:\.[\w+&-]++)*+"
+_APP_WORD = r"[A-Z][\w+&#-]*+(?:\.[\w+&-]++)*+"
 _APP_OBJECT = re.compile(
     r"(?<![ \t])[ \t]++(?:(?:the|your|a|an|that|this)[ \t]++)?"
     rf"(?P<object>{_APP_WORD}(?:[ \t]++{_APP_WORD}){{0,3}}"
     r"|(?i:apps?|applications?|programs?|browsers?|services?|process(?:es)?|windows?"
-    r"|terminal))\b"
+    r"|terminal))(?![\w+])"
 )
+_PRONOUN_OBJECT = re.compile(r"[ \t]++(?:it|that|this|them)\b", re.I)
 # How far after a claim its device may be named, and what may not sit between
 # them: a clause break. ", " and ": " break (a Windows drive's "C:\" does not),
-# so do a spaced dash and the words that start another clause.
+# so do a spaced dash and the words that start another clause. The same breaks
+# bound how far back a cut reaches (I3: "No problem — Notepad is now open" is a
+# claim; "Let me check whether Notepad is open" is not).
 _ANCHOR_REACH = 60
 _ANCHOR_BREAK = re.compile(
-    r"[,;]\s|:\s|\s[—–-]\s|\b(?:and|but|so|then|or|while|which|where|who|whom|whereas)\b",
+    r"[,;]\s|:\s|\s[—–-]\s|[—–]\s|\b(?:and|but|so|then|or|while|which|where|who|whom|whereas)\b",
     re.I,
 )
-# A state claim whose subject is one of these is not hers: "you have opened
-# it", "they have saved it", "let's" (a suggestion).
+# A claim whose subject is one of these is not hers: "you have opened it",
+# "they have saved it", "let's" (a suggestion), and a relative clause's
+# pronoun ("the Brave that is running on your PC is version 1.70").
 _NOT_HER_SUBJECT = frozenset(
     {"you", "he", "she", "they", "someone", "somebody", "everyone", "everybody", "let"}
+    | {"that", "which", "who", "whom", "whose"}
 )
+# Words that precede a lifecycle verb as an auxiliary, not a subject: the
+# copula shape reads those ("has opened"), the first-person shape "I opened".
+_NOT_A_SUBJECT = frozenset(
+    {"i", "has", "have", "had", "was", "were", "is", "are", "been", "be", "being"}
+    | {"just", "also", "already", "now", "then", "not", "never", "successfully", "finally"}
+    | {"done", "ok", "okay", "sure", "great", "perfect", "set"}
+    # "Apps started on your PC stay running": a kind of thing, not a thing done
+    | {"apps", "applications", "programs", "files", "windows", "processes", "services"}
+)
+# After a device, a verb makes "Apps started on your PC" a noun phrase: "…stay
+# running", "…is still there".
+_THEN_A_VERB = re.compile(
+    r"[ \t]++(?:stay|stays|remain|remains|is|are|was|were|will|can|could|may|might|should"
+    r"|would|keep|keeps|run|runs|have|has|do|does|get|gets|appear|appears|show|shows)\b",
+    re.I,
+)
+# A claim relayed through a reporting verb: "…reports that the app was launched".
+_RELAYED_THAT = re.compile(
+    r"\b(?:reports?|reported|says?|said|states?|stated|shows?|showed|notes?|noted|means?"
+    r"|meant|tells?|told|claims?|claimed|returns?|returned|prints?|printed)\s++that\b",
+    re.I,
+)
+# A subject's contraction: "you've" is "you".
+_CONTRACTION = re.compile(r"['’](?:ve|re|ll|d|s|m)$", re.I)
 # A model or an engine running on a machine is a SERVING claim — the stack and
 # served-model guards' business, and true with no device tool at all: the Dell
 # serves models in this household (`dell:qwen3:8b`). A model reference is
 # "name:tag".
 _SERVING_SUBJECT = re.compile(r"\b(?:models?|ollama|vllm|llm|inference|gpu|vram)\b|\w:\w", re.I)
+# Someone else did it: "…saved by Windows Backup", "…by the backup timer".
+# Read only after a PASSIVE or subject claim — "I opened it by double-clicking"
+# is still her.
+_BY_ANOTHER = _BY_OTHER
+# Items the machine starts by itself: "Launched on your Dell at login: OneDrive,
+# Teams".
+_STARTUP = re.compile(
+    r"\b(?:at|on|during|upon)\s++(?:log-?in|logon|sign-?in|start-?up|boot(?:ing)?|reboot)\b"
+    r"|\bautomatically\b|\bon\s++its\s++own\b|\bby\s++itself\b",
+    re.I,
+)
 # A device the claim can be ON is named after one of these.
 _ANCHOR_PREPOSITION = r"(?:on|to|onto|from)"
 _ANCHOR_DETERMINER = r"(?:your|the|my|this|that|his|her|their|our)"
 # The words for one of her machines, after a determiner ("your PC", "the
-# laptop"). A paired device's own name needs none.
+# laptop", "your Windows PC"). They name no device in particular.
 _DEVICE_WORDS = r"(?:pc|computer|laptop|desktop|machine|device|workstation|mac|macbook)"
-# What before a claim, in its clause, means it is not one: a negation, a
+_GENERIC_DEVICE = frozenset(
+    {"pc", "computer", "laptop", "desktop", "machine", "device", "workstation", "mac", "macbook"}
+)
+# Markdown around a device's name: `DELL-XPS-8950`, __DELL-XPS-8950__, and an
+# emoji between "your" and the name ("your 💻 DELL-XPS-8950"). A link is
+# rewritten to its text before anything is read.
+_NAME_WRAP = r"[`_]{0,3}"
+_MD_LINK = re.compile(r"\[([^\[\]\n]{1,120})\]\([^()\s]{0,300}\)")
+# What before a claim, in its own segment, means it is not one: a negation, a
 # hedge or subordinator, an intent to establish it. Each is found ONCE per
 # clause and compared by position.
 _ACTION_NEGATION = re.compile(
@@ -4851,21 +5118,44 @@ _ACTION_INTENT = re.compile(
     r"|determining|find\s+out|ping|pinging|ensure|ensuring|make\s+sure|making\s+sure)\b",
     re.I,
 )
+_NOW_AFTER = re.compile(r"[ \t]++(?:right[ \t]++)?now\b", re.I)
+# Words of a claim that name no app in particular.
+_GENERIC_TARGET = frozenset(
+    (
+        "the your my a an this that these those it its them app apps application applications "
+        "program programs browser window windows new now again up for you me instance copy "
+        "service services process processes script scripts file files notification "
+        "notifications desktop"
+    ).split()
+)
 
 
 @lru_cache(maxsize=16)
 def _device_anchor(names: tuple[str, ...]) -> re.Pattern[str]:
     """ "on your DELL-XPS-8950", "to the laptop", "on your Dell": the device a
-    claim is on. DERIVED from the paired names: a paired name alone, or after a
-    determiner; or after a determiner, a word for a machine or a word of a
-    paired name — "your Dell" is a device BECAUSE a DELL-XPS-8950 is paired.
-    Cached on the names, like the state guard's patterns."""
+    claim is on. DERIVED from the paired names: a paired name, alone or after a
+    determiner; after a determiner, a word for a machine or a word of a paired
+    name, with up to two capitalised words before it ("your Windows PC"); or a
+    paired name's word alone ("on DELL") — "Dell" is a device BECAUSE a
+    DELL-XPS-8950 is paired. Markdown around the name is read through. Cached
+    on the names, like the state guard's patterns."""
     named = "|".join(re.escape(name) for name in sorted(names, key=lambda n: (-len(n), n)))
     words = sorted({word.lower() for name in names for word in re.findall(r"[A-Za-z]{3,}", name)})
     worded = "|".join([_DEVICE_WORDS, *(re.escape(word) for word in words)])
-    alternatives = [rf"{_ANCHOR_DETERMINER}\s++(?P<word>{worded})\b"]
+    wrap = r"(?:[^\w\s]{1,4}[ \t]++)?" + _NAME_WRAP
+    alternatives = [
+        rf"{_ANCHOR_DETERMINER}\s++{wrap}(?:(?-i:[A-Z][\w-]*+)[ \t]++){{0,2}}"
+        rf"(?P<word>{worded}){_NAME_WRAP}\b"
+    ]
     if named:
-        alternatives.insert(0, rf"(?:{_ANCHOR_DETERMINER}\s++)?(?P<name>{named})(?![\w-]|\.\w|:\w)")
+        alternatives.insert(
+            0,
+            rf"(?:{_ANCHOR_DETERMINER}\s++)?{wrap}(?P<name>{named}){_NAME_WRAP}"
+            r"(?![\w-]|\.\w|:\w)",
+        )
+    if words:
+        bare = "|".join(re.escape(word) for word in words)
+        alternatives.append(rf"{_NAME_WRAP}(?P<bare>{bare}){_NAME_WRAP}(?![\w-]|['’]s|\.\w|:\w)")
     return re.compile(rf"\b{_ANCHOR_PREPOSITION}\s++(?:{'|'.join(alternatives)})", re.I)
 
 
@@ -4884,7 +5174,7 @@ def _subject_start(text: str, position: int) -> int:
         while end > floor and text[end - 1] in " \t":
             end -= 1
         begin = end
-        while begin > floor and (text[begin - 1].isalnum() or text[begin - 1] in "_'’.+&:/-"):
+        while begin > floor and (text[begin - 1].isalnum() or text[begin - 1] in "_'’.+&#:/`-"):
             begin -= 1
         if begin == end:
             break
@@ -4893,172 +5183,388 @@ def _subject_start(text: str, position: int) -> int:
     return start
 
 
+def _tokens(text: str) -> set[str]:
+    """The words of `text` that could name an app: three or more letters or
+    digits, lower-cased, less the ones that name nothing in particular."""
+    return {
+        word for word in re.findall(r"[a-z0-9]{3,}", text.lower()) if word not in _GENERIC_TARGET
+    }
+
+
+def _is_her_span(span: Any) -> bool:
+    """A tool span SHE made this turn: not a check the backend ran unasked
+    (live_facts' `unasked`), and not a call refused before it ran (markup, a
+    closed round — `refused_*`, as `_attempted` reads it)."""
+    if getattr(span, "kind", None) != "tool":
+        return False
+    meta = getattr(span, "meta", None) or {}
+    if meta.get("unasked") is True:
+        return False
+    return not any(str(key).startswith("refused") for key in meta)
+
+
+def _span_device(span: Any) -> str | None:
+    args = (getattr(span, "meta", None) or {}).get("args_redacted")
+    device = args.get("device") if isinstance(args, dict) else None
+    return device if isinstance(device, str) and device.strip() else None
+
+
+def _span_target(span: Any) -> str | None:
+    """What a launch-capable call named: its `app`, or its `argv`. None when
+    the record cannot be read (a clipped argument record)."""
+    args = (getattr(span, "meta", None) or {}).get("args_redacted")
+    if not isinstance(args, dict):
+        return None
+    if isinstance(args.get("app"), str):
+        return args["app"]
+    argv = args.get("argv")
+    if isinstance(argv, list):
+        return " ".join(str(part) for part in argv)
+    return None
+
+
+def _same_device(named: str | None, generic: bool, span_device: str | None) -> bool:
+    """Is the span on the device the claim named? With no device named, or a
+    word that names none in particular ("your PC"), any device is (C1: "any
+    device only when none is named"); a span whose device cannot be read counts
+    too — the record, not the claim, is what is missing."""
+    if named is None or generic or span_device is None:
+        return True
+    claimed = named.strip().lower()
+    held = span_device.strip().lower()
+    if claimed == held:
+        return True
+    return claimed in re.findall(r"[a-z0-9]+", held)
+
+
+def _same_target(target: str, span: Any) -> bool:
+    """Did a launch-capable call name the app the claim names? `device_run
+    ["tasklist"]` did not open Notepad (review B2). Read both ways and by
+    substring ("Teams" and "MSTeams_8wekyb3d8bbwe!MSTeams"; "Edge" and
+    "msedge"); when either side names nothing readable, it cannot be told, and
+    precision-first says it matches."""
+    claimed = _tokens(target)
+    named = _span_target(span)
+    held = _tokens(named) if named is not None else set()
+    if not claimed or not held:
+        return True
+    return any(c in h or h in c for c in claimed for h in held)
+
+
+def _failure_reason(meta: Mapping[str, Any], device: str | None) -> str:
+    """The reason a failed call's span recorded, as a sentence can quote it:
+    no "Error: " prefix, and no leading "<device>: " when the device is named
+    beside it anyway ("device_launch_app failed on DELL-XPS-8950: no Start-menu
+    app named 'x'…")."""
+    reason = str(meta.get("error") or meta.get("result_head") or "no reason was recorded")
+    if reason.startswith("Error: "):
+        reason = reason[len("Error: ") :]
+    if device and reason.startswith(f"{device}: "):
+        reason = reason[len(device) + 2 :]
+    return reason.strip().rstrip(".")[:200]
+
+
+def _action_backing(
+    spans: Sequence[Any],
+    kind: str,
+    named: str | None,
+    generic: bool,
+    target: str | None,
+) -> tuple[bool, DeviceFailure | None, bool]:
+    """(backed, failure, attempted) for one claim: a SUCCESSFUL span she made
+    of a tool that performs `kind` on the named device (and, for a launch, of
+    the named app) backs it; a failed one is its failure; `attempted` says a
+    call of the family was made at all (C1, I1)."""
+    family = DEVICE_ACTION_TOOLS[kind]
+    failure: DeviceFailure | None = None
+    attempted = False
+    for span in spans:
+        if getattr(span, "name", None) not in family or not _is_her_span(span):
+            continue
+        device = _span_device(span)
+        if not _same_device(named, generic, device):
+            continue
+        if kind == "launch" and target and not _same_target(target, span):
+            continue
+        attempted = True
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("ok") is True:
+            return True, None, True
+        if failure is None:
+            failure = DeviceFailure(
+                tool=str(span.name), device=device, reason=_failure_reason(meta, device)
+            )
+    return False, failure, attempted
+
+
+def failed_call(spans: Sequence[Any], names: Sequence[str]) -> DeviceFailure | None:
+    """Her call of one of `names` this turn that FAILED, when none of them
+    succeeded — with the device it named and the reason its span recorded. The
+    turn's one correction states it (fix round 1, I1): "device_info failed on
+    DELL-XPS-8950: …", never "it did not run" with the reason left out."""
+    wanted = frozenset(names)
+    failure: DeviceFailure | None = None
+    for span in spans:
+        if getattr(span, "name", None) not in wanted or not _is_her_span(span):
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("ok") is True:
+            return None
+        if failure is None:
+            device = _span_device(span)
+            failure = DeviceFailure(
+                tool=str(span.name), device=device, reason=_failure_reason(meta, device)
+            )
+    return failure
+
+
+def ran_her_call(spans: Sequence[Any], names: Sequence[str]) -> bool:
+    """Did SHE make a successful call of one of `names` this turn? What a
+    redirect's live note reads before it says "doing it now" (C1): never a
+    backend check, never a refused one."""
+    wanted = frozenset(names)
+    return any(
+        getattr(span, "name", None) in wanted
+        and _is_her_span(span)
+        and (getattr(span, "meta", None) or {}).get("ok") is True
+        for span in spans
+    )
+
+
 def device_completion_check(
     reply_text: str,
     spans: Sequence[Any],
     available_tools: Sequence[str],
     device_names: Sequence[str] = (),
 ) -> DeviceCompletionClaim | None:
-    """A claim that an action happened on a device, with nothing run to do it.
+    """A claim that an action happened on a device, that nothing backs.
 
-    The FAMILY that could do it is every device tool advertised this turn,
-    derived from the registry's own naming (`_DEVICE_SPAN_PREFIX`: every device
-    tool is device_*), never a list kept here. With none advertised the guard
-    is silent — she cannot have been expected to use one. Backing:
+    The tools that could do it are the registered tools that PERFORM its kind
+    of action (`DEVICE_ACTION_TOOLS`, pinned against the live registry). With
+    no device tool advertised the guard is silent — she cannot have been
+    expected to use one.
 
-      * a claim that NAMES a device (`_device_anchor`: "…on your
-        DELL-XPS-8950", "…to your PC", within `_ANCHOR_REACH` of the claim
-        and no clause break) is backed by a SUCCESSFUL span of the family this
-        turn — any of them, read or act, precision-first, as list_timers backs
-        "your reminder is running" — or by an OK span that READ a device (a
-        {"device", "connected"} fact: machine_status's agent listing, which
-        _checked_a_device counts too). A failed launch opened nothing, and a
-        refusal that found the device offline launched nothing either, so
-        neither backs anything here.
-      * a first-person claim that names no device ("I opened Teams", "I've
-        stopped the service") cannot say which family it needed, so ANY
-        successful span this turn backs it (bare_intent's rule): "I opened
-        Wikipedia" after a fetch is her report of the fetch.
+    What is a CLAIM (fix round 1, C1/C2/I3): an ACTION, done, this turn, by her:
+      * a copula and an action's participle or progressive ("Teams has been
+        launched", "Teams is now opening", "the file was saved") — or a state
+        ("open", "running") only with "now" ("Notepad is now open"); a plain
+        state is the state guard's (212b9f8b's "your agents are running on…"
+        stays silent);
+      * her own completed action ("I opened…", "I've gone ahead and opened…");
+      * a clause that opens on the action ("Launched brave on …",
+        "Successfully launched…"), or a subject and an app's lifecycle verb
+        ("Done — Notepad opened on …").
+    It must name a device of hers (`_device_anchor`, within `_ANCHOR_REACH`
+    and no clause break), except her own lifecycle claim about an app, or
+    about "it" when a call that performs it was made this turn.
 
-    The shapes: a copula and an action's state ("Notepad is now open", "the
-    file was saved"), with a device named; her own completed action ("I
-    opened…"), with a device named, or an app's lifecycle and an app as its
-    object; and a clause that opens on the action ("Launched brave on …"),
-    with a device named. Never a claim, like the timer completion shape: a
-    question, a negation before the claim or inside it ("I launched nothing
-    on your Dell"), a hedge or subordinator, an intent to establish it ("let
-    me check whether…"), relayed or quoted text, a blockquote, second or third
-    person, "let's", a future (no shape reaches one), a prior-time marker, or
-    a model serving on a machine ("qwen3:8b is running on your Dell" — the
-    stack guards' business, and true with no device tool at all).
+    Never a claim: a question; a recap or a past time ("today", "at 15:56",
+    "in our last chat", a list under "here is what we did:"); another actor
+    ("…by Windows Backup"), second or third person, a relative clause; the
+    machine's own startup ("…at login: OneDrive, Teams"); a negation, hedge,
+    subordinator or intent in the claim's own segment — LOCAL, so "No problem —
+    Notepad is now open" still is one; relayed or quoted text; a blockquote; a
+    model serving on a machine.
 
-    Measured before it shipped over every real reply on record (998: 392
-    messages, 606 eval replies, each against its own turn's spans): it fires
-    on the owner's two turns and nothing else. The one false fire the scan
-    found — an honest machine_status relay, 212b9f8b — is why an OK read of a
-    device backs a claim."""
+    Backing (C1): only a SUCCESSFUL span SHE made (never a backend `unasked`
+    check), of a tool that performs the action, on the device she named (any
+    device when she named none in particular), and for a launch, naming the
+    app she named. Reads and connectivity facts never back an action claim.
+    A first-person claim that names no device may also be about a page or a
+    file, so a successful span she made of a tool OUTSIDE the device family
+    backs that one; a device read never does. When a call of the family was
+    made and FAILED, the claim carries the failure (I1)."""
     if not reply_text or not reply_text.strip():
         return None
-    if not any(str(name).startswith(_DEVICE_SPAN_PREFIX) for name in available_tools):
-        return None
-    successful = _successful(spans)
-    if any(
-        str(span.name).startswith(_DEVICE_SPAN_PREFIX) or _determined_connectivity(span)
-        for span in successful
-    ):
-        # A device tool ran, or an OK span READ a device (machine_status's
-        # agent listing records {"device", "connected"} per agent — the fact
-        # _checked_a_device counts, S42a): whatever she says of a device is a
-        # report of it, and a first-person claim is backed by any span at all.
-        # A REFUSED device span is not here even when it found the device
-        # offline: that settles connectivity, and launched nothing.
+    advertised = [str(name) for name in available_tools]
+    if not any(name.startswith(_DEVICE_SPAN_PREFIX) for name in advertised):
         return None
     names = tuple(sorted({str(name).strip() for name in device_names if str(name).strip()}))
     anchor = _device_anchor(names)
-    unanchored_ok = not successful
-    for clause, is_question in _clauses(reply_text):
-        if is_question:
+    outside_ran = any(
+        _is_her_span(span)
+        and (getattr(span, "meta", None) or {}).get("ok") is True
+        and not str(getattr(span, "name", "")).startswith(_DEVICE_SPAN_PREFIX)
+        for span in spans
+    )
+    list_is_recap = False
+    for line in reply_text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
             continue
-        claim = _device_action_in(clause, anchor, unanchored_ok=unanchored_ok)
-        if claim is not None:
-            return claim
+        if _LIST_ITEM.match(line):
+            if list_is_recap:
+                continue  # an item of "here is what we did today:"
+        else:
+            list_is_recap = _recap(stripped)
+        for sentence in _sentences(line):
+            if not sentence.strip() or sentence.rstrip().endswith("?") or _recap(sentence):
+                continue
+            for clause in _CLAUSE_SPLIT.split(sentence):
+                if not clause or not clause.strip():
+                    continue
+                claim = _device_action_in(clause, anchor, spans, advertised, outside_ran)
+                if claim is not None:
+                    return claim
     return None
 
 
 def _device_action_in(
-    clause: str, anchor: re.Pattern[str], *, unanchored_ok: bool
+    clause: str,
+    anchor: re.Pattern[str],
+    spans: Sequence[Any],
+    advertised: Sequence[str],
+    outside_ran: bool,
 ) -> DeviceCompletionClaim | None:
-    """The first claim in one non-question clause that nothing before it in
-    the clause cuts, or None. Every cut is found ONCE per clause and compared
-    by position; the only per-claim work is on a window of at most
-    `_ANCHOR_REACH` characters, so a long clause costs one pass."""
-    text = clause.replace("*", "")  # emphasis: "**DELL-XPS-8950**" is the name
-    if text.lstrip().startswith(">") or _PRIOR_TIME.search(text):
-        return None  # a blockquote is someone's words; a prior time is not this turn
+    """The first unbacked claim in one non-question clause, or None. Every cut
+    is found ONCE per clause and compared by position (bisect), so a long
+    clause costs one pass."""
+    text = _MD_LINK.sub(r"\1", clause).replace("*", "")
+    if text.lstrip().startswith(">") or _STARTUP.search(text):
+        return None  # a blockquote is someone's words; startup items are the machine's
     candidates: list[tuple[int, str, re.Match[str]]] = []
     candidates.extend((m.start(), "state", m) for m in _ACTION_CLAIM.finditer(text))
     candidates.extend((m.start(), "first", m) for m in _FIRST_PERSON_ACTION.finditer(text))
+    candidates.extend((m.start(), "subject", m) for m in _SUBJECT_ACTION.finditer(text))
     head = _HEAD_ACTION.match(text)
     if head is not None:
         candidates.append((head.start("verb"), "head", head))
     if not candidates:
         return None
     candidates.sort(key=lambda candidate: candidate[0])
-    # Everything after the first cut in the clause is cut.
-    cut = len(text)
-    for blocker in (_ACTION_NEGATION, _ACTION_HEDGE, _ACTION_INTENT, _REPORTED):
-        found = blocker.search(text)
-        if found is not None:
-            cut = min(cut, found.start())
+    breaks = [(found.start(), found.end()) for found in _ANCHOR_BREAK.finditer(text)]
+    break_ends = [end for _, end in breaks]
+    break_starts = [start for start, _ in breaks]
+    blockers = sorted(
+        found.start()
+        for pattern in (_ACTION_NEGATION, _ACTION_HEDGE, _ACTION_INTENT, _REPORTED, _RELAYED_THAT)
+        for found in pattern.finditer(text)
+    )
+    negations = [found.start() for found in _ACTION_NEGATION.finditer(text)]
+    others = [found.start() for found in _BY_ANOTHER.finditer(text)]
+    quotes = {
+        mark: [i for i, char in enumerate(text) if char == mark] for mark in ('"', "`", "“", "”")
+    }
     places = list(anchor.finditer(text))
     place_starts = [place.start() for place in places]
-    breaks = [found.start() for found in _ANCHOR_BREAK.finditer(text)]
+
+    def any_in(positions: list[int], lo: int, hi: int) -> bool:
+        index = bisect_right(positions, lo - 1)
+        return index < len(positions) and positions[index] < hi
+
+    def count_before(positions: list[int], at: int) -> int:
+        return bisect_right(positions, at - 1)
 
     def place_after(end: int) -> re.Match[str] | None:
         """The device the claim ending at `end` is ON: the next anchor, if it
-        starts within `_ANCHOR_REACH` with no clause break before it — "the
-        file is saved, and I'll send it to your Dell" names the Dell for the
-        sending, not the saving."""
+        starts within `_ANCHOR_REACH` with no clause break before it."""
         index = bisect_right(place_starts, end - 1)
         if index == len(places) or place_starts[index] - end > _ANCHOR_REACH:
             return None
-        gap = bisect_right(breaks, end - 1)
-        if gap < len(breaks) and breaks[gap] < place_starts[index]:
+        if any_in(break_starts, end, place_starts[index]):
             return None
         return places[index]
 
-    cursor = 0
-    straight = curly_open = curly_close = backticks = 0
-    for start, kind, m in candidates:
-        if start >= cut:
-            break
-        straight += text.count('"', cursor, start)
-        curly_open += text.count("\u201c", cursor, start)
-        curly_close += text.count("\u201d", cursor, start)
-        backticks += text.count("`", cursor, start)
-        cursor = start
-        if straight % 2 or backticks % 2 or curly_open > curly_close:
+    def segment_end(at: int) -> int:
+        index = bisect_right(break_starts, at - 1)
+        return break_starts[index] if index < len(break_starts) else len(text)
+
+    for position, shape, m in candidates:
+        # The claim's own segment: back to the last clause break before it (I3).
+        index = bisect_right(break_ends, position)
+        segment_start = break_ends[index - 1] if index else 0
+        if shape in ("state", "subject"):
+            begin = max(_subject_start(text, position), segment_start)
+            while begin < position and text[begin] in " \t":
+                begin += 1
+            if begin >= position:
+                continue  # no subject at all
+        else:
+            begin = position
+        claim_at = m.start("word") if shape == "state" else m.start()
+        if any_in(blockers, segment_start, max(claim_at, begin)):
+            continue  # a negation, hedge, intent or report in its own segment
+        if (
+            count_before(quotes['"'], begin) % 2
+            or count_before(quotes["`"], begin) % 2
+            or count_before(quotes["“"], begin) > count_before(quotes["”"], begin)
+        ):
             continue  # inside a quotation: someone else's words
-        place = place_after(m.end())
-        if place is not None and _ACTION_NEGATION.search(text, m.end(), place.start()):
+        verb_end = m.end()
+        place = place_after(verb_end)
+        if place is not None and any_in(negations, verb_end, place.start()):
             continue  # "I launched nothing on your Dell"
-        device = None
+        subject = text[begin:position].strip() if shape in ("state", "subject") else ""
+        last = _CONTRACTION.sub("", subject.rsplit(maxsplit=1)[-1].lower()) if subject else ""
+        if shape in ("state", "subject"):
+            if last in _NOT_HER_SUBJECT or _SERVING_SUBJECT.search(subject):
+                continue  # not hers, a relative clause, or a model serving
+            if shape == "subject" and last in _NOT_A_SUBJECT:
+                continue  # "has opened", "I opened": the other shapes read those
+            if shape == "subject" and place is not None and _THEN_A_VERB.match(text, place.end()):
+                continue  # "Apps started on your PC stay running": a noun phrase
+        if shape != "first" and any_in(others, verb_end, segment_end(verb_end)):
+            continue  # "…saved on your Dell by Windows Backup": another actor
+        word = m.group("word") if shape == "state" else m.group("verb")
+        word = " ".join(word.lower().split())
+        kind = _KIND_OF_WORD.get(word, "run")
+        if shape == "state":
+            if re.fullmatch(_NOW_STATE, word, re.I) and not (
+                re.search(r"\bnow\b", m.group("adverbs"), re.I)
+                or _NOW_AFTER.match(text, verb_end)
+                or (place is not None and _NOW_AFTER.match(text, place.end()))
+            ):
+                continue  # a plain state, not a change she made (C1)
+            copula = m.group("copula").strip().lower()
+            if word in ("installed", "uninstalled") and copula in ("is", "are", "'s", "’s"):
+                continue  # "Teams is installed": what the machine holds
+        named: str | None = None
+        generic = False
         if place is not None:
-            device = place.group("name") if "name" in anchor.groupindex else None
-            device = device or place.group("word")
-        if kind == "state":
-            if place is None:
-                continue  # no device of hers named: "the PR is now open on GitHub"
-            begin = _subject_start(text, start)
-            subject = text[begin:start].strip()
-            last = subject.rsplit(maxsplit=1)[-1].lower() if subject else ""
-            if last in _NOT_HER_SUBJECT:
-                continue  # second or third person, or "let's": not her claim
-            if _SERVING_SUBJECT.search(subject):
-                continue  # a model serving on a machine: the stack guards' business
-            return DeviceCompletionClaim(
-                phrase=text[begin : place.end()].strip()[:80], device=device
-            )
-        if kind == "head":
-            if place is None:
-                continue
-            return DeviceCompletionClaim(
-                phrase=text[m.start("verb") : place.end()].strip()[:80], device=device
-            )
-        # kind == "first": her own completed action
-        if place is not None:
-            return DeviceCompletionClaim(
-                phrase=text[start : place.end()].strip()[:80], device=device
-            )
-        if not unanchored_ok or " ".join(m.group("verb").lower().split()) not in _LIFECYCLE_VERBS:
+            for group in ("name", "word", "bare"):
+                if group in anchor.groupindex and place.group(group):
+                    named = place.group(group)
+                    break
+            generic = named is not None and named.lower() in _GENERIC_DEVICE
+        pronoun = False
+        if place is None:
+            if shape != "first" or word not in _LIFECYCLE_VERBS:
+                continue  # an unanchored claim is only her own lifecycle claim
+            thing = _APP_OBJECT.match(text, verb_end)
+            if thing is None:
+                it = _PRONOUN_OBJECT.match(text, verb_end)
+                if it is None:
+                    continue
+                pronoun, target, end = True, None, it.end()
+            else:
+                target = thing.group("object")
+                if _FILENAME.fullmatch(target) or _URL.match(target):
+                    continue  # a file or a page: another tool's object
+                end = thing.end()
+        else:
+            end = place.end()
+            target = subject if shape in ("state", "subject") else text[verb_end : place.start()]
+        backed, failure, attempted = _action_backing(spans, kind, named, generic, target)
+        if backed:
             continue
-        thing = _APP_OBJECT.match(text, m.end())
-        if thing is None:
-            continue
-        named = thing.group("object")
-        if _FILENAME.fullmatch(named) or _URL.match(named):
-            continue  # a file or a page: another tool's object
-        return DeviceCompletionClaim(phrase=text[start : thing.end()].strip()[:80])
+        if place is None:
+            if pronoun and not attempted:
+                continue  # "I launched it." with no launch made: "it" names nothing
+            if outside_ran and failure is None:
+                continue  # may be about a page or a file another tool opened
+        if shape in ("state", "subject"):
+            phrase_start = begin
+        else:
+            phrase_start = m.start("verb") if shape == "head" else position
+        tools_for_kind = tuple(t for t in DEVICE_ACTION_TOOLS[kind] if t in advertised)
+        return DeviceCompletionClaim(
+            phrase=text[phrase_start:end].strip()[:80],
+            device=named,
+            kind=kind,
+            tools=tools_for_kind or DEVICE_ACTION_TOOLS[kind],
+            failed=failure,
+            generic=generic,
+        )
     return None
 
 

@@ -76,45 +76,69 @@ def test_the_brave_turn_wrote_no_call():
     assert check(FE7E3198) is None
 
 
-# -- what counts as argument syntax -------------------------------------------
+# -- what counts: CODE, framed as her action now (fix round 1, C2) -----------
 
 
 @pytest.mark.parametrize(
     "reply",
     [
-        'device_info("DELL-XPS-8950")',
-        "device_info('DELL-XPS-8950')",
-        'device_info(device="DELL-XPS-8950")',
-        'device_info(device: "DELL-XPS-8950")',
-        'device_run(["ls", "-la"])',
-        'device_run(argv=["ls"])',
-        'device_run ["ls", "-la"]',
-        'device_run {"device": "DELL-XPS-8950", "argv": ["ls"]}',
-        'device_info "DELL-XPS-8950"',
-        "device_info 'DELL-XPS-8950'",
-        "device_list_files --device DELL-XPS-8950 --path /home",
-        'functions.device_run({"device": "DELL-XPS-8950", "argv": ["ls"]})',
-        'Running it now: `device_info("DELL-XPS-8950")`.',
-        'I am calling device_info("DELL-XPS-8950") to check.',
-        '```\ndevice_run(["ls"])\n```',
+        'Let me check:\n```\ndevice_info("DELL-XPS-8950")\n```',
+        "I'll check now: `device_info('DELL-XPS-8950')`",
+        'Running `device_info(device="DELL-XPS-8950")` now.',
+        'Now calling `device_info(device: "DELL-XPS-8950")`.',
+        'I\'ll run it:\n```\ndevice_run(["ls", "-la"])\n```',
+        'Launching it: `device_run(argv=["ls"])`',
+        'I\'m running `device_run ["ls", "-la"]` on your Dell.',
+        'Let me run:\n```\ndevice_run {"device": "DELL-XPS-8950", "argv": ["ls"]}\n```',
+        "No problem — I'll run `device_info 'DELL-XPS-8950'`.",
+        "Let me list them: `device_list_files --device DELL-XPS-8950 --path /home`",
+        'Now: `functions.device_run({"device": "DELL-XPS-8950", "argv": ["ls"]})`',
+        '1. Let me check the OS first:\n```\ndevice_info "DELL-XPS-8950"\n```',
+        'I haven\'t opened it yet. Let me launch it now:\n```\ndevice_run ["notepad"]\n```',
+        # A fence with nothing before it IS the answer.
+        '```\ndevice_info "DELL-XPS-8950"\n```',
         '```python\nresult = device_run(["ls"])\n```',
     ],
 )
-def test_a_written_call_fires(reply):
+def test_a_written_call_framed_as_her_action_now_fires(reply):
     claim = check(reply)
     assert claim is not None, reply
     assert claim.tools[0] in ("device_info", "device_run", "device_list_files")
 
 
 def test_the_longest_name_is_the_one_written():
-    claim = check('device_list_files("DELL-XPS-8950", "/home")')
+    claim = check('Let me list it: `device_list_files("DELL-XPS-8950", "/home")`')
     assert claim is not None and claim.tools == ("device_list_files",)
 
 
 def test_every_distinct_unbacked_tool_is_named_once_in_order():
-    reply = 'device_info "A"\ndevice_run ["ls"]\ndevice_info "B"'
+    reply = '```\ndevice_info "A"\ndevice_run ["ls"]\ndevice_info "B"\n```'
     claim = check(reply)
     assert claim is not None and claim.tools == ("device_info", "device_run")
+
+
+# -- a call in PROSE is a word, never a call (C2, I1a) --------------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        'device_info("DELL-XPS-8950")',
+        'I am calling device_info("DELL-XPS-8950") to check.',
+        'Let me run device_run ["ls"] for you.',
+        "device_list_files --device DELL-XPS-8950 --path /home",
+        # the English-word tool names (review I1a): notices, web_search
+        'You have two notices "Backup failed" and "Disk low", both from last week.',
+        "Your open notices “Backup failed” and “Disk low” are from last week.",
+        "The notices 'Backup failed' and 'Disk low' are still open.",
+        "There are 3 notices [1] Backup failed [2] Disk low [3] Timer late.",
+        'My web_search "latest pixel" from yesterday found the Pixel 10.',
+        'Yesterday I ran device_run ["notepad"] on your Dell.',
+        'I haven\'t called device_launch_app "DELL-XPS-8950" "Teams" yet.',
+    ],
+)
+def test_a_call_in_prose_never_fires(reply):
+    assert check(reply) is None, reply
 
 
 # -- an explanation, a signature, a mention: no argument, no call --------------
@@ -143,6 +167,76 @@ def test_every_distinct_unbacked_tool_is_named_once_in_order():
 )
 def test_no_argument_syntax_is_no_call(reply):
     assert check(reply) is None, reply
+
+
+# -- code that is NOT her action now: the review's shapes (C2, I1, I2) ---------
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    [
+        ("explain-like", 'device_run takes an argv list, like `device_run ["ls", "-la"]`.'),
+        ("explain-colon", 'device_run takes an argv list: `device_run ["ls", "-la"]`.'),
+        (
+            "tool-what-does",
+            'device_launch_app starts an app by name — `device_launch_app "DELL-XPS-8950" '
+            '"Notepad"` would open Notepad.',
+        ),
+        (
+            "would-run",
+            'To clear the temp folder I would run `device_run ["cmd", "/c", "del", "/q", '
+            '"C:\\\\Temp\\\\*"]`.',
+        ),
+        ("could-run", 'I could run `device_run ["shutdown", "/r", "/t", "0"]` to restart it.'),
+        (
+            "offer-fence",
+            'I can run this for you:\n```\ndevice_run ["cmd", "/c", "rmdir", "/s", "/q", '
+            '"C:\\\\Temp"]\n```\nWant me to go ahead?',
+        ),
+        ("offer-inline", 'Want me to run `device_run ["shutdown", "/r"]` now?'),
+        (
+            "if-you-want",
+            'If you want, I can call `device_write_file("notes.txt", "hello")` on your Dell.',
+        ),
+        (
+            "you-can-open-by",
+            'You can open Notepad by asking me to call `device_launch_app "DELL-XPS-8950" '
+            '"Notepad"`.',
+        ),
+        (
+            "bullet-list",
+            'My device tools:\n- `device_info "<device>"` — hardware and OS\n- `device_run '
+            '["argv"]` — run a program\n- `device_launch_app "<device>" "<app>"` — open an app',
+        ),
+        (
+            "numbered",
+            'Here is what each does:\n1. `device_run ["ls"]` lists a directory\n2. '
+            '`device_read_file("C:/x.txt")` reads a file',
+        ),
+        ("table", '| tool | example |\n|---|---|\n| device_run | `device_run ["ls"]` |'),
+        ("past-earlier", 'Earlier today I ran `device_run ["notepad"]` and it exited 0.'),
+        ("recap", 'Here is what I ran at 15:56: `device_run ["notepad"]` — exit 0.'),
+        ("the-command-was", 'The command I used last time was `device_run ["notepad"]`.'),
+        ("dont-run", 'Do not run `device_run ["format", "C:"]` — it would wipe the disk.'),
+        ("never-call", 'I will never call `device_run ["rm", "-rf", "/"]`.'),
+        ("i-didnt", 'I did not run `device_run ["notepad"]` this turn.'),
+        (
+            "the-nudge's-own-honest-answer",
+            'I have not run `device_launch_app "DELL-XPS-8950" "Teams"` — I only wrote it as '
+            "text, so nothing was launched.",
+        ),
+        (
+            "proposal-fence",
+            'To clear your temp folder I would run this:\n```\ndevice_run ["cmd", "/c", '
+            '"del", "/q", "/s", "C:\\\\Users\\\\Public\\\\Temp\\\\*"]\n```\n'
+            "Want me to go ahead?",
+        ),
+        ("show-you", 'Let me show you what the call looks like: `device_info "DELL-XPS-8950"`'),
+        ("warning-to-owner", 'Do not run `device_run ["format", "C:", "/q"]` on your Dell.'),
+    ],
+)
+def test_code_that_is_not_her_action_now_is_silent(label, reply):
+    assert check(reply) is None, label
 
 
 # -- a report of a call that ran ----------------------------------------------

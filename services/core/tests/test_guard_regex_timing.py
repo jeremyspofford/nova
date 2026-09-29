@@ -296,7 +296,8 @@ def test_the_sweep_now_reaches_the_new_capability_pattern():
 def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     """Pinned like test_tools_registry/test_eval_corpus (CLAUDE.md's
     pinned-expectation-suite convention): 162 -> 221, +59 at the amendment;
-    172 -> 233, +61 since the said-not-done pair (2026-09-29, below). This catches the
+    172 -> 233, +61 since the said-not-done pair, and 188 -> 249 since its fix
+    round 1 (2026-09-29, below). This catches the
     sweep silently losing reach (the count drops below 221) as sharply as it
     catches a change that inflates it for the wrong reason (a NEW id that
     was not really newly reachable, or a regression back to deduping by
@@ -330,11 +331,20 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
           module Pattern, so the fossil grows too: 162 -> 172, 221 -> 231.
        2  per-name builders added to the live walk only (the fossil is not
           evolved): `_written_call_pattern`, `_device_anchor`. 231 -> 233, and
-          the difference 59 -> 61."""
+          the difference 59 -> 61.
+
+    Its fix round 1 (2026-09-29) moved the two totals again, deliberately, and
+    not the difference: 16 new BARE module Patterns, reached by both walks —
+    `_RECAP_TIME`, `_LIST_ITEM`, the five `_WRITTEN_CALL_*` framings (LEAD,
+    NEGATION, HEDGE, PROPOSAL, PAST), `_SUBJECT_ACTION`, `_PRONOUN_OBJECT`,
+    `_STARTUP`, `_MD_LINK`, `_NOW_AFTER`, `_THEN_A_VERB`, `_RELAYED_THAT`,
+    `_CONTRACTION`, and `_BY_ANOTHER` (the same object as `_BY_OTHER` under a
+    second name, which this walk counts as its own id by design): 172 -> 188,
+    233 -> 249, the difference still 61."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 172, len(old)
-    assert len(new) == 233, len(new)
+    assert len(old) == 188, len(old)
+    assert len(new) == 249, len(new)
     assert len(new) - len(old) == 61
 
 
@@ -388,6 +398,14 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "first_person_then_spaces": "I have" + pad + "x",
         "anchor_then_spaces": "on your" + pad + "x",
         "example_then_spaces": "for" + pad + "x",
+        # fix round 1: a negation walking to its verb, a lead, a recap time, a
+        # link, a relayed "that", and a subject walking to its verb.
+        "negation_then_spaces": "not" + pad + "run",
+        "lead_then_spaces": "I am" + pad + "running",
+        "recap_then_spaces": "at" + pad + "15:56",
+        "link_then_spaces": "[" + half + "](" + half + "x",
+        "relayed_then_spaces": "reports" + pad + "that",
+        "subject_then_spaces": "Notepad" + pad + "opened",
     }
 
 
@@ -504,6 +522,16 @@ FIFTY_KB = [
     ("capitalised_run", "I opened " + "A" * 50_000),
     ("prose", _fifty_kb("The quick brown fox jumps over the lazy dog. ")),
     ("stars", _fifty_kb("**DELL-XPS-8950** ")),
+    # fix round 1's paths: a line of inline calls, one sentence of them, fenced
+    # calls under leads, a recap list, subject verbs, links, a dot run.
+    ("inline_calls_one_line", _fifty_kb('Let me run `device_info "x"` now. ')),
+    ("inline_calls_one_sentence", _fifty_kb('I\'ll run `device_info "x"` and ')),
+    ("fence_intros", _fifty_kb('I\'ll check:\n```\ndevice_info "x"\n```\n')),
+    ("recap_list", "Here's what I did today:\n" + _fifty_kb("- I opened Notepad on your Dell\n")),
+    ("subject_verbs", _fifty_kb("Notepad opened on your Dell and ")),
+    ("links", _fifty_kb("[DELL-XPS-8950](https://x.invalid/d) ")),
+    ("negated_calls", _fifty_kb('I did not run `device_run ["x"]` and ')),
+    ("dots", "." * 50_000),
 ]
 
 

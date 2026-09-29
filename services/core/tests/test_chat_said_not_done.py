@@ -5,11 +5,19 @@ tool as a fence and said Teams was opening; she said Notepad was open; she
 wrote device_info as a fence when asked why nothing opened. Zero calls each
 time, no guard fired, and all of it went into her memory.
 
-These drive the real route through a scripted gateway. Each claim takes the
+These drive the real route through a scripted gateway. The pair takes the
 turn's ONE redirect through `_claim_redirect` (tools advertised, so the MODEL
 makes the call — nothing here turns her text into one), the regeneration is
-vetted by the full guard set, a detection that is not corrected keeps the
-turn out of memory, and the budget is shared with every other claim.
+vetted by the full guard set, the turn ships ONE correction derived from its
+final spans, a detection that is not corrected keeps the turn out of memory,
+and the budget is shared with every other claim.
+
+Fix round 1 (2026-09-29): every chat-level probe of the adversarial review of
+bc89e231 is a test here, asserting what must happen instead — a read, a shell
+read, a backend check or another device never launders a claim (C1); a
+proposal, a recap or a warning is never redirected into an action (C2); a
+failure is stated with its reason, never as "nothing ran" (I1); and the
+nudge's own honest answer passes (I2).
 """
 
 from __future__ import annotations
@@ -21,9 +29,9 @@ import pytest
 from app import chat, guards, tools
 from app.tools import devices as device_tools
 from app.tools import web_search as web_search_tools
-from app.tools.base import Tool, ToolContext
+from app.tools.base import Tool, ToolContext, ToolFailure
 from tests.conftest import requires_db
-from tests.fakes import FakeMemory, ScriptedGateway
+from tests.fakes import FakeMemory, Refusal, ScriptedGateway
 from tests.said_not_done_walk import (
     DEVICE,
     T3DEE5106,
@@ -38,6 +46,7 @@ DONE = "[DONE]"
 SCHEMAS = {tool.name: tool.parameters for tool in device_tools.TOOLS}
 SEARCH_SCHEMA = next(t.parameters for t in web_search_tools.TOOLS if t.name == "web_search")
 LAUNCHED = f"{DEVICE}: asked Windows to launch Teams — whether a window opened is not confirmed."
+NAMES = tools.tool_names()
 
 
 class Spy:
@@ -51,14 +60,39 @@ class Spy:
 
 
 def _arm(monkeypatch, name: str, result: str, *, schema: dict | None = None) -> Spy:
-    """The registered tool with its REAL schema and a spy body: the redirect's
-    call validates like a real one and the spy proves the executor ran.
-    Not ephemeral, so a turn that ran it is ingested like any other."""
+    """The registered tool with its REAL schema and its REAL flags, and a spy
+    body: the redirect's call validates like a real one, the spy proves the
+    executor ran, and a read stays a read (a backend live check may run it
+    unasked). Ephemeral turned off, so a turn that ran it is ingested like
+    any other."""
     spy = Spy(result)
+    real = tools.REGISTRY.get(name)
     monkeypatch.setitem(
-        tools.REGISTRY, name, Tool(name, "d", schema or SCHEMAS[name], spy, ephemeral=False)
+        tools.REGISTRY,
+        name,
+        Tool(
+            name,
+            "d",
+            schema or SCHEMAS[name],
+            spy,
+            ephemeral=False,
+            reads_only=real.reads_only if real is not None else False,
+        ),
     )
     return spy
+
+
+def _arm_failing(monkeypatch, name: str, reason: str) -> list:
+    """The tool with its real schema, failing the way a device reports it: a
+    ToolFailure, which dispatch turns into an `Error:` result and ok=False."""
+    attempts: list = []
+
+    async def failing(args: dict, ctx: ToolContext) -> str:
+        attempts.append(args)
+        raise ToolFailure(reason)
+
+    monkeypatch.setitem(tools.REGISTRY, name, Tool(name, "d", SCHEMAS[name], failing))
+    return attempts
 
 
 def frames(body: str) -> list:
@@ -129,74 +163,143 @@ def _texts(sent: list) -> list[str]:
     return [f["t"] for f in sent if isinstance(f, dict) and "t" in f]
 
 
+def _system_nudges(gateway) -> list[str]:
+    out = []
+    for body in gateway.payloads:
+        messages = body.get("messages") or []
+        if messages and messages[-1].get("role") == "system":
+            out.append(messages[-1]["content"])
+    return out
+
+
+def _claim(reply: str, spans=()) -> guards.DeviceCompletionClaim:
+    claim = guards.device_completion_check(reply, list(spans), NAMES, [DEVICE])
+    assert claim is not None, reply
+    return claim
+
+
+NOTEPAD = _claim(T98ECFB11)
+TEAMS = _claim(T890B1C63)
+FAILED_REASON = "no Start-menu app named 'notepad++' and no program by that name on PATH"
+
+
+def _failed_claim() -> guards.DeviceCompletionClaim:
+    from types import SimpleNamespace
+
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_launch_app",
+        meta={
+            "ok": False,
+            "args_redacted": {"app": "notepad++", "device": DEVICE},
+            "error": f"Error: {DEVICE}: {FAILED_REASON}",
+        },
+    )
+    return _claim("I launched Notepad++ on your DELL-XPS-8950.", [span])
+
+
 # -- the texts the turn ships: true, and clean under every guard ---------------
 
 
-def test_the_nudges_say_the_facts_and_refuse_to_lie():
+def test_the_written_call_nudge_offers_a_clean_way_out():
+    """(C2) It never pushes an action she may not have meant: make the call if
+    she meant to run it now, keep her reply if she was explaining, proposing
+    or asking."""
     nudge = chat.written_call_redirect_nudge(names=("device_launch_app",), ran_a_tool=False)
     assert nudge == (
         "You wrote a call to device_launch_app as text — text never runs a tool. If you "
-        "meant to do it, make the call now; otherwise say plainly that you have not done it."
+        "meant to run it now, make the call; if you were explaining, proposing or asking, "
+        "keep your reply as it is."
     )
-    phrase = "Notepad is now open on your DELL-XPS-8950"
-    nudge = chat.device_completion_redirect_nudge(phrase=phrase, ran_a_tool=False)
-    assert nudge == (
-        "You said “Notepad is now open on your DELL-XPS-8950”, but no device tool ran this "
-        "turn. Do it now with the tool, or say plainly that you have not done it."
+    several = chat.written_call_redirect_nudge(
+        names=("device_info", "device_run"), ran_a_tool=False
     )
-    # Built only when nothing has run — _claim_redirect's own precondition.
+    assert several.startswith("You wrote calls to device_info and device_run as text")
+    assert "make the calls;" in several
     with pytest.raises(ValueError):
         chat.written_call_redirect_nudge(names=("device_info",), ran_a_tool=True)
+
+
+def test_the_completion_nudge_names_the_tools_that_would_have_done_it():
+    """(C1) "no device tool ran" is false when a READ ran; what is true is that
+    none of the tools that perform the action did."""
+    assert chat.device_completion_redirect_nudge(NOTEPAD, ran_a_tool=False) == (
+        "You said “Notepad is now open on your DELL-XPS-8950”, but no device_launch_app or "
+        "device_run call ran on DELL-XPS-8950 this turn. Do it now with the tool, or say "
+        "plainly that you have not done it."
+    )
     with pytest.raises(ValueError):
-        chat.device_completion_redirect_nudge(phrase=phrase, ran_a_tool=True)
+        chat.device_completion_redirect_nudge(NOTEPAD, ran_a_tool=True)
 
 
-def test_several_written_tools_are_named_together():
-    nudge = chat.written_call_redirect_nudge(names=("device_info", "device_run"), ran_a_tool=False)
-    assert nudge.startswith("You wrote calls to device_info and device_run as text")
+def test_a_failure_nudge_states_the_failure_and_pushes_no_retry():
+    """(I1) the call that would have done it FAILED: say so, with its reason —
+    never "nothing ran", never "do it now"."""
+    nudge = chat.device_completion_redirect_nudge(_failed_claim(), ran_a_tool=False)
+    assert nudge == (
+        "You said “I launched Notepad++ on your DELL-XPS-8950”, but device_launch_app failed on "
+        f"DELL-XPS-8950: {FAILED_REASON} — it did not open. Say so plainly; do not claim it "
+        "opened."
+    )
+    assert "no device" not in nudge and "Do it now" not in nudge
+
+
+def test_the_corrections_say_only_what_the_record_shows():
+    assert chat._device_completion_honest_note(NOTEPAD) == (
+        "Correction: I said “Notepad is now open on your DELL-XPS-8950”, but no "
+        "device_launch_app or device_run call ran on DELL-XPS-8950 this turn — I did not do "
+        "that, and I have not checked whether it is so. Ask me again and I'll do it."
+    )
+    assert chat._device_failure_correction(_failed_claim()) == (
+        "Correction: I said “I launched Notepad++ on your DELL-XPS-8950”, but "
+        f"device_launch_app failed on DELL-XPS-8950: {FAILED_REASON} — it did not open."
+    )
+    assert chat._written_and_claimed_correction(("device_launch_app",), TEAMS) == (
+        "Correction: I wrote device_launch_app as text instead of calling it — text never "
+        "runs a tool, so no device_launch_app or device_run call ran on DELL-XPS-8950 this "
+        "turn and I did not do what I said (“Teams is now opening on your DELL-XPS-8950”). "
+        "Ask me again and I'll make the call."
+    )
+    note = chat._written_call_honest_note(("device_info", "device_run"))
+    assert "none of them ran this turn" in note
+    # None says the app is closed: nothing checked that either.
+    for said in (chat._device_completion_honest_note(NOTEPAD), note):
+        assert "not open" not in said and "closed" not in said
 
 
 def test_every_note_and_nudge_is_clean_under_the_whole_guard_family():
     """Backend text the turn ships or sends must never itself trip a guard —
     the family's pinned property, extended to the two new claims."""
-    names = tools.tool_names()
-    phrase = "Notepad is now open on your DELL-XPS-8950"
     shipped = (
         chat.written_call_redirect_nudge(names=("device_launch_app",), ran_a_tool=False),
         chat.written_call_redirect_nudge(names=("device_info", "device_run"), ran_a_tool=False),
-        chat.device_completion_redirect_nudge(phrase=phrase, ran_a_tool=False),
-        chat.device_completion_redirect_nudge(phrase="I opened Teams", ran_a_tool=False),
+        chat.device_completion_redirect_nudge(NOTEPAD, ran_a_tool=False),
+        chat.device_completion_redirect_nudge(TEAMS, ran_a_tool=False),
+        chat.device_completion_redirect_nudge(_failed_claim(), ran_a_tool=False),
+        chat.device_completion_redirect_nudge(_claim("I opened Teams."), ran_a_tool=False),
         chat._written_call_honest_note(("device_launch_app",)),
         chat._written_call_honest_note(("web_search", "fetch_url")),
-        chat._device_completion_honest_note(phrase),
-        chat._device_completion_honest_note("I've stopped the service"),
+        chat._device_completion_honest_note(NOTEPAD),
+        chat._device_completion_honest_note(_claim("I've stopped the service.")),
+        chat._device_failure_correction(_failed_claim()),
+        chat._written_and_claimed_correction(("device_launch_app",), TEAMS),
+        chat._bare_intent_ran_but_unreported_note("device_launch_app"),
         chat.WRITTEN_CALL_REDIRECT_NOTE,
         chat.WRITTEN_CALL_REDIRECT_NOTE_NO_CALL,
         chat.DEVICE_COMPLETION_REDIRECT_NOTE,
         chat.DEVICE_COMPLETION_REDIRECT_NOTE_NO_CALL,
     )
     for said in shipped:
-        assert guards.written_call_check(said, [], names) is None, said
-        assert guards.device_completion_check(said, [], names, [DEVICE]) is None, said
+        assert guards.written_call_check(said, [], NAMES) is None, said
+        assert guards.device_completion_check(said, [], NAMES, [DEVICE]) is None, said
         for instruction in ("", T98ECFB11_ASKED, "check the web for the latest pixel phone"):
-            assert guards.deferral_check(said, [], names, user_message=instruction) is None, said
+            assert guards.deferral_check(said, [], NAMES, user_message=instruction) is None, said
         assert guards.bare_intent_check(said, []) is None, said
         assert guards.narration_check(said, []) is None, said
         assert guards.consent_claim_check(said) is None, said
-        assert guards.capability_claim_check(said, names) is None, said
+        assert guards.capability_claim_check(said, NAMES) is None, said
         assert guards.state_claim_check(said, [], [DEVICE], purpose="chat") is None, said
         assert guards.presented_listing_check(said, [], []) is None, said
-
-
-def test_the_notes_say_only_what_is_mechanically_true():
-    note = chat._written_call_honest_note(("device_info",))
-    assert "device_info did not run this turn" in note
-    note = chat._written_call_honest_note(("device_info", "device_run"))
-    assert "none of them ran this turn" in note
-    note = chat._device_completion_honest_note("Notepad is now open on your DELL-XPS-8950")
-    assert "no device tool ran this turn" in note
-    # It does NOT say Notepad is closed: nothing checked that either.
-    assert "not open" not in note and "closed" not in note
 
 
 # -- the written-call guard, live ---------------------------------------------
@@ -256,7 +359,7 @@ async def test_a_regen_that_writes_the_call_again_is_refused_and_the_note_is_app
 ):
     """The why-not turn, verbatim. Bounded to ONE redirect: the regeneration
     writes device_info as a fence again, the written-call guard refuses it by
-    name, the honest note is APPENDED (the reply's manual steps may be real
+    name, the correction is APPENDED (the reply's manual steps may be real
     content), and the turn stays out of memory. No third gateway call."""
     await _pair(pool)
     info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
@@ -288,13 +391,13 @@ async def test_a_regen_that_writes_the_call_again_is_refused_and_the_note_is_app
 
 
 @requires_db
-async def test_both_claims_in_one_reply_share_one_redirect_and_both_notes_stand(
+async def test_both_claims_in_one_reply_share_one_redirect_and_one_correction(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """The Teams turn again, and this time the one redirect fails. The written
-    call had the budget; the completion claim still files its ONE span, says
-    why it did not redirect, and its note follows the first. Two gateway
-    calls, never three."""
+    """The Teams turn again, and this time the one redirect fails. (I1) The
+    turn ships exactly ONE correction, covering the written call AND the
+    "Teams is now opening" beside it; the completion claim files its own span
+    and says its correction was joined. Two gateway calls, never three."""
     await _pair(pool)
     launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
     again = '```bash\ndevice_launch_app "DELL-XPS-8950" "Teams"\n```'
@@ -306,10 +409,9 @@ async def test_both_claims_in_one_reply_share_one_redirect_and_both_notes_stand(
 
     assert gateway.calls == 2
     assert launcher.calls == []  # the fenced call, written twice, never ran
-    written = chat._written_call_honest_note(("device_launch_app",))
-    completion = chat._device_completion_honest_note("Teams is now opening on your DELL-XPS-8950")
-    assert await _stored(pool) == f"{T890B1C63}\n\n{written}\n\n{completion}"
-    assert _corrections(sent) == [written, completion]
+    one = chat._written_and_claimed_correction(("device_launch_app",), TEAMS)
+    assert await _stored(pool) == f"{T890B1C63}\n\n{one}"
+    assert _corrections(sent) == [one]
 
     (written_span,) = await _named(pool, "written_call")
     assert written_span["meta"]["redirected"] is False
@@ -319,6 +421,7 @@ async def test_both_claims_in_one_reply_share_one_redirect_and_both_notes_stand(
     assert completion_span["meta"]["phrase"] == "Teams is now opening on your DELL-XPS-8950"
     assert completion_span["meta"]["redirected"] is False
     assert completion_span["meta"]["not_redirected_because"] == "redirect_spent"
+    assert completion_span["meta"]["correction"] == "joined"
 
     await chat.drain_background()
     assert memory.ingests == []
@@ -334,7 +437,7 @@ async def test_a_written_call_after_another_tool_ran_is_noted_never_redirected(
     await _pair(pool)
     lister = _arm(monkeypatch, "device_list_apps", f"Apps on {DEVICE}:\nTeams\nNotepad")
     launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
-    reply = 'Teams is installed. ```device_launch_app "DELL-XPS-8950" "Teams"```'
+    reply = 'Teams is installed. Launching it: `device_launch_app "DELL-XPS-8950" "Teams"`'
     gateway = ScriptedGateway(
         rounds=((call("device_list_apps", {"device": DEVICE}, "c1"),), (text(reply),))
     )
@@ -361,7 +464,7 @@ async def test_a_written_call_after_another_tool_ran_is_noted_never_redirected(
 async def test_a_written_call_goes_before_a_deferral_and_spends_the_budget(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """A commitment ("I'll search the web") AND the search written as text:
+    """A commitment ("I'll search the web") AND the search written as code:
     the written call is the claim that can be fixed WITH tools, so it has the
     budget first. The regeneration searches, stands, and the text-only
     commitment redirect never runs — three gateway calls, one redirect."""
@@ -445,7 +548,10 @@ async def test_a_hard_correction_keeps_the_redirect_off_and_the_turn_out_of_memo
     — like the timer completion shape — no regeneration runs over it. The
     written call still files its one span, says why, and appends its note."""
     await _pair(pool)
-    reply = 'I saved report.md for you.\n```\ndevice_info "DELL-XPS-8950"\n```'
+    reply = (
+        "I saved report.md for you. Let me check the Dell too:\n"
+        '```\ndevice_info "DELL-XPS-8950"\n```'
+    )
     gateway = ScriptedGateway(rounds=((text(reply),),))
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
@@ -496,6 +602,7 @@ async def test_the_notepad_claim_redirects_and_the_launch_really_runs(
     assert meta["detected"] is True
     assert meta["phrase"] == "Notepad is now open on your DELL-XPS-8950"
     assert meta["device"] == DEVICE
+    assert meta["action"] == "launch"
     assert meta["redirected"] is True
     await chat.drain_background()
     assert [i["exchange"]["assistant"] for i in memory.ingests] == [done]
@@ -537,7 +644,7 @@ async def test_a_completion_regen_that_claims_it_again_is_refused(
     sent = await _say(owner_client, T98ECFB11_ASKED)
 
     assert gateway.calls == 2
-    note = chat._device_completion_honest_note("Notepad is now open on your DELL-XPS-8950")
+    note = chat._device_completion_honest_note(NOTEPAD)
     assert await _stored(pool) == f"{T98ECFB11}\n\n{note}"
     assert _corrections(sent) == [note]
     (span,) = await _named(pool, "device_completion")
@@ -569,6 +676,394 @@ async def test_a_real_launch_backs_the_claim_and_nothing_fires(
     assert await _stored(pool) == reply
     assert await _named(pool, "device_completion") == []
     assert await _named(pool, "written_call") == []
+
+
+# -- the review's chat-level probes, each now asserting what must happen -------
+
+
+def _apps_memory() -> FakeMemory:
+    """A recalled note whose live source is device_list_apps on the Dell: the
+    backend runs that read UNASKED before she answers (live_facts)."""
+    return FakeMemory(
+        results=(
+            {
+                "title": "Apps on the Dell",
+                "snippet": "Notepad and Teams are installed on DELL-XPS-8950",
+                "kind": "topic",
+                "created": "2026-09-28",
+                "live_source": {"tool": "device_list_apps", "args": {"device": DEVICE}},
+            },
+        )
+    )
+
+
+@requires_db
+async def test_A_a_backend_check_never_backs_her_claim(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(C1, review A) A live check the BACKEND ran unasked read the Dell's
+    apps; it launched nothing. The Notepad claim fires. A tool ran this turn,
+    so no redirect (a second dispatch is worse than the lie): the correction is
+    appended and the turn stays out of memory."""
+    await _pair(pool)
+    lister = _arm(monkeypatch, "device_list_apps", f"Apps on {DEVICE}:\n2 apps\nNotepad\nTeams")
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    memory = _apps_memory()
+    gateway = ScriptedGateway(rounds=((text(T98ECFB11),),))
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert gateway.calls == 1
+    assert lister.calls == [{"device": DEVICE}]  # the backend's unasked read
+    assert launcher.calls == []
+    note = chat._device_completion_honest_note(NOTEPAD)
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{note}"
+    assert _corrections(sent)[-1] == note
+    (span,) = await _named(pool, "device_completion")
+    assert span["meta"]["not_redirected_because"] == "tools_already_ran"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "label,read,args",
+    [
+        ("B1 a read of the apps", "device_list_apps", {"device": DEVICE}),
+        ("B2 a shell read", "device_run", {"device": DEVICE, "argv": ["tasklist"]}),
+    ],
+)
+async def test_B_a_redirect_that_only_reads_cannot_launder_the_claim(
+    label, read, args, owner_client, pool, mount_peers, monkeypatch
+):
+    """(C1, review B1 and B2) The redirect reads the Dell — its apps, or a
+    `tasklist` through device_run — then claims Notepad is open. Neither
+    launched Notepad: the regeneration is refused, the live note never says
+    "doing it now", and the ONE correction persists, not ingested."""
+    await _pair(pool)
+    reader = _arm(monkeypatch, read, f"{DEVICE}: read ok")
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(T98ECFB11),),
+            (call(read, args),),
+            (text("Notepad is now open on your DELL-XPS-8950."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert gateway.calls == 3, label
+    assert reader.calls == [args], label
+    assert launcher.calls == [], label
+    note = chat._device_completion_honest_note(NOTEPAD)
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{note}", label
+    assert _corrections(sent) == [note], label
+    (span,) = await _named(pool, "device_completion")
+    assert span["meta"]["regen_rejected_by"] == "device_completion", label
+    await chat.drain_background()
+    assert memory.ingests == [], label
+
+
+@requires_db
+async def test_B3_a_written_call_redirect_that_reads_instead_is_one_correction(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(C1, I1, review B3) The Teams turn: the redirect calls device_info
+    instead of the launch, then says Teams is open. Refused; the note never
+    said "making that call"; ONE correction covers the written call and the
+    claim."""
+    await _pair(pool)
+    info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11 Pro")
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(T890B1C63),),
+            (call("device_info", {"device": DEVICE}),),
+            (text("Teams is now open on your DELL-XPS-8950."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T890B1C63_ASKED)
+
+    assert info.calls == [{"device": DEVICE}]
+    assert launcher.calls == []
+    one = chat._written_and_claimed_correction(("device_launch_app",), TEAMS)
+    assert await _stored(pool) == f"{T890B1C63}\n\n{one}"
+    assert _corrections(sent) == [one]
+    (written_span,) = await _named(pool, "written_call")
+    assert written_span["meta"]["regen_rejected_by"] == "device_completion"
+
+
+@requires_db
+async def test_B4_a_read_then_a_written_launch_leaves_the_true_correction(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(C1, review B4) The Notepad turn: the redirect reads the Dell, then
+    writes the launch as text. Before, the read "backed" the claim and the
+    correction became "I ran device_info but could not report…". Now the read
+    backs nothing, and what persists is what is true: nothing that could open
+    Notepad ran."""
+    await _pair(pool)
+    _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11 Pro")
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(T98ECFB11),),
+            (call("device_info", {"device": DEVICE}),),
+            (text('Launching now:\n```\ndevice_launch_app "DELL-XPS-8950" "Notepad"\n```'),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert launcher.calls == []
+    note = chat._device_completion_honest_note(NOTEPAD)
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{note}"
+    assert _corrections(sent) == [note]
+    (span,) = await _named(pool, "device_completion")
+    assert span["meta"]["regen_rejected_by"] == "written_call"
+
+
+@requires_db
+async def test_B5_a_failed_launch_in_the_redirect_is_one_correction_with_its_reason(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(I1, review B5) The Teams turn: the redirect really calls
+    device_launch_app and it FAILS; its closing round claims Teams is open.
+    Before, two corrections contradicted each other ("I ran a tool…" and "no
+    device tool ran"). Now ONE states the failure and its reason."""
+    await _pair(pool)
+    attempts = _arm_failing(
+        monkeypatch,
+        "device_launch_app",
+        f"{DEVICE}: no Start-menu app named 'Teams' and no program by that name on PATH",
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(T890B1C63),),
+            (call("device_launch_app", {"device": DEVICE, "app": "Teams"}),),
+            (text("Teams is now open on your DELL-XPS-8950."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, T890B1C63_ASKED)
+
+    assert attempts == [{"device": DEVICE, "app": "Teams"}]
+    one = (
+        "Correction: I said “Teams is now opening on your DELL-XPS-8950”, but device_launch_app "
+        "failed on DELL-XPS-8950: no Start-menu app named 'Teams' and no program by that name "
+        "on PATH — it did not open."
+    )
+    assert await _stored(pool) == f"{T890B1C63}\n\n{one}"
+    assert _corrections(sent) == [one]
+    (completion_span,) = await _named(pool, "device_completion")
+    assert completion_span["meta"]["correction"] == "joined"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+@requires_db
+async def test_C_a_failed_launch_is_stated_with_its_reason_never_as_nothing_ran(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(I1, review C) She called device_launch_app, it FAILED, and she said she
+    launched it. The nudge states the failure with its reason and pushes no
+    retry; the regeneration that claims it again is refused; the correction
+    states the failure."""
+    await _pair(pool)
+    attempts = _arm_failing(monkeypatch, "device_launch_app", f"{DEVICE}: {FAILED_REASON}")
+    claimed = "I launched Notepad++ on your DELL-XPS-8950."
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad++"}, "c1"),),
+            (text(claimed),),
+            (text("Notepad is open on your DELL-XPS-8950 now."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "open notepad++ on my dell")
+
+    assert gateway.calls == 3
+    assert attempts == [{"device": DEVICE, "app": "notepad++"}]  # never retried by the redirect
+    nudge = _system_nudges(gateway)[-1]
+    assert nudge == chat.device_completion_redirect_nudge(_failed_claim(), ran_a_tool=False)
+    assert "no device" not in nudge and "Do it now" not in nudge
+    correction = chat._device_failure_correction(_failed_claim())
+    assert await _stored(pool) == f"{claimed}\n\n{correction}"
+    assert _corrections(sent) == [correction]
+    (span,) = await _named(pool, "device_completion")
+    assert span["meta"]["failed"] == "device_launch_app"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+@requires_db
+async def test_C2_a_plusplus_app_claimed_again_after_its_failure_is_refused(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(I3, review C2) "Notepad++ is open … now" after the launch failed: the
+    "++" ends the subject and "now" after the device marks the change. The
+    regeneration is refused, not stored, not ingested."""
+    await _pair(pool)
+    _arm_failing(monkeypatch, "device_launch_app", f"{DEVICE}: {FAILED_REASON}")
+    regen = "Notepad++ is open on your DELL-XPS-8950 now."
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad++"}, "c1"),),
+            (text("I launched Notepad++ on your DELL-XPS-8950."),),
+            (text(regen),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client, "open notepad++ on my dell")
+
+    assert await _stored(pool) != regen
+    (span,) = await _named(pool, "device_completion")
+    assert span["meta"]["regen_rejected_by"] == "device_completion"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "label,first,reply,asked",
+    [
+        (
+            "D a recap",
+            None,
+            "Today I opened Notepad on your DELL-XPS-8950 and sent you a test notification.",
+            "what did you do on my dell today?",
+        ),
+        (
+            "D2 a recap beside a clock read",
+            "get_time",
+            "Today I opened Notepad on your DELL-XPS-8950 at 15:56.",
+            "what did you do on my dell today, and what time is it?",
+        ),
+        (
+            "E a proposal",
+            None,
+            'To clear your temp folder I would run this:\n```\ndevice_run ["cmd", "/c", '
+            '"del", "/q", "/s", "C:\\\\Users\\\\Public\\\\Temp\\\\*"]\n```\nWant me to go ahead?',
+            "how would I clear the temp folder on my dell?",
+        ),
+        (
+            "G a warning",
+            "get_time",
+            'Do not run `device_run ["format", "C:", "/q"]` on your Dell — it would wipe the disk.',
+            "what time is it, and is it safe to format my dell's C drive?",
+        ),
+    ],
+)
+async def test_recaps_proposals_and_warnings_are_never_turned_into_actions(
+    label, first, reply, asked, owner_client, pool, mount_peers, monkeypatch
+):
+    """(C2, I1a, review D, D2, E, G) Before, each of these took a "do it now"
+    redirect: the recap re-launched Notepad, the proposal ran a recursive
+    delete, the warning was "corrected" as a call to make. Now nothing fires:
+    one answer, no redirect, no tool, the reply as she wrote it."""
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    runner = _arm(monkeypatch, "device_run", f"{DEVICE} ran ['cmd'] — exit 0")
+    rounds = [(text(reply),)]
+    if first is not None:
+        rounds.insert(0, (call(first, {}, "c1"),))
+    gateway = ScriptedGateway(rounds=tuple(rounds))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, asked)
+
+    assert gateway.calls == len(rounds), label
+    assert launcher.calls == [] and runner.calls == [], label
+    assert await _stored(pool) == reply, label
+    assert _corrections(sent) == [], label
+    assert await _named(pool, "written_call") == [], label
+    assert await _named(pool, "device_completion") == [], label
+
+
+@requires_db
+async def test_F_the_nudges_own_honest_answer_stands(owner_client, pool, mount_peers, monkeypatch):
+    """(I2, review F) Asked to make the call or say plainly she has not, she
+    says plainly she has not — and names the call she wrote. Before, the re-vet
+    refused that very answer as another written call. Now it stands, with the
+    note that says it answered again, and nothing ran."""
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    plain = (
+        'I have not run `device_launch_app "DELL-XPS-8950" "Teams"` — I only wrote it as text, '
+        "so nothing was launched."
+    )
+    gateway = ScriptedGateway(rounds=((text(T890B1C63),), (text(plain),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T890B1C63_ASKED)
+
+    assert launcher.calls == []
+    assert await _stored(pool) == plain
+    assert _corrections(sent) == [chat.WRITTEN_CALL_REDIRECT_NOTE_NO_CALL]
+    (span,) = await _named(pool, "written_call")
+    assert span["meta"]["redirected"] is True
+    assert "regen_rejected_by" not in span["meta"]
+
+
+@requires_db
+async def test_a_redirect_that_only_read_never_says_it_did_the_work(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(C1) The redirect lists the apps and answers honestly that Notepad is
+    installed but not opened. It stands — but the live note says it answered
+    again, not "doing that now": a read is not the action."""
+    await _pair(pool)
+    _arm(monkeypatch, "device_list_apps", f"Apps on {DEVICE}:\nNotepad")
+    honest = "Notepad is installed on your DELL-XPS-8950, but I have not opened it."
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(T98ECFB11),),
+            (call("device_list_apps", {"device": DEVICE}),),
+            (text(honest),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert await _stored(pool) == honest
+    assert _corrections(sent) == [chat.DEVICE_COMPLETION_REDIRECT_NOTE_NO_CALL]
+
+
+@requires_db
+async def test_H_a_gateway_failure_in_the_redirect_fails_open(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """(review H) The redirect's gateway refuses: the turn still ships, with the
+    correction appended, no error frame, and nothing ingested."""
+    await _pair(pool)
+    _arm(monkeypatch, "device_launch_app", LAUNCHED)
+    gateway = ScriptedGateway(
+        rounds=((text(T98ECFB11),), Refusal(502, {"error": {"message": "upstream down"}}))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    note = chat._device_completion_honest_note(NOTEPAD)
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{note}"
+    assert not [f for f in sent if isinstance(f, dict) and "error" in f]
+    await chat.drain_background()
+    assert memory.ingests == []
 
 
 # -- the rest of the family is vetted by them too ------------------------------
