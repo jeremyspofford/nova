@@ -288,6 +288,91 @@ async def test_every_call_walks_the_decisions_role_under_the_turns_attribution(m
         assert call["headers"]["x-nova-turn-id"] == str(turn.id)
         assert "model" not in call["body"], "the decisions chain decides who answers"
         assert json.loads(call["body"]["state"])["owner_message"] == PHONE
+        # No kinds stated, none named: the gateway reads that as every kind.
+        assert "x-nova-decision-kinds" not in call["headers"]
+    assert "kinds" not in _span(turn).meta
+
+
+# -- the two switches (decision-role spec §6) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kinds", "named"),
+    [({"cloud"}, "cloud"), ({"local"}, "local"), ({"local", "cloud"}, "cloud,local")],
+)
+async def test_every_call_names_the_kinds_of_decision_model_the_owner_allows(
+    mount_peers, kinds, named
+):
+    """Every call, every round: the gateway passes over a link of any other
+    kind, in words, and the span keeps what was allowed."""
+    gateway = FakeGateway(decision_answer=decider())
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(
+        app, turn, PHONE, NOTES, PATHS, tools.advertised_tools(), kinds=frozenset(kinds)
+    )
+
+    assert advice.hint is not None
+    assert len(gateway.decision_calls) == 4
+    assert {c["headers"]["x-nova-decision-kinds"] for c in gateway.decision_calls} == {named}
+    meta = _span(turn).meta
+    assert meta["outcome"] == "decided"
+    assert meta["kinds"] == sorted(kinds)
+
+
+async def test_with_both_decision_models_switched_off_nothing_is_asked_and_the_span_says_so(
+    mount_peers,
+):
+    """No call and no delay: the turn is exactly the turn it was before this
+    module existed, and its one `decisions` span says the step is off."""
+    gateway = FakeGateway(decision_answer=decider())
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(
+        app, turn, PHONE, NOTES, PATHS, tools.advertised_tools(), kinds=frozenset()
+    )
+
+    assert advice == decisions.Advice()
+    assert gateway.decision_calls == []
+    span = _span(turn)
+    assert span.meta == {
+        "outcome": "off",
+        "why": "both decision models are switched off in Settings, so none was asked",
+        "kinds": [],
+        "calls": 0,
+        "served_by": [],
+    }
+    assert span.duration_ms < 100
+
+
+async def test_with_nothing_left_to_answer_the_step_fails_open_at_once_in_the_gateways_words(
+    mount_peers,
+):
+    """One kind switched off and the chain holding only that kind: the gateway
+    answers 503 at once, in words, and the step fails open with them — the
+    budget is never waited out."""
+    said = (
+        "no model in the 'decisions' chain can serve right now — dell-kev:kev-latest: local "
+        "decision models are switched off in Settings (alpha)"
+    )
+    gateway = FakeGateway(
+        decision_answer=lambda body: JSONResponse({"error": said}, status_code=503)
+    )
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(
+        app, turn, PHONE, NOTES, PATHS, tools.advertised_tools(), kinds=frozenset({"cloud"})
+    )
+
+    assert advice == decisions.Advice()
+    span = _span(turn)
+    assert span.meta["outcome"] == "failed_open"
+    assert span.meta["reason"] == f"the gateway refused (503): {said}"
+    assert span.meta["calls"] == 1
+    assert span.duration_ms < 1000, "the 5 s budget is not waited out"
 
 
 async def test_with_no_decision_model_nothing_is_applied_and_the_span_says_why(mount_peers):

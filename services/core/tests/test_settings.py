@@ -8,7 +8,11 @@ new hour would otherwise sit in the table doing nothing.
 
 from __future__ import annotations
 
-from app import beats, schedule
+import importlib
+
+import pytest
+
+from app import beats, decisions, schedule, settings_store
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -53,6 +57,12 @@ KNOWN_KEYS = {
     # has to be generating before the beat says so. A knob because 5x is a
     # judgement call, and the thing it moves is a sentence in the digest.
     "inference.degraded_factor",
+    # The decision role's two switches (decision-role spec §6, owner
+    # 2026-09-29): which kinds of decision model may answer — local (alpha,
+    # off until he turns it on) and cloud (beta, on). Deliberate tripwire
+    # update: two defs landed, so the set moved by two.
+    "decisions.local",
+    "decisions.cloud",
 }
 
 
@@ -204,6 +214,73 @@ async def test_the_validate_hook_runs_after_the_type_check(owner_client):
 async def test_the_listing_carries_no_validate_callable(owner_client):
     for item in (await _by_key(owner_client)).values():
         assert set(item) == {"key", "type", "default", "description", "value"}
+
+
+# -- the decision role's two switches (decision-role spec §6) -----------------
+
+
+async def test_the_decision_switches_ship_local_off_and_cloud_on(owner_client, pool):
+    """Local is alpha and off until he turns it on; cloud is beta and on. Each
+    description is the notice Settings shows under its switch, so it says why
+    — the budget in it read off the step's own constant, never typed twice."""
+    items = await _by_key(owner_client)
+
+    assert (items["decisions.local"]["type"], items["decisions.cloud"]["type"]) == ("bool", "bool")
+    assert items["decisions.local"]["default"] is False
+    assert items["decisions.local"]["value"] is False
+    assert items["decisions.cloud"]["default"] is True
+    assert items["decisions.cloud"]["value"] is True
+    assert items["decisions.local"]["description"] == (
+        "A decision model on your own machine may answer before she replies. Off by default: "
+        "on a GPU shared with your chat model, a local decision model often cannot answer "
+        "within the 5 s budget; the step is then skipped and your message waits up to 5 s."
+    )
+    assert items["decisions.cloud"]["description"] == (
+        "A decision model at a cloud provider may answer before she replies. On by default: "
+        "your message and its recalled notes go to the provider, at a small cost per message."
+    )
+    assert await settings_store.decision_kinds(pool) == {"cloud"}
+
+
+async def test_the_budget_in_the_local_switchs_notice_is_the_steps_own(monkeypatch):
+    """Read off decisions.TURN_BUDGET_S when the registry is built, so the
+    notice cannot say one budget while the step runs another."""
+    monkeypatch.setattr(decisions, "TURN_BUDGET_S", 3.5)
+
+    reloaded = importlib.reload(settings_store)
+    try:
+        said = reloaded.DEFS_BY_KEY["decisions.local"].description
+    finally:
+        monkeypatch.undo()
+        importlib.reload(settings_store)
+
+    assert "within the 3.5 s budget" in said and "waits up to 3.5 s" in said
+
+
+@pytest.mark.parametrize("key", ["decisions.local", "decisions.cloud"])
+@pytest.mark.parametrize("value", ["yes", 1, None, "true"])
+async def test_a_decision_switch_takes_true_or_false_and_nothing_else(
+    owner_client, pool, key, value
+):
+    resp = await owner_client.put("/api/v1/settings", json={"key": key, "value": value})
+
+    assert resp.status_code == 400
+    assert f"setting {key} expects bool" in resp.json()["error"]
+    assert await pool.fetchval("SELECT count(*) FROM settings") == 0
+
+
+async def test_the_kinds_allowed_follow_both_switches(owner_client, pool):
+    async def switch(key: str, value: bool) -> None:
+        resp = await owner_client.put("/api/v1/settings", json={"key": key, "value": value})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"key": key, "value": value}
+
+    await switch("decisions.local", True)
+    assert await settings_store.decision_kinds(pool) == {"local", "cloud"}
+    await switch("decisions.cloud", False)
+    assert await settings_store.decision_kinds(pool) == {"local"}
+    await switch("decisions.local", False)
+    assert await settings_store.decision_kinds(pool) == frozenset()
 
 
 # -- the proactive engine's three settings (S11) -------------------------------

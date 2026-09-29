@@ -134,6 +134,66 @@ async def test_with_no_decision_model_the_turn_is_the_turn_it_was(pool, mount_pe
     assert "the decisions chain is empty" in span.meta["reason"]
 
 
+async def _switch(pool, key: str, on: bool) -> None:
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ($1, $2::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        key,
+        on,
+    )
+
+
+@pytest.mark.parametrize(
+    ("local", "cloud", "named"),
+    [(None, None, "cloud"), (True, None, "cloud,local"), (True, False, "local")],
+    ids=["the-defaults", "both-on", "local-only"],
+)
+async def test_the_turn_asks_with_the_kinds_of_decision_model_he_switched_on(
+    pool, mount_peers, local, cloud, named
+):
+    """Decision-role spec §6: read for this turn, from his two switches — local
+    (alpha) ships off and cloud (beta) on — and named on every call, so the
+    gateway passes over a link of any other kind."""
+    for key, on in (("decisions.local", local), ("decisions.cloud", cloud)):
+        if on is not None:
+            await _switch(pool, key, on)
+    owner = await _owner(pool)
+    gateway = FakeGateway(deltas=("Hello.",), decision_answer=decider())
+    mount_peers(gateway=gateway, memory=FakeMemory(results=HITS))
+
+    turn = await _nova(pool, owner, PHONE, decide=True)
+
+    assert len(gateway.decision_calls) == 4
+    assert {c["headers"]["x-nova-decision-kinds"] for c in gateway.decision_calls} == {named}
+    (span,) = [s for s in turn.spans if s.kind == "decisions"]
+    assert span.meta["kinds"] == named.split(",")
+
+
+async def test_with_both_switched_off_the_turn_asks_nothing_and_is_the_turn_it_was(
+    pool, mount_peers
+):
+    """No call, no delay: her prompt is byte-for-byte a turn that never asked,
+    every recalled note stands, and the span says the step is off."""
+    await _switch(pool, "decisions.cloud", False)
+    owner = await _owner(pool)
+    gateway = FakeGateway(deltas=("Hello.",), decision_answer=decider())
+    mount_peers(gateway=gateway, memory=FakeMemory(results=HITS))
+
+    before = await _nova(pool, owner, PHONE, decide=False)
+    after = await _nova(pool, owner, PHONE, decide=True)
+
+    assert gateway.decision_calls == []
+    without, with_step = _sent(gateway)
+    assert _clockless(with_step) == _clockless(without)
+    assert not [m for m in with_step if m["content"] == HINT]
+    assert not [s for s in before.spans if s.kind == "decisions"]
+    (span,) = [s for s in after.spans if s.kind == "decisions"]
+    assert span.meta["outcome"] == "off"
+    assert (
+        span.meta["why"] == "both decision models are switched off in Settings, so none was asked"
+    )
+
+
 async def test_a_slow_decision_model_costs_the_budget_and_she_still_answers(
     pool, mount_peers, monkeypatch
 ):
@@ -274,7 +334,7 @@ async def test_a_recall_that_found_nothing_is_never_narrowed(pool, mount_peers, 
     her prompt says the search came back empty, never that a decision model set
     aside "all 0 notes" — a search that found notes, which this one did not."""
 
-    async def keeps_nothing(app, turn, message, notes, paths, advertised):
+    async def keeps_nothing(app, turn, message, notes, paths, advertised, *, kinds=None):
         return decisions.Advice(keep=())
 
     monkeypatch.setattr(decisions, "run", keeps_nothing)

@@ -4319,7 +4319,16 @@ async def _run_turn(
         hint: str | None = None
         if decide and persona.agent is None:
             advice = await decisions.run(
-                app, turn, message, recalled.notes, recalled.paths, advertised
+                app,
+                turn,
+                message,
+                recalled.notes,
+                recalled.paths,
+                advertised,
+                # His two switches (decision-role spec §6), read for THIS turn
+                # — the module reads no settings. Both off, the step asks
+                # nothing and costs no time.
+                kinds=await settings_store.decision_kinds(pool),
             )
             if recalled.notes:
                 # Only a recall that returned notes is narrowed: with none there

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs
+
+import pytest
+
+from app import settings_store
 from app.main import app
 from app.tools import route
 from app.tools.base import ToolContext, ToolFailure
@@ -149,7 +154,8 @@ async def test_every_role_whose_turns_send_chat_model_is_explained_with_it_as_li
 ):
     """Scheduled and beat turns send chat.model as link 1, exactly as chat's
     do, so their walk is explained with it. A role whose turns send no model —
-    the judge, the decision role, an agent — is explained with none."""
+    the judge, the decision role, an agent — is explained with none (the
+    decision role is explained with his two switches instead, below)."""
     gateway = FakeGateway(explain_body=EXPLAIN)
     mount_peers(gateway=gateway)
     ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
@@ -161,6 +167,131 @@ async def test_every_role_whose_turns_send_chat_model_is_explained_with_it_as_li
     for role in ("scheduled", "beat"):
         await route.route_explain({"role": role}, ctx)
         assert gateway.queries[-1] == f"role={role}&model=openrouter%3Agpt-y".encode()
-    for role in ("judge", "decisions", "agent_coder"):
+    for role in ("judge", "agent_coder"):
         await route.route_explain({"role": role}, ctx)
         assert gateway.queries[-1] == f"role={role}".encode()
+    await route.route_explain({"role": "decisions"}, ctx)
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds=cloud"
+
+
+# -- the decision role's two switches (decision-role spec §6) ----------------
+
+LOCAL_OFF = "local decision models are switched off in Settings (alpha)"
+CLOUD_OFF = "cloud decision models are switched off in Settings (beta)"
+
+
+async def test_the_decisions_walk_is_explained_with_the_kinds_he_switched_on(
+    pool, mount_peers, tmp_path
+):
+    """Her answer about the decision role follows his switches: read here, as a
+    decision call reads them, never left for her to remember."""
+    gateway = FakeGateway(explain_body=EXPLAIN)
+    mount_peers(gateway=gateway)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    await route.route_explain({"role": "decisions"}, ctx)
+    assert parse_qs(gateway.queries[-1].decode()) == {
+        "role": ["decisions"],
+        "decision_kinds": ["cloud"],
+    }
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('decisions.local', 'true'::jsonb)"
+    )
+    await route.route_explain({"role": "decisions"}, ctx)
+    assert parse_qs(gateway.queries[-1].decode())["decision_kinds"] == ["cloud,local"]
+
+
+def test_a_link_whose_kind_is_switched_off_is_said_in_words():
+    body = {
+        "role": "decisions",
+        "chain": [
+            {
+                "link": 1,
+                "id": "dell-kev:kev-latest",
+                "verdict": "kind_off",
+                "reason": LOCAL_OFF,
+                "local": True,
+            },
+            {"link": 2, "id": "openrouter:~typesafe/jev-latest", "verdict": "runnable"},
+        ],
+        "would_serve": {
+            "served_by": "openrouter:~typesafe/jev-latest",
+            "reason": f"fell back to link 2 (openrouter:~typesafe/jev-latest) — "
+            f"dell-kev:kev-latest: {LOCAL_OFF}",
+        },
+        "reason": None,
+    }
+
+    text = route.describe(body, kinds=frozenset({"cloud"}))
+
+    assert text.splitlines()[0].startswith(
+        "Answer: openrouter:~typesafe/jev-latest serves the decisions role right now"
+    )
+    assert (
+        "  1. dell-kev:kev-latest: skipped — the owner switched this kind of decision model "
+        f"off ({LOCAL_OFF})"
+    ) in text
+
+
+async def test_with_both_switched_off_her_answer_says_the_step_is_off(pool, mount_peers, tmp_path):
+    """The top line is what a small model reads: with both off, the decision
+    step does not run at all, and her answer says that first — not merely that
+    no link can serve."""
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('decisions.cloud', 'false'::jsonb)"
+    )
+    off = {
+        "role": "decisions",
+        "chain": [
+            {"link": 1, "id": "dell-kev:kev-latest", "verdict": "kind_off", "reason": LOCAL_OFF},
+            {
+                "link": 2,
+                "id": "openrouter:~typesafe/jev-latest",
+                "verdict": "kind_off",
+                "reason": CLOUD_OFF,
+            },
+        ],
+        "would_serve": None,
+        "reason": "no model in the 'decisions' chain can serve right now",
+    }
+    gateway = FakeGateway(explain_body=off)
+    mount_peers(gateway=gateway)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    text = await route.route_explain({"role": "decisions"}, ctx)
+
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds="
+    assert text.splitlines()[0] == (
+        "Answer: the decision step is switched off — both decision models, local and cloud, "
+        "are switched off in Settings, so no decision model is asked before a reply and it "
+        "costs nothing."
+    )
+    assert (
+        f"  2. openrouter:~typesafe/jev-latest: skipped — the owner switched this kind of "
+        f"decision model off ({CLOUD_OFF})" in text
+    )
+
+
+async def test_switches_that_cannot_be_read_are_said_never_guessed(
+    pool, mount_peers, tmp_path, monkeypatch
+):
+    """A walk explained without them would name a link he switched off as the
+    one that answers — so a failed read is a stated failure, and the gateway
+    is never asked."""
+
+    async def unreadable(pool):
+        raise ConnectionError("the settings table is locked")
+
+    monkeypatch.setattr(settings_store, "decision_kinds", unreadable)
+    gateway = FakeGateway(explain_body=EXPLAIN)
+    mount_peers(gateway=gateway)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    with pytest.raises(ToolFailure) as caught:
+        await route.route_explain({"role": "decisions"}, ctx)
+
+    assert str(caught.value) == (
+        "the decision switches in Settings could not be read, so the decisions walk cannot be "
+        "explained — ConnectionError: the settings table is locked"
+    )
+    assert gateway.queries == []

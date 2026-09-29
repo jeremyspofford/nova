@@ -18,7 +18,7 @@ import asyncpg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app import db, schedule
+from app import db, decisions, schedule
 
 logger = logging.getLogger("core")
 
@@ -76,6 +76,11 @@ def _max_notices_problem(value: Any) -> str | None:
             "carry none would tell him nothing, and would look like a quiet day"
         )
     return None
+
+
+# The decision step's budget as its notice says it — read off the step's own
+# constant, so the words cannot say one budget while the step runs another.
+_DECISION_BUDGET = f"{decisions.TURN_BUDGET_S:g} s"
 
 
 def def_json(definition: SettingDef) -> dict:
@@ -225,9 +230,38 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
         validate=_max_notices_problem,
     ),
+    # The decision role's two switches (decision-role spec §6, owner
+    # 2026-09-29): which kinds of decision model may answer before she replies.
+    # Each description is the notice Settings shows under its switch.
+    SettingDef(
+        key="decisions.local",
+        type="bool",
+        default=False,
+        description=(
+            "A decision model on your own machine may answer before she replies. Off by "
+            "default: on a GPU shared with your chat model, a local decision model often "
+            f"cannot answer within the {_DECISION_BUDGET} budget; the step is then skipped and "
+            f"your message waits up to {_DECISION_BUDGET}."
+        ),
+    ),
+    SettingDef(
+        key="decisions.cloud",
+        type="bool",
+        default=True,
+        description=(
+            "A decision model at a cloud provider may answer before she replies. On by "
+            "default: your message and its recalled notes go to the provider, at a small cost "
+            "per message."
+        ),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
+
+#: The decision switches by the kind of decision model each allows. A decision
+#: link's kind is its provider's own `local` flag, which the gateway reads;
+#: core only states the kinds allowed (decisions.KINDS_HEADER).
+DECISION_KINDS: dict[str, str] = {"local": "decisions.local", "cloud": "decisions.cloud"}
 
 # type(value) is checked exactly: python says True == 1, JSON does not — so
 # `int` here refuses `true` rather than storing it as 1.
@@ -276,6 +310,17 @@ async def read_value(pool: asyncpg.Pool | asyncpg.Connection, key: str) -> Any:
     definition = DEFS_BY_KEY[key]
     row = await pool.fetchrow("SELECT value FROM settings WHERE key = $1", key)
     return definition.default if row is None else row["value"]
+
+
+async def decision_kinds(pool: asyncpg.Pool | asyncpg.Connection) -> frozenset[str]:
+    """The kinds of decision model the owner has switched on, read now — the
+    one reader the turn, the Routing page's explain and her routing tool
+    share. Both off is the empty set: the decision step does not run."""
+    allowed: set[str] = set()
+    for kind, key in DECISION_KINDS.items():
+        if await read_value(pool, key) is True:
+            allowed.add(kind)
+    return frozenset(allowed)
 
 
 @router.get("")

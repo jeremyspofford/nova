@@ -2,28 +2,43 @@
 
 Reads the gateway's explain walk — the same one the Routing page shows —
 and says every link's verdict in words. Nothing is called, nothing is
-charged; a fallback reason is the gateway's own sentence, quoted.
+charged; a fallback reason is the gateway's own sentence, quoted. The
+decision role's walk follows the owner's two decision switches (decision-role
+spec §6), so it is explained with them, read here.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 import httpx
 
-from app import db, peers, settings_store
+from app import db, decisions, peers, settings_store
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 # No list of roles here (S12-2): the gateway is the one rule — built-ins plus
 # any agent's derived role `agent_<name>` — and its refusal is quoted below.
 EXPLAIN_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+# With both decision models switched off the step does not run at all, which
+# is the answer — not merely that no link in the chain can serve.
+STEP_OFF = (
+    "Answer: the decision step is switched off — both decision models, local and cloud, are "
+    "switched off in Settings, so no decision model is asked before a reply and it costs "
+    "nothing."
+)
 
 
-def describe(body: dict) -> str:
+def describe(body: dict, *, kinds: Collection[str] | None = None) -> str:
+    """The walk in words. `kinds` is the decision switches the walk was
+    explained with (the decision role only); empty says the step is off."""
     role = body.get("role")
     chain = body.get("chain") or []
     serve = body.get("would_serve")
     # The answer FIRST, in one sentence — a small model reads the top line
     # and stops; the walk below is the evidence.
-    if serve and serve.get("reason"):
+    if kinds is not None and not kinds:
+        lines = [STEP_OFF]
+    elif serve and serve.get("reason"):
         lines = [
             f"Answer: {serve.get('served_by')} serves the {role} role right now because it "
             f"{serve['reason']}."
@@ -48,6 +63,7 @@ def describe(body: dict) -> str:
             "unknown": "skipped — no such provider",
             "refused": "refused this request",
             "wrong_protocol": "skipped — it cannot answer this role",
+            "kind_off": "skipped — the owner switched this kind of decision model off",
         }.get(verdict, str(verdict))
         lines.append(
             f"  {v.get('link')}. {v.get('id')}: {state}" + (f" ({reason})" if reason else "")
@@ -74,6 +90,19 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
             model = ""
     if model:
         params["model"] = model
+    kinds: frozenset[str] | None = None
+    if role == decisions.ROLE:
+        # His two switches, read as a decision call reads them. A read that
+        # fails is said: a walk explained without them would name a link he
+        # switched off as the one that answers.
+        try:
+            kinds = await settings_store.decision_kinds(await db.get_pool())
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            raise ToolFailure(
+                "the decision switches in Settings could not be read, so the decisions walk "
+                f"cannot be explained — {peers.reason(exc)}"
+            ) from exc
+        params["decision_kinds"] = decisions.kinds_value(kinds)
     try:
         async with peers.client(ctx.app, peers.GATEWAY, EXPLAIN_TIMEOUT) as client:
             resp = await client.get("/admin/route/explain", params=params)
@@ -91,7 +120,7 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
         body = resp.json()
     except ValueError as exc:
         raise ToolFailure("the gateway's routing answer was not JSON") from exc
-    return describe(body)
+    return describe(body, kinds=kinds)
 
 
 TOOLS: tuple[Tool, ...] = (
@@ -103,7 +132,9 @@ TOOLS: tuple[Tool, ...] = (
             "agent_<name>) goes to the model it goes to: "
             "each link in the role's chain with its live verdict — would serve, over its "
             "monthly cap, the provider refused recently (walled), not installed, cannot "
-            "answer this role — and the gateway's stated reason for any fallback. Use it to "
+            "answer this role, its kind of decision model switched off in Settings (local "
+            "and cloud each have a switch) — and the gateway's stated reason for any "
+            "fallback. Use it to "
             "answer 'why did that come from the local model' or 'which model will answer "
             "next'. Reads only."
         ),

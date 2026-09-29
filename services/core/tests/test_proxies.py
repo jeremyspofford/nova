@@ -723,3 +723,52 @@ async def test_the_switchs_refusal_comes_back_in_the_gateways_words(
     assert resp.status_code == 400
     assert resp.json() == refusal
     assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+
+
+# The decision role's two switches (decision-role spec §6). The walk a
+# decision call takes follows them, and the gateway reads none of core's
+# settings — so explaining the decisions role states them, as a decision call
+# does, and no browser can state its own.
+
+
+async def _switch_is(owner_client, key: str, on: bool) -> None:
+    resp = await owner_client.put("/api/v1/settings", json={"key": key, "value": on})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_the_decisions_walk_is_explained_with_the_kinds_he_switched_on(
+    owner_client, mount_peers
+):
+    """So "right now: X would answer" names the link that would: local (alpha)
+    ships off and cloud (beta) on, and both off names none."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    assert (await owner_client.get("/api/v1/routes/explain?role=decisions")).status_code == 200
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds=cloud"
+
+    await _switch_is(owner_client, "decisions.local", True)
+    await owner_client.get("/api/v1/routes/explain?role=decisions")
+    assert parse_qs(gateway.queries[-1].decode())["decision_kinds"] == ["cloud,local"]
+
+    await _switch_is(owner_client, "decisions.local", False)
+    await _switch_is(owner_client, "decisions.cloud", False)
+    await owner_client.get("/api/v1/routes/explain?role=decisions")
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds="
+
+
+async def test_explain_never_forwards_a_browsers_decision_kinds(owner_client, mount_peers):
+    """Only core states the switches — spelled plainly or percent-encoded, a
+    browser's copy is taken out for every role, and core adds its own only for
+    the decisions role. Every other parameter goes byte for byte."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+    planted = "decision_kinds=local&keep=a+b&decision%5Fkinds=local"
+
+    assert (
+        await owner_client.get(f"/api/v1/routes/explain?role=decisions&{planted}")
+    ).status_code == 200
+    assert gateway.queries[-1] == b"role=decisions&keep=a+b&decision_kinds=cloud"
+
+    await owner_client.get(f"/api/v1/routes/explain?role=chat&{planted}")
+    assert gateway.queries[-1] == b"role=chat&keep=a+b"
