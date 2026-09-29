@@ -920,3 +920,167 @@ func TestAResumeThatCannotReadTheBinarySaysWhy(t *testing.T) {
 		t.Fatalf("update = %+v", u)
 	}
 }
+
+// An exit 78 whose revert leaves nothing installed does not stop the
+// supervisor there. Returning would leave the service manager no binary to
+// start. .prev is put back first, on the backoff ladder, with nothing
+// started meanwhile. Then a 78 from the restored build is final.
+func TestAnExit78WhoseRevertLeftNothingInstalledIsRestoredThenStopsForGood(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: ExitFinal}, step{exit: ExitFinal})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var fromPrev atomic.Int32
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".prev"):
+			if fromPrev.Add(1) <= 2 { // the revert's try, then one restore retry
+				return errors.New("the disk refused")
+			}
+		case strings.HasSuffix(from, ".failed"):
+			return errors.New("the disk refused again")
+		}
+		return nil
+	})
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if code := Run(ctx, cfg); code != 0 || ctx.Err() != nil {
+		t.Fatalf("Run = %d (ctx %v), want 0 on its own; agents started from %q", code, ctx.Err(), r.sp.spawned())
+	}
+	if from := r.sp.spawned(); !slices.Equal(from, []string{"old", "new", "old"}) {
+		t.Fatalf("agents started from %q, want [old new old]: the 78 stopped the supervisor with nothing installed; logs %q", from, logged.lines)
+	}
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "exited with 78 before it connected") ||
+		!strings.Contains(u.Reason, "nothing installed") {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q", got)
+	}
+	if got := read(t, r.bin+".failed"); got != "new" {
+		t.Fatalf(".failed = %q", got)
+	}
+	if n := fromPrev.Load(); n != 3 {
+		t.Fatalf("%d renames from .prev, want 3: the revert's, a failed retry, the restore", n)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ladder []time.Duration
+	for _, d := range r.slept {
+		if d != 10*time.Millisecond { // the confirm's polls
+			ladder = append(ladder, d)
+		}
+	}
+	if !slices.Equal(ladder, []time.Duration{exitGrace, time.Second, 2 * time.Second}) {
+		t.Fatalf("slept %v, want the exit's grace, then the ladder 1s, 2s", r.slept)
+	}
+}
+
+// A new build that cannot even start, whose revert then leaves nothing
+// installed. Nothing is started from the missing binary: the previous build
+// is put back first. The rollback recorded says why — the spawn error, and
+// that nothing was installed.
+func TestANewBuildThatCannotStartWhoseRevertLeavesNothingInstalledIsRestored(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{startErr: "exec format error"})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var fromPrev atomic.Int32
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".prev"):
+			if fromPrev.Add(1) == 1 { // the revert's try
+				return errors.New("the disk refused")
+			}
+		case strings.HasSuffix(from, ".failed"):
+			return errors.New("the disk refused again")
+		}
+		return nil
+	})
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 3 })
+	if from := r.sp.spawned(); !slices.Equal(from, []string{"old", "new", "old"}) {
+		t.Fatalf("agents started from %q, want nothing from the missing binary before the previous build is back", from)
+	}
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "could not start: exec format error") ||
+		!strings.Contains(u.Reason, "nothing installed") {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q", got)
+	}
+	if got := read(t, r.bin+".failed"); got != "new" {
+		t.Fatalf(".failed = %q", got)
+	}
+}
+
+// stopWhileRestoring runs a supervisor whose swap fails and leaves nothing
+// installed, stopping it while it waits to retry the restore. lastTry says
+// whether the rename from .prev works once the stop has come.
+func stopWhileRestoring(t *testing.T, lastTry bool) (*rig, *logLines) {
+	t.Helper()
+	r := newRig(t, step{exit: ExitUpdateStaged})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var stopping atomic.Bool
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".new"):
+			return errors.New("no space left")
+		case strings.HasSuffix(from, ".prev"):
+			if !stopping.Load() || !lastTry {
+				return errors.New("the disk refused")
+			}
+		}
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	logged := &logLines{}
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		if d == time.Second { // waiting to retry the restore: the service is stopped
+			stopping.Store(true)
+			cancel()
+		}
+		return ctx.Err()
+	}
+	if code := Run(ctx, cfg); code != 0 || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("Run = %d (ctx %v), want 0 on the stop", code, ctx.Err())
+	}
+	if n := len(r.sp.spawned()); n != 1 {
+		t.Fatalf("%d agents started, want none after the swap left nothing installed", n)
+	}
+	return r, logged
+}
+
+// A stop while nothing is installed makes one last try to put the previous
+// build back before returning. Otherwise the service manager would have no
+// binary to start any later supervisor with. It is back: said, and
+// recorded.
+func TestAStopWhileNothingIsInstalledPutsThePreviousBuildBackFirst(t *testing.T) {
+	r, logged := stopWhileRestoring(t, true)
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the previous one back before the supervisor returned", got)
+	}
+	if !logged.contain("stopping: the previous build is back at " + r.bin) {
+		t.Fatalf("the last restore is not logged: %q", logged.lines)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "moving the new build into place") {
+		t.Fatalf("update = %+v", u)
+	}
+}
+
+// ...and when the last try fails too, that is said, and nothing is recorded.
+func TestAStopWhoseLastRestoreFailsSaysSoAndRecordsNothing(t *testing.T) {
+	r, logged := stopWhileRestoring(t, false)
+	if _, err := os.Lstat(r.bin); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("something is installed: %v", err)
+	}
+	if !logged.contain("stopping with nothing installed at " + r.bin) {
+		t.Fatalf("the failed last restore is not logged: %q", logged.lines)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v", u)
+	}
+}

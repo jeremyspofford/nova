@@ -126,6 +126,11 @@ func (s *sup) loop(ctx context.Context) int {
 	attempt := 0
 	confirm := s.unconfirmed() // the version a just-swapped build must connect as
 	restore := s.unrestored()  // a swap that left nothing installed
+	defer func() {
+		if restore != nil {
+			s.lastRestore(restore)
+		}
+	}()
 	for ctx.Err() == nil {
 		if restore != nil {
 			// Nothing is installed: put the running build back before
@@ -431,6 +436,19 @@ func (s *sup) swapStaged() (string, error) {
 // restoreDue is a rollback to record once the running build is back in
 // place: a swap failed and could not put it back.
 type restoreDue struct{ version, reason string }
+
+// lastRestore is one last try to put the previous build back as the
+// supervisor stops with nothing installed. Without it, the service manager
+// would have no binary to start any later supervisor with. The outcome is
+// logged either way; a build that is back is recorded.
+func (s *sup) lastRestore(r *restoreDue) {
+	if err := restorePrev(s.cfg.Binary); err != nil {
+		s.cfg.Logf("stopping with nothing installed at %s: the last try to put the previous build back failed too: %v", s.cfg.Binary, err)
+		return
+	}
+	s.cfg.Logf("stopping: the previous build is back at %s", s.cfg.Binary)
+	s.record(r.version, state.UpdateRolledBack, r.reason)
+}
 
 // unrestored is a restore due from before this start. Nothing is installed
 // at Binary, the build a swap (or a revert) moved aside waits at .prev, and
