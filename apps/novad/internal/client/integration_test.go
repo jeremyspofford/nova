@@ -1241,3 +1241,142 @@ func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
 		})
 	}
 }
+
+// buildAgentWithHubs is buildAgent with an ordered locator list (S42b).
+func buildAgentWithHubs(t *testing.T, hubs []string, deviceID, corePubHex string, devPriv ed25519.PrivateKey) *Agent {
+	t.Helper()
+	home := t.TempDir()
+	auditLog, err := audit.Open(filepath.Join(home, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: hubs[0], CorePubKey: corePubHex, Locators: hubs}
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent
+}
+
+// acceptingCore answers the challenge with corePub and reports each device
+// that authenticated on it. Before signaling, it reads one more frame — the
+// facts frame serve() sends as its first act (sendFacts, before the read
+// loop) — rather than signaling the instant its own "ready" write returns.
+// Without this, a caller that waits on authed and then reads agent.Server()
+// races the client's own post-handshake bookkeeping (current.Store, in
+// sessionAt, which happens strictly before serve() and so strictly before
+// that facts write): the server's write of "ready" returning is not
+// ordered against the client having processed it at all, and measurement
+// (30/30 runs failing under go test -count=30) showed the client losing
+// that race almost every time. Reading a frame the client can only have
+// sent from inside serve() — reachable only after current.Store — makes the
+// wait, and so the assertion after it, deterministic.
+func acceptingCore(t *testing.T, corePub, devPub ed25519.PublicKey, authed chan<- string, label string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) != nil {
+			_, _ = coreRead(r.Context(), c) // the facts frame serve() sends first
+			authed <- label
+		}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestTheAgentFallsThroughToTheNextLocatorWhenTheFirstDoesNotAnswer(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	second := acceptingCore(t, corePub, devPub, authed, "second")
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", second.URL}, "dev-loc-1", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case got := <-authed:
+		if got != "second" {
+			t.Fatalf("authenticated on %s", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the agent never tried its second locator")
+	}
+	if agent.Server() != second.URL {
+		t.Fatalf("Server() = %q, want the locator in use %q", agent.Server(), second.URL)
+	}
+}
+
+// The loopback of a machine that no longer hosts THIS Nova (the hub moved)
+// can answer with another Nova's key: that locator is skipped, not fatal,
+// while another locator remains.
+func TestALocatorPresentingAnotherCoreKeyIsSkippedWhileAnotherRemains(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	stranger := acceptingCore(t, otherPub, devPub, authed, "stranger")
+	ours := acceptingCore(t, corePub, devPub, authed, "ours")
+	agent := buildAgentWithHubs(t, []string{stranger.URL, ours.URL}, "dev-loc-2", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- agent.Run(ctx) }()
+	select {
+	case got := <-authed:
+		if got != "ours" {
+			t.Fatalf("authenticated on %s — the pinned key must decide", got)
+		}
+	case err := <-runErr:
+		t.Fatalf("Run returned %v — a stranger's key must not be fatal while another locator remains", err)
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+}
+
+func TestEveryLocatorPresentingAnotherKeyIsFatal(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	a := acceptingCore(t, otherPub, devPub, authed, "a")
+	b := acceptingCore(t, otherPub, devPub, authed, "b")
+	agent := buildAgentWithHubs(t, []string{a.URL, b.URL}, "dev-loc-3", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("Run = %v, want a fatal naming the pin", err)
+	}
+}
+
+// Controller ruling (preflight F1, item 2): the brief's own connectOnce kept
+// lastErr = err (the fatal{KeyMismatch} wrapper) for a skipped mismatch, so
+// a mismatch tried LAST beside a locator that merely failed to dial would
+// itself look fatal to Run's own errors.As(err, &fatal{}) check, and Run
+// would stop instead of retrying. The fix keeps lastErr = f.err (the
+// unwrapped *KeyMismatch), which Run's fatal check does not match, so Run
+// keeps retrying (backoff, never a return) until ctx ends the test.
+func TestATrailingMismatchBesideADialFailureDoesNotEndRun(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	// The dial failure comes FIRST, the mismatch LAST — the order that
+	// exposed the defect.
+	stranger := acceptingCore(t, otherPub, devPub, authed, "stranger")
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", stranger.URL}, "dev-loc-4", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want context.DeadlineExceeded — a trailing mismatch beside a dial failure must keep retrying, not end Run", err)
+	}
+}

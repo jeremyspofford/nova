@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -98,8 +99,16 @@ type Agent struct {
 	priv  ed25519.PrivateKey
 	audit *audit.Log
 	deps  caps.Deps
-	wsURL string
 	logf  func(string, ...any)
+
+	// locators are this device's ordered ways to reach its Nova (S42b):
+	// config.Config.Hubs() at construction. current is the index into
+	// locators this agent is connected through now, or last was —
+	// Server() reads it, and connectOnce starts its next attempt there so
+	// a reconnect after a session that worked tries the same address
+	// first.
+	locators []string
+	current  atomic.Int32
 
 	// opts are what main hands the agent beyond its identity (S42b).
 	opts Options
@@ -153,9 +162,14 @@ type Agent struct {
 
 // New assembles an agent from loaded custody. logf may be nil.
 func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, version string, logf func(string, ...any)) (*Agent, error) {
-	wsURL, err := WSURL(cfg.Server)
-	if err != nil {
-		return nil, err
+	locators := cfg.Hubs()
+	if len(locators) == 0 {
+		return nil, errors.New("this enrolment names no server — pair it again")
+	}
+	for _, loc := range locators {
+		if _, err := WSURL(loc); err != nil {
+			return nil, err
+		}
 	}
 	// Pin the command verifier at construction. A bad core pubkey is a config
 	// fault surfaced here at startup, not a mystery mid-run — and the one
@@ -172,7 +186,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		priv:     priv,
 		audit:    log,
 		deps:     caps.Deps{Home: home},
-		wsURL:    wsURL,
+		locators: locators,
 		logf:     logf,
 		verifier: verifier,
 		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
@@ -208,6 +222,9 @@ func (a *Agent) state(st, server string, err error) {
 		a.opts.OnState(st, server, err)
 	}
 }
+
+// Server is the locator this agent is connected through now (or last was).
+func (a *Agent) Server() string { return a.locators[int(a.current.Load())%len(a.locators)] }
 
 // WSURL derives the socket URL from the enrollment server URL: http->ws,
 // https->wss, path /api/v1/devices/ws.
@@ -267,15 +284,65 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// connectOnce dials, authenticates and serves one session. It reports whether
-// the session authenticated (Run's backoff reset reads it), and why it ended.
+// connectOnce tries each locator in order, starting with the one that last
+// worked, and serves the first session that authenticates. A locator that
+// answers with another Nova's key is skipped while another remains — the
+// loopback of a machine the hub moved away from — and is fatal only when
+// every locator did (the pinned key, never a URL, is the identity).
 func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
-	a.state(state.StateConnecting, a.cfg.Server, nil)
+	n := len(a.locators)
+	start := int(a.current.Load())
+	var lastErr error
+	mismatches := 0
+	for i := 0; i < n; i++ {
+		idx := (start + i) % n
+		authed, err := a.sessionAt(ctx, idx)
+		if authed || ctx.Err() != nil {
+			return authed, err
+		}
+		var f fatal
+		var km *KeyMismatch
+		if errors.As(err, &f) && errors.As(f.err, &km) && n > 1 {
+			mismatches++
+			a.logf("%s answered with another Nova's key — trying the next address", a.locators[idx])
+			// Unwrapped: a mismatch skipped here while another locator
+			// remains must never itself look fatal to Run's own
+			// errors.As(err, &fatal{}) check (controller ruling, preflight
+			// F1) — only the "every locator mismatched" case below is.
+			lastErr = f.err
+			continue
+		}
+		if errors.As(err, &f) {
+			return false, err
+		}
+		a.logf("%s: %v", a.locators[idx], err)
+		lastErr = err
+	}
+	if n > 1 && mismatches == n {
+		return false, fatal{fmt.Errorf("none of this device's %d addresses is the Nova it paired with: %w", n, lastErr)}
+	}
+	return false, lastErr
+}
+
+// sessionAt dials locator idx, authenticates, and serves one session. It
+// reports whether the session authenticated (Run's backoff reset reads it),
+// and why it ended. current is stored right after the handshake succeeds —
+// before serve, which runs for the life of the connection — so Server()
+// names the locator this agent is actually connected through for the whole
+// live session, not just the one connectOnce started dialing (controller
+// ruling, preflight F1).
+func (a *Agent) sessionAt(ctx context.Context, idx int) (bool, error) {
+	loc := a.locators[idx]
+	wsURL, err := WSURL(loc)
+	if err != nil {
+		return false, err
+	}
+	a.state(state.StateConnecting, loc, nil)
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	c, _, err := websocket.Dial(dialCtx, a.wsURL, nil)
+	c, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	cancel()
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", a.wsURL, err)
+		return false, fmt.Errorf("dial %s: %w", wsURL, err)
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(wsReadLimit)
@@ -283,8 +350,9 @@ func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
 	if err := a.handshake(ctx, c); err != nil {
 		return false, err
 	}
+	a.current.Store(int32(idx))
 	a.logf("authenticated; serving")
-	a.state(state.StateReady, a.cfg.Server, nil)
+	a.state(state.StateReady, loc, nil)
 	return true, a.serve(ctx, c)
 }
 
@@ -308,8 +376,11 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	coreKey, _ := frame["core_pubkey"].(string)
 
 	// TOFU: a changed core key is a refuse-and-exit, not a silent re-trust.
+	// *KeyMismatch (not a plain error) lets connectOnce tell "this locator
+	// is not our Nova" apart from any other fatal reason: with more than
+	// one locator configured, this one is skipped rather than ending Run.
 	if coreKey != a.cfg.CorePubKey {
-		return fatal{fmt.Errorf("core presented key %s but we pinned %s at enrollment", short(coreKey), short(a.cfg.CorePubKey))}
+		return fatal{&KeyMismatch{Presented: coreKey, Pinned: a.cfg.CorePubKey}}
 	}
 
 	nonce, err := hex.DecodeString(nonceHex)

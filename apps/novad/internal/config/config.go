@@ -26,6 +26,24 @@ type Config struct {
 	Name       string `json:"name"`
 	Server     string `json:"server"`
 	CorePubKey string `json:"core_pubkey"` // pinned at enrollment; 64 hex
+
+	// Locators are this device's ways to reach its Nova, in order (S42b):
+	// the hub's own loopback first on the hub machine, then the tailnet
+	// origin. Each is only ever trusted through the core key pinned at
+	// enrolment. Empty in a config written before S42b.
+	Locators []string `json:"locators,omitempty"`
+}
+
+// Hubs are the locators to try, in order: Locators, else the one Server a
+// config from before S42b carries. A copy — callers may reorder it.
+func (c Config) Hubs() []string {
+	if len(c.Locators) > 0 {
+		return append([]string(nil), c.Locators...)
+	}
+	if c.Server != "" {
+		return []string{c.Server}
+	}
+	return nil
 }
 
 // Paths resolves the daemon's file locations per OS (platform.ConfigBase and
@@ -192,7 +210,40 @@ func Wipe(p Paths, now time.Time) (string, error) {
 // Windows, so reusing a name a previous wipe already claimed would silently
 // destroy that earlier audit log instead of keeping it.
 func setAsideName(auditFile string, now time.Time) (string, error) {
-	base := fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix())
+	return freeName(fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix()))
+}
+
+// SetAside moves an identity out of the way without deleting it — config,
+// key and audit log each renamed to "<file>.<tag>-<unix>[-N]", never
+// overwriting an earlier one — so a machine can pair again while the old
+// record stays on disk. Missing files are skipped; the new paths are
+// returned.
+func SetAside(p Paths, now time.Time, tag string) ([]string, error) {
+	var moved []string
+	var errs []error
+	for _, f := range []string{p.ConfigFile, p.KeyFile, p.AuditFile} {
+		if _, err := os.Lstat(f); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		dst, err := freeName(fmt.Sprintf("%s.%s-%d", f, tag, now.Unix()))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := os.Rename(f, dst); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		moved = append(moved, dst)
+	}
+	return moved, errors.Join(errs...)
+}
+
+// freeName is base, or base-1, base-2, … — the first that does not exist.
+func freeName(base string) (string, error) {
 	candidate := base
 	for n := 0; ; n++ {
 		if n > 0 {
@@ -201,7 +252,7 @@ func setAsideName(auditFile string, now time.Time) (string, error) {
 		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
 			return candidate, nil
 		} else if err != nil {
-			return "", fmt.Errorf("checking a set-aside name %s: %w", candidate, err)
+			return "", err
 		}
 	}
 }
