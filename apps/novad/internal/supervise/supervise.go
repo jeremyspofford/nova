@@ -150,12 +150,18 @@ func (s *sup) loop(ctx context.Context) int {
 		if err != nil {
 			if confirm == "" {
 				s.cfg.Logf("could not start the agent: %v", err)
-			} else if s.revert(confirm, fmt.Sprintf("the new build could not start: %v", err)) {
-				confirm = ""
-				continue
+			} else {
+				reason := fmt.Sprintf("the new build could not start: %v", err)
+				switch reverted, installed := s.revert(confirm, reason); {
+				case reverted:
+					confirm = ""
+					continue
+				case !installed:
+					restore, confirm = leftNothing(confirm, reason), ""
+				}
 			}
-			// A failed revert keeps confirm: the build is tried again, and so
-			// the revert, on the backoff ladder.
+			// A failed revert that left the build installed keeps confirm: it
+			// is tried again, and so the revert, on the backoff ladder.
 			if s.cfg.Sleep(ctx, s.backoff(attempt)) != nil {
 				return 0
 			}
@@ -189,11 +195,16 @@ func (s *sup) loop(ctx context.Context) int {
 					_ = child.Kill()
 					<-exited
 				}
-				if s.revert(confirm, reason) {
+				reverted, installed := s.revert(confirm, reason)
+				if reverted {
 					confirm = ""
 					continue
 				}
-				if code != nil && *code == ExitFinal {
+				if !installed {
+					// Nothing is installed, so nothing is respawned: .prev is
+					// put back first, on the backoff ladder.
+					restore, confirm = leftNothing(confirm, reason), ""
+				} else if code != nil && *code == ExitFinal {
 					// It can never get in, and it cannot be reverted now:
 					// respawning it would only exit 78 again, forever (P3).
 					// update.json stays staged, so the next start confirms
@@ -205,9 +216,9 @@ func (s *sup) loop(ctx context.Context) int {
 						confirm, ExitFinal)
 					return 0
 				}
-				// The revert failed and the build that did not connect is
-				// still installed: confirm it again, on the backoff ladder,
-				// which retries the revert.
+				// The revert failed. Next, on the backoff ladder: confirm the
+				// still-installed build again, which retries the revert, or
+				// put .prev back where nothing is installed.
 				if s.cfg.Sleep(ctx, s.backoff(attempt)) != nil {
 					return 0
 				}
@@ -421,19 +432,34 @@ var revertBuild = Revert
 
 // revert puts .prev back for a build that failed to confirm, and records
 // rolled_back only once that has happened. A revert that fails records
-// nothing: the build that did not connect is still installed, so the record
-// would be false (and a next start would read it as done and never retry).
-// The failure is logged with its reason. The caller keeps confirming the
-// build, which retries the revert.
-func (s *sup) revert(version, reason string) bool {
-	if err := revertBuild(s.cfg.Binary); err != nil {
-		s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; it stays installed, and the revert is retried",
-			version, reason, err)
-		return false
+// nothing, since the record would be false (and a next start would read it
+// as done and never retry). It is logged, saying what the failure left. When
+// the failed build is still installed (installed), the caller confirms it
+// again, which retries the revert. When nothing is installed — .prev could
+// not come back, nor the failed build return — the caller puts .prev back
+// before anything starts, and keeps .failed.
+func (s *sup) revert(version, reason string) (reverted, installed bool) {
+	err := revertBuild(s.cfg.Binary)
+	if err == nil {
+		s.cfg.Logf("rolled back %s: %s", version, reason)
+		s.record(version, state.UpdateRolledBack, reason)
+		return true, true
 	}
-	s.cfg.Logf("rolled back %s: %s", version, reason)
-	s.record(version, state.UpdateRolledBack, reason)
-	return true
+	if _, lerr := os.Lstat(s.cfg.Binary); lerr != nil {
+		s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; nothing is installed at %s, and putting it back is retried",
+			version, reason, err, s.cfg.Binary)
+		return false, false
+	}
+	s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; it stays installed, and the revert is retried",
+		version, reason, err)
+	return false, true
+}
+
+// leftNothing is the rollback to record once .prev is back, for a revert
+// that failed and left nothing installed: the original reason, and that.
+func leftNothing(version, reason string) *restoreDue {
+	return &restoreDue{version: version,
+		reason: reason + "; putting the previous build back failed at first and left nothing installed until it was put back"}
 }
 
 // record writes an update's outcome, keeping what daemon.update staged.

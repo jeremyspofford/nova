@@ -810,3 +810,47 @@ func TestAnExit78DuringAConfirmWhoseRevertFailsStopsForGood(t *testing.T) {
 		t.Fatalf("supervisor status = %+v, %v; want the 78 recorded as its last exit", sv, err)
 	}
 }
+
+// A revert that can neither put .prev back nor return the failed build to its
+// place leaves nothing installed. The log says so, never "it stays
+// installed". Nothing is started from the missing binary: the previous build
+// is put back first. The rolled_back then recorded carries the original
+// reason and that nothing was installed, never a spawn error. The failed
+// build is kept as .failed.
+func TestARevertThatLeavesNothingInstalledSaysSoAndKeepsTheFailedBuild(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var fromPrev atomic.Int32
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".prev"): // putting the previous build back: the revert's try fails
+			if fromPrev.Add(1) == 1 {
+				return errors.New("the disk refused")
+			}
+		case strings.HasSuffix(from, ".failed"): // returning the failed build to its place
+			return errors.New("the disk refused again")
+		}
+		return nil
+	})
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 3 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "exited with 2 before it connected") ||
+		!strings.Contains(u.Reason, "nothing installed") || strings.Contains(u.Reason, "could not start") {
+		t.Fatalf("update = %+v, want the original reason and that nothing was installed", u)
+	}
+	if !logged.contain("nothing is installed at "+r.bin) || logged.contain("it stays installed") {
+		t.Fatalf("the log does not say nothing is installed: %q", logged.lines)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the previous one back", got)
+	}
+	if got := read(t, r.bin+".failed"); got != "new" {
+		t.Fatalf(".failed = %q, want the failed build kept", got)
+	}
+	if from := r.sp.spawned(); from[2] != "old" {
+		t.Fatalf("agents started from %q, want nothing from the missing binary, then the previous build", from)
+	}
+}
