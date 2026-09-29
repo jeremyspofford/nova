@@ -125,7 +125,26 @@ const (
 func (s *sup) loop(ctx context.Context) int {
 	attempt := 0
 	confirm := s.unconfirmed() // the version a just-swapped build must connect as
+	restore := s.unrestored()  // a swap that left nothing installed
 	for ctx.Err() == nil {
+		if restore != nil {
+			// Nothing is installed: put the running build back before
+			// anything starts, and only then record the rollback.
+			if err := restorePrev(s.cfg.Binary); err != nil {
+				s.cfg.Logf("nothing is installed at %s, and putting the running build back failed again: %v; retrying", s.cfg.Binary, err)
+				if s.cfg.Sleep(ctx, s.backoff(attempt)) != nil {
+					return 0
+				}
+				attempt++
+				continue
+			}
+			s.cfg.Logf("the running build is back at %s", s.cfg.Binary)
+			s.record(restore.version, state.UpdateRolledBack, restore.reason)
+			restore = nil
+		}
+		if _, err := os.Lstat(s.cfg.Binary); err != nil {
+			s.cfg.Logf("no build is installed at %s (%v): starting the agent will fail", s.cfg.Binary, err)
+		}
 		started := s.cfg.Now()
 		child, err := s.cfg.Spawn(ctx, s.cfg.Binary, []string{"run"}, s.env())
 		if err != nil {
@@ -204,14 +223,20 @@ func (s *sup) loop(ctx context.Context) int {
 			return 0
 		case ExitUpdateStaged:
 			v, err := s.swapStaged()
-			if err != nil {
+			var nr *notRestoredError
+			switch {
+			case errors.As(err, &nr):
+				s.cfg.Logf("%s could not be swapped in, and putting the running build back failed: %v; nothing is installed at %s, and the restore is retried",
+					v, err, s.cfg.Binary)
+				restore = &restoreDue{version: v, reason: nr.swap.Error()}
+			case err != nil:
 				s.cfg.Logf("a staged update cannot be applied: %v — running the current build", err)
-				break
+			default:
+				s.cfg.Logf("swapped in %s; waiting up to %s for it to connect", v, s.cfg.ConfirmWithin)
+				confirm = v
+				attempt = 0
+				continue
 			}
-			s.cfg.Logf("swapped in %s; waiting up to %s for it to connect", v, s.cfg.ConfirmWithin)
-			confirm = v
-			attempt = 0
-			continue
 		}
 		if ctx.Err() != nil {
 			return 0
@@ -343,10 +368,40 @@ func (s *sup) swapStaged() (string, error) {
 		return "", fmt.Errorf("%s", reason)
 	}
 	if err := Swap(s.cfg.Binary, u.Staged); err != nil {
+		var nr *notRestoredError
+		if errors.As(err, &nr) {
+			// Nothing is installed, so nothing is recorded yet: the loop
+			// records the rollback once the running build is back.
+			return u.Version, err
+		}
 		s.record(u.Version, state.UpdateRolledBack, err.Error())
 		return "", err
 	}
 	return u.Version, nil
+}
+
+// restoreDue is a rollback to record once the running build is back in
+// place: a swap failed and could not put it back.
+type restoreDue struct{ version, reason string }
+
+// unrestored is a restore due from before this start. Nothing is installed
+// at Binary, the build a swap (or a revert) moved aside waits at .prev, and
+// update.json still says staged: the last supervisor stopped while putting
+// it back kept failing. nil when there is none.
+func (s *sup) unrestored() *restoreDue {
+	if _, err := os.Lstat(s.cfg.Binary); !errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if _, err := os.Lstat(s.cfg.Binary + ".prev"); err != nil {
+		return nil
+	}
+	var u state.Update
+	if state.ReadJSON(filepath.Join(s.cfg.StateDir, state.UpdateFile), &u) != nil || u.Outcome != state.UpdateStaged {
+		return nil
+	}
+	s.cfg.Logf("nothing is installed at %s and the previous build waits at .prev; putting it back", s.cfg.Binary)
+	return &restoreDue{version: u.Version,
+		reason: fmt.Sprintf("the update to %s left nothing installed at %s; the previous build was put back from .prev", u.Version, s.cfg.Binary)}
 }
 
 // revertBuild is Revert; a test makes it fail.

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -618,5 +619,166 @@ func TestABuildThatConnectedAsAnotherVersionIsNotSaidNotToHaveConnected(t *testi
 	if u.Outcome != state.UpdateRolledBack || strings.Contains(u.Reason, "did not connect") ||
 		!strings.Contains(u.Reason, "connected as bbbbbbbbbbbb, not aaaaaaaaaaaa") {
 		t.Fatalf("update = %+v", u)
+	}
+}
+
+// scriptRenames makes each rename whose source refuse answers for fail with
+// that answer; every other rename is os.Rename. The real Swap, restore and
+// revert run on top.
+func scriptRenames(t *testing.T, refuse func(from string) error) {
+	t.Helper()
+	was := rename
+	rename = func(from, to string) error {
+		if err := refuse(from); err != nil {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
+		}
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { rename = was })
+}
+
+// A swap that fails but puts the running build back records rolled_back: the
+// build that was running is verifiably in place again.
+func TestAFailedSwapWhoseRestoreSucceedsRecordsRolledBack(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	scriptRenames(t, func(from string) error {
+		if strings.HasSuffix(from, ".new") {
+			return errors.New("no space left")
+		}
+		return nil
+	})
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "moving the new build into place") {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the running one back", got)
+	}
+	if from := r.sp.spawned(); from[1] != "old" {
+		t.Fatalf("the next agent started from %q", from[1])
+	}
+}
+
+// A swap that fails and cannot put the running build back either leaves
+// nothing installed. It records nothing (no build is in place to have been
+// rolled back to), says why, starts nothing, and retries the restore on the
+// backoff ladder.
+func TestAFailedSwapWhoseRestoreFailsRecordsNothingAndRetries(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var restores atomic.Int32
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".new"):
+			return errors.New("no space left")
+		case strings.HasSuffix(from, ".prev"):
+			restores.Add(1)
+			return errors.New("the disk refused")
+		}
+		return nil
+	})
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return restores.Load() >= 3 }) // the swap's own, then two retries
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("a swap that left nothing installed recorded %+v", u)
+	}
+	if n := len(r.sp.spawned()); n != 1 {
+		t.Fatalf("%d agents started, want none after the swap left nothing installed", n)
+	}
+	if _, err := os.Lstat(r.bin); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("something is installed: %v", err)
+	}
+	if !logged.contain("the disk refused") {
+		t.Fatalf("why the restore failed is not logged: %q", logged.lines)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !slices.Contains(r.slept, time.Second) || !slices.Contains(r.slept, 2*time.Second) {
+		t.Fatalf("slept %v, want the restore retried on the backoff ladder", r.slept)
+	}
+}
+
+// A restore that succeeds later records rolled_back exactly once, and only
+// then: until the running build is back, nothing is recorded.
+func TestARestoreThatLaterSucceedsRecordsRolledBackExactlyOnce(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var restores atomic.Int32
+	var mu sync.Mutex
+	var seen []string // update.json's outcome at each restore
+	scriptRenames(t, func(from string) error {
+		switch {
+		case strings.HasSuffix(from, ".new"):
+			return errors.New("no space left")
+		case strings.HasSuffix(from, ".prev"):
+			var u state.Update
+			_ = state.ReadJSON(filepath.Join(r.dir, state.UpdateFile), &u)
+			mu.Lock()
+			seen = append(seen, u.Outcome)
+			mu.Unlock()
+			if restores.Add(1) <= 2 {
+				return errors.New("the disk refused")
+			}
+		}
+		return nil
+	})
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(seen, []string{state.UpdateStaged, state.UpdateStaged, state.UpdateStaged}) {
+		t.Fatalf("update.json at each restore = %q, want staged until the one that succeeded", seen)
+	}
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "moving the new build into place") {
+		t.Fatalf("update = %+v", u)
+	}
+	if n := restores.Load(); n != 3 {
+		t.Fatalf("%d restores, want 3: two that failed, one that succeeded", n)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q", got)
+	}
+	if from := r.sp.spawned(); from[1] != "old" {
+		t.Fatalf("the next agent started from %q", from[1])
+	}
+}
+
+// A supervisor that starts with nothing installed, the previous build at
+// .prev and the update still staged (the last one stopped while its restore
+// kept failing) puts the build back first, and records the rollback then.
+func TestASupervisorStartingWithNothingInstalledPutsThePreviousBuildBack(t *testing.T) {
+	r := newRig(t)
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	if err := os.Rename(r.bin, r.bin+".prev"); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 1 })
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the previous one back", got)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "put back") {
+		t.Fatalf("update = %+v", u)
+	}
+	if from := r.sp.spawned(); from[0] != "old" {
+		t.Fatalf("the agent started from %q", from[0])
+	}
+}
+
+// An agent is never started from a missing binary without saying so.
+func TestStartingWithNoBuildInstalledSaysSo(t *testing.T) {
+	r := newRig(t)
+	if err := os.Remove(r.bin); err != nil {
+		t.Fatal(err)
+	}
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 1 })
+	if !logged.contain("no build is installed at " + r.bin) {
+		t.Fatalf("an agent was started from a missing binary without saying so: %q", logged.lines)
 	}
 }
