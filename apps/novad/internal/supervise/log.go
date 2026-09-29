@@ -24,6 +24,7 @@ type Log struct {
 	mu     sync.Mutex
 	f      *os.File
 	follow func(*os.File) error // points this process's own output at a fresh file (log_windows.go)
+	held   []*os.File           // earlier files a failed follow may have left this process's output on
 }
 
 // OpenLog opens path to append to, with platform.OpenLog: on Windows it is
@@ -43,11 +44,21 @@ func (l *Log) Write(p []byte) (int, error) {
 	return l.f.Write(p)
 }
 
-// Close closes the current file.
+// Close closes the current file, and any earlier one still held.
 func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.release()
 	return l.f.Close()
+}
+
+// release closes the earlier files held for this process's output, once it
+// no longer points at them; l.mu is held.
+func (l *Log) release() {
+	for _, f := range l.held {
+		_ = f.Close()
+	}
+	l.held = nil
 }
 
 // file is the current file, for an agent's output; nil when there is no Log.
@@ -89,16 +100,20 @@ func (l *Log) Rotate() error {
 	if err != nil {
 		return l.sayLocked("could not open a fresh %s: %v; still writing to the previous file", l.path, err)
 	}
-	var followErr error
 	if l.follow != nil {
-		followErr = l.follow(f)
+		if err := l.follow(f); err != nil {
+			// This process's own output may still point at the previous
+			// file, so it stays open — a crash is never written to a closed
+			// handle — until a later follow succeeds.
+			l.held = append(l.held, l.f)
+			l.f = f
+			return l.sayLocked("this process's own output does not follow the fresh %s: %v; the previous file stays open", l.path, err)
+		}
 	}
+	l.release()
 	old := l.f
 	l.f = f
 	_ = old.Close()
-	if followErr != nil {
-		return l.sayLocked("this process's own output does not follow the fresh %s: %v", l.path, followErr)
-	}
 	return nil
 }
 
