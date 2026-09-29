@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Trash2, Waypoints, X } from 'lucide-react'
-import { Badge, Button, ConfirmDialog, Section, Select } from '../../components/ui'
+import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
 import { InlineSave, type SaveMessage } from '../settings/shared'
 import {
   clearWall as apiClearWall,
@@ -10,12 +10,14 @@ import {
   getCatalog as apiGetCatalog,
   getRoutes as apiGetRoutes,
   listAgents as apiListAgents,
+  putJevRouter as apiPutJevRouter,
   putRoute as apiPutRoute,
   type AgentSummary,
   type BuiltinRole,
   type CatalogRow,
   type RouteExplain,
   type RouteProtocol,
+  type RouteRouter,
   type Routes,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
@@ -41,6 +43,7 @@ import { LIBRARY } from './modelsFormat'
 export interface RoutingApi {
   getRoutes: typeof apiGetRoutes
   putRoute: typeof apiPutRoute
+  putJevRouter: typeof apiPutJevRouter
   explainRoute: typeof apiExplainRoute
   clearWall: typeof apiClearWall
   getCatalog: typeof apiGetCatalog
@@ -51,6 +54,7 @@ export interface RoutingApi {
 const DEFAULT_API: RoutingApi = {
   getRoutes: apiGetRoutes,
   putRoute: apiPutRoute,
+  putJevRouter: apiPutJevRouter,
   explainRoute: apiExplainRoute,
   clearWall: apiClearWall,
   getCatalog: apiGetCatalog,
@@ -86,6 +90,17 @@ const VERDICT_WORDS: Record<string, string> = {
   // model where typed questions are needed, or a decision model where chat is.
   wrong_protocol: 'cannot answer this role',
 }
+
+/** Jev Router's model id (decision-role spec §4). The LINK is whichever
+ * registered provider's listing carries it — read from the live catalogue,
+ * never assumed to be a provider named openrouter. */
+export const JEV_ROUTER_MODEL = 'typesafe/jev-router'
+/** What the switch says Jev Router does. OpenRouter lists no parameters for
+ * typesafe/jev-router (supported_parameters is empty, checked 2026-09-28), so
+ * there is no quality-first setting to turn on — the spec's fallback: say what
+ * it balances. */
+export const JEV_ROUTER_BALANCES =
+  'Jev Router picks a model and reasoning effort for each request, balancing quality, speed and cost, and you pay for the model it picks. It has no setting to put quality first.'
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -133,7 +148,19 @@ function wordsFor(role: string, builtin: boolean, agents: AgentSummary[] | null,
   return { label: role, note: 'no agent by this name', orphan: true }
 }
 
-export function RoutingSection({ chatModel, api = DEFAULT_API }: { chatModel: string; api?: RoutingApi }) {
+export function RoutingSection({
+  chatModel,
+  api = DEFAULT_API,
+  onChatModelChanged,
+}: {
+  chatModel: string
+  api?: RoutingApi
+  /** The switch can move chat.model itself (chat's cloud link IS chat.model,
+   * and core writes it once the gateway names what it must become) — this
+   * tells the settings page to reload it, the same way a pick made on Models
+   * or Providers does. Called only when a switch answer names one. */
+  onChatModelChanged?: (model: string) => void
+}) {
   const [routes, setRoutes] = useState<Routes | null>(null)
   const [catalog, setCatalog] = useState<CatalogRow[]>([])
   // null = the agents list was NOT read (agentsError says why); [] = read and empty.
@@ -141,6 +168,8 @@ export function RoutingSection({ chatModel, api = DEFAULT_API }: { chatModel: st
   const [agentsError, setAgentsError] = useState<string | null>(null)
   const [explains, setExplains] = useState<Record<string, RouteExplain | { error: string }>>({})
   const [error, setError] = useState<string | null>(null)
+  // The link that serves Jev Router, from the catalogue the page already read.
+  const routerLink = catalog.find(r => r.kind === 'cloud' && r.model === JEV_ROUTER_MODEL)?.id ?? null
 
   const load = useCallback(async () => {
     setError(null)
@@ -213,6 +242,14 @@ export function RoutingSection({ chatModel, api = DEFAULT_API }: { chatModel: st
               catalog={catalog}
               protocol={entry.protocol ?? 'chat'}
               explain={explains[entry.role]}
+              router={entry.router ?? null}
+              routerLink={routerLink}
+              onRouter={async on => {
+                const result = await api.putJevRouter(entry.role, on, on ? routerLink ?? undefined : undefined)
+                if (result.chat_model !== undefined) onChatModelChanged?.(result.chat_model)
+                await load()
+                return result.note
+              }}
               onSave={async chain => {
                 await api.putRoute(entry.role, chain)
                 await load()
@@ -270,6 +307,9 @@ function RoleEditor({
   catalog,
   protocol,
   explain,
+  router,
+  routerLink,
+  onRouter,
   onSave,
   onRemove,
 }: {
@@ -281,6 +321,14 @@ function RoleEditor({
   catalog: CatalogRow[]
   protocol: RouteProtocol
   explain: RouteExplain | { error: string } | undefined
+  /** null where the Jev Router switch is not offered on this role. */
+  router: RouteRouter | null
+  /** the provider:model that serves Jev Router, from the live catalogue; null
+   * when no registered provider lists it. */
+  routerLink: string | null
+  /** Flips the switch. Resolves to the gateway's `note` (undefined for none)
+   * on success; a refusal is thrown, in the gateway's own words. */
+  onRouter: (on: boolean) => Promise<string | undefined>
   onSave: (chain: string[]) => Promise<void>
   /** present only when the role is an orphan — the one thing to do with it */
   onRemove?: () => Promise<void>
@@ -292,6 +340,22 @@ function RoleEditor({
   const [message, setMessage] = useState<SaveMessage | null>(null)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
+  const [routerBusy, setRouterBusy] = useState(false)
+  const [routerError, setRouterError] = useState<string | null>(null)
+  const [routerNote, setRouterNote] = useState<string | null>(null)
+  const flipRouter = async (on: boolean) => {
+    setRouterBusy(true)
+    setRouterError(null)
+    setRouterNote(null)
+    try {
+      const note = await onRouter(on)
+      setRouterNote(note ?? null)
+    } catch (err) {
+      setRouterError(reasonOf(err))
+    } finally {
+      setRouterBusy(false)
+    }
+  }
   useEffect(() => {
     setDraft(chain)
   }, [chain])
@@ -440,6 +504,49 @@ function RoleEditor({
             onReset={() => setDraft(chain)}
             message={message}
           />
+        </div>
+      )}
+      {router && editable && (
+        <div className="mt-2 space-y-1" data-testid={`route-${role}-router`}>
+          <Toggle
+            id={`jev-router-${role}`}
+            size="sm"
+            checked={router.on}
+            disabled={routerBusy || (!router.on && !routerLink)}
+            onChange={on => void flipRouter(on)}
+            label="Let Jev Router pick the cloud model"
+          />
+          <p className="text-caption text-content-tertiary">{JEV_ROUTER_BALANCES}</p>
+          {role === 'chat' && (
+            <p className="text-caption text-content-tertiary">
+              Link 1 stays the model picked in chat; the switch changes the cloud link behind it.
+            </p>
+          )}
+          {router.on && router.kept && (
+            <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-kept`}>
+              in place of {router.kept}, which comes back when you switch it off
+            </p>
+          )}
+          {router.on && router.kept === '' && (
+            <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-kept`}>
+              added after the local links; switching it off removes it
+            </p>
+          )}
+          {!router.on && !routerLink && (
+            <p className="text-caption text-content-tertiary">
+              no provider lists {JEV_ROUTER_MODEL} — add OpenRouter under Providers to use it
+            </p>
+          )}
+          {routerNote && (
+            <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-note`}>
+              {routerNote}
+            </p>
+          )}
+          {routerError && (
+            <p role="alert" className="text-caption text-danger" data-testid={`route-${role}-router-error`}>
+              could not switch — {routerError}
+            </p>
+          )}
         </div>
       )}
       {removeError && (

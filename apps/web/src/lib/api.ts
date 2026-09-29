@@ -625,6 +625,15 @@ export type RouteRole = BuiltinRole | string
  * `systemone` (typed questions) for the decision role, `chat` for the rest. */
 export type RouteProtocol = 'chat' | 'systemone'
 
+/** The Jev Router switch on a role (decision-role spec §4). `on` is DERIVED by
+ * the gateway from the chain — a Jev Router link is in it; `kept` is the
+ * cloud link it took the place of ('' when it replaced none and was added
+ * after the local links), null when off. Null where the switch is not offered. */
+export interface RouteRouter {
+  on: boolean
+  kept: string | null
+}
+
 export interface RouteVerdict {
   link: number
   id: string
@@ -654,13 +663,25 @@ export interface RouteWall {
 }
 
 export interface Routes {
-  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean; protocol?: RouteProtocol }[]
+  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean; protocol?: RouteProtocol; router?: RouteRouter | null }[]
   walls: RouteWall[]
 }
 
 export const getRoutes = () => apiGet<Routes>('/api/v1/routes')
 export const putRoute = (role: RouteRole, chain: string[]) =>
   apiSend<{ role: RouteRole; chain: string[] }>(`/api/v1/routes/${role}`, 'PUT', { chain })
+/** Switch Jev Router on or off for a role — an edit to its chain, which stays
+ * the one source of truth. `link` is the provider:model that serves Jev
+ * Router, read from the live catalogue; only switching on needs it. A 200
+ * carries `chat_model` when chat's own pick just changed (core has already
+ * written it) and `note` when something the switch did is worth saying, such
+ * as a kept link whose provider is gone. */
+export const putJevRouter = (role: RouteRole, on: boolean, link?: string) =>
+  apiSend<{ role: RouteRole; chain: string[]; router: RouteRouter; chat_model?: string; note?: string }>(
+    `/api/v1/routes/${encodeURIComponent(role)}/jev-router`,
+    'PUT',
+    link ? { on, link } : { on },
+  )
 export const explainRoute = (role: RouteRole, model?: string) =>
   apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
 export const clearWall = (provider: string) =>

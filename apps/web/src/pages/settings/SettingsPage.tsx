@@ -230,7 +230,13 @@ export function SettingsPage() {
                     setModel(model)
                   }}
                 />
-                <RoutingSection chatModel={chatModel} />
+                <RoutingSection
+                  chatModel={chatModel}
+                  onChatModelChanged={model => {
+                    updateSettingValue('chat.model', model)
+                    setModel(model)
+                  }}
+                />
               </>
             )}
             {tab === 'behaviour' && (
