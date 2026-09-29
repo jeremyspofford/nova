@@ -618,13 +618,23 @@ async def observe(
 
 #: A decision's ledger error for a 200 whose body is not a JSON object.
 UNREADABLE = "the answer is not a JSON object, so no answers can be read from it"
+#: ...and for a 200 whose JSON object holds no `answers` object and states no
+#: error of its own.
+NO_ANSWERS = "the answer has no answers object, so no answers can be read from it"
 
 
 class UnreadableAnswer(ValueError):
-    """A decision's 200 whose body is not a JSON object. observe_decision
-    meters it, with UNREADABLE as its error, then raises this rather than
-    relay it: there are no answers in it, so nothing may read it as one.
-    The decision walk passes the link over (data_plane.serve_systemone)."""
+    """A decision's 200 no answers can be read from: a body that is not a
+    JSON object, or a JSON object with no `answers` object in it (OpenRouter
+    can state a refusal as `{"error": ...}` under a 200). observe_decision
+    meters it, with its error, then raises this rather than relay it: there
+    are no answers in it, so nothing may read it as one. `what` says which,
+    after "answered 200 ... but"; the decision walk passes the link over in
+    those words (data_plane.serve_systemone)."""
+
+    def __init__(self, error: str, what: str) -> None:
+        super().__init__(error)
+        self.what = what
 
 
 def decision_captured(parsed: object) -> Captured:
@@ -672,9 +682,12 @@ async def observe_decision(
     object goes back with `usage` replaced by the ledger's own fields and
     `route` added; a refusal goes back as it came.
 
-    A 200 whose body is not a JSON object is no answer: it is metered with
-    UNREADABLE as its error — never as a clean completion — and then raised
-    as UnreadableAnswer instead of relayed, so nothing reads it as one."""
+    A 200 no answers can be read from is no answer: a body that is not a JSON
+    object (metered with UNREADABLE as its error), or a JSON object with no
+    `answers` object (metered with the error it states, else NO_ANSWERS) —
+    never as a clean completion. It is then raised as UnreadableAnswer
+    instead of relayed, so nothing reads it as one: no route stamp, and no
+    success that clears a wall."""
     parsed = _json_or_none(content)
     event = _call_event(
         row=row,
@@ -687,12 +700,17 @@ async def observe_decision(
         route=route,
     )
     event.captured = decision_captured(parsed)
-    unreadable = status == 200 and not isinstance(parsed, dict)
-    if unreadable:
+    unreadable: str | None = None
+    if status == 200 and not isinstance(parsed, dict):
+        unreadable = "not a JSON object"
         event.captured.error = UNREADABLE
+    elif status == 200 and not isinstance(parsed.get("answers"), dict):
+        stated = event.captured.error
+        unreadable = "with no answers object" + (f" — its error: {stated}" if stated else "")
+        event.captured.error = stated or NO_ANSWERS
     content = await _meter_buffered(pool, event, content, parsed, row=row, model=model, route=route)
     if unreadable:
-        raise UnreadableAnswer(UNREADABLE)
+        raise UnreadableAnswer(event.captured.error, unreadable)
     return Response(content=content, status_code=status, media_type="application/json")
 
 

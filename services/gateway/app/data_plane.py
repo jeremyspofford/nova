@@ -322,8 +322,8 @@ async def serve_systemone(
     raised with its status — the walk walls it and tries the next link, as
     for chat. A link that serves no typed questions is metered the same way
     and passed over, never walled: an endpoint with no /systemone
-    (systemone.NotCarried), or a 200 that is not a JSON object
-    (usage.UnreadableAnswer)."""
+    (systemone.NotCarried), or a 200 no answers can be read from — not a JSON
+    object, or one with no `answers` object (usage.UnreadableAnswer)."""
     served_by = _served_by(row, model)
     started = time.monotonic()
 
@@ -358,10 +358,12 @@ async def serve_systemone(
         # Metered, with its error. It is no answer, and says nothing about the
         # key or the model's health: passed over like an endpoint with no
         # /systemone — never walled, and never a success that clears a wall.
+        # The words say only what was checked: a proxy's page in front of a
+        # real decision server reads exactly like this.
         raise PassedOver(
             status_code=502,
             detail=f"{row['name']} answered 200 at {providers.base_url_of(row)}/systemone "
-            "but not a JSON object — not a decision server",
+            f"but {exc.what}",
             headers={SERVED_BY_HEADER: served_by},
         ) from exc
     response.headers[SERVED_BY_HEADER] = served_by

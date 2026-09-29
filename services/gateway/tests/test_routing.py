@@ -371,13 +371,13 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
 
 
 async def test_a_wrong_protocol_link_does_not_block_the_standby(client, pool, local, mount_backend):
-    """F7 (decision-role spec, Task 2 rulings). chat.model can be a Kev link
-    left behind by a misclick on a model list — wrong_protocol on the chat
-    endpoint. Its provider row is `local` (a Kev box lives on the owner's own
-    network), but it never served anything: before the fix, has_local read
-    that `local` anyway and skipped the cross-tier standby outright, 503ing a
-    turn a local engine could answer. Here the chain's only cloud link is
-    walled too, so only the Kev link and the standby exist to serve."""
+    """chat.model can be a Kev link left behind by a misclick on a model list
+    — wrong_protocol on the chat endpoint. Its provider row is `local` (a Kev
+    box lives on the owner's own network), but it never served anything:
+    before the fix, has_local read that `local` anyway and skipped the
+    cross-tier standby outright, 503ing a turn a local engine could answer.
+    Here the chain's only cloud link is walled too, so only the Kev link and
+    the standby exist to serve."""
     await pool.execute(
         "INSERT INTO providers (name, adapter, base_url, auth_shape, local) "
         "VALUES ('dell-kev', 'systemone', 'http://kev.test/v1', 'none', true)"
@@ -728,7 +728,7 @@ async def test_an_engine_that_cannot_be_reached_is_never_walled_and_the_next_lin
     client, pool, local, mount_backend, mount_transport
 ):
     """D21: a connect failure to an engine is not a wall. A wall outlives the
-    outage — a local model's wall is never cleared by a success — while the
+    outage — an engine's wall is never cleared by a success — while the
     engine's own observation is re-read on the next walk. The ledger still
     has the refusal row; the route says why the link was passed over; the
     next turn asks the engine again, once, even through a bare id."""

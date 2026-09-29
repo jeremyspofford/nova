@@ -12,10 +12,10 @@ POST /v1/systemone forwards to ANY link whose adapter carries `systemone`
 (Adapter.protocols) — OpenRouter's openai-chat row carries both — with that
 row's own adapter's auth headers.
 
-F6: the listing fetch and the wrong-key probe are shared with
-`openai_chat.OpenAIChat` (`base.fetch_listing`, `base.wrong_key_probe`) —
-lifted there rather than copied, each adapter supplying its own row
-normaliser and its own wording.
+The listing fetch and the wrong-key probe are the ones `openai_chat.OpenAIChat`
+makes (`base.fetch_listing`, `base.wrong_key_probe`) — lifted there rather
+than copied, because a copied block would drift; each adapter supplies its
+own row normaliser and its own wording.
 """
 
 from __future__ import annotations
@@ -86,8 +86,8 @@ class SystemOne:
             base_url_of(row),
             headers=self.headers(row),
             normalize=normalize_models,
-            # F13: no "type a model id" — no page offers a typed id for a
-            # decision server.
+            # No "type a model id": no page offers a typed id for a decision
+            # server.
             unavailable_note="this server has no model listing",
         )
 

@@ -164,11 +164,13 @@ async def test_the_switch_is_refused_in_words_where_it_cannot_apply(client, pool
         assert resp.json()["error"] == (
             f"the Jev Router switch is for the chat, scheduled and agent roles — not {role}"
         )
+    # No chat model passed: nothing says chat's switch leads scheduled's turns
+    # (here chat has no chain and no chat model, so it could not switch on).
     empty = await _switch(client, "scheduled", True)
     assert empty.status_code == 400
     assert empty.json()["error"] == (
-        "scheduled has no chain of its own — it walks the chat chain; switch Jev Router on "
-        "for chat, or give scheduled its own chain first"
+        "scheduled has no chain of its own — it walks the chat chain; give scheduled its own "
+        "chain first"
     )
     nolink = await client.put("/admin/routes/chat/jev-router", json={"on": True})
     assert nolink.status_code == 400
@@ -491,8 +493,9 @@ async def test_scheduled_shares_the_chat_model_so_its_cloud_link_is_switched_on_
     """Scheduled turns send chat.model as link 1 too. A cloud chat.model is
     chat's as much as scheduled's, so scheduled cannot swap it alone: refused
     in words, nothing stored. Once the router is the chat model, scheduled
-    reads on and is switched off on chat. The page applies the pick to the
-    roles core names, and no other."""
+    reads on, and its OFF is refused too: here the router was picked in chat,
+    not placed by chat's switch, so the chat picker is what changes it. The
+    page applies the pick to the roles core names, and no other."""
     await client.put("/admin/routes/scheduled", json={"chain": ["cerebras:llama"]})
     await client.put("/admin/routes/agent_coder", json={"chain": ["cerebras:llama"]})
 
@@ -511,7 +514,8 @@ async def test_scheduled_shares_the_chat_model_so_its_cloud_link_is_switched_on_
     off = await _switch(client, "scheduled", False, chat_model=ROUTER)
     assert off.status_code == 400
     assert off.json()["error"] == (
-        "scheduled's first link is the chat model, which is Jev Router — switch it off on chat"
+        "scheduled's first link is the chat model, which is Jev Router, picked in chat — pick "
+        "a chat model in chat"
     )
     # An agent's turns send no chat model, so core passes none: its switch
     # edits its own chain.
@@ -781,3 +785,405 @@ async def test_off_clears_the_chat_model_when_the_kept_picks_provider_is_gone_an
     assert any(
         r.levelno == logging.WARNING and "cerebras:llama" in r.getMessage() for r in caplog.records
     )
+
+
+# ── the answer is what the page reads next ─────────────────────────────────
+
+
+async def test_off_that_empties_a_role_answers_what_the_page_reads_and_says_what_it_walks(
+    client, pool, world
+):
+    """The review's probe. Scheduled holds only a router the owner typed, and
+    chat's chain holds the router at its cloud slot. OFF on scheduled removes
+    its only link, so scheduled walks chat's chain again, where Jev Router is
+    still the first cloud link. The answer reads that, exactly as the page
+    reads it next, and says why the switch still reads on. No chat model is
+    passed, so the gateway cannot tell whether chat's own switch leads this
+    role's turns: the remedy it names is the one that always works."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED]})
+    await _switch(client, "chat", True)
+    await client.put("/admin/routes/scheduled", json={"chain": [ROUTER]})
+
+    off = await _switch(client, "scheduled", False)
+
+    assert off.status_code == 200, off.text
+    assert off.json() == {
+        "role": "scheduled",
+        "chain": [],
+        "router": {"on": True, "kept": None},
+        "note": "scheduled now walks the chat chain, where Jev Router is the first cloud link "
+        "its turns reach — give scheduled a chain of its own to take it off Jev Router",
+    }
+    assert (await _roles(client))["scheduled"]["router"] == off.json()["router"]
+
+
+async def test_off_that_empties_a_role_sharing_a_local_chat_model_points_at_chats_switch(
+    client, pool, world
+):
+    """With the chat model core passes for it, the emptied role walks the same
+    effective chain chat does, so chat's switch reads on too and switching it
+    off there takes the router out of both."""
+    local = "hub:qwen3:8b"
+    await client.put("/admin/routes/chat", json={"chain": [local, PICKED]})
+    await _switch(client, "chat", True, chat_model=local)
+    await client.put("/admin/routes/scheduled", json={"chain": [ROUTER]})
+
+    off = await _switch(client, "scheduled", False, chat_model=local)
+
+    assert off.status_code == 200, off.text
+    assert off.json() == {
+        "role": "scheduled",
+        "chain": [],
+        "router": {"on": True, "kept": None},
+        "note": "scheduled now walks the chat chain, where Jev Router is on — switch it off "
+        "for chat",
+    }
+    roles = await _roles(client, chat_model=local)
+    assert roles["scheduled"]["router"] == off.json()["router"]
+    assert roles["chat"]["router"] == {"on": True, "kept": PICKED}
+    assert (await _switch(client, "chat", False, chat_model=local)).status_code == 200
+    assert (await _roles(client, chat_model=local))["scheduled"]["router"] == {
+        "on": False,
+        "kept": None,
+    }
+
+
+class _Core:
+    """What core does around the switch, in miniature: it holds chat.model,
+    passes it to the switch for the roles whose turns send it (chat,
+    scheduled, beat — core's own list), writes the chat model an answer names,
+    and reads the routes page with it. `switch` checks every answer against
+    the page it reads next."""
+
+    ROLES = ("chat", "scheduled", "beat")
+
+    def __init__(self, client) -> None:
+        self.client = client
+        self.chat_model = ""
+
+    async def switch(self, role: str, on: bool) -> dict:
+        pick = self.chat_model if role in self.ROLES and self.chat_model else None
+        resp = await _switch(self.client, role, on, chat_model=pick)
+        assert resp.status_code == 200, resp.text
+        answer = resp.json()
+        if "chat_model" in answer and role in self.ROLES:
+            self.chat_model = answer["chat_model"]
+        page = await _roles(
+            self.client, chat_model=self.chat_model or None, roles=",".join(self.ROLES)
+        )
+        assert answer["router"] == page[role]["router"], (role, on, answer, page[role])
+        return answer
+
+
+async def _shape_first_cloud_link(client, core):
+    await client.put(
+        "/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED, "cerebras:llama"]}
+    )
+    await core.switch("chat", True)
+    await core.switch("chat", False)
+
+
+async def _shape_after_the_local_links(client, core):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    await core.switch("chat", True)
+    await core.switch("chat", False)
+
+
+async def _shape_a_hand_edit_dropped_the_router(client, core):
+    await client.put("/admin/routes/chat", json={"chain": [PICKED]})
+    await core.switch("chat", True)
+    await client.put("/admin/routes/chat", json={"chain": ["cerebras:llama"]})
+    await core.switch("chat", False)
+
+
+async def _shape_a_roles_own_chain_twice(client, core):
+    await client.put("/admin/routes/scheduled", json={"chain": [PICKED]})
+    await core.switch("scheduled", True)
+    await core.switch("scheduled", True)
+    await core.switch("scheduled", False)
+
+
+async def _shape_the_cloud_chat_model(client, core):
+    core.chat_model = PICKED
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", "cerebras:llama"]})
+    await core.switch("chat", True)
+    await core.switch("chat", True)
+    await core.switch("chat", False)
+    await core.switch("chat", False)
+
+
+async def _shape_bare_picks(client, core):
+    assert (await client.put("/admin/providers/openrouter/default")).status_code == 200
+    core.chat_model = "anthropic/claude-x"
+    await core.switch("chat", True)
+    core.chat_model = "typesafe/jev-router"  # the router picked bare, by hand
+    await core.switch("chat", False)
+
+
+async def _shape_a_displaced_router(client, core):
+    core.chat_model = "hub:qwen3:8b"
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", "cerebras:llama"]})
+    await core.switch("chat", True)
+    core.chat_model = PICKED  # a cloud chat model picked in chat, in front of the router
+    await core.switch("chat", False)
+    await core.switch("chat", True)
+    await core.switch("chat", False)
+
+
+async def _shape_a_role_that_walks_chats_chain(client, core):
+    core.chat_model = "hub:qwen3:8b"
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", "cerebras:llama"]})
+    await core.switch("chat", True)
+    await core.switch("scheduled", True)
+    await core.switch("chat", False)
+    await core.switch("scheduled", False)
+
+
+async def _shape_an_agents_own_chain(client, core):
+    core.chat_model = PICKED
+    await client.put("/admin/routes/agent_coder", json={"chain": ["cerebras:llama"]})
+    await core.switch("agent_coder", True)
+    await core.switch("agent_coder", False)
+
+
+async def _shape_off_empties_scheduled(client, core):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED]})
+    await core.switch("chat", True)
+    await client.put("/admin/routes/scheduled", json={"chain": [ROUTER]})
+    await core.switch("scheduled", False)
+
+
+async def _shape_off_empties_scheduled_with_a_local_chat_model(client, core):
+    core.chat_model = "hub:qwen3:8b"
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED]})
+    await core.switch("chat", True)
+    await client.put("/admin/routes/scheduled", json={"chain": [ROUTER]})
+    await core.switch("scheduled", False)
+
+
+async def _shape_off_empties_an_agent(client, core):
+    """chat.model is a cloud pick, so chat's own switch reads off; the agent's
+    turns send no chat model and reach the router in chat's stored chain."""
+    core.chat_model = PICKED
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", ROUTER]})
+    await client.put("/admin/routes/agent_coder", json={"chain": [ROUTER]})
+    await core.switch("agent_coder", False)
+
+
+async def _shape_gone_providers(client, core):
+    """The router's provider is deleted with the router in scheduled's stored
+    chain and in chat.model; a cloud chat model then displaces scheduled's."""
+    await client.put("/admin/routes/scheduled", json={"chain": ["cerebras:llama"]})
+    await core.switch("scheduled", True)
+    core.chat_model = "cerebras:qwen"
+    await core.switch("chat", True)
+    assert (await client.delete("/admin/providers/openrouter")).status_code == 200
+    await core.switch("chat", False)
+    await core.switch("scheduled", False)
+
+
+async def _shape_a_kept_pick_whose_provider_is_gone(client, core):
+    core.chat_model = "cerebras:llama"
+    await core.switch("chat", True)
+    assert (await client.delete("/admin/providers/cerebras")).status_code == 200
+    await core.switch("chat", False)
+
+
+SHAPES = [
+    _shape_first_cloud_link,
+    _shape_after_the_local_links,
+    _shape_a_hand_edit_dropped_the_router,
+    _shape_a_roles_own_chain_twice,
+    _shape_the_cloud_chat_model,
+    _shape_bare_picks,
+    _shape_a_displaced_router,
+    _shape_a_role_that_walks_chats_chain,
+    _shape_an_agents_own_chain,
+    _shape_off_empties_scheduled,
+    _shape_off_empties_scheduled_with_a_local_chat_model,
+    _shape_off_empties_an_agent,
+    _shape_gone_providers,
+    _shape_a_kept_pick_whose_provider_is_gone,
+]
+
+
+@pytest.mark.parametrize("shape", SHAPES, ids=[s.__name__.removeprefix("_shape_") for s in SHAPES])
+async def test_every_switch_answer_reads_what_the_routes_page_reads_next(
+    client, pool, world, shape
+):
+    """For every role shape these tests cover, each switch answer's `router`
+    is what GET /admin/routes reads straight after, with the chat model core
+    then holds: the toggle never comes back different after the reload."""
+    await shape(client, _Core(client))
+
+
+# ── the refusals name a remedy that works ──────────────────────────────────
+
+
+async def test_a_role_with_no_chain_whose_cloud_slot_is_the_chat_model_is_switched_on_chat(
+    client, pool, world
+):
+    """Scheduled's turns reach the chat model first, a cloud model it shares
+    with chat. A chain of its own would change nothing there — the switch
+    would then refuse it for sharing chat's model — so the refusal names chat's
+    switch, and that works."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", "cerebras:llama"]})
+    shares = (
+        f"scheduled's first link is the chat model, {PICKED}, a cloud model it shares with "
+        "chat — switch Jev Router on for chat"
+    )
+
+    refused = await _switch(client, "scheduled", True, chat_model=PICKED)
+
+    assert refused.status_code == 400
+    assert refused.json()["error"] == shares
+    assert await pool.fetchval("SELECT count(*) FROM routes WHERE role = 'scheduled'") == 0
+    # A chain of its own is refused in the same words: it was never the remedy.
+    await client.put("/admin/routes/scheduled", json={"chain": ["cerebras:llama"]})
+    again = await _switch(client, "scheduled", True, chat_model=PICKED)
+    assert again.status_code == 400 and again.json()["error"] == shares
+    # Chat's switch is.
+    await client.put("/admin/routes/scheduled", json={"chain": []})
+    assert (await _switch(client, "chat", True, chat_model=PICKED)).status_code == 200
+    assert (await _roles(client, chat_model=ROUTER))["scheduled"]["router"] == {
+        "on": True,
+        "kept": None,
+    }
+
+
+async def test_an_agent_with_no_chain_is_told_to_give_it_one_to_switch_on(client, pool, world):
+    """An agent's turns send no chat model, so they reach chat's stored chain
+    and never chat.model. With chat's switch already on through chat.model,
+    switching it on for chat changes nothing the agent reaches: only a chain of
+    its own does, and that works."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", "cerebras:llama"]})
+    assert (await _switch(client, "chat", True, chat_model=PICKED)).status_code == 200
+    assert (await _roles(client, chat_model=ROUTER))["chat"]["router"]["on"] is True
+
+    on = await _switch(client, "agent_coder", True)
+
+    assert on.status_code == 400
+    assert on.json()["error"] == (
+        "agent_coder has no chain of its own — it walks the chat chain; give agent_coder its "
+        "own chain first"
+    )
+    await client.put("/admin/routes/agent_coder", json={"chain": ["cerebras:llama"]})
+    assert (await _switch(client, "agent_coder", True)).json()["router"] == {
+        "on": True,
+        "kept": "cerebras:llama",
+    }
+
+
+async def test_an_agent_with_no_chain_is_told_to_give_it_one_to_switch_off(client, pool, world):
+    """Chat's chain holds a router that chat's own switch does not read: the
+    owner has picked a cloud chat model in front of it, so chat reads off. The
+    agent, which sends no chat model, reaches the router. Chat's switch cannot
+    take it away from the agent; a chain of its own can."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", ROUTER]})
+    await client.put("/admin/routes/agent_coder", json={"chain": []})
+    roles = await _roles(client, chat_model=PICKED)
+    assert roles["chat"]["router"]["on"] is False
+    assert roles["agent_coder"]["router"] == {"on": True, "kept": None}
+
+    off = await _switch(client, "agent_coder", False)
+
+    assert off.status_code == 400
+    assert off.json()["error"] == (
+        "agent_coder has no chain of its own — it walks the chat chain; give agent_coder a "
+        "chain of its own to take it off Jev Router"
+    )
+    await client.put("/admin/routes/agent_coder", json={"chain": ["cerebras:llama"]})
+    assert (await _roles(client, chat_model=PICKED))["agent_coder"]["router"] == {
+        "on": False,
+        "kept": None,
+    }
+
+
+async def test_a_role_behind_a_hand_picked_jev_router_chat_model_is_told_to_pick_another(
+    client, pool, world
+):
+    """Jev Router picked by hand as the chat model: chat's own OFF has nothing
+    to put back and refuses, so sending a role there is a remedy that fails.
+    A role whose first link is that chat model — with a chain of its own or
+    walking chat's — is told what does change it: the chat picker."""
+    words = (
+        "scheduled's first link is the chat model, which is Jev Router, picked in chat — pick "
+        "a chat model in chat"
+    )
+    await client.put("/admin/routes/scheduled", json={"chain": ["cerebras:llama"]})
+
+    own = await _switch(client, "scheduled", False, chat_model=ROUTER)
+
+    assert own.status_code == 400 and own.json()["error"] == words
+    chat = await _switch(client, "chat", False, chat_model=ROUTER)
+    assert chat.status_code == 400, "chat's switch cannot turn it off"
+    await client.put("/admin/routes/scheduled", json={"chain": []})
+    walks = await _switch(client, "scheduled", False, chat_model=ROUTER)
+    assert walks.status_code == 400 and walks.json()["error"] == words
+
+
+async def test_a_role_behind_a_jev_router_chat_model_the_switch_placed_is_switched_off_on_chat(
+    client, pool, world
+):
+    """Chat's switch put Jev Router in the chat model and kept the pick, so
+    chat's OFF hands it back: that is the remedy, with a chain of the role's
+    own or without, and it works."""
+    assert (await _switch(client, "chat", True, chat_model=PICKED)).status_code == 200
+    for chain in (["cerebras:llama"], []):
+        await client.put("/admin/routes/scheduled", json={"chain": chain})
+
+        off = await _switch(client, "scheduled", False, chat_model=ROUTER)
+
+        assert off.status_code == 400, chain
+        assert off.json()["error"] == (
+            "scheduled's first link is the chat model, which is Jev Router — switch it off on chat"
+        )
+    chat = await _switch(client, "chat", False, chat_model=ROUTER)
+    assert chat.status_code == 200 and chat.json()["chat_model"] == PICKED
+    assert (await _roles(client, chat_model=PICKED))["scheduled"]["router"]["on"] is False
+
+
+@pytest.mark.parametrize(
+    ("link", "said"),
+    [
+        ("gone:typesafe/jev-router", "its provider, gone, is not registered"),
+        ("typesafe/jev-router", "it names no provider"),
+    ],
+)
+async def test_a_jev_router_link_on_no_registered_provider_is_refused_as_such(
+    client, pool, world, link, said
+):
+    """The link is Jev Router, read off its own text; what is wrong with it is
+    the provider, so that is what the refusal says."""
+    await client.put("/admin/routes/chat", json={"chain": [PICKED]})
+
+    resp = await _switch(client, "chat", True, link=link)
+
+    assert resp.status_code == 400
+    assert resp.json()["error"] == (
+        f"{link!r} is Jev Router, but {said} — the link must be "
+        "<provider>:typesafe/jev-router on a registered provider"
+    )
+    assert await _row(pool, "chat") == (None, None)
+
+
+async def test_on_judges_only_the_link_it_places_never_a_stale_one_the_owner_left(
+    client, pool, world
+):
+    """A link further along whose provider was deleted since is the owner's to
+    edit in the chain editor. The switch replaces a different link, so that one
+    must not stop it — nor be refused in the chain editor's typo words."""
+    await client.put(
+        "/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED, "cerebras:llama"]}
+    )
+    assert (await client.delete("/admin/providers/cerebras")).status_code == 200
+
+    on = await _switch(client, "chat", True)
+
+    assert on.status_code == 200, on.text
+    assert on.json() == {
+        "role": "chat",
+        "chain": ["hub:qwen3:8b", ROUTER, "cerebras:llama"],
+        "router": {"on": True, "kept": PICKED},
+    }
+    assert await _row(pool, "chat") == (PICKED, "chain")

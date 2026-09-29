@@ -248,13 +248,12 @@ async def fetch_listing(
     normalize,
     unavailable_note: str,
 ) -> Listing:
-    """The `GET {url}/models` call every listing-backed adapter makes: the
-    same reachability, status and JSON handling (OpenAIChat's and SystemOne's
-    `list_models` were byte-for-byte copies of this before F6's refactor).
-    Each caller supplies its own row normaliser (`normalize`) and its own
-    words for "no listing here" (`unavailable_note` — OpenAIChat's says
-    "type a model id"; a systemone server has no page that offers one, so
-    it does not, per decision-role spec Task 2 ruling F13)."""
+    """The `GET {url}/models` call OpenAIChat and SystemOne both make: one
+    reachability, status and JSON handling, kept here once because a copied
+    block would drift. Each caller supplies its own row normaliser
+    (`normalize`) and its own words for "no listing here" (`unavailable_note`
+    — OpenAIChat's says "type a model id"; no page offers a typed model id
+    for a decision server, so SystemOne's does not)."""
     if not url:
         raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
     client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers)
@@ -281,11 +280,10 @@ _WRONG_KEY = "nova-verify-this-key-is-wrong"
 
 async def wrong_key_probe(app, row: dict, url: str, *, headers_for) -> tuple[str, int | None, str]:
     """Re-asks `GET {url}/models` with a key that is certainly wrong
-    (`_WRONG_KEY`) — the one way to learn whether a listing NEEDS a key at
-    all, shared by every adapter that proves a key this way (OpenAIChat's
-    `_listing_is_public` and SystemOne's `verify` both drove this exact
-    fetch-and-branch before F6's refactor; only the PROSE each builds from
-    it differs, which stays with the caller).
+    (`_WRONG_KEY`) — how OpenAIChat (`_listing_is_public`) and SystemOne
+    (`verify`) learn whether a listing NEEDS a key at all. The fetch and its
+    branches are kept here once, because a copied block would drift; only
+    the PROSE each builds from them differs, which stays with the caller.
 
     Returns `(bucket, status, detail)`:
       * `"protected"`, the status (401/403) — the listing refused this key,

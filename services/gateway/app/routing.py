@@ -430,9 +430,26 @@ def _put_back(
     return out, None
 
 
+def _still_walks_the_router(role: str, pick: str) -> str:
+    """Why a role an OFF left with no chain of its own still reads on: its
+    turns walk chat's chain now, and Jev Router is the first cloud link
+    there. With the chat model core passes for it (the role's turns send it),
+    chat's own switch reads that same chain and switching it off there works.
+    With none passed, nothing says chat's switch reads what this role's turns
+    reach — an agent's turns send no chat model, while chat's may put one in
+    front — so the remedy named is the one that always works."""
+    if pick:
+        return f"{role} now walks the chat chain, where Jev Router is on — switch it off for chat"
+    return (
+        f"{role} now walks the chat chain, where Jev Router is the first cloud link its turns "
+        f"reach — give {role} a chain of its own to take it off Jev Router"
+    )
+
+
 def _answer(
     role: str,
     chain: list[str],
+    chat_chain: Sequence[str],
     by_name: dict[str, dict],
     kept: str | None,
     kept_slot: str | None,
@@ -441,18 +458,21 @@ def _answer(
     writes: bool = False,
     note: str | None = None,
 ) -> dict:
-    """The switch's answer, its `router` read off the result (router_state),
-    never assumed. `chat_model` is the chat model once core has written what
-    the answer asks for; `writes` puts it in the answer as that request."""
-    answer = {
-        "role": role,
-        "chain": chain,
-        "router": router_state(chain, by_name, kept, kept_slot, chat_model or None),
-    }
+    """The switch's answer, its `router` read off the result exactly as the
+    routes page reads it next (role_state: a role left with no chain of its
+    own reads chat's chain), never assumed. `chat_model` is the chat model
+    once core has written what the answer asks for; `writes` puts it in the
+    answer as that request. When the result reads on only because the role
+    now walks chat's chain, the note says so."""
+    router = role_state(role, chain, chat_chain, by_name, kept, kept_slot, chat_model or None)
+    notes = [note] if note else []
+    if router["on"] and borrows_chat_chain(role, chain):
+        notes.append(_still_walks_the_router(role, chat_model))
+    answer = {"role": role, "chain": chain, "router": router}
     if writes:
         answer["chat_model"] = chat_model
-    if note:
-        answer["note"] = note
+    if notes:
+        answer["note"] = "; ".join(notes)
     return answer
 
 
@@ -476,8 +496,12 @@ async def set_router(
     A non-chat role with no chain of its own walks chat's, so its switch is
     read there and nothing is written for it: asked for the state it reads,
     it answers with that state; asked for the other, it is refused in words
-    pointing at chat's switch (a one-link chain of its own would silently
-    stop it walking chat's).
+    naming what would change it (a one-link chain of its own would silently
+    stop it walking chat's) — see _walks_chat. Every answer's `router` is
+    read the way the routes page reads it next (role_state, with chat's chain
+    read in this transaction): an OFF that empties a role's own chain leaves
+    it walking chat's, and when Jev Router is the first cloud link there the
+    answer reads on and its `note` says why.
 
     ON while on changes nothing. ON puts `link`
     (`<provider>:typesafe/jev-router`) in the cloud slot and keeps what it
@@ -497,12 +521,17 @@ async def set_router(
     off puts back what a displaced router replaced, as ON does, and forgets
     any other kept link: its slot does not hold the router.
 
+    Only the link a switch places or puts back is judged: the rest of the
+    chain is as the owner stored it, and a link there whose provider has
+    since gone is the chain editor's to fix, never a reason to refuse.
+
     Refused, in words (ValueError): a role the switch is not offered on; a
-    link that is not Jev Router, or whose provider cannot carry the role's
-    calls; a role sharing chat's cloud chat model (its switch is chat's); a
-    role with no chain of its own, as above; chat with neither a chain nor a
-    chat model (it answers with the gateway's default model); and OFF on a
-    chat model the switch did not replace."""
+    link that is not Jev Router, is Jev Router on no registered provider, or
+    whose provider cannot carry the role's calls; a role sharing chat's cloud
+    chat model (its switch is chat's); a role with no chain of its own, as
+    above; chat with neither a chain nor a chat model (it answers with the
+    gateway's default model); and OFF on a chat model the switch did not
+    replace."""
     validate_role(role)
     if not router_switchable(role):
         raise ValueError(
@@ -517,51 +546,131 @@ async def set_router(
         chain = list(json.loads(row["chain"])) if row else []
         kept = row["router_kept"] if row else None
         kept_slot = row["router_kept_slot"] if row else None
-        if borrows_chat_chain(role, chain):
-            chat_chain = json.loads(
-                await conn.fetchval("SELECT chain FROM routes WHERE role = 'chat'") or "[]"
+        # Chat's row, read here, in this transaction: its chain is the one a
+        # role with none of its own walks, so every answer reads the role as
+        # the page will next; its kept link says whether chat's switch put
+        # Jev Router in the chat model, and so whether chat's OFF can take it
+        # out again.
+        if role == "chat":
+            chat_chain, chat_hands_back = chain, _kept_the_chat_model(kept, kept_slot)
+        else:
+            chat_row = await conn.fetchrow(
+                "SELECT chain, router_kept, router_kept_slot FROM routes WHERE role = 'chat'"
             )
-            return _walks_chat(role, on, chat_chain, pick, by_name)
+            chat_chain = list(json.loads(chat_row["chain"])) if chat_row else []
+            chat_hands_back = chat_row is not None and _kept_the_chat_model(
+                chat_row["router_kept"], chat_row["router_kept_slot"]
+            )
+        if borrows_chat_chain(role, chain):
+            return _walks_chat(role, on, chat_chain, pick, by_name, chat_hands_back)
         at = _router_at(chain, by_name, pick)
         if on and at is not None:
-            return _answer(role, chain, by_name, kept, kept_slot, pick)
+            return _answer(role, chain, chat_chain, by_name, kept, kept_slot, pick)
         if on:
-            return await _switch_on(conn, role, chain, kept, kept_slot, pick, link, by_name)
+            return await _switch_on(
+                conn, role, chain, chat_chain, kept, kept_slot, pick, by_name, link
+            )
         if at is not None:
-            return await _switch_off(conn, role, chain, kept, kept_slot, pick, at, by_name)
-        return await _off_while_off(conn, role, chain, kept, kept_slot, pick, by_name)
+            return await _switch_off(
+                conn, role, chain, chat_chain, kept, kept_slot, pick, by_name, at, chat_hands_back
+            )
+        return await _off_while_off(conn, role, chain, chat_chain, kept, kept_slot, pick, by_name)
+
+
+def _kept_the_chat_model(kept: str | None, kept_slot: str | None) -> bool:
+    """Did chat's switch put Jev Router in the chat model, keeping the pick it
+    replaced? Only then can chat's OFF take it out again."""
+    return kept_slot == CHAT_MODEL_SLOT and bool(kept)
+
+
+def _shares_a_cloud_chat_model(role: str, pick: str) -> str:
+    """ON refused on a role (not chat) whose first link is a cloud chat model:
+    that model is chat's as much as this role's, so the switch that replaces
+    it is chat's, and a chain of the role's own would change nothing."""
+    return (
+        f"{role}'s first link is the chat model, {pick}, a cloud model it shares with chat — "
+        "switch Jev Router on for chat"
+    )
+
+
+def _first_link_is_the_router(role: str, chat_hands_back: bool) -> str:
+    """OFF refused on a role (not chat) whose first link is the chat model,
+    which is Jev Router — chat's as much as this role's. When chat's switch
+    put it there, chat's OFF takes it out again. Picked by hand in chat,
+    chat's OFF has nothing to put back and refuses, so the chat picker is
+    what changes it."""
+    if chat_hands_back:
+        return f"{role}'s first link is the chat model, which is Jev Router — switch it off on chat"
+    return (
+        f"{role}'s first link is the chat model, which is Jev Router, picked in chat — pick a "
+        "chat model in chat"
+    )
 
 
 def _walks_chat(
-    role: str, on: bool, chat_chain: list[str], pick: str, by_name: dict[str, dict]
+    role: str,
+    on: bool,
+    chat_chain: list[str],
+    pick: str,
+    by_name: dict[str, dict],
+    chat_hands_back: bool,
 ) -> dict:
     """ON or OFF on a role with no chain of its own. Its turns walk chat's
     chain, so its switch is read there (role_state), and nothing there is
     this role's to change: asked for the state it reads, it answers with it;
-    asked for the other, it is refused in words pointing at chat's switch."""
+    asked for the other, it is refused in words naming a remedy that works.
+
+    Which remedy works depends on what its turns reach first. A cloud chat
+    model (core passes it: the role's turns send it) is chat's as much as
+    this role's, so it is changed on chat — a chain of its own would still
+    put that model first: ON is chat's switch, and OFF chat's switch or the
+    chat picker (_first_link_is_the_router). A local one leads chat's turns
+    and this role's alike, so chat's switch changes both, and a chain of its
+    own works too. With no chat model passed, nothing says chat's switch
+    reads what this role's turns reach — an agent's turns send none, while
+    chat's may put one in front — so only a chain of its own is named."""
     router = role_state(role, [], chat_chain, by_name, None, None, pick)
-    if on and not router["on"]:
+    if router["on"] == on:
+        return {"role": role, "chain": [], "router": router}
+    if _cloud_slot([], by_name, pick) is not None:
+        # The chat model is this role's cloud slot, and chat's as much.
+        if on:
+            raise ValueError(_shares_a_cloud_chat_model(role, pick))
+        raise ValueError(_first_link_is_the_router(role, chat_hands_back))
+    walks = f"{role} has no chain of its own — it walks the chat chain"
+    if not pick:
+        if on:
+            raise ValueError(f"{walks}; give {role} its own chain first")
+        raise ValueError(f"{walks}; give {role} a chain of its own to take it off Jev Router")
+    if on:
         raise ValueError(
-            f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
-            f"on for chat, or give {role} its own chain first"
+            f"{walks}; switch Jev Router on for chat, or give {role} its own chain first"
         )
-    if router["on"] and not on:
-        raise ValueError(
-            f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
-            "off for chat"
-        )
-    return {"role": role, "chain": [], "router": router}
+    raise ValueError(f"{walks}; switch Jev Router off for chat")
+
+
+def _router_link_refused(link: str) -> str:
+    """Why `link` cannot be the switch's router link, in what is true of it: a
+    link that is Jev Router by its own text names no registered provider (a
+    bare id, or a provider since deleted) — anything else is not Jev Router."""
+    rule = f"the link must be <provider>:{JEV_ROUTER_MODEL} on a registered provider"
+    if not is_router_link(link):
+        return f"{link!r} is not Jev Router — {rule}"
+    prefix, colon, _model = link.partition(":")
+    said = f"its provider, {prefix}, is not registered" if colon else "it names no provider"
+    return f"{link!r} is Jev Router, but {said} — {rule}"
 
 
 async def _switch_on(
     conn,
     role: str,
     chain: list[str],
+    chat_chain: Sequence[str],
     kept: str | None,
     kept_slot: str | None,
     pick: str,
-    link: object,
     by_name: dict[str, dict],
+    link: object,
 ) -> dict:
     names = set(by_name)
     if not isinstance(link, str) or not link.strip():
@@ -572,13 +681,11 @@ async def _switch_on(
     link = link.strip()
     provider_name, model = providers.split_model_id(link, names)
     if provider_name is None or model != JEV_ROUTER_MODEL:
-        raise ValueError(
-            f"{link!r} is not Jev Router — the link must be <provider>:{JEV_ROUTER_MODEL} "
-            "on a registered provider"
-        )
+        raise ValueError(_router_link_refused(link))
     # From here the link is the role's chat link — on chat, the chat model
     # itself — so a provider that cannot carry the role's calls is refused
-    # by name before anything is stored or handed to core.
+    # by name before anything is stored or handed to core. It is the one
+    # link ON judges.
     _clean_chain(role, [link], by_name)
     note = None
     placed = router_link(chain) if kept_slot == CHAIN_SLOT else None
@@ -589,25 +696,19 @@ async def _switch_on(
     slot = _cloud_slot(chain, by_name, pick)
     if slot is not None and slot[0] == CHAT_MODEL_SLOT:
         if role != "chat":
-            raise ValueError(
-                f"{role}'s first link is the chat model, {pick}, a cloud model it shares "
-                "with chat — switch Jev Router on for chat"
-            )
+            raise ValueError(_shares_a_cloud_chat_model(role, pick))
         # Kept qualified — the provider a bare pick reached — so OFF hands back
         # the link that served, and a bare id is never taken for a gone one.
         provider_name, model = _provider_of(pick, by_name)
         kept = f"{provider_name}:{model}"
         await _store(conn, role, chain, kept, CHAT_MODEL_SLOT)
-        return _answer(role, chain, by_name, kept, CHAT_MODEL_SLOT, link, writes=True, note=note)
+        return _answer(
+            role, chain, chat_chain, by_name, kept, CHAT_MODEL_SLOT, link, writes=True, note=note
+        )
     if slot is not None:
         kept = chain[slot[1]]
         chain[slot[1]] = link
     else:
-        if not chain and role != "chat":
-            raise ValueError(
-                f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
-                f"on for chat, or give {role} its own chain first"
-            )
         if not chain and not pick:
             raise ValueError(
                 "chat has no chain and no chat model, so it answers with the gateway's default "
@@ -615,54 +716,61 @@ async def _switch_on(
             )
         kept = ""
         chain.append(link)
-    cleaned = _clean_chain(role, chain, by_name)
-    await _store(conn, role, cleaned, kept, CHAIN_SLOT)
-    return _answer(role, cleaned, by_name, kept, CHAIN_SLOT, pick, note=note)
+    # A link is never doubled: a router the owner typed further along goes,
+    # the one placed here stays. Nothing else is judged — a link there whose
+    # provider has since gone is as the owner stored it, and the chain
+    # editor's to fix, not a reason to refuse the switch.
+    chain = list(dict.fromkeys(chain))
+    await _store(conn, role, chain, kept, CHAIN_SLOT)
+    return _answer(role, chain, chat_chain, by_name, kept, CHAIN_SLOT, pick, note=note)
 
 
 async def _switch_off(
     conn,
     role: str,
     chain: list[str],
+    chat_chain: Sequence[str],
     kept: str | None,
     kept_slot: str | None,
     pick: str,
-    at: tuple[str, int | None],
     by_name: dict[str, dict],
+    at: tuple[str, int | None],
+    chat_hands_back: bool,
 ) -> dict:
     names = set(by_name)
     where, index = at
     if where == CHAT_MODEL_SLOT:
         if role != "chat":
-            raise ValueError(
-                f"{role}'s first link is the chat model, which is Jev Router — switch it off "
-                "on chat"
-            )
-        if kept_slot != CHAT_MODEL_SLOT or not kept:
+            raise ValueError(_first_link_is_the_router(role, chat_hands_back))
+        if not _kept_the_chat_model(kept, kept_slot):
             raise ValueError(
                 "Jev Router is the chat model, picked in chat — the switch replaced nothing "
                 "there, so there is nothing to put back; pick a chat model in chat"
             )
         # The pick stays kept: until core has written it, the router is still
-        # link 1 and the switch still reads on, so OFF can be asked again. The
-        # next ON overwrites it.
+        # link 1 and the switch still reads on, so OFF can be asked again.
+        # Once core has written it and the answer reads off, core asks OFF
+        # once more, and OFF-while-off forgets it. The next ON overwrites it.
         if not _names_a_provider(kept, names):
             note = (
                 f"the chat model Jev Router replaced, {kept}, names a provider that no longer "
                 "exists, so the chat model is cleared — pick one in chat"
             )
             logger.warning("jev router %s: %s", role, note)
-            return _answer(role, chain, by_name, kept, kept_slot, "", writes=True, note=note)
-        return _answer(role, chain, by_name, kept, kept_slot, kept, writes=True)
+            return _answer(
+                role, chain, chat_chain, by_name, kept, kept_slot, "", writes=True, note=note
+            )
+        return _answer(role, chain, chat_chain, by_name, kept, kept_slot, kept, writes=True)
     chain, note = _put_back(role, chain, index, kept if kept_slot == CHAIN_SLOT else "", names)
     await _store(conn, role, chain, None, None)
-    return _answer(role, chain, by_name, None, None, pick, note=note)
+    return _answer(role, chain, chat_chain, by_name, None, None, pick, note=note)
 
 
 async def _off_while_off(
     conn,
     role: str,
     chain: list[str],
+    chat_chain: Sequence[str],
     kept: str | None,
     kept_slot: str | None,
     pick: str,
@@ -678,7 +786,7 @@ async def _off_while_off(
         chain, note = _put_back(role, chain, chain.index(placed), kept, set(by_name))
     if kept is not None:
         await _store(conn, role, chain, None, None)
-    return _answer(role, chain, by_name, None, None, pick, note=note)
+    return _answer(role, chain, chat_chain, by_name, None, None, pick, note=note)
 
 
 # ── walls ──────────────────────────────────────────────────────────────────
@@ -1096,11 +1204,11 @@ async def resolve(
             verdict["verdict"] = "refused"
             verdict["reason"] = f"{link} refused this request"
         verdicts.append(verdict)
-        # F7 (decision-role spec, Task 2 rulings): a wrong_protocol link never
-        # served anything and never will on this role — its `local` says only
-        # where the PROVIDER sits, so counting it would let a local decision
-        # server (Kev, marked local) sitting in chat.model by mistake block
-        # the cross-tier standby it can never itself become.
+        # A wrong_protocol link never served anything and never will on this
+        # role — its `local` says only where the PROVIDER sits, so counting it
+        # would let a local decision server (Kev, marked local) sitting in
+        # chat.model by mistake block the cross-tier standby it can never
+        # itself become.
         has_local = has_local or (
             bool(verdict.get("local")) and verdict["verdict"] != "wrong_protocol"
         )

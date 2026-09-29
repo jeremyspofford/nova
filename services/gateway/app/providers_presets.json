@@ -153,7 +153,7 @@
     "local": true,
     "placeholders": ["host"],
     "docs_url": "https://github.com/jaredpalmer/kev",
-    "model_note": "kev-latest is whatever checkpoint the server was started with (kev.serve --run jaredpalmer/kev-4b).",
+    "model_note": "kev-latest is whatever checkpoint the server was started with — the one --run names in uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --host 0.0.0.0 --port 8009.",
     "quirks": "A decision model answers typed questions for the Decisions role and has no chat. Start the server with --host 0.0.0.0 so the gateway can reach it; set KEV_API_KEY on the server, and add it as a custom provider with a bearer key, to require one."
   }
 ]
