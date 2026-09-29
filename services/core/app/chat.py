@@ -3124,12 +3124,15 @@ def _note_upstream(span, chunk: dict) -> None:
     key says which model answered, never why it differs. Read only off a chunk
     that carries `choices` (the provider's own; the gateway's usage chunk has
     none), and recorded only when it differs from the served link's model: a
-    link that answers as itself records nothing. Never guessed."""
+    link that answers as itself records nothing, and with no served link to
+    compare against (the gateway named none) nothing is recorded either.
+    Never guessed."""
     named = chunk.get("model")
     if not isinstance(named, str) or not named or not chunk.get("choices"):
         return
     served = span.meta.get("served_by")
-    if isinstance(served, str) and served.partition(":")[2] == named:
+    served_model = served.partition(":")[2] if isinstance(served, str) else ""
+    if not served_model or served_model == named:
         return
     span.meta["upstream_model"] = named
 

@@ -312,6 +312,14 @@ async def _chat_model_is(owner_client, value: str) -> None:
     assert resp.status_code == 200
 
 
+async def _agent_coder(pool) -> None:
+    """A live agent `coder`, so `agent_coder` passes the no-such-agent check."""
+    await pool.execute(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page')"
+    )
+
+
 async def test_the_routes_page_is_read_with_chat_model_as_link_one_of_the_roles_that_send_it(
     owner_client, mount_peers
 ):
@@ -358,10 +366,7 @@ async def test_the_switch_is_told_chat_model_for_a_role_whose_turns_send_it(
 async def test_an_agent_roles_switch_is_never_told_chat_model(owner_client, mount_peers, pool):
     """An agent's turn sends no model, so its chain's first link is its own:
     chat.model is never stated for it, even while one is set."""
-    await pool.execute(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
-        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page')"
-    )
+    await _agent_coder(pool)
     gateway = FakeGateway(
         admin_body={"role": "agent_coder", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
     )
@@ -372,6 +377,64 @@ async def test_an_agent_roles_switch_is_never_told_chat_model(owner_client, moun
 
     assert resp.status_code == 200
     assert gateway.seen[-1] == ("/admin/routes/agent_coder/jev-router", {"on": True})
+
+
+# chat_model is chat.model, a fact only core holds, and the gateway takes it as
+# core's: it would keep a client's value as the pick the router replaced and
+# hand it back on OFF as chat.model — a model chat.model never held. So a
+# client's chat_model never reaches the gateway, whatever the role.
+async def test_a_client_chat_model_never_reaches_the_gateway_for_an_agent_role(
+    owner_client, mount_peers, pool
+):
+    await _agent_coder(pool)
+    gateway = FakeGateway(
+        admin_body={"role": "agent_coder", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put(
+        "/api/v1/routes/agent_coder/jev-router", json={"on": True, "chat_model": CHAT_PICK}
+    )
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/agent_coder/jev-router", {"on": True})
+
+
+async def test_a_client_chat_model_never_reaches_the_gateway_while_chat_model_is_empty(
+    owner_client, mount_peers
+):
+    gateway = FakeGateway(
+        admin_body={"role": "chat", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put(
+        "/api/v1/routes/chat/jev-router", json={"on": True, "chat_model": "openrouter:x/y"}
+    )
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/chat/jev-router", {"on": True})
+
+
+async def test_an_agent_roles_switch_never_writes_chat_model(owner_client, mount_peers, pool):
+    """Only a role whose turns send chat.model can have its switch move it: an
+    agent role's answer that names one writes nothing."""
+    await _agent_coder(pool)
+    gateway = FakeGateway(
+        admin_body={
+            "role": "agent_coder",
+            "chain": [ROUTER],
+            "router": {"on": True, "kept": ""},
+            "chat_model": ROUTER,
+        }
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/agent_coder/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
 
 
 async def test_the_switch_writes_chat_model_when_its_answer_names_it(
@@ -482,11 +545,14 @@ async def test_a_chat_model_that_cannot_be_written_is_a_502_in_words(
 async def test_the_switchs_refusal_comes_back_in_the_gateways_words(
     owner_client, mount_peers, pool
 ):
+    """Relayed as it came, and only a 200 writes chat.model: this refusal names
+    one, which the gateway's never do, so nothing but the status stops it."""
     refusal = {
         "error": (
             f"scheduled's first link is the chat model, {CHAT_PICK}, a cloud model it shares "
             "with chat — switch Jev Router on for chat"
-        )
+        ),
+        "chat_model": ROUTER,
     }
     gateway = FakeGateway(admin_status=400, admin_body=refusal)
     mount_peers(gateway=gateway)

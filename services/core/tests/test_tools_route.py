@@ -142,3 +142,25 @@ def test_her_routing_tool_names_the_decisions_role():
     (tool,) = route.TOOLS
     assert "decisions" in tool.description
     assert "decisions" in tool.parameters["properties"]["role"]["description"]
+
+
+async def test_every_role_whose_turns_send_chat_model_is_explained_with_it_as_link_one(
+    pool, mount_peers, tmp_path
+):
+    """Scheduled and beat turns send chat.model as link 1, exactly as chat's
+    do, so their walk is explained with it. A role whose turns send no model —
+    the judge, the decision role, an agent — is explained with none."""
+    gateway = FakeGateway(explain_body=EXPLAIN)
+    mount_peers(gateway=gateway)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('chat.model', '\"openrouter:gpt-y\"'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+
+    for role in ("scheduled", "beat"):
+        await route.route_explain({"role": role}, ctx)
+        assert gateway.queries[-1] == f"role={role}&model=openrouter%3Agpt-y".encode()
+    for role in ("judge", "decisions", "agent_coder"):
+        await route.route_explain({"role": role}, ctx)
+        assert gateway.queries[-1] == f"role={role}".encode()

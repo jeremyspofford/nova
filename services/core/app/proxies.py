@@ -3,7 +3,10 @@
 Ruling R8: the browser only ever talks to core, so the wizard's hardware,
 model and backend calls arrive here and are forwarded 1:1 over core's
 gateway link. Nothing is interpreted on the way through — the gateway's
-status and body are the answer, including its refusals.
+status and body are the answer, including its refusals. GET /routes and the
+Jev Router switch are the exception: chat.model is a fact only core holds,
+so they state it to the gateway, and the switch writes it back when the
+gateway's answer names what it must become.
 """
 
 from __future__ import annotations
@@ -241,23 +244,26 @@ async def put_route(role: str, request: Request) -> Response:
 
 
 async def _switch_body(request: Request, role: str) -> bytes:
-    """The switch's body as the gateway gets it: for a role whose turns send
-    chat.model as link 1, `chat_model` states it (none while it is empty);
-    any other body goes as it came, and so does one that is not a JSON
-    object — the gateway refuses that in its own words."""
+    """The switch's body as the gateway gets it. `chat_model` is chat.model,
+    a fact only core holds, and the gateway takes it as core's — it would keep
+    a client's value as the pick the router replaced and hand it back on OFF
+    as chat.model. So whatever a client put there is dropped, for every role,
+    and core states its own for a role whose turns send chat.model as link 1
+    (none while it is empty). A body naming neither goes as it came, and so
+    does one that is not a JSON object: the gateway refuses that in its own
+    words."""
     raw = await request.body()
-    if role not in chat.CHAT_MODEL_ROLES:
-        return raw
-    chat_model = await _chat_model()
-    if not chat_model:
-        return raw
     try:
         body = json.loads(raw)
     except ValueError:
         return raw
     if not isinstance(body, dict):
         return raw
-    return json.dumps({**body, "chat_model": chat_model}).encode()
+    stated = {key: value for key, value in body.items() if key != "chat_model"}
+    chat_model = await _chat_model() if role in chat.CHAT_MODEL_ROLES else ""
+    if chat_model:
+        stated["chat_model"] = chat_model
+    return raw if stated == body else json.dumps(stated).encode()
 
 
 async def _write_chat_model_named_in(role: str, content: bytes) -> None:
@@ -294,7 +300,8 @@ async def put_jev_router(role: str, request: Request) -> Response:
     """The Jev Router switch (decision-role spec §4): an edit to the role's
     chain that the gateway makes and states, refusals included. For chat the
     cloud link can be chat.model itself, so the gateway's answer then names
-    what chat.model must become, and core writes it before answering."""
+    what chat.model must become, and core writes it before answering — for a
+    role whose turns send chat.model and no other, and only off a 200."""
     await _refuse_an_agent_role_with_no_agent(role)
     answer = await _forward(
         request,
@@ -302,7 +309,7 @@ async def put_jev_router(role: str, request: Request) -> Response:
         f"/admin/routes/{role}/jev-router",
         content=await _switch_body(request, role),
     )
-    if answer.status_code == 200:
+    if answer.status_code == 200 and role in chat.CHAT_MODEL_ROLES:
         await _write_chat_model_named_in(role, answer.body)
     return answer
 

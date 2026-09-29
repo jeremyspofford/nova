@@ -235,3 +235,14 @@ def test_note_upstream_reads_only_a_provider_chunk_naming_another_model():
     assert "upstream_model" not in noted({**picked, "choices": []})
     assert "upstream_model" not in noted({"choices": picked["choices"]})
     assert "upstream_model" not in noted({**picked, "model": ""})
+
+
+def test_note_upstream_records_nothing_without_a_served_link_to_compare():
+    """Recorded only when it differs from the served link's model — which
+    cannot be checked when the gateway named no served link, or one with no
+    model part. Nothing is recorded then, rather than a difference assumed."""
+    chunk = {"model": "anthropic/claude-sonnet-5", "choices": [{"delta": {"content": "Hi"}}]}
+    for meta in ({}, {"served_by": "openrouter"}):
+        span = SimpleNamespace(meta=dict(meta))
+        chat._note_upstream(span, chunk)
+        assert "upstream_model" not in span.meta, meta

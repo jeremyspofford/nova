@@ -59,10 +59,15 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
     role = str(args.get("role") or "chat").strip()
     params = {"role": role}
     model = str(args.get("model") or "")
-    if not model and role == "chat":
-        # The chat chain's link 1 is the model picked in chat — read here,
-        # never left for her to remember to pass (the first live walk asked
-        # without it and was told about the fallbacks alone).
+    # Function-local: a cold `import app.tools` must not load app.chat
+    # (tests/test_tools_agents.py).
+    from app import chat
+
+    if not model and role in chat.CHAT_MODEL_ROLES:
+        # Link 1 of every role whose turns send chat.model (chat, scheduled,
+        # beat) is the model picked in chat — read here, never left for her to
+        # remember to pass (the first live walk asked without it and was told
+        # about the fallbacks alone).
         try:
             model = str(await settings_store.read_value(await db.get_pool(), "chat.model") or "")
         except Exception:  # noqa: BLE001 — the walk still answers, about the chain
