@@ -124,6 +124,34 @@ Face, keeps one model loaded, and unloads it when idle so the GPU is free. The g
 like the hub's Ollama for downloads. Until it exists, the Kev server the owner started by hand
 (`kev.serve --run jaredpalmer/kev-4b --port 8009`) is a plain `systemone` provider link.
 
+### 6. Local (alpha) and cloud (beta) decision models: two switches (owner, 2026-09-29)
+
+Measured on the deployed stack on 2026-09-29, with the chat model `dell:qwen3:8b`:
+- Kev-4B on the Dell answered within the 5 s budget on 1 of 90 corpus turns, and on 0 of 10
+  latency runs, while the chat model was loaded on the same GPU.
+- Alone and warm, Kev-4B took 1.8 s. Jev on OpenRouter took 0.8 s.
+- A slow first link also strands the next one: the budget ends before the gateway sees Kev fail.
+
+The owner's ruling: "the local decision model is an alpha feature while the cloud decision model
+is a beta feature". The chain order stays his, Kev first and Jev second in his setup, or
+however a person orders it.
+
+- **Two switches.** Both sit in Settings, beside the decisions chain, and each is labelled with
+  its stage.
+  - "Local decision model (alpha)": off by default. Its notice says why it is alpha: on a GPU
+    shared with the chat model, a local decision model often cannot answer within the 5 s
+    budget. When that happens, the step is skipped and the message waits up to 5 s.
+  - "Cloud decision model (beta)": on by default. Its notice says that the message and its
+    recalled notes go to the provider, at a small cost per message.
+- **What a switch does.** A switched-off kind is passed over in the decisions walk, for that
+  request only, without a wall, and the route states the reason. Local or cloud is derived
+  from the provider's `local` flag, never from a list of names. With local off, Kev is passed
+  over and Jev answers.
+- **Both off.** The decision step does not run at all: no call and no delay. The `decisions`
+  span says the step is switched off.
+- **Everything the page and Nova say follows the switches.** That covers Routing's "right now: X
+  would answer" and her routing tool's explanation of the decisions role.
+
 ## Open risks (measured, not solved)
 
 - **Kev-4B latency on the Dell.** A two-stage route took 3 s warm and 21-47 s cold or under
