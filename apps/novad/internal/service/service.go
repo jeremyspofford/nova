@@ -53,7 +53,7 @@ func SystemdUnit(bin string) string {
 		"After=network-online.target\n" +
 		"Wants=network-online.target\n\n" +
 		"[Service]\n" +
-		"ExecStart=" + systemdQuote(bin) + " supervise --mode systemd-user\n" +
+		"ExecStart=" + systemdQuote(bin) + " supervise --mode " + ModeSystemd + "\n" +
 		"Restart=on-failure\n" +
 		"RestartSec=5\n" +
 		"RestartPreventExitStatus=78\n\n" +
@@ -61,13 +61,20 @@ func SystemdUnit(bin string) string {
 		"WantedBy=default.target\n"
 }
 
-// systemdQuote quotes an ExecStart path that needs it (systemd.syntax: C-style
-// quotes; % and $ doubled so they are not specifiers or variables).
+// systemdQuote quotes an ExecStart path that needs it (systemd.syntax:
+// C-style quotes; % is doubled so it is not a specifier). A literal $ is left
+// as-is: unlike %, systemd does NOT collapse a doubled $$ back to one $ in
+// the executable path (systemd-analyze verify rejects the doubled form as
+// "not executable"), so escaping it would corrupt the path instead of
+// protecting it. A $ still forces quoting when it appears with something
+// else that needs it (a space, say); it is still subject to systemd's own
+// variable expansion either way, quoted or not — this function cannot change
+// that, only avoid making it worse.
 func systemdQuote(p string) string {
 	if !strings.ContainsAny(p, " \t\"\\'$%;") {
 		return p
 	}
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `$$`, `%`, `%%`)
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`)
 	return `"` + r.Replace(p) + `"`
 }
 
@@ -90,7 +97,7 @@ func LaunchAgentPlist(bin, logPath string) string {
     <string>` + esc(bin) + `</string>
     <string>supervise</string>
     <string>--mode</string>
-    <string>launch-agent</string>
+    <string>` + ModeLaunch + `</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -102,4 +109,4 @@ func LaunchAgentPlist(bin, logPath string) string {
 }
 
 // RunKeyCommand is the HKCU Run value: the binary QUOTED, supervise, the mode.
-func RunKeyCommand(bin string) string { return `"` + bin + `" supervise --mode run-key` }
+func RunKeyCommand(bin string) string { return `"` + bin + `" supervise --mode ` + ModeRunKey }

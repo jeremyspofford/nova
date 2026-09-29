@@ -32,6 +32,20 @@ func TestTheUnitQuotesAPathWithASpaceOrASpecifier(t *testing.T) {
 	}
 }
 
+// Fix round 1, Minor 1: unlike %, systemd does not collapse a doubled $$
+// back to one $ in the executable path (systemd-analyze verify rejects it as
+// "not executable") — so a $ in the path must pass through as a single
+// character, never doubled.
+func TestTheUnitDoesNotDoubleADollarInThePath(t *testing.T) {
+	u := SystemdUnit("/home/sam/nova$d")
+	if !strings.Contains(u, `ExecStart="/home/sam/nova$d" supervise --mode systemd-user`) {
+		t.Fatalf("a single $ must pass through unescaped, got:\n%s", u)
+	}
+	if strings.Contains(u, "$$") {
+		t.Fatalf("$ must never be doubled in the executable path, got:\n%s", u)
+	}
+}
+
 func TestThePlistDoesNotRestartACleanExit(t *testing.T) {
 	p := LaunchAgentPlist("/Users/sam/Library/Application Support/Nova/novad", "/Users/sam/Library/Logs/novad&.log")
 	for _, want := range []string{

@@ -56,14 +56,25 @@ func (k *runKey) Install(bin string) error {
 	return nil
 }
 
+// stopTimeout bounds how long Stop waits for a novad process it terminates to
+// actually exit (Fix round 1, Important 1). Restart only launches a new
+// supervisor after Stop returns nil, so a lock file the dying supervisor
+// still held cannot make the new one exit at once thinking one already runs
+// (P3's HeldError) and leave the machine with no agent until next sign-in.
+const stopTimeout = 10 * time.Second
+
 // Restart stops the running supervisor and agent (their pids from the status
-// files, checked to be novad before anything is ended), then starts
-// supervise detached, as the Run key would at sign-in.
+// files, verified to be novad and waited for on the SAME handle —
+// platform.TerminateNovad — before anything is reported ended), then starts
+// supervise detached, as the Run key would at sign-in. It launches only after
+// Stop reports every novad pid it found actually ended.
 func (k *runKey) Restart(ctx context.Context) error {
 	if k.bin == "" {
 		return errors.New("cannot restart: the Run key was not written in this run")
 	}
-	_ = k.Stop(ctx)
+	if err := k.Stop(ctx); err != nil {
+		return fmt.Errorf("cannot restart: the running agent did not stop: %w", err)
+	}
 	_, err := platform.StartDetached(k.bin, []string{"supervise", "--mode", ModeRunKey, "--detached"},
 		filepath.Join(k.paths.StateDir, state.LogFile))
 	return err
@@ -73,27 +84,47 @@ func (k *runKey) RestartLater(context.Context, time.Duration) error {
 	return errors.New("cannot: a Windows agent updates through its supervisor, never by a delayed restart")
 }
 
+// Stop ends the pids the status files name, when they are still running a
+// novad image — never a pid Windows reused for something else — and reports
+// an error naming any of them that did not actually end within stopTimeout.
+// A status file that does not exist, or names no pid, is not an error: there
+// is simply nothing recorded to stop.
 func (k *runKey) Stop(context.Context) error {
+	var pids []int
 	var sv state.SupervisorStatus
 	if state.ReadJSON(filepath.Join(k.paths.StateDir, state.SupervisorStatusFile), &sv) == nil {
-		for _, pid := range []int{sv.PID, sv.ChildPID} {
-			if pid > 0 && platform.ProcessIsNovad(pid) {
-				_ = platform.Terminate(pid)
-			}
-		}
+		pids = append(pids, sv.PID, sv.ChildPID)
 	}
 	var ag state.AgentStatus
-	if state.ReadJSON(filepath.Join(k.paths.StateDir, state.AgentStatusFile), &ag) == nil && ag.PID > 0 && platform.ProcessIsNovad(ag.PID) {
-		_ = platform.Terminate(ag.PID)
+	if state.ReadJSON(filepath.Join(k.paths.StateDir, state.AgentStatusFile), &ag) == nil {
+		pids = append(pids, ag.PID)
 	}
-	return nil
+	var errs []error
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		if err := platform.TerminateNovad(pid, stopTimeout); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
+// Uninstall stops any running instance (best effort: even when a process
+// would not stop, the autostart definition itself should still come out) and
+// removes the Run value. Only "the key does not exist" is treated as
+// nothing to do — any other error opening it (permissions, a malformed path,
+// …) is a real problem and is returned, never silently read as "already
+// uninstalled".
 func (k *runKey) Uninstall(ctx context.Context) error {
 	_ = k.Stop(ctx)
 	key, err := registry.OpenKey(registry.CURRENT_USER, k.keyPath, registry.SET_VALUE)
 	if err != nil {
-		return nil // no key, no value
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil // no key, no value
+		}
+		return err
 	}
 	defer key.Close()
 	if err := key.DeleteValue(k.value); err != nil && !errors.Is(err, registry.ErrNotExist) {
