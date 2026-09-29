@@ -626,9 +626,13 @@ export type RouteRole = BuiltinRole | string
 export type RouteProtocol = 'chat' | 'systemone'
 
 /** The Jev Router switch on a role (decision-role spec §4). `on` is DERIVED by
- * the gateway from the chain — a Jev Router link is in it; `kept` is the
- * cloud link it took the place of ('' when it replaced none and was added
- * after the local links), null when off. Null where the switch is not offered. */
+ * the gateway from the chain — true when a Jev Router link is in it,
+ * including one reached by walking chat's chain for a role with none of its
+ * own. `kept` is the cloud link the switch replaced ('' when it replaced
+ * none and was added after the local links) — null when off, and also null
+ * while on: for a role that walks chat's chain (the kept link, if any, is
+ * chat's, never shown here), and for a kept link recorded for a slot the
+ * router no longer holds. Null where the switch is not offered. */
 export interface RouteRouter {
   on: boolean
   kept: string | null

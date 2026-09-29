@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { RoutingSection } from './RoutingSection'
@@ -71,7 +72,7 @@ function renderSection(
     listAgents: vi.fn(async () => AGENTS),
     ...over,
   }
-  render(<RoutingSection chatModel="openrouter:openai/gpt-x" api={api as never} {...props} />)
+  render(<RoutingSection chatModel="openrouter:openai/gpt-x" api={api as never} onChatModelChanged={() => {}} {...props} />)
   return api
 }
 
@@ -307,7 +308,7 @@ describe('RoutingSection', () => {
     await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
     const panel = screen.getByTestId('route-chat-router')
     expect(panel.textContent).toContain('balancing quality, speed and cost')
-    expect(panel.textContent).toContain('Link 1 stays the model picked in chat')
+    expect(panel.textContent).toContain('Switching on puts Jev Router in place of the first cloud model a chat turn reaches')
     const toggle = within(panel).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
     fireEvent.click(toggle)
@@ -338,9 +339,26 @@ describe('RoutingSection', () => {
     const api = renderSection({ getRoutes: vi.fn(async () => ROUTES_SWITCH), getCatalog: catalogWith(row('hub:qwen3:8b', 'local', true)) })
     await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
     const panel = screen.getByTestId('route-chat-router')
-    expect((within(panel).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement).disabled).toBe(true)
-    expect(panel.textContent).toContain('no provider lists typesafe/jev-router — add OpenRouter under Providers to use it')
+    const toggle = within(panel).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+    expect(toggle.disabled).toBe(true)
+    expect(panel.textContent).toContain('no provider lists typesafe/jev-router right now (OpenRouter serves it)')
+    fireEvent.click(toggle)
     expect(api.putJevRouter).not.toHaveBeenCalled()
+  })
+
+  it('names a catalogue source that failed to list, alongside the no-provider reason', async () => {
+    renderSection({
+      getRoutes: vi.fn(async () => ROUTES_SWITCH),
+      getCatalog: vi.fn(async () => ({
+        fetched_at: 't',
+        sources: [{ key: 'openrouter', ok: false, note: 'rate limited (429)' }],
+        rows: [],
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    expect(screen.getByTestId('route-chat-router').textContent).toContain(
+      'no provider lists typesafe/jev-router right now (OpenRouter serves it) — these model lists could not be read: openrouter (rate limited (429))',
+    )
   })
 
   it('shows a refused switch in the gateway\'s words and keeps what the page knew', async () => {
@@ -398,5 +416,120 @@ describe('RoutingSection', () => {
     fireEvent.click(within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
     await waitFor(() => expect(api.getRoutes).toHaveBeenCalledTimes(2))
     expect(onChatModelChanged).not.toHaveBeenCalled()
+  })
+
+  it('reloads chat\'s explanation with the model the switch just set, never a stale one still in flight', async () => {
+    // A real parent (SettingsPage) re-renders with the new chatModel once
+    // onChatModelChanged fires, which starts a SECOND reload racing the
+    // click's own. Whichever started later must win, however they finish.
+    const OLD_MODEL = 'openrouter:openai/gpt-x'
+    const NEW_MODEL = 'openrouter:typesafe/jev-router'
+    let resolveOld: (value: RouteExplain) => void = () => {}
+    const oldExplain = new Promise<RouteExplain>(resolve => {
+      resolveOld = resolve
+    })
+    const explainRoute = vi.fn(async (role: string, model?: string) => {
+      if (role !== 'chat') return { role, chain: [], would_serve: null, reason: 'no chain' }
+      if (model === OLD_MODEL) return oldExplain
+      return {
+        role: 'chat',
+        chain: [{ link: 1, id: NEW_MODEL, verdict: 'runnable', reason: null }],
+        would_serve: { role: 'chat', link: 1, reason: null, served_by: NEW_MODEL, standby: false },
+        reason: null,
+      }
+    })
+    const api = {
+      getRoutes: vi.fn(async () => ROUTES_SWITCH),
+      putRoute: vi.fn(async (role: string, chain: string[]) => ({ role, chain })),
+      putJevRouter: vi.fn(async () => ({ role: 'chat', chain: [], router: { on: true, kept: '' }, chat_model: NEW_MODEL })),
+      explainRoute,
+      clearWall: vi.fn(async () => ({ provider: 'openrouter', cleared: true })),
+      getCatalog: catalogWith(ROUTER_ROW),
+      deleteRoute: vi.fn(async () => undefined),
+      listAgents: vi.fn(async () => AGENTS),
+    }
+    function Parent() {
+      const [chatModel, setChatModel] = useState(OLD_MODEL)
+      return <RoutingSection chatModel={chatModel} api={api as never} onChatModelChanged={setChatModel} />
+    }
+    render(<Parent />)
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
+    await waitFor(() => expect(screen.getByTestId('route-chat-would-serve').textContent).toContain(NEW_MODEL))
+    // The old, still-pending explanation finally lands — late — and must not
+    // un-write the fresh one.
+    resolveOld({
+      role: 'chat',
+      chain: [{ link: 1, id: OLD_MODEL, verdict: 'walled', reason: 'stale' }],
+      would_serve: null,
+      reason: 'old model still walled',
+    })
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.getByTestId('route-chat-would-serve').textContent).toContain(NEW_MODEL)
+  })
+
+  it('says the switch was added after the local links when it kept nothing', async () => {
+    const on: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'chat' ? { ...r, router: { on: true, kept: '' } } : r)) }
+    renderSection({ getRoutes: vi.fn(async () => on), getCatalog: catalogWith(ROUTER_ROW) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router-kept')).toBeTruthy())
+    expect(screen.getByTestId('route-chat-router-kept').textContent).toBe('added after the local links; switching it off removes it')
+  })
+
+  it('disables the toggle while a switch is in flight', async () => {
+    let resolvePut: (value: { role: string; chain: string[]; router: { on: boolean; kept: string | null } }) => void = () => {}
+    const putJevRouter = vi.fn(
+      () =>
+        new Promise<{ role: string; chain: string[]; router: { on: boolean; kept: string | null } }>(resolve => {
+          resolvePut = resolve
+        }),
+    )
+    renderSection({ getRoutes: vi.fn(async () => ROUTES_SWITCH), getCatalog: catalogWith(ROUTER_ROW), putJevRouter })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    const toggle = within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle.disabled).toBe(true))
+    resolvePut({ role: 'chat', chain: [], router: { on: true, kept: null } })
+    await waitFor(() => expect(toggle.disabled).toBe(false))
+  })
+
+  it('offers the switch on an agent role too', async () => {
+    const withRouter: Routes = {
+      ...ROUTES_WITH_AGENTS,
+      roles: ROUTES_WITH_AGENTS.roles.map(r => (r.role === 'agent_coder' ? { ...r, router: { on: false, kept: null } } : r)),
+    }
+    const api = renderSection({ getRoutes: vi.fn(async () => withRouter), getCatalog: catalogWith(ROUTER_ROW) })
+    await waitFor(() => expect(screen.getByTestId('route-agent_coder-router')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('route-agent_coder-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
+    await waitFor(() => expect(api.putJevRouter).toHaveBeenCalledWith('agent_coder', true, 'openrouter:typesafe/jev-router'))
+  })
+
+  it('clears a stale refusal once a reload shows the role\'s router state actually changed', async () => {
+    const refusal = 'scheduled has no chain of its own — it walks the chat chain; switch Jev Router on for chat, or give scheduled its own chain first'
+    let reloaded = false
+    const getRoutes = vi.fn(async () =>
+      reloaded
+        ? {
+            ...ROUTES_SWITCH,
+            roles: ROUTES_SWITCH.roles.map(r =>
+              r.role === 'scheduled' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: '' } } : r,
+            ),
+          }
+        : ROUTES_SWITCH,
+    )
+    renderSection({
+      getRoutes,
+      getCatalog: catalogWith(ROUTER_ROW),
+      putJevRouter: vi.fn(async () => { throw new Error(refusal) }),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-scheduled-router')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('route-scheduled-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
+    await waitFor(() => expect(screen.getByTestId('route-scheduled-router-error')).toBeTruthy())
+    reloaded = true
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }))
+    await waitFor(() => {
+      const toggle = within(screen.getByTestId('route-scheduled-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+      expect(toggle.checked).toBe(true)
+    })
+    expect(screen.queryByTestId('route-scheduled-router-error')).toBeNull()
   })
 })

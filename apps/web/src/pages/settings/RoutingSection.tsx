@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Trash2, Waypoints, X } from 'lucide-react'
 import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
@@ -15,6 +15,7 @@ import {
   type AgentSummary,
   type BuiltinRole,
   type CatalogRow,
+  type CatalogSource,
   type RouteExplain,
   type RouteProtocol,
   type RouteRouter,
@@ -159,10 +160,11 @@ export function RoutingSection({
    * and core writes it once the gateway names what it must become) — this
    * tells the settings page to reload it, the same way a pick made on Models
    * or Providers does. Called only when a switch answer names one. */
-  onChatModelChanged?: (model: string) => void
+  onChatModelChanged: (model: string) => void
 }) {
   const [routes, setRoutes] = useState<Routes | null>(null)
   const [catalog, setCatalog] = useState<CatalogRow[]>([])
+  const [catalogSources, setCatalogSources] = useState<CatalogSource[]>([])
   // null = the agents list was NOT read (agentsError says why); [] = read and empty.
   const [agents, setAgents] = useState<AgentSummary[] | null>(null)
   const [agentsError, setAgentsError] = useState<string | null>(null)
@@ -170,8 +172,30 @@ export function RoutingSection({
   const [error, setError] = useState<string | null>(null)
   // The link that serves Jev Router, from the catalogue the page already read.
   const routerLink = catalog.find(r => r.kind === 'cloud' && r.model === JEV_ROUTER_MODEL)?.id ?? null
+  // The switch's disabled-with-no-link reason: the base sentence, plus a
+  // named reason for each catalogue source that failed outright — read from
+  // the sources themselves, since a source this page has not read is not the
+  // same fact as one that came back empty.
+  const failedSources = catalogSources.filter(s => s.ok === false)
+  const routerUnavailableReason =
+    `no provider lists ${JEV_ROUTER_MODEL} right now (OpenRouter serves it)` +
+    (failedSources.length > 0
+      ? ` — these model lists could not be read: ${failedSources.map(s => `${s.key} (${s.note ?? 'failed'})`).join(', ')}`
+      : '')
 
-  const load = useCallback(async () => {
+  // Answers arriving out of order — an older reload landing after a newer one
+  // (two quick switches on different roles, or this reload racing the
+  // parent's own re-render once a switch moves chat.model) — must not
+  // publish over what the newer one already wrote: every load takes a
+  // sequence number, and only the newest one may set state.
+  const loadSeq = useRef(0)
+
+  const load = useCallback(async (overrideChatModel?: string) => {
+    const seq = ++loadSeq.current
+    // The model to explain chat against: an override the CALLER already
+    // knows is current (a switch answer's own chat_model) beats this
+    // closure's own `chatModel`, which can still be one render behind it.
+    const modelForChat = overrideChatModel ?? chatModel
     setError(null)
     try {
       const [r, cat, agentsRead] = await Promise.all([
@@ -184,8 +208,10 @@ export function RoutingSection({
           (err: unknown) => ({ list: null as AgentSummary[] | null, error: reasonOf(err) }),
         ),
       ])
+      if (seq !== loadSeq.current) return
       setRoutes(r)
       setCatalog(cat.rows)
+      setCatalogSources(cat.sources)
       setAgents(agentsRead.list)
       setAgentsError(agentsRead.error)
       const entries = await Promise.all(
@@ -193,15 +219,17 @@ export function RoutingSection({
           .filter(role => !role.reserved)
           .map(async role => {
             try {
-              const model = role.role === 'chat' && chatModel ? chatModel : undefined
+              const model = role.role === 'chat' && modelForChat ? modelForChat : undefined
               return [role.role, await api.explainRoute(role.role, model)] as const
             } catch (err) {
               return [role.role, { error: reasonOf(err) }] as const
             }
           }),
       )
+      if (seq !== loadSeq.current) return
       setExplains(Object.fromEntries(entries))
     } catch (err) {
+      if (seq !== loadSeq.current) return
       setError(reasonOf(err))
     }
   }, [api, chatModel])
@@ -244,10 +272,15 @@ export function RoutingSection({
               explain={explains[entry.role]}
               router={entry.router ?? null}
               routerLink={routerLink}
+              routerUnavailableReason={routerUnavailableReason}
               onRouter={async on => {
                 const result = await api.putJevRouter(entry.role, on, on ? routerLink ?? undefined : undefined)
-                if (result.chat_model !== undefined) onChatModelChanged?.(result.chat_model)
-                await load()
+                // Reload with the model the ANSWER just named, not this
+                // closure's — the parent's own re-render (which would
+                // otherwise start a second, correctly-modelled reload) has
+                // not necessarily happened yet.
+                if (result.chat_model !== undefined) onChatModelChanged(result.chat_model)
+                await load(result.chat_model)
                 return result.note
               }}
               onSave={async chain => {
@@ -309,6 +342,7 @@ function RoleEditor({
   explain,
   router,
   routerLink,
+  routerUnavailableReason,
   onRouter,
   onSave,
   onRemove,
@@ -326,6 +360,10 @@ function RoleEditor({
   /** the provider:model that serves Jev Router, from the live catalogue; null
    * when no registered provider lists it. */
   routerLink: string | null
+  /** Why the switch is off with no way to turn it on — the base sentence,
+   * plus a named reason for each catalogue source that failed outright.
+   * Always a real sentence; only ever shown when `routerLink` is null. */
+  routerUnavailableReason: string
   /** Flips the switch. Resolves to the gateway's `note` (undefined for none)
    * on success; a refusal is thrown, in the gateway's own words. */
   onRouter: (on: boolean) => Promise<string | undefined>
@@ -344,6 +382,11 @@ function RoleEditor({
   const [routerError, setRouterError] = useState<string | null>(null)
   const [routerNote, setRouterNote] = useState<string | null>(null)
   const flipRouter = async (on: boolean) => {
+    // The same condition the toggle's `disabled` reflects, checked again
+    // here: an input's `disabled` attribute is what a pointer respects, not
+    // what a dispatched event is required to. Nothing may reach `onRouter`
+    // while either holds.
+    if (routerBusy || !router || (!router.on && !routerLink)) return
     setRouterBusy(true)
     setRouterError(null)
     setRouterNote(null)
@@ -356,6 +399,15 @@ function RoleEditor({
       setRouterBusy(false)
     }
   }
+  // A refusal is about the attempt that produced it, not a persistent fact:
+  // once a reload shows this role's router state actually moved (this
+  // role's own switch, or another role's switch racing a shared reload in),
+  // a stale refusal no longer describes what the toggle now shows. The note
+  // is different — it is set by the very reload that just applied it — so
+  // it is never touched here.
+  useEffect(() => {
+    setRouterError(null)
+  }, [router?.on, router?.kept])
   useEffect(() => {
     setDraft(chain)
   }, [chain])
@@ -519,7 +571,7 @@ function RoleEditor({
           <p className="text-caption text-content-tertiary">{JEV_ROUTER_BALANCES}</p>
           {role === 'chat' && (
             <p className="text-caption text-content-tertiary">
-              Link 1 stays the model picked in chat; the switch changes the cloud link behind it.
+              Switching on puts Jev Router in place of the first cloud model a chat turn reaches: the model picked in chat when that is a cloud model, otherwise the first cloud link after it. Local links stay first.
             </p>
           )}
           {router.on && router.kept && (
@@ -533,12 +585,10 @@ function RoleEditor({
             </p>
           )}
           {!router.on && !routerLink && (
-            <p className="text-caption text-content-tertiary">
-              no provider lists {JEV_ROUTER_MODEL} — add OpenRouter under Providers to use it
-            </p>
+            <p className="text-caption text-content-tertiary">{routerUnavailableReason}</p>
           )}
           {routerNote && (
-            <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-note`}>
+            <p role="status" className="text-caption text-content-tertiary" data-testid={`route-${role}-router-note`}>
               {routerNote}
             </p>
           )}
