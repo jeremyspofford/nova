@@ -33,6 +33,7 @@ import (
 	"novad/internal/config"
 	"novad/internal/facts"
 	"novad/internal/platform"
+	"novad/internal/state"
 	"novad/internal/wire"
 )
 
@@ -99,6 +100,9 @@ type Agent struct {
 	deps  caps.Deps
 	wsURL string
 	logf  func(string, ...any)
+
+	// opts are what main hands the agent beyond its identity (S42b).
+	opts Options
 
 	// verifier is built ONCE and reused across every reconnect, so its one-use
 	// seen-set spans the envelope validity window (TTL + skew) rather than a
@@ -186,6 +190,25 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 	}, nil
 }
 
+// Options are what main hands an Agent beyond its identity (S42b): where its
+// local status lives, whether a supervisor started it, the binary it runs
+// as, and a callback for each change of connection state.
+type Options struct {
+	StateDir   string
+	Supervised bool
+	Binary     string
+	OnState    func(state, server string, err error)
+}
+
+// Configure sets the options. Call it before Run.
+func (a *Agent) Configure(o Options) { a.opts = o }
+
+func (a *Agent) state(st, server string, err error) {
+	if a.opts.OnState != nil {
+		a.opts.OnState(st, server, err)
+	}
+}
+
 // WSURL derives the socket URL from the enrollment server URL: http->ws,
 // https->wss, path /api/v1/devices/ws.
 func WSURL(server string) (string, error) {
@@ -224,6 +247,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		if err != nil {
 			a.logf("connection ended: %v", err)
+			a.state(state.StateConnecting, "", err)
 		}
 		if authed {
 			// A session that authenticated proves the path works, so the next
@@ -246,6 +270,7 @@ func (a *Agent) Run(ctx context.Context) error {
 // connectOnce dials, authenticates and serves one session. It reports whether
 // the session authenticated (Run's backoff reset reads it), and why it ended.
 func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
+	a.state(state.StateConnecting, a.cfg.Server, nil)
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	c, _, err := websocket.Dial(dialCtx, a.wsURL, nil)
 	cancel()
@@ -259,6 +284,7 @@ func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	a.logf("authenticated; serving")
+	a.state(state.StateReady, a.cfg.Server, nil)
 	return true, a.serve(ctx, c)
 }
 

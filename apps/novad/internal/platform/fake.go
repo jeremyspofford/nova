@@ -14,7 +14,10 @@ type FakeRunner struct {
 	mu      sync.Mutex
 	Outputs map[string]string // keyed by program name
 	Errs    map[string]error
-	Calls   []FakeCall
+	// Seq answers successive calls of one program in order, before Outputs:
+	// a test that reads a value, changes it and reads it back scripts both.
+	Seq   map[string][]string
+	Calls []FakeCall
 }
 
 // FakeCall is one recorded run.
@@ -32,6 +35,10 @@ func (f *FakeRunner) Run(_ context.Context, name string, args []string, stdin st
 	f.Calls = append(f.Calls, FakeCall{Name: name, Args: append([]string(nil), args...), Stdin: stdin})
 	if err, ok := f.Errs[name]; ok {
 		return "", err
+	}
+	if q := f.Seq[name]; len(q) > 0 {
+		f.Seq[name] = q[1:]
+		return q[0], nil
 	}
 	if out, ok := f.Outputs[name]; ok {
 		return out, nil

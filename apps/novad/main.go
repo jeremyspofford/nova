@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -31,6 +32,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/platform"
+	"novad/internal/state"
 )
 
 // version is the build stamp: builds set it with
@@ -309,24 +311,48 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
+
+	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
+
+	lock, err := state.Acquire(filepath.Join(paths.StateDir, state.RunLockFile))
+	if err != nil {
+		// Exit 1, never 78: the other copy may stop, and a supervisor retries.
+		fail("%v — this identity is already running; stop that copy first", err)
+	}
+	defer lock.Release()
+	statusPath := filepath.Join(paths.StateDir, state.AgentStatusFile)
+	writeStatus := func(st, server string, e error) {
+		s := state.AgentStatus{V: 1, PID: os.Getpid(), Version: version, Mode: platform.Mode(),
+			State: st, Server: server, Since: time.Now().UTC()}
+		if e != nil {
+			s.Error = e.Error()
+		}
+		if err := state.WriteJSON(statusPath, s); err != nil {
+			logger.Printf("could not write %s: %v", statusPath, err)
+		}
+	}
+	writeStatus(state.StateStarting, cfg.Server, nil)
+
 	auditLog, err := audit.Open(paths.AuditFile)
 	if err != nil {
 		fail("could not open the audit log: %v", err)
 	}
 
-	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
 	agent, err := client.New(cfg, priv, auditLog, paths.Home, version, func(format string, a ...any) {
 		logger.Printf(format, a...)
 	})
 	if err != nil {
 		fail("%v", err)
 	}
+	self, _ := os.Executable()
+	agent.Configure(client.Options{StateDir: paths.StateDir, Supervised: platform.Supervised(), Binary: self, OnState: writeStatus})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	logger.Printf("device %s connecting to %s", cfg.DeviceID, cfg.Server)
 	runErr := agent.Run(ctx)
+	writeStatus(state.StateStopped, "", runErr)
 	if ctx.Err() != nil {
 		logger.Printf("stopped")
 		return
@@ -377,6 +403,57 @@ func cmdStatus(argv []string) {
 	} else {
 		fmt.Printf("server:      NOT reachable (%s)\n", detail)
 	}
+
+	var ag *state.AgentStatus
+	var sv *state.SupervisorStatus
+	var up *state.Update
+	if a := new(state.AgentStatus); state.ReadJSON(filepath.Join(paths.StateDir, state.AgentStatusFile), a) == nil {
+		ag = a
+	}
+	if s := new(state.SupervisorStatus); state.ReadJSON(filepath.Join(paths.StateDir, state.SupervisorStatusFile), s) == nil {
+		sv = s
+	}
+	if u := new(state.Update); state.ReadJSON(filepath.Join(paths.StateDir, state.UpdateFile), u) == nil {
+		up = u
+	}
+	for _, line := range statusLines(ag, sv, up) {
+		fmt.Println(line)
+	}
+}
+
+// statusLines says what the status files say — and that there is none when
+// there is none, never a guess. A "ready" is what the agent last wrote, not
+// a live probe; the reachability line below it is the probe.
+func statusLines(a *state.AgentStatus, s *state.SupervisorStatus, u *state.Update) []string {
+	var out []string
+	if a == nil {
+		out = append(out, "agent:       no status yet (it has not run since S42b's build)")
+	} else {
+		line := fmt.Sprintf("agent:       %s since %s (pid %d, %s, build %s)", a.State,
+			a.Since.UTC().Format(time.RFC3339), a.PID, a.Mode, a.Version)
+		if a.Server != "" {
+			line += " via " + a.Server
+		}
+		out = append(out, line)
+		if a.Error != "" {
+			out = append(out, "             last error: "+a.Error)
+		}
+	}
+	if s != nil {
+		line := fmt.Sprintf("supervisor:  pid %d, %d restarts", s.PID, s.Restarts)
+		if s.LastExit != nil {
+			line += fmt.Sprintf(", last exit %d", *s.LastExit)
+		}
+		out = append(out, line)
+	}
+	if u != nil {
+		line := fmt.Sprintf("last update: %s %s at %s", u.Outcome, u.Version, u.At.UTC().Format(time.RFC3339))
+		if u.Reason != "" {
+			line += " — " + u.Reason
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // probe does a short HTTP GET to the server root; any HTTP answer (even 401/404)

@@ -15,5 +15,6 @@ func Interactive() bool {
 	return session != 0
 }
 
-// Mode is foreground until S42b's Run key starts `novad supervise`.
-func Mode() string { return "foreground" }
+// osMode is foreground: a Windows agent's service mode arrives from its
+// supervisor (mode.go).
+func osMode() string { return "foreground" }

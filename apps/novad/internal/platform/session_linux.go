@@ -27,9 +27,9 @@ func Interactive() bool {
 	return os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("DISPLAY") != ""
 }
 
-// Mode is how this daemon was started: by systemd, which sets INVOCATION_ID
+// osMode is how this daemon was started: by systemd, which sets INVOCATION_ID
 // for every unit it starts, or by hand.
-func Mode() string {
+func osMode() string {
 	if os.Getenv("INVOCATION_ID") != "" {
 		return "systemd-user"
 	}

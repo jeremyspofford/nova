@@ -14,6 +14,7 @@ import (
 
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/state"
 )
 
 // The enroll body is identity only: the pairing code plus what this machine
@@ -210,3 +211,27 @@ func TestAfterRunNamesWhereTheAuditLogWentOnlyWhenOneExisted(t *testing.T) {
 // main_unix_test.go (CI follow-up): its ENOTDIR fault-injection technique is
 // Unix-only — see that file's comment for why, and main_windows_test.go for
 // the Windows twin.
+
+func TestStatusLinesSayWhatTheStatusFilesSay(t *testing.T) {
+	since := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	exit1 := 1
+	lines := statusLines(
+		&state.AgentStatus{PID: 7, Version: "0123456789ab", Mode: "run-key", State: state.StateReady, Server: "https://nova.fake-tailnet.ts.net", Since: since},
+		&state.SupervisorStatus{PID: 6, Version: "0123456789ab", Restarts: 2, LastExit: &exit1, Since: since},
+		&state.Update{Version: "fedcba987654", Outcome: state.UpdateRolledBack, Reason: "the new build did not connect within 2m0s", At: since},
+	)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"agent:       ready since 2026-09-28T12:00:00Z (pid 7, run-key, build 0123456789ab) via https://nova.fake-tailnet.ts.net",
+		"supervisor:  pid 6, 2 restarts, last exit 1",
+		"last update: rolled_back fedcba987654 at 2026-09-28T12:00:00Z — the new build did not connect within 2m0s",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in:\n%s", want, joined)
+		}
+	}
+	none := strings.Join(statusLines(nil, nil, nil), "\n")
+	if !strings.Contains(none, "agent:       no status yet") {
+		t.Errorf("no status file must be said, got:\n%s", none)
+	}
+}
