@@ -376,7 +376,12 @@ func (s *sup) unconfirmed() string {
 	if _, err := os.Lstat(s.cfg.Binary + ".prev"); err != nil {
 		return ""
 	}
-	if sum, err := platform.FileSHA256(s.cfg.Binary); err != nil || sum != u.SHA256 {
+	sum, err := platform.FileSHA256(s.cfg.Binary)
+	if err != nil {
+		s.cfg.Logf("cannot tell whether %s is the build swapped in for %s: %v; not confirming it", s.cfg.Binary, u.Version, err)
+		return ""
+	}
+	if sum != u.SHA256 {
 		return "" // another build was installed since the swap
 	}
 	s.cfg.Logf("%s was swapped in but never confirmed (the last supervisor stopped first); waiting up to %s for it to connect",

@@ -895,3 +895,28 @@ func TestABuildThatConnectedAsItsVersionBeforeExitingIsConfirmed(t *testing.T) {
 		t.Fatalf("after its exit the agent restarted from %q, want the confirmed build", from[2])
 	}
 }
+
+// When the resume cannot read the installed binary to tell whether it is the
+// build that was swapped in, it says so. It is never a silent skip, and it
+// still confirms nothing.
+func TestAResumeThatCannotReadTheBinarySaysWhy(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{block: true})
+	r.stopMidConfirm(t)
+	if err := os.Remove(r.bin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(r.bin, 0o700); err != nil { // present, but no file to hash
+		t.Fatal(err)
+	}
+	r.sp = &fakeSpawner{stateDir: r.dir}
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 1 })
+	if !logged.contain("cannot tell whether " + r.bin) {
+		t.Fatalf("the unreadable binary is not said: %q", logged.lines)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v", u)
+	}
+}
