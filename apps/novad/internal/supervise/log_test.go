@@ -108,14 +108,23 @@ func TestAFailedFollowKeepsThePreviousFileOpenUntilOneSucceeds(t *testing.T) {
 	if got := read(t, path); !strings.Contains(got, "generation 2") {
 		t.Fatalf("%s = %q, want the writers on the fresh file", path, got)
 	}
-	lg.follow = func(*os.File) error { return nil }
-	if err := os.Remove(path + ".1"); err != nil { // the held file, so no rename replaces it
-		t.Fatal(err)
-	}
+	// The held file IS .1. On Windows a rename cannot replace a file that a
+	// handle holds (MoveFileEx(REPLACE_EXISTING)), so the output must move
+	// off it — follow on the current file, and the held one closed — before
+	// the next rename, or rotation stays stuck and the log grows past its cap.
+	current := lg.f
+	var followed []*os.File
+	lg.follow = func(f *os.File) error { followed = append(followed, f); return nil }
 	if err := lg.Rotate(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the rotation after a failed follow is stuck: %v", err)
+	}
+	if len(followed) == 0 || followed[0] != current {
+		t.Fatalf("follow was not retried on the current file before the rename (it followed %d files)", len(followed))
 	}
 	if _, err := previous.WriteString("x"); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("the previous file is still open after a follow succeeded (write: %v)", err)
+	}
+	if got := read(t, path+".1"); !strings.Contains(got, "generation 2") {
+		t.Fatalf("%s.1 = %q, want generation 2: the rename replaced the held file", path, got)
 	}
 }

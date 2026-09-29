@@ -83,6 +83,13 @@ func (l *Log) Rotate() error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.held) > 0 && l.follow != nil && l.follow(l.f) == nil {
+		// A file held after a failed follow is the previous generation, now
+		// .1, and on Windows a rename cannot replace a file a handle holds.
+		// So move this process's output onto the current file and let the
+		// held ones go BEFORE renaming, or rotation stays stuck (P6).
+		l.release()
+	}
 	fi, err := os.Stat(l.path)
 	switch {
 	case err == nil && fi.Size() <= l.max:
