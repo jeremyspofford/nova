@@ -2885,6 +2885,8 @@ async def _gateway_round(
                         except json.JSONDecodeError:
                             span.meta["malformed_chunks"] = span.meta.get("malformed_chunks", 0) + 1
                             continue
+                        if "upstream_model" not in span.meta:
+                            _note_upstream(span, chunk)
                         delta, reasoning, usage, error, fragments = _chunk_parts(chunk)
                         if error is not None:
                             raise GatewayFailure(f"the gateway reported: {error}")
@@ -3113,6 +3115,25 @@ def _note_served(span, headers) -> None:
         span.meta["served_runtime"] = runtime
 
 
+def _note_upstream(span, chunk: dict) -> None:
+    """The model id the provider named in its answer, when that is not the
+    served link's model (decision-role spec §4). A Jev Router link —
+    `openrouter:typesafe/jev-router` — answers from a model it picks for each
+    request, and OpenRouter names that model on every chunk it relays; a
+    provider that resolves an alias names the model the alias reached. So the
+    key says which model answered, never why it differs. Read only off a chunk
+    that carries `choices` (the provider's own; the gateway's usage chunk has
+    none), and recorded only when it differs from the served link's model: a
+    link that answers as itself records nothing. Never guessed."""
+    named = chunk.get("model")
+    if not isinstance(named, str) or not named or not chunk.get("choices"):
+        return
+    served = span.meta.get("served_by")
+    if isinstance(served, str) and served.partition(":")[2] == named:
+        return
+    span.meta["upstream_model"] = named
+
+
 # The routing chain a turn's own rounds walk (S10-2): a chat turn the chat
 # chain, a scheduled turn the scheduled chain, a beat the beat chain; an eval
 # NAMES its model and walks none — a measurement on a substituted model would
@@ -3124,6 +3145,13 @@ def _note_served(span, headers) -> None:
 # when that model is walled, and the ledger meters the spend under a NULL role
 # — so a beat's hourly cost would be invisible on the Spend page.
 _ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled", "beat": "beat"}
+
+# The roles whose turns send chat.model as their link 1: Nova's own kinds'
+# roles above — an agent's turn sends no model and an eval names its own. Read
+# off the map, never kept as a second list, because the Jev Router switch
+# (proxies.py) reads chat.model as link 1 of exactly these roles; a role
+# missing here would show a switch that ignores the model its turns reach.
+CHAT_MODEL_ROLES: tuple[str, ...] = tuple(dict.fromkeys(_ROLE_BY_KIND.values()))
 
 
 def _role_of(turn: traces.Turn) -> str | None:

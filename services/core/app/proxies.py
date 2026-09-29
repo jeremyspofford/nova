@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.responses import Response
 
-from app import db, peers, settings_store
+from app import chat, db, peers, settings_store
 
 router = APIRouter(prefix="/api/v1", tags=["wizard"])
 logger = logging.getLogger("core")
@@ -74,25 +75,39 @@ async def _timezone_header() -> dict[str, str]:
     return {peers.HEADER_TIMEZONE: str(zone or "UTC")}
 
 
-def _target(request: Request, path: str) -> httpx.URL:
+def _target(request: Request, path: str, params: dict[str, str] | None = None) -> httpx.URL:
     """The gateway path with this request's query string, byte for byte.
 
     Passed as raw bytes rather than re-parsed parameters so that whatever
     the browser sent — encodings included — is what the gateway sees.
+    `params` are core's own, encoded after the browser's bytes and never
+    mixed into them.
     """
     query = request.scope.get("query_string") or b""
+    if params:
+        query = b"&".join(part for part in (query, urlencode(params).encode()) if part)
     return httpx.URL(path, query=query) if query else httpx.URL(path)
 
 
 async def _forward(
-    request: Request, method: str, path: str, *, timeout: httpx.Timeout = ADMIN_TIMEOUT
+    request: Request,
+    method: str,
+    path: str,
+    *,
+    timeout: httpx.Timeout = ADMIN_TIMEOUT,
+    content: bytes | None = None,
+    params: dict[str, str] | None = None,
 ) -> Response:
-    body = await request.body()
+    """The request as the gateway gets it, and the gateway's answer as it
+    came. `content` stands in for the request's own body and `params` are
+    added after its query string — for a route that must state a fact only
+    core holds."""
+    body = await request.body() if content is None else content
     try:
         async with peers.client(request.app, peers.GATEWAY, timeout) as client:
             upstream = await client.request(
                 method,
-                _target(request, path),
+                _target(request, path, params),
                 content=body or None,
                 headers={**_forward_headers(request), **(await _timezone_header())},
             )
@@ -175,18 +190,36 @@ async def delete_spend_price(request: Request) -> Response:
 
 
 # ── routing (S10-2): the role chains, the walk explained, the walls.
+#
+# chat.model is link 1 of every role whose turns send it (chat.CHAT_MODEL_ROLES),
+# and the gateway reads none of core's settings — so the Jev Router switch
+# (decision-role spec §4), which must read what those turns actually reach, is
+# told it on both of its routes.
+async def _chat_model() -> str:
+    """chat.model, or '' when it names none (the gateway's default)."""
+    return str(await settings_store.read_value(await db.get_pool(), "chat.model") or "")
+
+
+async def _chat_model_params() -> dict[str, str]:
+    """`?chat_model=` and the roles it is link 1 of, or nothing while it is empty."""
+    chat_model = await _chat_model()
+    if not chat_model:
+        return {}
+    return {"chat_model": chat_model, "chat_model_roles": ",".join(chat.CHAT_MODEL_ROLES)}
+
+
 @router.get("/routes")
 async def routes(request: Request) -> Response:
-    return await _forward(request, "GET", "/admin/routes")
+    """Every role's chain, and the Jev Router switch's state where it is
+    offered — read with chat.model as link 1 of the roles whose turns send it."""
+    return await _forward(request, "GET", "/admin/routes", params=await _chat_model_params())
 
 
-@router.put("/routes/{role}")
-async def put_route(role: str, request: Request) -> Response:
-    """Set a role's chain. An agent's role (`agent_<name>`, S12) is refused
-    HERE when no such agent exists — the Routing page is the only production
-    caller, so a typo is refused where the owner types it, by name, instead
-    of becoming a chain nobody walks. Every other role is the gateway's to
-    judge (its built-ins, its ROLE_RE); its 400 comes back verbatim."""
+async def _refuse_an_agent_role_with_no_agent(role: str) -> None:
+    """An agent's role (`agent_<name>`, S12) is refused HERE when no such agent
+    exists — the Routing page is the only production caller, so a typo is
+    refused where the owner types it, by name, instead of becoming a chain
+    nobody walks. Every other role is the gateway's to judge."""
     from app import agents  # function-local: agents imports the store, not the proxies
 
     if role.startswith(agents.ROLE_PREFIX):
@@ -197,7 +230,81 @@ async def put_route(role: str, request: Request) -> Response:
             raise HTTPException(
                 status_code=400, detail=f"no agent named {name!r} — live agent roles: {roles}"
             )
+
+
+@router.put("/routes/{role}")
+async def put_route(role: str, request: Request) -> Response:
+    """Set a role's chain; the gateway's built-ins, its ROLE_RE and its
+    protocol check answer verbatim."""
+    await _refuse_an_agent_role_with_no_agent(role)
     return await _forward(request, "PUT", f"/admin/routes/{role}")
+
+
+async def _switch_body(request: Request, role: str) -> bytes:
+    """The switch's body as the gateway gets it: for a role whose turns send
+    chat.model as link 1, `chat_model` states it (none while it is empty);
+    any other body goes as it came, and so does one that is not a JSON
+    object — the gateway refuses that in its own words."""
+    raw = await request.body()
+    if role not in chat.CHAT_MODEL_ROLES:
+        return raw
+    chat_model = await _chat_model()
+    if not chat_model:
+        return raw
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(body, dict):
+        return raw
+    return json.dumps({**body, "chat_model": chat_model}).encode()
+
+
+async def _write_chat_model_named_in(role: str, content: bytes) -> None:
+    """chat.model, written when the switch's answer names what it must become
+    ('' is the gateway's default: a value, not an absence). Written through
+    the settings writer PUT /settings uses, so it is checked exactly as a
+    value typed there is. A write that fails is a 502 in words, never a 200 —
+    the gateway keeps the link it would put back, so the switch still reads
+    what the turns reach and can be flipped again."""
+    try:
+        answer = json.loads(content)
+    except ValueError:
+        return
+    named = answer.get("chat_model") if isinstance(answer, dict) else None
+    if not isinstance(named, str):
+        return
+    try:
+        await settings_store.write_setting(
+            settings_store.SettingWrite(key="chat.model", value=named)
+        )
+    except Exception as exc:  # noqa: BLE001 - the reason is the answer
+        reason = peers.reason(exc)
+        logger.warning("jev router %s: chat.model could not be written — %s", role, reason)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"the gateway switched Jev Router, but chat.model could not be written — {reason}"
+            ),
+        ) from exc
+
+
+@router.put("/routes/{role}/jev-router")
+async def put_jev_router(role: str, request: Request) -> Response:
+    """The Jev Router switch (decision-role spec §4): an edit to the role's
+    chain that the gateway makes and states, refusals included. For chat the
+    cloud link can be chat.model itself, so the gateway's answer then names
+    what chat.model must become, and core writes it before answering."""
+    await _refuse_an_agent_role_with_no_agent(role)
+    answer = await _forward(
+        request,
+        "PUT",
+        f"/admin/routes/{role}/jev-router",
+        content=await _switch_body(request, role),
+    )
+    if answer.status_code == 200:
+        await _write_chat_model_named_in(role, answer.body)
+    return answer
 
 
 @router.delete("/routes/{role}")

@@ -74,8 +74,8 @@ async def test_the_tool_asks_the_gateway_with_the_role_and_model(pool, mount_pee
         admin_status=400,
         admin_body={
             "error": (
-                "role must be a built-in (chat, scheduled, judge, coding, vision) or a "
-                "lowercase [a-z_] name of at most 32 chars — got 'Vibes-1'"
+                "role must be a built-in (chat, scheduled, judge, decisions, coding, "
+                "vision) or a lowercase [a-z_] name of at most 32 chars — got 'Vibes-1'"
             )
         },
     )
@@ -112,3 +112,33 @@ def test_a_machine_switched_off_is_said_in_words():
     said = route.describe(unreachable)
     assert "skipped — its machine did not answer" in said
     assert "ollama" not in said  # the builtin is `hub` now; no engine is named by its adapter
+
+
+def test_a_link_that_cannot_answer_its_role_is_said_in_words():
+    body = {
+        "role": "decisions",
+        "chain": [
+            {
+                "link": 1,
+                "id": "hub:qwen3:8b",
+                "verdict": "wrong_protocol",
+                "reason": "hub answers chat — this role needs typed questions",
+            }
+        ],
+        "would_serve": None,
+        "reason": "no model in the 'decisions' chain can serve right now",
+    }
+
+    text = route.describe(body)
+
+    assert text.startswith("Answer: nothing can serve the decisions role right now")
+    assert (
+        "  1. hub:qwen3:8b: skipped — it cannot answer this role (hub answers chat — "
+        "this role needs typed questions)"
+    ) in text
+
+
+def test_her_routing_tool_names_the_decisions_role():
+    (tool,) = route.TOOLS
+    assert "decisions" in tool.description
+    assert "decisions" in tool.parameters["properties"]["role"]["description"]

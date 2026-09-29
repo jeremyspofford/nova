@@ -321,6 +321,9 @@ class FakeGateway:
     decision_hold: asyncio.Event | None = None
     decision_hold_on: str | None = None
     decision_calls: list[dict] = field(default_factory=list)
+    # The model the provider names on each content chunk. OpenRouter names the
+    # model a router link picked (decision-role spec §4); None names none.
+    chunk_model: str | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -357,6 +360,7 @@ class FakeGateway:
                 Route("/admin/routes", self._admin, methods=["GET"]),
                 # S12: agents.unregister_route DELETEs a derived role's row.
                 Route("/admin/routes/{role}", self._admin, methods=["PUT", "DELETE"]),
+                Route("/admin/routes/{role}/jev-router", self._admin, methods=["PUT"]),
                 Route("/admin/route/explain", self._explain, methods=["GET"]),
                 Route("/admin/routes/walls/{provider}", self._admin, methods=["DELETE"]),
                 Route("/admin/engines", self._engines, methods=["GET"]),
@@ -420,7 +424,10 @@ class FakeGateway:
             for delta in self.deltas:
                 if self.delta_delay_s:
                     await asyncio.sleep(self.delta_delay_s)
-                yield _sse({"choices": [{"delta": {"content": delta}}]})
+                chunk: dict = {"choices": [{"delta": {"content": delta}}]}
+                if self.chunk_model is not None:
+                    chunk["model"] = self.chunk_model
+                yield _sse(chunk)
             if self.hold is not None:
                 await self.hold.wait()
             for delta in self.after_hold:

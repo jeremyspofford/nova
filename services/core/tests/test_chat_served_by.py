@@ -170,3 +170,68 @@ def test_note_served_takes_only_what_the_headers_state():
     empty = SimpleNamespace(meta={})
     chat._note_served(empty, httpx.Headers({}))
     assert empty.meta == {}
+
+
+async def test_a_router_links_upstream_model_is_recorded_on_its_round(
+    owner_client, pool, mount_peers
+):
+    """Decision-role spec §4: with the Jev Router switch on, a round can be served
+    by `openrouter:typesafe/jev-router`, a link that answers from a model it
+    picks per request. OpenRouter names that model on every chunk; the round's
+    span keeps it as `upstream_model`, beside the link that served."""
+    gateway = FakeGateway(
+        deltas=("Hi", "."),
+        served_by="openrouter:typesafe/jev-router",
+        chunk_model="anthropic/claude-sonnet-5",
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await owner_client.put(
+        "/api/v1/settings", json={"key": "chat.model", "value": "openrouter:typesafe/jev-router"}
+    )
+
+    resp = await owner_client.post("/api/v1/chat/stream", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE kind = 'llm_call' ORDER BY started_at LIMIT 1"
+    )
+    assert meta["served_by"] == "openrouter:typesafe/jev-router"
+    assert meta["upstream_model"] == "anthropic/claude-sonnet-5"
+
+
+async def test_a_link_that_answers_as_itself_records_no_upstream_model(
+    owner_client, pool, mount_peers
+):
+    gateway = FakeGateway(
+        deltas=("Hi",),
+        served_by="openrouter:anthropic/claude-sonnet-5",
+        chunk_model="anthropic/claude-sonnet-5",
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    resp = await owner_client.post("/api/v1/chat/stream", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE kind = 'llm_call' ORDER BY started_at LIMIT 1"
+    )
+    assert meta["served_by"] == "openrouter:anthropic/claude-sonnet-5"
+    assert "upstream_model" not in meta
+
+
+def test_note_upstream_reads_only_a_provider_chunk_naming_another_model():
+    """Only a chunk that carries `choices` is read — the provider's own; the
+    gateway's usage chunk has none — and only a model other than the served
+    link's is recorded. A chunk that names nothing records nothing."""
+    picked = {"model": "anthropic/claude-sonnet-5", "choices": [{"delta": {"content": "Hi"}}]}
+
+    def noted(chunk: dict) -> dict:
+        span = SimpleNamespace(meta={"served_by": "openrouter:typesafe/jev-router"})
+        chat._note_upstream(span, chunk)
+        return span.meta
+
+    assert noted(picked)["upstream_model"] == "anthropic/claude-sonnet-5"
+    assert "upstream_model" not in noted({**picked, "model": "typesafe/jev-router"})
+    assert "upstream_model" not in noted({**picked, "choices": []})
+    assert "upstream_model" not in noted({"choices": picked["choices"]})
+    assert "upstream_model" not in noted({**picked, "model": ""})

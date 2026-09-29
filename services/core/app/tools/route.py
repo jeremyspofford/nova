@@ -47,6 +47,7 @@ def describe(body: dict) -> str:
             "switched_off": "skipped — its machine is switched off for models",
             "unknown": "skipped — no such provider",
             "refused": "refused this request",
+            "wrong_protocol": "skipped — it cannot answer this role",
         }.get(verdict, str(verdict))
         lines.append(
             f"  {v.get('link')}. {v.get('id')}: {state}" + (f" ({reason})" if reason else "")
@@ -92,12 +93,14 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="route_explain",
         description=(
-            "Why a call for a role (chat, scheduled, judge, or an agent's role agent_<name>) "
-            "goes to the model it goes to: "
+            "Why a call for a role (chat, scheduled, judge, decisions — the decision "
+            "model that reads each message before she answers — or an agent's role "
+            "agent_<name>) goes to the model it goes to: "
             "each link in the role's chain with its live verdict — would serve, over its "
-            "monthly cap, the provider refused recently (walled), not installed — and the "
-            "gateway's stated reason for any fallback. Use it to answer 'why did that come "
-            "from the local model' or 'which model will answer next'. Reads only."
+            "monthly cap, the provider refused recently (walled), not installed, cannot "
+            "answer this role — and the gateway's stated reason for any fallback. Use it to "
+            "answer 'why did that come from the local model' or 'which model will answer "
+            "next'. Reads only."
         ),
         parameters={
             "type": "object",
@@ -105,8 +108,8 @@ TOOLS: tuple[Tool, ...] = (
                 "role": {
                     "type": "string",
                     "description": (
-                        "The role to explain (default chat): chat, scheduled, judge, or an "
-                        "agent's role agent_<name>."
+                        "The role to explain (default chat): chat, scheduled, judge, decisions, "
+                        "or an agent's role agent_<name>."
                     ),
                 },
                 "model": {

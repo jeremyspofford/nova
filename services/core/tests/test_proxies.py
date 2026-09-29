@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs
+
 import httpx
 import pytest
 
-from app import proxies
+from app import proxies, settings_store
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
@@ -60,6 +62,8 @@ ROUTES = [
     ("DELETE", "/api/v1/routes/walls/openrouter", "/admin/routes/walls/openrouter", None),
     # S12-2: a role's chain row can be dropped (a stray agent role).
     ("DELETE", "/api/v1/routes/agent_coder", "/admin/routes/agent_coder", None),
+    # The decision role (spec §4): the Jev Router switch, an edit to a chain.
+    ("PUT", "/api/v1/routes/chat/jev-router", "/admin/routes/chat/jev-router", {"on": False}),
 ]
 
 
@@ -278,3 +282,218 @@ async def test_an_agent_role_with_no_agent_is_refused_before_the_gateway(owner_c
     resp = await owner_client.put("/api/v1/routes/chat", json={"chain": []})
     assert resp.status_code == 200
     assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": []})
+
+
+async def test_the_router_switch_on_an_agent_role_with_no_agent_is_refused_here(
+    owner_client, mount_peers
+):
+    """The same rule as PUT /routes/{role}: a typo'd agent role is refused where
+    the owner types it, by name, and the gateway is never asked."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put("/api/v1/routes/agent_nobody/jev-router", json={"on": False})
+
+    assert resp.status_code == 400
+    assert "no agent named 'nobody'" in resp.json()["error"]
+    assert gateway.seen == []
+
+
+# chat.model and the Jev Router switch (decision-role spec §4). The gateway
+# reads none of core's settings, yet chat.model is link 1 of every role whose
+# turns send it — Nova's own turn kinds — so core states it to the switch, and
+# writes it when the switch's answer says what it must become.
+CHAT_PICK = "openrouter:anthropic/claude-sonnet-5"
+ROUTER = "openrouter:typesafe/jev-router"
+
+
+async def _chat_model_is(owner_client, value: str) -> None:
+    resp = await owner_client.put("/api/v1/settings", json={"key": "chat.model", "value": value})
+    assert resp.status_code == 200
+
+
+async def test_the_routes_page_is_read_with_chat_model_as_link_one_of_the_roles_that_send_it(
+    owner_client, mount_peers
+):
+    """GET /routes names chat.model and the roles whose turns send it — chat,
+    scheduled and beat, Nova's own turn kinds (an agent's turn sends no model)
+    — so each switch reads what those roles' turns actually reach. Neither is
+    sent while chat.model is empty."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    assert (await owner_client.get("/api/v1/routes")).status_code == 200
+    assert gateway.queries[-1] == b""
+
+    await _chat_model_is(owner_client, CHAT_PICK)
+    resp = await owner_client.get("/api/v1/routes")
+
+    assert resp.status_code == 200
+    sent = parse_qs(gateway.queries[-1].decode())
+    assert set(sent) == {"chat_model", "chat_model_roles"}
+    assert sent["chat_model"] == [CHAT_PICK]
+    (roles,) = sent["chat_model_roles"]
+    assert sorted(roles.split(",")) == ["beat", "chat", "scheduled"]
+
+
+@pytest.mark.parametrize("role", ["chat", "scheduled", "beat"])
+async def test_the_switch_is_told_chat_model_for_a_role_whose_turns_send_it(
+    owner_client, mount_peers, role
+):
+    gateway = FakeGateway(
+        admin_body={"role": role, "chain": [], "router": {"on": False, "kept": None}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put(f"/api/v1/routes/{role}/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == (
+        f"/admin/routes/{role}/jev-router",
+        {"on": False, "chat_model": CHAT_PICK},
+    )
+
+
+async def test_an_agent_roles_switch_is_never_told_chat_model(owner_client, mount_peers, pool):
+    """An agent's turn sends no model, so its chain's first link is its own:
+    chat.model is never stated for it, even while one is set."""
+    await pool.execute(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page')"
+    )
+    gateway = FakeGateway(
+        admin_body={"role": "agent_coder", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/agent_coder/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/agent_coder/jev-router", {"on": True})
+
+
+async def test_the_switch_writes_chat_model_when_its_answer_names_it(
+    owner_client, mount_peers, pool
+):
+    """Chat's cloud link is chat.model: ON makes the router chat's model, and
+    the answer says so. Core writes it through the settings writer and hands
+    back the gateway's answer as it came."""
+    answer = {
+        "role": "chat",
+        "chain": ["hub:qwen3:8b"],
+        "router": {"on": True, "kept": CHAT_PICK},
+        "chat_model": ROUTER,
+    }
+    gateway = FakeGateway(admin_body=answer)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert resp.json() == answer
+    assert gateway.seen[-1] == (
+        "/admin/routes/chat/jev-router",
+        {"on": True, "chat_model": CHAT_PICK},
+    )
+    assert await settings_store.read_value(pool, "chat.model") == ROUTER
+
+
+async def test_an_empty_chat_model_in_the_answer_is_written_as_the_gateways_default(
+    owner_client, mount_peers, pool
+):
+    """OFF when the pick the router replaced names a provider that is gone:
+    the answer's chat_model is '' — the gateway's default — with a note saying
+    why. An empty string is a value to write, not the absence of one."""
+    answer = {
+        "role": "chat",
+        "chain": [],
+        "router": {"on": False, "kept": None},
+        "chat_model": "",
+        "note": (
+            f"the chat model Jev Router replaced, {CHAT_PICK}, names a provider that no longer "
+            "exists, so the chat model is cleared — pick one in chat"
+        ),
+    }
+    gateway = FakeGateway(admin_body=answer)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, ROUTER)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert resp.json() == answer
+    assert await settings_store.read_value(pool, "chat.model") == ""
+
+
+async def test_an_answer_that_names_no_chat_model_leaves_it_alone(owner_client, mount_peers, pool):
+    """A local chat model is not the cloud link, so the switch edits the
+    stored chain and its answer names no chat model: nothing is written."""
+    gateway = FakeGateway(
+        admin_body={"role": "chat", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "hub:qwen3:8b")
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert await settings_store.read_value(pool, "chat.model") == "hub:qwen3:8b"
+
+
+async def test_a_chat_model_that_cannot_be_written_is_a_502_in_words(
+    owner_client, mount_peers, pool, monkeypatch
+):
+    """The gateway has switched, but for chat the switch IS chat.model — a
+    write that fails must never read as a 200. The gateway keeps the link it
+    needs to put back, so the switch still reads what the turns reach and can
+    be flipped again."""
+    gateway = FakeGateway(
+        admin_body={
+            "role": "chat",
+            "chain": [],
+            "router": {"on": True, "kept": CHAT_PICK},
+            "chat_model": ROUTER,
+        }
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    async def refused(body):
+        raise RuntimeError("the settings table is locked")
+
+    # The switch writes through the settings writer and nothing else, so this
+    # is the one write it can make.
+    monkeypatch.setattr(settings_store, "write_setting", refused)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == (
+        "the gateway switched Jev Router, but chat.model could not be written — "
+        "RuntimeError: the settings table is locked"
+    )
+    assert gateway.seen[-1][0] == "/admin/routes/chat/jev-router"
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+
+
+async def test_the_switchs_refusal_comes_back_in_the_gateways_words(
+    owner_client, mount_peers, pool
+):
+    refusal = {
+        "error": (
+            f"scheduled's first link is the chat model, {CHAT_PICK}, a cloud model it shares "
+            "with chat — switch Jev Router on for chat"
+        )
+    }
+    gateway = FakeGateway(admin_status=400, admin_body=refusal)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/scheduled/jev-router", json={"on": True})
+
+    assert resp.status_code == 400
+    assert resp.json() == refusal
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
