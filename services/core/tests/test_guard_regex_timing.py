@@ -515,3 +515,69 @@ def test_the_said_not_done_guards_read_50_kb_in_100_ms(label, reply):
     ):
         took = _best_of(check)
         assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+
+
+# -- _sentences() is linear (said-not-done fix round 1, M2) --------------------
+#
+# The shared sentence splitter re-scanned a run of terminators from every
+# position inside it when the run was not followed by whitespace: 10,000 dots
+# took 3.9 s and 20,000 took 15 s — and device_completion_check now runs it on
+# EVERY reply. The fix only skips positions that could never split; the
+# outputs must stay identical, so the pre-fix body is kept here as the oracle.
+
+
+def _sentences_before_the_fix(text: str) -> list[str]:
+    out: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        char = text[i]
+        if char == "\n":
+            out.append(text[start : i + 1])
+            start = i + 1
+        elif char in ".!?":
+            end = i
+            while end + 1 < n and text[end + 1] in ".!?":
+                end += 1
+            following = text[end + 1] if end + 1 < n else ""
+            if following == "" or following.isspace():
+                out.append(text[start : end + 1])
+                start = end + 1
+                i = end
+        i += 1
+    if start < n:
+        out.append(text[start:])
+    return out
+
+
+SENTENCE_ORACLE_INPUTS = [
+    "",
+    "One. Two! Three? Four",
+    "summary.md is at $4.50. Next.",
+    "Wait... what?! Really?!? yes.",
+    "a..b...c. d",
+    "...leading dots and trailing...",
+    "line one\nline two. still two\n\nfour!",
+    "no terminator at all",
+    "!!!",
+    "?.!x y.",
+    ".\n.\n. .",
+    "Version 1.70.2 shipped. v2.0!",
+    "…unicode ellipsis… then. done",
+    "x" * 50 + "." * 30 + "y" + "." * 5 + " z",
+    ". " * 20,
+    "a.b.c.d.e.f.g. h",
+]
+
+
+@pytest.mark.parametrize("text", SENTENCE_ORACLE_INPUTS)
+def test_sentences_splits_exactly_as_before(text):
+    assert guards._sentences(text) == _sentences_before_the_fix(text)
+
+
+@pytest.mark.parametrize("mark", [".", "!", "?"])
+def test_sentences_reads_20_kb_of_one_terminator_in_50_ms(mark):
+    for text in (mark * 20_000 + "x", "x" + mark * 20_000, (mark * 999 + "y") * 20):
+        took = _best_of(lambda text=text: guards._sentences(text))
+        assert took < BUDGET_S, f"{mark!r} x {len(text)}: {took * 1000:.1f} ms"

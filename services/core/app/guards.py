@@ -745,7 +745,12 @@ def _sentences(text: str) -> list[str]:
             if following == "" or following.isspace():
                 out.append(text[start : end + 1])
                 start = end + 1
-                i = end
+            # Past the whole run either way: every position inside it would
+            # find this same `end` and this same `following`, so none of them
+            # can split. Resuming inside the run re-scanned it from each of
+            # its positions — quadratic on a long one (20,000 dots took 15 s,
+            # and device_completion_check runs this on every reply).
+            i = end
         i += 1
     if start < n:
         out.append(text[start:])
