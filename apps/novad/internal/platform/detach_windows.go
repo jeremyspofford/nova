@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"os"
 	"os/exec"
 	"syscall"
 
@@ -11,9 +10,10 @@ import (
 // StartDetached starts bin with no console and no parent it depends on (P6):
 // its own process group, no window, and out of the caller's job when that job
 // allows breakaway (a terminal's job would otherwise end it with the window).
-// Output goes to logPath. It returns the pid.
+// Output goes to logPath, opened by OpenLog so the log can still be rotated
+// while the detached process holds it. It returns the pid.
 func StartDetached(bin string, args []string, logPath string) (int, error) {
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := OpenLog(logPath)
 	if err != nil {
 		return 0, err
 	}

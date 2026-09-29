@@ -3,7 +3,6 @@ package supervise
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -26,7 +25,8 @@ func TestHelperAgent(t *testing.T) {
 
 func spawnHelper(t *testing.T, behaviour string) Child {
 	t.Helper()
-	spawn := ExecSpawner(filepath.Join(t.TempDir(), "novad.log"))
+	lg, _ := openTestLog(t, maxLogBytes) // Windows' agent output; unused elsewhere
+	spawn := ExecSpawner(lg)
 	c, err := spawn(context.Background(), os.Args[0], []string{"-test.run=^TestHelperAgent$"},
 		append(os.Environ(), "NOVA_TEST_AGENT="+behaviour))
 	if err != nil {

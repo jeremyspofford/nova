@@ -2,7 +2,7 @@ package supervise
 
 import (
 	"context"
-	"os"
+	"io"
 	"os/exec"
 	"syscall"
 	"unsafe"
@@ -10,33 +10,62 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ExecSpawner starts agents with no window, logging to logPath (1 MiB, one
-// rotation — there is no console), inside a kill-on-close job object: when
-// this supervisor ends, however it ends, its agent ends with it (P6).
-func ExecSpawner(logPath string) Spawner {
-	job, jobErr := killOnCloseJob()
+// Output is where a supervisor and its agents write on Windows, which keeps
+// no journal: novad.log, rotated at 1 MiB with one generation kept (P6). This
+// process's own output — its lines, and a crash — follows the log across a
+// rotation.
+func Output(logPath string) (io.Writer, *Log, error) {
+	lg, err := OpenLog(logPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := lg.captureProcessOutput(); err != nil {
+		lg.say("this process's own output does not follow %s: %v", logPath, err)
+	}
+	return lg, lg, nil
+}
+
+// newJob is killOnCloseJob; a test makes it fail.
+var newJob = killOnCloseJob
+
+// ExecSpawner starts agents with no window, writing to lg — rotated first
+// when it is over its limit — inside a kill-on-close job object: when this
+// supervisor ends, however it ends, its agent ends with it (P6). A job that
+// cannot be made, or an agent that cannot be put in it, is written to lg:
+// the agent still runs, but would outlive a supervisor that is killed.
+func ExecSpawner(lg *Log) Spawner {
+	job, jobErr := newJob()
+	if jobErr != nil {
+		lg.say("no kill-on-close job (%v): an agent will outlive this supervisor if it is killed", jobErr)
+	}
 	return func(_ context.Context, bin string, args, env []string) (Child, error) {
-		rotate(logPath, 1<<20)
-		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
+		_ = lg.Rotate() // a failed rotation is written into the log itself
 		cmd := exec.Command(bin, args...)
 		cmd.Env = env
-		cmd.Stdout, cmd.Stderr = f, f
+		if out := lg.file(); out != nil {
+			cmd.Stdout, cmd.Stderr = out, out
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
 		if jobErr == nil {
-			if h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid)); err == nil {
-				_ = windows.AssignProcessToJobObject(job, h)
-				windows.CloseHandle(h)
+			if err := assignToJob(job, cmd.Process.Pid); err != nil {
+				lg.say("agent pid %d is not in the kill-on-close job (%v): it will outlive this supervisor if it is killed",
+					cmd.Process.Pid, err)
 			}
 		}
 		return &execChild{cmd: cmd}, nil
 	}
+}
+
+func assignToJob(job windows.Handle, pid int) error {
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(h)
+	return windows.AssignProcessToJobObject(job, h)
 }
 
 func killOnCloseJob() (windows.Handle, error) {
@@ -53,12 +82,6 @@ func killOnCloseJob() (windows.Handle, error) {
 		return 0, err
 	}
 	return job, nil
-}
-
-func rotate(path string, max int64) {
-	if fi, err := os.Stat(path); err == nil && fi.Size() > max {
-		_ = os.Rename(path, path+".1")
-	}
 }
 
 // Kill ends the agent at once: Windows has no SIGTERM to ask with.

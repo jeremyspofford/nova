@@ -4,16 +4,22 @@ package supervise
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 )
 
+// Output is where a supervisor and its agents write on Linux and macOS: this
+// process's own stdout and stderr, which the service manager keeps (the
+// journal under systemd, the plist's log under launchd) — so there is no Log.
+func Output(string) (io.Writer, *Log, error) { return os.Stderr, nil, nil }
+
 // ExecSpawner starts agents with this process's output (the journal under
-// systemd, the plist's log under launchd). Kill asks politely — `novad run`
-// handles SIGTERM — and forces after 10 s.
-func ExecSpawner(_ string) Spawner {
+// systemd, the plist's log under launchd); the Log is Windows' only. Kill
+// asks politely — `novad run` handles SIGTERM — and forces after 10 s.
+func ExecSpawner(*Log) Spawner {
 	return func(_ context.Context, bin string, args, env []string) (Child, error) {
 		cmd := exec.Command(bin, args...)
 		cmd.Env = env

@@ -56,11 +56,18 @@ func cmdSupervise(argv []string) {
 		}
 		fail("%v", err)
 	}
-	logger := log.New(os.Stderr, "novad supervise ", log.LstdFlags)
+	// Windows keeps no journal: this supervisor's own output and its agents'
+	// go to novad.log, which rotates and which that output follows (P6).
+	// Elsewhere Output is stderr, which the service manager keeps.
+	out, lg, err := supervise.Output(logPath)
+	if err != nil {
+		fail("%v", err)
+	}
+	logger := log.New(out, "novad supervise ", log.LstdFlags)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	code := supervise.Run(ctx, supervise.Config{
 		Binary: self, StateDir: paths.StateDir, Mode: *mode, Version: version,
-		Spawn: supervise.ExecSpawner(logPath), Logf: logger.Printf,
+		Spawn: supervise.ExecSpawner(lg), Logf: logger.Printf,
 	})
 	stop()
 	_ = lock.Release()
