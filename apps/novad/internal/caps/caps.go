@@ -32,6 +32,11 @@ type Outcome struct {
 	Output   string
 	ExitCode *int
 	Error    string
+
+	// Restart asks the client to leave for a new build AFTER this outcome's
+	// result and audit frames are written (daemon.update, P7). Never set on
+	// a refusal.
+	Restart bool
 }
 
 // Deps are the ambient facts a handler needs: the default working directory
@@ -42,6 +47,10 @@ type Outcome struct {
 type Deps struct {
 	Home      string
 	SendFacts func(context.Context) error
+
+	// Update is what daemon.update needs; nil where there is no connected
+	// agent (a handler then says cannot).
+	Update *UpdateDeps
 }
 
 // Request is one verified call as its handler receives it.

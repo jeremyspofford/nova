@@ -19,6 +19,7 @@ var table = map[string]Handler{
 	"apps.launch":   func(ctx context.Context, r Request) Outcome { return appsLaunch(ctx, r.Args) },
 	"shell.exec":    func(ctx context.Context, r Request) Outcome { return shellExec(ctx, r.Args, r.Deps) },
 	"facts.refresh": factsRefresh,
+	"daemon.update": daemonUpdate,
 }
 
 // factsRefresh answers core's facts.refresh: it writes a fresh facts frame

@@ -203,6 +203,11 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 // systemd stops instead of restarting a daemon that can never get in.
 const exitConfig = 78
 
+// exitUpdateStaged is `novad run`'s exit after daemon.update staged a build:
+// the supervisor (internal/supervise, ExitUpdateStaged) swaps it in and
+// confirms or rolls it back.
+const exitUpdateStaged = 75
+
 // afterFailedWipe turns a config.Wipe failure into an instruction built from
 // what is ACTUALLY still on disk, checked fresh rather than assumed from
 // which of Wipe's three independent steps (config, key, audit) errored — any
@@ -265,6 +270,8 @@ func afterRun(paths config.Paths, err error, now time.Time) (int, string) {
 		}
 		msg += "). Pair it again with `novad enroll`."
 		return exitConfig, msg
+	case errors.Is(err, client.ErrRestartForUpdate):
+		return exitUpdateStaged, "a new build is staged — exiting so the supervisor swaps it in"
 	default:
 		return 1, fmt.Sprintf("run stopped: %v", err)
 	}

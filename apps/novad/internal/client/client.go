@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,6 +94,10 @@ func (f fatal) Unwrap() error { return f.err }
 // exits 78 so no supervisor restarts a daemon that can never get in.
 var ErrRevoked = errors.New("core says this device was revoked")
 
+// ErrRestartForUpdate is Run's return after daemon.update staged a build:
+// main exits 75 and the supervisor swaps it in.
+var ErrRestartForUpdate = errors.New("a new build is staged; restarting into it")
+
 // Agent holds the pinned identity and the local capability + audit surfaces.
 type Agent struct {
 	cfg   config.Config
@@ -112,6 +117,15 @@ type Agent struct {
 
 	// opts are what main hands the agent beyond its identity (S42b).
 	opts Options
+
+	// restart and sessionCancel are daemon.update's way out of serve (P7):
+	// handleCommand sets restart once the update's result and audit frames
+	// are written, then cancels the live session through sessionCancel — the
+	// current serveCtx's own cancel, stored fresh by serve on every
+	// connection — so serve returns, connectOnce and Run's loop unwind, and
+	// Run returns ErrRestartForUpdate for main to exit 75 on.
+	restart       atomic.Bool
+	sessionCancel atomic.Pointer[context.CancelFunc]
 
 	// verifier is built ONCE and reused across every reconnect, so its one-use
 	// seen-set spans the envelope validity window (TTL + skew) rather than a
@@ -181,17 +195,14 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Agent{
-		cfg:      cfg,
-		priv:     priv,
-		audit:    log,
-		deps:     caps.Deps{Home: home},
-		locators: locators,
-		logf:     logf,
-		verifier: verifier,
-		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
-			return facts.GatherAuth(ctx, platform.Exec{}, version)
-		},
+	a := &Agent{
+		cfg:              cfg,
+		priv:             priv,
+		audit:            log,
+		deps:             caps.Deps{Home: home},
+		locators:         locators,
+		logf:             logf,
+		verifier:         verifier,
 		gatherFrame:      facts.GatherFrame,
 		now:              time.Now,
 		authGatherBudget: 5 * time.Second,
@@ -201,7 +212,25 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		factsMinGap:      FactsMinGap,
 		backoffs:         defaultBackoffs,
 		watchdogEvery:    WatchdogEvery,
-	}, nil
+	}
+	// Set after the Agent exists, so it can read update.json through
+	// a.lastUpdate() — the last outcome daemon.update or supervise recorded.
+	a.gatherAuth = func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+		return facts.GatherAuth(ctx, platform.Exec{}, version, a.lastUpdate())
+	}
+	return a, nil
+}
+
+// lastUpdate is update.json, or nil when there is none to report.
+func (a *Agent) lastUpdate() *state.Update {
+	if a.opts.StateDir == "" {
+		return nil
+	}
+	var u state.Update
+	if state.ReadJSON(filepath.Join(a.opts.StateDir, state.UpdateFile), &u) != nil {
+		return nil
+	}
+	return &u
 }
 
 // Options are what main hands an Agent beyond its identity (S42b): where its
@@ -254,6 +283,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	attempt := 0
 	for {
 		authed, err := a.connectOnce(ctx)
+		if a.restart.Load() {
+			// daemon.update staged a build and ended the session itself
+			// (handleCommand, via sessionCancel) only after its result and
+			// audit frames were written: leave for the swap now.
+			return ErrRestartForUpdate
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -469,6 +504,7 @@ func (a *Agent) replayAudit(ctx context.Context, c *websocket.Conn, lastSeqField
 func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	a.sessionCancel.Store(&cancel)
 
 	// The facts frame follows ready at once (r2-integration): core records
 	// the slower facts before the first command could need them. writeFacts
@@ -649,6 +685,7 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 	// facts.refresh writes its frame on THIS connection, before its result.
 	deps := a.deps
 	deps.SendFacts = func(ctx context.Context) error { return a.sendFacts(ctx, c) }
+	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
 	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
 	errStr := ""
@@ -663,6 +700,15 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 		ExitCode:   outcome.ExitCode,
 		Error:      errStr,
 	}, envelopeID, capability, summarize(capability, outcome), outcome.OK, outcome.ExitCode)
+
+	if outcome.OK && outcome.Restart {
+		// The result and its audit entry are written: now end the session
+		// so Run can return and main can exit 75 for the swap.
+		a.restart.Store(true)
+		if c := a.sessionCancel.Load(); c != nil {
+			(*c)()
+		}
+	}
 }
 
 // emit sends the result, then appends the audit entry and sends it in a batch.

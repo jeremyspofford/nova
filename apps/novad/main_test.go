@@ -257,3 +257,10 @@ func TestStatusLinesSayWhatTheStatusFilesSay(t *testing.T) {
 		t.Errorf("no status file must be said, got:\n%s", none)
 	}
 }
+
+func TestAStagedUpdateExitsSeventyFiveForTheSupervisor(t *testing.T) {
+	code, msg := afterRun(config.Paths{}, client.ErrRestartForUpdate, time.Now())
+	if code != 75 || !strings.Contains(msg, "the supervisor") {
+		t.Fatalf("afterRun = %d %q", code, msg)
+	}
+}

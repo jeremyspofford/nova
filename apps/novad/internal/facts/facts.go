@@ -26,9 +26,11 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"time"
 	"unicode/utf8"
 
 	"novad/internal/platform"
+	"novad/internal/state"
 )
 
 const (
@@ -59,6 +61,18 @@ type AgentInfo struct {
 	Version            string `json:"version"`
 	Mode               string `json:"mode"`
 	SessionInteractive bool   `json:"session_interactive"`
+	// Update is the last update's outcome, omitted unless there is one to
+	// report (a staged update is transient and never reported here).
+	Update *UpdateFact `json:"update,omitempty"`
+}
+
+// UpdateFact is the last update's outcome, as the supervisor recorded it:
+// core confirms or rolls back its record from this (S42b P8).
+type UpdateFact struct {
+	Version string `json:"version"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	At      string `json:"at"`
 }
 
 // OSInfo is the OS as Go and the OS name it. WSL is nil (null on the wire)
@@ -106,9 +120,12 @@ type Unreadable struct {
 }
 
 // GatherAuth reads this machine's auth facts. version is the build stamp
-// (main.version). What could not be read is returned so the caller carries
-// it into the facts frames.
-func GatherAuth(ctx context.Context, r platform.Runner, version string) (Auth, []Unreadable) {
+// (main.version). last is update.json's last outcome, or nil when there is
+// none — GatherAuth reports it only when it is applied or rolled_back
+// (never staged, which is transient and confirmed a different way: by the
+// next connection's own reported version). What could not be read is
+// returned so the caller carries it into the facts frames.
+func GatherAuth(ctx context.Context, r platform.Runner, version string, last *state.Update) (Auth, []Unreadable) {
 	var unread []Unreadable
 	host, err := os.Hostname()
 	if err != nil {
@@ -135,6 +152,10 @@ func GatherAuth(ctx context.Context, r platform.Runner, version string) (Auth, [
 	}
 	if in, distro := platform.WSL(); in {
 		a.OS.WSL = &WSL{Distro: clip(distro)}
+	}
+	if last != nil && (last.Outcome == state.UpdateApplied || last.Outcome == state.UpdateRolledBack) {
+		a.Agent.Update = &UpdateFact{Version: clip(last.Version), Outcome: last.Outcome,
+			Reason: clip(last.Reason), At: last.At.UTC().Format(time.RFC3339)}
 	}
 	return a, unread
 }

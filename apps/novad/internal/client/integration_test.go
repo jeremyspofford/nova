@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1378,5 +1380,82 @@ func TestATrailingMismatchBesideADialFailureDoesNotEndRun(t *testing.T) {
 	err := agent.Run(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run = %v, want context.DeadlineExceeded — a trailing mismatch beside a dial failure must keep retrying, not end Run", err)
+	}
+}
+
+// P7: the result and its audit entry are on the wire BEFORE the agent leaves
+// for the swap; Run then returns ErrRestartForUpdate (main exits 75).
+func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-update-1"
+	build := []byte("the hub's new build")
+	sum := sha256.Sum256(build)
+	name := "novad-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	results := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/agent/dist/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(build) })
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "upd-e1", "device_id": deviceID, "capability": "daemon.update",
+			"args":      map[string]any{"version": "aaaaaaaaaaaa", "sha256": hex.EncodeToString(sum[:]), "path": "/api/v1/agent/dist/" + name},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "result" {
+				results <- f
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "novad")
+	if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- agent.Run(ctx) }()
+	select {
+	case res := <-results:
+		if ok, _ := res["ok"].(bool); !ok {
+			t.Fatalf("result = %v", res)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result frame")
+	}
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, ErrRestartForUpdate) {
+			t.Fatalf("Run = %v, want ErrRestartForUpdate", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the agent never left for the swap")
 	}
 }

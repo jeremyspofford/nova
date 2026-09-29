@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"novad/internal/platform"
+	"novad/internal/state"
 )
 
 // The auth facts are exactly the five keys r2-integration fixes, ≤4 KiB,
@@ -18,7 +21,7 @@ func TestAuthFactsDescribeThisAgentInFiveKeysUnderTheCap(t *testing.T) {
 	r := &platform.FakeRunner{Outputs: map[string]string{
 		"/usr/sbin/ioreg": `"IOPlatformUUID" = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"`,
 	}}
-	a, _ := GatherAuth(context.Background(), r, strings.Repeat("v", 1000))
+	a, _ := GatherAuth(context.Background(), r, strings.Repeat("v", 1000), nil)
 	if a.V != 2 || a.OS.GOOS != runtime.GOOS || a.OS.Arch != runtime.GOARCH {
 		t.Fatalf("%+v", a)
 	}
@@ -179,5 +182,22 @@ func TestATooLongFolderPathIsOmittedNeverClippedIntoAWrongPath(t *testing.T) {
 	data, err := json.Marshal(f)
 	if err != nil || len(data) > MaxFrameBytes {
 		t.Fatalf("%d bytes, %v", len(data), err)
+	}
+}
+
+func TestAuthFactsCarryTheLastUpdateOutcomeButNeverAStagedOne(t *testing.T) {
+	r := &platform.FakeRunner{Outputs: map[string]string{
+		"/usr/sbin/ioreg": `"IOPlatformUUID" = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"`,
+	}}
+	at := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	a, _ := GatherAuth(context.Background(), r, "0123456789ab", &state.Update{
+		Version: "aaaaaaaaaaaa", Outcome: state.UpdateRolledBack, Reason: "the new build did not connect within 2m0s", At: at})
+	want := &UpdateFact{Version: "aaaaaaaaaaaa", Outcome: "rolled_back", Reason: "the new build did not connect within 2m0s", At: "2026-09-28T12:00:00Z"}
+	if !reflect.DeepEqual(a.Agent.Update, want) {
+		t.Fatalf("got %+v", a.Agent.Update)
+	}
+	b, _ := GatherAuth(context.Background(), r, "0123456789ab", &state.Update{Version: "aaaaaaaaaaaa", Outcome: state.UpdateStaged})
+	if b.Agent.Update != nil {
+		t.Fatal("a staged update is transient and never reported")
 	}
 }
