@@ -47,6 +47,7 @@ def describe(body: dict) -> str:
             "switched_off": "skipped — its machine is switched off for models",
             "unknown": "skipped — no such provider",
             "refused": "refused this request",
+            "wrong_protocol": "skipped — it cannot answer this role",
         }.get(verdict, str(verdict))
         lines.append(
             f"  {v.get('link')}. {v.get('id')}: {state}" + (f" ({reason})" if reason else "")
@@ -58,10 +59,15 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
     role = str(args.get("role") or "chat").strip()
     params = {"role": role}
     model = str(args.get("model") or "")
-    if not model and role == "chat":
-        # The chat chain's link 1 is the model picked in chat — read here,
-        # never left for her to remember to pass (the first live walk asked
-        # without it and was told about the fallbacks alone).
+    # Function-local: a cold `import app.tools` must not load app.chat
+    # (tests/test_tools_agents.py).
+    from app import chat
+
+    if not model and role in chat.CHAT_MODEL_ROLES:
+        # Link 1 of every role whose turns send chat.model (chat, scheduled,
+        # beat) is the model picked in chat — read here, never left for her to
+        # remember to pass (the first live walk asked without it and was told
+        # about the fallbacks alone).
         try:
             model = str(await settings_store.read_value(await db.get_pool(), "chat.model") or "")
         except Exception:  # noqa: BLE001 — the walk still answers, about the chain
@@ -92,12 +98,14 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="route_explain",
         description=(
-            "Why a call for a role (chat, scheduled, judge, or an agent's role agent_<name>) "
-            "goes to the model it goes to: "
+            "Why a call for a role (chat, scheduled, judge, decisions — the decision "
+            "model that reads each message before she answers — or an agent's role "
+            "agent_<name>) goes to the model it goes to: "
             "each link in the role's chain with its live verdict — would serve, over its "
-            "monthly cap, the provider refused recently (walled), not installed — and the "
-            "gateway's stated reason for any fallback. Use it to answer 'why did that come "
-            "from the local model' or 'which model will answer next'. Reads only."
+            "monthly cap, the provider refused recently (walled), not installed, cannot "
+            "answer this role — and the gateway's stated reason for any fallback. Use it to "
+            "answer 'why did that come from the local model' or 'which model will answer "
+            "next'. Reads only."
         ),
         parameters={
             "type": "object",
@@ -105,8 +113,8 @@ TOOLS: tuple[Tool, ...] = (
                 "role": {
                     "type": "string",
                     "description": (
-                        "The role to explain (default chat): chat, scheduled, judge, or an "
-                        "agent's role agent_<name>."
+                        "The role to explain (default chat): chat, scheduled, judge, decisions, "
+                        "or an agent's role agent_<name>."
                     ),
                 },
                 "model": {

@@ -596,6 +596,7 @@ def _error_body(resp: httpx.Response) -> bytes:
 
 class AnthropicMessages:
     name = "anthropic-messages"
+    protocols = frozenset({"chat"})
 
     def headers(self, row: dict) -> dict[str, str]:
         headers = base.bearer_or_header(row, header_name="x-api-key")

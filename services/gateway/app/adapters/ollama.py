@@ -312,6 +312,7 @@ async def facts_for_installed(app, base_url: str, rows: list[dict]) -> dict[str,
 
 class Ollama:
     name = "ollama"
+    protocols = frozenset({"chat"})
 
     def headers(self, row: dict) -> dict[str, str]:
         return {}

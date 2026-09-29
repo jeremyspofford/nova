@@ -162,7 +162,9 @@ def test_presets_load_and_name_the_openrouter_first():
     for preset in presets:
         assert preset["adapter"] in providers.ADAPTERS
         assert preset["auth_shape"] in providers.AUTH_SHAPES
-        assert preset["base_url"].startswith("https://")
+        # Moved when the kev preset arrived: it is plain http on the owner's
+        # own machine, never an internet address.
+        assert preset["base_url"].startswith("https://") or preset.get("local") is True
         # A placeholder is declared, never silent.
         if "{" in preset["base_url"]:
             assert preset.get("placeholders")

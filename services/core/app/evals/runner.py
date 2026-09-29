@@ -86,6 +86,15 @@ Three properties are enforced mechanically, not by intention:
     every other frame. There is no orphan sweep for it because there is nothing
     to orphan.
 
+    THE DECISION ROLE (decision-role spec §2). A chat turn he types asks a
+    decision model which tool his message needs and which recalled notes still
+    hold, so every case's turn does too (`decide=True`): a measurement of her
+    chat path must include the step. It walks the owner's live `decisions`
+    chain — a different model from the one under test, like a delegated child's
+    — and its `decisions` span says who answered, so a score is attributable.
+    With no decision model the step fails open and the turn is exactly the
+    turn it was.
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -1123,6 +1132,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 max_tool_rounds,
                 emit,
                 card=chat._card_channel(emit),
+                decide=True,
             )
         except Exception as exc:
             # _run_turn is built never to raise (it catches everything and closes

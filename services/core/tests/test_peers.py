@@ -2,6 +2,8 @@
 or memory goes through."""
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -50,3 +52,15 @@ def test_client_uses_a_mounted_fake_when_present(monkeypatch):
     app.state.peer_transports = {"http://gateway.test": mounted}
     client = peers.client(app, peers.GATEWAY, httpx.Timeout(5.0))
     assert client._transport is mounted
+
+
+def test_route_fields_reads_x_nova_route_the_one_way_chat_and_decisions_share():
+    """The gateway's X-Nova-Route is `role=…;link=N;reason=…`, the reason
+    percent-quoted because it is free text that can carry `;` and `=`. One
+    reader, so a chat round and a decision call never decode it two ways."""
+    reason = "fell back to link 2 (ollama:qwen3:8b) — openrouter: over its cap $10.00; walled"
+    header = f"role=chat;link=2;reason={quote(reason, safe='')}"
+    assert peers.route_fields(header) == {"role": "chat", "link": "2", "reason": reason}
+    assert peers.route_fields("role=decisions;link=1") == {"role": "decisions", "link": "1"}
+    assert peers.route_fields(None) == {}
+    assert peers.route_fields("") == {}

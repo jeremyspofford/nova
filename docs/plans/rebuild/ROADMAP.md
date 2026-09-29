@@ -25,7 +25,10 @@ S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, S40, S40b (2026-09-19) and
 merged 2026-09-26** (PR #76: `nova_address`/`show_setup_qr`, thin-client
 setup QR codes — no walked status is recorded on this branch, so read it as
 landed, not shipped). **S42a merged and walked 2026-09-28** (the agent on
-every OS). Parked: S23. Unbuilt: S26, S27, S42b–S46, S48–S49.
+every OS). Parked: S23. Unbuilt: S26, S27, S42b–S46, S48–S49. **The decision role**
+(Jev and Kev) was pulled forward from the optional list by the owner on 2026-09-27
+and is being built on `slice/decisions` — spec and plan in
+[`decision-role/`](decision-role/spec.md).
 
 ---
 
@@ -42,6 +45,7 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | — | **S28** attachments | done (inserted) |
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
 | — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S42a shipped 2026-09-28** (the agent on every OS). **S42b next** (install, service, downloads, the code card), then S46a → S46b → S43a (order reset 2026-09-25). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
+| — | **The decision role — Jev and Kev** ([`decision-role/spec.md`](decision-role/spec.md)) | **Pulled forward 2026-09-27** from the optional list, by the owner. Built on `slice/decisions` ([plan](decision-role/plan.md)): the gateway's `decisions` role and `POST /v1/systemone`; core asks two questions (the tool hint, the recall check) on typed turns and eval turns, fail-open in 5 s; Routing and Models; a Jev Router switch on chat, scheduled and agent roles. **Not yet measured:** the whole eval corpus (30 cases on main today) × 3 on `dell:qwen3:8b`, decisions off and on, is owed (plan Task 14). The Kev engine on the Dell (spec §5) is a separate, later plan. |
 | 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 | 6 | **After release: the optional list** ([below](#after-release-the-optional-list)) | Only after Nova is released. Things the owner marked optional, each one to research, build or decide on. |
@@ -243,8 +247,14 @@ it, build it, or decide not to. **When he says something is optional, add it
 here** with the date and the open question, and leave it alone until then
 unless he asks.
 
-### Jev and Kev (added 2026-09-25, re-checked the same day)
+### Jev and Kev (added 2026-09-25, re-checked the same day) — PULLED FORWARD 2026-09-27
 
+- **Pulled forward 2026-09-27 by the owner** — now the decision role:
+  [`decision-role/spec.md`](decision-role/spec.md), its plan beside it. What follows
+  is the 2026-09-25 research, kept as written. Where it and the spec disagree, the
+  spec's measurements on this stack win where they measure the same thing; the "first
+  experiment" named below — a per-turn tool hint for the 8B, measured through the eval
+  runner — is the spec's §2.
 - **What they are.** Jev is TypeSafe AI's hosted "decision model", launched
   2026-09-15. Instead of text, it returns typed answers with probabilities
   (yes/no, pick one, a score on a scale). It costs $0.042 per million input
@@ -335,6 +345,7 @@ kept for the record).
 | S40 | engines and measurement identity | `slice-40-engines.md`, `-carries`, `s40/` (task files + review rulings) |
 | S40b | honest claims about machines, models and memory | `slice-40b-honest-machine-claims.md`, `-carries`, `s40b/` (design verdict, rulings, review trail) |
 | S41–S49 | the rest of the hub lane: backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18** |
+| — | the decision role (Jev, Kev) | `decision-role/spec.md`, `decision-role/plan.md` — **in progress** |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +
 provenance. The owner's hand-pulled `muse-glimmer:latest` showed no metadata —

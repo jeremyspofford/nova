@@ -90,7 +90,6 @@ from collections.abc import AsyncIterator, Callable, Collection, Iterable, Seque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
-from urllib.parse import unquote
 
 import asyncpg
 import httpx
@@ -103,6 +102,7 @@ from app import (
     attachments,
     conversations,
     db,
+    decisions,
     devices,
     guards,
     identity,
@@ -1040,6 +1040,38 @@ class Recalled:
     # live_facts.lines(). Filled in after the checks run; empty when no note
     # named one.
     live: tuple[str, ...] = ()
+    # WHICH note each of `notes` is, by path, in the same order — "" for one
+    # memory named no path for (recalled_sources' rule: paths, never bodies).
+    # The decision role records its per-note verdicts by path (decisions.py,
+    # decision-role spec §2) and must know which note is which.
+    paths: tuple[str, ...] = ()
+    # The decision role set aside EVERY note recall returned: its sentence,
+    # said in place of the notes. Without it the prompt would read like a
+    # search that found nothing, which is not what happened (plan decision 8).
+    set_aside: str | None = None
+
+
+def _with_notes_kept(recalled: Recalled, keep: Sequence[int] | None) -> Recalled:
+    """The recall after the decision role's check (decisions.py): only the
+    notes at `keep`, each path beside its note. None leaves it untouched. When
+    every note was set aside the prompt says so (`set_aside`) — an empty block
+    would read as a search that came back empty."""
+    if keep is None:
+        return recalled
+    notes = tuple(recalled.notes[i] for i in keep if i < len(recalled.notes))
+    paths = tuple(recalled.paths[i] for i in keep if i < len(recalled.paths))
+    if notes:
+        return dataclasses.replace(recalled, notes=notes, paths=paths)
+    count = len(recalled.notes)
+    return dataclasses.replace(
+        recalled,
+        notes=(),
+        paths=(),
+        set_aside=(
+            f"a decision model set aside all {count} note{'s' if count != 1 else ''} it "
+            "returned as unrelated to this message or superseded by what she can do now"
+        ),
+    )
 
 
 # The line above the notes. It says only what is mechanically true of every hit
@@ -1073,6 +1105,11 @@ def volatile_system_prompt(
     if recall.notes:
         notes = "\n".join(f"- {snippet}" for snippet in recall.notes)
         parts.append(f"{NOTES_HEADER}\n{notes}")
+    elif recall.set_aside:
+        # The decision role set every note aside (decisions.py). Said: this
+        # search FOUND notes, which a decision model judged unrelated or out of
+        # date — not the same fact as "nothing matched".
+        parts.append(f"Her memory was searched for this turn; {recall.set_aside}.")
     elif recall.empty:
         # Said, rather than left as an absence: an empty prompt block reads to
         # the model exactly like a turn where memory was never consulted, and
@@ -1122,6 +1159,7 @@ def base_messages(
     persona: agents.Persona | None = None,
     roster: str | None = None,
     skills_roster: str | None = None,
+    hint: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
@@ -1129,7 +1167,11 @@ def base_messages(
     before — the whole live registry and no block; an agent's names its
     subset and carries its block. `roster` is Nova's line about who she can
     delegate to, and `skills_roster` (S17) her line about the procedures
-    written down for this household (see volatile_system_prompt)."""
+    written down for this household (see volatile_system_prompt). `hint`
+    (decision-role spec §2) is the decision role's one line: its own system
+    message immediately before his message — the position measured at 3/3 —
+    so the cached prefix (the system prompts and the history) is the same
+    bytes with or without it."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -1141,6 +1183,8 @@ def base_messages(
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
+    if hint:
+        messages.append({"role": "system", "content": hint})
     messages.append({"role": "user", "content": message})
     return messages
 
@@ -1352,6 +1396,20 @@ def _snippets(results: Iterable, today: date | None = None) -> list[str]:
         if text:
             snippets.append(text)
     return snippets
+
+
+def _note_paths(results: Iterable) -> list[str]:
+    """The path of each note _snippets makes from the same hits — one per note,
+    in the same order, "" for a hit memory named no path for. PATHS, never
+    bodies (recalled_sources' rule): the decision role records WHICH note it
+    set aside by this, never by its text (decision-role spec §2)."""
+    paths: list[str] = []
+    for hit in results:
+        if not _snippets([hit]):
+            continue
+        named = recalled_sources([hit])
+        paths.append(named[0] if named else "")
+    return paths
 
 
 def _degraded_from(body: object) -> str | None:
@@ -1981,6 +2039,10 @@ async def _recall(
         # The PATHS behind those hits, per scope, for the span — see
         # recalled_sources.
         sources: dict[str, list[str]] = {}
+        # The same paths, aligned one-for-one with `hits[name]` rather than
+        # collapsed into one list — the decision role needs to know WHICH
+        # note in the prompt a path names (decisions.py, decision-role spec §2).
+        note_paths: dict[str, list[str]] = {}
         calls: list[live_facts.LiveCall] = []
         said: dict[str, str | None] = {}
         reduced: dict[str, str | None] = {}
@@ -1989,11 +2051,13 @@ async def _recall(
             if isinstance(outcome, BaseException):
                 errors[name] = peers.reason(outcome)
                 hits[name] = []
+                note_paths[name] = []
                 said[name] = None
                 reduced[name] = None
             else:
                 results, statement, degraded = outcome
                 hits[name] = _snippets(results)
+                note_paths[name] = _note_paths(results)
                 sources[name] = recalled_sources(results)
                 # From every scope that answered: an agent allowed to read the
                 # household's notes gets the same check on them that Nova does,
@@ -2013,6 +2077,7 @@ async def _recall(
                 logger.warning("memory recall failed, continuing without notes: %s", errors["own"])
                 return Recalled(unreachable=errors["own"])
             snippets = hits["own"]
+            paths = note_paths["own"]
         else:
             for name, reason in errors.items():
                 logger.warning(
@@ -2023,6 +2088,7 @@ async def _recall(
             if errors:
                 span.meta["errors"] = errors
             snippets = [*hits["own"], *(f"(shared) {s}" for s in hits["shared"])]
+            paths = [*note_paths["own"], *note_paths["shared"]]
             span.meta["scopes"] = {"own": len(hits["own"]), "shared": len(hits["shared"])}
         span.meta["hits"] = len(snippets)
         # WHICH ones, not just how many (2026-09-16). See recalled_sources:
@@ -2041,6 +2107,7 @@ async def _recall(
         if snippets:
             return Recalled(
                 notes=tuple(snippets),
+                paths=tuple(paths),
                 unreachable=unreachable,
                 degraded=degraded,
                 live_calls=tuple(calls),
@@ -2771,7 +2838,7 @@ async def _gateway_round(
     # is generation, and `completion_tokens` counts all three.
     t_first_any: float | None = None
     reasoning_chars = 0
-    purpose = purpose or _purpose_of(turn)
+    purpose = purpose or traces.purpose_of(turn)
     role = role if role is not None else _role_of(turn)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
@@ -2818,6 +2885,8 @@ async def _gateway_round(
                         except json.JSONDecodeError:
                             span.meta["malformed_chunks"] = span.meta.get("malformed_chunks", 0) + 1
                             continue
+                        if "upstream_model" not in span.meta:
+                            _note_upstream(span, chunk)
                         delta, reasoning, usage, error, fragments = _chunk_parts(chunk)
                         if error is not None:
                             raise GatewayFailure(f"the gateway reported: {error}")
@@ -3013,16 +3082,15 @@ def _note_throughput(
 
 
 def _note_route(span, header: str | None) -> None:
-    """The gateway's X-Nova-Route (S10-2): `role=…;link=N;reason=…`."""
-    if not header:
-        return
-    fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
+    """The gateway's X-Nova-Route (S10-2): `role=…;link=N;reason=…`, read by
+    peers.route_fields — the one reader chat and the decision role share."""
+    fields = peers.route_fields(header)
     if fields.get("role"):
         span.meta["route_role"] = fields["role"]
     if fields.get("link", "").isdigit():
         span.meta["route_link"] = int(fields["link"])
     if fields.get("reason"):
-        span.meta["route_reason"] = unquote(fields["reason"])
+        span.meta["route_reason"] = fields["reason"]
 
 
 def _note_served(span, headers) -> None:
@@ -3047,10 +3115,26 @@ def _note_served(span, headers) -> None:
         span.meta["served_runtime"] = runtime
 
 
-def _purpose_of(turn: traces.Turn) -> str:
-    """What the ledger records a turn's own rounds as: its kind."""
-    kind = getattr(turn, "kind", None)
-    return kind if isinstance(kind, str) and kind else "chat"
+def _note_upstream(span, chunk: dict) -> None:
+    """The model id the provider named in its answer, when that is not the
+    served link's model (decision-role spec §4). A Jev Router link —
+    `openrouter:typesafe/jev-router` — answers from a model it picks for each
+    request, and OpenRouter names that model on every chunk it relays; a
+    provider that resolves an alias names the model the alias reached. So the
+    key says which model answered, never why it differs. Read only off a chunk
+    that carries `choices` (the provider's own; the gateway's usage chunk has
+    none), and recorded only when it differs from the served link's model: a
+    link that answers as itself records nothing, and with no served link to
+    compare against (the gateway named none) nothing is recorded either.
+    Never guessed."""
+    named = chunk.get("model")
+    if not isinstance(named, str) or not named or not chunk.get("choices"):
+        return
+    served = span.meta.get("served_by")
+    served_model = served.partition(":")[2] if isinstance(served, str) else ""
+    if not served_model or served_model == named:
+        return
+    span.meta["upstream_model"] = named
 
 
 # The routing chain a turn's own rounds walk (S10-2): a chat turn the chat
@@ -3065,13 +3149,20 @@ def _purpose_of(turn: traces.Turn) -> str:
 # — so a beat's hourly cost would be invisible on the Spend page.
 _ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled", "beat": "beat"}
 
+# The roles whose turns send chat.model as their link 1: Nova's own kinds'
+# roles above — an agent's turn sends no model and an eval names its own. Read
+# off the map, never kept as a second list, because the Jev Router switch
+# (proxies.py) reads chat.model as link 1 of exactly these roles; a role
+# missing here would show a switch that ignores the model its turns reach.
+CHAT_MODEL_ROLES: tuple[str, ...] = tuple(dict.fromkeys(_ROLE_BY_KIND.values()))
+
 
 def _role_of(turn: traces.Turn) -> str | None:
     """The turn's own role when it was opened with one (S12: an agent's
     `agent_<name>`, whatever kind the turn is), else the kind's. An eval turn
     is opened with none and its kind maps to none — rail 17 holds by the same
     line."""
-    return turn.role or _ROLE_BY_KIND.get(_purpose_of(turn))
+    return turn.role or _ROLE_BY_KIND.get(traces.purpose_of(turn))
 
 
 async def _collect_completion(
@@ -3407,7 +3498,9 @@ def _state_claim_stands(
     the same subject, so what persists is true of the final state. Fail-open:
     a guard that raises leaves the correction as it was."""
     try:
-        claim = guards.state_claim_check(text, turn.spans, device_names, purpose=_purpose_of(turn))
+        claim = guards.state_claim_check(
+            text, turn.spans, device_names, purpose=traces.purpose_of(turn)
+        )
     except Exception:
         logger.exception("state-claim re-check raised; keeping the correction")
         return True
@@ -3529,7 +3622,7 @@ def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object
         ("memory_claim", guards.memory_claim_check),
     ):
         try:
-            claim = check(text, turn.spans, purpose=_purpose_of(turn))
+            claim = check(text, turn.spans, purpose=traces.purpose_of(turn))
         except Exception:
             logger.exception("%s guard raised; shipping the reply uncorrected", name)
             claim = None
@@ -3642,7 +3735,9 @@ def _regen_rejected_by(
         # thrown away (_append_class_claims; S40b final fix wave, A9).
         (
             "stack_claim",
-            lambda: guards.stack_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+            lambda: guards.stack_claim_check(
+                corrected, turn.spans, purpose=traces.purpose_of(turn)
+            ),
         ),
         (
             "state_claim",
@@ -3650,7 +3745,7 @@ def _regen_rejected_by(
             # over the reply this regeneration replaces (S40b): a regen that
             # repeats an unchecked machine claim is refused by name.
             lambda: guards.state_claim_check(
-                corrected, turn.spans, device_names, purpose=_purpose_of(turn)
+                corrected, turn.spans, device_names, purpose=traces.purpose_of(turn)
             ),
         ),
         (
@@ -3962,6 +4057,7 @@ async def _run_turn(
     persona: agents.Persona | None = None,
     attached: Sequence[attachments.Attachment] = (),
     card: Callable[[dict], None] | None = None,
+    decide: bool = False,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -4002,6 +4098,13 @@ async def _run_turn(
 
     `card` is the UI-only card channel (S47); only the stream route and the
     eval runner pass one.
+
+    `decide` (decision-role spec §2) runs the decision step — a decision model
+    asked which tool the message needs and which recalled notes still hold —
+    before the first round. Only the stream route (a turn he typed) and the
+    eval runner (which measures that path) pass True; a scheduled firing, a
+    drained queue and delegation never do, and an agent's persona never asks
+    whatever is passed (spec: "Not on … to start. Measure first").
     """
     # Everything streamed to the client this turn, across every round, in
     # order — this is what persists, so a reload shows exactly what was
@@ -4206,6 +4309,24 @@ async def _run_turn(
         if recalled.live_calls:
             checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
             recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
+        # THE DECISION ROLE (decisions.py, decision-role spec §2), before she is
+        # asked anything: which of her tools his message needs, and which of the
+        # recalled notes still hold. (plan decision 4) Here because it needs the
+        # notes and the advertised tools, and must come before the first round.
+        # Fail-open by construction: `advice` is a whole decision or nothing,
+        # and the `decisions` span says which. The hint is a request — nothing
+        # here or downstream refuses, reorders or runs a call because of it.
+        hint: str | None = None
+        if decide and persona.agent is None:
+            advice = await decisions.run(
+                app, turn, message, recalled.notes, recalled.paths, advertised
+            )
+            if recalled.notes:
+                # Only a recall that returned notes is narrowed: with none there
+                # is nothing to set aside, and "set aside all 0 notes" would
+                # tell her a search found notes when it found nothing.
+                recalled = _with_notes_kept(recalled, advice.keep)
+            hint = advice.hint.line() if advice.hint is not None else None
         # S28 — THE FILES HE SENT.
         #
         # Three things happen here and each is stated rather than silent:
@@ -4296,6 +4417,7 @@ async def _run_turn(
             persona,
             roster=roster,
             skills_roster=skills_roster,
+            hint=hint,
         )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
@@ -4813,7 +4935,9 @@ async def _run_turn(
             # "chat". The guard reads them in the kinds it is armed in
             # (guards.STACK_CLAIM_KINDS: chat and the eval that replays it)
             # and says nothing in the others, where it is unmeasured.
-            stack_claim = guards.stack_claim_check(text, turn.spans, purpose=_purpose_of(turn))
+            stack_claim = guards.stack_claim_check(
+                text, turn.spans, purpose=traces.purpose_of(turn)
+            )
         except Exception:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
             stack_claim = None
@@ -4873,7 +4997,7 @@ async def _run_turn(
         if not consent_redirected:
             try:
                 state_claim = guards.state_claim_check(
-                    text, turn.spans, device_names, purpose=_purpose_of(turn)
+                    text, turn.spans, device_names, purpose=traces.purpose_of(turn)
                 )
             except Exception:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")
@@ -5873,6 +5997,7 @@ def _spawn_turn(
     emit: Callable[[str | None], None],
     *,
     card: Callable[[dict], None] | None = None,
+    decide: bool = False,
 ) -> None:
     """Run an opened turn as its own detached task.
 
@@ -5883,6 +6008,8 @@ def _spawn_turn(
     absent reader — the frames it emits after the client is gone are simply never
     read. A drained queued turn has no reader from the start, and that is the
     same path, not a second one.
+
+    `decide` is passed through to `_run_turn` (the stream route alone sets it).
     """
     _spawn(
         _run_turn(
@@ -5899,6 +6026,7 @@ def _spawn_turn(
             persona=started.persona,
             attached=started.attached,
             card=card,
+            decide=decide,
         )
     )
 
@@ -6117,6 +6245,8 @@ async def chat_stream(
         started,
         queue.put_nowait,
         card=_card_channel(queue.put_nowait),
+        # A turn he typed asks the decision role (decision-role spec §2).
+        decide=True,
     )
     return StreamingResponse(
         _stream_from_queue(queue),

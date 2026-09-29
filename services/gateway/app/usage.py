@@ -433,6 +433,78 @@ def usage_chunk(event: Event, recorded: bool, route: dict | None = None) -> byte
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
+def _call_event(
+    *,
+    row: dict,
+    model: str,
+    served_by: str,
+    kind: str,
+    status: int,
+    attribution: Attribution,
+    started: float,
+    route: dict | None = None,
+    served_on: str | None = None,
+) -> Event:
+    """One call's ledger event, built the one way observe, observe_decision
+    and record_probe all build it: the provider and its `local` from the row,
+    a status other than 200 as kind `refusal`, the route's link and reason,
+    and the duration from `started` to NOW — so a stream's event, built when
+    the stream ends, spans the whole stream. What the body stated
+    (`captured`) and the error are the caller's to add."""
+    return Event(
+        provider=row["name"],
+        model=model,
+        served_by=served_by,
+        kind=kind if status == 200 else "refusal",
+        attribution=attribution,
+        duration_ms=int((time.monotonic() - started) * 1000),
+        local=bool(row.get("local")),
+        status=status,
+        route_reason=route.get("reason") if route else None,
+        route_link=route.get("link") if route else None,
+        served_on=served_on,
+    )
+
+
+def _json_or_none(content: bytes) -> object:
+    """A body read as JSON, or None when it is empty or is not JSON."""
+    try:
+        return json.loads(content) if content else None
+    except ValueError:
+        return None
+
+
+async def _meter_buffered(
+    pool: asyncpg.Pool,
+    event: Event,
+    content: bytes,
+    parsed: object,
+    *,
+    row: dict,
+    model: str,
+    route: dict | None,
+) -> bytes:
+    """The end of a relayed call read whole — observe's non-stream completion
+    or refusal, and a decision (observe_decision) — once `event.captured`
+    holds what the body stated: a refusal keeps the provider's words, a
+    completion is priced, the ledger row is written, and the body to relay
+    comes back. A completion's JSON object goes back with `usage` replaced
+    by the ledger's own fields and `route` added; anything else as it came."""
+    if event.kind == "refusal":
+        event.error = (event.captured.error or content.decode(errors="replace")[:400]) or None
+    else:
+        event.cost_usd, event.cost_basis = await price_call(pool, row, model, event.captured)
+        event.error = event.captured.error
+    recorded = await record(pool, event)
+    if event.kind == "completion" and isinstance(parsed, dict):
+        enriched = dict(parsed)
+        enriched["usage"] = usage_fields(event, recorded)
+        if route is not None:
+            enriched["route"] = route
+        return json.dumps(enriched).encode()
+    return content
+
+
 async def observe(
     pool: asyncpg.Pool,
     response: Response,
@@ -454,23 +526,17 @@ async def observe(
     refusal (kind `refusal`), tokens NULL. `served_on` is where the call
     ran (data_plane stamps it before the first byte); a refusal is given
     None."""
-    local = bool(row.get("local"))
-    provider = row["name"]
-    route_reason = route.get("reason") if route else None
-    route_link = route.get("link") if route else None
 
     def base_event(status: int) -> Event:
-        return Event(
-            provider=provider,
+        return _call_event(
+            row=row,
             model=model,
             served_by=served_by,
-            kind=kind if status == 200 else "refusal",
-            attribution=attribution,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            local=local,
+            kind=kind,
             status=status,
-            route_reason=route_reason,
-            route_link=route_link,
+            attribution=attribution,
+            started=started,
+            route=route,
             served_on=served_on,
         )
 
@@ -480,24 +546,12 @@ async def observe(
         # through a streaming body), or a refusal body.
         content = response.body if iterator is None else b"".join([c async for c in iterator])
         event = base_event(response.status_code)
-        try:
-            parsed = json.loads(content) if content else None
-        except ValueError:
-            parsed = None
+        parsed = _json_or_none(content)
         if isinstance(parsed, dict):
             event.captured.absorb(parsed)
-        if event.kind == "refusal":
-            event.error = (event.captured.error or content.decode(errors="replace")[:400]) or None
-        else:
-            event.cost_usd, event.cost_basis = await price_call(pool, row, model, event.captured)
-            event.error = event.captured.error
-        recorded = await record(pool, event)
-        if event.kind == "completion" and isinstance(parsed, dict):
-            enriched = dict(parsed)
-            enriched["usage"] = usage_fields(event, recorded)
-            if route is not None:
-                enriched["route"] = route
-            content = json.dumps(enriched).encode()
+        content = await _meter_buffered(
+            pool, event, content, parsed, row=row, model=model, route=route
+        )
         headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
         if response.status_code != 200:
             # A refusal body is relayed whole, its length ours to declare.
@@ -562,6 +616,104 @@ async def observe(
     )
 
 
+#: A decision's ledger error for a 200 whose body is not a JSON object.
+UNREADABLE = "the answer is not a JSON object, so no answers can be read from it"
+#: ...and for a 200 whose JSON object holds no `answers` object and states no
+#: error of its own.
+NO_ANSWERS = "the answer has no answers object, so no answers can be read from it"
+
+
+class UnreadableAnswer(ValueError):
+    """A decision's 200 no answers can be read from: a body that is not a
+    JSON object, or a JSON object with no `answers` object in it (OpenRouter
+    can state a refusal as `{"error": ...}` under a 200). observe_decision
+    meters it, with its error, then raises this rather than relay it: there
+    are no answers in it, so nothing may read it as one. `what` says which,
+    after "answered 200 ... but"; the decision walk passes the link over in
+    those words (data_plane.serve_systemone)."""
+
+    def __init__(self, error: str, what: str) -> None:
+        super().__init__(error)
+        self.what = what
+
+
+def decision_captured(parsed: object) -> Captured:
+    """What a decision model's answer stated. `usage.input_tokens` and
+    `usage.output_tokens` — TypeSafe's names, which Jev and Kev both send —
+    are the ledger's prompt and completion counts; everything else is read by
+    the one reader every completion goes through (Captured.absorb): the
+    provider's OWN `usage.cost` (OpenRouter's), the upstream's charge on a
+    bring-your-own-key provider, an `error`. Absent stays None, never 0; a
+    body that is not an object states nothing."""
+    captured = Captured()
+    if not isinstance(parsed, dict):
+        return captured
+    stated = parsed.get("usage")
+    if isinstance(stated, dict):
+        renamed = dict(stated)
+        for ledger, typesafe in (
+            ("prompt_tokens", "input_tokens"),
+            ("completion_tokens", "output_tokens"),
+        ):
+            if typesafe in stated:
+                renamed[ledger] = stated[typesafe]
+        parsed = {**parsed, "usage": renamed}
+    captured.absorb(parsed)
+    return captured
+
+
+async def observe_decision(
+    pool: asyncpg.Pool,
+    *,
+    status: int,
+    content: bytes,
+    row: dict,
+    model: str,
+    served_by: str,
+    attribution: Attribution,
+    started: float,
+    route: dict | None,
+) -> Response:
+    """One decision, metered and relayed (decision-role spec §1). The ledger row
+    is written under the call's role exactly like a buffered completion's
+    (_meter_buffered, the tail observe uses): a 200 is kind `completion` with
+    the provider's stated tokens and cost (a local link never has dollars);
+    anything else is kind `refusal` with the provider's words. A 200's JSON
+    object goes back with `usage` replaced by the ledger's own fields and
+    `route` added; a refusal goes back as it came.
+
+    A 200 no answers can be read from is no answer: a body that is not a JSON
+    object (metered with UNREADABLE as its error), or a JSON object with no
+    `answers` object (metered with the error it states, else NO_ANSWERS) —
+    never as a clean completion. It is then raised as UnreadableAnswer
+    instead of relayed, so nothing reads it as one: no route stamp, and no
+    success that clears a wall."""
+    parsed = _json_or_none(content)
+    event = _call_event(
+        row=row,
+        model=model,
+        served_by=served_by,
+        kind="completion",
+        status=status,
+        attribution=attribution,
+        started=started,
+        route=route,
+    )
+    event.captured = decision_captured(parsed)
+    unreadable: str | None = None
+    if status == 200 and not isinstance(parsed, dict):
+        unreadable = "not a JSON object"
+        event.captured.error = UNREADABLE
+    elif status == 200 and not isinstance(parsed.get("answers"), dict):
+        stated = event.captured.error
+        unreadable = "with no answers object" + (f" — its error: {stated}" if stated else "")
+        event.captured.error = stated or NO_ANSWERS
+    content = await _meter_buffered(pool, event, content, parsed, row=row, model=model, route=route)
+    if unreadable:
+        raise UnreadableAnswer(event.captured.error, unreadable)
+    return Response(content=content, status_code=status, media_type="application/json")
+
+
 async def record_probe(
     pool: asyncpg.Pool,
     *,
@@ -578,25 +730,21 @@ async def record_probe(
     `served_on` is where an admin probe ran (D10), None when unknown or a
     cloud call."""
     captured = Captured()
-    try:
-        parsed = json.loads(body) if body else None
-    except ValueError:
-        parsed = None
+    parsed = _json_or_none(body)
     if isinstance(parsed, dict):
         captured.absorb(parsed)
-    event = Event(
-        provider=row["name"],
+    event = _call_event(
+        row=row,
         model=model,
         served_by=f"{row['name']}:{model}",
-        kind="probe" if status == 200 else "refusal",
-        attribution=Attribution(purpose=purpose),
-        duration_ms=int((time.monotonic() - started) * 1000),
-        local=bool(row.get("local")),
+        kind="probe",
         status=status,
-        captured=captured,
-        error=error or captured.error,
+        attribution=Attribution(purpose=purpose),
+        started=started,
         served_on=served_on,
     )
+    event.captured = captured
+    event.error = error or captured.error
     if event.kind == "probe":
         event.cost_usd, event.cost_basis = await price_call(pool, row, model, captured)
     await record(pool, event)

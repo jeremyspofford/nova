@@ -16,6 +16,12 @@ COMPLETIONS_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.
 MODELS_TIMEOUT = httpx.Timeout(10.0)
 VERIFY_TIMEOUT = httpx.Timeout(10.0)
 
+#: What a decision model's listing row says it outputs — OpenRouter's own word
+#: (`architecture.output_modalities`), so the catalogue reads a Kev box and
+#: OpenRouter's Jev the same way. Defined once here (never per-adapter) so
+#: every adapter that lists decision models imports the same value.
+DECISIONS = "decisions"
+
 
 class ProviderRefused(RuntimeError):
     """The provider answered, and the answer was a refusal — its status and
@@ -33,10 +39,10 @@ class ProviderUnreachable(ProviderRefused):
 
     A ProviderRefused, so every path that relays a refusal still relays this
     one in the same words. It exists for one decision: data_plane never walls
-    it (D21). A wall outlives the outage it describes — a local model's wall
-    is never cleared by a success (routing.note_success clears cloud rows
-    only) — while the engine's own observation (engines.observe, a failure
-    cached 10 s) is the fact the next walk reads.
+    it (D21). A wall outlives the outage it describes — an engine's wall is
+    never cleared by a success (the walk runs routing.note_success for every
+    other row) — while the engine's own observation (engines.observe, a
+    failure cached 10 s) is the fact the next walk reads.
 
     Raised only for an engine. A cloud provider's connect failure stays a
     plain ProviderRefused and walls as it always has."""
@@ -65,14 +71,29 @@ class ListingUnavailable(RuntimeError):
 @dataclass
 class Listing:
     """A live model list, always labelled with where and when it came from —
-    never an unlabelled number (S10a's rail, adopted here)."""
+    never an unlabelled number (S10a's rail, adopted here). `note` says what
+    the listing could NOT include, in words (a decision-model listing that
+    failed) — a partial list is never passed off as a whole one."""
 
     source: str
     models: list[dict]
     fetched_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    note: str | None = None
 
     def as_dict(self) -> dict:
-        return {"source": self.source, "fetched_at": self.fetched_at, "models": self.models}
+        out = {"source": self.source, "fetched_at": self.fetched_at, "models": self.models}
+        if self.note:
+            out["note"] = self.note
+        return out
+
+    def summary(self) -> str:
+        """ "N models listed", extended with what the listing could not
+        include. The one sentence both the verify-before-save note
+        (OpenAIChat.verify) and the provider's stored listing state
+        (admin._listing_for) build from, so a partial list reads the same
+        words wherever it is said."""
+        text = f"{len(self.models)} models listed"
+        return f"{text}; {self.note}" if self.note else text
 
 
 @dataclass
@@ -98,6 +119,12 @@ class VerifyResult:
 
 class Adapter(Protocol):
     name: str
+
+    #: The wire protocols a provider on this adapter can carry — "chat"
+    #: (/v1/chat/completions) and "systemone" (typed questions, /v1/systemone).
+    #: The ENDPOINT decides which one a call speaks (decision-role spec §1);
+    #: routing reads this to refuse, by name, a link that cannot carry it.
+    protocols: frozenset[str]
 
     def headers(self, row: dict) -> dict[str, str]: ...
 
@@ -210,3 +237,73 @@ def refusal_detail(resp: httpx.Response) -> str:
         if body.get("message"):
             return str(body["message"])[:400]
     return text[:400] or resp.reason_phrase or f"HTTP {resp.status_code}"
+
+
+async def fetch_listing(
+    app,
+    row: dict,
+    url: str,
+    *,
+    headers: dict[str, str],
+    normalize,
+    unavailable_note: str,
+) -> Listing:
+    """The `GET {url}/models` call OpenAIChat and SystemOne both make: one
+    reachability, status and JSON handling, kept here once because a copied
+    block would drift. Each caller supplies its own row normaliser
+    (`normalize`) and its own words for "no listing here" (`unavailable_note`
+    — OpenAIChat's says "type a model id"; no page offers a typed model id
+    for a decision server, so SystemOne's does not)."""
+    if not url:
+        raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
+    client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers)
+    try:
+        async with client as c:
+            resp = await c.get("/models")
+    except httpx.HTTPError as exc:
+        raise ProviderRefused(502, f"could not reach {url} — {reason(exc)}") from exc
+    if resp.status_code in (404, 405):
+        raise ListingUnavailable(f"{url}/models answered {resp.status_code} — {unavailable_note}")
+    if resp.status_code != 200:
+        raise ProviderRefused(resp.status_code, refusal_detail(resp))
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
+    return Listing(source=row["name"], models=normalize(body, owned_by=row["name"]))
+
+
+#: A key that is certainly wrong, for the wrong-key probe below: a listing
+#: that refuses THIS key proves the real key was accepted, never guessed.
+_WRONG_KEY = "nova-verify-this-key-is-wrong"
+
+
+async def wrong_key_probe(app, row: dict, url: str, *, headers_for) -> tuple[str, int | None, str]:
+    """Re-asks `GET {url}/models` with a key that is certainly wrong
+    (`_WRONG_KEY`) — how OpenAIChat (`_listing_is_public`) and SystemOne
+    (`verify`) learn whether a listing NEEDS a key at all. The fetch and its
+    branches are kept here once, because a copied block would drift; only
+    the PROSE each builds from them differs, which stays with the caller.
+
+    Returns `(bucket, status, detail)`:
+      * `"protected"`, the status (401/403) — the listing refused this key,
+        so the real key's earlier acceptance proves it.
+      * `"public"`, 200, `""` — the listing answered 200 to a wrong key too,
+        so nothing about the real key was proven.
+      * `"undetermined"`, a status or None, and words — any other status
+        (`detail` is `refusal_detail(resp)`) or a transport failure
+        (`status` is None, `detail` is `reason(exc)`): neither decides
+        anything about the key.
+    """
+    wrong = dict(row, api_key=_WRONG_KEY)
+    client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers_for(wrong))
+    try:
+        async with client as c:
+            resp = await c.get("/models")
+    except httpx.HTTPError as exc:
+        return "undetermined", None, reason(exc)
+    if resp.status_code == 200:
+        return "public", 200, ""
+    if resp.status_code in (401, 403):
+        return "protected", resp.status_code, ""
+    return "undetermined", resp.status_code, refusal_detail(resp)

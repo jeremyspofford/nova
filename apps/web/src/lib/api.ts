@@ -615,11 +615,34 @@ export const deleteOwnerPrice = (provider: string, model: string) =>
 
 // ── routing (S10-2): the role chains, the walk explained, the walls ─────
 
-/** The five roles the gateway ships with; every other role is derived — a
- * core-side agent named `x` owns `agent_x` (S12). */
-export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+/** The roles the gateway ships with; every other role is derived — a
+ * core-side agent named `x` owns `agent_x` (S12). `decisions` answers typed
+ * questions — the decision role — never chat. */
+export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'decisions' | 'coding' | 'vision'
 /** Any routing role: a built-in or an agent's derived `agent_<name>`. */
 export type RouteRole = BuiltinRole | string
+/** The protocol a role's calls speak — the gateway's routing.protocol_of:
+ * `systemone` (typed questions) for the decision role, `chat` for the rest. */
+export type RouteProtocol = 'chat' | 'systemone'
+
+/** The Jev Router switch on a role (decision-role spec §4). `on` is DERIVED by
+ * the gateway from the chain a turn actually walks — chat.model first, where
+ * core passes it, then the stored chain (chat's, for a role with none of its
+ * own) — true only when the FIRST CLOUD link there is a Jev Router link; one
+ * elsewhere in the chain, behind an earlier cloud link, reads off
+ * (`[hub, gpt-x, jev-router]` is off). `kept` is the cloud link the switch
+ * replaced ('' when it replaced none and the router went after the local
+ * links). It shows only while the switch is on, and only when it was kept
+ * for the slot the router now holds (the chat model, or the stored chain) —
+ * the gateway's routing.router_state. That is every null: off; a router
+ * typed in the chain editor, or Jev Router picked by hand as chat.model,
+ * which kept nothing; a kept link recorded for a slot the router no longer
+ * holds; a role that walks chat's chain, whose router is chat's. The whole
+ * field is null where the switch is not offered. */
+export interface RouteRouter {
+  on: boolean
+  kept: string | null
+}
 
 export interface RouteVerdict {
   link: number
@@ -628,7 +651,8 @@ export interface RouteVerdict {
   model?: string
   local?: boolean
   // switched_off (S40): the link's machine was switched off by the owner.
-  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | string
+  // wrong_protocol (decision role): the link's provider cannot answer this role.
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | 'wrong_protocol' | string
   reason: string | null
   walled_until?: string
 }
@@ -649,13 +673,25 @@ export interface RouteWall {
 }
 
 export interface Routes {
-  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean }[]
+  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean; protocol?: RouteProtocol; router?: RouteRouter | null }[]
   walls: RouteWall[]
 }
 
 export const getRoutes = () => apiGet<Routes>('/api/v1/routes')
 export const putRoute = (role: RouteRole, chain: string[]) =>
   apiSend<{ role: RouteRole; chain: string[] }>(`/api/v1/routes/${role}`, 'PUT', { chain })
+/** Switch Jev Router on or off for a role — an edit to its chain, which stays
+ * the one source of truth. `link` is the provider:model that serves Jev
+ * Router, read from the live catalogue; only switching on needs it. A 200
+ * carries `chat_model` when chat's own pick just changed (core has already
+ * written it) and `note` when something the switch did is worth saying, such
+ * as a kept link whose provider is gone. */
+export const putJevRouter = (role: RouteRole, on: boolean, link?: string) =>
+  apiSend<{ role: RouteRole; chain: string[]; router: RouteRouter; chat_model?: string; note?: string }>(
+    `/api/v1/routes/${encodeURIComponent(role)}/jev-router`,
+    'PUT',
+    link ? { on, link } : { on },
+  )
 export const explainRoute = (role: RouteRole, model?: string) =>
   apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
 export const clearWall = (provider: string) =>
@@ -1810,8 +1846,9 @@ export async function getEvalRun(runId: string): Promise<EvalRunRecord> {
 
 /** The wire protocols a provider row can name. Vendors are not the unit;
  * protocols are: everything OpenAI-shaped (OpenAI, OpenRouter, Groq, Azure
- * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`. */
-export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages'
+ * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`; a decision-model
+ * server (a Kev box — typed questions only, no chat) is `systemone`. */
+export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages' | 'systemone'
 export type ProviderAuthShape = 'none' | 'static-bearer' | 'api-key-header'
 export type ProviderListingState = 'available' | 'unavailable' | 'unknown'
 
@@ -1827,6 +1864,9 @@ export interface Provider {
   preset: string | null
   builtin: boolean
   is_default: boolean
+  /** Runs on the owner's own machine: its calls are never priced and never
+   * capped. The owner's to say (decision-role spec §1); an engine always is. */
+  local: boolean
   verified_at: string | null
   /** What the LAST model listing learned — rewritten by every listing fetch. */
   listing: ProviderListingState
@@ -1850,6 +1890,7 @@ export interface ProviderWrite {
   default_model?: string
   model_note?: string
   preset?: string
+  local?: boolean
 }
 
 export interface ProviderPreset {
@@ -1863,6 +1904,7 @@ export interface ProviderPreset {
   quirks?: string
   /** `{resource}`, `{region}` … the owner fills in before saving. */
   placeholders?: string[]
+  local?: boolean
 }
 
 export interface ProviderModel {
@@ -1872,6 +1914,9 @@ export interface ProviderModel {
   context_length?: number
   /** USD per token, as the provider stated it. Absent when it stated none. */
   pricing?: { prompt?: number; completion?: number }
+  /** What the model produces, when the listing says: ['text'], or
+   * ['decisions'] for a decision model — which has no chat. */
+  output_modalities?: string[]
 }
 
 /** A live listing — always labelled with where and when it came from. */

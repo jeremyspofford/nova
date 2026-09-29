@@ -185,6 +185,15 @@ class Turn:
         return SpanRecorder(self, kind, name)
 
 
+def purpose_of(turn: Turn) -> str:
+    """What the ledger records a turn's own gateway calls as: its kind. One
+    reader for chat's rounds and the decision role's calls (decisions.py), so
+    the two are always metered under the same purpose — a copy in each would
+    drift."""
+    kind = getattr(turn, "kind", None)
+    return kind if isinstance(kind, str) and kind else "chat"
+
+
 async def open_turn(
     # A Pool or a Connection: S15 opens the turn inside the caller's
     # transaction, so the claim on the queued message it answers and the turn

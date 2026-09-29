@@ -12,6 +12,7 @@ header, same parsing.
 from __future__ import annotations
 
 import os
+from urllib.parse import unquote
 
 import httpx
 from fastapi import FastAPI
@@ -86,3 +87,21 @@ def attribution_headers(turn, purpose: str, role: str | None = None) -> dict[str
     if role:
         headers[HEADER_ROLE] = role
     return headers
+
+
+# ── X-Nova-Route: which link of a role's chain answered ─────────────────────
+#
+# The gateway stamps `role=…;link=N;reason=…` on every routed answer (S10-2);
+# `reason` is free text that can carry `;` and `=`, so the gateway
+# percent-quotes it. One reader, so chat's rounds and the decision role's
+# calls (decisions.py) can never decode the header two ways.
+
+
+def route_fields(header: str | None) -> dict[str, str]:
+    """The header's fields by name, `reason` already decoded; {} for none."""
+    if not header:
+        return {}
+    fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
+    if "reason" in fields:
+        fields["reason"] = unquote(fields["reason"])
+    return fields

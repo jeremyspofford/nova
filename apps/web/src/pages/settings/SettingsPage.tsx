@@ -113,6 +113,18 @@ export function SettingsPage() {
     setSettings(prev => (prev ? prev.map(s => (s.key === key ? { ...s, value } : s)) : prev))
   }
 
+  /** chat.model has one writer, but three surfaces can move it — a pick on
+   * Models, a pick on Providers, and the Jev Router switch on Routing — and
+   * each needs the exact same pair of writes: the settings echo keeps this
+   * page's own state consistent with the write that just succeeded, and
+   * `setModel` is what actually makes the switch visible everywhere else
+   * (the Settings list's "Current" marker, the chat badge) with no message
+   * sent. One handler for all three, so the copies cannot again drift. */
+  const onChatModelChanged = (model: string) => {
+    updateSettingValue('chat.model', model)
+    setModel(model)
+  }
+
   // Clears onboarding.completed and lets the app gate (App.tsx's Gate) pick
   // that up on its own: refresh() re-fetches this browser's identity, which
   // re-triggers the gate's settings re-probe and — seeing the flag false —
@@ -208,29 +220,19 @@ export function SettingsPage() {
                 {/* First: where the models run, before which one answers. */}
                 <MachinesSection />
                 <ModelsSection
-              chatModel={chatModel}
-              visionModel={visionModel}
-              onModelChanged={model => {
-                // Both writes matter: the settings echo keeps this page's
-                // OWN state consistent with the PUT that just succeeded
-                // (harmless once `chatModel` above prefers chat-store, but
-                // cheap and correct), while `setModel` is what actually
-                // makes the switch visible — the Settings list's "Current"
-                // marker and the chat badge both re-render off it the
-                // instant this fires, with no message sent.
-                updateSettingValue('chat.model', model)
-                setModel(model)
-              }}
+                  chatModel={chatModel}
+                  visionModel={visionModel}
+                  onModelChanged={onChatModelChanged}
                   onRerunSetup={handleRerunSetup}
                 />
                 <ProvidersSection
                   chatModel={chatModel}
-                  onModelChanged={model => {
-                    updateSettingValue('chat.model', model)
-                    setModel(model)
-                  }}
+                  onModelChanged={onChatModelChanged}
                 />
-                <RoutingSection chatModel={chatModel} />
+                <RoutingSection
+                  chatModel={chatModel}
+                  onChatModelChanged={onChatModelChanged}
+                />
               </>
             )}
             {tab === 'behaviour' && (
