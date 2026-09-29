@@ -74,20 +74,26 @@ async def _assistant_rows(pool) -> list[str]:
 
 
 class RaisingTransport(httpx.AsyncBaseTransport):
-    """Raises `make_exc(request)` on the `fail_on`th request; earlier requests
-    are handed to `inner` — so a scripted round can run its tools before the
-    transport dies under the next one."""
+    """Raises `make_exc(request)` on the `fail_on`th model round — the
+    `fail_on`th POST /v1/chat/completions — and on every round after it.
+    Earlier rounds, and every request that is not a round (a typed turn's
+    decision step at /v1/systemone, first), are handed to `inner`: a scripted
+    round can run its tools before the transport dies under the next one,
+    and nothing else the turn asks the gateway moves which request fails."""
 
-    def __init__(self, make_exc, *, inner=None, fail_on: int = 1) -> None:
+    ROUND = "/v1/chat/completions"
+
+    def __init__(self, make_exc, *, inner, fail_on: int = 1) -> None:
         self.make_exc = make_exc
         self.inner = inner
         self.fail_on = fail_on
-        self.calls = 0
+        self.rounds = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.calls += 1
-        if self.calls >= self.fail_on or self.inner is None:
-            raise self.make_exc(request)
+        if request.url.path == self.ROUND:
+            self.rounds += 1
+            if self.rounds >= self.fail_on:
+                raise self.make_exc(request)
         return await self.inner.handle_async_request(request)
 
 
@@ -135,8 +141,11 @@ async def test_a_read_timeout_persists_a_statement_naming_the_model_and_the_budg
     owner_client, pool, mount_peers
 ):
     memory = FakeMemory()
-    mount_peers(gateway=FakeGateway(), memory=memory)
-    _mount_gateway_transport(RaisingTransport(_read_timeout))
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway, memory=memory)
+    _mount_gateway_transport(
+        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(gateway.app))
+    )
     await _set_model(owner_client)
 
     sent = await _say(owner_client)
@@ -201,19 +210,14 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
         )
     )
     mount_peers(gateway=scripted, memory=memory)
-    # A turn he typed asks the decision role before its first round (decision-role
-    # spec §2), so request 1 on the gateway link is that /v1/systemone (the script
-    # has no decision model: a 503, and the step fails open), request 2 is round 1,
-    # and request 3 — round 2 — is the one that dies.
     _mount_gateway_transport(
-        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=3)
+        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=2)
     )
     await _set_model(owner_client)
 
     sent = await _say(owner_client, "what time is it?")
     await chat.drain_background()
 
-    assert len(scripted.decision_calls) == 1, "request 1 was the decision step's"
     assert [(f["activity"]["tool"], f["activity"]["status"]) for f in sent if "activity" in f] == [
         ("get_time", "start"),
         ("get_time", "ok"),
@@ -233,8 +237,11 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
 
 
 async def test_a_refused_connection_names_the_connection_failure(owner_client, pool, mount_peers):
-    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
-    _mount_gateway_transport(RaisingTransport(_connection_refused))
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    _mount_gateway_transport(
+        RaisingTransport(_connection_refused, inner=fakes.StreamingASGITransport(gateway.app))
+    )
     await _set_model(owner_client)
 
     sent = await _say(owner_client)
