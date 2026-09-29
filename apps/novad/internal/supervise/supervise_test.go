@@ -524,3 +524,45 @@ func TestANewBuildThatCannotStartIsRolledBack(t *testing.T) {
 		t.Fatalf("agents started from %v", from)
 	}
 }
+
+// An install over an interrupted confirm places another build. It is not the
+// build update.json says was swapped in, so it is not confirmed as that one,
+// and never reverted to an older .prev.
+func TestAnotherBuildInstalledOverAnInterruptedConfirmIsNotReverted(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{block: true})
+	r.stopMidConfirm(t)
+	if err := os.WriteFile(r.bin, []byte("installed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.sp = &fakeSpawner{stateDir: r.dir, steps: []step{{exit: 1}}}
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	if from := r.sp.spawned(); from[0] != "installed" || from[1] != "installed" {
+		t.Fatalf("agents started from %v, want the installed build, never the older .prev", from)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin+".prev"); got != "old" {
+		t.Fatalf(".prev = %q", got)
+	}
+}
+
+// A staged build never swapped in (.new still there), beside an older .prev
+// from an earlier update: nothing was swapped, so nothing is confirmed.
+func TestAStagedBuildBesideAnOlderPrevIsNotConfirmed(t *testing.T) {
+	r := newRig(t, step{exit: 1})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	if err := os.WriteFile(r.bin+".prev", []byte("older"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	if from := r.sp.spawned(); from[0] != "old" || from[1] != "old" {
+		t.Fatalf("agents started from %v, want the installed build", from)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin+".prev"); got != "older" {
+		t.Fatalf(".prev = %q", got)
+	}
+}

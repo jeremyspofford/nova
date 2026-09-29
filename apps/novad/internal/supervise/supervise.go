@@ -254,10 +254,13 @@ func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, versio
 
 // unconfirmed is the version a swap put in place that no supervisor
 // confirmed: update.json still says staged, but the staged file is gone —
-// moved into place — and .prev holds the build it replaced. A supervisor
-// stopped, crashed or rebooted inside the confirm window leaves exactly that,
-// so the next one confirms the build or puts .prev back, as after a fresh
-// swap (Review Focus 1). "" when there is nothing to confirm.
+// moved into place — .prev holds the build it replaced, and the installed
+// build IS the staged one (its sha256). A supervisor stopped, crashed or
+// rebooted inside the confirm window leaves exactly that, so the next one
+// confirms the build or puts .prev back, as after a fresh swap (Review
+// Focus 1). An install over that state placed another build, which is never
+// confirmed as the staged one or reverted to an older .prev. "" when there
+// is nothing to confirm.
 func (s *sup) unconfirmed() string {
 	var u state.Update
 	if state.ReadJSON(filepath.Join(s.cfg.StateDir, state.UpdateFile), &u) != nil ||
@@ -269,6 +272,9 @@ func (s *sup) unconfirmed() string {
 	}
 	if _, err := os.Lstat(s.cfg.Binary + ".prev"); err != nil {
 		return ""
+	}
+	if sum, err := platform.FileSHA256(s.cfg.Binary); err != nil || sum != u.SHA256 {
+		return "" // another build was installed since the swap
 	}
 	s.cfg.Logf("%s was swapped in but never confirmed (the last supervisor stopped first); waiting up to %s for it to connect",
 		u.Version, s.cfg.ConfirmWithin)
