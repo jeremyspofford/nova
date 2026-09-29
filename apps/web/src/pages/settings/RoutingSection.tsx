@@ -12,6 +12,7 @@ import {
   listAgents as apiListAgents,
   putJevRouter as apiPutJevRouter,
   putRoute as apiPutRoute,
+  putSetting as apiPutSetting,
   type AgentSummary,
   type BuiltinRole,
   type CatalogRow,
@@ -20,6 +21,7 @@ import {
   type RouteProtocol,
   type RouteRouter,
   type Routes,
+  type SettingDef,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
 import { suitabilityEntries } from '../models/catalogFormat'
@@ -40,6 +42,10 @@ import { LIBRARY } from './modelsFormat'
  * `agent_<name>` role, named after the live agents list. A stored role no
  * agent owns any more can be removed — but only once the agents list was
  * actually READ and the name is absent: unread is not empty.
+ *
+ * Beside the decisions chain sit the two decision switches (decision-role
+ * spec §6) — settings core holds, written through the settings API every
+ * other section uses, and shown as core stored them.
  */
 export interface RoutingApi {
   getRoutes: typeof apiGetRoutes
@@ -50,6 +56,7 @@ export interface RoutingApi {
   getCatalog: typeof apiGetCatalog
   deleteRoute: typeof apiDeleteRoute
   listAgents: typeof apiListAgents
+  putSetting: typeof apiPutSetting
 }
 
 const DEFAULT_API: RoutingApi = {
@@ -61,7 +68,31 @@ const DEFAULT_API: RoutingApi = {
   getCatalog: apiGetCatalog,
   deleteRoute: apiDeleteRoute,
   listAgents: apiListAgents,
+  putSetting: apiPutSetting,
 }
+
+/** The two decision switches (decision-role spec §6, owner 2026-09-29): which
+ * kinds of decision model may answer. A link's kind is its provider's own
+ * "Runs on my own machine" flag, which the gateway reads — never a name kept
+ * here. The notice under each is its setting's own description from core, so
+ * the words (the budget among them) are core's. */
+const DECISION_SWITCHES = [
+  { key: 'decisions.local', label: 'Local decision model', stage: 'alpha' },
+  { key: 'decisions.cloud', label: 'Cloud decision model', stage: 'beta' },
+] as const
+
+/** The decision switches' defs out of core's settings listing, in
+ * DECISION_SWITCHES' order — or null when core does not list them all, and
+ * then no switch is drawn (a switch whose write core would refuse by name). */
+export function decisionSwitchDefs(settings: SettingDef[]): SettingDef[] | null {
+  const defs = DECISION_SWITCHES.map(({ key }) => settings.find(s => s.key === key))
+  return defs.every((def): def is SettingDef => def !== undefined) ? defs : null
+}
+
+/** What the decisions panel says while both switches are off: the step does
+ * not run at all, so nothing answers and nothing is spent. */
+const DECISIONS_OFF =
+  'right now: the decision step is off — both decision models are switched off, so no decision model is asked and it costs nothing'
 
 const ROLE_WORDS: Record<BuiltinRole, { label: string; note: string }> = {
   chat: { label: 'Chat', note: 'your conversations; link 1 is the model picked in chat' },
@@ -90,6 +121,9 @@ const VERDICT_WORDS: Record<string, string> = {
   // The decision role: the link's provider cannot answer this role — a chat
   // model where typed questions are needed, or a decision model where chat is.
   wrong_protocol: 'cannot answer this role',
+  // The decision switches: the owner switched this link's kind (local or
+  // cloud) off — his choice, passed over for the call, never a failure.
+  kind_off: 'switched off in Settings',
 }
 
 /** Jev Router's model id (decision-role spec §4). The LINK is whichever
@@ -105,6 +139,23 @@ export const JEV_ROUTER_BALANCES =
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** The value core says it stored for a switch, or a failure that says why
+ * the write cannot be shown as done: an answer that states no stored
+ * true/false is a write nobody verified, never one to render as taken. */
+function storedSwitch(written: unknown, key: string): boolean {
+  if (
+    written === null ||
+    typeof written !== 'object' ||
+    (written as { key?: unknown }).key !== key ||
+    typeof (written as { value?: unknown }).value !== 'boolean'
+  ) {
+    throw new Error(
+      `the write of ${key} did not say what core stored, so the switch is shown as it was; reload the page to read it`,
+    )
+  }
+  return (written as { value: boolean }).value
 }
 
 /** A decision model: the catalogue says it outputs decisions — read from the
@@ -153,6 +204,8 @@ export function RoutingSection({
   chatModel,
   api = DEFAULT_API,
   onChatModelChanged,
+  decisionSwitches = null,
+  onSettingChanged = () => {},
 }: {
   chatModel: string
   api?: RoutingApi
@@ -161,6 +214,12 @@ export function RoutingSection({
    * tells the settings page to reload it, the same way a pick made on Models
    * or Providers does. Called only when a switch answer names one. */
   onChatModelChanged: (model: string) => void
+  /** The decision switches' defs as core listed them (decisionSwitchDefs);
+   * null draws no switch. */
+  decisionSwitches?: SettingDef[] | null
+  /** Hands the parent the value CORE stored for a switch, so the page
+   * re-renders from it — the switch moves with that, never with the click. */
+  onSettingChanged?: (key: string, value: unknown) => void
 }) {
   const [routes, setRoutes] = useState<Routes | null>(null)
   const [catalog, setCatalog] = useState<CatalogRow[]>([])
@@ -269,6 +328,15 @@ export function RoutingSection({
     void load()
   }, [load])
 
+  // One decision switch: written through the settings API, shown as core
+  // stored it, and then the page re-reads — the decisions walk follows the
+  // switches (core states them to the gateway), so its explanation moves too.
+  const onDecisionSwitch = async (key: string, on: boolean): Promise<void> => {
+    const stored = storedSwitch(await api.putSetting(key, on), key)
+    onSettingChanged(key, stored)
+    await load()
+  }
+
   return (
     <Section
       icon={Waypoints}
@@ -305,6 +373,10 @@ export function RoutingSection({
               routerLink={routerLink}
               routerUnavailableReason={routerUnavailableReason}
               catalogProviders={catalogProviders}
+              // Beside the chain whose calls are typed questions — the
+              // decisions role's, read off its protocol like the picker is.
+              decisionSwitches={entry.protocol === 'systemone' ? decisionSwitches : null}
+              onDecisionSwitch={onDecisionSwitch}
               onRouter={async on => {
                 const result = await api.putJevRouter(entry.role, on, on ? routerLink ?? undefined : undefined)
                 // Reload with the model the ANSWER just named, not this
@@ -376,6 +448,8 @@ function RoleEditor({
   routerLink,
   routerUnavailableReason,
   catalogProviders,
+  decisionSwitches,
+  onDecisionSwitch,
   onRouter,
   onSave,
   onRemove,
@@ -401,6 +475,11 @@ function RoleEditor({
    * because a row happens to be offered. A kept link whose provider has
    * fallen out of this set will not come back off a switch off. */
   catalogProviders: Set<string>
+  /** The decision switches' defs, drawn beside this chain — null on every
+   * role but the decisions role, and when core does not list them. */
+  decisionSwitches: SettingDef[] | null
+  /** Writes one decision switch; a refusal is thrown, in core's own words. */
+  onDecisionSwitch: (key: string, on: boolean) => Promise<void>
   /** Flips the switch. Resolves to the gateway's `note` (undefined for none)
    * on success; a refusal is thrown, in the gateway's own words. */
   onRouter: (on: boolean) => Promise<string | undefined>
@@ -461,6 +540,9 @@ function RoleEditor({
   const verdicts = explain && !('error' in explain) ? explain.chain : []
   const verdictFor = (id: string) => verdicts.find(v => v.id === id)
   const wantsDecisions = protocol === 'systemone'
+  // Both decision switches off: the step does not run at all, which is what
+  // "right now" is — not that no link in the chain could answer.
+  const decisionsOff = decisionSwitches !== null && decisionSwitches.every(def => def.value === false)
   const options = catalog
     // A `library:` row is a model on no machine yet: the gateway cannot
     // route to it, so it is never offered as a link (pull it on Models).
@@ -645,18 +727,26 @@ function RoleEditor({
           )}
         </div>
       )}
+      {decisionSwitches && editable && <DecisionSwitches defs={decisionSwitches} onSwitch={onDecisionSwitch} />}
       {removeError && (
         <p role="alert" className="mt-2 text-caption text-danger" data-testid={`route-${role}-remove-error`}>
           could not remove — {removeError}
         </p>
       )}
       {explain && 'error' in explain && <p className="mt-2 text-caption text-danger">could not check: {explain.error}</p>}
-      {explain && !('error' in explain) && (
+      {decisionsOff ? (
         <p className="mt-2 text-caption text-content-tertiary" data-testid={`route-${role}-would-serve`}>
-          {explain.would_serve
-            ? `right now: ${explain.would_serve.served_by} would answer${explain.would_serve.link > 1 ? ` — ${explain.would_serve.reason}` : ''}`
-            : `right now: nothing could answer — ${explain.reason}`}
+          {DECISIONS_OFF}
         </p>
+      ) : (
+        explain &&
+        !('error' in explain) && (
+          <p className="mt-2 text-caption text-content-tertiary" data-testid={`route-${role}-would-serve`}>
+            {explain.would_serve
+              ? `right now: ${explain.would_serve.served_by} would answer${explain.would_serve.link > 1 ? ` — ${explain.would_serve.reason}` : ''}`
+              : `right now: nothing could answer — ${explain.reason}`}
+          </p>
+        )
       )}
       {onRemove && (
         <ConfirmDialog
@@ -676,13 +766,72 @@ function RoleEditor({
   )
 }
 
+/** The two decision switches, each as core stored it: its label, its stage
+ * (alpha, beta) and core's own notice under it. A click writes the setting;
+ * the switch moves when the page re-renders with what core stored, so a
+ * refused write leaves it where it was, with core's reason under it. */
+function DecisionSwitches({
+  defs,
+  onSwitch,
+}: {
+  defs: SettingDef[]
+  onSwitch: (key: string, on: boolean) => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string | null>>({})
+  const flip = async (key: string, on: boolean) => {
+    // Checked here as well as in `disabled`: a dispatched event is not
+    // required to respect the attribute.
+    if (busy) return
+    setBusy(true)
+    setErrors(prev => ({ ...prev, [key]: null }))
+    try {
+      await onSwitch(key, on)
+    } catch (err) {
+      setErrors(prev => ({ ...prev, [key]: reasonOf(err) }))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-3 space-y-3" data-testid="decision-switches">
+      {DECISION_SWITCHES.map(({ key, label, stage }) => {
+        const def = defs.find(d => d.key === key)
+        if (!def) return null
+        return (
+          <div key={key} className="space-y-1" data-testid={`decision-switch-${key}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Toggle id={`decision-switch-${key}`} size="sm" checked={def.value === true} disabled={busy} onChange={on => void flip(key, on)} label={label} />
+              <span data-testid="decision-switch-stage">
+                <Badge size="sm" color={stage === 'alpha' ? 'warning' : 'info'}>
+                  {stage}
+                </Badge>
+              </span>
+            </div>
+            <p className="text-caption text-content-tertiary" data-testid="decision-switch-notice">
+              {def.description}
+            </p>
+            {errors[key] && (
+              <p role="alert" className="text-caption text-danger">
+                could not switch — {errors[key]}
+              </p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function VerdictBadge({ verdict }: { verdict: { verdict: string; reason: string | null } | undefined }) {
   if (!verdict) return null
   const ok = verdict.verdict === 'runnable'
-  // switched_off is the owner's choice, not a failure: neutral, never red.
+  // switched_off (a machine) and kind_off (a kind of decision model) are the
+  // owner's choice, not a failure: neutral, never red.
+  const chosen = verdict.verdict === 'switched_off' || verdict.verdict === 'kind_off'
   return (
     <span title={verdict.reason ?? undefined} data-verdict={verdict.verdict}>
-      <Badge size="sm" color={ok ? 'success' : verdict.verdict === 'over_cap' ? 'warning' : verdict.verdict === 'switched_off' ? 'neutral' : 'danger'}>
+      <Badge size="sm" color={ok ? 'success' : verdict.verdict === 'over_cap' ? 'warning' : chosen ? 'neutral' : 'danger'}>
         {VERDICT_WORDS[verdict.verdict] ?? verdict.verdict}
       </Badge>
     </span>
