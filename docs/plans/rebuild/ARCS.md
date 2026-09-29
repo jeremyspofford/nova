@@ -485,7 +485,8 @@ been measured on this stack — the numbers are the vendor's or third parties',
 cited so the next reader can check them.
 
 *(2026-09-28: it is being built — the decision role, [`decision-role/spec.md`](decision-role/spec.md),
-whose measurements on this stack supersede the vendor figures here.)*
+whose measurements on this stack supersede the vendor figures here where they measure
+the same thing.)*
 
 **What it is.** TypeSafe AI launched Jev on 2026-09-15 as the first "System
 One" model. It **does not generate text**. It takes a `state` plus typed

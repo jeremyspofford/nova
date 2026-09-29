@@ -87,49 +87,58 @@ its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
 
 ## Decision models (Jev and Kev)
 
-Since the decision role (`docs/plans/rebuild/decision-role/spec.md`), a **decision
-model** can answer two typed questions on each chat turn you type, before Nova does:
-which of her tools the message needs, and which recalled notes are still right for it.
-The answer becomes one hint line in her turn and a smaller set of notes. She still
-decides, and every guard still judges what she writes.
+Since the decision role (`docs/plans/rebuild/decision-role/spec.md`), before Nova
+answers a typed chat message, core asks the decisions role two things: which of her
+tools the message needs, and which recalled notes are still right for it. The answer
+can add one hint line to her turn — only when the tool fit and the gate are each at
+least 0.30 — and can narrow the recalled notes to the ones still judged current. She
+still decides, and every guard still judges what she writes.
 
 - **Where it is set.** The `decisions` routing role, in Settings → Routing, edited like
-  chat's chain. Its links are decision models, never chat models (the gateway refuses
-  the mix, by name):
+  chat's chain. A link whose provider cannot answer typed questions is refused, by name;
+  the Routing picker itself offers the decisions role decision models only, so its chain
+  never holds a chat model:
   - **Jev** (cloud): `openrouter:~typesafe/jev-latest`, through the existing `openrouter`
-    provider and its key. Models lists it under Cloud with a `decisions` tag. Metered
-    under the `decisions` role on the Spend page (about $0.00001 a question).
+    provider and its key. Models lists it under Cloud with a `decisions` tag. The step's
+    total cost (`cost_usd`) is on its `decisions` span, and the Spend page shows it
+    under the `decisions` role.
   - **Kev** (your own machine): Providers → Add → the **Kev** preset — the `systemone`
     adapter at `http://<host>:8009/v1`, ticked "Runs on my own machine", so it is never
-    priced or capped. The server is started by hand until the Kev engine exists:
-    `kev.serve --run jaredpalmer/kev-4b --host 0.0.0.0 --port 8009`.
+    priced or capped. The server is started by hand until the Kev engine exists, run
+    from a clone of [jaredpalmer/kev](https://github.com/jaredpalmer/kev):
+    `uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --host 0.0.0.0
+    --port 8009` — `--host 0.0.0.0` is what lets the gateway reach it.
 - **With no decision model** — an empty chain, which is how every install starts — nothing
   changes: each turn runs exactly as before, and its trace says why.
 - **The budget.** The whole step has 5 seconds per turn (`decisions.TURN_BUDGET_S` in
   core). A slow or unreachable decision model costs the hint, never the turn, and a
-  decision is applied whole or not at all. A decision server that refuses or cannot be
-  reached is walled like any provider, and the next link answers. The wall lapses on the
-  outage ladder — 1 minute, then 5, then 30, while it keeps failing — and a clean answer
-  clears it at once, the way it does for a cloud link (only the hub's own engines keep a
-  wall until the ladder lapses, never cleared by a success). "Try it again" in
-  Settings → Routing clears it at once too.
-- **Where it does not run (yet).** Scheduled firings, a drained queue, and agents' turns.
-  The eval runner's turns do run it, because they measure the chat path.
+  decision is applied whole or not at all. A decision server that cannot be reached, or
+  fails with a 5xx, is walled and the next link answers. That wall lapses on the outage
+  ladder (1 minute, then 5, then 30 while it keeps failing), and its first clean answer
+  after that resets the ladder. A refused key or a rate limit (401, 402, 403, 429) walls
+  the whole provider for an hour, then 6, then 24. "Try it again" in Settings → Routing
+  clears a wall at once.
+- **Where it does not run (yet).** Scheduled firings and agents' turns never ask. Neither
+  does a second message sent while she is still answering the first — it is queued, then
+  drained without the step once her turn ends. The eval runner's turns do run it,
+  because they measure the chat path.
 - **Reading it.** Each turn it ran on has one `decisions` span: the hint, its fit and the
-  gate, every note's scores and verdict by path (never its text), who served, and — as
-  the span's duration — how long it took:
+  gate, each note's scores and verdict by path (never its text) when the notes were
+  checked, who served, its cost (`cost_usd`), and — as the span's duration — how long it
+  took:
   `SELECT meta, duration_ms FROM turn_spans WHERE turn_id = '<id>' AND kind = 'decisions';`
 - **The Jev Router switch.** Settings → Routing shows "Let Jev Router pick the cloud
-  model" on Chat, Scheduled and each agent's role, read off what his turns actually do:
-  it shows on exactly when the first cloud model a turn would reach is Jev Router. On,
-  the role's first cloud link becomes `openrouter:typesafe/jev-router`, which picks a
-  model and reasoning effort per request, balancing quality, speed and cost — you pay
-  for the model it picks. Off puts the link it replaced back. Local links stay first:
-  when chat's own pick is a cloud model, the switch puts Jev Router in its place, and
-  switching off puts the pick back. Scheduled shares chat's pick, so switch it on chat.
-  With no chain and no chat model, chat answers with the gateway's default model, and
-  switching Jev Router on asks him to pick a chat model or give chat a chain first. The
-  model it picked is on the round's `llm_call` span as `upstream_model`.
+  model" on Chat, Scheduled tasks and each agent's role, read off what your turns
+  actually do: it shows on exactly when the first cloud model a turn would reach is Jev
+  Router. On, the role's first cloud link becomes `openrouter:typesafe/jev-router`,
+  which picks a model and reasoning effort per request, balancing quality, speed and
+  cost — you pay for the model it picks. Off puts the link it replaced back. Local links
+  stay first: when chat's own pick is a cloud model, the switch puts Jev Router in its
+  place, and switching off puts the pick back. A role that shares chat's cloud pick, or
+  has no chain of its own, is switched on chat. With no chain and no chat model, chat
+  answers with the gateway's default model, and switching Jev Router on asks you to pick
+  a chat model or give chat a chain first. The model it picked is on the round's
+  `llm_call` span as `upstream_model`.
 
 ## Tailnet access
 
