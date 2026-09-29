@@ -36,11 +36,14 @@ func (c *fakeChild) Kill() error {
 
 // step is what one spawned agent does: after delay, write "ready" as that
 // version (when ready is set), then exit with code — or block until killed.
+// A stopped agent exits 0 when the supervisor's context ends, as `novad run`
+// does when the service manager stops the whole group at once.
 type step struct {
-	ready string
-	exit  int
-	block bool
-	delay time.Duration
+	ready   string
+	exit    int
+	block   bool
+	stopped bool
+	delay   time.Duration
 }
 
 type fakeSpawner struct {
@@ -51,7 +54,7 @@ type fakeSpawner struct {
 	envs     [][]string // each agent's environment
 }
 
-func (f *fakeSpawner) spawn(_ context.Context, bin string, _ []string, env []string) (Child, error) {
+func (f *fakeSpawner) spawn(ctx context.Context, bin string, _ []string, env []string) (Child, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	body, _ := os.ReadFile(bin)
@@ -69,7 +72,14 @@ func (f *fakeSpawner) spawn(_ context.Context, bin string, _ []string, env []str
 			_ = state.WriteJSON(filepath.Join(f.stateDir, state.AgentStatusFile), state.AgentStatus{
 				V: 1, PID: c.pid, Version: st.ready, State: state.StateReady, Since: time.Now()})
 		}
-		if !st.block {
+		switch {
+		case st.stopped:
+			<-ctx.Done()
+			select {
+			case c.exit <- 0:
+			default: // already killed
+			}
+		case !st.block:
 			c.exit <- st.exit
 		}
 	}()
@@ -149,6 +159,9 @@ func read(t *testing.T, path string) string {
 }
 
 // runUntil runs supervise in the background and cancels it once cond holds.
+// Run returning because the 10 s bound ran out is the condition never
+// holding — a failure, never a quiet return the test's later checks could
+// read as a pass.
 func runUntil(t *testing.T, cfg Config, cond func() bool) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -158,6 +171,9 @@ func runUntil(t *testing.T, cfg Config, cond func() bool) int {
 	for !cond() {
 		select {
 		case code := <-done:
+			if ctx.Err() != nil {
+				t.Fatal("the condition never held")
+			}
 			return code
 		case <-time.After(5 * time.Millisecond):
 		}
@@ -287,5 +303,100 @@ func TestTheBackoffResetsAfterAStableRun(t *testing.T) {
 	defer r.mu.Unlock()
 	if len(r.slept) < 2 || r.slept[1] != time.Second {
 		t.Fatalf("slept %v, want the ladder to restart at 1s", r.slept)
+	}
+}
+
+// stopMidConfirm stages a build, lets a supervisor swap it in and start it,
+// and stops that supervisor before the build confirms: what a service stop, a
+// crash or a reboot inside the window leaves on disk. The rig's first two
+// steps must be an exit 75 and an agent that never reaches ready.
+func (r *rig) stopMidConfirm(t *testing.T) {
+	t.Helper()
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	if u, got := r.update(t), read(t, r.bin); u.Outcome != state.UpdateStaged || got != "new" {
+		t.Fatalf("stopped mid-confirm: update = %+v, installed build = %q", u, got)
+	}
+}
+
+// Review focus 1 across a restart: the next supervisor confirms a build that
+// was swapped in but never confirmed...
+func TestASupervisorRestartedMidConfirmConfirmsAGoodBuild(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{block: true})
+	r.stopMidConfirm(t)
+	r.sp = &fakeSpawner{stateDir: r.dir, steps: []step{{ready: "aaaaaaaaaaaa", block: true}}}
+	runUntil(t, r.config(), func() bool {
+		var u state.Update
+		return state.ReadJSON(filepath.Join(r.dir, state.UpdateFile), &u) == nil && u.Outcome == state.UpdateApplied
+	})
+	if got := read(t, r.bin); got != "new" {
+		t.Fatalf("installed build = %q, want the new one", got)
+	}
+	if got := read(t, r.bin+".prev"); got != "old" {
+		t.Fatalf(".prev = %q, want the old build kept", got)
+	}
+	if from := r.sp.spawned(); from[0] != "new" {
+		t.Fatalf("the restarted supervisor's agent started from %q", from[0])
+	}
+}
+
+// ...and puts .prev back when that build never connects.
+func TestASupervisorRestartedMidConfirmRevertsABuildThatNeverReachesReady(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{block: true})
+	r.stopMidConfirm(t)
+	r.sp = &fakeSpawner{stateDir: r.dir} // every agent blocks and never writes ready
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "did not connect within") {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the old one back", got)
+	}
+	if got := read(t, r.bin+".failed"); got != "new" {
+		t.Fatalf(".failed = %q", got)
+	}
+	if from := r.sp.spawned(); from[0] != "new" || from[1] != "old" {
+		t.Fatalf("agents started from %v, want the unconfirmed build, then the old one", from)
+	}
+}
+
+// A stop during confirm is not a failed build, even when the agent's own exit
+// (the service manager ends the whole group) lands with the stop: nothing is
+// recorded and nothing reverted, so the next start confirms it. Repeated, so
+// both orders of the agent's exit and the stop are seen.
+func TestACancelDuringConfirmRecordsNothingAndRevertsNothing(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		r := newRig(t, step{exit: ExitUpdateStaged}, step{stopped: true})
+		r.stage(t, "new", "aaaaaaaaaaaa", "")
+		cfg := r.config()
+		// Pace the confirm poll without ending it on the stop, so the agent's
+		// exit is often already waiting when the stop is seen.
+		cfg.Sleep = func(context.Context, time.Duration) error { time.Sleep(time.Millisecond); return nil }
+		runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 2 })
+		if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+			t.Fatalf("run %d: a stop was recorded as %q (%s)", i, u.Outcome, u.Reason)
+		}
+		if got := read(t, r.bin); got != "new" {
+			t.Fatalf("run %d: a stop put back the old build (installed = %q)", i, got)
+		}
+		if _, err := os.Lstat(r.bin + ".failed"); err == nil {
+			t.Fatalf("run %d: a stop left a .failed build", i)
+		}
+	}
+}
+
+// With no .prev there is nothing to put back, so a staged record whose file
+// is gone is not confirmed: the agent runs as it is, and no rollback that
+// could not happen is recorded.
+func TestAnUnconfirmedSwapWithNoPreviousBuildIsNotConfirmed(t *testing.T) {
+	r := newRig(t, step{exit: 1})
+	if err := state.WriteJSON(filepath.Join(r.dir, state.UpdateFile), state.Update{
+		V: 1, Version: "aaaaaaaaaaaa", Staged: r.bin + ".new", Outcome: state.UpdateStaged, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v", u)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,7 +116,7 @@ const (
 
 func (s *sup) loop(ctx context.Context) int {
 	attempt := 0
-	confirm := "" // the version a just-swapped build must connect as
+	confirm := s.unconfirmed() // the version a just-swapped build must connect as
 	for ctx.Err() == nil {
 		started := s.cfg.Now()
 		child, err := s.cfg.Spawn(ctx, s.cfg.Binary, []string{"run"}, s.env())
@@ -147,8 +148,12 @@ func (s *sup) loop(ctx context.Context) int {
 			outcome, code, reason := s.awaitReady(ctx, child.PID(), exited, confirm, started)
 			switch outcome {
 			case readyStopped:
-				_ = child.Kill()
-				<-exited
+				// Nothing is recorded or reverted: update.json stays staged,
+				// and the next start confirms the build (unconfirmed).
+				if code == nil {
+					_ = child.Kill()
+					<-exited
+				}
 				return 0
 			case readyFailed:
 				if code == nil {
@@ -205,6 +210,9 @@ func (s *sup) loop(ctx context.Context) int {
 
 // awaitReady waits for the new agent to write "ready" as version (its own
 // pid, since it started), to exit, or for the bound — whichever is first.
+// A stop is never a failed build: an exit seen once ctx has ended is the
+// stop (a service manager ends the whole group at once) and returns
+// readyStopped with the code it consumed.
 func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, version string, started time.Time) (readyOutcome, *int, string) {
 	path := filepath.Join(s.cfg.StateDir, state.AgentStatusFile)
 	deadline := s.cfg.Now().Add(s.cfg.ConfirmWithin)
@@ -216,6 +224,9 @@ func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, versio
 		}
 		select {
 		case code := <-exited:
+			if ctx.Err() != nil {
+				return readyStopped, &code, ""
+			}
 			return readyFailed, &code, fmt.Sprintf("the new build exited with %d before it connected%s", code, lastError(path, pid))
 		case <-ctx.Done():
 			return readyStopped, nil, ""
@@ -228,6 +239,29 @@ func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, versio
 			return readyStopped, nil, ""
 		}
 	}
+}
+
+// unconfirmed is the version a swap put in place that no supervisor
+// confirmed: update.json still says staged, but the staged file is gone —
+// moved into place — and .prev holds the build it replaced. A supervisor
+// stopped, crashed or rebooted inside the confirm window leaves exactly that,
+// so the next one confirms the build or puts .prev back, as after a fresh
+// swap (Review Focus 1). "" when there is nothing to confirm.
+func (s *sup) unconfirmed() string {
+	var u state.Update
+	if state.ReadJSON(filepath.Join(s.cfg.StateDir, state.UpdateFile), &u) != nil ||
+		u.Outcome != state.UpdateStaged || u.Staged == "" || u.Version == "" {
+		return ""
+	}
+	if _, err := os.Lstat(u.Staged); !errors.Is(err, fs.ErrNotExist) {
+		return "" // still staged, never swapped in — or it cannot be told
+	}
+	if _, err := os.Lstat(s.cfg.Binary + ".prev"); err != nil {
+		return ""
+	}
+	s.cfg.Logf("%s was swapped in but never confirmed (the last supervisor stopped first); waiting up to %s for it to connect",
+		u.Version, s.cfg.ConfirmWithin)
+	return u.Version
 }
 
 func lastError(path string, pid int) string {
