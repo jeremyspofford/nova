@@ -48,11 +48,13 @@ const DEFAULT_API: ModelSelectorApi = {
   getCatalog: apiGetCatalog,
 }
 
-/** Cloud rows grouped by provider, in the catalogue's order. */
+/** Cloud rows grouped by provider, in the catalogue's order — only the rows
+ * the gateway offers as the chat model (`use`). A decision model answers
+ * typed questions and has no chat; picking one would end every turn. */
 export function cloudGroups(rows: CatalogRow[]): { provider: string; rows: CatalogRow[] }[] {
   const groups = new Map<string, CatalogRow[]>()
   for (const row of rows) {
-    if (row.kind !== 'cloud') continue
+    if (row.kind !== 'cloud' || !(Array.isArray(row.actions) && row.actions.includes('use'))) continue
     const list = groups.get(row.provider) ?? []
     list.push(row)
     groups.set(row.provider, list)

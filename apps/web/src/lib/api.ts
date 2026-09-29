@@ -1843,8 +1843,9 @@ export async function getEvalRun(runId: string): Promise<EvalRunRecord> {
 
 /** The wire protocols a provider row can name. Vendors are not the unit;
  * protocols are: everything OpenAI-shaped (OpenAI, OpenRouter, Groq, Azure
- * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`. */
-export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages'
+ * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`; a decision-model
+ * server (a Kev box — typed questions only, no chat) is `systemone`. */
+export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages' | 'systemone'
 export type ProviderAuthShape = 'none' | 'static-bearer' | 'api-key-header'
 export type ProviderListingState = 'available' | 'unavailable' | 'unknown'
 
@@ -1860,6 +1861,9 @@ export interface Provider {
   preset: string | null
   builtin: boolean
   is_default: boolean
+  /** Runs on the owner's own machine: its calls are never priced and never
+   * capped. The owner's to say (decision-role spec §1); an engine always is. */
+  local: boolean
   verified_at: string | null
   /** What the LAST model listing learned — rewritten by every listing fetch. */
   listing: ProviderListingState
@@ -1883,6 +1887,7 @@ export interface ProviderWrite {
   default_model?: string
   model_note?: string
   preset?: string
+  local?: boolean
 }
 
 export interface ProviderPreset {
@@ -1896,6 +1901,7 @@ export interface ProviderPreset {
   quirks?: string
   /** `{resource}`, `{region}` … the owner fills in before saving. */
   placeholders?: string[]
+  local?: boolean
 }
 
 export interface ProviderModel {
@@ -1905,6 +1911,9 @@ export interface ProviderModel {
   context_length?: number
   /** USD per token, as the provider stated it. Absent when it stated none. */
   pricing?: { prompt?: number; completion?: number }
+  /** What the model produces, when the listing says: ['text'], or
+   * ['decisions'] for a decision model — which has no chat. */
+  output_modalities?: string[]
 }
 
 /** A live listing — always labelled with where and when it came from. */

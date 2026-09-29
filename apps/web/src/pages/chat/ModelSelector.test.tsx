@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { ModelSelector } from './ModelSelector'
-import type { Suggestion } from '../../lib/api'
+import { ModelSelector, cloudGroups } from './ModelSelector'
+import type { CatalogRow, Suggestion } from '../../lib/api'
 
 /**
  * The inline chat model selector. It reuses the model API (installed list +
@@ -153,5 +153,17 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByTestId('chat-model-option-openrouter:openai/gpt-x'))
     await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:openai/gpt-x'))
     expect(onModelChanged).toHaveBeenCalledWith('openrouter:openai/gpt-x')
+  })
+
+  it('never lists a decision model among the chat models', () => {
+    // Review focus 2: picking one would end every chat turn. The gateway
+    // offers it no `use` action; the picker lists only what it offers.
+    const gpt: CatalogRow = { id: 'openrouter:openai/gpt-x', provider: 'openrouter', model: 'openai/gpt-x', label: 'GPT X', kind: 'cloud', sources: [], facts: {}, capabilities: {}, suitability: {}, actions: ['use'] }
+    const jev: CatalogRow = {
+      id: 'openrouter:~typesafe/jev-latest', provider: 'openrouter', model: '~typesafe/jev-latest', label: 'TypeSafe: Jev Latest', kind: 'cloud', sources: [], facts: {}, capabilities: {},
+      suitability: { decisions: { value: true, basis: 'declared', source: 'provider-listing' } },
+      actions: [],
+    }
+    expect(cloudGroups([gpt, jev])).toEqual([{ provider: 'openrouter', rows: [gpt] }])
   })
 })

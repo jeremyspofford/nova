@@ -15,6 +15,7 @@ import { formatContext, formatPrice } from '../../lib/modelFormat'
 import {
   Badge,
   Button,
+  Checkbox,
   ConfirmDialog,
   Input,
   Section,
@@ -81,6 +82,9 @@ const ADAPTER_LABELS: Record<ProviderAdapter, string> = {
   ollama: 'Bundled Ollama',
   'openai-chat': 'OpenAI-compatible chat',
   'anthropic-messages': 'Anthropic Messages API',
+  // A decision-model server (a Kev box): typed questions for the Decisions
+  // role, and no chat.
+  systemone: 'Decision-model server (typed questions)',
 }
 
 const AUTH_LABELS: Record<ProviderAuthShape, string> = {
@@ -115,6 +119,7 @@ interface Draft {
   auth_shape: ProviderAuthShape
   api_key: string
   placeholders: Record<string, string>
+  local: boolean
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -125,6 +130,7 @@ const EMPTY_DRAFT: Draft = {
   auth_shape: 'static-bearer',
   api_key: '',
   placeholders: {},
+  local: false,
 }
 
 export function ProvidersSection({
@@ -184,6 +190,7 @@ export function ProvidersSection({
       auth_shape: preset.auth_shape,
       api_key: '',
       placeholders: {},
+      local: preset.local ?? false,
     })
   }
 
@@ -201,6 +208,7 @@ export function ProvidersSection({
         adapter: draft.adapter,
         base_url: effectiveBaseUrl.trim(),
         auth_shape: draft.auth_shape,
+        local: draft.local,
         api_key: draft.auth_shape === 'none' ? undefined : draft.api_key,
         preset: selectedPreset?.name,
         model_note: selectedPreset?.model_note,
@@ -399,13 +407,19 @@ export function ProvidersSection({
                   return {
                     ...d,
                     adapter,
-                    auth_shape: adapter === 'anthropic-messages' ? 'api-key-header' : d.auth_shape,
+                    auth_shape:
+                      adapter === 'anthropic-messages'
+                        ? 'api-key-header'
+                        : adapter === 'systemone' && d.auth_shape === 'api-key-header'
+                          ? 'static-bearer'
+                          : d.auth_shape,
                   }
                 })
               }
               items={[
                 { value: 'openai-chat', label: ADAPTER_LABELS['openai-chat'] },
                 { value: 'anthropic-messages', label: ADAPTER_LABELS['anthropic-messages'] },
+                { value: 'systemone', label: ADAPTER_LABELS.systemone },
               ]}
             />
           )}
@@ -420,9 +434,15 @@ export function ProvidersSection({
                 { value: 'static-bearer', label: 'Authorization: Bearer <key>' },
                 { value: 'api-key-header', label: 'api-key: <key> (Azure-shaped)' },
                 { value: 'none', label: 'No auth (a trusted endpoint on your network)' },
-              ]}
+              ].filter(item => draft.adapter !== 'systemone' || item.value !== 'api-key-header')}
             />
           )}
+          <Checkbox
+            label="Runs on my own machine"
+            description="Free: its calls are never priced and never count against a spend cap."
+            checked={draft.local}
+            onChange={checked => setDraft(d => ({ ...d, local: checked }))}
+          />
           {draft.auth_shape !== 'none' && (
             <Input
               label="API key"
@@ -571,6 +591,11 @@ function ProviderRow({
     chatModel === `${provider.name}:${modelId}` ||
     (provider.adapter === 'ollama' && chatModel === modelId)
 
+  // A decision model answers typed questions and has no chat: never offered
+  // as the chat model — its place is the Decisions chain on Settings → Routing.
+  const isDecisionModel = (model: ProviderModel) =>
+    provider.adapter === 'systemone' || (model.output_modalities ?? []).includes('decisions')
+
   const visible = (listing?.models ?? []).filter(
     m => !filter || m.id.toLowerCase().includes(filter.toLowerCase()) || m.name?.toLowerCase().includes(filter.toLowerCase()),
   )
@@ -582,6 +607,11 @@ function ProviderRow({
         <Badge size="sm" color="neutral">
           {ADAPTER_LABELS[provider.adapter]}
         </Badge>
+        {provider.local && !provider.builtin && (
+          <Badge size="sm" color="neutral">
+            local
+          </Badge>
+        )}
         {provider.is_default && (
           <Badge size="sm" color="accent" dot>
             default for bare model ids
@@ -709,23 +739,29 @@ function ProviderRow({
           {listingError && (
             <div className="space-y-2">
               <p className="text-caption text-content-tertiary">{listingError}</p>
-              <form
-                className="flex items-end gap-2"
-                onSubmit={e => {
-                  e.preventDefault()
-                  if (manualModel.trim()) void use(manualModel.trim())
-                }}
-              >
-                <Input
-                  label={`Model id for ${provider.name}`}
-                  value={manualModel}
-                  onChange={e => setManualModel(e.target.value)}
-                  placeholder={provider.model_note ?? 'model id'}
-                />
-                <Button type="submit" size="sm" disabled={!manualModel.trim()}>
-                  Use
-                </Button>
-              </form>
+              {provider.adapter === 'systemone' ? (
+                <p className="text-caption text-content-tertiary">
+                  A decision-model server has no chat model to pick — add its model to the Decisions chain under Routing.
+                </p>
+              ) : (
+                <form
+                  className="flex items-end gap-2"
+                  onSubmit={e => {
+                    e.preventDefault()
+                    if (manualModel.trim()) void use(manualModel.trim())
+                  }}
+                >
+                  <Input
+                    label={`Model id for ${provider.name}`}
+                    value={manualModel}
+                    onChange={e => setManualModel(e.target.value)}
+                    placeholder={provider.model_note ?? 'model id'}
+                  />
+                  <Button type="submit" size="sm" disabled={!manualModel.trim()}>
+                    Use
+                  </Button>
+                </form>
+              )}
             </div>
           )}
           {listing && (
@@ -734,7 +770,9 @@ function ProviderRow({
                 <span className="text-caption text-content-tertiary">
                   {listing.models.length} models from {listing.source}, fetched{' '}
                   {new Date(listing.fetched_at).toLocaleTimeString()}
-                  {listing.models.length > 0 ? ' — press Use to make one the chat model' : ''}
+                  {listing.models.length > 0 && provider.adapter !== 'systemone'
+                    ? ' — press Use to make one the chat model'
+                    : ''}
                 </span>
                 <Button
                   size="sm"
@@ -776,7 +814,11 @@ function ProviderRow({
                       )}
                       {price && <span className="text-micro text-content-tertiary">{price}</span>}
                       <span className="ml-auto">
-                        {current ? (
+                        {isDecisionModel(model) ? (
+                          <span className="text-caption text-content-tertiary" data-testid={`decision-model-${model.id}`}>
+                            decision model — add it under Routing → Decisions
+                          </span>
+                        ) : current ? (
                           <Badge size="sm" color="success">
                             <Check size={10} /> current
                           </Badge>
