@@ -550,3 +550,43 @@ run as written on this host: `NOVA_SUBNET_GATEWAY` maps to `"host"`,
 line showing something else, e.g. bare `127.0.0.1` from the userland proxy
 being off) did not occur here.
 
+### Self-linger without sudo
+
+**Measured** (mini PC; controller, read-only):
+
+```
+systemctl --version | head -1
+pkaction --verbose --action-id org.freedesktop.login1.set-self-linger | sed -n '/implicit/,$p'
+loginctl show-user "$USER" -p Linger
+```
+
+| | Reading |
+|---|---|
+| systemd | 255 (`255.4-1ubuntu8.15pop0~…~24.04`, Pop!_OS 24.04) |
+| `org.freedesktop.login1.set-self-linger`, implicit **any** | yes |
+| implicit **inactive** | yes |
+| implicit **active** | yes |
+| `loginctl show-user $USER -p Linger` | `Linger=yes` |
+
+**This build's policy is wider than upstream's default.** The usual reading
+on current systemd is `active: yes`, `inactive: auth_admin_keep` — an active
+(console/desktop) session self-enables linger with no prompt, an inactive
+one (SSH) is asked to authenticate. On this Pop!_OS build, `inactive` is
+also unconditionally `yes`: even an SSH session can self-enable linger with
+no prompt at all. That is a distro-policy difference, not something to
+assume holds elsewhere — `install` still reads the policy back live rather
+than hardcoding either default, which is exactly what covers a distro
+shipping the upstream `auth_admin_keep` default instead.
+
+**Step 2 (a real attempt with linger off, via a throwaway user) was
+skipped — controller ruling.** The policy read above is what selects L1 vs.
+L2, and P26's read-back inside `install` is what covers whatever a
+different distro's policy turns out to be; a live throwaway-user trial
+wasn't needed to choose the branch on this host.
+
+**Branch.** `active: yes` → **L1**: the Linux card says nothing extra about
+linger; `install` turns linger on itself when run from a desktop session
+and, from an SSH session, prints `sudo loginctl enable-linger <user>` once
+(P26). Task 19's `agent_card.LINUX_NOTE` takes this branch's sentence, not
+L2's.
+
