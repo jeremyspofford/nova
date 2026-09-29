@@ -159,9 +159,9 @@ func read(t *testing.T, path string) string {
 }
 
 // runUntil runs supervise in the background and cancels it once cond holds.
-// Run returning because the 10 s bound ran out is the condition never
-// holding — a failure, never a quiet return the test's later checks could
-// read as a pass.
+// Supervise returning before cond holds — on its own, or because the 10 s
+// bound ran out — fails the test: it is never a quiet return that the
+// test's later checks could read as a pass.
 func runUntil(t *testing.T, cfg Config, cond func() bool) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -171,8 +171,8 @@ func runUntil(t *testing.T, cfg Config, cond func() bool) int {
 	for !cond() {
 		select {
 		case code := <-done:
-			if ctx.Err() != nil {
-				t.Fatal("the condition never held")
+			if !cond() {
+				t.Fatalf("supervise returned %d (ctx: %v) before the condition held", code, ctx.Err())
 			}
 			return code
 		case <-time.After(5 * time.Millisecond):
