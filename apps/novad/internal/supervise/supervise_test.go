@@ -782,3 +782,31 @@ func TestStartingWithNoBuildInstalledSaysSo(t *testing.T) {
 		t.Fatalf("an agent was started from a missing binary without saying so: %q", logged.lines)
 	}
 }
+
+// P3 holds while a revert fails: an unconfirmed build that exits 78 (it can
+// never get in) and cannot be reverted is not respawned forever. Run ends with
+// 0 and records nothing; update.json stays staged, so the next start confirms
+// it again and retries the revert.
+func TestAnExit78DuringAConfirmWhoseRevertFailsStopsForGood(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: ExitFinal}, step{exit: ExitFinal}, step{exit: ExitFinal})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	swapRevert(t, func(string) error { return errors.New("the disk refused") })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if code := Run(ctx, r.config()); code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("Run did not stop on its own: %d agents started, the 78 starved", len(r.sp.spawned()))
+	}
+	if n := len(r.sp.spawned()); n != 2 {
+		t.Fatalf("%d agents started, want 2 — a build that exited 78 is never respawned", n)
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("update = %+v, want nothing recorded", u)
+	}
+	var sv state.SupervisorStatus
+	if err := state.ReadJSON(filepath.Join(r.dir, state.SupervisorStatusFile), &sv); err != nil || sv.LastExit == nil || *sv.LastExit != ExitFinal {
+		t.Fatalf("supervisor status = %+v, %v; want the 78 recorded as its last exit", sv, err)
+	}
+}

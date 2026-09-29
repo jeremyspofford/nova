@@ -193,6 +193,18 @@ func (s *sup) loop(ctx context.Context) int {
 					confirm = ""
 					continue
 				}
+				if code != nil && *code == ExitFinal {
+					// It can never get in, and it cannot be reverted now:
+					// respawning it would only exit 78 again, forever (P3).
+					// update.json stays staged, so the next start confirms
+					// it again and retries the revert.
+					s.restarts++
+					s.lastExit = code
+					s.writeStatus()
+					s.cfg.Logf("%s cannot get in (exit %d), and putting the previous build back failed: stopping for good; the next start confirms it again and retries the revert",
+						confirm, ExitFinal)
+					return 0
+				}
 				// The revert failed and the build that did not connect is
 				// still installed: confirm it again, on the backoff ladder,
 				// which retries the revert.
