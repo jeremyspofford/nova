@@ -848,6 +848,34 @@ async def test_off_that_empties_a_role_sharing_a_local_chat_model_points_at_chat
     }
 
 
+async def test_off_that_empties_a_role_says_what_it_could_not_put_back_and_what_it_walks(
+    client, pool, world
+):
+    """Both notes, in the order they happened: the link the router replaced
+    names a provider since deleted, so OFF removes the router and puts nothing
+    back; that empties scheduled's chain, and chat's chain holds Jev Router at
+    its cloud slot, so the switch still reads on."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b", PICKED]})
+    await _switch(client, "chat", True)
+    await client.put("/admin/routes/scheduled", json={"chain": ["cerebras:llama"]})
+    await _switch(client, "scheduled", True)
+    assert (await client.delete("/admin/providers/cerebras")).status_code == 200
+
+    off = await _switch(client, "scheduled", False)
+
+    assert off.status_code == 200, off.text
+    assert off.json() == {
+        "role": "scheduled",
+        "chain": [],
+        "router": {"on": True, "kept": None},
+        "note": "the link Jev Router replaced, cerebras:llama, names a provider that no longer "
+        "exists, so it was not put back; scheduled now walks the chat chain, where Jev Router "
+        "is the first cloud link its turns reach — give scheduled a chain of its own to take it "
+        "off Jev Router",
+    }
+    assert (await _roles(client))["scheduled"]["router"] == off.json()["router"]
+
+
 class _Core:
     """What core does around the switch, in miniature: it holds chat.model,
     passes it to the switch for the roles whose turns send it (chat,
