@@ -615,11 +615,15 @@ export const deleteOwnerPrice = (provider: string, model: string) =>
 
 // ── routing (S10-2): the role chains, the walk explained, the walls ─────
 
-/** The five roles the gateway ships with; every other role is derived — a
- * core-side agent named `x` owns `agent_x` (S12). */
-export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+/** The roles the gateway ships with; every other role is derived — a
+ * core-side agent named `x` owns `agent_x` (S12). `decisions` answers typed
+ * questions — the decision role — never chat. */
+export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'decisions' | 'coding' | 'vision'
 /** Any routing role: a built-in or an agent's derived `agent_<name>`. */
 export type RouteRole = BuiltinRole | string
+/** The protocol a role's calls speak — the gateway's routing.protocol_of:
+ * `systemone` (typed questions) for the decision role, `chat` for the rest. */
+export type RouteProtocol = 'chat' | 'systemone'
 
 export interface RouteVerdict {
   link: number
@@ -628,7 +632,8 @@ export interface RouteVerdict {
   model?: string
   local?: boolean
   // switched_off (S40): the link's machine was switched off by the owner.
-  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | string
+  // wrong_protocol (decision role): the link's provider cannot answer this role.
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | 'wrong_protocol' | string
   reason: string | null
   walled_until?: string
 }
@@ -649,7 +654,7 @@ export interface RouteWall {
 }
 
 export interface Routes {
-  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean }[]
+  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean; protocol?: RouteProtocol }[]
   walls: RouteWall[]
 }
 

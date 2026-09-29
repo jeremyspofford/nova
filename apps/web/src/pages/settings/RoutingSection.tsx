@@ -15,9 +15,11 @@ import {
   type BuiltinRole,
   type CatalogRow,
   type RouteExplain,
+  type RouteProtocol,
   type Routes,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
+import { suitabilityEntries } from '../models/catalogFormat'
 import { LIBRARY } from './modelsFormat'
 
 /**
@@ -60,6 +62,10 @@ const ROLE_WORDS: Record<BuiltinRole, { label: string; note: string }> = {
   chat: { label: 'Chat', note: 'your conversations; link 1 is the model picked in chat' },
   scheduled: { label: 'Scheduled tasks', note: 'turns the scheduler runs on a timer; empty = the chat chain' },
   judge: { label: 'Quality judging', note: 'the responsiveness judge and honesty redirects inside a turn; empty = the chat chain' },
+  decisions: {
+    label: 'Decisions',
+    note: 'a decision model answers typed questions before she replies — which tool the message needs, which recalled notes still hold; empty = none, and her turns run as before',
+  },
   coding: { label: 'Coding', note: 'reserved — nothing routes here yet' },
   vision: { label: 'Vision', note: 'reserved — nothing routes here yet' },
 }
@@ -76,10 +82,21 @@ const VERDICT_WORDS: Record<string, string> = {
   unreachable: 'could not be reached',
   unknown: 'no such provider',
   refused: 'refused',
+  // The decision role: the link's provider cannot answer this role — a chat
+  // model where typed questions are needed, or a decision model where chat is.
+  wrong_protocol: 'cannot answer this role',
 }
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** A decision model: the catalogue says it outputs decisions — read from the
+ * provider's own listing, never a list kept here. It is offered to the
+ * decisions role and to no chat role; the gateway refuses the other pairing
+ * by name, too. */
+export function isDecisionModel(row: CatalogRow): boolean {
+  return suitabilityEntries(row, 'decisions').some(fact => fact.value === true)
 }
 
 /** What a row says about its role. */
@@ -194,6 +211,7 @@ export function RoutingSection({ chatModel, api = DEFAULT_API }: { chatModel: st
               chain={entry.chain}
               chatModel={chatModel}
               catalog={catalog}
+              protocol={entry.protocol ?? 'chat'}
               explain={explains[entry.role]}
               onSave={async chain => {
                 await api.putRoute(entry.role, chain)
@@ -250,6 +268,7 @@ function RoleEditor({
   chain,
   chatModel,
   catalog,
+  protocol,
   explain,
   onSave,
   onRemove,
@@ -260,6 +279,7 @@ function RoleEditor({
   chain: string[]
   chatModel: string
   catalog: CatalogRow[]
+  protocol: RouteProtocol
   explain: RouteExplain | { error: string } | undefined
   onSave: (chain: string[]) => Promise<void>
   /** present only when the role is an orphan — the one thing to do with it */
@@ -282,10 +302,13 @@ function RoleEditor({
   const verbatim = words.label === role
   const verdicts = explain && !('error' in explain) ? explain.chain : []
   const verdictFor = (id: string) => verdicts.find(v => v.id === id)
+  const wantsDecisions = protocol === 'systemone'
   const options = catalog
     // A `library:` row is a model on no machine yet: the gateway cannot
     // route to it, so it is never offered as a link (pull it on Models).
-    .filter(r => (r.kind === 'local' || r.kind === 'cloud') && r.provider !== LIBRARY && !draft.includes(r.id) && r.id !== chatModel)
+    // A decision model answers typed questions only: offered to the
+    // decisions role, and to no other.
+    .filter(r => (r.kind === 'local' || r.kind === 'cloud') && r.provider !== LIBRARY && !draft.includes(r.id) && r.id !== chatModel && isDecisionModel(r) === wantsDecisions)
     .map(r => ({ value: r.id, label: `${r.provider} · ${r.model}${r.installed === false ? ' (not installed)' : ''}` }))
 
   const remove = async () => {
@@ -373,7 +396,9 @@ function RoleEditor({
           )
         })}
         {draft.length === 0 && role !== 'chat' && !reserved && (
-          <li className="text-content-tertiary">no chain of its own — uses the chat chain</li>
+          <li className="text-content-tertiary">
+            {wantsDecisions ? 'no decision model — her turns run without one' : 'no chain of its own — uses the chat chain'}
+          </li>
         )}
       </ol>
       {editable && (
@@ -381,7 +406,7 @@ function RoleEditor({
           <Select
             value={adding}
             onChange={e => setAdding(e.target.value)}
-            items={[{ value: '', label: 'add a fallback…' }, ...options]}
+            items={[{ value: '', label: wantsDecisions ? 'add a decision model…' : 'add a fallback…' }, ...options]}
             label={`add to ${role}`}
           />
           <Button

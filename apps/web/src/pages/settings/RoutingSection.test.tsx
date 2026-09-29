@@ -11,14 +11,22 @@ function row(id: string, kind: 'local' | 'cloud', installed?: boolean): CatalogR
   }
 }
 
+/** A decision model's row: the listing says it outputs decisions, and it is
+ * offered no action (the gateway never offers one as the chat model). */
+function decisionRow(id: string): CatalogRow {
+  return { ...row(id, 'cloud'), suitability: { decisions: { value: true, basis: 'declared', source: 'provider-listing' } } }
+}
+
 // The gateway lists built-ins first (in its order), then stored roles by name.
 const ROUTES: Routes = {
   roles: [
-    { role: 'chat', chain: ['hub:qwen3:8b'], reserved: false, builtin: true },
-    { role: 'scheduled', chain: [], reserved: false, builtin: true },
-    { role: 'judge', chain: [], reserved: false, builtin: true },
-    { role: 'coding', chain: [], reserved: true, builtin: true },
-    { role: 'vision', chain: [], reserved: true, builtin: true },
+    { role: 'chat', chain: ['hub:qwen3:8b'], reserved: false, builtin: true, protocol: 'chat' },
+    { role: 'scheduled', chain: [], reserved: false, builtin: true, protocol: 'chat' },
+    { role: 'judge', chain: [], reserved: false, builtin: true, protocol: 'chat' },
+    // The decision role: typed questions, never chat.
+    { role: 'decisions', chain: [], reserved: false, builtin: true, protocol: 'systemone' },
+    { role: 'coding', chain: [], reserved: true, builtin: true, protocol: 'chat' },
+    { role: 'vision', chain: [], reserved: true, builtin: true, protocol: 'chat' },
   ],
   walls: [{ provider: 'openrouter', walled_until: '2026-09-08T10:00:00Z', reason: 'openrouter refused (402): insufficient credits', status: 402, strikes: 1 }],
 }
@@ -88,13 +96,16 @@ describe('RoutingSection', () => {
 
   it('renders the roles the server returns, in the server\'s order, with the built-ins\' own words', async () => {
     // Not the canonical order: proves the page follows the response, not a list of its own.
-    const shuffled: Routes = { ...ROUTES, roles: [ROUTES.roles[0], ROUTES.roles[2], ROUTES.roles[1], ROUTES.roles[4], ROUTES.roles[3]] }
+    const byName = Object.fromEntries(ROUTES.roles.map(r => [r.role, r]))
+    const order = ['chat', 'judge', 'decisions', 'scheduled', 'vision', 'coding']
+    const shuffled: Routes = { ...ROUTES, roles: order.map(name => byName[name]) }
     renderSection({ getRoutes: vi.fn(async () => shuffled) })
     await waitFor(() => expect(screen.getByTestId('route-vision')).toBeTruthy())
-    expect(rolesOnPage()).toEqual(['chat', 'judge', 'scheduled', 'vision', 'coding'])
+    expect(rolesOnPage()).toEqual(order)
     expect(screen.getByTestId('route-judge').textContent).toContain('Quality judging')
+    expect(screen.getByTestId('route-decisions').textContent).toContain('Decisions')
     expect(screen.getByTestId('route-vision').textContent).toContain('reserved — nothing routes here yet')
-    for (const role of ['chat', 'judge', 'scheduled', 'vision', 'coding']) {
+    for (const role of order) {
       expect(within(screen.getByTestId(`route-${role}`)).queryByRole('button', { name: `remove role ${role}` })).toBeNull()
     }
   })
@@ -102,7 +113,7 @@ describe('RoutingSection', () => {
   it('names a live agent\'s role after the agent, links to it, and offers no Remove', async () => {
     renderSection({ getRoutes: vi.fn(async () => ROUTES_WITH_AGENTS) })
     await waitFor(() => expect(screen.getByTestId('route-agent_coder')).toBeTruthy())
-    expect(rolesOnPage()).toEqual(['chat', 'scheduled', 'judge', 'coding', 'vision', 'agent_coder', 'agent_zed'])
+    expect(rolesOnPage()).toEqual(['chat', 'scheduled', 'judge', 'decisions', 'coding', 'vision', 'agent_coder', 'agent_zed'])
     const coder = screen.getByTestId('route-agent_coder')
     const link = within(coder).getByRole('link', { name: 'Agent · coder' })
     expect(link.getAttribute('href')).toBe('/agents/coder')
@@ -221,5 +232,59 @@ describe('RoutingSection', () => {
     expect(screen.getByTestId('routing-walls').textContent).toContain('openrouter refused (402): insufficient credits')
     fireEvent.click(screen.getByRole('button', { name: 'clear wall openrouter' }))
     await waitFor(() => expect(api.clearWall).toHaveBeenCalledWith('openrouter'))
+  })
+
+  it('shows the decision role in its own words and offers it decision models only', async () => {
+    renderSection({
+      getCatalog: vi.fn(async () => ({
+        fetched_at: 't',
+        sources: [],
+        rows: [row('hub:qwen3:8b', 'local', true), row('cerebras:llama', 'cloud'), decisionRow('openrouter:~typesafe/jev-latest'), decisionRow('dell-kev:kev-latest')],
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+    const decisions = screen.getByTestId('route-decisions')
+    expect(decisions.textContent).toContain('a decision model answers typed questions before she replies')
+    expect(decisions.textContent).toContain('no decision model — her turns run without one')
+    expect(decisions.textContent).not.toContain('uses the chat chain')
+    const offered = [...(within(decisions).getByLabelText('add to decisions') as HTMLSelectElement).options].map(o => o.value).filter(Boolean)
+    expect(offered).toEqual(['openrouter:~typesafe/jev-latest', 'dell-kev:kev-latest'])
+    // And never the other way round: a chat role is offered no decision model.
+    const scheduled = [...(within(screen.getByTestId('route-scheduled')).getByLabelText('add to scheduled') as HTMLSelectElement).options].map(o => o.value)
+    expect(scheduled).toContain('hub:qwen3:8b')
+    expect(scheduled).not.toContain('openrouter:~typesafe/jev-latest')
+    expect(scheduled).not.toContain('dell-kev:kev-latest')
+  })
+
+  it('saves a decision chain through the same API as any role', async () => {
+    const api = renderSection({
+      getCatalog: vi.fn(async () => ({ fetched_at: 't', sources: [], rows: [decisionRow('dell-kev:kev-latest'), decisionRow('openrouter:~typesafe/jev-latest')] })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+    const decisions = screen.getByTestId('route-decisions')
+    for (const id of ['dell-kev:kev-latest', 'openrouter:~typesafe/jev-latest']) {
+      fireEvent.change(within(decisions).getByLabelText('add to decisions'), { target: { value: id } })
+      fireEvent.click(within(decisions).getByRole('button', { name: 'add decisions' }))
+    }
+    fireEvent.click(within(decisions).getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(api.putRoute).toHaveBeenCalledWith('decisions', ['dell-kev:kev-latest', 'openrouter:~typesafe/jev-latest']))
+  })
+
+  it('words a link that cannot answer its role as that, not as a failure of the provider', async () => {
+    const explain: RouteExplain = {
+      role: 'decisions',
+      chain: [{ link: 1, id: 'hub:qwen3:8b', verdict: 'wrong_protocol', reason: 'hub answers chat — this role needs typed questions' }],
+      would_serve: null,
+      reason: 'no model in the \'decisions\' chain can serve right now',
+    }
+    const routes: Routes = { ...ROUTES, roles: ROUTES.roles.map(r => (r.role === 'decisions' ? { ...r, chain: ['hub:qwen3:8b'] } : r)) }
+    renderSection({
+      getRoutes: vi.fn(async () => routes),
+      explainRoute: vi.fn(async (role: string) => (role === 'decisions' ? explain : { role, chain: [], would_serve: null, reason: 'no chain' })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')).toBeTruthy())
+    const badge = screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')
+    expect(badge?.textContent).toBe('cannot answer this role')
+    expect(badge?.getAttribute('title')).toBe('hub answers chat — this role needs typed questions')
   })
 })
