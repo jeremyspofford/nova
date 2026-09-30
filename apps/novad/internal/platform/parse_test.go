@@ -196,3 +196,15 @@ func TestRunWSLRunsNothingThroughARunnerThatCannotSetTheEnvironment(t *testing.T
 		t.Fatalf("err = %v, ran = %v", err, p.ran)
 	}
 }
+
+// Fix round 1, Minor 6: a refusing sudo's first line is read, and pids=? —
+// pgrep missing or failing — is unknown, never "no novad process".
+func TestParseWSLInsideReadsSudosWordsAndUnknownPIDs(t *testing.T) {
+	got := ParseWSLInside("pid1=systemd\nuser=sam\nsudo=refused\nsudo.said=sudo: a password is required\npids=?\n")
+	if got.Sudo != "refused" || got.SudoSaid != "sudo: a password is required" || !got.PIDsUnknown || got.PIDs != nil {
+		t.Fatalf("got %+v", got)
+	}
+	if got := ParseWSLInside("pids=\n"); got.PIDsUnknown || got.PIDs != nil {
+		t.Fatalf("none found is known: %+v", got)
+	}
+}

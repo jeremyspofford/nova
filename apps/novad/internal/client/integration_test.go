@@ -1812,3 +1812,264 @@ func TestConfigureProbesThroughTheRunnerWithTheAgentsOwnFiles(t *testing.T) {
 		}
 	}
 }
+
+// nextFacts reads frames until a facts frame; nil when the socket ends.
+func nextFacts(ctx context.Context, c *websocket.Conn) map[string]any {
+	for {
+		f, err := coreRead(ctx, c)
+		if err != nil {
+			return nil
+		}
+		if f["type"] == "facts" {
+			return f
+		}
+	}
+}
+
+// saidOf is what a frame's unreadable list says about item.
+func saidOf(f map[string]any, item string) string {
+	list, _ := f["unreadable"].([]any)
+	for _, u := range list {
+		if m, _ := u.(map[string]any); m["item"] == item {
+			s, _ := m["reason"].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// Fix round 1, I1: a probe program that ignores its kill — sudo, once root,
+// answers an unprivileged agent's SIGKILL with EPERM — holds nothing past
+// the probe's bound. The probe returns then and says so, probing clears, the
+// next connection probes again (a probe cut short is not kept), and
+// facts.refresh answers within the bound instead of waiting on sudo.
+func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the probe runs no program unless WSL lists distributions; facts' tests hand one in")
+	}
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-bound-1"
+	type seen struct {
+		probeAfter    time.Duration
+		probeSaid     string
+		kept, again   bool
+		refreshTook   time.Duration
+		refreshSaid   string
+		refreshResult map[string]any
+	}
+	got, first := make(chan seen, 1), make(chan seen, 1)
+	var sessions atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		ready := nextFacts(ctx, c)
+		start := time.Now()
+		if sessions.Add(1) == 1 {
+			probe := nextFacts(ctx, c)
+			first <- seen{probeAfter: time.Since(start), probeSaid: saidOf(probe, "elevation")}
+			return // the session ends; the next one must probe again
+		}
+		s := <-first
+		_, s.kept = ready["service"].(map[string]any)
+		s.again = nextFacts(ctx, c) != nil
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "bound-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		sent := time.Now()
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				s.refreshSaid = saidOf(f, "elevation")
+			case "result":
+				s.refreshTook, s.refreshResult = time.Since(sent), f
+				got <- s
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	hold := make(chan struct{})
+	defer close(hold)
+	r := &platform.FakeRunner{Hold: hold}
+	old := probeRunner
+	probeRunner = r
+	defer func() { probeRunner = old }()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	agent.Configure(Options{Binary: filepath.Join(t.TempDir(), "novad"), Config: filepath.Join(t.TempDir(), "config.json")})
+	agent.probeBudget, agent.backoffs = 400*time.Millisecond, []time.Duration{10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	var s seen
+	select {
+	case s = <-got:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	if s.probeAfter > 3*time.Second || s.probeSaid != "sudo: gave no answer in time" {
+		t.Fatalf("the probe frame came %s after ready, saying %q", s.probeAfter, s.probeSaid)
+	}
+	if !s.kept || !s.again {
+		t.Fatalf("carried at the next connect %v, probed again there %v", s.kept, s.again)
+	}
+	if ok, _ := s.refreshResult["ok"].(bool); !ok || s.refreshTook > 3*time.Second || s.refreshSaid != "sudo: gave no answer in time" {
+		t.Fatalf("facts.refresh answered %v after %s, its frame saying %q", s.refreshResult, s.refreshTook, s.refreshSaid)
+	}
+	sudo := 0
+	for _, c := range r.Recorded() {
+		if c.Name == "sudo" {
+			sudo++
+		}
+	}
+	agent.factsMu.Lock()
+	probing := agent.probing
+	agent.factsMu.Unlock()
+	if sudo != 3 || probing {
+		t.Fatalf("%d sudo runs (want connect, connect again, refresh), probing %v", sudo, probing)
+	}
+}
+
+// Fix round 1, I1: whatever a probe does — even ignore its ctx outright — it
+// is waited for at most probeBudget. probing clears, nothing it answers later
+// is kept, the next connection probes again, and facts.refresh says so.
+func TestAProbeThatNeverAnswersIsLeftAtItsBudget(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-budget-1"
+	results := make(chan map[string]any, 1)
+	var sessions atomic.Int32
+	var sawProbe atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if sessions.Add(1) > 1 {
+			for f := nextFacts(ctx, c); f != nil; f = nextFacts(ctx, c) {
+				if _, ok := f["service"]; ok {
+					sawProbe.Store(true)
+				}
+			}
+			return
+		}
+		nextFacts(ctx, c) // the frame at ready
+		time.Sleep(300 * time.Millisecond)
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "budget-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		sent := time.Now()
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				if _, ok := f["service"]; ok {
+					sawProbe.Store(true)
+				}
+			case "result":
+				f["took"] = time.Since(sent)
+				results <- f
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	release := make(chan struct{})
+	defer close(release)
+	var probes atomic.Int32
+	agent.probe = func(context.Context) facts.Probed {
+		probes.Add(1)
+		<-release // deaf to its ctx
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "late"}}
+	}
+	agent.probeBudget, agent.backoffs = 150*time.Millisecond, []time.Duration{10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	var res map[string]any
+	select {
+	case res = <-results:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	took, _ := res["took"].(time.Duration)
+	errText, _ := res["error"].(string)
+	if ok, _ := res["ok"].(bool); ok || took > 3*time.Second || !strings.Contains(errText, "the probes gave no answer within 150ms") {
+		t.Fatalf("facts.refresh = %v after %s", res, took)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for probes.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := probes.Load(); n != 3 || sawProbe.Load() {
+		t.Fatalf("%d probes (want connect, refresh, next connect), a late answer carried %v", n, sawProbe.Load())
+	}
+}
+
+// Fix round 1, Minor 3: findings that would take the frame over core's cap
+// are left out, and the frame says so — they never stop every facts frame.
+func TestAProbeThatWouldOverfillTheFrameIsLeftOutAndSaid(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-probe-cap-1", hex.EncodeToString(corePub), devPriv)
+	long := strings.Repeat("x", 255)
+	distros := make([]facts.Distro, 8)
+	for i := range distros {
+		distros[i] = facts.Distro{Name: fmt.Sprintf("%d%s", i, long[1:]), Running: true, Looked: true, PID1: long, User: long,
+			Sudo: "refused", SudoSaid: long, Unit: &facts.Unit{Active: long, File: long, Restart: long, Said: long}, PIDs: []int{1}}
+	}
+	agent.probed = &facts.Probed{At: time.Now(), Service: facts.Service{Name: long, Binary: long, Config: long},
+		WSL: &facts.WSLDistros{Distros: distros}}
+	data, err := agent.frameBytes()
+	if err != nil {
+		t.Fatalf("the frame was not built: %v", err)
+	}
+	var f map[string]any
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	_, hasNet := f["net"]
+	if len(data) > facts.MaxFrameBytes || f["service"] != nil || f["wsl_distros"] != nil || f["probed_at"] != nil || !hasNet ||
+		!strings.Contains(saidOf(f, "probe"), "over the 16384-byte cap; they are left out") {
+		t.Fatalf("%d bytes: %s", len(data), data)
+	}
+	agent.probed = &facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service"}}
+	if data, err = agent.frameBytes(); err != nil || !strings.Contains(string(data), `"service":`) {
+		t.Fatalf("a probe that fits is carried: %s, %v", data, err)
+	}
+}
+
+// Fix round 1, I1: the probes' real programs run with a WaitDelay.
+func TestTheProbesRealRunnerHasAWaitDelay(t *testing.T) {
+	if probeExec.WaitDelay <= 0 {
+		t.Fatalf("probeExec = %+v", probeExec)
+	}
+}

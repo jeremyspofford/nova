@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner runs one program, argv form, and returns what it wrote to stdout.
@@ -35,8 +36,13 @@ type EnvRunner interface {
 	RunEnv(ctx context.Context, env []string, name string, args []string, stdin string) (string, error)
 }
 
-// Exec is the Runner that runs real programs.
-type Exec struct{}
+// Exec is the Runner that runs real programs. WaitDelay, when set, bounds
+// how long a call waits, once its program has exited or been killed at ctx's
+// end, for the program's output pipes to close: a grandchild still holding
+// them (one wsl.exe started) cannot hold the call open (exec.Cmd.WaitDelay).
+type Exec struct {
+	WaitDelay time.Duration
+}
 
 // Run runs name with args. A failure carries the program's own stderr, so a
 // caller states the reason the program gave, not just "exit status 1".
@@ -46,11 +52,12 @@ func (e Exec) Run(ctx context.Context, name string, args []string, stdin string)
 
 // RunEnv is Run with env ("KEY=value" entries) added to the environment the
 // program inherits from the agent. A failure is a *RunError.
-func (Exec) RunEnv(ctx context.Context, env []string, name string, args []string, stdin string) (string, error) {
+func (e Exec) RunEnv(ctx context.Context, env []string, name string, args []string, stdin string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = e.WaitDelay
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -60,7 +67,10 @@ func (Exec) RunEnv(ctx context.Context, env []string, name string, args []string
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return "", &RunError{Name: name, Err: err, NotStarted: true}
+	}
+	if err := cmd.Wait(); err != nil {
 		return stdout.String(), &RunError{Name: name, Err: err, Stderr: stderr.String()}
 	}
 	return stdout.String(), nil
@@ -69,11 +79,13 @@ func (Exec) RunEnv(ctx context.Context, env []string, name string, args []string
 // RunError is a program that failed: its name, how (an exit status, not
 // found, killed), and its stderr exactly as it wrote it — so a caller that
 // knows the program's encoding decodes its words alone (RunWSL), never the
-// prefix this adds.
+// prefix this adds. NotStarted is a program that never ran: it could not be
+// started (not found, not allowed), or its bound had already passed.
 type RunError struct {
-	Name   string
-	Err    error
-	Stderr string
+	Name       string
+	Err        error
+	Stderr     string
+	NotStarted bool
 }
 
 // Error is "name: how: stderr", stderr trimmed, or "name: how" when the

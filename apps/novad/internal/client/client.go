@@ -69,10 +69,16 @@ const (
 	ProbeMaxAge = 10 * time.Minute
 )
 
-// probeRunner runs the probes' programs (`sudo -n true`, wsl.exe) for every
-// agent Configure sets up. A variable so this package's tests replace it
-// before any of them runs: no test runs the real programs (S42b Task 10b).
-var probeRunner platform.Runner = platform.Exec{}
+// probeExec runs the probes' real programs (`sudo -n true`, wsl.exe), with a
+// WaitDelay: a grandchild holding wsl.exe's pipes cannot hold a finished or
+// killed call open. Each program is bounded besides, whatever its kill does
+// (platform.Elevation, platform.RunWSL).
+var probeExec = platform.Exec{WaitDelay: 2 * time.Second}
+
+// probeRunner runs the probes' programs for every agent Configure sets up. A
+// variable so this package's tests replace it before any of them runs: no
+// test runs the real programs (S42b Task 10b).
+var probeRunner platform.Runner = probeExec
 
 // defaultBackoffs is the reconnect ladder. It resets after every session
 // that authenticated (Run).
@@ -158,9 +164,11 @@ type Agent struct {
 	// probe runs the slow probes (P29). nil — tests, and every verb but
 	// run — probes nothing. probed is the last result, and probing says a
 	// probe started at connect is still running; both guarded by factsMu.
-	probe   func(context.Context) facts.Probed
-	probed  *facts.Probed
-	probing bool
+	// probeBudget is ProbeBudget, a field so a test runs it fast.
+	probe       func(context.Context) facts.Probed
+	probed      *facts.Probed
+	probing     bool
+	probeBudget time.Duration
 
 	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
 	// platform call with no timeout of its own (macOS ioreg) must not burn
@@ -227,6 +235,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		gatherFrame:      facts.GatherFrame,
 		now:              time.Now,
 		authGatherBudget: 5 * time.Second,
+		probeBudget:      ProbeBudget,
 		heartbeatEvery:   HeartbeatInterval,
 		pingTimeout:      PingTimeout,
 		factsEvery:       FactsEvery,
@@ -823,9 +832,17 @@ func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
 
 // reprobe runs the slow probes off every lock and sends a frame carrying
 // them. force (facts.refresh) always probes. At connect it does not when the
-// last probe is younger than ProbeMaxAge — the frame sent at ready already
-// carried it — or when one started at an earlier connection is still
-// running: whichever connection is live when it finishes carries it.
+// last probe is younger than ProbeMaxAge and answered in full — the frame
+// sent at ready already carried it — or when one started at an earlier
+// connection is still running: whichever connection is live when it
+// finishes carries it. A probe a program's bound cut (OutOfTime) is carried
+// but not kept across a reconnect: the next connection probes again.
+//
+// The probe is waited for at most probeBudget, whatever it does (S42b fix
+// round 1, I1): its programs are bounded a little inside that, so they
+// answer "gave no answer in time" first; anything else that hangs is left
+// to finish on its own, nothing it answers later is kept, and probing
+// clears either way.
 func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) error {
 	if a.probe == nil {
 		if force {
@@ -835,7 +852,8 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 	}
 	if !force {
 		a.factsMu.Lock()
-		skip := a.probing || (a.probed != nil && a.now().Sub(a.probed.At) < ProbeMaxAge)
+		kept := a.probed != nil && !a.probed.OutOfTime && a.now().Sub(a.probed.At) < ProbeMaxAge
+		skip := a.probing || kept
 		if !skip {
 			a.probing = true
 		}
@@ -849,9 +867,20 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 			a.factsMu.Unlock()
 		}()
 	}
-	pctx, cancel := context.WithTimeout(ctx, ProbeBudget)
-	p := a.probe(pctx)
-	cancel()
+	pctx, cancel := context.WithTimeout(ctx, a.probeBudget-a.probeBudget/20)
+	defer cancel()
+	answer := make(chan facts.Probed, 1) // buffered: a probe answering late never blocks
+	go func() { answer <- a.probe(pctx) }()
+	wait := time.NewTimer(a.probeBudget)
+	defer wait.Stop()
+	var p facts.Probed
+	select {
+	case p = <-answer:
+	case <-wait.C:
+		return fmt.Errorf("the probes gave no answer within %s", a.probeBudget)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -866,7 +895,9 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 }
 
 // frameBytes gathers and encodes a facts frame — with the last probe's
-// findings, carried in every frame. One over core's cap is an error here —
+// findings, carried in every frame. Findings that would take the frame over
+// core's cap are left out and said so: they never stop every facts frame
+// (fix round 1). A frame over the cap even without them is an error here —
 // never sent to be refused over there.
 func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Lock()
@@ -875,7 +906,19 @@ func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Unlock()
 	frame := a.gatherFrame(carried)
 	if probed != nil {
-		probed.ApplyTo(&frame)
+		full := frame
+		full.Unreadable = append([]facts.Unreadable(nil), frame.Unreadable...)
+		probed.ApplyTo(&full)
+		data, err := json.Marshal(full)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) <= facts.MaxFrameBytes {
+			return data, nil
+		}
+		frame.AddUnreadable(facts.Unreadable{Item: "probe", Reason: fmt.Sprintf(
+			"the probe's findings would make the frame %d bytes, over the %d-byte cap; they are left out",
+			len(data), facts.MaxFrameBytes)})
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {

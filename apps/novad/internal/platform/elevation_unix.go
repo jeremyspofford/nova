@@ -5,7 +5,6 @@ package platform
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,19 +20,22 @@ type Elev struct {
 
 // Elevation: whether the agent already runs as root, and what `sudo -n
 // true` did. -n never asks for a password; it fails instead, which is the
-// answer. A sudo stopped at ctx's bound (a PAM module waiting on a directory
-// server) answered nothing: that is an error, never "refused" — on its kill
-// sudo exits non-zero like a refusal would.
+// answer. sudo runs bounded (runBounded): a sudo that gives no answer by
+// ctx's end — a PAM module waiting on a directory server — is waited for no
+// longer, and is an error, never "refused". So is a sudo that never started.
 func Elevation(ctx context.Context, r Runner) (Elev, error) {
 	e := Elev{Elevated: os.Geteuid() == 0}
-	_, err := r.Run(ctx, "sudo", []string{"-n", "true"}, "")
+	_, err := runBounded(ctx, "sudo", func(ctx context.Context) (string, error) {
+		return r.Run(ctx, "sudo", []string{"-n", "true"}, "")
+	})
+	var re *RunError
 	switch {
 	case err == nil:
 		e.Sudo = "no_password"
 	case errors.Is(err, exec.ErrNotFound):
 		e.Sudo = "absent"
-	case ctx.Err() != nil:
-		return e, fmt.Errorf("sudo -n true gave no answer in time (%v)", ctx.Err())
+	case OutOfTime(err), errors.As(err, &re) && re.NotStarted:
+		return e, err
 	default:
 		e.Sudo = "refused"
 		e.Said, _, _ = strings.Cut(err.Error(), "\n")

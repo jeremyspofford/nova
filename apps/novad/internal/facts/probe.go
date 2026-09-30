@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -49,6 +50,8 @@ type Elevation struct {
 type WSLDistros struct {
 	Distros     []Distro `json:"distros"`
 	RunningSaid string   `json:"running_said,omitempty"`
+
+	outOfTime bool // a wsl.exe was cut by its bound (Probed.OutOfTime)
 }
 
 // Distro is one distribution. Looked is false for one that is not running:
@@ -62,9 +65,13 @@ type Distro struct {
 	PID1    string `json:"pid1,omitempty"`
 	User    string `json:"user,omitempty"`
 	Sudo    string `json:"sudo,omitempty"`
-	Root    bool   `json:"root"`
-	Unit    *Unit  `json:"novad_unit,omitempty"`
-	PIDs    []int  `json:"novad_pids"`
+	// SudoSaid is sudo's own first line there when it refused.
+	SudoSaid string `json:"sudo_said,omitempty"`
+	Root     bool   `json:"root"`
+	Unit     *Unit  `json:"novad_unit,omitempty"`
+	// PIDs are its novad processes: [] for none, and null — never [] — when
+	// they could not be listed (pgrep missing or failing there).
+	PIDs []int `json:"novad_pids"`
 }
 
 // Unit is the user unit novad.service inside a distribution.
@@ -76,13 +83,17 @@ type Unit struct {
 	Said    string `json:"said,omitempty"`
 }
 
-// Probed is one run of the probes and when it ran.
+// Probed is one run of the probes and when it ran. OutOfTime says a
+// program in it gave no answer in time, or had no time left to start: what
+// it did not answer is said unreadable, and a reconnect probes again rather
+// than keep it.
 type Probed struct {
 	At         time.Time
 	Service    Service
 	Elevation  *Elevation
 	WSL        *WSLDistros
 	Unreadable []Unreadable
+	OutOfTime  bool
 }
 
 const (
@@ -100,7 +111,9 @@ var readDistros = platform.WSLDistros
 
 // Probe runs the probes. The client runs it at connect and on facts.refresh
 // only — never on the minute cadence: `sudo -n` can write an auth-log line
-// each time, and wsl.exe is not free. Every program runs through r.
+// each time, and wsl.exe is not free. Every program runs through r, bounded
+// by ctx and by probeProgram whatever its kill does (platform.Elevation and
+// platform.RunWSL run them through the platform's bounded helper).
 func Probe(ctx context.Context, r platform.Runner, self Self) Probed {
 	p := Probed{At: time.Now().UTC(), Service: serviceOf(platform.Mode(), self)}
 	for _, f := range []struct{ item, path string }{{"service.binary", self.Binary}, {"service.config", self.Config}} {
@@ -112,13 +125,15 @@ func Probe(ctx context.Context, r platform.Runner, self Self) Probed {
 	e, err := platform.Elevation(ectx, r)
 	cancel()
 	if err != nil {
-		p.Unreadable = append(p.Unreadable, Unreadable{Item: "elevation", Reason: said(err.Error())})
+		p.OutOfTime = platform.OutOfTime(err)
+		p.Unreadable = append(p.Unreadable, Unreadable{Item: "elevation", Reason: failed(err)})
 	} else {
 		p.Elevation = &Elevation{Elevated: e.Elevated, Admin: e.Admin, Sudo: e.Sudo, SudoSaid: said(e.Said)}
 	}
 	if runtime.GOOS == "windows" {
 		w, unread := probeWSL(ctx, r)
 		p.WSL = w
+		p.OutOfTime = p.OutOfTime || (w != nil && w.outOfTime)
 		p.Unreadable = append(p.Unreadable, unread...)
 	}
 	return p
@@ -153,64 +168,105 @@ func serviceOf(mode string, self Self) Service {
 // probeWSL lists the distributions and looks inside each RUNNING one —
 // never a stopped one, which looking would start (Review Focus 11).
 func probeWSL(ctx context.Context, r platform.Runner) (*WSLDistros, []Unreadable) {
-	list, err := readDistros()
+	list, bad, err := readDistros()
 	if err != nil {
 		return nil, []Unreadable{{Item: "wsl_distros", Reason: said(err.Error())}}
 	}
+	var unread []Unreadable
+	for _, e := range bad {
+		unread = append(unread, Unreadable{Item: "wsl_distros", Reason: said(e.Error())})
+	}
 	out := &WSLDistros{Distros: []Distro{}}
 	if len(list) == 0 {
-		return out, nil
+		return out, unread
 	}
-	var unread []Unreadable
-	lctx, cancel := context.WithTimeout(ctx, probeProgram)
-	raw, err := platform.RunWSL(lctx, r, "--list", "--running", "--quiet")
-	running := map[string]bool{}
+	running, err := runningNow(ctx, r)
 	if err != nil {
 		// Nothing running and a real failure can look alike here: say the
 		// words, and read nothing it printed as running — a wrong guess
 		// would look inside, and so start, a stopped distribution.
-		out.RunningSaid = failed(lctx, err)
-	} else {
-		for _, row := range strings.Split(raw, "\n") {
-			if name := strings.TrimSpace(row); name != "" {
-				running[name] = true
-			}
-		}
+		out.RunningSaid = failed(err)
+		out.outOfTime = platform.OutOfTime(err)
 	}
-	cancel()
 	for _, d := range list {
 		if len(out.Distros) == maxDistros {
 			unread = append(unread, Unreadable{Item: "wsl_distros", Reason: fmt.Sprintf("more than %d distributions; the rest are not listed", maxDistros)})
 			break
 		}
 		entry := Distro{Name: line(d.Name), Default: d.Default, Version: wslVersion(d.Version), Running: running[d.Name], PIDs: []int{}}
-		if entry.Running {
-			look(ctx, r, d.Name, &entry, &unread)
+		if entry.Running && lookIfStillRunning(ctx, r, d.Name, &entry, &unread) {
+			out.outOfTime = true
 		}
 		out.Distros = append(out.Distros, entry)
 	}
 	return out, unread
 }
 
+// runningNow is the distributions wsl.exe lists as running at this moment.
+func runningNow(ctx context.Context, r platform.Runner) (map[string]bool, error) {
+	lctx, cancel := context.WithTimeout(ctx, probeProgram)
+	defer cancel()
+	raw, err := platform.RunWSL(lctx, r, "--list", "--running", "--quiet")
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	for _, row := range strings.Split(raw, "\n") {
+		if name := strings.TrimSpace(row); name != "" {
+			names[name] = true
+		}
+	}
+	return names, nil
+}
+
+// lookIfStillRunning lists what runs again just before the look (Review
+// Focus 11): a distribution that stopped since the first list is never
+// started by looking. It reports whether a wsl.exe was out of time.
+func lookIfStillRunning(ctx context.Context, r platform.Runner, name string, d *Distro, unread *[]Unreadable) bool {
+	running, err := runningNow(ctx, r)
+	switch {
+	case err != nil:
+		*unread = append(*unread, Unreadable{Item: clip("wsl_distros." + d.Name),
+			Reason: said("not looked inside: the running-list just before the look failed: " + failed(err))})
+		return platform.OutOfTime(err)
+	case !running[name]:
+		d.Running = false // it stopped since the first list
+		return false
+	}
+	return look(ctx, r, name, d, unread)
+}
+
 // look runs the one look inside a running distribution, then whether
-// `wsl.exe -u root` runs there without a password. A look that failed before
-// its last line is unreadable: what it never printed is not read as "no
-// unit" or "no novad process".
-func look(ctx context.Context, r platform.Runner, name string, d *Distro, unread *[]Unreadable) {
+// `wsl.exe -u root` runs there without a password. A look that did not
+// print its last line, pids=, is unreadable whatever wsl.exe's exit status:
+// what it never printed is not read as "no unit" or "no novad process". It
+// reports whether a wsl.exe was out of time before its answer was complete.
+func look(ctx context.Context, r platform.Runner, name string, d *Distro, unread *[]Unreadable) bool {
 	item := clip("wsl_distros." + d.Name)
 	lctx, cancel := context.WithTimeout(ctx, probeProgram)
 	raw, err := platform.RunWSL(lctx, r, "-d", name, "--exec", "/bin/sh", "-c", platform.WSLLookScript)
-	if err != nil && !lookFinished(raw) {
-		*unread = append(*unread, Unreadable{Item: item, Reason: failed(lctx, err)})
-		cancel()
-		return
-	}
 	cancel()
+	if !lookFinished(raw) {
+		reason := "the look printed no answer"
+		if err != nil {
+			reason = failed(err)
+		}
+		*unread = append(*unread, Unreadable{Item: item, Reason: reason})
+		return platform.OutOfTime(err)
+	}
 	in := platform.ParseWSLInside(raw)
 	d.Looked = true
 	d.PID1, d.User = line(in.PID1), line(in.User)
 	if lookSudo[in.Sudo] {
 		d.Sudo = in.Sudo
+		if in.Sudo == "refused" {
+			d.SudoSaid = said(in.SudoSaid)
+		}
+	}
+	if in.PIDsUnknown {
+		d.PIDs = nil
+		*unread = append(*unread, Unreadable{Item: clip(item + ".novad_pids"),
+			Reason: "its novad processes could not be listed: pgrep is missing there, or failed"})
 	}
 	for _, pid := range in.PIDs {
 		if pidFact(pid) == 0 {
@@ -231,6 +287,10 @@ func look(ctx context.Context, r platform.Runner, name string, d *Distro, unread
 	_, rerr := platform.RunWSL(rctx, r, "-d", name, "-u", "root", "--exec", "/bin/true")
 	rcancel()
 	d.Root = rerr == nil
+	if rerr != nil {
+		*unread = append(*unread, Unreadable{Item: clip(item + ".root"), Reason: failed(rerr)})
+	}
+	return platform.OutOfTime(rerr)
 }
 
 // lookFinished is whether a look's output reached its last line, pids=.
@@ -238,12 +298,13 @@ func lookFinished(out string) bool {
 	return strings.HasPrefix(out, "pids=") || strings.Contains(out, "\npids=")
 }
 
-// failed is why a wsl.exe failed, as one line: its own words, or — when it
-// was stopped at its bound — that it gave no answer in time, since a program
-// killed on Windows exits 1, which would read as wsl.exe's own failure.
-func failed(ctx context.Context, err error) string {
-	if ctx.Err() != nil {
-		return said("wsl.exe gave no answer in time and was stopped (" + err.Error() + ")")
+// failed is why a program failed, as one line (S42b F3): that it never
+// started — for want of time or of the program — that it gave no answer in
+// time (platform.ErrNoAnswer, which claims no kill took), or its own words.
+func failed(err error) string {
+	var re *platform.RunError
+	if errors.As(err, &re) && re.NotStarted {
+		return said(re.Name + " did not start: " + re.Err.Error())
 	}
 	return said(err.Error())
 }

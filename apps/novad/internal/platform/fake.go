@@ -18,6 +18,10 @@ type FakeRunner struct {
 	// a test that reads a value, changes it and reads it back scripts both.
 	Seq   map[string][]string
 	Calls []FakeCall
+	// Hold, when not nil, makes every call wait for it to close before it
+	// answers — deaf to ctx, like a child the agent cannot kill (a setuid
+	// sudo). The call is recorded first; read Recorded while one waits.
+	Hold chan struct{}
 }
 
 // FakeCall is one recorded run. Env is what RunEnv added to the program's
@@ -38,9 +42,15 @@ func (f *FakeRunner) Run(ctx context.Context, name string, args []string, stdin 
 // RunEnv is Run, recording env too.
 func (f *FakeRunner) RunEnv(_ context.Context, env []string, name string, args []string, stdin string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, FakeCall{Name: name, Args: append([]string(nil), args...), Stdin: stdin,
 		Env: append([]string(nil), env...)})
+	hold := f.Hold
+	f.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err, ok := f.Errs[name]; ok {
 		return "", err
 	}
@@ -52,4 +62,12 @@ func (f *FakeRunner) RunEnv(_ context.Context, env []string, name string, args [
 		return out, nil
 	}
 	return "", fmt.Errorf("fake runner: nothing scripted for %s %s", name, strings.Join(args, " "))
+}
+
+// Recorded is a copy of the calls so far — safe to read while a held call
+// waits.
+func (f *FakeRunner) Recorded() []FakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]FakeCall(nil), f.Calls...)
 }

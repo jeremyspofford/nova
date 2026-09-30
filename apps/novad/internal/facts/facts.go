@@ -274,6 +274,13 @@ func GatherFrame(carried []Unreadable) Frame {
 	return capUnreadable(f)
 }
 
+// AddUnreadable names one more fact that could not be read, keeping the
+// list within core's cap: one over it and core drops the whole frame.
+func (f *Frame) AddUnreadable(u Unreadable) {
+	f.Unreadable = append(f.Unreadable, u)
+	*f = capUnreadable(*f)
+}
+
 // capUnreadable keeps the list within core's cap, saying so when it cut.
 func capUnreadable(f Frame) Frame {
 	if len(f.Unreadable) > maxUnreadable {

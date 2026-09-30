@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // P29: what `sudo -n true` did, never a guess — and -n never asks anyone.
@@ -38,15 +39,35 @@ func TestElevationSaysWhatSudoDid(t *testing.T) {
 	}
 }
 
-// A sudo stopped at its bound (a PAM module waiting on a directory server)
-// did not refuse anything: it is said unreadable, never "refused" — its kill
-// would otherwise read as sudo's own answer.
-func TestASudoStoppedAtItsBoundIsNeverARefusal(t *testing.T) {
+// Fix round 1, I1: a sudo that ignores its kill — once it runs as root, an
+// unprivileged agent's SIGKILL gets EPERM — is waited for no longer than its
+// bound, and is no answer: an error, never "refused".
+func TestASudoThatIgnoresItsKillIsLeftAtItsBoundNeverARefusal(t *testing.T) {
+	hold := make(chan struct{})
+	defer close(hold)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var e Elev
+	var err error
+	returnsWithin(t, 2*time.Second, func() { e, err = Elevation(ctx, &FakeRunner{Hold: hold}) })
+	if !errors.Is(err, ErrNoAnswer) || e.Sudo == "refused" || err.Error() != "sudo: gave no answer in time" {
+		t.Fatalf("got %+v, %v", e, err)
+	}
+}
+
+// A sudo that never started — no time was left, or it could not be run —
+// did not refuse anything either.
+func TestASudoThatNeverStartedIsNeverARefusal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	r := &FakeRunner{Errs: map[string]error{"sudo": errors.New("sudo: signal: killed")}}
+	r := &FakeRunner{Outputs: map[string]string{"sudo": ""}}
 	e, err := Elevation(ctx, r)
-	if err == nil || e.Sudo == "refused" {
+	if !errors.Is(err, ErrNoTime) || e.Sudo == "refused" || len(r.Calls) != 0 {
+		t.Fatalf("got %+v, %v after %d calls", e, err, len(r.Calls))
+	}
+	denied := &RunError{Name: "sudo", Err: errors.New("fork/exec /usr/bin/sudo: permission denied"), NotStarted: true}
+	e, err = Elevation(context.Background(), &FakeRunner{Errs: map[string]error{"sudo": denied}})
+	if err != denied || e.Sudo == "refused" {
 		t.Fatalf("got %+v, %v", e, err)
 	}
 }

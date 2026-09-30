@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -79,5 +80,16 @@ func TestExecAddsTheEnvironmentAndKeepsAFailuresStderr(t *testing.T) {
 	}
 	if _, err := (Exec{}).Run(context.Background(), self, []string{"-test.run=^TestHelperFailsInUTF16$"}, ""); err != nil {
 		t.Fatalf("without the variable the helper exits 0: %v", err)
+	}
+}
+
+// Fix round 1, Minor 4: a program that could not be started is marked so —
+// what it never did is not read as its answer — under the same text as before.
+func TestExecSaysWhenAProgramNeverStarted(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-program")
+	_, err := Exec{}.Run(context.Background(), missing, nil, "")
+	var re *RunError
+	if !errors.As(err, &re) || !re.NotStarted || re.Name != missing || !strings.HasPrefix(err.Error(), missing+": ") {
+		t.Fatalf("err = %#v", err)
 	}
 }
