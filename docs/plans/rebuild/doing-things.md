@@ -420,6 +420,24 @@ reason.
 **S31 — superseded by S42b.** S42b builds the signed update path end to
 end. Nothing of S31 is left.
 
+**S30b — The standing admin path (M; owner, Q17, 2026-09-30).** Installed
+once per machine with one OS prompt: on Linux a root-owned helper the agent
+talks to over a socket only the agent's user can open (or a sudoers rule for
+the agent's user — the plan picks and says why); on Windows an elevated
+scheduled task or service the agent drives. It runs ANY command as root or
+admin, not only named fixes (S42c's boundary is dropped by the owner).
+`device_run` gains `elevated`; the agent's facts report whether the path is
+installed and which kind; every elevated call is a span with `elevated:
+true` and the machine; nothing asks and nothing refuses. Uninstall removes
+it and proves the removal. The Devices page states the surface: a core
+compromise is root on every machine with the path.
+*DoD:* on the mini PC, "install htop" runs `apt-get install -y htop`
+elevated with no prompt, and the span says `elevated: true`; on the Dell, an
+elevated winget install succeeds from a signed-in session with no UAC
+prompt; uninstalling the path on one machine makes the next elevated call a
+stated "no admin path on <machine>".
+*Waits on:* S30 (jobs, because an install outlives a turn).
+
 **S32 — Build identity and her landing step (L).** `NOVA_BUILD_SHA` and a
 per-service content hash baked into all four images, reported on `/status`
 and web's `/build.json`; images tagged by that hash — a tree-wide tag would
@@ -447,6 +465,21 @@ page and the commit in `git log`; a landing touching `guards.py` states
 `protected: [services/core/app/guards.py]` on the record and in her reply;
 a failing test shows `red` and the failing suite.
 *Pins:* registry +5. *Waits on:* S30; Q2; Q7.
+
+**S32b — Claude Code as a coder (M; owner, Q5, 2026-09-30).** A coding
+step in a goal attempt can be handed to `claude -p` on a machine where the
+owner is logged into Claude Code, run as him through that machine's agent
+(a detached job, S30), in her branch's worktree, with its transcript kept
+(`stream-json`) and its permissions set by flags. Nova never holds or reads
+his Claude login. The result is judged by S32's landing step — the diff and
+the suites on a clean copy — never by the session's report. Routing gains
+"Claude Code on <machine>" as a coder choice beside the `coding` role's
+models. Policy (Anthropic docs, checked 2026-09-30): running `claude -p`
+yourself with your subscription is documented; a product offering claude.ai
+login is not allowed without approval; a RELEASED Nova driving each user's
+own logged-in Claude Code is unclear — ask Anthropic before it ships to
+anyone else. It shares his subscription's limits with his own sessions.
+*Waits on:* S30 (jobs), S32 (the landing step that judges it).
 
 **S33 — Deploy by SHA with the verdict outside core (L).**
 `deploy/redeploy.sh`: build with args, tag, **an S41 bundle as the
@@ -538,15 +571,24 @@ verdict a separate column never folded into the suites'.
   through `curl` inside `device_run`, whose HTTP status is prose. Placement:
   Q16.
 
-**S38 — Her own browser (L; the first new service here).** A re-port of
-v2's `browser-worker/` (`git show v0.5.0-alpha:browser-worker/…`): a
-Playwright service only she uses, one persistent context per site, pages
-read as a numbered list of interactive elements from the accessibility tree
-and acted on by number, screenshots optional (ARCS arc 5). The container is
-the boundary: its own network, no host display, no real profile. Two jobs
-that want different network rules: QA of her own stack, and the open web,
-which is where injection lives (Q13). It is also the route for any app
-setting that has no API. Sign-ups also need Q6.
+**S38 — Her own browser (L; IN PROGRESS beside S37a since 2026-09-30).**
+Spec approved by the owner: `docs/plans/rebuild/s38/spec.md` on
+`slice/s38-browser`. Approach C: Microsoft's Playwright MCP server as a
+pinned engine container, and five tools of hers in core that call it
+through S37a's client (`browser_open`, `browser_read` in parts or by search,
+`browser_act`, `browser_back`, `browser_screenshot`); ONE browser that
+reaches everything (the owner's choice over two walled ones); her own
+persistent profile; downloads into her workspace; and a shipped `browser`
+agent the owner routes to a cloud or local model. It is also the route for
+any app setting that has no API. Sign-ups need Q6's store and mailbox.
+
+**S38b — Reading past the context (M; right after S38, owner 2026-09-30).**
+His idea: "read what it can, then compress/summarize it when the context is
+almost full, then continue reading". When a turn's gathered tool results
+near the model's context, the older ones are replaced by written summaries
+so the turn can go on; the full text stays on the trace, and a summary is
+marked as one. General — logs, files and command output as well as pages —
+which is why it is its own slice with its own evals and measurement.
 
 **S39 — Screens: see, record, then act (L).** An agent capability that
 captures the machine's desktop. The Windows agent runs in the user's
@@ -576,9 +618,10 @@ anything that needs admin rights is Q17.
 
 ## Order
 
-S42b (hub:primary, in progress) → S29 → S30 → S37d → the install walk →
-S34 → S37c → S39 → S32 → S33 → S35. **S37a (MCP) and S38 (her browser) run
-in parallel now** (owner, 2026-09-30: "both in parallel").
+S42b (hub:primary, in progress) → S29 → S30 → S30b → S37d → the install
+walk → S34 (with the `coding` role's modes, Q5) → S37c → S39 → S32 → S32b →
+S33 → S35. **S37a (MCP) and S38 (her browser), then S38b, run in parallel
+now** (owner, 2026-09-30: "both in parallel").
 S36 and S37b after S34, unscheduled. Then the paused hub slices (S46a,
 S46b, S43a, S43b, S44, S48, S49, and S42c per Q15), then S26, then S27.
 
@@ -628,11 +671,85 @@ outside. On the mini PC, whose agent S42b installs.
   (S37a). An app without an MCP server is configured through S37d, S38 or
   its files.
 - **Q8** is merged into Q7.
+- **Q2, where her code goes** — answered 2026-09-30: the default. Her own
+  branch per change; a change whose suites pass on a clean copy merges
+  itself into `main`; deploys come from `~/workspace/nova` on `main`.
+- **Q3, who decides a goal is done** — answered 2026-09-30: the default.
+  Code, from a fixed list of finish checks set when the goal is made; he can
+  stop any goal.
+- **Q4, what blue/green means** — answered 2026-09-30, after he asked about
+  lightweight Kubernetes ("deploy a new pod of a service, test it"): in
+  place by commit NOW, shaped like a Kubernetes rollout (a desired image per
+  service, a health gate, automatic rollback), so the master plan's optional
+  S20 (a k3s target) can later swap the engine without changing her tools.
+  Recorded with it: the real blocker for blue/green under compose OR k3s is
+  the shared database (a new core runs its migrations against live data at
+  start) and two singletons (memory's index file, the device hub) — true
+  blue/green needs backward-compatible migrations, which a test can enforce.
+- **Q5, which model does the doing work** — answered 2026-09-30: MODES plus
+  Claude Code. The `coding` role (reserved today) gets a mode on Routing like
+  the decision role's switches: Local only, Cloud only, or Hybrid, default
+  local first (his words: "for me, it would be local first"). And Claude
+  Code is BUILT IN as an optional coder: a coding step can be handed to
+  `claude -p` on a machine where he is logged in, run as him through that
+  machine's agent; Nova never holds or reads his Claude login; its work is
+  judged by the diff and the suites on a clean copy, never by its report,
+  and its transcript is kept. Policy, checked 2026-09-30 against Anthropic's
+  docs: running `claude -p` yourself with your subscription is documented
+  (code.claude.com/docs/en/headless); a product offering claude.ai login is
+  not allowed without approval (code.claude.com/docs/en/agent-sdk/overview);
+  a RELEASED Nova driving each user's own logged-in Claude Code is unclear —
+  ask Anthropic before it ships to anyone else. An API key (the existing
+  Anthropic provider) is the clearly allowed path. It shares his
+  subscription's usage limits with his own Claude sessions.
+- **Q6, credentials** — answered 2026-09-30: the default. An encrypted
+  store (`{{secret:name}}` resolved only at the outbound call, its key on
+  its own volume, provider keys and S37a's MCP tokens moved in); no tool
+  ever returns a value; sign-ups use a browser profile (S38's) and a
+  mailbox that are hers alone.
+- **Q7, how her landing step judges a change** — answered 2026-09-30: the
+  default. Suites always run on a clean copy; red cannot deploy; a change to
+  the tests that grade her lands flagged; "could not measure" deploys with a
+  note; "still running" waits.
+- **Q9, her own goals' address/command checks** — answered 2026-09-30: the
+  default. They run when she calls them inside her own turn; checks with no
+  address or command of hers run unasked.
+- **Q10, rollback on a failed read-back** — answered 2026-09-30: yes,
+  recorded as "rolled back", never across a migration.
+- **Q11, her configuration** — answered 2026-09-30: the default. Her
+  instructions and typed settings are data she changes with a tool; compose
+  and nginx stay code.
+- **Q13, a page steering her commands** — answered 2026-09-30: the default.
+  Recorded, not prevented: every call that changes something carries whether
+  untrusted text was in that turn; research and action go in separate goal
+  attempts by convention.
+- **Q14, when the Claude rules end** — answered 2026-09-30: the default.
+  `repo_land` (S32) ends "Claude commits in her tree"; `deploy_stack` (S33)
+  ends "Claude deploys".
+- **Q15, S42c** — answered 2026-09-30: paused with S46a. (Q17 below
+  drops its "named fixes only" limit for the admin path; whether S46a still
+  wants a named-fix layer on top is S46a's question when it resumes.)
+- **Q16, placement of S37d and S37c** — answered 2026-09-30: the default.
+  S37d right after S30 (and S30b); S37c right after S34.
+- **Q17, installs that need admin rights** — answered 2026-09-30: **a
+  standing admin path, NOT the default.** Set up once per machine with one
+  OS prompt (sudo on Linux, UAC on Windows); after that she can run any
+  command as root or admin on that machine. The owner chose it knowing the
+  downside: anything she runs there can run as root, the widest reach there
+  is, and it breaks S42c's "named fixes only" boundary. Consequences, all
+  record-never-refuse: a new slice S30b builds it; every elevated call is a
+  span with `elevated: true`; the machine's facts say whether the path is
+  installed; and the Devices page states the accepted surface where he
+  reads it — a core compromise is now root on every machine with the path.
+- **Q18, the proving app** — answered 2026-09-30: the default. A complex
+  self-hosted app (Gitea or Paperless-ngx) on the mini PC, proven working,
+  then removed, and the removal proven.
 
-### Still open
+### As asked (all answered 2026-09-30 — see above)
 
-Defaults first. Every option is one line, downside first. Each names what
-waits on it.
+Kept as the owner saw them: defaults first, every option one line, downside
+first. Q4 and Q5 were answered after a discussion (lightweight Kubernetes;
+Claude Code), and Q17 against the default.
 
 **Q2. Where does her code go, and what gets deployed?** (S32, S33)
 *Changed from the 09-18 recommendation, which deployed from a branch of her
