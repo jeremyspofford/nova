@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -100,5 +101,16 @@ func TestRunWSLIsLeftAtItsBound(t *testing.T) {
 	returnsWithin(t, 2*time.Second, func() { _, err = RunWSL(ctx, r, "--list", "--running", "--quiet") })
 	if !errors.Is(err, ErrNoAnswer) || len(r.Recorded()) != 1 {
 		t.Fatalf("err %v, calls %v", err, r.Recorded())
+	}
+}
+
+// Fix round 2: exec.ErrWaitDelay — a program that exited 0 while a
+// descendant held its output — is an answer: success, whatever wraps it.
+func TestABoundedProgramThatExitedZeroWhileItsOutputWasHeldSucceeded(t *testing.T) {
+	out, err := runBounded(context.Background(), "wsl.exe", func(context.Context) (string, error) {
+		return "Ubuntu-26.04\n", &RunError{Name: "wsl.exe", Err: exec.ErrWaitDelay}
+	})
+	if err != nil || out != "Ubuntu-26.04\n" {
+		t.Fatalf("got %q, %v", out, err)
 	}
 }

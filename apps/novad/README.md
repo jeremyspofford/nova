@@ -306,11 +306,12 @@ carries the last result and `probed_at`. A reconnect within ten minutes of the l
 probe keeps it instead of probing again. Each program is waited for at most 10 s and a
 whole probe at most 45 s, whatever its kill does: a program the agent cannot stop
 (`sudo`, once it runs as root) is left to exit by itself, the frame says it gave no
-answer in time, and such a probe is not kept across a reconnect. What runs is listed
-again just before each look. `novad_pids` is `null` — unknown, never "none" — when
-`pgrep` is missing there or fails. `wsl.exe` always runs with `WSL_UTF8=1`, and what a
-program said (a refusal, an error) is carried as its first line only — core refuses a
-control character in these fields.
+answer in time, and such a probe is not kept across a reconnect; a `sudo` with no
+answer is `unknown`, with the reason, and `elevated` is still said. What runs is listed
+again just before each look. `novad_pids` is `null` — unknown, never "none" — unless the
+distribution is stopped or a finished look found none. `wsl.exe` always runs with
+`WSL_UTF8=1`, and what a program said (a refusal, an error) is carried as its first line
+only — core refuses a control character in these fields.
 
 A fact that could not be read is never dropped silently: it is named in
 `unreadable`, with why.

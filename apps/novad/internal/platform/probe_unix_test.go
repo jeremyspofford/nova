@@ -97,3 +97,31 @@ func TestTheLookScriptUnderShSaysWhatItCouldNot(t *testing.T) {
 		})
 	}
 }
+
+// Fix round 2: exec.ErrWaitDelay is the exit 0 Go reports for a program that
+// succeeded while a descendant still held its output pipes. Run for real —
+// a fake sudo and a fake wsl.exe, found on a PATH of their own, background
+// a sleep that keeps the pipe and exit 0 — it reads as success, never as a
+// refusal or a failed list. A fake that exits 1 the same way still refuses.
+func TestAProgramThatExitedZeroWhileADescendantHeldItsOutputAnswered(t *testing.T) {
+	holdsPipe := "PATH=/usr/bin:/bin\nsleep 2 &\n"
+	dir := fakeBin(t, map[string]string{
+		"sudo":    holdsPipe + "exit 0\n",
+		"wsl.exe": holdsPipe + "echo Ubuntu-26.04\nexit 0\n",
+	})
+	t.Setenv("PATH", dir)
+	r := Exec{WaitDelay: 200 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if e, err := Elevation(ctx, r); err != nil || e.Sudo != "no_password" {
+		t.Fatalf("a sudo that exited 0 read as %+v, %v", e, err)
+	}
+	if out, err := RunWSL(ctx, r, "--list", "--running", "--quiet"); err != nil || out != "Ubuntu-26.04\n" {
+		t.Fatalf("a wsl.exe list that exited 0 read as %q, %v", out, err)
+	}
+	refusing := fakeBin(t, map[string]string{"sudo": holdsPipe + "echo 'sudo: a password is required' >&2\nexit 1\n"})
+	t.Setenv("PATH", refusing)
+	if e, err := Elevation(ctx, r); err != nil || e.Sudo != "refused" || e.Said != "sudo: exit status 1: sudo: a password is required" {
+		t.Fatalf("a sudo that exited 1 read as %+v, %v", e, err)
+	}
+}

@@ -1853,6 +1853,7 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 	type seen struct {
 		probeAfter    time.Duration
 		probeSaid     string
+		elevation     map[string]any
 		kept, again   bool
 		refreshTook   time.Duration
 		refreshSaid   string
@@ -1868,17 +1869,28 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 		}
 		defer c.CloseNow()
 		ctx := r.Context()
+		n := sessions.Add(1)
+		if n > 2 {
+			<-ctx.Done() // nothing is asked of a later session; it waits for the agent to leave
+			return
+		}
 		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
 			return
 		}
 		ready := nextFacts(ctx, c)
 		start := time.Now()
-		if sessions.Add(1) == 1 {
+		if n == 1 {
 			probe := nextFacts(ctx, c)
-			first <- seen{probeAfter: time.Since(start), probeSaid: saidOf(probe, "elevation")}
+			elevation, _ := probe["elevation"].(map[string]any)
+			first <- seen{probeAfter: time.Since(start), probeSaid: saidOf(probe, "elevation"), elevation: elevation}
 			return // the session ends; the next one must probe again
 		}
-		s := <-first
+		var s seen
+		select {
+		case s = <-first:
+		case <-ctx.Done():
+			return
+		}
 		_, s.kept = ready["service"].(map[string]any)
 		s.again = nextFacts(ctx, c) != nil
 		now := time.Now().Unix()
@@ -1898,6 +1910,10 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 			case "result":
 				s.refreshTook, s.refreshResult = time.Since(sent), f
 				got <- s
+				// Held open until the agent leaves at the test's end: while
+				// this session lives no later one connects, so no connect
+				// probe can run a fourth sudo under the count below.
+				<-ctx.Done()
 				return
 			}
 		}
@@ -1912,8 +1928,11 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 	defer func() { probeRunner = old }()
 	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	agent.Configure(Options{Binary: filepath.Join(t.TempDir(), "novad"), Config: filepath.Join(t.TempDir(), "config.json")})
-	agent.probeBudget, agent.backoffs = 400*time.Millisecond, []time.Duration{10 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The programs are cut at 500 ms; reprobe waits until 1.5 s — a second
+	// to spare, so the probe's own answer always wins under load.
+	agent.probeBudget, agent.probeGrace = 1500*time.Millisecond, time.Second
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	go func() { _ = agent.Run(ctx) }()
 	var s seen
@@ -1922,13 +1941,18 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("timed out")
 	}
-	if s.probeAfter > 3*time.Second || s.probeSaid != "sudo: gave no answer in time" {
+	if s.probeAfter > 5*time.Second || s.probeSaid != "sudo: gave no answer in time" {
 		t.Fatalf("the probe frame came %s after ready, saying %q", s.probeAfter, s.probeSaid)
+	}
+	// Fix round 2: what the agent knows is kept — elevated is its own read —
+	// and sudo is unknown, with the reason.
+	if _, ok := s.elevation["elevated"].(bool); !ok || s.elevation["sudo"] != "unknown" || s.elevation["sudo_said"] != "sudo: gave no answer in time" {
+		t.Fatalf("elevation = %v", s.elevation)
 	}
 	if !s.kept || !s.again {
 		t.Fatalf("carried at the next connect %v, probed again there %v", s.kept, s.again)
 	}
-	if ok, _ := s.refreshResult["ok"].(bool); !ok || s.refreshTook > 3*time.Second || s.refreshSaid != "sudo: gave no answer in time" {
+	if ok, _ := s.refreshResult["ok"].(bool); !ok || s.refreshTook > 5*time.Second || s.refreshSaid != "sudo: gave no answer in time" {
 		t.Fatalf("facts.refresh answered %v after %s, its frame saying %q", s.refreshResult, s.refreshTook, s.refreshSaid)
 	}
 	sudo := 0
@@ -1974,8 +1998,8 @@ func TestAProbeThatNeverAnswersIsLeftAtItsBudget(t *testing.T) {
 			}
 			return
 		}
-		nextFacts(ctx, c) // the frame at ready
-		time.Sleep(300 * time.Millisecond)
+		nextFacts(ctx, c)                  // the frame at ready
+		time.Sleep(600 * time.Millisecond) // four budgets: the connect probe was given up on
 		now := time.Now().Unix()
 		env := map[string]any{"v": int64(1), "envelope_id": "budget-e1", "device_id": deviceID,
 			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
@@ -2010,7 +2034,8 @@ func TestAProbeThatNeverAnswersIsLeftAtItsBudget(t *testing.T) {
 		<-release // deaf to its ctx
 		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "late"}}
 	}
-	agent.probeBudget, agent.backoffs = 150*time.Millisecond, []time.Duration{10 * time.Millisecond}
+	agent.probeBudget, agent.probeGrace = 150*time.Millisecond, 50*time.Millisecond
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	go func() { _ = agent.Run(ctx) }()
@@ -2067,9 +2092,18 @@ func TestAProbeThatWouldOverfillTheFrameIsLeftOutAndSaid(t *testing.T) {
 	}
 }
 
-// Fix round 1, I1: the probes' real programs run with a WaitDelay.
+// probeRunnerAtLoad is probeRunner as the package set it up — package-level
+// variables are initialized before any init() — so the test below reads the
+// wiring itself, not the fake this package's init() puts in its place.
+var probeRunnerAtLoad = probeRunner
+
+// Fix round 1, I1 (fix round 2: the wiring itself): the probes' real
+// programs run through probeExec, which has a WaitDelay.
 func TestTheProbesRealRunnerHasAWaitDelay(t *testing.T) {
-	if probeExec.WaitDelay <= 0 {
-		t.Fatalf("probeExec = %+v", probeExec)
+	if probeRunnerAtLoad != platform.Runner(probeExec) || probeExec.WaitDelay <= 0 {
+		t.Fatalf("probeRunner starts as %#v; probeExec = %+v", probeRunnerAtLoad, probeExec)
+	}
+	if _, fake := probeRunner.(*platform.FakeRunner); !fake {
+		t.Fatalf("this package's tests must run with the fake, got %#v", probeRunner)
 	}
 }

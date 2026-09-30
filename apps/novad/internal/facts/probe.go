@@ -69,8 +69,9 @@ type Distro struct {
 	SudoSaid string `json:"sudo_said,omitempty"`
 	Root     bool   `json:"root"`
 	Unit     *Unit  `json:"novad_unit,omitempty"`
-	// PIDs are its novad processes: [] for none, and null — never [] — when
-	// they could not be listed (pgrep missing or failing there).
+	// PIDs are its novad processes: [] only when none is known to run (it
+	// is stopped, or a finished look found none); null — unknown — whenever
+	// they could not be listed: the list or look failed, pgrep is missing.
 	PIDs []int `json:"novad_pids"`
 }
 
@@ -124,11 +125,17 @@ func Probe(ctx context.Context, r platform.Runner, self Self) Probed {
 	ectx, cancel := context.WithTimeout(ctx, probeProgram)
 	e, err := platform.Elevation(ectx, r)
 	cancel()
+	// What was read is kept whatever failed (fix round 2): Elevated is the
+	// agent's own read (geteuid, its token). A sudo that gave no answer, or
+	// never started, is "unknown" with the reason — never dropped, never a
+	// guess; what else failed is said unreadable, and Admin stays nil.
+	p.Elevation = &Elevation{Elevated: e.Elevated, Admin: e.Admin, Sudo: e.Sudo, SudoSaid: said(e.Said)}
 	if err != nil {
 		p.OutOfTime = platform.OutOfTime(err)
 		p.Unreadable = append(p.Unreadable, Unreadable{Item: "elevation", Reason: failed(err)})
-	} else {
-		p.Elevation = &Elevation{Elevated: e.Elevated, Admin: e.Admin, Sudo: e.Sudo, SudoSaid: said(e.Said)}
+		if p.Elevation.Sudo == "" {
+			p.Elevation.Sudo, p.Elevation.SudoSaid = "unknown", failed(err)
+		}
 	}
 	if runtime.GOOS == "windows" {
 		w, unread := probeWSL(ctx, r)
@@ -180,21 +187,28 @@ func probeWSL(ctx context.Context, r platform.Runner) (*WSLDistros, []Unreadable
 	if len(list) == 0 {
 		return out, unread
 	}
-	running, err := runningNow(ctx, r)
-	if err != nil {
+	running, listErr := runningNow(ctx, r)
+	if listErr != nil {
 		// Nothing running and a real failure can look alike here: say the
 		// words, and read nothing it printed as running — a wrong guess
 		// would look inside, and so start, a stopped distribution.
-		out.RunningSaid = failed(err)
-		out.outOfTime = platform.OutOfTime(err)
+		out.RunningSaid = failed(listErr)
+		out.outOfTime = platform.OutOfTime(listErr)
 	}
 	for _, d := range list {
 		if len(out.Distros) == maxDistros {
 			unread = append(unread, Unreadable{Item: "wsl_distros", Reason: fmt.Sprintf("more than %d distributions; the rest are not listed", maxDistros)})
 			break
 		}
-		entry := Distro{Name: line(d.Name), Default: d.Default, Version: wslVersion(d.Version), Running: running[d.Name], PIDs: []int{}}
-		if entry.Running && lookIfStillRunning(ctx, r, d.Name, &entry, &unread) {
+		// PIDs stay nil — null on the wire, unknown — unless it is known
+		// that none runs: the distribution is stopped, or a finished look
+		// found none (fix round 2). [] is never a guess.
+		entry := Distro{Name: line(d.Name), Default: d.Default, Version: wslVersion(d.Version), Running: running[d.Name]}
+		switch {
+		case listErr != nil:
+		case !entry.Running:
+			entry.PIDs = []int{} // stopped: nothing runs there
+		case lookIfStillRunning(ctx, r, d.Name, &entry, &unread):
 			out.outOfTime = true
 		}
 		out.Distros = append(out.Distros, entry)
@@ -230,7 +244,7 @@ func lookIfStillRunning(ctx context.Context, r platform.Runner, name string, d *
 			Reason: said("not looked inside: the running-list just before the look failed: " + failed(err))})
 		return platform.OutOfTime(err)
 	case !running[name]:
-		d.Running = false // it stopped since the first list
+		d.Running, d.PIDs = false, []int{} // it stopped since the first list: nothing runs there
 		return false
 	}
 	return look(ctx, r, name, d, unread)
@@ -264,9 +278,10 @@ func look(ctx context.Context, r platform.Runner, name string, d *Distro, unread
 		}
 	}
 	if in.PIDsUnknown {
-		d.PIDs = nil
 		*unread = append(*unread, Unreadable{Item: clip(item + ".novad_pids"),
 			Reason: "its novad processes could not be listed: pgrep is missing there, or failed"})
+	} else {
+		d.PIDs = []int{}
 	}
 	for _, pid := range in.PIDs {
 		if pidFact(pid) == 0 {

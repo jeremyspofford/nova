@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -506,5 +507,87 @@ func TestAProbeWhoseProgramIgnoresTheKillReturnsAtItsBound(t *testing.T) {
 	}
 	if !p.OutOfTime || !strings.Contains(said, "gave no answer in time") || len(r.Recorded()) == 0 {
 		t.Fatalf("out of time %v, said %q, calls %v", p.OutOfTime, said, r.Recorded())
+	}
+}
+
+// Fix round 2: a wsl.exe that exited 0 while a descendant held its output
+// (exec.ErrWaitDelay) answered — its list is read, its look is looked at, its
+// root check ran — never "the list failed" or root:false.
+func TestAWSLExeThatExitedZeroWhileItsOutputWasHeldAnswered(t *testing.T) {
+	withDistros(t, []platform.WSLDistro{{Name: "Ubuntu-26.04", Version: 2}})
+	held := &platform.RunError{Name: "wsl.exe", Err: exec.ErrWaitDelay}
+	s := &script{answers: []answer{
+		{out: "Ubuntu-26.04\n", err: held}, {out: "Ubuntu-26.04\n", err: held}, {out: lookOut, err: held}, {err: held},
+	}}
+	got, unread := probeWSL(context.Background(), s)
+	if d := got.Distros[0]; got.RunningSaid != "" || !d.Running || !d.Looked || !d.Root || len(unread) != 0 {
+		t.Fatalf("got %+v (running_said %q), unreadable %+v", d, got.RunningSaid, unread)
+	}
+}
+
+// Fix round 2: novad_pids is [] only when none is known to run — the
+// distribution is stopped, or a finished look found none. Whenever the list,
+// the list before the look, or the look failed, it is null: unknown, never
+// "no novad process".
+func TestNovadPIDsAreUnknownUnlessKnownToBeNone(t *testing.T) {
+	failed := errors.New("wsl.exe: exit status 1: busy")
+	cases := []struct {
+		name    string
+		answers []answer
+		want    []int
+	}{
+		{"the list failed", []answer{{err: failed}}, nil},
+		{"the list before the look failed", []answer{{out: "Ubuntu-26.04\n"}, {err: failed}}, nil},
+		{"the look failed", []answer{{out: "Ubuntu-26.04\n"}, {out: "Ubuntu-26.04\n"}, {err: failed}}, nil},
+		{"the look ended early", []answer{{out: "Ubuntu-26.04\n"}, {out: "Ubuntu-26.04\n"}, {out: "pid1=systemd\n"}}, nil},
+		{"stopped", []answer{{out: ""}}, []int{}},
+		{"stopped since the list", []answer{{out: "Ubuntu-26.04\n"}, {out: ""}}, []int{}},
+		{"a finished look found none", []answer{{out: "Ubuntu-26.04\n"}, {out: "Ubuntu-26.04\n"},
+			{out: strings.Replace(lookOut, "pids=412", "pids=", 1)}, {}}, []int{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withDistros(t, []platform.WSLDistro{{Name: "Ubuntu-26.04", Version: 2}})
+			got, _ := probeWSL(context.Background(), &script{answers: c.answers})
+			d := got.Distros[0]
+			if (d.PIDs == nil) != (c.want == nil) || len(d.PIDs) != len(c.want) {
+				t.Fatalf("novad_pids = %#v, want %#v", d.PIDs, c.want)
+			}
+			data, _ := json.Marshal(d)
+			if wire := `"novad_pids":null`; (c.want == nil) != strings.Contains(string(data), wire) {
+				t.Fatalf("on the wire: %s", data)
+			}
+		})
+	}
+}
+
+// Fix round 2: a sudo that gave no answer, or never started, leaves what the
+// agent knows in the frame — elevated is its own geteuid read — and says
+// sudo is unknown, with the reason; it is never dropped whole.
+func TestASudoWithNoAnswerKeepsWhatTheAgentKnows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reads its own token and registry; no program answers for sudo there")
+	}
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	var p Probed
+	returnsWithin(t, 2*time.Second, func() { p = Probe(ctx, &platform.FakeRunner{Hold: hold}, Self{}) })
+	e := p.Elevation
+	if e == nil || e.Elevated != (os.Geteuid() == 0) || e.Admin != nil || e.Sudo != "unknown" ||
+		e.SudoSaid != "sudo: gave no answer in time" || !p.OutOfTime || len(p.Unreadable) != 1 {
+		t.Fatalf("elevation %+v, unreadable %+v", e, p.Unreadable)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	p = Probe(ctx, &platform.FakeRunner{}, Self{})
+	if e := p.Elevation; e == nil || e.Sudo != "unknown" || e.SudoSaid != "sudo did not start: had no time left to start" {
+		t.Fatalf("elevation %+v", e)
+	}
+	// A sudo that answered is said as it answered.
+	p = Probe(context.Background(), &platform.FakeRunner{Outputs: map[string]string{"sudo": ""}}, Self{})
+	if e := p.Elevation; e == nil || e.Sudo != "no_password" || e.SudoSaid != "" || len(p.Unreadable) != 0 {
+		t.Fatalf("elevation %+v, unreadable %+v", e, p.Unreadable)
 	}
 }

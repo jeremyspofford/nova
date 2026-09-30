@@ -62,10 +62,14 @@ const (
 )
 
 // ProbeBudget bounds one run of the slow probes (P29); each program they
-// run has 10 s of its own. ProbeMaxAge spares a flapping link: a reconnect
-// within it keeps the last probe instead of running sudo and wsl.exe again.
+// run has 10 s of its own. ProbeGrace is how long before ProbeBudget runs
+// out the probe's own programs are cut, so they answer "gave no answer in
+// time" with that much to spare before reprobe stops waiting on the probe.
+// ProbeMaxAge spares a flapping link: a reconnect within it keeps the last
+// probe instead of running sudo and wsl.exe again.
 const (
 	ProbeBudget = 45 * time.Second
+	ProbeGrace  = 2 * time.Second
 	ProbeMaxAge = 10 * time.Minute
 )
 
@@ -164,11 +168,13 @@ type Agent struct {
 	// probe runs the slow probes (P29). nil — tests, and every verb but
 	// run — probes nothing. probed is the last result, and probing says a
 	// probe started at connect is still running; both guarded by factsMu.
-	// probeBudget is ProbeBudget, a field so a test runs it fast.
+	// probeBudget and probeGrace are ProbeBudget and ProbeGrace, fields so
+	// a test runs them fast.
 	probe       func(context.Context) facts.Probed
 	probed      *facts.Probed
 	probing     bool
 	probeBudget time.Duration
+	probeGrace  time.Duration
 
 	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
 	// platform call with no timeout of its own (macOS ioreg) must not burn
@@ -236,6 +242,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		now:              time.Now,
 		authGatherBudget: 5 * time.Second,
 		probeBudget:      ProbeBudget,
+		probeGrace:       ProbeGrace,
 		heartbeatEvery:   HeartbeatInterval,
 		pingTimeout:      PingTimeout,
 		factsEvery:       FactsEvery,
@@ -839,7 +846,7 @@ func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
 // but not kept across a reconnect: the next connection probes again.
 //
 // The probe is waited for at most probeBudget, whatever it does (S42b fix
-// round 1, I1): its programs are bounded a little inside that, so they
+// round 1, I1): its programs are bounded probeGrace inside that, so they
 // answer "gave no answer in time" first; anything else that hangs is left
 // to finish on its own, nothing it answers later is kept, and probing
 // clears either way.
@@ -867,7 +874,7 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 			a.factsMu.Unlock()
 		}()
 	}
-	pctx, cancel := context.WithTimeout(ctx, a.probeBudget-a.probeBudget/20)
+	pctx, cancel := context.WithTimeout(ctx, a.probeBudget-a.probeGrace)
 	defer cancel()
 	answer := make(chan facts.Probed, 1) // buffered: a probe answering late never blocks
 	go func() { answer <- a.probe(pctx) }()

@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"os/exec"
 )
 
 // The two ways a bound cuts a program (runBounded).
@@ -29,7 +30,11 @@ func OutOfTime(err error) bool {
 // waits for as long as sudo takes. A program still running at the bound is
 // left to the goroutine that ran it, which reaps it whenever it exits. One
 // that failed as its bound passed was killed by it — on Windows a killed
-// program exits 1, which would otherwise read as its own failure.
+// program exits 1, which would otherwise read as its own failure. And
+// exec.ErrWaitDelay is the exit 0 it reports (fix round 2): Go returns it
+// only for a program that exited successfully while a descendant still held
+// its output pipes — sudo -n true that succeeded is never "refused" for it,
+// nor a wsl.exe list, look or root check a failure.
 func runBounded(ctx context.Context, name string, run func(context.Context) (string, error)) (string, error) {
 	if ctx.Err() != nil {
 		return "", &RunError{Name: name, Err: ErrNoTime, NotStarted: true}
@@ -52,6 +57,9 @@ func runBounded(ctx context.Context, name string, run func(context.Context) (str
 		default:
 			return "", &RunError{Name: name, Err: ErrNoAnswer}
 		}
+	}
+	if errors.Is(res.err, exec.ErrWaitDelay) {
+		res.err = nil
 	}
 	if res.err != nil && ctx.Err() != nil {
 		return res.out, &RunError{Name: name, Err: ErrNoAnswer}
