@@ -49,6 +49,10 @@ func main() {
 		cmdRepoint(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "install":
+		cmdInstall(os.Args[2:])
+	case "uninstall":
+		cmdUninstall(os.Args[2:])
 	case "supervise":
 		cmdSupervise(os.Args[2:])
 	case "status":
@@ -61,13 +65,17 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `novad %s — the Nova agent daemon
+func usage() { fmt.Fprint(os.Stderr, usageText()) }
+
+func usageText() string {
+	return fmt.Sprintf(`novad %s — the Nova agent daemon
 
 usage:
   novad enroll --server <url> --code <code> [--name <name>] [--force]
   novad repoint --server <url> [--check]
   novad run
+  novad install [--hub <url>]... [--code <code>] [--name <name>] [--if-missing] [--restart-later]
+  novad uninstall [--forget]
   novad supervise --mode <systemd-user|launch-agent|run-key>
   novad status
   novad version
@@ -284,13 +292,6 @@ func cmdRun(argv []string) {
 	}
 
 	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
-
-	lock, err := state.Acquire(filepath.Join(paths.StateDir, state.RunLockFile))
-	if err != nil {
-		// Exit 1, never 78: the other copy may stop, and a supervisor retries.
-		fail("%v — this identity is already running; stop that copy first", err)
-	}
-	defer lock.Release()
 	statusPath := filepath.Join(paths.StateDir, state.AgentStatusFile)
 	writeStatus := func(st, server string, e error) {
 		s := state.AgentStatus{V: 1, PID: os.Getpid(), Version: version, Mode: platform.Mode(),
@@ -302,6 +303,13 @@ func cmdRun(argv []string) {
 			logger.Printf("could not write %s: %v", statusPath, err)
 		}
 	}
+
+	lock, err := holdIdentity(paths.StateDir, writeStatus)
+	if err != nil {
+		// Exit 1, never 78: the other copy may stop, and a supervisor retries.
+		fail("%v — this identity is already running; stop that copy first", err)
+	}
+	defer lock.Release()
 	writeStatus(state.StateStarting, cfg.Server, nil)
 
 	auditLog, err := audit.Open(paths.AuditFile)
@@ -337,6 +345,18 @@ func cmdRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "novad: %s\n", msg)
 	}
 	os.Exit(code)
+}
+
+// holdIdentity takes run.lock, one copy per identity (P5). A refusal is
+// written into the agent's status before it is returned: `install` waits on
+// that file, and names the copy holding the identity from it (Review Focus 4).
+func holdIdentity(stateDir string, writeStatus func(st, server string, e error)) (*state.Lock, error) {
+	lock, err := state.Acquire(filepath.Join(stateDir, state.RunLockFile))
+	if err != nil {
+		writeStatus(state.StateStopped, "", err)
+		return nil, err
+	}
+	return lock, nil
 }
 
 func cmdStatus(argv []string) {

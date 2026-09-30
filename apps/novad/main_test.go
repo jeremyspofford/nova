@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/install"
 	"novad/internal/state"
 	"novad/internal/supervise"
 )
@@ -292,5 +294,85 @@ func TestSelfBinarySurfacesAFailedExecutablePathLookup(t *testing.T) {
 	self, err := selfBinary()
 	if err != nil || self != "/opt/novad/novad" {
 		t.Fatalf("selfBinary() = %q, %v", self, err)
+	}
+}
+
+func TestInstallExitCodes(t *testing.T) {
+	if installExit(nil) != 0 || installExit(fmt.Errorf("x: %w", install.ErrNeedsCode)) != 3 || installExit(errors.New("boom")) != 1 {
+		t.Fatal("install exits 0, 3 (a code is needed) or 1")
+	}
+}
+
+// Controller ruling: the usage names every install flag, --restart-later
+// included (P11 runs it; a person reading the usage should find it).
+func TestTheUsageNamesTheInstallVerbsAndTheirFlags(t *testing.T) {
+	for _, want := range []string{
+		"novad install [--hub <url>]... [--code <code>] [--name <name>] [--if-missing] [--restart-later]\n",
+		"novad uninstall [--forget]\n",
+	} {
+		if !strings.Contains(usageText(), want) {
+			t.Errorf("the usage is missing %q:\n%s", want, usageText())
+		}
+	}
+}
+
+// Review focus 4: a second copy of one identity is refused by run.lock, and
+// the refusal is written into the agent's status before run fails — install
+// waits on that file, and names the holder from it.
+func TestARefusedRunLockIsWrittenIntoTheStatusForInstallToName(t *testing.T) {
+	dir := t.TempDir()
+	first, err := state.Acquire(filepath.Join(dir, state.RunLockFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	t.Cleanup(func() { // a held lock would stop Windows removing dir
+		if !released {
+			_ = first.Release()
+		}
+	})
+	var said string
+	var why error
+	record := func(st, _ string, e error) { said, why = st, e }
+	if lock, err := holdIdentity(dir, record); err == nil {
+		_ = lock.Release()
+		t.Fatal("a second holder of the identity must be refused")
+	}
+	var held *state.HeldError
+	if said != state.StateStopped || !errors.As(why, &held) || held.PID != os.Getpid() {
+		t.Fatalf("status %q, error %v — the refusal must reach the status, naming the holder", said, why)
+	}
+
+	_ = first.Release()
+	released = true
+	said, why = "", nil
+	lock, err := holdIdentity(dir, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lock.Release()
+	if said != "" || why != nil {
+		t.Fatalf("a lock that was taken wrote a status: %q %v", said, why)
+	}
+}
+
+// The code reaches install by --code or NOVA_PAIRING_CODE, and never goes
+// further: the variable leaves this process's environment, so no program
+// install starts (on Windows the supervisor it starts detached, and every
+// command the agent runs after it) inherits it.
+func TestThePairingCodeFromTheEnvironmentGoesNoFurther(t *testing.T) {
+	t.Setenv(pairingCodeEnv, "ABCD-2345")
+	if got := pairingCode(""); got != "ABCD-2345" {
+		t.Fatalf("pairingCode = %q", got)
+	}
+	if v, set := os.LookupEnv(pairingCodeEnv); set {
+		t.Fatalf("%s is still in the environment: %q", pairingCodeEnv, v)
+	}
+	t.Setenv(pairingCodeEnv, "WXYZ-6789")
+	if got := pairingCode("ABCD-2345"); got != "ABCD-2345" {
+		t.Fatalf("--code must win over the environment, got %q", got)
+	}
+	if _, set := os.LookupEnv(pairingCodeEnv); set {
+		t.Fatalf("%s is still in the environment after --code", pairingCodeEnv)
 	}
 }
