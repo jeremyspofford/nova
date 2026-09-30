@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -154,8 +155,12 @@ func GatherAuth(ctx context.Context, r platform.Runner, version string, last *st
 		a.OS.WSL = &WSL{Distro: clip(distro)}
 	}
 	if last != nil && (last.Outcome == state.UpdateApplied || last.Outcome == state.UpdateRolledBack) {
+		// Reason can carry an agent's own last error (supervise's
+		// lastError) — collapsed to one line BEFORE clipping (cross-task,
+		// fix round 1): core's Task 16 refuses a control character
+		// outright, and this is meant to render as one line regardless.
 		a.Agent.Update = &UpdateFact{Version: clip(last.Version), Outcome: last.Outcome,
-			Reason: clip(last.Reason), At: last.At.UTC().Format(time.RFC3339)}
+			Reason: clip(collapseControl(last.Reason)), At: last.At.UTC().Format(time.RFC3339)}
 	}
 	return a, unread
 }
@@ -281,4 +286,30 @@ func clip(s string) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// collapseControl replaces every control character (newlines, tabs, a
+// program's raw stderr, …) with a single space and squeezes the runs that
+// leaves, so text built from another program's output — supervise's
+// lastError, folded into a rolled-back/applied UpdateFact.Reason — still
+// reads as ONE line (cross-task, fix round 1: core's Task 16 refuses a
+// control character in this field outright).
+func collapseControl(s string) string {
+	var b strings.Builder
+	spaced := false
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		if r == ' ' {
+			if spaced {
+				continue
+			}
+			spaced = true
+		} else {
+			spaced = false
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }

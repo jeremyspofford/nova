@@ -201,3 +201,46 @@ func TestAuthFactsCarryTheLastUpdateOutcomeButNeverAStagedOne(t *testing.T) {
 		t.Fatal("a staged update is transient and never reported")
 	}
 }
+
+// Minor 4 (fix round 1): the applied branch is exercised too, not just
+// rolled_back — a confirmed update is reported exactly like a reverted one.
+func TestAuthFactsCarryAnAppliedUpdateToo(t *testing.T) {
+	r := &platform.FakeRunner{Outputs: map[string]string{
+		"/usr/sbin/ioreg": `"IOPlatformUUID" = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"`,
+	}}
+	at := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	a, _ := GatherAuth(context.Background(), r, "0123456789ab", &state.Update{
+		Version: "bbbbbbbbbbbb", Outcome: state.UpdateApplied, At: at})
+	want := &UpdateFact{Version: "bbbbbbbbbbbb", Outcome: "applied", Reason: "", At: "2026-09-28T12:00:00Z"}
+	if !reflect.DeepEqual(a.Agent.Update, want) {
+		t.Fatalf("got %+v", a.Agent.Update)
+	}
+}
+
+// Cross-task item (fix round 1): core's Task 16 refuses a control character
+// in a P29-style reported field outright, and the supervisor's own reasons
+// can carry an agent's last error (supervise's lastError appends "; its
+// last error: " + a status string an arbitrary program produced) — so a
+// newline or tab must never survive into UpdateFact.Reason.
+func TestAuthFactsCollapseControlCharactersInTheUpdateReason(t *testing.T) {
+	r := &platform.FakeRunner{Outputs: map[string]string{
+		"/usr/sbin/ioreg": `"IOPlatformUUID" = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"`,
+	}}
+	a, _ := GatherAuth(context.Background(), r, "0123456789ab", &state.Update{
+		Version: "aaaaaaaaaaaa", Outcome: state.UpdateRolledBack,
+		Reason: "the new build did not connect within 2m0s; its last error: panic: boom\n\ngoroutine 1 [running]:\nmain.main()\n\t/tmp/x.go:1",
+		At:     time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC),
+	})
+	got := a.Agent.Update.Reason
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("a control character (%q) survived into the reported reason: %q", r, got)
+		}
+	}
+	if strings.Contains(got, "\n") || strings.Contains(got, "\t") {
+		t.Fatalf("the reason must read as one line, got %q", got)
+	}
+	if !strings.Contains(got, "boom") || !strings.Contains(got, "main.main()") {
+		t.Fatalf("collapsing must not delete the content, only the control characters, got %q", got)
+	}
+}

@@ -75,6 +75,12 @@ func daemonUpdate(ctx context.Context, r Request) Outcome {
 	if !u.Supervised {
 		return fail("cannot: this agent was started by hand, not by its service, so nothing would start a new build — install the service (novad install) and it updates itself")
 	}
+	if u.Binary == "" || !filepath.IsAbs(u.Binary) || u.StateDir == "" || !filepath.IsAbs(u.StateDir) {
+		// Fix round 1, Minor 2: a relative or empty Binary/StateDir would
+		// stage (or record) beside whatever the process's current
+		// directory happens to be — never safe to guess at.
+		return fail("cannot: this agent's binary and state directory must both be configured with absolute paths before it can stage an update")
+	}
 	base := ""
 	if u.BaseURL != nil {
 		base = strings.TrimRight(u.BaseURL(), "/")
@@ -114,7 +120,15 @@ func daemonUpdate(ctx context.Context, r Request) Outcome {
 
 func download(ctx context.Context, c *http.Client, url, dst string) (string, int64, error) {
 	if c == nil {
-		c = &http.Client{Timeout: 100 * time.Second}
+		c = &http.Client{
+			Timeout: 100 * time.Second,
+			// Fix round 1, Minor 3: the download must stay on the locator
+			// this connection is on. The first response is used as-is —
+			// http.ErrUseLastResponse stops net/http from silently
+			// following a redirect to another host; a redirect then reads
+			// as a non-200 status below, refused like any other bad answer.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

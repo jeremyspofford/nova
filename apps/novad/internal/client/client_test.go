@@ -1,9 +1,13 @@
 package client
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"novad/internal/state"
 )
 
 // truncate caps by bytes but must never split a rune — a mangled rune in an
@@ -52,5 +56,28 @@ func TestWSURLDerivation(t *testing.T) {
 func TestWSURLRefusesAJunkScheme(t *testing.T) {
 	if _, err := WSURL("ftp://nope"); err == nil {
 		t.Error("a non-http(s)/ws(s) scheme must be refused")
+	}
+}
+
+// I3 (fix round 1): lastUpdate must distinguish "never written"
+// (fs.ErrNotExist — nothing to report, (nil, nil)) from any OTHER read
+// error (a real failure, returned as (nil, err) rather than silently
+// swallowed into the same "nothing to report" shape).
+func TestLastUpdateDistinguishesMissingFromAnyOtherReadError(t *testing.T) {
+	a := &Agent{}
+	a.Configure(Options{StateDir: t.TempDir()})
+
+	u, err := a.lastUpdate()
+	if u != nil || err != nil {
+		t.Fatalf("a never-written update.json must be (nil, nil), got (%v, %v)", u, err)
+	}
+
+	path := filepath.Join(a.opts.StateDir, state.UpdateFile)
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u, err = a.lastUpdate()
+	if u != nil || err == nil {
+		t.Fatalf("a corrupt update.json must be (nil, a real error), got (%v, %v)", u, err)
 	}
 }

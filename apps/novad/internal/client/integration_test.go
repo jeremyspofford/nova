@@ -1395,7 +1395,11 @@ func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	results := make(chan map[string]any, 1)
+	type observed struct {
+		result, audit map[string]any
+		closeErr      error
+	}
+	results := make(chan observed, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/agent/dist/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(build) })
 	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -1419,13 +1423,27 @@ func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
 		}
 		canon, _ := wire.Canonical(env)
 		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		// Keep reading past the result: the audit entry (Minor 4, fix round
+		// 1) follows it, and then the agent closes the socket itself
+		// (Minor 5) to leave for the swap — that close is what ends this
+		// loop, so its status/reason is observable too.
+		var obs observed
 		for {
 			f, err := coreRead(ctx, c)
 			if err != nil {
+				obs.closeErr = err
+				results <- obs
 				return
 			}
-			if f["type"] == "result" {
-				results <- f
+			switch f["type"] {
+			case "result":
+				obs.result = f
+			case "audit":
+				if raw, ok := f["entries"].([]any); ok && len(raw) > 0 {
+					if m, ok := raw[0].(map[string]any); ok {
+						obs.audit = m
+					}
+				}
 			}
 		}
 	})
@@ -1443,12 +1461,21 @@ func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- agent.Run(ctx) }()
 	select {
-	case res := <-results:
-		if ok, _ := res["ok"].(bool); !ok {
-			t.Fatalf("result = %v", res)
+	case obs := <-results:
+		if ok, _ := obs.result["ok"].(bool); !ok {
+			t.Fatalf("result = %v", obs.result)
+		}
+		if ok, _ := obs.audit["ok"].(bool); !ok {
+			t.Fatalf("audit entry = %v", obs.audit)
+		}
+		if code := websocket.CloseStatus(obs.closeErr); code != websocket.StatusNormalClosure {
+			t.Errorf("close status = %v (%v), want StatusNormalClosure — a graceful close, not the deferred CloseNow", code, obs.closeErr)
+		}
+		if obs.closeErr == nil || !strings.Contains(obs.closeErr.Error(), "restarting into a new build") {
+			t.Errorf("close reason missing %q, got %v", "restarting into a new build", obs.closeErr)
 		}
 	case <-ctx.Done():
-		t.Fatal("no result frame")
+		t.Fatal("no result+audit frame")
 	}
 	select {
 	case err := <-runErr:
@@ -1457,5 +1484,134 @@ func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("the agent never left for the swap")
+	}
+}
+
+// F1 pin (fix round 1, Minor 4): daemon.update downloads from the locator
+// THIS session is actually connected through (Server(), Task 6's F1
+// ruling), never blindly the first configured locator. The first locator
+// here is a black hole; only the second answers, so if BaseURL were wired
+// to anything but a.Server() the download would try the dead address and
+// the result would never come back ok.
+func TestDaemonUpdateDownloadsFromTheLocatorThisSessionIsActuallyOn(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-update-locator-1"
+	build := []byte("the hub's new build")
+	sum := sha256.Sum256(build)
+	name := "novad-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	results := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/agent/dist/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(build) })
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "upd-loc-e1", "device_id": deviceID, "capability": "daemon.update",
+			"args":      map[string]any{"version": "aaaaaaaaaaaa", "sha256": hex.EncodeToString(sum[:]), "path": "/api/v1/agent/dist/" + name},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "result" {
+				results <- f
+				return
+			}
+		}
+	})
+	live := httptest.NewServer(mux)
+	defer live.Close()
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", live.URL}, deviceID, hex.EncodeToString(corePub), devPriv)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "novad")
+	if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case res := <-results:
+		if ok, _ := res["ok"].(bool); !ok {
+			t.Fatalf("result = %v — the download must succeed against the SECOND (live) locator, the one this session is actually on", res)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result frame — daemon.update likely tried the dead first locator instead of Server()")
+	}
+}
+
+// I2 (fix round 1), Run's own half: a restart flagged before Run ever
+// starts — standing in for a now-dead session's daemon.update finishing its
+// download only after ITS OWN connection died, so sessionCancel no longer
+// names anything useful — is caught at the TOP of the loop, before even
+// dialing. Proven by counting connection ARRIVALS at a live, otherwise-
+// perfectly-answering fake core: a timing bound alone would not isolate
+// this from the (also-present) after-connectOnce check, since a refused
+// dial can be just as fast as never dialing at all.
+func TestRunNeverDialsWhenARestartIsAlreadyPending(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, false, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-restart-race-1", hex.EncodeToString(corePub), devPriv)
+	agent.restart.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, ErrRestartForUpdate) {
+		t.Fatalf("Run = %v, want ErrRestartForUpdate", err)
+	}
+	if n := len(arrivals()); n != 0 {
+		t.Fatalf("Run dialed the hub %d time(s) — it must never dial at all once a restart is already pending", n)
+	}
+}
+
+// I2 (fix round 1), serve's own half: a restart already pending when a NEW
+// session starts is caught right after sessionCancel.Store, before this
+// session serves anything — not even the facts frame. Proven directly
+// against serve() with a connection whose write lock is already held
+// forever: without the fix, sendFacts's write would block on it until
+// pingTimeout; with the fix, serve returns long before that write is ever
+// attempted.
+func TestServeRefusesToStartASessionWhenARestartIsAlreadyPending(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-restart-race-2", hex.EncodeToString(corePub), devPriv)
+	agent.pingTimeout = 100 * time.Millisecond
+	agent.restart.Store(true)
+
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() { errCh <- agent.serve(context.Background(), conn) }()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrRestartForUpdate) {
+			t.Fatalf("serve = %v, want ErrRestartForUpdate", err)
+		}
+		if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+			t.Fatalf("serve took %s — it must return before ever attempting to write (a write would block on this connection's held lock until pingTimeout)", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve never returned — a pending restart did not stop it from trying to serve this session")
 	}
 }

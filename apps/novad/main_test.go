@@ -15,6 +15,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/state"
+	"novad/internal/supervise"
 )
 
 // The enroll body is identity only: the pairing code plus what this machine
@@ -260,7 +261,36 @@ func TestStatusLinesSayWhatTheStatusFilesSay(t *testing.T) {
 
 func TestAStagedUpdateExitsSeventyFiveForTheSupervisor(t *testing.T) {
 	code, msg := afterRun(config.Paths{}, client.ErrRestartForUpdate, time.Now())
-	if code != 75 || !strings.Contains(msg, "the supervisor") {
+	if code != exitUpdateStaged || !strings.Contains(msg, "the supervisor") {
 		t.Fatalf("afterRun = %d %q", code, msg)
+	}
+}
+
+// Fix round 1, Minor 1: exitUpdateStaged is named FROM
+// supervise.ExitUpdateStaged — the value supervise itself consumes at the
+// OS boundary — so a pin on the literal here would never catch it drifting
+// from what supervise actually expects.
+func TestExitUpdateStagedIsTheSupervisorsOwnConstant(t *testing.T) {
+	if exitUpdateStaged != supervise.ExitUpdateStaged {
+		t.Fatalf("exitUpdateStaged = %d, supervise.ExitUpdateStaged = %d", exitUpdateStaged, supervise.ExitUpdateStaged)
+	}
+}
+
+// Fix round 1, Minor 2: main.go used to discard os.Executable's error and
+// hand daemon.update a silently empty Binary — surfaced now as a real
+// failure at startup instead of a mysterious later refusal.
+func TestSelfBinarySurfacesAFailedExecutablePathLookup(t *testing.T) {
+	old := executablePath
+	t.Cleanup(func() { executablePath = old })
+
+	executablePath = func() (string, error) { return "", errors.New("boom") }
+	if _, err := selfBinary(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("selfBinary() error = %v, want it to surface the underlying failure", err)
+	}
+
+	executablePath = func() (string, error) { return "/opt/novad/novad", nil }
+	self, err := selfBinary()
+	if err != nil || self != "/opt/novad/novad" {
+		t.Fatalf("selfBinary() = %q, %v", self, err)
 	}
 }

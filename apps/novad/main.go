@@ -33,6 +33,7 @@ import (
 	"novad/internal/config"
 	"novad/internal/platform"
 	"novad/internal/state"
+	"novad/internal/supervise"
 )
 
 // version is the build stamp: builds set it with
@@ -170,6 +171,21 @@ func cmdEnroll(argv []string) {
 // inWSL is platform.WSL, a variable so a test can say "inside WSL".
 var inWSL = func() bool { in, _ := platform.WSL(); return in }
 
+// executablePath is os.Executable, a variable so a test can make it fail.
+var executablePath = os.Executable
+
+// selfBinary is cmdRun's own path — daemon.update stages a build beside it,
+// so it must be a real, absolute path, never a silently empty Binary that
+// only surfaces much later as a mysterious daemon.update refusal (fix round
+// 1, Minor 2: main.go used to discard os.Executable's error).
+func selfBinary() (string, error) {
+	self, err := executablePath()
+	if err != nil {
+		return "", fmt.Errorf("could not determine this executable's own path: %w", err)
+	}
+	return self, nil
+}
+
 // enrollPreflight refuses to enroll inside WSL (hub decision D1): on Windows,
 // Nova's agent runs on Windows itself and reaches WSL through wsl.exe and
 // \\wsl.localhost. An agent inside WSL cannot reach Windows' desktop,
@@ -204,9 +220,11 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 const exitConfig = 78
 
 // exitUpdateStaged is `novad run`'s exit after daemon.update staged a build:
-// the supervisor (internal/supervise, ExitUpdateStaged) swaps it in and
-// confirms or rolls it back.
-const exitUpdateStaged = 75
+// the supervisor (internal/supervise) swaps it in and confirms or rolls it
+// back. Fix round 1, Minor 1: named FROM supervise.ExitUpdateStaged (the
+// value that code actually consumes at the OS boundary), not a second
+// literal 75 that could quietly drift from it.
+const exitUpdateStaged = supervise.ExitUpdateStaged
 
 // afterFailedWipe turns a config.Wipe failure into an instruction built from
 // what is ACTUALLY still on disk, checked fresh rather than assumed from
@@ -354,7 +372,10 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	self, _ := os.Executable()
+	self, err := selfBinary()
+	if err != nil {
+		fail("%v", err)
+	}
 	agent.Configure(client.Options{StateDir: paths.StateDir, Supervised: platform.Supervised(), Binary: self, OnState: writeStatus})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"path/filepath"
 	"sync"
@@ -216,21 +217,38 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 	// Set after the Agent exists, so it can read update.json through
 	// a.lastUpdate() — the last outcome daemon.update or supervise recorded.
 	a.gatherAuth = func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
-		return facts.GatherAuth(ctx, platform.Exec{}, version, a.lastUpdate())
+		last, uerr := a.lastUpdate()
+		auth, unread := facts.GatherAuth(ctx, platform.Exec{}, version, last)
+		if uerr != nil {
+			// Fix round 1, I3: update.json existing but unreadable is a real
+			// fact-gathering failure, not "no update to report" — say so
+			// rather than silently making the update fact disappear.
+			unread = append(unread, facts.Unreadable{Item: "agent.update", Reason: uerr.Error()})
+		}
+		return auth, unread
 	}
 	return a, nil
 }
 
-// lastUpdate is update.json, or nil when there is none to report.
-func (a *Agent) lastUpdate() *state.Update {
+// lastUpdate is update.json's last outcome. It returns (nil, nil) when
+// there is nothing to report — no StateDir configured, or the file was
+// never written (fs.ErrNotExist) — and (nil, err) for any OTHER read error,
+// so the caller can say the fact was unreadable rather than silently omit
+// it (fix round 1, I3: the plan's original "return nil either way" swallowed
+// a real error, e.g. update.json present but corrupt).
+func (a *Agent) lastUpdate() (*state.Update, error) {
 	if a.opts.StateDir == "" {
-		return nil
+		return nil, nil
 	}
 	var u state.Update
-	if state.ReadJSON(filepath.Join(a.opts.StateDir, state.UpdateFile), &u) != nil {
-		return nil
+	switch err := state.ReadJSON(filepath.Join(a.opts.StateDir, state.UpdateFile), &u); {
+	case err == nil:
+		return &u, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	default:
+		return nil, err
 	}
-	return &u
 }
 
 // Options are what main hands an Agent beyond its identity (S42b): where its
@@ -282,6 +300,14 @@ func WSURL(server string) (string, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	attempt := 0
 	for {
+		if a.restart.Load() {
+			// Fix round 1, I2: caught here too, before dialing again, when
+			// restart was flagged during the reconnect backoff between
+			// sessions — e.g. a now-dead session's daemon.update finishing
+			// its download only after sessionCancel had already moved on to
+			// naming a DIFFERENT (or no) session.
+			return ErrRestartForUpdate
+		}
 		authed, err := a.connectOnce(ctx)
 		if a.restart.Load() {
 			// daemon.update staged a build and ended the session itself
@@ -505,6 +531,16 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.sessionCancel.Store(&cancel)
+	if a.restart.Load() {
+		// Fix round 1, I2: a restart flagged by an earlier, now-dead
+		// session's late-finishing daemon.update must not be lost just
+		// because sessionCancel no longer names that session — this NEW
+		// session refuses to serve anything, not even the facts frame,
+		// rather than trusting a stored cancel func to still point at
+		// whichever session needs ending. Run's own restart checks are what
+		// actually end the process.
+		return ErrRestartForUpdate
+	}
 
 	// The facts frame follows ready at once (r2-integration): core records
 	// the slower facts before the first command could need them. writeFacts
@@ -703,10 +739,16 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 
 	if outcome.OK && outcome.Restart {
 		// The result and its audit entry are written: now end the session
-		// so Run can return and main can exit 75 for the swap.
+		// so Run can return and main can exit 75 for the swap. A graceful
+		// close (fix round 1, Minor 5) — not the deferred CloseNow — tells
+		// core why the socket is going away. If this session already died
+		// for an unrelated reason before this finished, Close is a harmless
+		// no-op on the dead connection, and the NEXT session's own startup
+		// check (serve, I2) is what actually catches that case.
 		a.restart.Store(true)
-		if c := a.sessionCancel.Load(); c != nil {
-			(*c)()
+		_ = c.Close(websocket.StatusNormalClosure, "restarting into a new build")
+		if cf := a.sessionCancel.Load(); cf != nil {
+			(*cf)()
 		}
 	}
 }
