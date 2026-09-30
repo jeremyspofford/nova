@@ -5514,6 +5514,8 @@ async def test_an_agents_turn_asks_no_decision_model_even_when_told_to(pool, mou
     reached is walled like any provider and the next link answers. A LOCAL provider's
     wall is never cleared by a success (the rule every local provider has): it expires on
     its own ladder — 1, 5, then 30 minutes — or clear it from Settings → Routing.
+    (Superseded; see Close-out: a recovered local decision server is unwalled by its first
+    answer after the wall lapses.)
   - **Where it does not run (yet).** Scheduled firings, a drained queue, and agents' turns.
     The eval runner's turns do run it, because they measure the chat path.
   - **Reading it.** Each turn it ran on has one `decisions` span: the hint, its fit and the
@@ -5525,7 +5527,8 @@ async def test_an_agents_turn_asks_no_decision_model_even_when_told_to(pool, mou
     `openrouter:typesafe/jev-router`, which picks a model and reasoning effort per request,
     balancing quality, speed and cost — you pay for the model it picks. Off puts the link
     it replaced back. Local links stay first, and chat's own pick stays link 1. The model it
-    picked is on the round's `llm_call` span as `routed_to`.
+    picked is on the round's `llm_call` span as `routed_to`. (Shipped as `upstream_model`;
+    see Close-out.)
   ```
 
 - [ ] **Step 4: Check the links resolve, then commit.**
@@ -5926,6 +5929,8 @@ test is written out in that task: 1 → Tasks 1, 3, 8; 2 → Tasks 2, 4, 12; 3 �
 - Kev on the Dell is a non-engine local provider: a connect failure walls it, and by the
   existing local rule a success never clears the wall, so it can stay skipped up to 30
   minutes after the Dell wakes (said in deploy/README; §5's engine is where that changes).
+  (Superseded; see Close-out: a recovered local decision server is unwalled by its first
+  answer after the wall lapses.)
 - "Done means" measures the deployed stack, and deploys come only from `main`: the gate
   is checked after the merge (Task 14, Step 7), so a failed gate is follow-up work, not a
   blocked merge.

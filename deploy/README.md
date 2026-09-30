@@ -359,9 +359,9 @@ what she reads first to know her own address.
   needs the models role (S44), not built yet — today it just pairs as a machine Nova
   controls.
 
-**Step zero, every time:** the other device must already be signed in to Tailscale on the
-same tailnet. Nova cannot check this — the page loading there is the check — so every card
-says so first.
+**Step zero:** the phone and app cards say the other device must already be signed in to
+Tailscale on the same tailnet before the link works — Nova cannot check this, so the page
+loading there is the check. The machine and model-server cards don't carry that line.
 
 Every QR encodes the derived tailnet address (above), never `127.0.0.1` or a LAN address.
 With no address to give out, she says so and sends no card.

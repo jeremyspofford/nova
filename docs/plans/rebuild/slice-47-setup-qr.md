@@ -4528,9 +4528,10 @@ too. Deployed from
 `~/workspace/nova` the same day; core, web and tailscale were recreated and healthy that
 evening.
 
-A same-day follow-up (PR #77) made core send a setup card itself when a message plainly
-asked for one, matched by a phrase matcher. The owner rejected the phrase matcher as
-brittle, and PR #78 reverted it the next day, back to exactly what PR #76 shipped.
+A follow-up (PR #77, merged 2026-09-27) made core send a setup card itself when a message
+plainly asked for one, matched by a phrase matcher. The owner rejected the phrase matcher
+as brittle, and PR #78 reverted it minutes later that same day, back to exactly what PR #76
+shipped.
 
 **The walk.** The first attempt (2026-09-26, the owner's real chat) failed: asked "How do I
 put you on my phone?", the chat model made no tool call and invented a Dell-hosted web page
