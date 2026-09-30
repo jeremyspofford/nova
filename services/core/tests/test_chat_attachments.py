@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory
 from tests.test_chat import _say, _set_model

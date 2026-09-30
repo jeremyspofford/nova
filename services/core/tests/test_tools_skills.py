@@ -106,7 +106,12 @@ async def test_the_skill_is_read_from_the_household_root_not_the_callers_folder(
 SCRIPT = {
     "version": 1,
     "steps": [
-        {"tool": "workspace_read_file", "args": {"path": "{{ p }}"}, "for_each": "paths", "as": "p"},
+        {
+            "tool": "workspace_read_file",
+            "args": {"path": "{{ p }}"},
+            "for_each": "paths",
+            "as": "p",
+        },
         {"tool": "workspace_delete", "args": {"path": "{{ p }}"}, "for_each": "paths", "as": "p"},
     ],
 }
