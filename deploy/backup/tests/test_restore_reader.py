@@ -375,6 +375,11 @@ def test_out_places_the_manifest_that_describes_what_it_placed(bundle, force, tm
     assert "MANIFEST.json" in done.stdout, "and it is named in what the run says it placed"
 
 
+def _without_mode(row):
+    kind, _mode, *rest = row.split(" ")
+    return " ".join([kind, "-", *rest])
+
+
 def test_the_tree_that_lands_has_the_modes_the_listing_recorded(bundle, tmp_path):
     """The fixture volume carries a 0664 note, a 0666 note and a 0775
     directory because a real markdown memory volume does. CPython's `data`
@@ -396,6 +401,12 @@ def test_the_tree_that_lands_has_the_modes_the_listing_recorded(bundle, tmp_path
             wrong.append(f"{rel}: in the listing, not on disk")
             continue
         got = disk_row(full)
+        if want.startswith("l "):
+            # A link's OWN mode is never set by the reader (no lchmod on
+            # Linux) and on macOS is the maker's umask — the rule the reader
+            # itself uses (nova_restore._checkable_columns). Its kind and owner
+            # are still compared here, and its target below.
+            got, want = _without_mode(got), _without_mode(want)
         if got != want:
             wrong.append(f"{rel}: on disk `{got}`, the listing recorded `{want}`")
     assert not wrong, "the extracted tree is not the tree the listing describes:\n" + "\n".join(
