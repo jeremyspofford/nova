@@ -202,7 +202,7 @@ by core on the next replay, not prevented). The nine:
 | `apps.list`     | list launchable apps                                         |
 | `apps.launch`   | launch an app (needs a session; see above)                  |
 | `shell.exec`    | run **argv** (no shell), 64 KiB output cap, honors a timeout |
-| `facts.refresh` | send a fresh `facts` frame on this connection, then answer — core has no caller yet (S46a is the first) |
+| `facts.refresh` | probe again (how it runs, elevation, WSL — see Facts), send a fresh `facts` frame on this connection, then answer — core has no caller yet (S46a is the first) |
 
 `shell.exec` is **argv-only** — there is no string-to-shell path anywhere. A
 user who wants a shell passes it explicitly, e.g. `["bash","-lc","echo hi"]`
@@ -294,6 +294,18 @@ and `unreadable` are everything S42a fills in —
 power, ollama, compute, hold and overlay are later slices' sections (see the
 carries); a section this build does not know is dropped by core, never
 stored as a mystery key.
+
+From S42b the frame also says what Nova needs to act on this machine without being
+told (`service`, `elevation`, `wsl_distros`, `probed_at`): the name the service manager
+knows this agent by, its binary, config, process and account; whether it runs as
+root or elevated and what `sudo -n true` did (Windows: membership of Administrators
+and Windows sudo's setting); and on Windows every WSL distribution — looked inside
+only when it is already running, since looking would start it. These run programs,
+so they are probed at connect and on `facts.refresh` only; every frame between
+carries the last result and `probed_at`. A reconnect within ten minutes of the last
+probe keeps it instead of probing again. `wsl.exe` always runs with `WSL_UTF8=1`, and
+what a program said (a refusal, an error) is carried as its first line only — core
+refuses a control character in these fields.
 
 A fact that could not be read is never dropped silently: it is named in
 `unreadable`, with why.

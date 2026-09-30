@@ -20,19 +20,27 @@ type FakeRunner struct {
 	Calls []FakeCall
 }
 
-// FakeCall is one recorded run.
+// FakeCall is one recorded run. Env is what RunEnv added to the program's
+// environment; nil for Run.
 type FakeCall struct {
 	Name  string
 	Args  []string
 	Stdin string
+	Env   []string
 }
 
-// Run records the call, then answers it from Errs, then Outputs. An
-// unscripted program is an error, never an empty success.
-func (f *FakeRunner) Run(_ context.Context, name string, args []string, stdin string) (string, error) {
+// Run records the call, then answers it from Errs, then Seq, then Outputs.
+// An unscripted program is an error, never an empty success.
+func (f *FakeRunner) Run(ctx context.Context, name string, args []string, stdin string) (string, error) {
+	return f.RunEnv(ctx, nil, name, args, stdin)
+}
+
+// RunEnv is Run, recording env too.
+func (f *FakeRunner) RunEnv(_ context.Context, env []string, name string, args []string, stdin string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, FakeCall{Name: name, Args: append([]string(nil), args...), Stdin: stdin})
+	f.Calls = append(f.Calls, FakeCall{Name: name, Args: append([]string(nil), args...), Stdin: stdin,
+		Env: append([]string(nil), env...)})
 	if err, ok := f.Errs[name]; ok {
 		return "", err
 	}

@@ -376,7 +376,8 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	agent.Configure(client.Options{StateDir: paths.StateDir, Supervised: platform.Supervised(), Binary: self, OnState: writeStatus})
+	agent.Configure(client.Options{StateDir: paths.StateDir, Supervised: platform.Supervised(), Binary: self,
+		Config: paths.ConfigFile, OnState: writeStatus})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

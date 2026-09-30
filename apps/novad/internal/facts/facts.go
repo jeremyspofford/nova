@@ -98,6 +98,13 @@ type Frame struct {
 	// admits an @folder path only for a folder listed here.
 	Folders    map[string]string `json:"folders,omitempty"`
 	Unreadable []Unreadable      `json:"unreadable"`
+
+	// The probes' last findings and when they ran (S42b P29): sent in
+	// every frame between probes, so core always holds the latest.
+	Service    *Service    `json:"service,omitempty"`
+	Elevation  *Elevation  `json:"elevation,omitempty"`
+	WSLDistros *WSLDistros `json:"wsl_distros,omitempty"`
+	ProbedAt   string      `json:"probed_at,omitempty"`
 }
 
 // Net is this machine's network interfaces, loopback excluded.
@@ -298,7 +305,7 @@ func collapseControl(s string) string {
 	var b strings.Builder
 	spaced := false
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
+		if isControl(r) {
 			r = ' '
 		}
 		if r == ' ' {
@@ -313,3 +320,6 @@ func collapseControl(s string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+// isControl is a character core refuses in text it renders into a line.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }

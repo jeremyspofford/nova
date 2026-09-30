@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,5 +46,38 @@ func TestFakeRunnerRecordsArgvAndStdinAndAnswersFromItsTable(t *testing.T) {
 	want := FakeCall{Name: "tool", Args: []string{"-a", "b"}, Stdin: "in"}
 	if !reflect.DeepEqual(r.Calls[0], want) {
 		t.Fatalf("recorded %+v", r.Calls[0])
+	}
+}
+
+// TestHelperFailsInUTF16 is not a test: TestExecAddsTheEnvironmentAndKeeps
+// AFailuresStderr runs this binary again with NOVA_TEST_HELPER=utf16-stderr
+// — passed through RunEnv — and this plays a wsl.exe that ignored WSL_UTF8.
+func TestHelperFailsInUTF16(t *testing.T) {
+	if os.Getenv("NOVA_TEST_HELPER") != "utf16-stderr" {
+		return
+	}
+	_, _ = os.Stderr.WriteString(asUTF16("bad news\r\n"))
+	os.Exit(3)
+}
+
+// F3: Exec adds what RunEnv is given to the program's environment, and a
+// failure keeps the program's stderr as written — RunWSL decodes wsl.exe's
+// words and nothing else — under the same text as before.
+func TestExecAddsTheEnvironmentAndKeepsAFailuresStderr(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Exec{}.RunEnv(context.Background(), []string{"NOVA_TEST_HELPER=utf16-stderr"}, self,
+		[]string{"-test.run=^TestHelperFailsInUTF16$"}, "")
+	var re *RunError
+	if !errors.As(err, &re) || re.Name != self || re.Stderr != asUTF16("bad news\r\n") {
+		t.Fatalf("err = %#v: the helper never ran with the environment given, or its stderr was not kept", err)
+	}
+	if want := self + ": exit status 3: " + strings.TrimSpace(asUTF16("bad news\r\n")); err.Error() != want {
+		t.Fatalf("text = %q, want %q", err.Error(), want)
+	}
+	if _, err := (Exec{}).Run(context.Background(), self, []string{"-test.run=^TestHelperFailsInUTF16$"}, ""); err != nil {
+		t.Fatalf("without the variable the helper exits 0: %v", err)
 	}
 }

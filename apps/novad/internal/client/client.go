@@ -61,6 +61,19 @@ const (
 	FactsMinGap = time.Minute
 )
 
+// ProbeBudget bounds one run of the slow probes (P29); each program they
+// run has 10 s of its own. ProbeMaxAge spares a flapping link: a reconnect
+// within it keeps the last probe instead of running sudo and wsl.exe again.
+const (
+	ProbeBudget = 45 * time.Second
+	ProbeMaxAge = 10 * time.Minute
+)
+
+// probeRunner runs the probes' programs (`sudo -n true`, wsl.exe) for every
+// agent Configure sets up. A variable so this package's tests replace it
+// before any of them runs: no test runs the real programs (S42b Task 10b).
+var probeRunner platform.Runner = platform.Exec{}
+
 // defaultBackoffs is the reconnect ladder. It resets after every session
 // that authenticated (Run).
 var defaultBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
@@ -141,6 +154,13 @@ type Agent struct {
 	gatherAuth  func(context.Context) (facts.Auth, []facts.Unreadable)
 	gatherFrame func([]facts.Unreadable) facts.Frame
 	now         func() time.Time
+
+	// probe runs the slow probes (P29). nil — tests, and every verb but
+	// run — probes nothing. probed is the last result, and probing says a
+	// probe started at connect is still running; both guarded by factsMu.
+	probe   func(context.Context) facts.Probed
+	probed  *facts.Probed
+	probing bool
 
 	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
 	// platform call with no timeout of its own (macOS ioreg) must not burn
@@ -253,16 +273,24 @@ func (a *Agent) lastUpdate() (*state.Update, error) {
 
 // Options are what main hands an Agent beyond its identity (S42b): where its
 // local status lives, whether a supervisor started it, the binary it runs
-// as, and a callback for each change of connection state.
+// as, its config file, and a callback for each change of connection state.
 type Options struct {
 	StateDir   string
 	Supervised bool
 	Binary     string
+	Config     string
 	OnState    func(state, server string, err error)
 }
 
-// Configure sets the options. Call it before Run.
-func (a *Agent) Configure(o Options) { a.opts = o }
+// Configure sets the options, and the probes (P29) that say how this agent
+// runs — through probeRunner, with the binary and config file given here.
+// Call it before Run.
+func (a *Agent) Configure(o Options) {
+	a.opts = o
+	self := facts.Self{Binary: o.Binary, Config: o.Config}
+	r := probeRunner
+	a.probe = func(ctx context.Context) facts.Probed { return facts.Probe(ctx, r, self) }
+}
 
 func (a *Agent) state(st, server string, err error) {
 	if a.opts.OnState != nil {
@@ -551,6 +579,16 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	if err := a.sendFacts(serveCtx, c); err != nil {
 		a.logf("facts frame not sent: %v", err)
 	}
+	// P29: the slow probes run off the reader's path — the frame above went
+	// out without them (or with the last ones kept), and when they run, a
+	// frame carrying them follows. They run on the agent's context, not this
+	// session's: a session that ends mid-probe neither cuts it short nor
+	// leaves the next connection to start another — its frames carry it.
+	go func() {
+		if err := a.reprobe(ctx, c, false); err != nil && serveCtx.Err() == nil {
+			a.logf("probe frame not sent: %v", err)
+		}
+	}()
 
 	go a.heartbeat(serveCtx, cancel, c)
 	go a.watchdog(serveCtx, cancel)
@@ -720,7 +758,7 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 	defer cancel()
 	// facts.refresh writes its frame on THIS connection, before its result.
 	deps := a.deps
-	deps.SendFacts = func(ctx context.Context) error { return a.sendFacts(ctx, c) }
+	deps.SendFacts = func(ctx context.Context) error { return a.reprobe(ctx, c, true) }
 	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
 	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
@@ -783,13 +821,63 @@ func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
 	return a.writeFacts(ctx, c, data)
 }
 
-// frameBytes gathers and encodes a facts frame. One over core's cap is an
-// error here — never sent to be refused over there.
+// reprobe runs the slow probes off every lock and sends a frame carrying
+// them. force (facts.refresh) always probes. At connect it does not when the
+// last probe is younger than ProbeMaxAge — the frame sent at ready already
+// carried it — or when one started at an earlier connection is still
+// running: whichever connection is live when it finishes carries it.
+func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) error {
+	if a.probe == nil {
+		if force {
+			return a.sendFacts(ctx, c)
+		}
+		return nil
+	}
+	if !force {
+		a.factsMu.Lock()
+		skip := a.probing || (a.probed != nil && a.now().Sub(a.probed.At) < ProbeMaxAge)
+		if !skip {
+			a.probing = true
+		}
+		a.factsMu.Unlock()
+		if skip {
+			return nil
+		}
+		defer func() {
+			a.factsMu.Lock()
+			a.probing = false
+			a.factsMu.Unlock()
+		}()
+	}
+	pctx, cancel := context.WithTimeout(ctx, ProbeBudget)
+	p := a.probe(pctx)
+	cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.factsMu.Lock()
+	if a.probed == nil || !p.At.Before(a.probed.At) {
+		// A refresh and a connect probe can overlap: the later-started one
+		// is kept, whichever finishes last.
+		a.probed = &p
+	}
+	a.factsMu.Unlock()
+	return a.sendFacts(ctx, c)
+}
+
+// frameBytes gathers and encodes a facts frame — with the last probe's
+// findings, carried in every frame. One over core's cap is an error here —
+// never sent to be refused over there.
 func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Lock()
 	carried := append([]facts.Unreadable(nil), a.authUnread...)
+	probed := a.probed
 	a.factsMu.Unlock()
-	data, err := json.Marshal(a.gatherFrame(carried))
+	frame := a.gatherFrame(carried)
+	if probed != nil {
+		probed.ApplyTo(&frame)
+	}
+	data, err := json.Marshal(frame)
 	if err != nil {
 		return nil, err
 	}

@@ -14,8 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,8 +26,14 @@ import (
 	"novad/internal/audit"
 	"novad/internal/config"
 	"novad/internal/facts"
+	"novad/internal/platform"
 	"novad/internal/wire"
 )
+
+// No test in this package runs the probes' real programs (S42b Task 10b,
+// ruling 3): an agent any test Configures probes through a FakeRunner, which
+// runs nothing — `sudo -n true` and wsl.exe included.
+func init() { probeRunner = &platform.FakeRunner{} }
 
 // A full protocol walk over a REAL websocket against an in-process fake core:
 // challenge -> auth (raw-nonce signature) -> ready -> a core-signed system.info
@@ -1613,5 +1621,194 @@ func TestServeRefusesToStartASessionWhenARestartIsAlreadyPending(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("serve never returned — a pending restart did not stop it from trying to serve this session")
+	}
+}
+
+// P29, Review Focus 11: the slow probes run once at connect — after the
+// first frame, off the reader's path — and again on facts.refresh; never on
+// the minute cadence. Every frame between carries the last result.
+func TestTheProbesRunAtConnectAndOnRefreshOnly(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-1"
+	pidOf := func(f map[string]any) string {
+		s, _ := f["service"].(map[string]any)
+		n, _ := s["pid"].(json.Number)
+		return n.String()
+	}
+	type seen struct{ before, after []string }
+	got := make(chan seen, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		var s seen
+		// The ready frame, the probe's frame, and at least two on the cadence.
+		for len(s.before) < 4 || !slices.Contains(s.before, "1") {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "facts" {
+				s.before = append(s.before, pidOf(f))
+			}
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "probe-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				s.after = append(s.after, pidOf(f))
+			case "audit":
+				got <- s
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	var probes atomic.Int32
+	agent.probe = func(context.Context) facts.Probed {
+		n := probes.Add(1)
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service", PID: int(n)}}
+	}
+	agent.factsMinGap, agent.factsEvery, agent.heartbeatEvery = 10*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	var s seen
+	select {
+	case s = <-got:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	if s.before[0] != "" {
+		t.Fatalf("the frame at ready waited for the probe: %v", s.before)
+	}
+	for _, pid := range s.before {
+		if pid != "" && pid != "1" {
+			t.Fatalf("frames before the refresh = %v: the cadence probed again", s.before)
+		}
+	}
+	if len(s.after) == 0 || s.after[len(s.after)-1] != "2" || probes.Load() != 2 {
+		t.Fatalf("after the refresh = %v with %d probes, want exactly one more probe, carried", s.after, probes.Load())
+	}
+}
+
+// Ruling 4: at connect the probes run at most once per ProbeMaxAge across
+// reconnects. A reconnect while one is still running starts no second one
+// beside it, and a probe whose session ended before it finished is neither
+// cut short nor lost: the next session's frames carry it.
+func TestTheConnectProbeRunsOnceAcrossReconnects(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	readyPIDs := make(chan string, 64)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		f, err := coreRead(ctx, c) // the frame at ready; then the session ends
+		if err != nil {
+			return
+		}
+		s, _ := f["service"].(map[string]any)
+		n, _ := s["pid"].(json.Number)
+		select {
+		case readyPIDs <- n.String():
+		default:
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-probe-2", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	release := make(chan struct{})
+	var probes atomic.Int32
+	agent.probe = func(ctx context.Context) facts.Probed {
+		n := probes.Add(1)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service", PID: int(n)}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	next := func() string {
+		t.Helper()
+		select {
+		case pid := <-readyPIDs:
+			return pid
+		case <-ctx.Done():
+			t.Fatal("timed out")
+			return ""
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if pid := next(); pid != "" {
+			t.Fatalf("session %d's frame at ready carried pid %q before any probe finished", i+1, pid)
+		}
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("%d probes after three sessions while the first still ran — a reconnect started another", n)
+	}
+	close(release)
+	for next() != "1" {
+	}
+	for i := 0; i < 3; i++ {
+		if pid := next(); pid != "1" {
+			t.Fatalf("a later session's frame at ready carried pid %q, want the kept probe's 1", pid)
+		}
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("%d probes — a reconnect within ProbeMaxAge probed again", n)
+	}
+}
+
+// Configure wires the probes to what main hands the agent — its binary and
+// config file — and runs their programs through probeRunner, which this
+// package's tests replace so no test runs sudo or wsl.exe.
+func TestConfigureProbesThroughTheRunnerWithTheAgentsOwnFiles(t *testing.T) {
+	old := probeRunner
+	r := &platform.FakeRunner{Outputs: map[string]string{"sudo": ""}}
+	probeRunner = r
+	t.Cleanup(func() { probeRunner = old })
+	a := &Agent{}
+	bin, cfg := filepath.Join(t.TempDir(), "novad"), filepath.Join(t.TempDir(), "config.json")
+	a.Configure(Options{Binary: bin, Config: cfg})
+	p := a.probe(context.Background())
+	if p.Service.Binary != bin || p.Service.Config != cfg || p.Service.Process != "novad" || p.At.IsZero() {
+		t.Fatalf("got %+v", p)
+	}
+	if runtime.GOOS != "windows" {
+		if p.Elevation == nil || p.Elevation.Sudo != "no_password" || len(r.Calls) != 1 || r.Calls[0].Name != "sudo" {
+			t.Fatalf("elevation %+v after calls %+v — sudo -n true through the runner Configure was given", p.Elevation, r.Calls)
+		}
 	}
 }
