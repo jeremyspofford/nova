@@ -3306,15 +3306,19 @@ _READING_KEY = (
     r"(?:last\s+(?:reported|checked|seen|observed|read|heard(?:\s+from)?|contact(?:ed)?)"
     r"|(?:reported|checked|observed|seen|read)\s+at|checked)"
 )
+# `\s*+` twice: each run of spaces sits beside an optional group that cannot
+# start with a space, so a possessive run matches exactly what a greedy one did
+# — without trying every split of it (quadratic: 88 ms for one 1,500-space line,
+# through `.match`, the way the reading walk calls it).
 _READING_LINE = re.compile(
-    rf"^\s*(?:[-+•]|\d+[.)])?\s*(?P<key>{_READING_KEY})\s*[:=]\s*[^\w\s]{{0,6}}\s*"
+    rf"^\s*+(?:[-+•]|\d+[.)])?\s*(?P<key>{_READING_KEY})\s*[:=]\s*+[^\w\s]{{0,6}}\s*"
     rf"(?P<ts>{_READING_TS})",
     re.I,
 )
 # A line that names what the lines under it are about ("- Name: …"). One that
 # names no machine ends the upward walk unbound.
 _SUBJECT_KEY_LINE = re.compile(
-    r"^\s*(?:[-+•]|\d+[.)])?\s*(?:name|machine|engine|host|device)\s*[:=]", re.I
+    r"^\s*+(?:[-+•]|\d+[.)])?\s*(?:name|machine|engine|host|device)\s*[:=]", re.I
 )
 # The history stamp's own words (S40b final fix wave, A3). chat builds every
 # stamp it hands her from these (_PAST_TURN_MARKERS, _RECORD_KIND_MARKER,
@@ -7134,7 +7138,9 @@ _SERVED_SKIP = re.compile(
 )
 # A labelled line ("- coding: gemma4:31b (active model)"): its label must say
 # chat or the current model for an in-use marker on it to be about this reply.
-_LINE_LABEL = re.compile(r"^\s*(?:[-+•]|\d+[.)])?\s*(?P<label>[A-Za-z][A-Za-z ]{0,30}?)\s*:\s")
+# `^\s*+`, as in _READING_LINE and _SUBJECT_KEY_LINE: the leading run beside an
+# optional bullet matched the same, without trying every split of it.
+_LINE_LABEL = re.compile(r"^\s*+(?:[-+•]|\d+[.)])?\s*(?P<label>[A-Za-z][A-Za-z ]{0,30}?)\s*:\s")
 _LABEL_OK = re.compile(
     r"chat(?:\s+model)?|(?:current|active)\s+(?:chat\s+)?model|model(?:\s+in\s+use)?"
     r"|in\s+use|answering(?:\s+now)?|serving(?:\s+now)?",
@@ -7259,7 +7265,12 @@ _IN_USE_UNSAID = re.compile(
 #   * A coordinated clause is its own claim: in "hub:qwen3:8b is the current
 #     model and qwen3.8:27b is installed" the nearest ref across "and" is the
 #     installed one. The marker's candidates are the refs in its own conjunct.
-_IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
+# `(?:,|(?<!\s))` for `,?`: a leftmost match only ever starts at a comma or at
+# the FIRST space of a run (one starting mid-run implies one at the run's
+# start), so finditer's matches are unchanged — and it no longer re-walks the
+# rest of a whitespace run from every position in it (quadratic: 63 ms on a
+# 1,500-space clause, over the timing sweep's 50 ms budget).
+_IN_USE_CONJUNCT = re.compile(r"(?:,|(?<!\s))\s+(?:and|while|whereas|plus)\s+", re.I)
 #   * T2 review, round 1: the marker is about the ref it is SAID of, never the
 #     nearest ref in the conjunct. The conjunct split knew only and/while/
 #     whereas/plus, and a comma, a dash, a colon, a parenthesis or a machine
@@ -7301,8 +7312,13 @@ _IN_USE_BEFORE_GAP = re.compile(
     r"(?P<copula>(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
     re.I,
 )
+# `(?<!\s)`: both call sites start at `_IN_USE`'s end, which is always just
+# after a word character, so it never changes a verdict there; it makes
+# `.search` give up at once inside a whitespace run instead of re-walking the
+# rest of it from every start (quadratic: 58 ms at 1,500 spaces on CI's
+# runner, over the timing sweep's 50 ms budget).
 _IN_USE_AFTER_GAP = re.compile(
-    r"(?:\s+(?:right\s+now|now|currently))?(?:\s*[:=]\s*|\s+(?:is|['’]s)\s+)", re.I
+    r"(?<!\s)(?:\s+(?:right\s+now|now|currently))?(?:\s*[:=]\s*|\s+(?:is|['’]s)\s+)", re.I
 )
 # What may follow the label's ref for it to close the label: a size, bare or
 # bracketed, a badge, a bar, a dash, closing punctuation. A WORDED bracket
@@ -7314,7 +7330,8 @@ _IN_USE_LABEL_ENDS = re.compile(
 #     the model before it is NOT in use (found fixing round 2; it fired at
 #     4c62f5c9 and e102b80b alike).
 _IN_USE_DENIED = re.compile(
-    r"(?:\s+(?:right\s+now|now|currently))?\s*[:=]\s*(?:no|none|false|❌|✗|✘|✖)(?!\w)", re.I
+    r"(?<!\s)(?:\s+(?:right\s+now|now|currently))?\s*[:=]\s*(?:no|none|false|❌|✗|✘|✖)(?!\w)",
+    re.I,
 )
 
 
