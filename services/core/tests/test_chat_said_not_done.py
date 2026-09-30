@@ -33,11 +33,15 @@ import inspect
 import json
 import os
 import re
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app import chat, guards, tools
+from app import chat, guards, tools, traces
+from app.identity import Person
 from app.tools import devices as device_tools
 from app.tools import web_search as web_search_tools
 from app.tools.base import Tool, ToolContext, ToolFailure
@@ -192,6 +196,21 @@ def _corrections(sent: list) -> list[str]:
 
 def _texts(sent: list) -> list[str]:
     return [f["t"] for f in sent if isinstance(f, dict) and "t" in f]
+
+
+async def _reached_executor(pool) -> list[str]:
+    """The tool spans whose call REACHED its tool's executor, by name, in order:
+    `reached_executor`, dispatch's own record on the span _run_tool files. A call
+    refused as text, in a closed round, or before any executor (no such tool,
+    bad arguments) is recorded as a span too, but ran nothing, so it is not
+    here. It is the one property a redirect's live note is chosen by
+    (said-not-done P6), so every test that asks "was a call dispatched" asks
+    this, never "is there a tool span"."""
+    rows = await pool.fetch(
+        "SELECT name FROM turn_spans WHERE kind = 'tool' "
+        """AND meta @> '{"reached_executor": true}' ORDER BY started_at"""
+    )
+    return [row["name"] for row in rows]
 
 
 def _system_nudges(gateway) -> list[str]:
@@ -1757,6 +1776,20 @@ def _p6_turn(kind: str, dispatched: bool):
     return build
 
 
+# (P6 at the cap.) A regeneration that ASKED for a call that never reached an
+# executor — here, one written as text — dispatched nothing. The stream frames
+# that call as started all the same (then as an error, exactly like an executor
+# that failed), which is why the web half reads `dispatched` from here rather
+# than off the stream. One such turn is enough to pin that; the unknown-tool
+# case (M6) is pinned in core alone, since its frame quotes the registry.
+def _p6_not_reached_turn(case: str):
+    async def build(pool, mount_peers, monkeypatch, tmp_path):
+        m = await P6_NOT_REACHED[case](pool, monkeypatch, tmp_path)
+        return "redirect", m.reply, m.ask, m.rounds
+
+    return build
+
+
 async def _commitment_redirect_stood(pool, mount_peers, monkeypatch, tmp_path):
     """The text-only commitment redirect: it advertises no tools, so it can
     never have done what was promised."""
@@ -1771,6 +1804,7 @@ LIVE_STORED_TURNS = {
     "consent_markup_and_unverified_listing": _consent_markup_and_unverified_listing,
     "consent_redirect_ran": _p6_turn("consent", True),
     "consent_redirect_no_call": _p6_turn("consent", False),
+    "consent_redirect_markup_refused": _p6_not_reached_turn("M1_consent_markup"),
     "listing_redirect_ran": _p6_turn("listing", True),
     "listing_redirect_no_call": _p6_turn("listing", False),
     "offer_redirect_ran": _p6_turn("offer", True),
@@ -1810,9 +1844,11 @@ async def test_R6_what_core_streams_for_a_turn_is_what_it_stores(
     corrections = _corrections(frames(raw))
     if kind == "redirect":
         # Live vs truth (fix round 5, P6): the note shown ahead of a
-        # regeneration that stood claims work only when a call was dispatched.
+        # regeneration that stood claims work only when a call was dispatched —
+        # one that REACHED a tool's executor. A refused call files a span too,
+        # so any tool span is not the record; dispatch's own is.
         note, *after = corrections
-        dispatched = bool(await pool.fetch("SELECT 1 FROM turn_spans WHERE kind = 'tool'"))
+        dispatched = bool(await _reached_executor(pool))
         claims_work = note in (
             chat.DEFERRAL_NOTE,
             chat.CONSENT_REDIRECT_NOTE,
@@ -2171,8 +2207,7 @@ async def test_P6_a_redirect_note_claims_work_only_beside_a_dispatched_call(
 
     sent = await _say(owner_client, ask)
 
-    ran = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'tool' ORDER BY started_at")
-    assert bool(ran) is dispatched
+    assert bool(await _reached_executor(pool)) is dispatched
     assert await _stored(pool) == answer  # the regeneration stood
     assert _corrections(sent) == [doing if dispatched else no_call]
     assert _texts(sent) == [reply, answer]
@@ -2215,3 +2250,350 @@ async def test_P6_a_bare_intent_regeneration_that_ran_nothing_says_so(
     assert info.calls == []
     assert await _stored(pool) == answer
     assert _corrections(sent) == [chat.DEFERRAL_NOTE_NO_CALL]
+
+
+# -- P6 at the cap: DISPATCHED means a call REACHED a tool's executor ------------
+#
+# The final re-review (M1–M6): the redirect counted its regeneration as
+# dispatched the moment it ASKED for a call — before _dispatch_calls refused one
+# written as text, and before tools.dispatch refused a name no tool has. So the
+# owner's own failure mode, a call written as text, still streamed "Nothing was
+# pending — doing it now…", "Doing that now…", "Listing the files now…" or
+# "Checking the device now…" beside a call that never ran. The ruling: a
+# regeneration is dispatched only when one of its calls REACHED a tool's
+# executor, read from what dispatch did (`reached`, and `reached_executor` on
+# the span _run_tool files) — never a second copy of the refusal rules. A call
+# whose executor ran and FAILED counts: it was an attempt.
+
+
+def markup(name: str, **params: str) -> str:
+    """A call written as TEXT, in the observed markup shape (the model's mangled
+    prefix and all): read out of the reply, refused, never run."""
+    body = "".join(f'<atem:parameter name="{k}">{v}</atem:parameter>\n' for k, v in params.items())
+    return (
+        f'<atem:function_calls>\n<atem:invoke name="{name}">\n{body}'
+        "</atem:invoke>\n</atem:function_calls>"
+    )
+
+
+@dataclass
+class _NotReached:
+    guard: str  # the claim kind's guard span
+    reply: str  # what she streamed first
+    ask: str
+    rounds: tuple
+    answer: str  # the regeneration, which stands
+    doing: str  # the note that claims work
+    no_call: str  # the note that must stream instead
+    executor: list | None  # the executor's calls, where a spy stands in for it
+
+
+async def _m1_consent_markup(pool, monkeypatch, tmp_path) -> _NotReached:
+    from tests.test_chat_pending_claim import AUTO_ACTION, FABRICATION, URL, _arm_auto_tool
+
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    answer = "There is no approval step. I have not run anything yet."
+    rounds = ((text(FABRICATION),), (text(markup(AUTO_ACTION, url=URL)),), (text(answer),))
+    return _NotReached(
+        "consent_claim",
+        FABRICATION,
+        "turn on the desk light",
+        rounds,
+        answer,
+        chat.CONSENT_REDIRECT_NOTE,
+        chat.CONSENT_REDIRECT_NOTE_NO_CALL,
+        spy.calls,
+    )
+
+
+async def _m2_offer_markup(pool, monkeypatch, tmp_path) -> _NotReached:
+    from tests.test_chat_deferral import INSTRUCTION, OFFER, _arm_web_search
+
+    spy = _arm_web_search(monkeypatch)
+    answer = "I have not searched the web this turn, so I have no results to give you."
+    rounds = (
+        (text(OFFER),),
+        (text(markup("web_search", query="latest pixel phone")),),
+        (text(answer),),
+    )
+    return _NotReached(
+        "deferral",
+        OFFER,
+        INSTRUCTION,
+        rounds,
+        answer,
+        chat.DEFERRAL_NOTE,
+        chat.DEFERRAL_NOTE_NO_CALL,
+        spy.calls,
+    )
+
+
+async def _m3_listing_markup(pool, monkeypatch, tmp_path) -> _NotReached:
+    from tests.test_chat_presented_listing import ASK, FABRICATED, REAL_FILES
+
+    root = tmp_path / "workspace"
+    for rel, body in REAL_FILES.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(root))
+    answer = "I have not listed the workspace this turn, so I will not show a listing."
+    rounds = ((text(FABRICATED),), (text(markup("workspace_list_files")),), (text(answer),))
+    return _NotReached(
+        "presented_listing",
+        FABRICATED,
+        ASK,
+        rounds,
+        answer,
+        chat.PRESENTED_LISTING_REDIRECT_NOTE,
+        chat.PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL,
+        None,  # the real executor: the spans say it never ran
+    )
+
+
+async def _m4_bare_intent_markup(pool, monkeypatch, tmp_path) -> _NotReached:
+    await _pair(pool)
+    info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+    answer = f"I have not checked your {DEVICE} this turn."
+    rounds = ((text(BARE_CHECK),), (text(markup("device_info", device=DEVICE)),), (text(answer),))
+    return _NotReached(
+        "deferral",
+        BARE_CHECK,
+        "what OS is my dell on?",
+        rounds,
+        answer,
+        chat.DEFERRAL_NOTE,
+        chat.DEFERRAL_NOTE_NO_CALL,
+        info.calls,
+    )
+
+
+async def _m5_state_markup(pool, monkeypatch, tmp_path) -> _NotReached:
+    await _pair(pool)
+    info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+    reply = "The device is still offline."
+    answer = "I have not checked the device this turn."
+    rounds = ((text(reply),), (text(markup("device_info", device=DEVICE)),), (text(answer),))
+    return _NotReached(
+        "state_claim",
+        reply,
+        "is my dell up?",
+        rounds,
+        answer,
+        chat.STATE_REDIRECT_NOTE,
+        chat.STATE_REDIRECT_NOTE_NO_CALL,
+        info.calls,
+    )
+
+
+async def _m6_consent_unknown_tool(pool, monkeypatch, tmp_path) -> _NotReached:
+    from tests.test_chat_pending_claim import FABRICATION
+
+    assert "turn_on_light" not in tools.REGISTRY
+    answer = "There is no approval step. I have not run anything yet."
+    rounds = (
+        (text(FABRICATION),),
+        (call("turn_on_light", {"room": "desk"}, "r1"),),
+        (text(answer),),
+    )
+    return _NotReached(
+        "consent_claim",
+        FABRICATION,
+        "turn on the desk light",
+        rounds,
+        answer,
+        chat.CONSENT_REDIRECT_NOTE,
+        chat.CONSENT_REDIRECT_NOTE_NO_CALL,
+        None,  # there is no executor to reach
+    )
+
+
+P6_NOT_REACHED = {
+    "M1_consent_markup": _m1_consent_markup,
+    "M2_offer_markup": _m2_offer_markup,
+    "M3_listing_markup": _m3_listing_markup,
+    "M4_bare_intent_markup": _m4_bare_intent_markup,
+    "M5_state_markup": _m5_state_markup,
+    "M6_consent_unknown_tool": _m6_consent_unknown_tool,
+}
+
+
+@requires_db
+@pytest.mark.parametrize("case", sorted(P6_NOT_REACHED))
+async def test_P6_a_call_that_never_reached_an_executor_dispatched_nothing(
+    case, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    m = await P6_NOT_REACHED[case](pool, monkeypatch, tmp_path)
+    mount_peers(gateway=ScriptedGateway(rounds=m.rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, m.ask)
+
+    # The regeneration ASKED for one call, and its span records it — refused,
+    # so nothing reached an executor.
+    assert len(await pool.fetch("SELECT 1 FROM turn_spans WHERE kind = 'tool'")) == 1
+    assert await _reached_executor(pool) == []
+    if m.executor is not None:
+        assert m.executor == []
+    # The no-call note streams, and the note that claims work never does.
+    assert _corrections(sent) == [m.no_call]
+    assert m.doing not in json.dumps(sent, ensure_ascii=False)
+    # The regeneration stood: live is her prose, the note, then exactly what is
+    # stored; the note itself is live-only.
+    stored = await _stored(pool)
+    assert _texts(sent) == [m.reply, m.answer]
+    assert stored == m.answer
+    assert m.no_call not in stored
+    # The guard span records what the dispatch did, not what was asked for.
+    (redirect,) = [
+        meta for meta in map(_meta, await _named(pool, m.guard)) if "redirect_tool_calls" in meta
+    ]
+    assert redirect["redirected"] is True
+    assert (redirect["redirect_tool_calls"], redirect["redirect_calls_reached"]) == (1, 0)
+
+
+@requires_db
+async def test_P6_a_call_whose_executor_ran_and_failed_was_dispatched(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The other side of the line: a call that reached its executor was an
+    attempt even when the executor failed, so the note that claims work streams
+    — and the regeneration says what happened."""
+    from tests.test_chat_pending_claim import AUTO_ACTION, FABRICATION, FETCH_SCHEMA, URL, auto_call
+
+    attempts: list = []
+
+    async def probe(args: dict, ctx: ToolContext) -> str:
+        attempts.append(args)
+        raise ToolFailure("the light did not answer")
+
+    monkeypatch.setitem(tools.REGISTRY, AUTO_ACTION, Tool(AUTO_ACTION, "d", FETCH_SCHEMA, probe))
+    answer = "The call to turn on the desk light failed: the light did not answer."
+    rounds = ((text(FABRICATION),), (auto_call("r1", URL),), (text(answer),))
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, "turn on the desk light")
+
+    assert len(attempts) == 1
+    assert await _reached_executor(pool) == [AUTO_ACTION]
+    (span,) = await pool.fetch("SELECT meta FROM turn_spans WHERE kind = 'tool'")
+    assert _meta(span)["ok"] is False
+    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+    assert await _stored(pool) == answer
+    (guard,) = await _named(pool, "consent_claim")
+    assert _meta(guard)["redirect_calls_reached"] == 1
+
+
+P6_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+def _arm_p6_tools(monkeypatch) -> None:
+    """Four registered tools whose executors answer, state a failure, raise, and
+    say nothing: every way a call that REACHED its executor can end."""
+
+    async def answers(args: dict, ctx: ToolContext) -> str:
+        return "ran"
+
+    async def fails(args: dict, ctx: ToolContext) -> str:
+        raise ToolFailure("it did not answer")
+
+    async def crashes(args: dict, ctx: ToolContext) -> str:
+        raise RuntimeError("a bug")
+
+    async def silent(args: dict, ctx: ToolContext) -> str:
+        return ""
+
+    for tool_name, executor in (
+        ("p6_answers", answers),
+        ("p6_fails", fails),
+        ("p6_crashes", crashes),
+        ("p6_silent", silent),
+    ):
+        monkeypatch.setitem(tools.REGISTRY, tool_name, Tool(tool_name, "d", P6_SCHEMA, executor))
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "reached"),
+    [
+        pytest.param("p6_answers", "{}", True, id="the executor answered"),
+        pytest.param("p6_fails", "{}", True, id="it ran and stated a failure"),
+        pytest.param("p6_crashes", "{}", True, id="it ran and raised"),
+        pytest.param("p6_silent", "{}", True, id="it ran and said nothing"),
+        pytest.param("p6_not_there", "{}", False, id="no tool by that name"),
+        pytest.param("p6_answers", "{not json", False, id="arguments unreadable"),
+        pytest.param("p6_answers", '{"extra": 1}', False, id="arguments off the schema"),
+    ],
+)
+async def test_P6_dispatch_records_a_call_only_once_its_executor_ran(
+    name, arguments, reached, monkeypatch, tmp_path
+):
+    """dispatch's own record is the ONE place "did a tool run" is read from: a
+    call it refused before any executor is not in it, a call whose executor ran
+    is, whatever the executor did."""
+    _arm_p6_tools(monkeypatch)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    ctx = tools.context_for(None, Person(id=uuid.uuid4(), name="owner", role="owner"))
+
+    record: list[str] = []
+    result, ok = await tools.dispatch(name, arguments, ctx, reached=record)
+
+    assert record == ([name] if reached else [])
+    assert ok is (name == "p6_answers" and reached)
+    assert (await tools.dispatch(name, arguments, ctx)) == (result, ok)  # no record asked for
+
+
+@pytest.mark.parametrize(
+    ("call", "subset", "reached", "ended"),
+    [
+        pytest.param(chat.ToolCall("c1", "p6_answers", "{}"), None, True, "ok", id="it ran"),
+        pytest.param(
+            chat.ToolCall("c1", "p6_fails", "{}"), None, True, "error", id="it ran and failed"
+        ),
+        pytest.param(
+            chat.ToolCall("c1", "p6_answers", "{}", from_markup=True),
+            None,
+            False,
+            "error",
+            id="written as text",
+        ),
+        pytest.param(
+            chat.ToolCall("c1", "p6_not_there", "{}"), None, False, "error", id="no such tool"
+        ),
+        pytest.param(
+            chat.ToolCall("c1", "p6_not_there", "{}"),
+            ("p6_answers",),
+            False,
+            "error",
+            id="no such tool, in a subset",
+        ),
+        pytest.param(
+            chat.ToolCall("c1", "p6_answers", '{"extra": 1}'),
+            None,
+            False,
+            "error",
+            id="off the schema",
+        ),
+    ],
+)
+async def test_P6_dispatch_calls_records_only_a_call_that_reached_its_executor(
+    call, subset, reached, ended, monkeypatch, tmp_path
+):
+    """The record the redirect reads, at the layer it reads it. _dispatch_calls
+    refuses a call written as text, or one naming no tool in a subset, itself;
+    dispatch refuses the rest before any executor; only a call whose executor
+    ran — whatever it returned — is in the record, and its span says the same.
+    The frames cannot say it: a refusal is started and ends in an error exactly
+    like an executor that ran and failed, so the property is pinned here."""
+    _arm_p6_tools(monkeypatch)
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    ctx = tools.ToolContext(app=None, person=None, workspace_root=tmp_path)
+    sent: list[str] = []
+    record: list[str] = []
+
+    await chat._dispatch_calls(turn, ctx, [call], [], sent.append, subset=subset, reached=record)
+
+    assert record == ([call.name] if reached else [])
+    (span,) = turn.spans
+    assert (span.kind, span.name) == ("tool", call.name)
+    assert (span.meta.get("reached_executor") is True) is reached
+    statuses = [json.loads(frame[len("data: ") :])["activity"]["status"] for frame in sent]
+    assert statuses == ["start", ended]

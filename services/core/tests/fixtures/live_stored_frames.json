@@ -37,6 +37,15 @@
   "stored": "Correction: there is no approval step — nothing is waiting on you. This turn, markup_probe ran.\n\n[I tried to run device_run but had no tool round left — ask again and I'll run it]\n\n[this listing is not backed by a recorded listing this turn — treat it as unverified]",
   "streamed": "That's still awaiting your approval — I can't run it until you OK it.\n\nHere's your workspace:\n├── config.json — 12.4 KB\n├── README.md — 2.1 KB\n├── notes.md — 905 bytes\n└── src/\n    └── app.py — 3.4 KB"
  },
+ "consent_redirect_markup_refused": {
+  "class": "redirect",
+  "dispatched": false,
+  "note": "Nothing was pending — answering again.",
+  "note_claims_work": false,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"auto_probe\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"auto_probe\", \"status\": \"error\", \"reason\": \"your reply wrote a tool call as text (auto_probe) \\u2014 tools only run when issued as a tool call; re-issue it as one\"}}\n\ndata: {\"correction\": \"Nothing was pending \\u2014 answering again.\"}\n\ndata: {\"t\": \"There is no approval step. I have not run anything yet.\"}\n\ndata: [DONE]\n\n",
+  "stored": "There is no approval step. I have not run anything yet.",
+  "streamed": "That's still awaiting your approval — I can't run it until you OK it."
+ },
  "consent_redirect_no_call": {
   "class": "redirect",
   "dispatched": false,

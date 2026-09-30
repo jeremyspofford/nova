@@ -200,15 +200,16 @@ DEFERRAL_NOTE = "Doing that now instead of just saying I would."
 # phrase, so the mechanical guards stay clean over it.
 CONSENT_REDIRECT_NOTE = "Nothing was pending — doing it now instead of waiting."
 
-# The same live notes when the regeneration that stands dispatched NO call
-# (said-not-done fix round 5, P6 — the state note's rule, C14, for every claim
-# kind). "Doing that now" and "doing it now" beside a reply that did nothing
-# are the backend claiming work the turn never did, and once the client showed
-# correction frames live (fix round 3, T6) the owner read them. Each of these
-# says only what is true of a regeneration that ran nothing: it is a second
-# answer, and what it no longer carries. `_claim_redirect` takes one for every
-# claim kind (no default), and the text-only commitment redirect, which can
-# never dispatch, always uses its own.
+# The same live notes when the regeneration that stands dispatched NO call — no
+# call of it reached a tool's executor (said-not-done fix round 5, P6 — the
+# state note's rule, C14, for every claim kind; a call refused as text or naming
+# no registered tool ran nothing). "Doing that now" and "doing it now" beside a
+# reply that did nothing are the backend claiming work the turn never did, and
+# once the client showed correction frames live (fix round 3, T6) the owner
+# read them. Each of these says only what is true of a regeneration that ran
+# nothing: it is a second answer, and what it no longer carries.
+# `_claim_redirect` takes one for every claim kind (no default), and the
+# text-only commitment redirect, which can never dispatch, always uses its own.
 DEFERRAL_NOTE_NO_CALL = "Answering again, without saying I would."
 DEFERRAL_COMPLETION_NOTE_NO_CALL = "Answering again, without saying it is done."
 CONSENT_REDIRECT_NOTE_NO_CALL = "Nothing was pending — answering again."
@@ -248,8 +249,8 @@ MACHINE_REDIRECT_NOTE = "Checking the machine now instead of describing it unche
 # The same redirect when it dispatched NO call (S40b final fix wave, C14): a
 # regeneration that stood by saying plainly it did not check ran nothing, and
 # "Checking the machine now" beside it is the backend claiming a check that
-# never happened. Derived from the redirect's own dispatch count, the way the
-# nudge is derived from ran_a_tool.
+# never happened. Derived from what the redirect's own dispatch did (a call that
+# reached a tool's executor — P6), the way the nudge is derived from ran_a_tool.
 STATE_REDIRECT_NOTE_NO_CALL = "Answering again, without the unchecked claim."
 
 
@@ -2505,6 +2506,7 @@ async def _run_tool(
     call: ToolCall,
     *,
     subset: Collection[str] | None = None,
+    reached: list[str] | None = None,
 ) -> tuple[str, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
@@ -2520,6 +2522,13 @@ async def _run_tool(
     tool refused with "not connected" established the machine is offline, and
     the span carries `facts: [{"device": …, "connected": false}]` so a guard can
     tell "it checked and reports offline" from "it never looked".
+
+    Whether the call got as far as its tool's executor is recorded the same
+    way, from dispatch's own record (tools.dispatch `reached`), never from the
+    result: `reached_executor` is False on a call dispatch refused first (no
+    such tool, arguments unreadable or off the schema — nothing ran) and True
+    on one whose executor ran, whatever it returned. `reached`, when given,
+    collects that record for the caller (_dispatch_calls; said-not-done P6).
 
     `subset` (S12) is the toolset the turn's persona was advertised (an
     agent's); None is Nova, who holds the whole registry. A call naming a
@@ -2546,7 +2555,10 @@ async def _run_tool(
         span.meta["ok"] = False
         span.meta["result_head"] = NEVER_RETURNED
         facts_before = len(facts) if facts is not None else 0
-        result, ok = await tools.dispatch(call.name, call.arguments, ctx)
+        record = reached if reached is not None else []
+        reached_before = len(record)
+        result, ok = await tools.dispatch(call.name, call.arguments, ctx, reached=record)
+        span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if facts is not None and len(facts) > facts_before:
@@ -2609,6 +2621,7 @@ async def _dispatch_calls(
     emit: Callable[[str | None], None],
     *,
     subset: Collection[str] | None = None,
+    reached: list[str] | None = None,
 ) -> bool:
     """Run one round's tool calls, append their results, stream what happened.
 
@@ -2626,6 +2639,12 @@ async def _dispatch_calls(
     successful call was an ephemeral (point-in-time) read. The caller ORs it
     into its own. `subset` is handed to _run_tool unchanged (S12: the
     persona's toolset, or None for Nova) — it marks, it never gates.
+
+    `reached`, when given, collects every call of the batch that got as far as
+    its tool's executor — dispatch's own record, through _run_tool. A call
+    refused here (written as text, or naming no tool in a subset) or by
+    dispatch before its executor (no such tool, bad arguments) is never in it;
+    one whose executor ran and failed is (said-not-done P6).
     """
     ran_ephemeral = False
     for call in calls:
@@ -2678,7 +2697,7 @@ async def _dispatch_calls(
         # What the turn is doing right now, for whoever asks (traces.DOING):
         # the tool's name, set synchronously so no await joins the funnel.
         traces.set_doing(turn.id, call.name)
-        result, ok = await _run_tool(turn, call_ctx, call, subset=subset)
+        result, ok = await _run_tool(turn, call_ctx, call, subset=subset, reached=reached)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True
@@ -3924,6 +3943,11 @@ async def _claim_redirect(
     plainly it did not check is the backend claiming a check that never ran;
     said-not-done fix round 5, P6: the same held for "Doing that now…",
     "Nothing was pending — doing it now…" and "Listing the files now…").
+    DISPATCHED means a call REACHED a tool's executor, read from what the
+    dispatch did (tools.dispatch `reached`), never from what the regeneration
+    asked for: a call refused as text or naming no registered tool ran
+    nothing, while one whose executor ran and failed was an attempt, and the
+    append-class corrections state its failure (said-not-done P6, at the cap).
     `correction_text` is the correction, or a callable that states it from the
     spans at the moment it is shown (fix round 5, P5: the consent correction's
     "nothing has run" holds only while nothing has). `still_unbacked` (A9)
@@ -4012,14 +4036,18 @@ async def _claim_redirect(
             emit(_frame({"correction": text}))
             return _ClaimRedirect(text, False, read_ephemeral, markup_note=_markup_note())
 
-        dispatched = False
+        # Every call of this redirect that REACHED a tool's executor —
+        # dispatch's own record, filled as the calls run — never the calls the
+        # regeneration asked for (said-not-done P6: a call refused as text, or
+        # naming no registered tool, reached none).
+        reached: list[str] = []
 
         def _correction() -> str:
             """What persists when the regeneration does not stand. Ordinarily
             the guard's own correction — but a redirect that RAN something may
             have backed the very claim it was correcting (A9), and then that
             correction is a false statement about the turn: name what ran."""
-            if dispatched and still_unbacked is not None and not still_unbacked():
+            if reached and still_unbacked is not None and not still_unbacked():
                 ran = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
                 span.meta["correction_replaced_by"] = "ran_but_unreported"
                 return _bare_intent_ran_but_unreported_note(ran)
@@ -4061,10 +4089,10 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
-                dispatched = True
                 read_ephemeral = await _dispatch_calls(
-                    turn, tool_ctx, calls, attempt, emit, subset=subset
+                    turn, tool_ctx, calls, attempt, emit, subset=subset, reached=reached
                 )
+                span.meta["redirect_calls_reached"] = len(reached)
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
                 # the action, never a loop of its own. A call it makes anyway is
@@ -4131,9 +4159,9 @@ async def _claim_redirect(
         span.meta["redirected"] = True
         if appended:
             span.meta["regen_appended"] = [name for name, _ in appended]
-        # "Doing it now" only beside a regeneration that dispatched a call;
-        # otherwise the kind's own no-call note (C14; fix round 5, P6).
-        note = redirect_note if dispatched else redirect_note_no_call
+        # "Doing it now" only beside a regeneration whose call REACHED a tool's
+        # executor; otherwise the kind's own no-call note (C14; fix round 5, P6).
+        note = redirect_note if reached else redirect_note_no_call
         emit(_frame({"correction": note}))
         emit(_frame({"t": corrected}))
         for name, claim in appended:

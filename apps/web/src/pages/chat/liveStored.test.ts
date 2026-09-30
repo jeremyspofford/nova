@@ -25,7 +25,8 @@ import { chatReducer, emptyChat, type ChatRow, type ChatState } from './chatRedu
  *   - a "redirect" turn (a REPLACE-class redirect whose regeneration stood)
  *     shows her streamed prose, the redirect's note, then exactly the stored
  *     reply — and that note, the one live line a reload never shows, claims
- *     work only when the stream itself shows a call was made.
+ *     work only when a call REACHED a tool's executor (`dispatched`, core's
+ *     record — see aCallStarted for why the stream cannot say it).
  */
 
 type Turn = {
@@ -64,15 +65,26 @@ function shownLive(raw: string): { text: string; errors: ChatRow[]; events: Stre
   }
 }
 
-/** Whether the stream shows a call made: an activity frame starting a tool. */
-function aCallWasMade(events: StreamEvent[]): boolean {
+/**
+ * Whether the stream shows a call STARTED — which is not whether one ran.
+ *
+ * A call core refuses before any executor — written as text, or naming no
+ * registered tool — is framed `activity: start` all the same, and the refusal
+ * then ends in `activity: error` exactly as an executor's own failure does:
+ * only the reason's words differ, and words are not a record. So nothing in
+ * the stream tells a refused call from one that ran (said-not-done P6, at the
+ * cap). Whether a call REACHED a tool's executor is pinned on core's side, from
+ * the spans it files (`reached_executor`), and carried here as `dispatched`;
+ * this checks only what the stream can show — a call that ran was started.
+ */
+function aCallStarted(events: StreamEvent[]): boolean {
   return events.some(e => e.type === 'activity' && e.status === 'start')
 }
 
 describe('what streams live is what core stores', () => {
   it('reads every turn core captured, of every class', () => {
     const names = Object.keys(turns)
-    expect(names.length).toBeGreaterThanOrEqual(17)
+    expect(names.length).toBeGreaterThanOrEqual(18)
     for (const name of [
       'offer_ran_report_failed',
       'bare_intent_ran_report_failed',
@@ -81,6 +93,7 @@ describe('what streams live is what core stores', () => {
       'offer_redirect_no_call',
       'consent_redirect_ran',
       'consent_redirect_no_call',
+      'consent_redirect_markup_refused',
       'listing_redirect_ran',
       'listing_redirect_no_call',
     ]) {
@@ -104,12 +117,23 @@ describe('what streams live is what core stores', () => {
         expect(turn.streamed).toBeTruthy()
         expect(turn.note).toBeTruthy()
         expect(live.text).toBe(`${turn.streamed}\n\n${turn.note}\n\n${turn.stored}`)
-        // Live vs truth: whether a call was made is read off the stream itself,
-        // and the note shown live claims work exactly when one was.
-        const made = aCallWasMade(live.events)
-        expect(made).toBe(turn.dispatched)
-        expect(turn.note_claims_work).toBe(made)
+        // Live vs truth: the note shown live claims work exactly when a call
+        // reached a tool's executor (core's record), and the stream agrees
+        // wherever it can — a call that ran was framed as started.
+        expect(typeof turn.dispatched).toBe('boolean')
+        expect(turn.note_claims_work).toBe(turn.dispatched)
+        if (turn.dispatched) expect(aCallStarted(live.events)).toBe(true)
       }
     })
   }
+
+  it('a call refused before any executor is framed as started too, so core keeps the record', () => {
+    // The regeneration wrote its call as text: refused, never run. The stream
+    // still starts it, and the note must not claim work.
+    const turn = turns.consent_redirect_markup_refused
+    expect(turn.class).toBe('redirect')
+    expect(aCallStarted(shownLive(turn.raw).events)).toBe(true)
+    expect(turn.dispatched).toBe(false)
+    expect(turn.note_claims_work).toBe(false)
+  })
 })
