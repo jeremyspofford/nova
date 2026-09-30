@@ -1119,10 +1119,19 @@ async def put_jev_router(role: str, request: Request) -> dict:
 async def route_explain(request: Request) -> dict:
     """The walk a call with `?role=` (and optionally `?model=`, the explicit
     pick) would take right now: every link's live verdict and what would
-    serve. Reads only; nothing is called, nothing is charged."""
+    serve. Reads only; nothing is called, nothing is charged.
+
+    `?decision_kinds=` is what a decision call's X-Nova-Decision-Kinds says:
+    the kinds of decision model the owner allows (decision-role spec §6),
+    which core states from his switches. A link of another kind is judged
+    `kind_off`; absent allows every kind. It is refused, in words, on a role
+    that has no decision models."""
     role = request.query_params.get("role") or "chat"
     try:
         routing.validate_role(role)
+        kinds = routing.allowed_kinds(
+            role, request.query_params.get("decision_kinds"), "decision_kinds"
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await routing.explain(
@@ -1133,6 +1142,7 @@ async def route_explain(request: Request) -> dict:
         timezone=_timezone_of(request),
         fit_context=_fit_context,
         latest_probes=_latest_probes,
+        kinds=kinds,
     )
 
 

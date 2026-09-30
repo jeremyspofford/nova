@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { RoutingSection } from './RoutingSection'
-import type { AgentSummary, CatalogRow, RouteExplain, Routes } from '../../lib/api'
+import type { AgentSummary, CatalogRow, RouteExplain, Routes, SettingDef } from '../../lib/api'
 
 function row(id: string, kind: 'local' | 'cloud', installed?: boolean): CatalogRow {
   const [provider, ...rest] = id.split(':')
@@ -51,11 +51,15 @@ const EXPLAIN_CHAT: RouteExplain = {
   reason: 'fell back to link 2 (hub:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)',
 }
 
-type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents'
+type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents' | 'putSetting'
 
 function renderSection(
   over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {},
-  props: Partial<{ onChatModelChanged: (model: string) => void }> = {},
+  props: Partial<{
+    onChatModelChanged: (model: string) => void
+    decisionSwitches: SettingDef[] | null
+    onSettingChanged: (key: string, value: unknown) => void
+  }> = {},
 ) {
   const api = {
     getRoutes: vi.fn(async () => ROUTES),
@@ -70,10 +74,50 @@ function renderSection(
     })),
     deleteRoute: vi.fn(async () => undefined),
     listAgents: vi.fn(async () => AGENTS),
+    // PUT /api/v1/settings answers with what core stored.
+    putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
     ...over,
   }
   render(<RoutingSection chatModel="openrouter:openai/gpt-x" api={api as never} onChatModelChanged={() => {}} {...props} />)
   return api
+}
+
+// The decision switches as core lists them (decision-role spec §6): local
+// (alpha) ships off, cloud (beta) on, and each description is the notice.
+const LOCAL_NOTICE =
+  'A decision model on your own machine may answer before she replies. Off by default: on a GPU shared with your chat model, a local decision model often cannot answer within the 5 s budget; the step is then skipped and your message waits up to 5 s.'
+const CLOUD_NOTICE =
+  'A decision model at a cloud provider may answer before she replies. On by default: your message and its recalled notes go to the provider, at a small cost per message.'
+function switches(local: boolean, cloud: boolean): SettingDef[] {
+  return [
+    { key: 'decisions.local', type: 'bool', default: false, description: LOCAL_NOTICE, value: local },
+    { key: 'decisions.cloud', type: 'bool', default: true, description: CLOUD_NOTICE, value: cloud },
+  ]
+}
+const KEV = 'dell-kev:kev-latest'
+const JEV = 'openrouter:~typesafe/jev-latest'
+const ROUTES_DECIDING: Routes = {
+  ...ROUTES,
+  roles: ROUTES.roles.map(r => (r.role === 'decisions' ? { ...r, chain: [KEV, JEV] } : r)),
+}
+const LOCAL_OFF = 'local decision models are switched off in Settings (alpha)'
+const EXPLAIN_LOCAL_OFF: RouteExplain = {
+  role: 'decisions',
+  chain: [
+    { link: 1, id: KEV, verdict: 'kind_off', reason: LOCAL_OFF, local: true },
+    { link: 2, id: JEV, verdict: 'runnable', reason: null, local: false },
+  ],
+  would_serve: { role: 'decisions', link: 2, reason: `fell back to link 2 (${JEV}) — ${KEV}: ${LOCAL_OFF}`, served_by: JEV, standby: false },
+  reason: `fell back to link 2 (${JEV}) — ${KEV}: ${LOCAL_OFF}`,
+}
+const EXPLAIN_EVERY_KIND: RouteExplain = {
+  role: 'decisions',
+  chain: [
+    { link: 1, id: KEV, verdict: 'runnable', reason: null, local: true },
+    { link: 2, id: JEV, verdict: 'runnable', reason: null, local: false },
+  ],
+  would_serve: { role: 'decisions', link: 1, reason: null, served_by: KEV, standby: false },
+  reason: null,
 }
 
 /** The roles on the page, top to bottom, by their data-testid. */
@@ -678,5 +722,230 @@ describe('RoutingSection', () => {
     expect(toggle.checked).toBe(true)
     expect(screen.getByTestId('route-chat-router-note').textContent).toBe('a note from the switch')
     expect(api.putJevRouter).toHaveBeenCalledTimes(1)
+  })
+
+  describe('the two decision switches (decision-role spec §6)', () => {
+    it('sits in the decisions panel: each switch with its stage and core\'s notice, as core stored it', async () => {
+      renderSection({ getRoutes: vi.fn(async () => ROUTES_DECIDING) }, { decisionSwitches: switches(false, true) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      const panel = screen.getByTestId('route-decisions')
+      const local = within(panel).getByTestId('decision-switch-decisions.local')
+      const cloud = within(panel).getByTestId('decision-switch-decisions.cloud')
+      expect((within(local).getByRole('switch', { name: 'Local decision model' }) as HTMLInputElement).checked).toBe(false)
+      expect((within(cloud).getByRole('switch', { name: 'Cloud decision model' }) as HTMLInputElement).checked).toBe(true)
+      expect(within(local).getByTestId('decision-switch-stage').textContent).toBe('alpha')
+      expect(within(cloud).getByTestId('decision-switch-stage').textContent).toBe('beta')
+      expect(within(local).getByTestId('decision-switch-notice').textContent).toBe(LOCAL_NOTICE)
+      expect(within(cloud).getByTestId('decision-switch-notice').textContent).toBe(CLOUD_NOTICE)
+      // Beside the decisions chain and nowhere else.
+      for (const role of ['chat', 'scheduled', 'judge']) {
+        expect(within(screen.getByTestId(`route-${role}`)).queryByRole('switch', { name: 'Local decision model' })).toBeNull()
+      }
+    })
+
+    it('draws no switch on a core that does not list them', async () => {
+      renderSection({}, { decisionSwitches: null })
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      expect(screen.queryByRole('switch', { name: 'Local decision model' })).toBeNull()
+      expect(screen.queryByRole('switch', { name: 'Cloud decision model' })).toBeNull()
+    })
+
+    /** The decisions walk as core explains it under what it has stored: Kev
+     * passed over while local is off, Kev answering once it is on. */
+    function explainUnder(stored: { local: boolean }) {
+      return vi.fn(async (role: string) =>
+        role === 'decisions'
+          ? stored.local ? EXPLAIN_EVERY_KIND : EXPLAIN_LOCAL_OFF
+          : { role, chain: [], would_serve: null, reason: 'no chain' },
+      )
+    }
+
+    /** The section under a parent that holds the switches the way SettingsPage
+     * does — it re-renders with whatever onSettingChanged hands it. `stored`
+     * is core's side: putSetting writes it and answers with it. */
+    function renderWithSwitches(over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {}) {
+      const stored = { local: false }
+      const onSettingChanged = vi.fn()
+      const api = {
+        getRoutes: vi.fn(async () => ROUTES_DECIDING),
+        putRoute: vi.fn(),
+        putJevRouter: vi.fn(),
+        explainRoute: explainUnder(stored),
+        clearWall: vi.fn(),
+        getCatalog: catalogWith(),
+        deleteRoute: vi.fn(),
+        listAgents: vi.fn(async () => AGENTS),
+        putSetting: vi.fn(async (key: string, value: boolean | string | number) => {
+          if (key === 'decisions.local') stored.local = value === true
+          return { key, value }
+        }),
+        ...over,
+      }
+      function Parent() {
+        const [defs, setDefs] = useState(switches(false, true))
+        return (
+          <RoutingSection
+            chatModel=""
+            api={api as never}
+            onChatModelChanged={() => {}}
+            decisionSwitches={defs}
+            onSettingChanged={(key, value) => {
+              onSettingChanged(key, value)
+              setDefs(prev => prev.map(d => (d.key === key ? { ...d, value } : d)))
+            }}
+          />
+        )
+      }
+      render(<Parent />)
+      return { api, onSettingChanged }
+    }
+
+    const localSwitch = () => screen.getByRole('switch', { name: 'Local decision model' }) as HTMLInputElement
+    const switchAlert = (key: string) => within(screen.getByTestId(`decision-switch-${key}`)).getByRole('alert').textContent
+
+    it('writes the setting, moves with what core stored, and reloads the decisions explanation', async () => {
+      const { api, onSettingChanged } = renderWithSwitches()
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
+      const badge = screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')
+      expect(badge?.getAttribute('data-verdict')).toBe('kind_off')
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('decisions.local', true))
+      await waitFor(() => expect(localSwitch().checked).toBe(true))
+      expect(onSettingChanged).toHaveBeenCalledWith('decisions.local', true)
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(`right now: ${KEV} would answer`))
+      expect(api.explainRoute.mock.calls.filter(([role]) => role === 'decisions').length).toBe(2)
+    })
+
+    it('while the page re-reads, shows nothing read under the switch as it was', async () => {
+      // The switch moves as soon as core has stored it; the walk beside it was
+      // read under the old value, and said "local decision models are switched
+      // off" next to a Local switch reading ON for the whole re-read.
+      let release: (routes: Routes) => void = () => {}
+      const getRoutes = vi
+        .fn()
+        .mockResolvedValueOnce(ROUTES_DECIDING)
+        .mockReturnValueOnce(new Promise<Routes>(resolve => { release = resolve }))
+      renderWithSwitches({ getRoutes })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
+
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(getRoutes).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(localSwitch().checked).toBe(true))
+
+      // Held: nothing beside the switch still says what it said before.
+      const panel = screen.getByTestId('route-decisions')
+      expect(panel.textContent).not.toContain('local decision models are switched off')
+      expect(panel.querySelector('[data-verdict]')).toBeNull()
+      expect(screen.queryByTestId('route-decisions-would-serve')).toBeNull()
+
+      release(ROUTES_DECIDING)
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(`right now: ${KEV} would answer`))
+      expect(screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')?.getAttribute('data-verdict')).toBe('runnable')
+    })
+
+    it('when the re-read fails, still shows nothing read under the switch as it was, and says why', async () => {
+      const getRoutes = vi
+        .fn()
+        .mockResolvedValueOnce(ROUTES_DECIDING)
+        .mockRejectedValueOnce(new Error('the gateway is unreachable — ConnectError: connection refused'))
+      renderWithSwitches({ getRoutes })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
+
+      fireEvent.click(localSwitch())
+      await waitFor(() =>
+        expect(screen.getByTestId('routing-section').textContent).toContain('the gateway is unreachable — ConnectError: connection refused'),
+      )
+      expect(localSwitch().checked).toBe(true)
+      const panel = screen.getByTestId('route-decisions')
+      expect(panel.textContent).not.toContain('local decision models are switched off')
+      expect(panel.querySelector('[data-verdict]')).toBeNull()
+      expect(screen.queryByTestId('route-decisions-would-serve')).toBeNull()
+    })
+
+    it('moves with what core stored, even when core stored something other than what was clicked', async () => {
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async (key: string) => ({ key, value: false })) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve')).toBeTruthy())
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(onSettingChanged).toHaveBeenCalledWith('decisions.local', false))
+      expect(onSettingChanged).not.toHaveBeenCalledWith('decisions.local', true)
+      expect(localSwitch().checked).toBe(false)
+    })
+
+    it('leaves a refused switch where it was and says why in core\'s words', async () => {
+      const onSettingChanged = vi.fn()
+      renderSection(
+        { putSetting: vi.fn(async () => { throw new Error('setting decisions.cloud expects bool, got str') }) },
+        { decisionSwitches: switches(false, true), onSettingChanged },
+      )
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      const cloud = screen.getByRole('switch', { name: 'Cloud decision model' }) as HTMLInputElement
+      fireEvent.click(cloud)
+      await waitFor(() => expect(switchAlert('decisions.cloud')).toBe('could not switch — setting decisions.cloud expects bool, got str'))
+      expect(cloud.checked).toBe(true)
+      expect(onSettingChanged).not.toHaveBeenCalled()
+    })
+
+    it('never shows a write as done when the answer does not say what core stored', async () => {
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async () => ({})) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      fireEvent.click(localSwitch())
+      await waitFor(() =>
+        expect(switchAlert('decisions.local')).toBe(
+          'could not switch — the write of decisions.local returned no stored value, so what is stored is unknown — reload the page',
+        ),
+      )
+      expect(onSettingChanged).not.toHaveBeenCalled()
+      expect(localSwitch().checked).toBe(false)
+    })
+
+    it('never shows a write as done when the value core says it stored is not true or false', async () => {
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async (key: string) => ({ key, value: 'true' })) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      fireEvent.click(localSwitch())
+      await waitFor(() =>
+        expect(switchAlert('decisions.local')).toBe(
+          'could not switch — the write of decisions.local returned "true", which is not a boolean, so what is stored is unknown — reload the page',
+        ),
+      )
+      expect(onSettingChanged).not.toHaveBeenCalled()
+      expect(localSwitch().checked).toBe(false)
+    })
+
+    it('with both off, says the step is off and costs nothing', async () => {
+      const explainRoute = vi.fn(async (role: string) =>
+        role === 'decisions'
+          ? {
+              role,
+              chain: [
+                { link: 1, id: KEV, verdict: 'kind_off', reason: LOCAL_OFF },
+                { link: 2, id: JEV, verdict: 'kind_off', reason: 'cloud decision models are switched off in Settings (beta)' },
+              ],
+              would_serve: null,
+              reason: 'no model in the \'decisions\' chain can serve right now',
+            }
+          : { role, chain: [], would_serve: null, reason: 'no chain' },
+      )
+      renderSection({ getRoutes: vi.fn(async () => ROUTES_DECIDING), explainRoute }, { decisionSwitches: switches(false, false) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve')).toBeTruthy())
+      expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(
+        'right now: the decision step is off — both decision models are switched off, so no decision model is asked and it costs nothing',
+      )
+      expect(screen.getByTestId('route-decisions').textContent).not.toContain('nothing could answer')
+    })
+
+    it('words a link whose kind is switched off as the owner\'s choice, never a failure', async () => {
+      renderSection(
+        { getRoutes: vi.fn(async () => ROUTES_DECIDING), explainRoute: vi.fn(async (role: string) => (role === 'decisions' ? EXPLAIN_LOCAL_OFF : { role, chain: [], would_serve: null, reason: 'no chain' })) },
+        { decisionSwitches: switches(false, true) },
+      )
+      await waitFor(() => expect(screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')).toBeTruthy())
+      const badge = screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')
+      expect(badge?.textContent).toBe('switched off in Settings')
+      expect(badge?.getAttribute('title')).toBe(LOCAL_OFF)
+      expect(badge?.innerHTML).not.toContain('danger')
+      expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(
+        `right now: ${JEV} would answer — fell back to link 2 (${JEV}) — ${KEV}: ${LOCAL_OFF}`,
+      )
+    })
   })
 })

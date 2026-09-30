@@ -652,7 +652,9 @@ export interface RouteVerdict {
   local?: boolean
   // switched_off (S40): the link's machine was switched off by the owner.
   // wrong_protocol (decision role): the link's provider cannot answer this role.
-  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | 'wrong_protocol' | string
+  // kind_off (decision-role spec §6): the owner switched this kind of decision
+  // model — local or cloud, its provider's `local` flag — off in Settings.
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | 'wrong_protocol' | 'kind_off' | string
   reason: string | null
   walled_until?: string
 }
@@ -692,6 +694,9 @@ export const putJevRouter = (role: RouteRole, on: boolean, link?: string) =>
     'PUT',
     link ? { on, link } : { on },
   )
+/** The walk a call for `role` would take right now. Core states the owner's
+ * decision switches for the decisions role itself (decision-role spec §6), so
+ * this never names them. */
 export const explainRoute = (role: RouteRole, model?: string) =>
   apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
 export const clearWall = (provider: string) =>

@@ -39,6 +39,14 @@ span says which. A cancellation of the turn itself is said on the span too,
 then passed on, never swallowed; either way the span keeps the calls made and
 what they cost.
 
+THE TWO SWITCHES (spec §6, owner 2026-09-29). A decision model is local
+(alpha) or cloud (beta) — its provider's own `local` flag, which the gateway
+reads — and the owner switches each kind on or off in Settings. The caller
+reads the switches (this module reads no settings) and passes the kinds
+allowed; every call names them (KINDS_HEADER), and the gateway passes over a
+link of any other kind, in words. Both off, the step does not run at all: no
+call and no delay, and the span says the step is off.
+
 WHAT IT NEVER DOES. Refuse, reorder or rewrite a tool call, or touch the
 dispatch funnel (tests/test_no_approvals.py pins it; this module imports
 nothing of app.tools). Run on a scheduled firing, a drained queue or an agent's
@@ -83,11 +91,17 @@ NONE_MEANS = "No tool: the reply only talks, from knowledge or the conversation.
 #: Who the decision model is told the assistant is (the measured wording).
 ASSISTANT = "Nova, a household AI assistant with tools"
 #: The span's outcomes: a decision applied whole, none applied (fail-open, with
-#: the reason), or the turn itself cancelled while the step ran.
+#: the reason), the turn itself cancelled while the step ran, or the step not
+#: run at all because the owner switched every kind of decision model off.
 DECIDED = "decided"
 FAILED_OPEN = "failed_open"
 CANCELLED = "cancelled"
 CANCELLED_WHY = "the turn was cancelled during the decision step"
+OFF = "off"
+OFF_WHY = "both decision models are switched off in Settings, so none was asked"
+#: The kinds of decision model the owner allows, named on every call — the
+#: gateway's data_plane.KINDS_HEADER. A call that names none allows every kind.
+KINDS_HEADER = "X-Nova-Decision-Kinds"
 NO_HINT_NO_FACTS = (
     "no tool hint, so there are no current facts to judge the notes against — they "
     "stand as recalled"
@@ -282,6 +296,22 @@ def request_body(state: str, questions: dict) -> dict:
     return {"state": state, "questions": questions}
 
 
+def kinds_value(kinds: Collection[str]) -> str:
+    """The kinds allowed as the gateway reads them, in a header or in explain's
+    `decision_kinds`: comma-separated, in one order. '' allows none."""
+    return ",".join(sorted(kinds))
+
+
+def call_headers(turn: traces.Turn, kinds: Collection[str] | None) -> dict[str, str]:
+    """Every call's headers: the turn's attribution under the decisions role,
+    and the kinds of decision model allowed — none named when none were stated,
+    which the gateway reads as every kind."""
+    headers = peers.attribution_headers(turn, traces.purpose_of(turn), ROLE)
+    if kinds is not None:
+        headers[KINDS_HEADER] = kinds_value(kinds)
+    return headers
+
+
 # -- reading an answer ---------------------------------------------------------
 
 
@@ -340,16 +370,15 @@ def _detail(response: httpx.Response) -> str:
 
 
 async def ask(
-    client: httpx.AsyncClient, turn: traces.Turn, state: str, questions: dict, calls: Calls
+    client: httpx.AsyncClient, headers: dict[str, str], state: str, questions: dict, calls: Calls
 ) -> dict:
-    """One decision request through the gateway: the answers, or a stated
-    Unanswered / Unreadable — never a guess at a missing answer."""
+    """One decision request through the gateway, with the step's own headers
+    (call_headers): the answers, or a stated Unanswered / Unreadable — never a
+    guess at a missing answer."""
     calls.count += 1
     try:
         response = await client.post(
-            "/v1/systemone",
-            json=request_body(state, questions),
-            headers=peers.attribution_headers(turn, traces.purpose_of(turn), ROLE),
+            "/v1/systemone", json=request_body(state, questions), headers=headers
         )
     except httpx.HTTPError as exc:
         raise Unanswered(f"the gateway could not be reached — {peers.reason(exc)}") from exc
@@ -375,18 +404,22 @@ async def decide(
     advertised: Sequence[dict],
     calls: Calls,
     meta: dict,
+    *,
+    kinds: Collection[str] | None = None,
 ) -> Advice:
     """The whole decision — or an exception, never half of one. `meta` fills as
     each answer arrives, so a step that fails still shows how far it got.
-    (plan decision 1) Three rounds: stage 1, stage 2, then every note at once."""
+    (plan decision 1) Three rounds: stage 1, stage 2, then every note at once.
+    Every call names `kinds`, the kinds of decision model allowed."""
     descriptions = tool_descriptions(advertised)
     if not descriptions:
         meta["hint"] = None
         meta["why"] = "the turn advertises no tools, so there is nothing to choose between"
         return Advice()
     state = json.dumps({"assistant": ASSISTANT, "owner_message": message})
+    headers = call_headers(turn, kinds)
     async with peers.client(app, peers.GATEWAY, CALL_TIMEOUT) as client:
-        first = await ask(client, turn, state, stage_one(descriptions), calls)
+        first = await ask(client, headers, state, stage_one(descriptions), calls)
         _chosen, probabilities = read_choice(first, "tool", {*descriptions, NONE})
         gate = read_noul(first, "acts")
         short = shortlist(probabilities, descriptions)
@@ -398,7 +431,7 @@ async def decide(
         none_p = probabilities.get(NONE)
         meta["none_p"] = round(none_p, 4) if none_p is not None else None
         meta["gate"] = round(gate, 4)
-        second = await ask(client, turn, state, stage_two(short, descriptions), calls)
+        second = await ask(client, headers, state, stage_two(short, descriptions), calls)
         pick, _probabilities = read_choice(second, "pick", set(short))
         fits = {name: read_noul(second, f"fit{index}") for index, name in enumerate(short)}
         meta["pick"] = pick
@@ -418,7 +451,7 @@ async def decide(
         facts = current_facts(hint, descriptions)
         answers = await asyncio.gather(
             *(
-                ask(client, turn, note_state(message, note, facts), NOTE_QUESTIONS, calls)
+                ask(client, headers, note_state(message, note, facts), NOTE_QUESTIONS, calls)
                 for note in notes
             ),
             return_exceptions=True,
@@ -456,16 +489,30 @@ async def run(
     notes: Sequence[str],
     paths: Sequence[str],
     advertised: Sequence[dict],
+    *,
+    kinds: Collection[str] | None = None,
 ) -> Advice:
     """The decision step as a turn runs it: under ONE `decisions` span, inside
     TURN_BUDGET_S, fail-open with the reason on the span. Never raises a
     failure — it costs the hint, never the turn — and passes a cancellation of
     the turn on, after saying so on the span. However the step ends, the span
     keeps the calls it made and what they cost. The span's own duration is
-    the step's latency."""
+    the step's latency.
+
+    `kinds` is the kinds of decision model the owner has switched on (spec
+    §6), which the caller reads: every call names them, and the span keeps
+    them. Empty is both switched off — the step asks nothing, at once, and the
+    span says so (OFF). None states no switches, so every kind is allowed."""
     calls = Calls()
     reached: dict = {}
     with turn.span("decisions") as span:
+        if kinds is not None:
+            span.meta["kinds"] = sorted(kinds)
+            if not kinds:
+                span.meta["outcome"] = OFF
+                span.meta["why"] = OFF_WHY
+                span.meta.update(calls.meta())
+                return Advice()
         span.meta["budget_s"] = TURN_BUDGET_S
         if len(paths) != len(notes):
             # A caller bug, said rather than papered over: each verdict is filed
@@ -486,7 +533,7 @@ async def run(
             )
         try:
             advice = await asyncio.wait_for(
-                decide(app, turn, message, notes, paths, advertised, calls, reached),
+                decide(app, turn, message, notes, paths, advertised, calls, reached, kinds=kinds),
                 TURN_BUDGET_S,
             )
         except asyncio.CancelledError:

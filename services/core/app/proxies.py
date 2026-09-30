@@ -6,7 +6,8 @@ gateway link. Nothing is interpreted on the way through — the gateway's
 status and body are the answer, including its refusals. GET /routes and the
 Jev Router switch are the exception: chat.model is a fact only core holds,
 so they state it to the gateway, and the switch writes it back when the
-gateway's answer names what it must become.
+gateway's answer names what it must become. GET /routes/explain is the
+other: for the decision role it states the owner's two decision switches.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.responses import Response
 
-from app import chat, db, peers, settings_store
+from app import chat, db, decisions, peers, settings_store
 
 router = APIRouter(prefix="/api/v1", tags=["wizard"])
 logger = logging.getLogger("core")
@@ -397,9 +398,30 @@ async def delete_route(role: str, request: Request) -> Response:
     return await _forward(request, "DELETE", f"/admin/routes/{role}")
 
 
+#: The parameter explain states the decision switches in: core's alone to state.
+DECISION_KINDS_PARAMS = frozenset({"decision_kinds"})
+
+
 @router.get("/routes/explain")
 async def route_explain(request: Request) -> Response:
-    return await _forward(request, "GET", "/admin/route/explain", timeout=CATALOG_HF_TIMEOUT)
+    """The walk a call for `?role=` would take right now. A decision call
+    names the kinds of decision model the owner has switched on (decision-role
+    spec §6), and the gateway reads none of core's settings — so the decision
+    role's walk is explained with them too, and "right now: X would answer"
+    names the link that would. A browser's own `decision_kinds` never reaches
+    the gateway, for any role."""
+    params: dict[str, str] = {}
+    if (request.query_params.get("role") or "chat") == decisions.ROLE:
+        kinds = await settings_store.decision_kinds(await db.get_pool())
+        params["decision_kinds"] = decisions.kinds_value(kinds)
+    return await _forward(
+        request,
+        "GET",
+        "/admin/route/explain",
+        timeout=CATALOG_HF_TIMEOUT,
+        params=params,
+        drop=DECISION_KINDS_PARAMS,
+    )
 
 
 @router.delete("/routes/walls/{provider}")

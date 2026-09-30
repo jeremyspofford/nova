@@ -41,6 +41,14 @@ link is runnable only on a provider whose adapter carries the role's
 protocol (Adapter.protocols), and a systemone role never borrows the chat
 chain and never falls to the local standby: a chat model has nothing to
 answer a typed question with.
+
+THE KINDS (decision-role spec §6). A decision link is local or cloud — its
+provider's own `local` flag, never a list of names — and the owner switches
+each kind on or off in Settings: local is alpha, cloud is beta. The gateway
+reads none of core's settings, so the caller states the kinds allowed
+(allowed_kinds): a link of any other kind is judged `kind_off` before its
+wall, its cap or its machine is read, so it is never dialled and never
+walled — the next link answers, and the route says why in words.
 """
 
 from __future__ import annotations
@@ -100,6 +108,49 @@ def cannot_serve(provider_name: str, row: dict, protocol: str) -> str:
     """Why a link on `row` cannot serve a role that speaks `protocol`."""
     carries = " and ".join(_ANSWERS[p] for p in sorted(for_row(row).protocols))
     return f"{provider_name} answers {carries} — this role needs {_ANSWERS[protocol]}"
+
+
+#: The decision-model kinds (see the module docstring).
+LOCAL = "local"
+CLOUD = "cloud"
+KINDS = frozenset({LOCAL, CLOUD})
+#: Each kind's stage, as the owner ruled it (2026-09-29).
+_STAGES = {LOCAL: "alpha", CLOUD: "beta"}
+
+
+def kind_of(row: dict) -> str:
+    """A link's decision-model kind: its provider's own `local` flag."""
+    return LOCAL if row.get("local") else CLOUD
+
+
+def kind_off(kind: str) -> str:
+    """Why a link of `kind` is passed over: the owner switched its kind off."""
+    return f"{kind} decision models are switched off in Settings ({_STAGES[kind]})"
+
+
+def allowed_kinds(role: str, raw: str | None, named_by: str) -> frozenset[str] | None:
+    """The decision-model kinds a caller allows in `role`'s walk, read off
+    `raw` — comma-separated, as `named_by` (a header or a query parameter)
+    carries it. None when the caller named none, which allows every kind: a caller
+    that states no switches walks the chain as the owner ordered it. '' names
+    none, so every link is passed over. ValueError, in words, for a kind that
+    does not exist, or for a role whose links are not decision models."""
+    if raw is None:
+        return None
+    protocol = protocol_of(role)
+    if protocol != SYSTEMONE:
+        raise ValueError(
+            f"{named_by} names the decision-model kinds allowed, and the {role} role has no "
+            f"decision models — it answers {_ANSWERS[protocol]}"
+        )
+    named = {part.strip() for part in raw.split(",") if part.strip()}
+    unknown = sorted(named - KINDS)
+    if unknown:
+        raise ValueError(
+            f"{named_by} names {', '.join(repr(kind) for kind in unknown)} — a decision model "
+            "is local or cloud"
+        )
+    return frozenset(named)
 
 
 # The statuses that are about the ACCOUNT rather than about one model: a key
@@ -940,6 +991,7 @@ async def judge_link(
     seen: dict[str, engines.EngineView],
     *,
     protocol: str = CHAT,
+    kinds: frozenset[str] | None = None,
 ) -> dict:
     """One link's live verdict: runnable, or why not — in words.
 
@@ -947,7 +999,9 @@ async def judge_link(
     (engines.observe), keyed by engine name. An engine its owner switched
     off is judged first, and nothing is asked of it. A link whose provider
     cannot carry the role's `protocol` is judged `wrong_protocol` first, and
-    nothing is asked of it."""
+    nothing is asked of it. Then a link whose kind is not among `kinds` (None
+    allows every kind) is judged `kind_off`, and nothing is asked of it
+    either — not its wall, its cap or its machine."""
     provider_name, model = _provider_of(link, by_name)
     if provider_name is None or not model:
         return {
@@ -963,6 +1017,8 @@ async def judge_link(
             "verdict": "wrong_protocol",
             "reason": cannot_serve(provider_name, row, protocol),
         }
+    if kinds is not None and kind_of(row) not in kinds:
+        return {**entry, "verdict": "kind_off", "reason": kind_off(kind_of(row))}
     off = switched_off(row)
     if off is not None:
         return {**entry, "verdict": "switched_off", "reason": off}
@@ -1104,13 +1160,16 @@ async def resolve(
     latest_probes,
     skip: set[str] | None = None,
     unreachable: dict[str, str] | None = None,
+    kinds: frozenset[str] | None = None,
 ) -> Decision:
     """The link that serves this call, decided BEFORE any provider is
     called. `skip` names links already refused in this request (the
     in-request fallback after a live refusal); `unreachable` maps links this
     request could not reach at all to the words why. Both are keyed by the
     served id (`provider:model`), so a bare link in the chain matches too,
-    and neither is asked again in the same request."""
+    and neither is asked again in the same request. `kinds` is the decision-
+    model kinds the caller allows (allowed_kinds; None allows every kind): a
+    link of another kind is passed over, `kind_off`, for this call only."""
     validate_role(role)
     protocol = protocol_of(role)
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
@@ -1193,7 +1252,7 @@ async def resolve(
     has_local = False
     for index, link in enumerate(chain, 1):
         verdict = await judge_link(
-            app, pool, link, by_name, walled, timezone, seen, protocol=protocol
+            app, pool, link, by_name, walled, timezone, seen, protocol=protocol, kinds=kinds
         )
         verdict["link"] = index
         served_as = f"{verdict['provider']}:{verdict['model']}" if verdict.get("provider") else link
@@ -1260,9 +1319,18 @@ async def resolve(
 
 
 async def explain(
-    app, pool, *, role: str, requested: str | None, timezone: str, fit_context, latest_probes
+    app,
+    pool,
+    *,
+    role: str,
+    requested: str | None,
+    timezone: str,
+    fit_context,
+    latest_probes,
+    kinds: frozenset[str] | None = None,
 ) -> dict:
-    """The same walk without serving: every link's verdict and what would serve."""
+    """The same walk without serving: every link's verdict and what would
+    serve — with `kinds`, the decision-model kinds a call would allow."""
     try:
         decision = await resolve(
             app,
@@ -1272,6 +1340,7 @@ async def explain(
             timezone=timezone,
             fit_context=fit_context,
             latest_probes=latest_probes,
+            kinds=kinds,
         )
     except NothingRunnable as exc:
         return {"role": role, "chain": exc.verdicts, "would_serve": None, "reason": str(exc)}
@@ -1287,13 +1356,19 @@ __all__ = [
     "BUILTIN_ROLES",
     "RESERVED_ROLES",
     "CHAT",
+    "CLOUD",
     "DECISIONS_ROLE",
     "JEV_ROUTER_MODEL",
+    "KINDS",
+    "LOCAL",
     "SYSTEMONE",
     "SYSTEMONE_ROLES",
     "Decision",
     "NothingRunnable",
+    "allowed_kinds",
     "cannot_serve",
+    "kind_of",
+    "kind_off",
     "protocol_of",
     "resolve",
     "explain",
