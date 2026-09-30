@@ -577,7 +577,8 @@ anything that needs admin rights is Q17.
 ## Order
 
 S42b (hub:primary, in progress) → S29 → S30 → S37d → the install walk →
-S34 → S37c → S38 → S39 → S32 → S33 → S35. **S37a runs in parallel now.**
+S34 → S37c → S39 → S32 → S33 → S35. **S37a (MCP) and S38 (her browser) run
+in parallel now** (owner, 2026-09-30: "both in parallel").
 S36 and S37b after S34, unscheduled. Then the paused hub slices (S46a,
 S46b, S43a, S43b, S44, S48, S49, and S42c per Q15), then S26, then S27.
 
@@ -762,8 +763,9 @@ with S46a?**
 
 **Q16. Where do S37d (HTTP requests) and S37c (reactive) go?**
 - **Default:** S37d right after S30, because the install walk configures an
-  app through its API; S37c right after S34. Downside: her browser (S38)
-  moves two M-sized slices later.
+  app through its API; S37c right after S34. Downside: self-coding (S32/S33)
+  moves two M-sized slices later. (S38 no longer waits: it runs in parallel
+  since 2026-09-30.)
 - Both after self-coding. Downside: until then, app APIs mean `curl` inside
   `device_run`, and events from other programs reach nothing.
 
