@@ -348,11 +348,18 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     `_WRITTEN_CALL_APPROVAL` and `_GERUND_START`, and the device-completion
     cuts `_ACTION_CONDITION`, `_FRONTED_CONDITION`, `_CHANGE_MARK`,
     `_OTHER_CAUSE` and `_NO_ANSWER` — less 1, `_BY_ANOTHER`, which
-    `_OTHER_CAUSE` replaced: 188 -> 196, 249 -> 257."""
+    `_OTHER_CAUSE` replaced: 188 -> 196, 249 -> 257.
+
+    Its fix round 3 (2026-09-29) moved them again, deliberately, and not the
+    difference: 1 new BARE module Pattern, reached by both walks —
+    `_GERUND_NOT_HERS`, the heading / generic-object / warning cut on the
+    gerund fragment above a fence (the re-review's R1: "Running this formats
+    your C: drive:" above a `format C: /q` fence read as her lead): 196 -> 197,
+    257 -> 258."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 196, len(old)
-    assert len(new) == 257, len(new)
+    assert len(old) == 197, len(old)
+    assert len(new) == 258, len(new)
     assert len(new) - len(old) == 61
 
 
@@ -425,6 +432,10 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "numbered_gerund": "1." + pad + "Launching",
         "moment_then_spaces": "the" + pad + "moment",
         "refusal_then_spaces": "did" + pad + "not",
+        # fix round 3: a gerund walking to its object, and a demonstrative
+        # walking to the verb that makes the gerund its subject.
+        "gerund_then_spaces": "Running" + pad + "this",
+        "demonstrative_then_spaces": "Running this" + pad + "formats",
     }
 
 
@@ -512,6 +523,7 @@ def test_the_sweep_walks_the_said_not_done_legs():
         "_WRITTEN_CALL_CONDITION",
         "_ACTION_CONDITION",
         "_NO_ANSWER",
+        "_GERUND_NOT_HERS",
     ):
         assert name in swept, name
     for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
@@ -526,6 +538,8 @@ def test_the_sweep_walks_the_said_not_done_legs():
             "as",
             "1.",
             "did",
+            "Running",
+            "Running this",
         ):
             assert any(re.match(re.escape(lead) + r"\s{100,}", text) for text in inputs.values())
 
@@ -601,6 +615,13 @@ FIFTY_KB = [
     ("conditioned_claims", _fifty_kb("Notepad is now open on your DELL-XPS-8950 when ")),
     ("fronted_conditions", "When " * 10_000 + "Notepad is now open on your DELL-XPS-8950"),
     ("platform_words", _fifty_kb("Notepad is now open on your Windows PC and on your Mac ")),
+    # fix round 3's paths: gerund labels and warnings above fences, a heading
+    # above each, modal futures, and conditional list intros.
+    ("gerund_labels", _fifty_kb('Launching an app:\n```\ndevice_run ["x"]\n```\n')),
+    ("gerund_warnings", _fifty_kb('Running this formats it:\n```\ndevice_run ["x"]\n```\n')),
+    ("heading_fences", _fifty_kb('### Running a command\n```\ndevice_run ["x"]\n```\n')),
+    ("modal_futures", _fifty_kb("Notepad will have opened on your DELL-XPS-8950. ")),
+    ("conditional_lists", _fifty_kb("If it works:\n- Notepad is now open on your DELL-XPS-8950\n")),
 ]
 
 
@@ -615,10 +636,10 @@ def test_the_said_not_done_guards_read_50_kb_in_100_ms(label, reply):
 
 
 def test_a_huge_command_record_is_read_in_100_ms():
-    """(fix round 2, C1) device_completion reads a device_run's argv to tell a
-    launch from a read. A record is bounded where it is written (chat's span
-    caps), but the reading must not depend on that: 50 KB of argv, as a list
-    and as one string, is read in 100 ms."""
+    """(fix rounds 2 and 3, C1) device_completion reads a FAILED device_run's
+    argv to choose which failure to state. A record is bounded where it is
+    written (chat's span caps), but the reading must not depend on that: 50 KB
+    of argv, as a list and as one string, is read in 100 ms."""
     from types import SimpleNamespace
 
     for argv in (["x"] * 25_000, ["cmd", "/c", "start " + "x " * 25_000], ["a" * 50_000]):
@@ -626,7 +647,11 @@ def test_a_huge_command_record_is_read_in_100_ms():
             SimpleNamespace(
                 kind="tool",
                 name="device_run",
-                meta={"ok": True, "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"}},
+                meta={
+                    "ok": False,
+                    "error": "Error: exit 1",
+                    "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"},
+                },
             )
         ]
         took = _best_of(
@@ -635,6 +660,88 @@ def test_a_huge_command_record_is_read_in_100_ms():
             )
         )
         assert took < WHOLE_GUARD_BUDGET_S, f"{len(argv)} argv words: {took * 1000:.1f} ms"
+
+
+def _recorded(name: str, args: dict, *, ok: bool = True) -> object:
+    """A tool span exactly as chat records one: its arguments through the
+    same per-value and whole-record caps (`chat._span_arguments`)."""
+    import json
+    from types import SimpleNamespace
+
+    from app import chat
+
+    meta: dict = {"ok": ok, "args_redacted": chat._span_arguments(json.dumps(args))}
+    if not ok:
+        meta["error"] = "Error: DELL-XPS-8950: exit 1"
+    return SimpleNamespace(kind="tool", name=name, meta=meta)
+
+
+_LONG_COMMAND = ["powershell", "-NoProfile", "-Command"] + [
+    "Get-ChildItem C:\\Users\\j\\Documents -Recurse | Where-Object {$_.Length -gt 1MB}"
+] * 7
+# 30 spans: the production cap on what one turn records (6 rounds of calls), as
+# the re-review measured it (scratchpad rr3/probe_timing2.py).
+_THIRTY_OK = [
+    *(
+        _recorded("device_run", {"device": "DELL-XPS-8950", "argv": _LONG_COMMAND})
+        for _ in range(29)
+    ),
+    _recorded("device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}),
+]
+_THIRTY_FAILED = [
+    _recorded("device_run", {"device": "DELL-XPS-8950", "argv": _LONG_COMMAND}, ok=False)
+    for _ in range(30)
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans",
+    [
+        (
+            "the same backed claim, over and over",
+            _fifty_kb("Notepad is now open on your DELL-XPS-8950. "),
+            _THIRTY_OK,
+        ),
+        (
+            "distinct backed claims",
+            "".join(f"App{i} is now open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _THIRTY_OK,
+        ),
+        (
+            "distinct backed close claims",
+            "".join(f"I closed App{i} on your DELL-XPS-8950. " for i in range(1_500))[:50_000],
+            _THIRTY_OK,
+        ),
+        (
+            "distinct claims on a machine word",
+            "".join(f"App{i} is now open on your PC. " for i in range(1_800))[:50_000],
+            _THIRTY_OK,
+        ),
+        (
+            "claims over thirty failed commands",
+            "".join(f"App{i} is now open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _THIRTY_FAILED,
+        ),
+        (
+            "distinct negated claims",
+            "".join(f"App{i} is not open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _THIRTY_OK,
+        ),
+    ],
+)
+def test_the_pair_reads_50_kb_against_thirty_recorded_spans_in_100_ms(label, reply, spans):
+    """(fix round 3, T5) The re-review's probe: 1,100 claims BACKED by a call —
+    every one read to the end — against 30 spans recorded as chat records them
+    took 96-105 ms. A claim a successful call silences is now dropped as soon
+    as its action and device are known, the record is read once per check,
+    each command's argv split once, and a sentence already read is not read
+    again."""
+    for check in (
+        lambda: guards.written_call_check(reply, spans, _NAMES),
+        lambda: guards.device_completion_check(reply, spans, _NAMES, ["DELL-XPS-8950"]),
+    ):
+        took = _best_of(check)
+        assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
 
 
 # -- _sentences() is linear (said-not-done fix round 1, M2) --------------------

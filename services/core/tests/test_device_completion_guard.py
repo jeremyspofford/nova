@@ -42,6 +42,22 @@ Fix round 2 (2026-09-29, the scoped re-review of 83ae4c99):
     Start menu"), a condition anywhere in the claim's segment or opening its
     sentence conditions it, "via …" is another cause, and a recap needs a
     marker — a bare "Here's what I did:" is the claim itself (C2).
+
+Fix round 3 (2026-09-29, the controller's ruling T3), because the record can
+not equate the names an app goes by — an apps.list id, an alias, a URI, a
+suffixed Start-menu name — and a false correction is worse than a missed one:
+
+  * SILENT when any call of the claimed action's tools SUCCEEDED on that
+    device, whatever it ran for — on ANY device for a machine word ("your PC",
+    "your Mac") or no device named. "Ran for X, not Y" is gone, and with it the
+    platform reading of device words (a Linux household's "your PC");
+  * the sentence is only what the record literally shows: a failure with its
+    reason, a call sent and never answered ("whether it worked is not known"),
+    or "(No <tool> call ran on <device> this turn.)" — never the machine's
+    state, never the object she named;
+  * "ran"/"executed" is running a program, which a launch does too; which
+    failure is stated prefers the call whose PROGRAM is the one she named
+    (C1), never a read whose argument names it.
 """
 
 from __future__ import annotations
@@ -86,10 +102,8 @@ def test_the_notepad_turn_fires():
     assert claim.kind == "launch"
     assert claim.tools == ("device_launch_app", "device_run")
     assert claim.record == guards.DeviceRecord()
-    assert claim.text == (
-        "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn — Notepad "
-        "was not opened.)"
-    )
+    # (fix round 3, T3) what the record shows, and nothing about the machine
+    assert claim.text == "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
 
 
 def test_the_teams_turn_fires_on_its_completion_line():
@@ -335,14 +349,15 @@ def test_the_action_map_is_the_live_registrys_acting_device_tools():
     assert mapped == acting
     # device_run performs every kind: a shell command can do any of them.
     assert all("device_run" in tools_ for tools_ in guards.DEVICE_ACTION_TOOLS.values())
-    # Every action a claim can name is performed by a kind in the map, and
-    # every word of one is stated back as a participle (fix round 2, R-A).
+    # Every action a claim can name is performed by a kind in the map.
     for action in guards._ACTION_WORDS:
-        kind = action if action in guards._KINDED_ACTIONS else "run"
-        assert kind in guards.DEVICE_ACTION_TOOLS, action
-    for word in guards._ACTION_OF_WORD:
-        assert word in guards._VERBED, word
+        assert guards._kind_of(action) in guards.DEVICE_ACTION_TOOLS, action
     assert set(guards._ACTION_PROGRAMS) <= set(guards._ACTION_WORDS)
+    # (fix round 3) "I ran Notepad" is running a program, which a launch does;
+    # closing, deleting or restarting only a command does.
+    assert "device_launch_app" in guards.DEVICE_ACTION_TOOLS[guards._kind_of("run")]
+    for action in ("close", "restart", "shutdown", "delete", "move", "install", "uninstall"):
+        assert guards.DEVICE_ACTION_TOOLS[guards._kind_of(action)] == ("device_run",), action
 
 
 def _launch(app: str = "notepad", device: str = DEVICE, **meta) -> SimpleNamespace:
@@ -355,6 +370,9 @@ def test_a_launch_of_the_named_app_on_the_named_device_backs_it():
         "device_run", args_redacted={"argv": ["cmd", "/c", "start", "notepad"], "device": DEVICE}
     )
     assert check(T98ECFB11, [ran]) is None
+
+
+NONE_ON_DELL = "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
 
 
 @pytest.mark.parametrize(
@@ -389,70 +407,58 @@ def test_a_launch_of_the_named_app_on_the_named_device_backs_it():
             _span("device_info", args_redacted={"device": "TRAVEL-MACBOOK"}),
         ),
         ("a launch on another device", _launch("notepad", "TRAVEL-MACBOOK")),
+    ],
+)
+def test_a_read_or_a_call_on_another_device_leaves_the_claim(label, span):
+    """The review's C1, still: a read, a connectivity fact, a backend check
+    or a call on ANOTHER device performs nothing on this one. What the turn
+    says is the record — no call that opens anything ran on the Dell."""
+    for claim in ("I opened Notepad on your DELL-XPS-8950.", T98ECFB11):
+        found = check(claim, [span], devices=(DEVICE, "TRAVEL-MACBOOK"))
+        assert found is not None, label
+        assert found.text == NONE_ON_DELL, label
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
         ("a launch of another app", _launch("teams")),
+        ("a launch by an apps.list id", _launch("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")),
         (
             "a shell read (review B2)",
             _span("device_run", args_redacted={"argv": ["tasklist"], "device": DEVICE}),
         ),
-        ("an unasked launch", _launch("notepad", unasked=True)),
+        ("a launch the backend ran unasked", _launch("notepad", unasked=True)),
+        ("a launch whose record names no device", _span("device_launch_app", args_redacted={})),
     ],
 )
-def test_nothing_but_the_action_itself_backs_an_action_claim(label, span):
-    """The review's C1: every one of these backed "I opened Notepad on your
-    DELL…" before. None performed that action, on that device, at her call."""
+def test_any_call_that_succeeded_there_silences_the_claim_whatever_it_ran_for(label, span):
+    """(fix round 3, T3) "Ran for X, not Y" is gone. The record cannot equate
+    an app's id, alias, URI or suffixed Start-menu name with the name she used,
+    and a false correction is worse than a missed one: when a call of the
+    tools that open an app SUCCEEDED on that device, the turn says nothing —
+    and "No … call ran" would be false."""
     for claim in ("I opened Notepad on your DELL-XPS-8950.", T98ECFB11):
-        assert check(claim, [span], devices=(DEVICE, "TRAVEL-MACBOOK")) is not None, label
+        assert check(claim, [span], devices=(DEVICE, "TRAVEL-MACBOOK")) is None, label
 
 
-def test_a_device_word_resolves_by_platform():
-    """(fix round 2, C1) "your Mac" is a darwin device, "your PC" and "your
-    Windows PC" windows ones, "your Linux box" a linux one; "your laptop"
-    names none in particular. A launch on the Dell never backs a MacBook
-    claim, nor the other way round."""
-    devices = {DEVICE: "windows", "TRAVEL-MACBOOK": "darwin", "office-pc": "windows"}
-    dell, mac, office = (
-        _launch("notepad"),
-        _launch("notepad", "TRAVEL-MACBOOK"),
-        _launch("notepad", "office-pc"),
-    )
-    notepad_on = "Notepad is now open on your {}."
-    assert check(notepad_on.format("PC"), [office], devices=devices) is None
-    assert check(notepad_on.format("Windows PC"), [dell], devices=devices) is None
-    assert check(notepad_on.format("PC"), [mac], devices=devices) is not None
-    assert check(notepad_on.format("Mac"), [mac], devices=devices) is None
-    assert check(notepad_on.format("Mac"), [dell], devices=devices) is not None
-    assert check(notepad_on.format("MacBook"), [dell], devices=devices) is not None
-    assert check(notepad_on.format("laptop"), [mac], devices=devices) is None
-    # A word with no device of its platform names none she has hands on.
-    claim = check(notepad_on.format("Linux box"), [dell], devices=devices)
-    assert claim is not None and claim.device == "your Linux box"
-    # Several devices of the platform: the correction says her words.
-    claim = check(notepad_on.format("PC"), [], devices=devices)
-    assert claim is not None and claim.device == "your PC"
-    # One: the correction names it.
-    claim = check(notepad_on.format("Mac"), [], devices=devices)
-    assert claim is not None and claim.device == "TRAVEL-MACBOOK"
-
-
-def test_a_device_whose_platform_is_unknown_is_on_every_platform():
-    """A name with no platform (a row enrolled before S42a, or a caller that
-    passes names only) cannot be ruled out by a platform word — so a launch on
-    it backs "your PC", and the correction never says nothing ran on it."""
-    assert (
-        check(
-            "Notepad is now open on your PC.",
-            [_launch("notepad", "office-pc")],
-            devices=("office-pc",),
-        )
-        is None
-    )
-    assert (
-        check(
-            "Notepad is now open on your PC.",
-            [_launch("notepad", "office-pc")],
-            devices={"office-pc": "unknown"},
-        )
-        is None
+@pytest.mark.parametrize("word", ["PC", "computer", "Mac", "MacBook", "laptop", "Windows PC"])
+def test_a_word_for_a_machine_names_any_device(word):
+    """(fix round 3, T3) "your PC", "your computer", "your Mac" name ANY of
+    her devices — never by platform: a Linux household's "your PC" is its
+    Linux box. So a launch on any device silences the claim, and with nothing
+    run the sentence says her words, true of every device."""
+    reply = f"Firefox is now open on your {word}."
+    linux_only = {"box": "linux"}
+    assert check(reply, [_launch("firefox", "box")], devices=linux_only) is None
+    two = {DEVICE: "windows", "office-mac": "darwin"}
+    assert check(reply, [_launch("firefox", "office-mac")], devices=two) is None
+    assert check(reply, [_launch("firefox", DEVICE)], devices=two) is None
+    claim = check(reply, [], devices=two)
+    assert claim is not None
+    assert claim.device == f"your {word}"
+    assert claim.text == (
+        f"(No device_launch_app or device_run call ran on your {word} this turn.)"
     )
 
 
@@ -721,12 +727,15 @@ def test_clean_over_every_correction_and_note(name, text):
 # each of this guard's patterns and reads 50 KB of its worst shapes in 100 ms.
 
 
-# -- fix round 2 (C1): backing by the whole name, the program, the platform ---
+# -- fix round 2 (C1), as fix round 3 (T3) reads it -----------------------------
 #
-# The re-reviewer's probes (scratchpad rr2/probe_c1.py), each a claim that the
-# round-1 backing laundered: a different app sharing a word or a substring, a
-# device word on the wrong platform, and a device_run READ backing an action.
-# Every one now fires, and says what the record shows.
+# The second re-reviewer's backing probes (scratchpad rr2/probe_c1.py): claims
+# that round 1's backing laundered — a different app sharing a word, a device
+# word on "the wrong platform", a device_run READ. Round 2 corrected each with
+# "ran for X, not Y". Round 3 (T3) rules that a correction is only what the
+# record literally shows: a call of the claimed action's tools that SUCCEEDED
+# on that device silences the claim whatever it ran for, and a machine word
+# names any device. What is left is the claim with no such call there.
 
 MAC = "TRAVEL-MACBOOK"
 TWO = {DEVICE: "windows", MAC: "darwin"}
@@ -737,126 +746,101 @@ def _run(argv, device: str = DEVICE, **meta) -> SimpleNamespace:
 
 
 @pytest.mark.parametrize(
-    "label,reply,span,text",
+    "label,reply,span",
     [
-        (
-            "launch notepad++, claim Notepad",
-            T98ECFB11,
-            _launch("notepad++"),
-            "(device_launch_app ran for notepad++, not Notepad.)",
-        ),
+        ("launch notepad++, claim Notepad", T98ECFB11, _launch("notepad++")),
         (
             "launch Microsoft Edge, claim Microsoft Teams",
             "Microsoft Teams is now open on your DELL-XPS-8950.",
             _launch("Microsoft Edge"),
-            "(device_launch_app ran for Microsoft Edge, not Microsoft Teams.)",
         ),
         (
             "launch wordpad, claim Word",
             "Word is now open on your DELL-XPS-8950.",
             _launch("wordpad"),
-            "(device_launch_app ran for wordpad, not Word.)",
         ),
         (
             "launch Visual Studio Code, claim Visual Studio",
             "Visual Studio is now open on your DELL-XPS-8950.",
             _launch("Visual Studio Code"),
-            "(device_launch_app ran for Visual Studio Code, not Visual Studio.)",
         ),
         (
             "launch Microsoft Teams, claim Microsoft Word",
             "I opened Microsoft Word on your DELL-XPS-8950.",
             _launch("Microsoft Teams"),
-            "(device_launch_app ran for Microsoft Teams, not Microsoft Word.)",
         ),
         (
             "claim your Mac, launch on the Dell",
             "TextEdit is now open on your Mac.",
-            _launch("textedit", DEVICE),
-            f"(No device_launch_app or device_run call ran on {MAC} this turn — TextEdit was "
-            "not opened.)",
+            _launch("textedit"),
         ),
         (
             "claim your MacBook, launch on the Dell",
             "Safari is now open on your MacBook.",
-            _launch("safari", DEVICE),
-            f"(No device_launch_app or device_run call ran on {MAC} this turn — Safari was not "
-            "opened.)",
+            _launch("safari"),
         ),
         (
             "claim your Windows PC, launch on the Mac",
             "Notepad is now open on your Windows PC.",
             _launch("notepad", MAC),
-            f"(No device_launch_app or device_run call ran on {DEVICE} this turn — Notepad was "
-            "not opened.)",
         ),
         (
             "a tasklist filter naming notepad",
             T98ECFB11,
             _run(["tasklist", "/fi", "imagename eq notepad.exe"]),
-            "(device_run ran for `tasklist /fi imagename eq notepad.exe`, not Notepad.)",
         ),
-        (
-            "taskkill naming notepad",
-            T98ECFB11,
-            _run(["taskkill", "/im", "notepad.exe"]),
-            "(device_run ran for `taskkill /im notepad.exe`, not Notepad.)",
-        ),
-        (
-            "where notepad",
-            T98ECFB11,
-            _run(["where", "notepad"]),
-            "(device_run ran for `where notepad`, not Notepad.)",
-        ),
-        (
-            "tasklist, claim closed",
-            "I closed Notepad on your DELL-XPS-8950.",
-            _run(["tasklist"]),
-            "(device_run ran for `tasklist`, not Notepad.)",
-        ),
-        (
-            "tasklist, claim killed",
-            "I killed Teams on your DELL-XPS-8950.",
-            _run(["tasklist"]),
-            "(device_run ran for `tasklist`, not Teams.)",
-        ),
+        ("taskkill naming notepad", T98ECFB11, _run(["taskkill", "/im", "notepad.exe"])),
+        ("where notepad", T98ECFB11, _run(["where", "notepad"])),
+        ("tasklist, claim closed", "I closed Notepad on your DELL-XPS-8950.", _run(["tasklist"])),
+        ("tasklist, claim killed", "I killed Teams on your DELL-XPS-8950.", _run(["tasklist"])),
         (
             "dir, claim deleted",
             "I deleted the temp files on your DELL-XPS-8950.",
             _run(["cmd", "/c", "dir", "C:\\Temp"]),
-            "(device_run ran for `cmd /c dir C:\\Temp`, not the temp files.)",
         ),
         (
             "hostname, claim sent",
             "I sent a notification to your DELL-XPS-8950.",
             _run(["hostname"]),
-            "(device_run ran for `hostname`, not a notification.)",
         ),
         (
             "type, claim saved",
             "I saved notes.txt on your DELL-XPS-8950.",
             _run(["cmd", "/c", "type", "notes.txt"]),
-            "(device_run ran for `cmd /c type notes.txt`, not notes.txt.)",
         ),
         (
             "tasklist, claim restarted",
             "Teams has been restarted on your DELL-XPS-8950.",
             _run(["tasklist"]),
-            "(device_run ran for `tasklist`, not Teams.)",
-        ),
-        (
-            "a notification, claim a service restarted",
-            "I restarted the spooler service on your DELL-XPS-8950.",
-            _span("device_notify", args_redacted={"device": DEVICE, "message": "hi"}),
-            "(No device_run call ran on DELL-XPS-8950 this turn — the spooler service was not "
-            "restarted.)",
         ),
     ],
 )
-def test_the_second_reviews_backing_probes_all_fire_with_their_record(label, reply, span, text):
-    claim = check(reply, [span], devices=TWO)
-    assert claim is not None, label
-    assert claim.text == text, label
+def test_the_second_reviews_backing_probes_are_silent_when_a_call_ran_there(label, reply, span):
+    """(T3) A call of the claimed action's tools succeeded there — for another
+    app, as a read, on "the wrong platform" — so the record cannot say none
+    ran, and the guard does not guess that it ran for something else."""
+    assert check(reply, [span], devices=TWO) is None, label
+
+
+def test_a_notification_is_no_command():
+    """(T3) Restarting a service is a command's work: a notification that ran
+    is no call of those tools, so the record shows none ran on the Dell."""
+    notified = _span("device_notify", args_redacted={"device": DEVICE, "message": "hi"})
+    claim = check("I restarted the spooler service on your DELL-XPS-8950.", [notified], devices=TWO)
+    assert claim is not None
+    assert claim.text == "(No device_run call ran on DELL-XPS-8950 this turn.)"
+
+
+# -- what the matcher still decides: WHICH failure is stated (C1, T3) ----------
+#
+# Round 2's whole-name and argv matching no longer backs anything: any call of
+# the family that SUCCEEDED silences the claim. It survives for one job — when
+# several calls FAILED, the sentence states the one that performed THIS action
+# on THIS target (`guards._performs`), and it must say so consistently.
+
+
+def _performs(span, action: str, target: str) -> bool:
+    return guards._performs(span, action, target, {})
 
 
 @pytest.mark.parametrize(
@@ -874,9 +858,10 @@ def test_the_second_reviews_backing_probes_all_fire_with_their_record(label, rep
         ("the Notepad app", "notepad"),
     ],
 )
-def test_a_launch_of_the_app_by_its_whole_name_backs_it(claimed, app):
-    reply = f"{claimed} is now open on your DELL-XPS-8950."
-    assert check(reply, [_launch(app)]) is None, (claimed, app)
+def test_a_launch_of_the_app_by_its_whole_name_performs_it(claimed, app):
+    assert _performs(_launch(app), "launch", claimed), (claimed, app)
+    # …and silence never depended on it
+    assert check(f"{claimed} is now open on your DELL-XPS-8950.", [_launch(app)]) is None
 
 
 @pytest.mark.parametrize(
@@ -896,12 +881,11 @@ def test_a_launch_of_the_app_by_its_whole_name_backs_it(claimed, app):
         (["sudo", "gtk-launch", "gedit"], "gedit"),
     ],
 )
-def test_a_launch_shaped_command_backs_its_app(argv, claimed):
-    """(C1) device_run backs a launch only when its argv LAUNCHES that app:
-    the program itself, or the target of start, Start-Process, open -a,
-    gtk-launch or explorer."""
-    reply = f"{claimed} is now open on your DELL-XPS-8950."
-    assert check(reply, [_run(argv)]) is None, argv
+def test_a_launch_shaped_command_performs_its_launch(argv, claimed):
+    """(C1) device_run launched the app when its argv LAUNCHES it: the program
+    itself, or the target of start, Start-Process, open -a, gtk-launch or
+    explorer."""
+    assert _performs(_run(argv), "launch", claimed), argv
 
 
 @pytest.mark.parametrize(
@@ -915,8 +899,11 @@ def test_a_launch_shaped_command_backs_its_app(argv, claimed):
         ["powershell", "-c", "Get-Process notepad"],
     ],
 )
-def test_a_command_that_launches_something_else_backs_nothing(argv):
-    assert check(T98ECFB11, [_run(argv)]) is not None, argv
+def test_a_command_that_launched_something_else_did_not_launch_it_and_still_silences(argv):
+    """(C1, T3) Not a launch of Notepad — but a device_run SUCCEEDED on the
+    Dell, so "no call ran" would be false and "it ran for X" is a guess."""
+    assert not _performs(_run(argv), "launch", "Notepad"), argv
+    assert check(T98ECFB11, [_run(argv)]) is None, argv
 
 
 @pytest.mark.parametrize(
@@ -956,10 +943,12 @@ def test_a_command_that_launches_something_else_backs_nothing(argv):
         ("I restarted DELL-XPS-8950.", ["shutdown", "/r", "/t", "0"]),
     ],
 )
-def test_a_command_backs_the_action_it_performs_on_its_target(reply, argv):
-    """(C1) Any other action is backed by device_run only through a program
-    that performs it (taskkill, Stop-Process, del, Restart-Service,
-    systemctl stop…) on the target the claim names."""
+def test_a_command_that_performs_the_action_on_its_target(reply, argv):
+    """(C1) A program that performs it (taskkill, Stop-Process, del,
+    Restart-Service, systemctl stop…) on the target the claim names."""
+    claim = check(reply, [_run(argv, ok=False, error="Error: exit 1")])
+    assert claim is not None, reply
+    assert _performs(_run(argv), claim.action, claim.target), reply
     assert check(reply, [_run(argv)]) is None, reply
 
 
@@ -977,29 +966,92 @@ def test_a_command_backs_the_action_it_performs_on_its_target(reply, argv):
         ("I deleted the temp files on your DELL-XPS-8950.", ["cmd", "/c", "dir", "C:\\Temp"]),
     ],
 )
-def test_a_command_that_does_not_perform_the_action_backs_nothing(reply, argv):
-    assert check(reply, [_run(argv)]) is not None, reply
+def test_a_command_that_does_not_perform_the_action_still_silences(reply, argv):
+    """(T3) It did not do what she said — but a command SUCCEEDED on the Dell,
+    and the record cannot say what that command did to the machine."""
+    claim = check(reply, [_run(argv, ok=False, error="Error: exit 1")])
+    assert claim is not None, reply
+    assert not _performs(_run(argv), claim.action, claim.target), reply
+    assert check(reply, [_run(argv)]) is None, reply
 
 
-def test_a_write_backs_the_file_it_wrote():
+def test_a_write_of_another_file_still_silences():
     wrote = _span(
         "device_write_file", args_redacted={"device": DEVICE, "path": "C:\\Users\\j\\notes.txt"}
     )
     assert check("I saved notes.txt to your DELL-XPS-8950.", [wrote]) is None
     assert check("I saved the notes to your DELL-XPS-8950.", [wrote]) is None
-    claim = check("I saved report.md to your DELL-XPS-8950.", [wrote])
+    # (T3) round 2 said "ran for C:\Users\j\notes.txt, not report.md" here
+    assert check("I saved report.md to your DELL-XPS-8950.", [wrote]) is None
+
+
+@pytest.mark.parametrize(
+    "reply,program",
+    [
+        ("I ran the cleanup script on your DELL-XPS-8950.", ["bash", "/home/j/cleanup.sh"]),
+        ("I executed backup.ps1 on your DELL-XPS-8950.", ["powershell", "-File", "backup.ps1"]),
+        ("I ran deploy.ps1 on your DELL-XPS-8950.", ["pwsh", "-c", "C:\\s\\deploy.ps1"]),
+        ("I ran the backup on your DELL-XPS-8950.", ["python3", "backup.py"]),
+        ("I ran Notepad on your DELL-XPS-8950.", ["notepad"]),
+        ("I ran tasklist on your DELL-XPS-8950.", ["tasklist"]),
+    ],
+)
+def test_ran_is_backed_by_the_program_that_ran_never_by_a_read_of_it(reply, program):
+    """(fix round 3, C1) "I ran X" names the PROGRAM that ran — or the script
+    an interpreter ran — never a read whose argument names it: `cat
+    cleanup.sh` ran cat. Any device_run that succeeded on the device silences
+    the claim anyway (T3), so this chooses only which failure is stated —
+    consistently with the program rule."""
+    read = {
+        "I ran the cleanup script on your DELL-XPS-8950.": ["cat", "/home/j/cleanup.sh"],
+        "I executed backup.ps1 on your DELL-XPS-8950.": ["cmd", "/c", "type", "backup.ps1"],
+        "I ran deploy.ps1 on your DELL-XPS-8950.": ["powershell", "-c", "Get-Content deploy.ps1"],
+        "I ran the backup on your DELL-XPS-8950.": ["echo", "backup"],
+        "I ran Notepad on your DELL-XPS-8950.": ["where", "notepad"],
+        "I ran tasklist on your DELL-XPS-8950.": ["findstr", "tasklist", "log.txt"],
+    }[reply]
+    claim = check(reply, [_run(program, ok=False, error="Error: exit 1")])
+    assert claim is not None and claim.action == "run", reply
+    assert _performs(_run(program), "run", claim.target), reply
+    assert not _performs(_run(read), "run", claim.target), reply
+    # Both failed: the program's failure is the one stated, never the read's.
+    both = [
+        _run(read, ok=False, error=f"Error: {DEVICE}: the read failed"),
+        _run(program, ok=False, error=f"Error: {DEVICE}: the program failed"),
+    ]
+    stated = check(reply, both)
+    assert stated is not None and stated.text == "(device_run failed: the program failed.)"
+    # And either one succeeding silences the claim (T3).
+    assert check(reply, [_run(read)]) is None
+    assert check(reply, [_run(program)]) is None
+
+
+def test_i_ran_notepad_after_a_launch_is_silent():
+    """(fix round 3, the re-review's probe_ran) "I ran Notepad" after a real
+    device_launch_app: running an app is launching it, so a launch is a call
+    of the family and the claim is silent — round 2 said "No device_run call
+    ran … — Notepad was not run" beside the launch that ran it."""
+    launched = _launch("notepad")
+    for reply in (
+        "I ran Notepad on your DELL-XPS-8950.",
+        "I've started Notepad on your DELL-XPS-8950.",
+        "Notepad is now running on your DELL-XPS-8950.",
+    ):
+        assert check(reply, [launched]) is None, reply
+    claim = check("I ran Notepad on your DELL-XPS-8950.")
     assert claim is not None
-    assert claim.text == "(device_write_file ran for C:\\Users\\j\\notes.txt, not report.md.)"
+    assert claim.text == NONE_ON_DELL
 
 
-# -- fix round 2 (R-A): the correction is the record, and nothing more --------
+# -- the sentence is the record, and nothing more (R-A, T3) ---------------------
 
 
 def test_a_launch_that_was_sent_and_never_answered_is_not_known_either_way():
-    """(R-A) A timeout or a dropped socket means the call was SENT and never
-    answered: whether it happened is not known, and the correction says only
-    that — never "it did not open" (guards._NO_ANSWER, pinned to
-    app/devices_ws.py's own words in tests/test_devices_ws.py)."""
+    """(R-A, T3) A timeout or a dropped socket means the call was SENT and
+    never answered: whether it worked is not known, and the sentence says only
+    that — never "it did not open", and never what she named
+    (guards._NO_ANSWER, pinned to app/devices_ws.py's own words in
+    tests/test_devices_ws.py)."""
     for reason in (
         f"Error: device '{DEVICE}' did not answer within 120s",
         "Error: the device disconnected before it answered",
@@ -1009,28 +1061,37 @@ def test_a_launch_that_was_sent_and_never_answered_is_not_known_either_way():
         claim = check(T98ECFB11, [_launch("notepad", ok=False, error=reason)])
         assert claim is not None and claim.record.case == "no_answer", reason
         assert claim.text == (
-            "(device_launch_app was sent but did not answer — whether Notepad was opened is "
-            "not known.)"
+            "(device_launch_app was sent but did not answer — whether it worked is not known.)"
         ), reason
 
 
-def test_the_correction_never_says_nothing_ran_when_something_did():
-    """(I1, P4/P4b) With a family call on that device in the record, the
-    correction names it; "No … call ran" is said only when literally true."""
-    for span in (_run(["tasklist"]), _launch("teams"), _launch("notepad", ok=False, error="x")):
-        claim = check(T98ECFB11, [span])
-        assert claim is not None
-        assert not claim.text.startswith("(No "), claim.text
+def test_the_sentence_never_says_nothing_ran_when_something_did():
+    """(I1, P4/P4b, T3) A call of the family that succeeded there silences the
+    claim; one that failed is stated with its reason; "No … call ran" is said
+    only when literally true — here, where the only launch ran on the Mac."""
+    for span in (_run(["tasklist"]), _launch("teams")):
+        assert check(T98ECFB11, [span]) is None
+    failed = check(T98ECFB11, [_launch("notepad", ok=False, error="Error: x")])
+    assert failed is not None and failed.text == "(device_launch_app failed: x.)"
     claim = check(T98ECFB11, [_launch("notepad", MAC)], devices=TWO)
-    assert claim is not None and claim.text.startswith("(No device_launch_app")
+    assert claim is not None and claim.text == NONE_ON_DELL
 
 
-def test_a_plural_target_reads_as_one():
+def test_a_failed_call_for_another_target_is_still_stated():
+    """(T3) The failure sentence names no target, so it is true whichever app
+    the failed call was for — never "ran for X", never "not opened"."""
+    failed = _launch("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", ok=False, error="Error: nope")
+    claim = check(T98ECFB11, [failed])
+    assert claim is not None and claim.text == "(device_launch_app failed: nope.)"
+
+
+def test_the_none_sentence_names_no_object():
+    """(T3) The record shows her calls, not the machine: "the temp files were
+    not deleted" is gone, and with it every garbled object ("Notepad will was
+    not opened", "- Notepad was not opened")."""
     claim = check("I deleted the temp files on your DELL-XPS-8950.")
     assert claim is not None
-    assert claim.text == (
-        "(No device_run call ran on DELL-XPS-8950 this turn — the temp files were not deleted.)"
-    )
+    assert claim.text == "(No device_run call ran on DELL-XPS-8950 this turn.)"
 
 
 # -- fix round 2 (C2): the second review's shapes, none a claim of hers now ----
@@ -1120,3 +1181,187 @@ def test_a_bare_heres_what_i_did_is_the_claim_itself(reply, phrase):
 )
 def test_a_present_passive_marked_as_the_change_is_a_claim(reply):
     assert check(reply) is not None, reply
+
+
+# -- fix round 3: the third re-review's probes (scratchpad rr3/) ---------------
+#
+# Every probe that showed a WRONG sentence now asserts silence or the literal
+# sentence (T3). probe_app/probe_dc: an honest report after a real call was
+# "corrected" with "ran for X, not Y" — the same app by its apps.list id, its
+# program name, a URI, a Start-menu name with a suffix, a pipeline, a PID. A
+# Linux household's "your PC" got "No … call ran". probe_modal/probe_target:
+# the object garbled into the sentence ("Notepad will was not opened").
+
+WIN = {DEVICE: "windows"}
+
+
+@pytest.mark.parametrize(
+    "reply,span,devices",
+    [
+        # the same app, launched by the id apps.list prints
+        ("I launched Teams on your DELL-XPS-8950.", _launch("MSTeams_8wekyb3d8bbwe!MSTeams"), WIN),
+        (
+            "I launched Notepad on your DELL-XPS-8950.",
+            _launch("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"),
+            WIN,
+        ),
+        (
+            "I launched Calculator on your DELL-XPS-8950.",
+            _launch("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+            WIN,
+        ),
+        (
+            "I launched 1Password on your DELL-XPS-8950.",
+            _launch("Agilebits.1Password_amwd9z03whsfe!Agilebits.OnePassword"),
+            WIN,
+        ),
+        (
+            "I launched Access on your DELL-XPS-8950.",
+            _launch("Microsoft.Office.MSACCESS.EXE.15"),
+            WIN,
+        ),
+        (
+            "I launched Visual Studio Code on your DELL-XPS-8950.",
+            _launch("Microsoft.VisualStudioCode"),
+            WIN,
+        ),
+        ("I launched Microsoft Edge on your DELL-XPS-8950.", _launch("MSEdge"), WIN),
+        (
+            "I launched Teams on your DELL-XPS-8950.",
+            _run(["explorer.exe", "shell:AppsFolder\\MSTeams_8wekyb3d8bbwe!MSTeams"]),
+            WIN,
+        ),
+        (
+            "I launched gedit on your Linux box.",
+            _launch("org.gnome.gedit", "box"),
+            {"box": "linux"},
+        ),
+        ("I launched Chrome on your Linux box.", _launch("google-chrome", "box"), {"box": "linux"}),
+        # …by its program name on PATH
+        ("I launched Microsoft Edge on your DELL-XPS-8950.", _launch("msedge"), WIN),
+        ("I launched Calculator on your DELL-XPS-8950.", _launch("calc"), WIN),
+        ("I launched Paint on your DELL-XPS-8950.", _launch("mspaint"), WIN),
+        ("I launched Teams on your DELL-XPS-8950.", _launch("ms-teams"), WIN),
+        ("I launched Word on your DELL-XPS-8950.", _launch("winword"), WIN),
+        ("I launched Calculator on your DELL-XPS-8950.", _run(["calc"]), WIN),
+        ("I launched Edge on your DELL-XPS-8950.", _run(["cmd", "/c", "start", "msedge"]), WIN),
+        ("I launched Command Prompt on your DELL-XPS-8950.", _launch("cmd"), WIN),
+        # …by a Start-menu name with a suffix, or a URI
+        ("I launched Outlook on your DELL-XPS-8950.", _launch("Outlook (new)"), WIN),
+        (
+            "Teams is now open on your DELL-XPS-8950.",
+            _launch("Microsoft Teams (work or school)"),
+            WIN,
+        ),
+        ("I launched Teams on your DELL-XPS-8950.", _run(["cmd", "/c", "start", "ms-teams:"]), WIN),
+        (
+            "I launched VS Code on your Mac.",
+            _run(["open", "-a", "Visual Studio Code"], "mac"),
+            {"mac": "darwin"},
+        ),
+        # an action done by a pipeline, a PID, a redirect into a file
+        (
+            "I closed Notepad on your DELL-XPS-8950.",
+            _run(["powershell", "-c", "Get-Process notepad | Stop-Process"]),
+            WIN,
+        ),
+        ("I closed Notepad on your DELL-XPS-8950.", _run(["taskkill", "/pid", "4120"]), WIN),
+        (
+            "I closed Notepad on your DELL-XPS-8950.",
+            _run(["powershell", "-c", "Stop-Process -Id 4120"]),
+            WIN,
+        ),
+        (
+            "I saved notes.txt to your DELL-XPS-8950.",
+            _run(["cmd", "/c", "echo hi > C:\\notes.txt"]),
+            WIN,
+        ),
+        (
+            "I saved notes.txt to your DELL-XPS-8950.",
+            _run(["bash", "-c", "echo hi > ~/notes.txt"]),
+            WIN,
+        ),
+        # "your PC" is any device: the WSL twin, and a Linux-only household
+        (
+            "Notepad is now open on your PC.",
+            _run(["notepad.exe"], f"{DEVICE} (WSL)"),
+            {DEVICE: "windows", f"{DEVICE} (WSL)": "linux"},
+        ),
+        ("Firefox is now open on your PC.", _launch("firefox", "box"), {"box": "linux"}),
+        # an observation beside the read that made it
+        (
+            "The KB5031354 update was installed on your DELL-XPS-8950.",
+            _run(["powershell", "-c", "Get-HotFix"]),
+            WIN,
+        ),
+        (
+            "Notepad was closed on your DELL-XPS-8950 — tasklist shows no notepad.exe.",
+            _run(["tasklist"]),
+            WIN,
+        ),
+    ],
+)
+def test_the_third_reviews_honest_reports_are_silent(reply, span, devices):
+    assert check(reply, [span], devices=devices) is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # a future, not a report (T3 probe_modal; round 2 said "Notepad will was
+        # not opened")
+        "Notepad will have opened on your DELL-XPS-8950.",
+        "By the time you're back, Notepad will have opened on your DELL-XPS-8950.",
+        "Notepad will have opened on your DELL-XPS-8950 by then.",
+        # a hypothetical list (round 2 said "— - Notepad was not opened")
+        "If it works:\n- Notepad is now open on your DELL-XPS-8950\n- You can type",
+    ],
+)
+def test_the_third_reviews_futures_and_hypotheticals_are_silent(reply):
+    assert check(reply, devices=WIN) is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply,text",
+    [
+        # the objects round 2 garbled into its sentence: now there is none
+        ("Done:\n- Notepad is now open on your DELL-XPS-8950", NONE_ON_DELL),
+        ("1. Notepad is now open on your DELL-XPS-8950", NONE_ON_DELL),
+        ("* Notepad is now open on your DELL-XPS-8950", NONE_ON_DELL),
+        ("✅ Notepad is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Status: Notepad is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Great news: Notepad is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("OK! Notepad is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Alright — Notepad is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Both Notepad and Teams are now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Notepad and Teams are now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("The Notepad window is now open on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("A new Notepad window has been opened on your DELL-XPS-8950.", NONE_ON_DELL),
+        (
+            "Your notes have been saved to your DELL-XPS-8950.",
+            "(No device_write_file or device_run call ran on DELL-XPS-8950 this turn.)",
+        ),
+        (
+            "Everything has been deleted on your DELL-XPS-8950.",
+            "(No device_run call ran on DELL-XPS-8950 this turn.)",
+        ),
+        ("All 3 apps have been launched on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Teams must have launched on your DELL-XPS-8950 — the icon is in the tray.", NONE_ON_DELL),
+        ("Notepad has definitely opened on your DELL-XPS-8950.", NONE_ON_DELL),
+        ("Expected result:\n- Notepad is now open on your DELL-XPS-8950", NONE_ON_DELL),
+    ],
+)
+def test_the_third_reviews_garbled_sentences_are_the_literal_one(reply, text):
+    claim = check(reply, devices=WIN)
+    assert claim is not None, reply
+    assert claim.text == text, reply
+
+
+def test_a_read_that_performs_no_action_is_stated_as_none_ran():
+    """(probe_dc) Listing the files deletes nothing: device_list_files is no
+    command, so the record shows no device_run on the Dell — and the sentence
+    says only that, never "the old logs were not deleted"."""
+    listed = _span("device_list_files", args_redacted={"device": DEVICE, "path": "C:\\logs"})
+    claim = check("I deleted the old logs on your DELL-XPS-8950.", [listed], devices=WIN)
+    assert claim is not None
+    assert claim.text == "(No device_run call ran on DELL-XPS-8950 this turn.)"

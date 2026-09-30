@@ -50,7 +50,7 @@ import re
 import shlex
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, NamedTuple
 from urllib.parse import urlsplit
@@ -4543,8 +4543,8 @@ def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim 
 #
 #   * markup_calls reads a fence as TEACHING by design, and that ruling stands:
 #     prose never dispatches. Nothing here changes it. Both checks return a
-#     tool NAME and a PHRASE — never an argument — and the turn's one redirect
-#     asks HER to make the call (chat._claim_redirect, tools advertised).
+#     tool NAME and a PHRASE — never an argument — and one SENTENCE saying what
+#     the record shows (fix round 3: neither leads to any action at all).
 #   * deferral_check's commitment and completion shapes map web search, fetch
 #     and timers; "open Teams" maps to none of them.
 #   * bare_intent_check reads replies of 15 words or fewer.
@@ -4586,6 +4586,25 @@ def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim 
 #   * both read fewer shapes (C2): waiting for his go-ahead, warnings and
 #     explanations are not calls; how-it-works passives, conditions, other
 #     causes and marked recaps are not completions.
+#
+# Fix round 3 (2026-09-29, the controller's rulings T1-T5) made the pair
+# APPEND-ONLY, with NO redirects — the owner shelved the handback guard the same
+# day for the same reason: a redirect that invites action cannot be made safe
+# with regex detection (the re-review drove a warning's `format C: /q` into a
+# redirect with 43 tools advertised). Each check now returns a claim whose
+# `text` is the ONE sentence the turn appends, computed by chat.py once, at the
+# END of the turn, from the FINAL spans (T4):
+#   * written_call: "(I wrote <tool> as text; it did not run.)" and nothing
+#     else (T2);
+#   * device_completion says only what the record literally shows and never
+#     guesses about targets (T3): SILENT when any call of the claimed action's
+#     tools SUCCEEDED on that device — on any device, for "your PC" or no
+#     device named — whatever it ran for (the record cannot equate an app id,
+#     an alias, a URI and a Start-menu name with the name she used, and a false
+#     correction is worse than a missed one); a failure or a call never
+#     answered, stated as such; else "(No <tool> call ran on <device> this
+#     turn.)" — no object, because the record shows her calls, not the
+#     machine's state.
 
 # A claim or a call about an EARLIER time is a recap, never "done now": the
 # family's _PRIOR_TIME, plus the markers the reviews found — "today", "this
@@ -4616,15 +4635,21 @@ def _recap(text: str) -> bool:
 _LIST_ITEM = re.compile(r"^\s*+(?:[-*+•]|\d{1,3}[.)])\s")
 
 
+def _joined(names: Sequence[str]) -> str:
+    """ "a", "a and b", "a, b and c"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 @dataclass(frozen=True)
 class WrittenCallClaim:
     """Her reply wrote a call to one of her own tools as text, framed as her
     action now, and no span of that tool ran this turn. `tools` names each
     such tool once, in the order written; `phrase` is the first such call as
     written, for the guard span; `fenced` says, per tool, whether it sat in a
-    fence or in inline code — the nudge says which, because it states only
-    what is true (fix round 2, R-B). There is no argument field on purpose:
-    nothing may run what she wrote."""
+    fence or in inline code (the span records `where`). There is no argument
+    field on purpose: nothing may run what she wrote."""
 
     tools: tuple[str, ...]
     phrase: str
@@ -4632,12 +4657,21 @@ class WrittenCallClaim:
 
     @property
     def where(self) -> str:
-        """Where the calls were written, as the nudge says it."""
+        """Where the calls were written, as the guard span records it."""
         if self.fenced and all(self.fenced):
             return "a code block"
         if self.fenced and not any(self.fenced):
             return "inline code"
         return "code"
+
+    @property
+    def text(self) -> str:
+        """The ONE sentence the turn appends (fix round 3, T2): the calls she
+        wrote as text, and that they did not run — nothing else, and no
+        invitation to make them. True whenever the claim exists: it exists
+        only when no call of those tools was attempted this turn."""
+        they = "it" if len(self.tools) == 1 else "they"
+        return f"(I wrote {_joined(self.tools)} as text; {they} did not run.)"
 
 
 # The value a written call's bracket opens onto: a quote, a bracket, a brace or
@@ -4718,6 +4752,20 @@ _WRITTEN_CALL_LEAD = re.compile(
 _GERUND_START = re.compile(
     r"^[\W_]*+(?:\d{1,3}[.)]\s*+)?[\W_]*+(?:running|launching|calling|executing|opening"
     r"|starting|sending|checking|invoking|triggering|verifying|confirming)\b",
+    re.I,
+)
+# …and the gerund fragments that are a LABEL or a SUBJECT, never her narration
+# (fix round 3, the re-review's how-to and warning shapes): a markdown heading
+# ("### Running a command"); a generic object ("Launching an app on a paired
+# device:", "1. Opening a file", "Sending a desktop notification:"); and a
+# "this"/"that"/"it" the fragment then says something about in the third
+# person — "Running this formats your C: drive:", "Calling this bricks the
+# agent." — whatever the verb (no closed list of verbs can hold them all).
+_GERUND_NOT_HERS = re.compile(
+    r"^\s*+#"
+    r"|^[\W_]*+(?:\d{1,3}[.)]\s*+)?[\W_]*+(?:running|launching|calling|executing|opening"
+    r"|starting|sending|checking|invoking|triggering|verifying|confirming)[ \t*_`]++"
+    r"(?:an?\b|(?:this|that|it)[ \t*_`]++[a-z]*[^\Ws]s\b)",
     re.I,
 )
 _FINITE_VERBS = frozenset(
@@ -4889,6 +4937,7 @@ def _intro_frames_a_fence(line: str) -> bool:
     return (
         "`" not in intro
         and _GERUND_START.match(intro) is not None
+        and _GERUND_NOT_HERS.match(intro) is None
         and _FINITE_VERBS.isdisjoint(re.findall(r"[a-z]+", intro.lower()))
         and _first_blocker(intro) is None
         and not _rules_out(intro)
@@ -5065,31 +5114,22 @@ def written_call_check(
 
 
 @dataclass(frozen=True)
-class DeviceFailure:
-    """A call she made this turn that FAILED — with the device it named and the
-    reason its span recorded."""
-
-    tool: str
-    device: str | None
-    reason: str
-
-
-@dataclass(frozen=True)
 class DeviceRecord:
-    """What the turn's record shows about one claimed device action. The one
-    correction the turn ships is built from it and says nothing else (fix
-    round 2, R-A):
+    """What the turn's record shows about one claimed device action, when no
+    call that performs it SUCCEEDED there (fix round 3, T3). The one sentence
+    the turn appends is built from it and says nothing else:
 
-      * "none" — no call that performs it ran on that device this turn;
-      * "other" — one did, for a different target: `tool`, and `target` as its
-        record names it;
-      * "failed" — one for this target failed, with the `reason` it stated;
-      * "no_answer" — one for this target was sent and never answered (a
-        timeout, a dropped socket), so whether it happened is not known."""
+      * "none" — no call of those tools ran on that device this turn;
+      * "failed" — one failed, with the `reason` it stated;
+      * "no_answer" — one was sent and never answered (a timeout, a dropped
+        socket), so whether it worked is not known.
+
+    There is no "ran for X, not Y" case any more: a call that succeeded for
+    ANY target silences the claim, because the record cannot equate the names
+    an app goes by."""
 
     case: str = "none"
     tool: str | None = None
-    target: str | None = None
     reason: str | None = None
 
 
@@ -5100,13 +5140,14 @@ class DeviceCompletionClaim:
     it backs.
 
     `phrase` is the claim as she wrote it (the guard span records it);
-    `device` the device as the correction names it — a paired name, or her
-    words when they name none or several — or None when she named none;
-    `kind` the kind of tool that performs it (DEVICE_ACTION_TOOLS) and `tools`
-    the advertised ones; `action` the action itself; `target` and `verbed`
-    what she said was done ("Notepad", "opened"); `record` what the turn's
-    record shows instead. `sentence` is the one correction, and nothing in it
-    is more than the record says (fix round 2, R-A)."""
+    `device` the device as the sentence names it — a paired name, or her
+    words when they name none or several ("your PC") — or None when she named
+    none; `kind` the kind of tool that performs it (DEVICE_ACTION_TOOLS) and
+    `tools` the advertised ones; `action` the action itself; `target` what she
+    said it was done to, read only to choose which failure to state (C1);
+    `record` what the turn's record shows instead. `sentence` is the one thing
+    the turn appends, and nothing in it is more than the record says (fix
+    round 3, T3) — never the machine's state, never a target."""
 
     phrase: str
     device: str | None = None
@@ -5114,29 +5155,21 @@ class DeviceCompletionClaim:
     tools: tuple[str, ...] = ()
     action: str = "launch"
     target: str = "it"
-    verbed: str = "opened"
     record: DeviceRecord = DeviceRecord()
 
     @property
     def sentence(self) -> str:
-        record, thing = self.record, self.target
-        was = "were" if _plural(thing) else "was"
+        record = self.record
         if record.case == "failed":
             return f"{record.tool} failed: {record.reason}."
         if record.case == "no_answer":
-            return (
-                f"{record.tool} was sent but did not answer — whether {thing} {was} "
-                f"{self.verbed} is not known."
-            )
-        if record.case == "other":
-            return f"{record.tool} ran for {record.target}, not {thing}."
+            return f"{record.tool} was sent but did not answer — whether it worked is not known."
         on = f" on {self.device}" if self.device else ""
-        tools = " or ".join(self.tools)
-        return f"No {tools} call ran{on} this turn — {thing} {was} not {self.verbed}."
+        return f"No {' or '.join(self.tools)} call ran{on} this turn."
 
     @property
     def text(self) -> str:
-        """The correction as the turn ships it, set off from her prose."""
+        """The sentence as the turn appends it, set off from her prose."""
         return f"({self.sentence})"
 
 
@@ -5148,18 +5181,22 @@ class DeviceCompletionClaim:
 # device tool that changes something (reads_only False), and every such
 # registered tool is in it — rename or add one and that pin turns red.
 # device_run performs them all: a shell command can open an app, write a file
-# or show a notification — and which one it did is read off its argv
-# (`_run_performs`), never assumed.
+# or show a notification. "run" ("I ran Notepad", "I executed the script") is
+# running a program, and launching an app runs it (fix round 3: "I ran Notepad"
+# after a real device_launch_app was corrected with "no device_run call ran");
+# every other action — close, restart, delete, install… — only a command
+# performs.
 DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
     "launch": ("device_launch_app", "device_run"),
     "write": ("device_write_file", "device_run"),
     "notify": ("device_notify", "device_run"),
-    "run": ("device_run",),
+    "run": ("device_launch_app", "device_run"),
+    "command": ("device_run",),
 }
 
 # The ACTIONS a claim can name, by the words it writes them with. The kind of
-# tool that performs one is its own name for launch, write and notify, and
-# device_run ("run") for every other.
+# tool that performs one is its own name for launch, write, notify and run,
+# and a command for every other (`_kind_of`).
 _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "launch": (
         "open",
@@ -5185,54 +5222,14 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "run": ("ran", "run", "executed"),
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
-_KINDED_ACTIONS = frozenset({"launch", "write", "notify"})
-# How the correction says each word was not done: "Notepad was not opened".
-_VERBED: dict[str, str] = {
-    "open": "opened",
-    "opened": "opened",
-    "opening": "opened",
-    "launched": "launched",
-    "launching": "launched",
-    "started": "started",
-    "starting": "started",
-    "running": "started",
-    "up and running": "started",
-    "active": "started",
-    "saved": "saved",
-    "saving": "saved",
-    "written": "written",
-    "wrote": "written",
-    "created": "created",
-    "sent": "sent",
-    "sending": "sent",
-    "shown": "shown",
-    "showing": "shown",
-    "displayed": "displayed",
-    "closed": "closed",
-    "closing": "closed",
-    "stopped": "stopped",
-    "stopping": "stopped",
-    "killed": "killed",
-    "terminated": "terminated",
-    "quit": "quit",
-    "restarted": "restarted",
-    "restarting": "restarted",
-    "rebooted": "rebooted",
-    "rebooting": "rebooted",
-    "shut down": "shut down",
-    "shutting down": "shut down",
-    "deleted": "deleted",
-    "deleting": "deleted",
-    "removed": "removed",
-    "removing": "removed",
-    "moved": "moved",
-    "moving": "moved",
-    "installed": "installed",
-    "uninstalled": "uninstalled",
-    "ran": "run",
-    "run": "run",
-    "executed": "executed",
-}
+_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run"})
+
+
+def _kind_of(action: str) -> str:
+    """The kind of tool that performs `action` (DEVICE_ACTION_TOOLS' key)."""
+    return action if action in _KINDED_ACTIONS else "command"
+
+
 # An ACTION's participle or progressive — the only states that are claims (C1).
 _ACTION_PARTICIPLE = (
     r"(?:opened|launched|started|stopped|closed|killed|terminated|restarted|rebooted"
@@ -5374,8 +5371,8 @@ _STARTUP = re.compile(
 _ANCHOR_PREPOSITION = r"(?:on|to|onto|from)"
 _ANCHOR_DETERMINER = r"(?:your|the|my|this|that|his|her|their|our)"
 # The words for one of her machines, after a determiner ("your PC", "the
-# laptop", "your Windows PC", "your Linux box"). Which of her devices one names
-# is read by platform (`_resolve_place`).
+# laptop", "your Windows PC", "your Linux box"). Each names ANY of her devices
+# (fix round 3, T3 — `_resolve_place`).
 _DEVICE_WORDS = (
     r"(?:pc|computer|laptop|desktop|machine|device|workstation|imac|macbook|mac"
     r"|linux[ \t]++box)"
@@ -5394,10 +5391,12 @@ _ACTION_NEGATION = re.compile(
     r"|n['’]t\b",
     re.I,
 )
+# "will" and "shall" too (fix round 3, the re-review's modal probes): "Notepad
+# will have opened on your Dell by then" is a future, not a report.
 _ACTION_HEDGE = re.compile(
     r"\b(?:if|whether|unless|in\s+case|assuming|suppose|supposing|maybe|perhaps|possibly"
-    r"|might|may|could|would|should|once|when|whenever|until|before|after|either|since"
-    r"|because|while|though|although)\b",
+    r"|might|may|could|would|should|will|shall|once|when|whenever|until|before|after"
+    r"|either|since|because|while|though|although)\b",
     re.I,
 )
 # A CONDITION or a time it happens at, anywhere in the claim's own segment —
@@ -5459,51 +5458,10 @@ def _device_anchor(names: tuple[str, ...]) -> re.Pattern[str]:
     return re.compile(rf"\b{_ANCHOR_PREPOSITION}\s++(?:{'|'.join(alternatives)})", re.I)
 
 
-class PairedNames(tuple):
-    """The live paired device names — a plain tuple of str to every reader —
-    carrying each one's platform (`platforms`, from the same registry read) for
-    the one reader that needs it: device_completion_check resolves "your Mac",
-    "your PC" and "your Linux box" by platform (fix round 2, C1). Built at the
-    call site from the live registry (chat._paired_device_names), never a list
-    kept here."""
-
-    platforms: dict[str, str]
-
-    def __new__(cls, platforms: Mapping[str, str]) -> PairedNames:
-        self = super().__new__(cls, tuple(platforms))
-        self.platforms = {str(name): str(platform or "") for name, platform in platforms.items()}
-        return self
-
-
-def _paired(device_names: Sequence[str] | Mapping[str, str]) -> tuple[tuple[str, ...], dict]:
-    """The paired names, and each one's platform where the caller knows it: a
-    mapping of name to platform, or a sequence of names that may carry the
-    same mapping as `.platforms` (chat._paired_device_names). A name whose
-    platform is unknown is on no platform in particular."""
-    if isinstance(device_names, Mapping):
-        platforms = {
-            str(name).strip(): str(platform or "") for name, platform in device_names.items()
-        }
-    else:
-        carried = getattr(device_names, "platforms", None)
-        platforms = {
-            str(name).strip(): str((carried or {}).get(name) or "") for name in device_names
-        }
-    names = tuple(sorted(name for name in platforms if name))
-    return names, platforms
-
-
-def _platform_of(written: str, word: str) -> str | None:
-    """The platform a device word names ("your Mac" is darwin, "your Windows PC"
-    and "your PC" windows, "your Linux box" linux), or None for a word that
-    names none ("your laptop")."""
-    if re.search(r"\b(?:linux|wsl|ubuntu)\b", written):
-        return "linux"
-    if re.search(r"\bwindows\b", written):
-        return "windows"
-    if re.search(r"\b(?:mac|macbook|imac|macos)\b", written):
-        return "darwin"
-    return "windows" if word == "pc" else None
+def _paired(device_names: Sequence[str] | Mapping[str, str]) -> tuple[str, ...]:
+    """The paired names, sorted — from a sequence of names, or the keys of a
+    mapping of name to anything."""
+    return tuple(sorted({str(name).strip() for name in device_names if str(name).strip()}))
 
 
 def _name_words(name: str) -> list[str]:
@@ -5511,63 +5469,40 @@ def _name_words(name: str) -> list[str]:
 
 
 def _resolve_place(
-    place: re.Match[str], names: tuple[str, ...], platforms: Mapping[str, str]
-) -> tuple[frozenset[str], str]:
-    """The paired devices a claim's place names, and how its correction says it
-    (fix round 2, C1):
+    place: re.Match[str], names: tuple[str, ...]
+) -> tuple[frozenset[str] | None, str]:
+    """The paired devices a claim's place names, and how its sentence says it
+    (fix round 3, T3):
 
       * a paired name is that device;
       * a word of paired names ("your Dell", "on DELL") the devices it is a
         word of;
-      * a word for a machine by its PLATFORM — "your Mac" only darwin devices,
-        "your PC" and "your Windows PC" only windows ones, "your Linux box"
-        only linux ones; a word that names no platform ("your laptop") any of
-        them — narrowed by a word of paired names beside it ("your Dell
-        laptop"). A platform with no device paired names none, and then
-        nothing she did can back the claim.
+      * a word for a machine — "your PC", "your computer", "your Mac", "the
+        laptop", "your Windows PC" — names ANY device (None): a Linux
+        household's "your PC" is its Linux box, and the sentence must never
+        say nothing ran on a machine that may be the one she meant.
 
-    A device whose platform is unknown cannot be ruled out by a platform word:
-    it stays in, so a correction never says nothing ran on a machine that may
-    be the one she meant. The correction names the one device, or says her
-    words when they name none or several."""
+    The sentence names the one device, or says her words when they name a
+    machine in general or several."""
     written = re.sub(r"[`*_]", "", place.group(0)).strip()
     written = re.sub(rf"^{_ANCHOR_PREPOSITION}\s+", "", written, flags=re.I)
-    lowered = written.lower()
     groups = place.re.groupindex
     named = place.group("name") if "name" in groups else None
     if named:
         by_lower = {name.lower(): name for name in names}
-        devices = frozenset({by_lower.get(named.lower(), named)})
-    else:
-        word = next(
-            (
-                place.group(group)
-                for group in ("word", "bare")
-                if group in groups and place.group(group)
-            ),
-            "",
-        )
-        word = " ".join(word.lower().split())
-        if re.fullmatch(_DEVICE_WORDS, word, re.I):
-            platform = _platform_of(lowered, word)
-            devices = frozenset(
-                name
-                for name in names
-                if platform is None or platforms.get(name, "") in (platform, "", "unknown")
-            )
-            beside = {
-                token
-                for token in re.findall(r"[a-z0-9]{3,}", lowered)
-                if not re.fullmatch(_DEVICE_WORDS, token)
-                and any(token in _name_words(name) for name in names)
-            }
-            if beside:
-                devices = (
-                    frozenset(name for name in devices if beside & set(_name_words(name)))
-                    or devices
-                )
-        else:
-            devices = frozenset(name for name in names if word in _name_words(name))
+        return frozenset({by_lower.get(named.lower(), named)}), by_lower.get(named.lower(), named)
+    word = next(
+        (
+            place.group(group)
+            for group in ("word", "bare")
+            if group in groups and place.group(group)
+        ),
+        "",
+    )
+    word = " ".join(word.lower().split())
+    if re.fullmatch(_DEVICE_WORDS, word, re.I):
+        return None, written
+    devices = frozenset(name for name in names if word in _name_words(name))
     return devices, (next(iter(devices)) if len(devices) == 1 else written)
 
 
@@ -5664,10 +5599,12 @@ def _same_app(claimed: str, held: str) -> bool:
 # What a device_run COMMAND does, read off its argv — when unsure, it did NOT
 # do the claimed thing. The shells that wrap a command, and the flag each takes
 # it after; the words that run the rest of it as someone else or detached.
+# `-File` runs a script: what follows it is the program that ran (fix round 3,
+# C1: "I ran cleanup.ps1").
 _SHELL_FLAGS: dict[str, tuple[str, ...]] = {
     "cmd": ("/c", "/k"),
-    "powershell": ("-command", "-c"),
-    "pwsh": ("-command", "-c"),
+    "powershell": ("-command", "-c", "-file", "-f"),
+    "pwsh": ("-command", "-c", "-file", "-f"),
     "sh": ("-c",),
     "bash": ("-c",),
     "zsh": ("-c",),
@@ -5787,7 +5724,10 @@ def _command(argv: object) -> list[str] | None:
         if at is not None:
             words = rest[at + 1 :]
         else:
-            words = [word for word in rest if not word.startswith(("-", "/"))]
+            # A flag starts with "/" only for cmd: to a POSIX shell "/home/j/x.sh"
+            # is the script it runs (fix round 3, C1).
+            flag = ("/",) if program == "cmd" else ("-",)
+            words = [word for word in rest if not word.startswith(flag)]
     return words
 
 
@@ -5865,12 +5805,34 @@ def _same_file(target: str, path: str) -> bool:
     return _covers(target, path)
 
 
+# The interpreters that run the script named after them: `python cleanup.py`
+# runs cleanup.py (the shells' own script form — `bash x.sh`, `powershell -File
+# x.ps1` — is read through by `_command`).
+_INTERPRETERS = frozenset("python python3 py node ruby perl php deno bun".split())
+
+
+def _ran_program(words: list[str]) -> str:
+    """What a command RAN, as names a "ran"/"executed" claim can be read
+    against (fix round 3, C1): its program's basename, with and without the
+    extension, and the script an interpreter was given — never an argument,
+    so `cat cleanup.sh` ran cat, not the cleanup script."""
+    base = re.split(r"[\\/]", words[0].strip().strip("\"'"))[-1]
+    names = [base, _program(words[0])]
+    if _program(words[0]) in _INTERPRETERS:
+        script = next((word for word in words[1:] if not word.startswith("-")), None)
+        if script is not None:
+            names += [re.split(r"[\\/]", script)[-1], _program(script)]
+    return " ".join(names)
+
+
 def _run_performs(words: list[str], action: str, target: str, device: str | None) -> bool:
     """Did this device_run command perform the claimed action on the claimed
     target? Read off its argv (`_command`): a launch by `_launched_app` and the
-    app's whole name; any other action only by a program that performs it
-    (`_ACTION_PROGRAMS`, a subcommand where one is needed) on a target the
-    command names. "ran" is backed by any command that names what she ran."""
+    app's whole name; "ran"/"executed" by the PROGRAM it ran (C1: never a read
+    whose argument names it); any other action only by a program that performs
+    it (`_ACTION_PROGRAMS`, a subcommand where one is needed) on a target the
+    command names. Since fix round 3 this only chooses WHICH failure the
+    sentence states (`_claim_record`): any call that succeeded silences it."""
     if action == "launch":
         app = _launched_app(words)
         return app is not None and _same_app(target, app)
@@ -5880,7 +5842,7 @@ def _run_performs(words: list[str], action: str, target: str, device: str | None
     lowered = frozenset(word.lower() for word in words[1:])
     named = " ".join(words[1:])
     if action == "run":
-        return _covers(target, " ".join(words))
+        return _covers(target, _ran_program(words))
     if program in _SERVICE_PROGRAMS:
         subcommand = _SERVICE_PROGRAMS[program].get(action)
         return subcommand is not None and subcommand in lowered and _covers(target, named)
@@ -5895,10 +5857,11 @@ def _run_performs(words: list[str], action: str, target: str, device: str | None
     return _covers(target, named)
 
 
-def _performs(span: Any, action: str, target: str) -> bool:
+def _performs(span: Any, action: str, target: str, commands: dict[int, list[str] | None]) -> bool:
     """Did this call perform the claimed action on the claimed target? A record
     that cannot be read cannot be told apart and counts — the record, not the
-    claim, is what is missing."""
+    claim, is what is missing. `commands` holds each device_run's argv, split
+    once per check however many claims read it (fix round 3, T5)."""
     args = _span_args(span)
     if args is None:
         return True
@@ -5912,31 +5875,13 @@ def _performs(span: Any, action: str, target: str) -> bool:
         path = args.get("path")
         return _same_file(target, path) if isinstance(path, str) else True
     if name == "device_run":
-        words = _command(args.get("argv"))
+        if id(span) not in commands:
+            commands[id(span)] = _command(args.get("argv"))
+        words = commands[id(span)]
         if words is None:
             return True
         return _run_performs(words, action, target, _span_device(span))
     return False
-
-
-def _record_target(span: Any) -> str:
-    """What a call ran FOR, as its record names it: the app, the path, the
-    command as sent."""
-    args = _span_args(span) or {}
-    name = getattr(span, "name", None)
-    if name == "device_launch_app" and isinstance(args.get("app"), str):
-        return args["app"].strip()
-    if name == "device_write_file" and isinstance(args.get("path"), str):
-        return args["path"].strip()
-    if name == "device_notify":
-        return "a notification"
-    argv = args.get("argv")
-    if isinstance(argv, list) and argv:
-        command = " ".join(str(part) for part in argv).replace("`", "'").strip()
-        if len(command) > 60:
-            command = command[:59] + "…"
-        return f"`{command}`"
-    return "a target its record does not name"
 
 
 def _failure_reason(meta: Mapping[str, Any], device: str | None) -> str:
@@ -5951,89 +5896,88 @@ def _failure_reason(meta: Mapping[str, Any], device: str | None) -> str:
     return reason.strip().rstrip(".")[:200] or "no reason was recorded"
 
 
-def _claim_record(
-    spans: Sequence[Any],
-    kind: str,
-    action: str,
-    devices: frozenset[str] | None,
-    target: str,
-) -> tuple[bool, DeviceRecord]:
-    """(backed, what the record shows) for one claim (fix round 2, C1 and R-A).
+@dataclass(frozen=True)
+class _Ran:
+    """One tool call the turn's record holds, read once per check (fix round
+    3, T5): its name, the device it named (lower-cased, None when its record
+    names none), whether it succeeded, and its span."""
 
-    BACKED only by a SUCCESSFUL call SHE made (never a backend `unasked` check)
-    of a tool that performs this kind of action, on a device she named (any,
-    when she named none), that performed THIS action on THIS target
-    (`_performs`). Otherwise the record, from every call of that kind on that
-    device that ran: one for this target that was sent and never answered, or
-    that failed with its reason; else one that ran for something else; else
-    none ran. A refused call never ran, and is not in the record."""
-    family = DEVICE_ACTION_TOOLS[kind]
-    wanted = None if devices is None else {device.lower() for device in devices}
-    failures: list[tuple[str, str]] = []
-    other: tuple[str, str] | None = None
+    name: str
+    device: str | None
+    ok: bool
+    span: Any
+
+
+def _calls_that_ran(spans: Sequence[Any]) -> list[_Ran]:
+    """Every tool call that RAN this turn — hers, or a check the backend ran
+    unasked: the record is what the sentence states, and a call that ran is
+    never said not to have. A REFUSED call (markup, a closed round —
+    `refused_*`, as `_attempted` reads it) never ran and is not in it."""
+    ran: list[_Ran] = []
     for span in spans:
-        name = getattr(span, "name", None)
-        if getattr(span, "kind", None) != "tool" or name not in family:
+        if getattr(span, "kind", None) != "tool":
             continue
         meta = getattr(span, "meta", None) or {}
         if any(str(key).startswith("refused") for key in meta):
             continue
         device = _span_device(span)
-        if wanted is not None and device is not None and device.lower() not in wanted:
-            continue
-        if _is_her_span(span) and _performs(span, action, target):
-            if meta.get("ok") is True:
-                return True, DeviceRecord()
-            failures.append((str(name), _failure_reason(meta, device)))
-        elif other is None:
-            other = (str(name), _record_target(span))
-    for tool, reason in failures:
-        if _NO_ANSWER.search(reason):
-            return False, DeviceRecord("no_answer", tool=tool)
-    if failures:
-        tool, reason = failures[0]
-        return False, DeviceRecord("failed", tool=tool, reason=reason)
-    if other is not None:
-        return False, DeviceRecord("other", tool=other[0], target=other[1])
-    return False, DeviceRecord()
-
-
-def failed_call(spans: Sequence[Any], names: Sequence[str]) -> DeviceFailure | None:
-    """Her call of one of `names` this turn that FAILED, when none of them
-    succeeded — with the device it named and the reason its span recorded. The
-    turn's one correction states it (fix round 1, I1): "device_info failed: …",
-    never "it did not run" with the reason left out."""
-    wanted = frozenset(names)
-    failure: DeviceFailure | None = None
-    for span in spans:
-        if getattr(span, "name", None) not in wanted or not _is_her_span(span):
-            continue
-        meta = getattr(span, "meta", None) or {}
-        if meta.get("ok") is True:
-            return None
-        if failure is None:
-            device = _span_device(span)
-            failure = DeviceFailure(
-                tool=str(span.name), device=device, reason=_failure_reason(meta, device)
+        ran.append(
+            _Ran(
+                str(getattr(span, "name", "")),
+                device.lower() if device else None,
+                meta.get("ok") is True,
+                span,
             )
-    return failure
+        )
+    return ran
 
 
-def _plural(thing: str) -> bool:
-    """Whether a target reads as plural ("the temp files were not deleted"):
-    a pronoun that is, or a last word in lower case ending in a lone "s" —
-    "Teams" and "Windows" are names."""
-    words = thing.split()
-    if not words:
-        return False
-    last = words[-1]
-    if last.lower() in ("they", "these", "those"):
-        return True
-    return last.islower() and last.endswith("s") and not last.endswith(("ss", "us", "is"))
+def _claim_record(
+    ran: Sequence[_Ran],
+    kind: str,
+    action: str,
+    devices: frozenset[str] | None,
+    target: str,
+    commands: dict[int, list[str] | None],
+) -> DeviceRecord:
+    """What the record shows about one claim that no successful call silenced
+    (fix round 3, T3 — `_succeeded` is asked first, and a call that SUCCEEDED
+    on that device silences the claim whatever it ran for: the record cannot
+    equate an app's id, alias, URI or suffixed Start-menu name with the name
+    she used, and a false correction is worse than a missed one).
+
+    What is left to state: a call of the tools that perform it, on that
+    device (any device when she named none or used a word for one, and a call
+    whose record names no device is on any), that was sent and never
+    answered, or that failed with its reason — the one that performed THIS
+    action on THIS target first, when one did (`_performs`, C1: choosing which
+    failure to state is all the target is read for now) — else that none ran.
+    A call on another device is not in it."""
+    family = DEVICE_ACTION_TOOLS[kind]
+    wanted = None if devices is None else {device.lower() for device in devices}
+    calls = [
+        call
+        for call in ran
+        if call.name in family and (wanted is None or call.device is None or call.device in wanted)
+    ]
+    if not calls:
+        return DeviceRecord()
+    failures = [
+        (call, _failure_reason(getattr(call.span, "meta", None) or {}, _span_device(call.span)))
+        for call in calls
+    ]
+    preferred = [
+        failure for failure in failures if _performs(failure[0].span, action, target, commands)
+    ] or failures
+    for call, reason in preferred:
+        if _NO_ANSWER.search(reason):
+            return DeviceRecord("no_answer", tool=call.name)
+    call, reason = preferred[0]
+    return DeviceRecord("failed", tool=call.name, reason=reason)
 
 
 def _clean_target(text: str) -> str:
-    """What she said was done, as the correction names it: markdown out, a
+    """What she said was done, as `_performs` reads it: markdown out, a
     trailing "for you", "again" or "now" and a leading "up" dropped, a leading
     determiner or a pronoun in lower case. "it" when nothing is left."""
     words = re.sub(r"[*`]", "", text).split()
@@ -6064,8 +6008,7 @@ def device_completion_check(
     The tools that could do it are the registered tools that PERFORM its kind
     of action (`DEVICE_ACTION_TOOLS`, pinned against the live registry). With
     no device tool advertised the guard is silent — she cannot have been
-    expected to use one. `device_names` are the paired names, with each one's
-    platform when the caller knows it (`_paired`).
+    expected to use one. `device_names` are the paired names (`_paired`).
 
     What is a CLAIM (fix rounds 1 and 2, C1/C2/I3): an ACTION, done, this
     turn, by her:
@@ -6088,23 +6031,27 @@ def device_completion_check(
     "as I mentioned", a list under "here is what I did today:" — never under a
     bare "here's what I did:"); a condition anywhere in the claim's segment, or
     opening its sentence ("…when a timer fires", "As soon as Teams has
-    launched…"); another actor or cause ("…by Windows Backup", "…via OneDrive
-    sync"), second or third person, a relative clause; the machine's own
-    startup ("…at login: OneDrive, Teams"); a negation, hedge, subordinator or
-    intent in the claim's own segment — LOCAL, so "No problem — Notepad is now
-    open" still is one; relayed or quoted text; a blockquote; a model serving
-    on a machine.
+    launched…") or its list ("If it works:\n- Notepad is now open…"); a future
+    ("Notepad will have opened…"); another actor or cause ("…by Windows
+    Backup", "…via OneDrive sync"), second or third person, a relative clause;
+    the machine's own startup ("…at login: OneDrive, Teams"); a negation,
+    hedge, subordinator or intent in the claim's own segment — LOCAL, so "No
+    problem — Notepad is now open" still is one; relayed or quoted text; a
+    blockquote; a model serving on a machine.
 
-    Backing (`_claim_record`): only a SUCCESSFUL call SHE made, of a tool that
-    performs the action, on a device she named, that performed THAT action on
-    THAT target. What the claim carries otherwise is what the record shows
-    (`DeviceRecord`), and its `sentence` is the turn's one correction."""
+    What the record shows (`_claim_record`, fix round 3, T3): SILENT when any
+    call of the tools that perform the action SUCCEEDED on the device she
+    named (any device for "your PC" or none named), whatever it ran for.
+    Otherwise the claim carries what the record shows (`DeviceRecord`) — a
+    failure, a call never answered, or that none ran — and its `sentence` is
+    the one thing the turn appends. The record is read once per check, and
+    each command's argv split once however many claims read it (T5)."""
     if not reply_text or not reply_text.strip():
         return None
     advertised = [str(name) for name in available_tools]
     if not any(name.startswith(_DEVICE_SPAN_PREFIX) for name in advertised):
         return None
-    names, platforms = _paired(device_names)
+    names = _paired(device_names)
     anchor = _device_anchor(names)
     outside_ran = any(
         _is_her_span(span)
@@ -6112,17 +6059,30 @@ def device_completion_check(
         and not str(getattr(span, "name", "")).startswith(_DEVICE_SPAN_PREFIX)
         for span in spans
     )
-    list_is_recap = False
+    reading = _Reading(
+        anchor=anchor,
+        ran=_calls_that_ran(spans),
+        advertised=advertised,
+        outside_ran=outside_ran,
+        names=names,
+    )
+    # A sentence read once and found to hold no claim holds none the second time
+    # it is written: every verdict below is a pure function of the sentence and
+    # this turn's record (fix round 3, T5 — 1,100 backed claims took 105 ms).
+    quiet: set[str] = set()
+    list_is_framed = False
     for line in reply_text.split("\n"):
         stripped = line.strip()
         if not stripped:
             continue
         if _LIST_ITEM.match(line):
-            if list_is_recap:
-                continue  # an item of "here is what we did today:"
+            if list_is_framed:
+                continue  # an item of "here is what we did today:" or "If it works:"
         else:
-            list_is_recap = _recap(stripped)
+            list_is_framed = _recap(stripped) or _FRONTED_CONDITION.match(stripped) is not None
         for sentence in _sentences(line):
+            if sentence in quiet:
+                continue
             if not sentence.strip() or sentence.rstrip().endswith("?") or _recap(sentence):
                 continue
             if _FRONTED_CONDITION.match(sentence):
@@ -6130,26 +6090,62 @@ def device_completion_check(
             for clause in _CLAUSE_SPLIT.split(sentence):
                 if not clause or not clause.strip():
                     continue
-                claim = _device_action_in(
-                    clause, anchor, spans, advertised, outside_ran, names, platforms
-                )
+                claim = _device_action_in(clause, reading)
                 if claim is not None:
                     return claim
+            quiet.add(sentence)
     return None
 
 
-def _device_action_in(
-    clause: str,
-    anchor: re.Pattern[str],
-    spans: Sequence[Any],
-    advertised: Sequence[str],
-    outside_ran: bool,
-    names: tuple[str, ...],
-    platforms: Mapping[str, str],
-) -> DeviceCompletionClaim | None:
-    """The first unbacked claim in one non-question clause, or None. Every cut
-    is found ONCE per clause and compared by position (bisect), so a long
-    clause costs one pass."""
+@dataclass
+class _Reading:
+    """What one device_completion_check reads every clause against, found
+    once: the device anchor, the calls that ran, the advertised tools, whether
+    a call of another family succeeded, the paired names — and what it has
+    already worked out (each command's words, each place's devices), so a
+    reply of many claims repeats none of it (fix round 3, T5)."""
+
+    anchor: re.Pattern[str]
+    ran: list[_Ran]
+    advertised: list[str]
+    outside_ran: bool
+    names: tuple[str, ...]
+    commands: dict[int, list[str] | None] = field(default_factory=dict)
+    places: dict[tuple, tuple[frozenset[str] | None, str]] = field(default_factory=dict)
+
+    def place(self, found: re.Match[str]) -> tuple[frozenset[str] | None, str]:
+        groups = found.re.groupindex
+        key = (found.group(0), *(found.group(g) if g in groups else None for g in _PLACE_GROUPS))
+        if key not in self.places:
+            self.places[key] = _resolve_place(found, self.names)
+        return self.places[key]
+
+
+_PLACE_GROUPS = ("name", "word", "bare")
+
+
+def _succeeded(ran: Sequence[_Ran], kind: str, devices: frozenset[str] | None) -> bool:
+    """Whether any call of the tools that perform `kind` SUCCEEDED on one of
+    `devices` (any device when None; a call naming no device is on any) — the
+    one fact that silences a claim (fix round 3, T3)."""
+    family = DEVICE_ACTION_TOOLS[kind]
+    wanted = None if devices is None else {device.lower() for device in devices}
+    return any(
+        call.ok
+        and call.name in family
+        and (wanted is None or call.device is None or call.device in wanted)
+        for call in ran
+    )
+
+
+def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim | None:
+    """The first unbacked claim in one non-question clause, or None.
+
+    A candidate that a successful call silences is dropped as soon as its
+    action and device are known, before any cut is read (fix round 3, T5):
+    silent is silent whatever the cuts say. The cuts are found at most ONCE
+    per clause, when a candidate first needs them, and compared by position
+    (bisect), so a long clause costs one pass."""
     text = _MD_LINK.sub(r"\1", clause).replace("*", "")
     if text.lstrip().startswith(">") or _STARTUP.search(text):
         return None  # a blockquote is someone's words; startup items are the machine's
@@ -6166,26 +6162,33 @@ def _device_action_in(
     breaks = [(found.start(), found.end()) for found in _ANCHOR_BREAK.finditer(text)]
     break_ends = [end for _, end in breaks]
     break_starts = [start for start, _ in breaks]
-    blockers = sorted(
-        found.start()
-        for pattern in (_ACTION_NEGATION, _ACTION_HEDGE, _ACTION_INTENT, _REPORTED, _RELAYED_THAT)
-        for found in pattern.finditer(text)
-    )
-    negations = [found.start() for found in _ACTION_NEGATION.finditer(text)]
-    others = [found.start() for found in _OTHER_CAUSE.finditer(text)]
-    conditions = [found.start() for found in _ACTION_CONDITION.finditer(text)]
-    quotes = {
-        mark: [i for i, char in enumerate(text) if char == mark] for mark in ('"', "`", "“", "”")
-    }
-    places = list(anchor.finditer(text))
+    places = list(reading.anchor.finditer(text))
     place_starts = [place.start() for place in places]
+    cuts: dict[str, list[int]] = {}
+
+    def found_at(key: str) -> list[int]:
+        """Where each cut starts in this clause, found once, on first need."""
+        if key not in cuts:
+            patterns = {
+                "blockers": (
+                    _ACTION_NEGATION,
+                    _ACTION_HEDGE,
+                    _ACTION_INTENT,
+                    _REPORTED,
+                    _RELAYED_THAT,
+                ),
+                "negations": (_ACTION_NEGATION,),
+                "others": (_OTHER_CAUSE,),
+                "conditions": (_ACTION_CONDITION,),
+            }[key]
+            cuts[key] = sorted(
+                found.start() for pattern in patterns for found in pattern.finditer(text)
+            )
+        return cuts[key]
 
     def any_in(positions: list[int], lo: int, hi: int) -> bool:
         index = bisect_right(positions, lo - 1)
         return index < len(positions) and positions[index] < hi
-
-    def count_before(positions: list[int], at: int) -> int:
-        return bisect_right(positions, at - 1)
 
     def place_after(end: int) -> re.Match[str] | None:
         """The device the claim ending at `end` is ON: the next anchor, if it
@@ -6216,6 +6219,16 @@ def _device_action_in(
             it = None if thing is not None else _PRONOUN_OBJECT.match(text, verb_end)
             if thing is None and it is None:
                 continue
+        word = m.group("word") if shape == "state" else m.group("verb")
+        word = " ".join(word.lower().split())
+        action = _ACTION_OF_WORD.get(word, "run")
+        kind = _kind_of(action)
+        devices: frozenset[str] | None = None
+        device_label: str | None = None
+        if place is not None:
+            devices, device_label = reading.place(place)
+        if _succeeded(reading.ran, kind, devices):
+            continue  # a call that performs it ran there: silent, whatever it ran for (T3)
         # The claim's own segment: back to the last clause break before it (I3).
         index = bisect_right(break_ends, position)
         segment_start = break_ends[index - 1] if index else 0
@@ -6228,17 +6241,17 @@ def _device_action_in(
         else:
             begin = position
         claim_at = m.start("word") if shape == "state" else m.start()
-        if any_in(blockers, segment_start, max(claim_at, begin)):
+        if any_in(found_at("blockers"), segment_start, max(claim_at, begin)):
             continue  # a negation, hedge, intent or report in its own segment
-        if any_in(conditions, segment_start, segment_end(verb_end)):
+        if any_in(found_at("conditions"), segment_start, segment_end(verb_end)):
             continue  # "…when a timer fires", "…after the update": conditioned (C2)
         if (
-            count_before(quotes['"'], begin) % 2
-            or count_before(quotes["`"], begin) % 2
-            or count_before(quotes["“"], begin) > count_before(quotes["”"], begin)
+            text.count('"', 0, begin) % 2
+            or text.count("`", 0, begin) % 2
+            or text.count("“", 0, begin) > text.count("”", 0, begin)
         ):
             continue  # inside a quotation: someone else's words
-        if place is not None and any_in(negations, verb_end, place.start()):
+        if place is not None and any_in(found_at("negations"), verb_end, place.start()):
             continue  # "I launched nothing on your Dell"
         subject = text[begin:position].strip() if shape in ("state", "subject") else ""
         last = _CONTRACTION.sub("", subject.rsplit(maxsplit=1)[-1].lower()) if subject else ""
@@ -6249,10 +6262,8 @@ def _device_action_in(
                 continue  # "has opened", "I opened": the other shapes read those
             if shape == "subject" and place is not None and _THEN_A_VERB.match(text, place.end()):
                 continue  # "Apps started on your PC stay running": a noun phrase
-        if shape != "first" and any_in(others, verb_end, segment_end(verb_end)):
+        if shape != "first" and any_in(found_at("others"), verb_end, segment_end(verb_end)):
             continue  # "…saved on your Dell by Windows Backup": another actor or cause
-        word = m.group("word") if shape == "state" else m.group("verb")
-        word = " ".join(word.lower().split())
         if shape == "state":
             marked = (
                 re.search(r"\bnow\b", m.group("adverbs"), re.I)
@@ -6271,12 +6282,6 @@ def _device_action_in(
                 and not marked
             ):
                 continue  # "Teams is launched from the Start menu": how it is done (C2)
-        action = _ACTION_OF_WORD.get(word, "run")
-        kind = action if action in _KINDED_ACTIONS else "run"
-        devices: frozenset[str] | None = None
-        device_label: str | None = None
-        if place is not None:
-            devices, device_label = _resolve_place(place, names, platforms)
         pronoun = False
         if thing is not None:
             target = thing.group("object")
@@ -6289,19 +6294,17 @@ def _device_action_in(
             end = place.end()
             target = subject if shape in ("state", "subject") else text[verb_end : place.start()]
         target = _clean_target(target)
-        backed, record = _claim_record(spans, kind, action, devices, target)
-        if backed:
-            continue
+        record = _claim_record(reading.ran, kind, action, devices, target, reading.commands)
         if place is None:
             if pronoun and record.case == "none":
                 continue  # "I launched it." with no launch made: "it" names nothing
-            if outside_ran and record.case == "none":
+            if reading.outside_ran and record.case == "none":
                 continue  # may be about a page or a file another tool opened
         if shape in ("state", "subject"):
             phrase_start = begin
         else:
             phrase_start = m.start("verb") if shape == "head" else position
-        tools_for_kind = tuple(t for t in DEVICE_ACTION_TOOLS[kind] if t in advertised)
+        tools_for_kind = tuple(t for t in DEVICE_ACTION_TOOLS[kind] if t in reading.advertised)
         return DeviceCompletionClaim(
             phrase=text[phrase_start:end].strip()[:80],
             device=device_label,
@@ -6309,7 +6312,6 @@ def _device_action_in(
             tools=tools_for_kind or DEVICE_ACTION_TOOLS[kind],
             action=action,
             target=target,
-            verbed=_VERBED.get(word, word),
             record=record,
         )
     return None

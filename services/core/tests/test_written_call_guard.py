@@ -11,7 +11,9 @@ then said "Teams is now opening". A minute later, asked why nothing opened,
 she wrote fences of `device_info "DELL-XPS-8950"` and more, again with no
 call. markup_calls reads a fence as teaching BY DESIGN and that ruling stands
 (prose never dispatches). This guard never runs anything either: it names the
-tool she wrote, and the turn's one redirect asks HER to make the call.
+tool she wrote, and — since fix round 3 — the turn appends ONE sentence, "(I
+wrote <tool> as text; it did not run.)", and does nothing else: no redirect,
+no nudge, no invitation (T1, T2).
 
 The rule (guards.written_call_check): the exact name of a tool advertised THIS
 turn, then argument syntax — `(` straight after the name, or after optional
@@ -30,6 +32,12 @@ the Windows desktop environment."). A hedge ("would", any subject), a
 condition ("once you confirm", "if"), waiting for his go-ahead, or a recap
 anywhere in the sentence rules the call out, and a fence is judged with the
 sentence after it ("Shall I go ahead?").
+
+Fix round 3 (2026-09-29): a false fire now costs that one TRUE sentence, never
+an action — the re-review drove "Running this formats your C: drive:" above a
+`format C: /q` fence into a redirect with 43 tools. The gerund fragment above a
+fence is her narration only when it is not a heading, a generic object ("an
+app", "a file") or a "this"/"that"/"it" it says something about.
 """
 
 from __future__ import annotations
@@ -66,6 +74,8 @@ def test_the_teams_turn_wrote_device_launch_app_as_a_fence():
     assert claim is not None
     assert claim.tools == ("device_launch_app",)
     assert 'device_launch_app "DELL-XPS-8950"' in claim.phrase
+    # (fix round 3, T2) the ONE sentence the turn appends, exactly
+    assert claim.text == "(I wrote device_launch_app as text; it did not run.)"
 
 
 def test_the_why_not_turn_wrote_device_info_and_a_tool_she_does_not_have():
@@ -74,6 +84,7 @@ def test_the_why_not_turn_wrote_device_info_and_a_tool_she_does_not_have():
     claim = check(T3DEE5106)
     assert claim is not None
     assert claim.tools == ("device_info",)
+    assert claim.text == "(I wrote device_info as text; it did not run.)"
 
 
 def test_the_notepad_turn_wrote_no_call():
@@ -516,3 +527,117 @@ def test_clean_over_every_correction_and_note(name, text):
 #
 # Timed where every guard's cost is pinned: test_guard_regex_timing.py sweeps
 # each of this guard's patterns and reads 50 KB of its worst shapes in 100 ms.
+
+
+# -- fix round 3: one sentence, and what the re-review drove into a redirect ----
+
+
+def test_the_sentence_is_the_record_and_invites_nothing():
+    """(T2) Exactly "(I wrote <tool> as text; it did not run.)" — the calls
+    she wrote, and that they did not run — and never an offer, an
+    instruction or a question."""
+    one = guards.WrittenCallClaim(tools=("device_launch_app",), phrase="x")
+    two = guards.WrittenCallClaim(tools=("device_info", "device_run"), phrase="x")
+    three = guards.WrittenCallClaim(tools=("device_info", "device_run", "web_search"), phrase="x")
+    assert one.text == "(I wrote device_launch_app as text; it did not run.)"
+    assert two.text == "(I wrote device_info and device_run as text; they did not run.)"
+    assert three.text == (
+        "(I wrote device_info, device_run and web_search as text; they did not run.)"
+    )
+    for said in (one.text, two.text, three.text):
+        lowered = said.lower()
+        for invitation in ("ask me", "again", "i'll", "want", "?", "please", "make the call"):
+            assert invitation not in lowered, (invitation, said)
+
+
+R = 'device_run ["shutdown", "/r", "/t", "0"]'
+FMT = 'device_run ["format", "C:", "/q"]'
+F = "```"
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    [
+        # how-to headings and labels above an example fence (rr3 probe_wc)
+        ("heading", f'### Running a command\n{F}\ndevice_run ["ls", "-la"]\n{F}'),
+        (
+            "an app",
+            f'Launching an app on a paired device:\n{F}\ndevice_launch_app(device="DELL-XPS-8950", '
+            f'app="notepad")\n{F}\nReplace notepad with any app from the list.',
+        ),
+        ("a file", f'1. Opening a file\n{F}\ndevice_run ["notepad", "C:\\\\notes.txt"]\n{F}'),
+        (
+            "a notification",
+            f'Sending a desktop notification:\n{F}\ndevice_notify(device="DELL-XPS-8950", '
+            f'message="hi")\n{F}',
+        ),
+        (
+            "heading two",
+            f'## Starting an app remotely\n{F}\ndevice_launch_app(device="DELL-XPS-8950", '
+            f'app="Teams")\n{F}',
+        ),
+        # warnings whose verb no closed list holds (R1: the format command)
+        ("formats", f"Running this formats your C: drive:\n{F}\n{FMT}\n{F}"),
+        ("destroys", f"Running this destroys everything on C:.\n{F}\n{FMT}\n{F}"),
+        ("reformats", f"Running this reformats the drive.\n{F}\n{FMT}\n{F}"),
+        ("bricks", f"Calling this bricks the agent.\n{F}\n{R}\n{F}"),
+        (
+            "nukes",
+            f'Running this nukes the temp folder.\n{F}\ndevice_run ["cmd", "/c", "rmdir", "/s", '
+            f'"/q", "C:\\\\Temp"]\n{F}',
+        ),
+        ("it wipes", f"Running it formats your drive.\n{F}\n{FMT}\n{F}"),
+    ],
+)
+def test_a_heading_a_generic_object_or_a_warning_is_no_lead(label, reply):
+    """(fix round 3) The gerund fragment above a fence is her narration only
+    when it is not a heading, a generic object, or a "this"/"that"/"it" the
+    fragment then says something about — whatever the verb."""
+    assert check(reply) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply,tool",
+    [
+        (
+            "bold label",
+            f'**Checking the OS:**\n{F}\ndevice_info "DELL-XPS-8950"\n{F}',
+            "device_info",
+        ),
+        ("send you", f"I'll send you the command:\n{F}\n{R}\n{F}", "device_run"),
+        ("write out", f"Let me write out the command for you:\n{F}\n{R}\n{F}", "device_run"),
+        ("write down", f"Let me write that down:\n{F}\n{R}\n{F}", "device_run"),
+        ("copy", f"I'll copy the command here:\n{F}\n{R}\n{F}", "device_run"),
+        ("read back", f"Let me read it back to you:\n{F}\n{R}\n{F}", "device_run"),
+        (
+            "list the steps",
+            f"Let me list the steps:\n{F}\n{FMT}\n{F}\nThat is what the tool call looks like.",
+            "device_run",
+        ),
+        ("syntax", f"Let me get the syntax right:\n{F}\n{R}\n{F}", "device_run"),
+        ("proposed", f"Let me check the command I proposed:\n{F}\n{R}\n{F}", "device_run"),
+        ("later", f"I'll use this command later:\n{F}\n{R}\n{F}", "device_run"),
+        ("tomorrow", f"Let's test it tomorrow:\n{F}\n{R}\n{F}", "device_run"),
+        ("next time", f"I'll save this for next time:\n{F}\n{R}\n{F}", "device_run"),
+        ("double-check", f"Let me double-check the syntax with you:\n{F}\n{R}\n{F}", "device_run"),
+        ("inline paste", f"I'll send you `{R}` to paste into chat.", "device_run"),
+        ("bare fence", f"{F}\n{R}\n{F}", "device_run"),
+        ("bare fence + note", f"{F}\n{R}\n{F}\nThat restarts it immediately.", "device_run"),
+        (
+            "too risky",
+            f"I'll run it:\n{F}\n{FMT}\n{F}\nActually, no — that's too risky.",
+            "device_run",
+        ),
+        ("kidding", f"I'll run it:\n{F}\n{FMT}\n{F}\nJust kidding — I won't.", "device_run"),
+        ("wait", f"I'll run it:\n{F}\n{FMT}\n{F}\nWait — that wipes the disk.", "device_run"),
+    ],
+)
+def test_what_still_reads_as_her_call_costs_one_true_sentence(label, reply, tool):
+    """(fix round 3, T1/T2) The re-review's other shapes still read as her
+    call written as text — and each once took a redirect with every tool
+    advertised. Now each costs exactly this sentence, which is TRUE of every
+    one of them: she wrote the call as text, and it did not run."""
+    claim = check(reply)
+    assert claim is not None, label
+    assert claim.tools == (tool,), label
+    assert claim.text == f"(I wrote {tool} as text; it did not run.)", label

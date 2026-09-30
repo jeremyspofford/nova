@@ -1371,13 +1371,13 @@ async def test_an_agent_that_says_nothing_is_not_quoted_as_having_launched_it(po
 
 # -- a launch SENT and never answered: its outcome is not known (said-not-done) --
 #
-# The device-completion guard's correction (fix round 2, R-A) says "was sent
-# but did not answer — whether it opened is not known" for exactly the failures
-# where the command left core and no result came back — never "it did not
-# open". It reads that off the failure's own words (guards._NO_ANSWER), so the
-# words are pinned HERE, produced by the real hub and the real tool: a hub
-# refusal reworded tomorrow turns this red instead of turning the correction
-# into a guess. A refusal BEFORE sending ("not connected") is a plain failure.
+# The device-completion guard's sentence (fix rounds 2 and 3, R-A and T3) says
+# "was sent but did not answer — whether it worked is not known" for exactly the
+# failures where the command left core and no result came back — never "it did
+# not open". It reads that off the failure's own words (guards._NO_ANSWER), so
+# the words are pinned HERE, produced by the real hub and the real tool: a hub
+# refusal reworded tomorrow turns this red instead of turning the sentence into
+# a guess. A refusal BEFORE sending ("not connected") is a plain failure.
 
 
 async def _launch_failure(pool, monkeypatch, how: str) -> str:
@@ -1442,6 +1442,5 @@ async def test_a_launch_sent_and_never_answered_is_read_as_not_known(pool, monke
     else:
         assert claim.record.case == "no_answer", error
         assert claim.text == (
-            "(device_launch_app was sent but did not answer — whether Notepad was opened is "
-            "not known.)"
+            "(device_launch_app was sent but did not answer — whether it worked is not known.)"
         )
