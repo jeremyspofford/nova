@@ -502,14 +502,29 @@ bk_bind_sources() {
 }
 
 # $1 relative to $2, without readlink -f (not portable) — the same
-# cd-and-pwd-P shape canonical_path uses at deploy/install.sh:132-146.
+# cd-and-pwd-P shape canonical_path uses at deploy/install.sh:145.
+#
+# $2 is git's --show-toplevel, which is PHYSICAL; $1 can reach it through a
+# symlink — a bind source compose rendered from a logical path, or any path
+# under macOS's /var -> /private/var, where every TMPDIR lives. So when the
+# plain strip misses, the PARENT is resolved (never the entry itself, so an
+# entry that is a symlink is still named as itself) and the strip is tried
+# once more. Until 2026-09-30 this comment described that resolution and the
+# body did not do it: every macOS run probed `check-ignore -q /var/…/data/`.
 bk_relpath() {
-  local path="$1" base="$2"
+  local path="$1" base="$2" dir full
   case "$path" in
-    "$base") printf '.' ;;
-    "$base"/*) printf '%s' "${path#"$base"/}" ;;
-    *) printf '%s' "$path" ;;
+    "$base") printf '.'; return 0 ;;
+    "$base"/*) printf '%s' "${path#"$base"/}"; return 0 ;;
   esac
+  if dir="$(cd -P "$(dirname "$path")" 2>/dev/null && pwd -P)" && [ -n "$dir" ]; then
+    full="$dir/$(basename "$path")"
+    case "$full" in
+      "$base") printf '.'; return 0 ;;
+      "$base"/*) printf '%s' "${full#"$base"/}"; return 0 ;;
+    esac
+  fi
+  printf '%s' "$path"
 }
 
 # "ignored" | "tracked" | "unknown" for a DIRECTORY, probed with the trailing
@@ -1038,7 +1053,7 @@ sha256_of() {
   fi
   out="${line%% *}"
   case "$out" in
-    "" | *[!0-9a-f]*)
+    "" | *[!0123456789abcdef]*)
       bk_fail "hashing $path produced '$out', which is not 64 hex."
       return 1
       ;;
@@ -1619,8 +1634,12 @@ bk_assert_selftest_name() {
        the CREATE, before the pg_restore and before the DROP."
     return 1
   fi
+  # Spelled out, never `[!0-9a-f]`: bash 3.2 (macOS's /bin/bash) reads a bracket
+  # RANGE in the locale's collation order, where A-E sort inside a-f, so
+  # 'nova_selftest_A1B2C3D4' passed on macOS (CI, 2026-09-30). A list is
+  # the same set in every locale. The drill and hash checks below do the same.
   case "$tail" in
-    *[!0-9a-f]*)
+    *[!0123456789abcdef]*)
       bk_fail "refusing to $what a database called '$name': a self-test database is
        named ^nova_selftest_[0-9a-f]{8}\$ and nothing else."
       return 1
@@ -3640,7 +3659,7 @@ bk_drill_assert_name() {
     return 1
   fi
   case "$id" in
-    *[!0-9a-f]*)
+    *[!0123456789abcdef]*)
       bk_drill_refuse "$name" "$what"
       return 1
       ;;
@@ -3684,7 +3703,7 @@ bk_assert_verify_name() {
     return 1
   fi
   case "$tail" in
-    *[!0-9a-f]*)
+    *[!0123456789abcdef]*)
       bk_fail "refusing to $what a database called '$name': a drill database is named
        ^nova_verify_[0-9a-f]{8}\$ and nothing else."
       return 1

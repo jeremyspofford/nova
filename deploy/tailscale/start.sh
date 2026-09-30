@@ -100,8 +100,8 @@ if [ -e "$MOVED_TO" ]; then
     log "  a marker this container cannot read is not a marker it may ignore"
   fi
   log "  Nova's data was carried to another machine, and that machine joins the"
-  log "  tailnet under this node's identity. Two tailscaled processes on one node"
-  log "  key flap it, and the tailnet address stops answering for both."
+  log "  tailnet under this node's identity. Two tailscaled processes on one"
+  log "  node key flap it, and the tailnet address stops answering for both."
   log "  If THIS machine should serve again, run \`./install undo-move\` here first:"
   log "  it prints the marker, says what it cannot check, and removes it only when"
   log "  you type the confirmation."

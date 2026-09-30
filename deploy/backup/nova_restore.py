@@ -709,14 +709,21 @@ def disk_metadata(path):
 def _checkable_columns(record):
     """The columns of a metadata line this process is in a position to check.
 
-    Type and mode always — extraction sets both, and this reader puts back
-    what the filter dropped. uid and gid ONLY when it is root: unprivileged,
-    `os.chown` did nothing, so comparing them would compare the extracting
-    user against himself and print "verified" over a tree nobody restored
-    the ownership of. What was not compared is stated instead, by
-    _ownership_line.
+    Type always, and mode for everything but a symlink — extraction sets
+    both, and this reader puts back what the filter dropped. A symlink's own
+    mode is never set here (apply_recorded_metadata: chmod through a link re-modes its
+    TARGET, and Linux has no lchmod) and is not data anything reads; on macOS
+    it is whatever the umask of the process that made the link gave it, so
+    comparing it compared the extracting umask with the packing one and
+    failed every macOS restore (CI, 2026-09-30). uid and gid ONLY when it is
+    root: unprivileged, `os.chown` did nothing, so comparing them would
+    compare the extracting user against himself and print "verified" over a
+    tree nobody restored the ownership of. What was not compared is stated
+    instead, by _ownership_line.
     """
     parts = record.split(" ")
+    if parts[:1] == ["l"] and len(parts) > 1:
+        parts = [parts[0], "-", *parts[2:]]
     return parts if running_as_root() else parts[:2]
 
 

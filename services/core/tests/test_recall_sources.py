@@ -60,8 +60,6 @@ def test_nothing_recalled_names_nothing():
 
 # -- on the span, through the real recall path ------------------------------------
 
-import uuid  # noqa: E402
-
 from tests.conftest import requires_db  # noqa: E402
 from tests.fakes import FakeGateway, FakeMemory  # noqa: E402
 from tests.test_chat import _say  # noqa: E402
