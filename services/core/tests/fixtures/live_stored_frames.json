@@ -11,6 +11,15 @@
   "stored": "[I ran device_info but could not report the result — ask again and I'll tell you what happened]",
   "streamed": "Got it. Checking your DELL-XPS-8950 now…"
  },
+ "commitment_redirect_stood": {
+  "class": "redirect",
+  "dispatched": false,
+  "note": "Answering again, without saying I would.",
+  "note_claims_work": false,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"I'll perform a web search for the latest Pixel news.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"correction\": \"Answering again, without saying I would.\"}\n\ndata: {\"t\": \"The Pixel 10 has a 50-megapixel main camera with strong low-light.\"}\n\ndata: [DONE]\n\n",
+  "stored": "The Pixel 10 has a 50-megapixel main camera with strong low-light.",
+  "streamed": "I'll perform a web search for the latest Pixel news."
+ },
  "completion_ran_report_failed": {
   "class": "append",
   "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Verified \\u2014 your blink reminder is now running. It'll fire every 5 minutes and land here in chat plus as a notification on your connected devices.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"create_timer\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"create_timer\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"[I ran create_timer but could not report the result \\u2014 ask again and I'll tell you what happened]\"}\n\ndata: [DONE]\n\n",
@@ -18,8 +27,32 @@
  },
  "consent_closing_markup": {
   "class": "replace",
-  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Correction: there is no approval step \\u2014 nothing is waiting on you and nothing has run. Tell me again and I'll do it.\"}\n\ndata: {\"correction\": \"[I tried to run device_run but had no tool round left \\u2014 ask again and I'll run it]\"}\n\ndata: [DONE]\n\n",
-  "stored": "Correction: there is no approval step — nothing is waiting on you and nothing has run. Tell me again and I'll do it.\n\n[I tried to run device_run but had no tool round left — ask again and I'll run it]",
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Correction: there is no approval step \\u2014 nothing is waiting on you. This turn, markup_probe ran.\"}\n\ndata: {\"correction\": \"[I tried to run device_run but had no tool round left \\u2014 ask again and I'll run it]\"}\n\ndata: [DONE]\n\n",
+  "stored": "Correction: there is no approval step — nothing is waiting on you. This turn, markup_probe ran.\n\n[I tried to run device_run but had no tool round left — ask again and I'll run it]",
+  "streamed": "That's still awaiting your approval — I can't run it until you OK it."
+ },
+ "consent_markup_and_unverified_listing": {
+  "class": "replace",
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\\n\\nHere's your workspace:\\n\\u251c\\u2500\\u2500 config.json \\u2014 12.4 KB\\n\\u251c\\u2500\\u2500 README.md \\u2014 2.1 KB\\n\\u251c\\u2500\\u2500 notes.md \\u2014 905 bytes\\n\\u2514\\u2500\\u2500 src/\\n    \\u2514\\u2500\\u2500 app.py \\u2014 3.4 KB\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"markup_probe\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Correction: there is no approval step \\u2014 nothing is waiting on you. This turn, markup_probe ran.\"}\n\ndata: {\"correction\": \"[I tried to run device_run but had no tool round left \\u2014 ask again and I'll run it]\"}\n\ndata: {\"correction\": \"[this listing is not backed by a recorded listing this turn \\u2014 treat it as unverified]\"}\n\ndata: [DONE]\n\n",
+  "stored": "Correction: there is no approval step — nothing is waiting on you. This turn, markup_probe ran.\n\n[I tried to run device_run but had no tool round left — ask again and I'll run it]\n\n[this listing is not backed by a recorded listing this turn — treat it as unverified]",
+  "streamed": "That's still awaiting your approval — I can't run it until you OK it.\n\nHere's your workspace:\n├── config.json — 12.4 KB\n├── README.md — 2.1 KB\n├── notes.md — 905 bytes\n└── src/\n    └── app.py — 3.4 KB"
+ },
+ "consent_redirect_no_call": {
+  "class": "redirect",
+  "dispatched": false,
+  "note": "Nothing was pending — answering again.",
+  "note_claims_work": false,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"correction\": \"Nothing was pending \\u2014 answering again.\"}\n\ndata: {\"t\": \"There is no approval step. I have not run anything yet.\"}\n\ndata: [DONE]\n\n",
+  "stored": "There is no approval step. I have not run anything yet.",
+  "streamed": "That's still awaiting your approval — I can't run it until you OK it."
+ },
+ "consent_redirect_ran": {
+  "class": "redirect",
+  "dispatched": true,
+  "note": "Nothing was pending — doing it now instead of waiting.",
+  "note_claims_work": true,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"That's still awaiting your approval \\u2014 I can't run it until you OK it.\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"auto_probe\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"auto_probe\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Nothing was pending \\u2014 doing it now instead of waiting.\"}\n\ndata: {\"t\": \"Done \\u2014 the desk light is on.\"}\n\ndata: [DONE]\n\n",
+  "stored": "Done — the desk light is on.",
   "streamed": "That's still awaiting your approval — I can't run it until you OK it."
  },
  "delegated_launch": {
@@ -32,6 +65,24 @@
   "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"device_launch_app\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"device_launch_app\", \"status\": \"error\", \"reason\": \"DELL-XPS-8950: no Start-menu app named 'notepad++' and no program by that name on PATH\"}}\n\ndata: {\"t\": \"I launched Notepad++ on your DELL-XPS-8950.\"}\n\ndata: {\"correction\": \"(device_launch_app failed: no Start-menu app named 'notepad++' and no program by that name on PATH.)\"}\n\ndata: [DONE]\n\n",
   "stored": "I launched Notepad++ on your DELL-XPS-8950.\n\n(device_launch_app failed: no Start-menu app named 'notepad++' and no program by that name on PATH.)"
  },
+ "listing_redirect_no_call": {
+  "class": "redirect",
+  "dispatched": false,
+  "note": "Answering again, without the listing from memory.",
+  "note_claims_work": false,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Here's your workspace:\\n\\u251c\\u2500\\u2500 config.json \\u2014 12.4 KB\\n\\u251c\\u2500\\u2500 README.md \\u2014 2.1 KB\\n\\u251c\\u2500\\u2500 notes.md \\u2014 905 bytes\\n\\u2514\\u2500\\u2500 src/\\n    \\u2514\\u2500\\u2500 app.py \\u2014 3.4 KB\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"correction\": \"Answering again, without the listing from memory.\"}\n\ndata: {\"t\": \"I have not listed the workspace this turn, so I will not show a listing.\"}\n\ndata: [DONE]\n\n",
+  "stored": "I have not listed the workspace this turn, so I will not show a listing.",
+  "streamed": "Here's your workspace:\n├── config.json — 12.4 KB\n├── README.md — 2.1 KB\n├── notes.md — 905 bytes\n└── src/\n    └── app.py — 3.4 KB"
+ },
+ "listing_redirect_ran": {
+  "class": "redirect",
+  "dispatched": true,
+  "note": "Listing the files now instead of presenting a listing from memory.",
+  "note_claims_work": true,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Here's your workspace:\\n\\u251c\\u2500\\u2500 config.json \\u2014 12.4 KB\\n\\u251c\\u2500\\u2500 README.md \\u2014 2.1 KB\\n\\u251c\\u2500\\u2500 notes.md \\u2014 905 bytes\\n\\u2514\\u2500\\u2500 src/\\n    \\u2514\\u2500\\u2500 app.py \\u2014 3.4 KB\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"workspace_list_files\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"workspace_list_files\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Listing the files now instead of presenting a listing from memory.\"}\n\ndata: {\"t\": \"Here's what is actually in the workspace:\\nconfig.json  2 bytes\\nREADME.md  5 bytes\\nnotes.md  1 bytes\\nsrc/app.py  4 bytes\"}\n\ndata: [DONE]\n\n",
+  "stored": "Here's what is actually in the workspace:\nconfig.json  2 bytes\nREADME.md  5 bytes\nnotes.md  1 bytes\nsrc/app.py  4 bytes",
+  "streamed": "Here's your workspace:\n├── config.json — 12.4 KB\n├── README.md — 2.1 KB\n├── notes.md — 905 bytes\n└── src/\n    └── app.py — 3.4 KB"
+ },
  "notepad_turn": {
   "class": "append",
   "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Notepad is now open on your DELL-XPS-8950. You can start typing or paste text into it. Let me know if you need help with anything else! \\ud83d\\udcdd\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"correction\": \"(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)\"}\n\ndata: [DONE]\n\n",
@@ -41,6 +92,24 @@
   "class": "append",
   "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Notepad is now open on your DELL-XPS-8950. Want me to search the web for its keyboard shortcuts?\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"device_launch_app\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"device_launch_app\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"[I ran device_launch_app but could not report the result \\u2014 ask again and I'll tell you what happened]\"}\n\ndata: [DONE]\n\n",
   "stored": "Notepad is now open on your DELL-XPS-8950. Want me to search the web for its keyboard shortcuts?\n\n[I ran device_launch_app but could not report the result — ask again and I'll tell you what happened]"
+ },
+ "offer_redirect_no_call": {
+  "class": "redirect",
+  "dispatched": false,
+  "note": "Answering again, without saying I would.",
+  "note_claims_work": false,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Want me to search the web for that?\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"correction\": \"Answering again, without saying I would.\"}\n\ndata: {\"t\": \"I have not searched the web this turn, so I have no results to give you.\"}\n\ndata: [DONE]\n\n",
+  "stored": "I have not searched the web this turn, so I have no results to give you.",
+  "streamed": "Want me to search the web for that?"
+ },
+ "offer_redirect_ran": {
+  "class": "redirect",
+  "dispatched": true,
+  "note": "Doing that now instead of just saying I would.",
+  "note_claims_work": true,
+  "raw": "data: {\"meta\": {\"conversation_id\": \"00000000-0000-0000-0000-000000000000\", \"model\": \"\", \"turn_id\": \"00000000-0000-0000-0000-000000000000\", \"agent\": null}}\n\ndata: {\"t\": \"Want me to search the web for that?\"}\n\ndata: {\"served_by\": \"ollama:qwen3:8b\"}\n\ndata: {\"activity\": {\"tool\": \"web_search\", \"status\": \"start\"}}\n\ndata: {\"activity\": {\"tool\": \"web_search\", \"status\": \"ok\"}}\n\ndata: {\"correction\": \"Doing that now instead of just saying I would.\"}\n\ndata: {\"t\": \"The Pixel 10 launched with a Tensor G5 and a 50-megapixel camera.\"}\n\ndata: [DONE]\n\n",
+  "stored": "The Pixel 10 launched with a Tensor G5 and a 50-megapixel camera.",
+  "streamed": "Want me to search the web for that?"
  },
  "teams_turn": {
   "class": "append",

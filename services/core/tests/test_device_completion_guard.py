@@ -85,6 +85,9 @@ from tests.test_guards import _every_correction
 
 NAMES = tools.tool_names()
 DEVICES = (DEVICE,)
+# A second machine of the household's (fix round 5, P4: a neutral name — the
+# repo is public).
+MAC = "TRAVEL-MACBOOK"
 
 
 def _span(name: str, *, ok: bool = True, **meta) -> SimpleNamespace:
@@ -307,13 +310,13 @@ def test_a_claim_naming_a_device_fires_with_nothing_run(reply, phrase):
         ),
         (
             "two-devices",
-            "Notepad is open on your TRAVEL-MACBOOK, and Teams is now open on your DELL-XPS-8950.",
+            f"Notepad is open on your {MAC}, and Teams is now open on your DELL-XPS-8950.",
             "Teams is now open on your DELL-XPS-8950",
         ),
     ],
 )
 def test_the_reviews_missed_shapes_are_claims(label, reply, phrase):
-    claim = check(reply, devices=(DEVICE, "TRAVEL-MACBOOK"))
+    claim = check(reply, devices=(DEVICE, MAC))
     assert claim is not None, label
     assert claim.phrase == phrase, label
 
@@ -407,9 +410,9 @@ NONE_ON_DELL = "(No device_launch_app or device_run call ran on DELL-XPS-8950 th
         ),
         (
             "a read on another device",
-            _span("device_info", args_redacted={"device": "TRAVEL-MACBOOK"}),
+            _span("device_info", args_redacted={"device": MAC}),
         ),
-        ("a launch on another device", _launch("notepad", "TRAVEL-MACBOOK")),
+        ("a launch on another device", _launch("notepad", MAC)),
     ],
 )
 def test_a_read_or_a_call_on_another_device_leaves_the_claim(label, span):
@@ -447,7 +450,7 @@ def test_any_call_that_succeeded_there_silences_the_claim_whatever_it_ran_for(la
     tools that open an app SUCCEEDED on that device, the turn says nothing —
     and "No … call ran" would be false."""
     for claim in ("I opened Notepad on your DELL-XPS-8950.", T98ECFB11):
-        assert check(claim, [span], devices=(DEVICE, "TRAVEL-MACBOOK")) is None, label
+        assert check(claim, [span], devices=(DEVICE, MAC)) is None, label
 
 
 @pytest.mark.parametrize("word", ["PC", "computer", "Mac", "MacBook", "laptop", "Windows PC"])
@@ -470,16 +473,63 @@ def test_a_word_for_a_machine_names_any_device(word):
     )
 
 
+def _read_as_production_reads(rows: dict) -> dict:
+    """name -> machine, read from each agent's FACTS the way production reads
+    the live rows (device_facts.machine): an agent inside WSL never yields a
+    machine, so no test can hand it one (fix round 5, P3)."""
+    from app import device_facts
+
+    return {name: device_facts.machine(facts) for name, facts in rows.items()}
+
+
+def _facts(uid: str, *, goos: str = "windows", wsl: bool = False) -> dict:
+    return {
+        "os": {"goos": "linux" if wsl else goos, "wsl": {"distro": "Ubuntu"} if wsl else None},
+        "machine_uid": uid,
+    }
+
+
+# The Dell's rows as they are: its Windows agent, its WSL agent (whose machine
+# id is WSL's own), and the Mac.
+DELLS_ROWS = {
+    DEVICE: _facts("d" * 64),
+    f"{DEVICE} (WSL)": _facts("e" * 64, wsl=True),
+    MAC: _facts("b" * 64, goos="darwin"),
+}
+
+
 def test_a_word_of_a_paired_name_takes_that_device():
     """ "your Dell" is DELL-XPS-8950 (or its WSL twin), not the MacBook — a
-    machine of its own by what each agent reported (fix round 4, R5)."""
-    devices = (DEVICE, f"{DEVICE} (WSL)", "TRAVEL-MACBOOK")
-    machines = {DEVICE: "d" * 64, f"{DEVICE} (WSL)": "e" * 64, MAC: "b" * 64}
+    machine of its own by what each agent reported (fix round 4, R5), read
+    from production-shaped rows (fix round 5, P3)."""
     reply = "Notepad is now open on your Dell."
-    assert check(reply, [_launch()], devices=devices) is None
-    mac = _launch("notepad", "TRAVEL-MACBOOK")
-    found = guards.device_completion_check(reply, [mac], NAMES, devices, machines=machines)
+    assert check(reply, [_launch()], devices=tuple(DELLS_ROWS)) is None
+    # The Dell and the Mac alone: each a machine of its own, readable, so a
+    # launch on the Mac is not one on the Dell.
+    rows = {DEVICE: DELLS_ROWS[DEVICE], MAC: DELLS_ROWS[MAC]}
+    machines = _read_as_production_reads(rows)
+    mac = _launch("notepad", MAC)
+    found = guards.device_completion_check(reply, [mac], NAMES, tuple(rows), machines=machines)
     assert found is not None
+    assert found.text == NONE_ON_DELL
+
+
+def test_with_the_dells_real_rows_a_launch_on_the_mac_leaves_your_dell_silent():
+    """(Fix round 5, P3) The missing test. With the Dell's real rows "your Dell"
+    names both of the Dell's agents, and the WSL agent's machine cannot be read
+    — its machine id is WSL's own — so whether the Mac's launch was on the
+    machine she meant cannot be told from what the agents reported. R5: then
+    the claim is silent."""
+    machines = _read_as_production_reads(DELLS_ROWS)
+    assert machines[f"{DEVICE} (WSL)"] is None  # never an id, whatever it reported
+    found = guards.device_completion_check(
+        "Notepad is now open on your Dell.",
+        [_launch("notepad", MAC)],
+        NAMES,
+        tuple(DELLS_ROWS),
+        machines=machines,
+    )
+    assert found is None
 
 
 def test_a_failed_launch_is_the_claims_failure_with_its_reason():
@@ -676,7 +726,7 @@ def test_never_a_claim(reply):
     ],
 )
 def test_recaps_other_actors_startup_and_relative_clauses_are_silent(label, reply):
-    assert check(reply, devices=(DEVICE, "TRAVEL-MACBOOK")) is None, label
+    assert check(reply, devices=(DEVICE, MAC)) is None, label
 
 
 def test_a_long_object_still_reaches_its_device():
@@ -720,7 +770,9 @@ def _every_note() -> list[tuple[str, str]]:
     return sorted(
         (name, value)
         for name in dir(chat)
-        if name.endswith("NOTE") and isinstance(value := getattr(chat, name), str)
+        # "NOTE" anywhere in the name: the redirects' no-call notes
+        # (`*_NOTE_NO_CALL`, fix round 5, P6) are shipped text too.
+        if "NOTE" in name and isinstance(value := getattr(chat, name), str)
     )
 
 
@@ -749,7 +801,6 @@ def test_clean_over_every_correction_and_note(name, text):
 # on that device silences the claim whatever it ran for, and a machine word
 # names any device. What is left is the claim with no such call there.
 
-MAC = "TRAVEL-MACBOOK"
 TWO = {DEVICE: "windows", MAC: "darwin"}
 
 
@@ -1836,3 +1887,55 @@ def test_R5_the_machine_an_agent_runs_on_is_read_from_its_own_facts():
     assert device_facts.machine({"os": {"goos": "linux", "wsl": None}}) is None
     assert device_facts.machine({"machine_uid": ""}) is None
     assert device_facts.machine(None) is None
+
+
+# -- fix round 5 (2026-09-30, the controller's rulings P1-P4) ---------------------
+
+# P1 — a delegation that MAY have run. The child-turn marker is filed only after
+# the executor reads the child's turn back (agents.delegate), so a delegation
+# that raised after its child ran carries none, and a scripted delegate step
+# (chat._run_script_step) copies no facts at all. Only a call refused before
+# any run is known to have run nothing: a `refused_*` span, or one whose facts
+# carry status "refused". The re-review's shapes (scratchpad rr5/probe_fresh.py,
+# R1a and R1b):
+RAISED_AFTER_ITS_CHILD_RAN = _span(
+    "delegate_to_agent",
+    ok=False,
+    args_redacted={"agent": "ops", "task": "open notepad"},
+    error="Error: delegate_to_agent failed unexpectedly — ConnectionDoesNotExistError: "
+    "connection was closed in the middle of operation",
+)
+A_SCRIPTED_DELEGATE_STEP = _span(
+    "delegate_to_agent",
+    ok=False,
+    via_skill=True,
+    step=0,
+    args_redacted={"agent": "ops", "task": "open notepad"},
+    error="Error: agent ops did not finish — its turn closed with status error · ops: 2 rounds",
+)
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
+        ("raised after its child ran", RAISED_AFTER_ITS_CHILD_RAN),
+        ("a scripted delegate step", A_SCRIPTED_DELEGATE_STEP),
+    ],
+)
+def test_P1_a_delegation_that_may_have_run_silences_the_turn(label, span):
+    rows = {DEVICE: "d" * 64, f"{DEVICE} (WSL)": None, MAC: "b" * 64}
+    for reply in RELAYED:
+        found = guards.device_completion_check(reply, [span], NAMES, tuple(rows), machines=rows)
+        assert found is None, (label, reply)
+
+
+def test_P1_only_a_delegation_refused_before_any_run_leaves_the_sentence():
+    refused = _span(
+        "delegate_to_agent",
+        ok=False,
+        args_redacted={"agent": "opz", "task": "open notepad"},
+        error="Error: no agent named 'opz'",
+        facts=[{"agent": "opz", "status": "refused", "reason": "no agent named 'opz'"}],
+    )
+    claim = check(T98ECFB11, [refused])
+    assert claim is not None and claim.text == NONE_ON_DELL

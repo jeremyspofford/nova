@@ -6279,14 +6279,21 @@ _PLACE_GROUPS = ("name", "word", "bare")
 
 
 def _a_delegation_ran(spans: Sequence[Any]) -> bool:
-    """Whether a delegate_to_agent call RAN an agent this turn (fix round 4,
-    R1): it succeeded, or it failed after its child turn ran
-    (`_child_turns_ran`: the facts entry carries the child's turn id). The
-    agent's calls are recorded on ITS turn, not this one, so this turn's record
-    cannot say what was done — "(No device_launch_app … call ran …)" beside
-    the launch an agent made for her is false. A delegation refused before any
-    run (an unknown agent, a call written as markup) ran nothing anywhere, and
-    leaves the record whole. The child's spans are not read here."""
+    """Whether a delegate_to_agent call may have RUN an agent this turn (fix
+    rounds 4 and 5, R1 and P1). The agent's calls are recorded on ITS turn,
+    not this one, so this turn's record cannot say what was done — "(No
+    device_launch_app … call ran …)" beside the launch an agent made for her
+    is false.
+
+    Only a call REFUSED before any run is known to have run nothing: one never
+    dispatched (`refused_*`: markup, a closed round), or one whose facts carry
+    the entry every refusal-before-run files (agents.delegation_refused:
+    status "refused"). Any other delegate call may have run one, even one with
+    no child-turn marker: the executor files that marker only after reading
+    the child's turn back, so a delegation that raised after its child ran
+    carries none (fix round 5, P1), and a scripted delegate step
+    (`chat._run_script_step`) copies no facts at all. The child's spans are not
+    read here."""
     for span in spans:
         if getattr(span, "kind", None) != "tool":
             continue
@@ -6297,8 +6304,11 @@ def _a_delegation_ran(spans: Sequence[Any]) -> bool:
             continue
         if meta.get("ok") is True:
             return True
-        ran, unnamed = _child_turns_ran(meta)
-        if ran or unnamed:
+        facts = meta.get("facts")
+        refused = isinstance(facts, list) and any(
+            isinstance(fact, dict) and fact.get("status") == "refused" for fact in facts
+        )
+        if not refused:
             return True
     return False
 

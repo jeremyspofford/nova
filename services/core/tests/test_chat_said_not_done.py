@@ -713,7 +713,8 @@ async def test_a_device_claim_no_longer_holds_off_the_commitment_redirect(
 
     assert gateway.calls == 2
     assert await _stored(pool) == f"{regen}\n\n{NONE_ON_DELL}"
-    assert _corrections(sent) == [chat.DEFERRAL_NOTE, NONE_ON_DELL]
+    # The text-only redirect ran nothing (fix round 5, P6).
+    assert _corrections(sent) == [chat.DEFERRAL_NOTE_NO_CALL, NONE_ON_DELL]
     (completion,) = await _named(pool, "device_completion")
     assert _meta(completion)["phrase"] == "Notepad is now open on your DELL-XPS-8950"
     await chat.drain_background()
@@ -1626,17 +1627,17 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 _NO_ID = "00000000-0000-0000-0000-000000000000"
 
 
-async def _teams_turn(pool, mount_peers, monkeypatch):
+async def _teams_turn(pool, mount_peers, monkeypatch, tmp_path):
     await _pair(pool)
     return "append", None, T890B1C63_ASKED, ((text(T890B1C63),),)
 
 
-async def _notepad_turn(pool, mount_peers, monkeypatch):
+async def _notepad_turn(pool, mount_peers, monkeypatch, tmp_path):
     await _pair(pool)
     return "append", None, T98ECFB11_ASKED, ((text(T98ECFB11),),)
 
 
-async def _failed_launch(pool, mount_peers, monkeypatch):
+async def _failed_launch(pool, mount_peers, monkeypatch, tmp_path):
     await _pair(pool)
     _arm_failing(monkeypatch, "device_launch_app", f"{DEVICE}: {FAILED_REASON}")
     rounds = (
@@ -1646,7 +1647,7 @@ async def _failed_launch(pool, mount_peers, monkeypatch):
     return "append", None, "open notepad++ on my dell", rounds
 
 
-async def _delegated_launch(pool, mount_peers, monkeypatch):
+async def _delegated_launch(pool, mount_peers, monkeypatch, tmp_path):
     from tests.test_chat_agents import _create
 
     await _pair(pool)
@@ -1661,7 +1662,7 @@ async def _delegated_launch(pool, mount_peers, monkeypatch):
     return "append", None, "have ops open notepad on my dell", rounds
 
 
-async def _offer_ran_report_failed(pool, mount_peers, monkeypatch):
+async def _offer_ran_report_failed(pool, mount_peers, monkeypatch, tmp_path):
     await _pair(pool)
     _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
     rounds = (
@@ -1673,7 +1674,7 @@ async def _offer_ran_report_failed(pool, mount_peers, monkeypatch):
     return "append", None, ask, rounds
 
 
-async def _completion_ran_report_failed(pool, mount_peers, monkeypatch):
+async def _completion_ran_report_failed(pool, mount_peers, monkeypatch, tmp_path):
     from tests.test_chat_deferral import COMPLETION, REMINDER_INSTRUCTION, _arm_create_timer
 
     _arm_create_timer(monkeypatch)
@@ -1685,7 +1686,7 @@ async def _completion_ran_report_failed(pool, mount_peers, monkeypatch):
     return "append", None, REMINDER_INSTRUCTION, rounds
 
 
-async def _bare_intent_ran_report_failed(pool, mount_peers, monkeypatch):
+async def _bare_intent_ran_report_failed(pool, mount_peers, monkeypatch, tmp_path):
     await _pair(pool)
     _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
     rounds = (
@@ -1696,7 +1697,7 @@ async def _bare_intent_ran_report_failed(pool, mount_peers, monkeypatch):
     return "replace", BARE_CHECK, "what OS is my dell on?", rounds
 
 
-async def _bare_intent_closing_markup(pool, mount_peers, monkeypatch):
+async def _bare_intent_closing_markup(pool, mount_peers, monkeypatch, tmp_path):
     from tests.test_chat_bare_intent import (
         BARE_INTENT,
         BARE_INTENT_MARKUP,
@@ -1709,7 +1710,7 @@ async def _bare_intent_closing_markup(pool, mount_peers, monkeypatch):
     return "replace", BARE_INTENT, "show me my workspace directory structure", rounds
 
 
-async def _consent_closing_markup(pool, mount_peers, monkeypatch):
+async def _consent_closing_markup(pool, mount_peers, monkeypatch, tmp_path):
     from tests.test_chat_markup import FABRICATION, PROBE, _arm_probe, real_call
     from tests.test_markup_calls import OBSERVED
 
@@ -1722,7 +1723,58 @@ async def _consent_closing_markup(pool, mount_peers, monkeypatch):
     return "replace", FABRICATION, "try again", rounds
 
 
+async def _consent_markup_and_unverified_listing(pool, mount_peers, monkeypatch, tmp_path):
+    """(Fix round 5, P2 — the re-review's rr5 A.) Two backend lines stored after
+    the consent correction: the redirect's markup note, then the unverified-
+    listing note. They are shown in that order."""
+    from tests.test_chat_markup import FABRICATION, PROBE, _arm_probe, real_call
+    from tests.test_chat_presented_listing import FABRICATED
+    from tests.test_markup_calls import OBSERVED
+
+    await _arm_probe(pool, monkeypatch)
+    reply = f"{FABRICATION}\n\n{FABRICATED}"
+    rounds = (
+        (text(reply),),
+        (real_call("r1", PROBE, {"device": DEVICE, "argv": ["tree"]}),),
+        (text(OBSERVED),),
+    )
+    return "replace", reply, "try again", rounds
+
+
+# (Fix round 5, P6.) A REPLACE-class redirect that STOOD: its note is live-only
+# (the stored text is the regeneration alone), so it is the one line of the
+# live view a reload never shows — and it must never claim work the
+# regeneration did not do. Class "redirect": live is her streamed prose, the
+# note, then the stored reply; `dispatched` is whether a call ran.
+def _p6_turn(kind: str, dispatched: bool):
+    async def build(pool, mount_peers, monkeypatch, tmp_path):
+        kwargs = {"tmp_path": tmp_path} if kind == "listing" else {}
+        reply, ask, rounds, _answer, _notes = await P6_KINDS[kind](
+            pool, monkeypatch, dispatched=dispatched, **kwargs
+        )
+        return "redirect", reply, ask, rounds
+
+    return build
+
+
+async def _commitment_redirect_stood(pool, mount_peers, monkeypatch, tmp_path):
+    """The text-only commitment redirect: it advertises no tools, so it can
+    never have done what was promised."""
+    from tests.test_chat_deferral import DEFER
+
+    corrected = "The Pixel 10 has a 50-megapixel main camera with strong low-light."
+    return "redirect", DEFER, "what's the latest pixel news?", ((text(DEFER),), (text(corrected),))
+
+
 LIVE_STORED_TURNS = {
+    "commitment_redirect_stood": _commitment_redirect_stood,
+    "consent_markup_and_unverified_listing": _consent_markup_and_unverified_listing,
+    "consent_redirect_ran": _p6_turn("consent", True),
+    "consent_redirect_no_call": _p6_turn("consent", False),
+    "listing_redirect_ran": _p6_turn("listing", True),
+    "listing_redirect_no_call": _p6_turn("listing", False),
+    "offer_redirect_ran": _p6_turn("offer", True),
+    "offer_redirect_no_call": _p6_turn("offer", False),
     "consent_closing_markup": _consent_closing_markup,
     "teams_turn": _teams_turn,
     "notepad_turn": _notepad_turn,
@@ -1741,7 +1793,9 @@ async def test_R6_what_core_streams_for_a_turn_is_what_it_stores(
     name, owner_client, pool, mount_peers, monkeypatch, tmp_path
 ):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
-    kind, streamed, ask, rounds = await LIVE_STORED_TURNS[name](pool, mount_peers, monkeypatch)
+    kind, streamed, ask, rounds = await LIVE_STORED_TURNS[name](
+        pool, mount_peers, monkeypatch, tmp_path
+    )
     mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
 
     resp = await owner_client.post("/api/v1/chat/stream", json={"message": ask})
@@ -1750,16 +1804,32 @@ async def test_R6_what_core_streams_for_a_turn_is_what_it_stores(
     raw = _UUID.sub(_NO_ID, resp.text)
     stored = await _reply_of(pool, "chat")
 
-    # Core's own half: what it streams as corrections is how the stored reply
-    # ends, in order — never a line it does not keep.
-    corrections = _corrections(frames(raw))
-    assert stored.endswith("\n\n".join(corrections)), (corrections, stored)
-    if kind == "replace":
-        assert stored == "\n\n".join(corrections)
-
     entry = {"class": kind, "raw": raw, "stored": stored}
     if streamed is not None:
         entry["streamed"] = streamed
+    corrections = _corrections(frames(raw))
+    if kind == "redirect":
+        # Live vs truth (fix round 5, P6): the note shown ahead of a
+        # regeneration that stood claims work only when a call was dispatched.
+        note, *after = corrections
+        dispatched = bool(await pool.fetch("SELECT 1 FROM turn_spans WHERE kind = 'tool'"))
+        claims_work = note in (
+            chat.DEFERRAL_NOTE,
+            chat.CONSENT_REDIRECT_NOTE,
+            chat.PRESENTED_LISTING_REDIRECT_NOTE,
+            chat.STATE_REDIRECT_NOTE,
+            chat.MACHINE_REDIRECT_NOTE,
+        )
+        assert claims_work is dispatched, (note, dispatched)
+        assert note not in stored  # live-only
+        assert stored.endswith("\n\n".join(after)) if after else True
+        entry.update(note=note, dispatched=dispatched, note_claims_work=claims_work)
+    else:
+        # Core's own half: what it streams as corrections is how the stored
+        # reply ends, in order — never a line it does not keep.
+        assert stored.endswith("\n\n".join(corrections)), (corrections, stored)
+        if kind == "replace":
+            assert stored == "\n\n".join(corrections)
     fixture = json.loads(LIVE_STORED.read_text()) if LIVE_STORED.exists() else {}
     if os.environ.get("NOVA_WRITE_LIVE_STORED") == "1":
         fixture[name] = entry
@@ -1775,3 +1845,373 @@ async def test_R6_what_core_streams_for_a_turn_is_what_it_stores(
 def test_R6_the_fixture_holds_exactly_these_turns():
     """No stale turn is left in the file the web suite reads."""
     assert sorted(json.loads(LIVE_STORED.read_text())) == sorted(LIVE_STORED_TURNS)
+
+
+# -- fix round 5 (2026-09-30, the controller's rulings P1, P2, P5, P6) -----------
+
+# P1 — a delegation that MAY have run. The re-review's repro (scratchpad
+# rr5/test_rr5_chat.py, B): ops really launches Notepad, then the executor
+# raises reading the child's turn back — before it files the child-turn marker
+# — so round 4's check saw no run and her true relay got "(No
+# device_launch_app … call ran …)". A scripted delegate step copies no facts at
+# all. Only a delegation refused before any run leaves the pair armed.
+
+
+async def _delegation_that_raises_after_its_child_ran(pool, mount_peers, monkeypatch, tmp_path):
+    from app import agents
+    from tests.test_chat_agents import _create
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    await _create(pool, mount_peers, name="ops", tools=("device_launch_app",))
+
+    def the_read_back_fails(*_args, **_kwargs):
+        raise RuntimeError("the read-back failed")
+
+    monkeypatch.setattr(agents, "run_facts", the_read_back_fails)
+    return launcher
+
+
+@requires_db
+async def test_P1_a_delegation_that_raised_after_its_child_launched_leaves_no_sentence(
+    owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    launcher = await _delegation_that_raises_after_its_child_ran(
+        pool, mount_peers, monkeypatch, tmp_path
+    )
+    relay = T98ECFB11
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                call(
+                    "delegate_to_agent", {"agent": "ops", "task": f"open notepad on {DEVICE}"}, "n1"
+                ),
+            ),
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad"}, "c1"),),
+            (text(f"I launched Notepad on {DEVICE}; Windows accepted it."),),
+            (text(relay),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "have ops open notepad on my dell")
+
+    assert launcher.calls == [{"device": DEVICE, "app": "notepad"}]  # the child ran it
+    delegate = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE name = 'delegate_to_agent' AND kind = 'tool'"
+    )
+    meta = _meta(delegate)
+    assert meta["ok"] is False and not meta.get("facts")  # no child-turn marker
+    assert await _reply_of(pool, "chat") == relay
+    assert _corrections(sent) == []
+    assert await _guard_spans_of(pool, "chat") == []
+
+
+@requires_db
+async def test_P1_a_scripted_delegate_step_that_may_have_run_leaves_no_sentence(
+    owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    """The scripted step's span carries no facts (chat._run_script_step copies
+    none), so it could never show a child-turn marker: a delegation made by a
+    script that did not report back may have launched all the same."""
+    from app import skills
+    from tests.test_chat_skills import _skill
+    from tests.test_chat_tools import whole_call
+
+    launcher = await _delegation_that_raises_after_its_child_ran(
+        pool, mount_peers, monkeypatch, tmp_path
+    )
+    await _skill(pool, tmp_path / "ws", "notepad-via-ops")
+    await skills.set_script(
+        pool,
+        "notepad-via-ops",
+        {
+            "version": 1,
+            "steps": [
+                {
+                    "tool": "delegate_to_agent",
+                    "args": {"agent": "ops", "task": f"open notepad on {DEVICE}"},
+                }
+            ],
+        },
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("s1", "run_skill", {"name": "notepad-via-ops", "inputs": {}}),),
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad"}, "c1"),),
+            (text(f"I launched Notepad on {DEVICE}; Windows accepted it."),),
+            (text(T98ECFB11),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "run the notepad skill")
+
+    assert launcher.calls == [{"device": DEVICE, "app": "notepad"}]
+    step = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE name = 'delegate_to_agent' AND kind = 'tool'"
+    )
+    assert _meta(step).get("via_skill") is True and not _meta(step).get("facts")
+    assert await _reply_of(pool, "chat") == T98ECFB11
+    assert _corrections(sent) == []
+
+
+# P2 — the live order is the stored order (rr5 A). The consent redirect's probe
+# ran and its closing round wrote a call as markup (a note stored), and the
+# reply also presented a listing with a tool run (the unverified note). The
+# markup note was streamed after the unverified note and stored before it.
+
+
+@requires_db
+async def test_P2_the_backend_lines_are_shown_in_the_order_they_are_stored(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    from tests.test_chat_markup import FABRICATION, PROBE, _arm_probe, real_call
+    from tests.test_chat_presented_listing import FABRICATED
+    from tests.test_markup_calls import OBSERVED
+
+    spy = await _arm_probe(pool, monkeypatch)
+    reply = f"{FABRICATION}\n\n{FABRICATED}"
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(reply),),
+            (real_call("r1", PROBE, {"device": DEVICE, "argv": ["tree"]}),),
+            (text(OBSERVED),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "try again")
+
+    assert spy.calls == [{"device": DEVICE, "argv": ["tree"]}]
+    stored = await _reply_of(pool, "chat")
+    corrections = _corrections(sent)
+    assert corrections[-1] == chat.PRESENTED_LISTING_UNVERIFIED_NOTE
+    assert stored == "\n\n".join(corrections)
+    assert _texts(sent) == [reply]
+
+
+# P5 — the consent correction says "nothing has run" only when nothing did.
+
+
+def test_P5_the_consent_correction_is_derived_from_what_ran():
+    none = chat._consent_correction([])
+    assert none == guards.CONSENT_CLAIM_CORRECTION and "nothing has run" in none
+    refused = _span("device_run", ok=False, refused_markup=True)
+    assert chat._consent_correction([refused]) == guards.CONSENT_CLAIM_CORRECTION
+    ran = chat._consent_correction([_span("device_info"), _span("device_run", ok=False)])
+    assert ran == (
+        "Correction: there is no approval step — nothing is waiting on you. "
+        "This turn, device_info ran and device_run failed."
+    )
+    for said in (ran, chat._consent_correction([_span("markup_probe")])):
+        assert "nothing has run" not in said
+        assert "again" not in said.lower()
+
+
+def test_P5_every_consent_correction_is_clean_under_the_whole_guard_family():
+    for said in (
+        chat._consent_correction([_span("markup_probe")]),
+        chat._consent_correction([_span("device_info"), _span("device_run", ok=False)]),
+    ):
+        assert guards.consent_claim_check(said) is None, said
+        assert guards.narration_check(said, []) is None, said
+        assert guards.capability_claim_check(said, NAMES) is None, said
+        assert guards.state_claim_check(said, [], [DEVICE], purpose="chat") is None, said
+        assert guards.deferral_check(said, [], NAMES, user_message="try again") is None, said
+        assert guards.bare_intent_check(said, []) is None, said
+        assert guards.written_call_check(said, [], NAMES) is None, said
+        assert guards.device_completion_check(said, [], NAMES, [DEVICE]) is None, said
+
+
+@requires_db
+@pytest.mark.parametrize("how", ["the probe ran", "the probe failed", "nothing ran"])
+async def test_P5_the_consent_redirect_states_what_its_own_round_ran(
+    how, owner_client, pool, mount_peers, monkeypatch
+):
+    from tests.test_chat_pending_claim import AUTO_ACTION, FABRICATION, URL, auto_call
+
+    attempts: list = []
+
+    async def probe(args: dict, ctx: ToolContext) -> str:
+        attempts.append(args)
+        if how == "the probe failed":
+            raise ToolFailure("the light did not answer")
+        return "Ran it: the desk light is on."
+
+    from tests.test_chat_pending_claim import FETCH_SCHEMA
+
+    monkeypatch.setitem(tools.REGISTRY, AUTO_ACTION, Tool(AUTO_ACTION, "d", FETCH_SCHEMA, probe))
+    down = Refusal(502, {"error": {"message": "upstream down"}})
+    if how == "nothing ran":
+        rounds = ((text(FABRICATION),), down)
+    else:
+        rounds = ((text(FABRICATION),), (auto_call("r1", URL),), down)
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, "turn on the desk light")
+
+    stored = await _stored(pool)
+    expected = {
+        "the probe ran": (
+            "Correction: there is no approval step — nothing is waiting on you. "
+            f"This turn, {AUTO_ACTION} ran."
+        ),
+        "the probe failed": (
+            "Correction: there is no approval step — nothing is waiting on you. "
+            f"This turn, {AUTO_ACTION} failed."
+        ),
+        "nothing ran": guards.CONSENT_CLAIM_CORRECTION,
+    }[how]
+    assert stored == expected
+    assert _corrections(sent) == [expected]
+    assert len(attempts) == (0 if how == "nothing ran" else 1)
+
+
+# P6 — a live note never claims work the regeneration did not do. "Doing that
+# now…", "Nothing was pending — doing it now…" and "Listing the files now…" were
+# shown beside regenerations that dispatched nothing (none of them is stored,
+# so a reload hid it). Each is shown only beside a dispatched call; otherwise
+# the kind's own no-call note.
+
+
+def test_P6_every_redirect_names_its_no_call_note():
+    """No default: a claim kind added tomorrow cannot fall back to "doing it
+    now" beside a regeneration that did nothing."""
+    parameter = inspect.signature(chat._claim_redirect).parameters["redirect_note_no_call"]
+    assert parameter.default is inspect.Parameter.empty
+    source = inspect.getsource(chat._run_turn)
+    assert source.count("_claim_redirect(") == source.count("redirect_note_no_call=")
+
+
+def test_P6_the_no_call_notes_claim_no_work_and_trip_no_guard():
+    for note in (
+        chat.DEFERRAL_NOTE_NO_CALL,
+        chat.DEFERRAL_COMPLETION_NOTE_NO_CALL,
+        chat.CONSENT_REDIRECT_NOTE_NO_CALL,
+        chat.PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL,
+    ):
+        assert " now" not in note, note
+        assert guards.consent_claim_check(note) is None, note
+        assert guards.narration_check(note, []) is None, note
+        assert guards.capability_claim_check(note, NAMES) is None, note
+        assert guards.deferral_check(note, [], NAMES, user_message="try again") is None, note
+        assert guards.bare_intent_check(note, []) is None, note
+        assert guards.presented_listing_check(note, [], []) is None, note
+        assert guards.state_claim_check(note, [], [DEVICE], purpose="chat") is None, note
+
+
+async def _p6_offer(pool, monkeypatch, *, dispatched: bool):
+    from tests.test_chat_deferral import INSTRUCTION, OFFER, _arm_web_search, _search_call
+
+    _arm_web_search(monkeypatch)
+    if dispatched:
+        answer = "The Pixel 10 launched with a Tensor G5 and a 50-megapixel camera."
+        rounds = ((text(OFFER),), (_search_call("r1"),), (text(answer),))
+    else:
+        answer = "I have not searched the web this turn, so I have no results to give you."
+        rounds = ((text(OFFER),), (text(answer),))
+    return OFFER, INSTRUCTION, rounds, answer, (chat.DEFERRAL_NOTE, chat.DEFERRAL_NOTE_NO_CALL)
+
+
+async def _p6_consent(pool, monkeypatch, *, dispatched: bool):
+    from tests.test_chat_pending_claim import FABRICATION, URL, _arm_auto_tool, auto_call
+
+    await _arm_auto_tool(pool, monkeypatch)
+    if dispatched:
+        answer = "Done — the desk light is on."
+        rounds = ((text(FABRICATION),), (auto_call("r1", URL),), (text(answer),))
+    else:
+        answer = "There is no approval step. I have not run anything yet."
+        rounds = ((text(FABRICATION),), (text(answer),))
+    notes = (chat.CONSENT_REDIRECT_NOTE, chat.CONSENT_REDIRECT_NOTE_NO_CALL)
+    return FABRICATION, "turn on the desk light", rounds, answer, notes
+
+
+async def _p6_listing(pool, monkeypatch, *, dispatched: bool, tmp_path=None):
+    from tests.test_chat_presented_listing import ASK, FABRICATED, HONEST, REAL_FILES, tool_call
+
+    root = tmp_path / "workspace"
+    for rel, body in REAL_FILES.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(root))
+    if dispatched:
+        answer = HONEST
+        rounds = (
+            (text(FABRICATED),),
+            (tool_call("r1", "workspace_list_files", {}),),
+            (text(answer),),
+        )
+    else:
+        answer = "I have not listed the workspace this turn, so I will not show a listing."
+        rounds = ((text(FABRICATED),), (text(answer),))
+    notes = (chat.PRESENTED_LISTING_REDIRECT_NOTE, chat.PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL)
+    return FABRICATED, ASK, rounds, answer, notes
+
+
+P6_KINDS = {"offer": _p6_offer, "consent": _p6_consent, "listing": _p6_listing}
+
+
+@requires_db
+@pytest.mark.parametrize("dispatched", [True, False], ids=["a call", "no call"])
+@pytest.mark.parametrize("kind", sorted(P6_KINDS))
+async def test_P6_a_redirect_note_claims_work_only_beside_a_dispatched_call(
+    kind, dispatched, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    build = P6_KINDS[kind]
+    kwargs = {"tmp_path": tmp_path} if kind == "listing" else {}
+    reply, ask, rounds, answer, (doing, no_call) = await build(
+        pool, monkeypatch, dispatched=dispatched, **kwargs
+    )
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, ask)
+
+    ran = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'tool' ORDER BY started_at")
+    assert bool(ran) is dispatched
+    assert await _stored(pool) == answer  # the regeneration stood
+    assert _corrections(sent) == [doing if dispatched else no_call]
+    assert _texts(sent) == [reply, answer]
+
+
+@requires_db
+async def test_P6_a_completion_regeneration_that_ran_nothing_says_so(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    from tests.test_chat_deferral import COMPLETION, REMINDER_INSTRUCTION, _arm_create_timer
+
+    spy = _arm_create_timer(monkeypatch)
+    answer = "I have not set that reminder yet — no timer exists for it."
+    mount_peers(
+        gateway=ScriptedGateway(rounds=((text(COMPLETION),), (text(answer),))),
+        memory=FakeMemory(),
+    )
+
+    sent = await _say(owner_client, REMINDER_INSTRUCTION)
+
+    assert spy.calls == []
+    assert await _stored(pool) == answer
+    assert _corrections(sent) == [chat.DEFERRAL_COMPLETION_NOTE_NO_CALL]
+
+
+@requires_db
+async def test_P6_a_bare_intent_regeneration_that_ran_nothing_says_so(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    await _pair(pool)
+    info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+    answer = f"I have not checked your {DEVICE} this turn."
+    mount_peers(
+        gateway=ScriptedGateway(rounds=((text(BARE_CHECK),), (text(answer),))),
+        memory=FakeMemory(),
+    )
+
+    sent = await _say(owner_client, "what OS is my dell on?")
+
+    assert info.calls == []
+    assert await _stored(pool) == answer
+    assert _corrections(sent) == [chat.DEFERRAL_NOTE_NO_CALL]

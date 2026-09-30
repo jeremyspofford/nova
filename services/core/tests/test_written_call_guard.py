@@ -510,7 +510,9 @@ def _every_note() -> list[tuple[str, str]]:
     return sorted(
         (name, value)
         for name in dir(chat)
-        if name.endswith("NOTE") and isinstance(value := getattr(chat, name), str)
+        # "NOTE" anywhere in the name: the redirects' no-call notes
+        # (`*_NOTE_NO_CALL`, fix round 5, P6) are shipped text too.
+        if "NOTE" in name and isinstance(value := getattr(chat, name), str)
     )
 
 
@@ -738,3 +740,41 @@ def test_R1_a_delegation_that_ran_no_agent_leaves_the_record_readable(label, spa
     claim = check(f"Launching Notepad via ops:\n{LAUNCH_FENCE}", [span])
     assert claim is not None, label
     assert claim.text == "(I wrote device_launch_app as text; it did not run.)", label
+
+
+# -- fix round 5 (2026-09-30, P1): a delegation that MAY have run ----------------
+#
+# The child-turn marker is filed only after the executor reads the child's turn
+# back, so a delegation that raised after its child ran carries none, and a
+# scripted delegate step copies no facts. Either may have made the call she
+# shows (scratchpad rr5/probe_fresh.py, R1c).
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
+        (
+            "raised after its child ran",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                args_redacted={"agent": "ops", "task": "open notepad"},
+                error="Error: delegate_to_agent failed unexpectedly — X: y",
+            ),
+        ),
+        (
+            "a scripted delegate step",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                via_skill=True,
+                step=0,
+                args_redacted={"agent": "ops", "task": "open notepad"},
+                error="Error: agent ops did not finish — its turn closed with status error",
+            ),
+        ),
+    ],
+)
+def test_P1_a_delegation_that_may_have_run_silences_the_turn(label, span):
+    for reply in RELAYS:
+        assert check(reply, [span]) is None, (label, reply)

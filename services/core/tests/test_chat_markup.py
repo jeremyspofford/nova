@@ -274,7 +274,14 @@ async def test_the_redirects_closing_round_refuses_markup_and_persists_the_note(
 
     stored = await _stored(pool)
     _no_markup(stored)
-    assert guards.CONSENT_CLAIM_CORRECTION in stored
+    # The probe RAN: the correction states that, never "nothing has run" beside
+    # it (said-not-done fix round 5, P5 — this pinned the false sentence).
+    assert guards.CONSENT_CLAIM_CORRECTION not in stored
+    assert "nothing has run" not in stored
+    assert stored.startswith(
+        "Correction: there is no approval step — nothing is waiting on you. "
+        f"This turn, {PROBE} ran."
+    )
     assert markup_calls.no_tool_round_note(["device_run"]) in stored
 
 
