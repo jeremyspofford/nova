@@ -188,6 +188,29 @@ describe('ProvidersSection', () => {
     await waitFor(() => expect(screen.queryByTestId('provider-form')).toBeNull())
   })
 
+  it('offers "Add a provider" only once the presets have loaded, so the first preset is what opens', async () => {
+    // CI run 36719466510 (2026-09-30) opened the form as Custom with an empty
+    // Base URL: the button rendered before load() resolved, and its click read
+    // an empty preset list. A presets answer held back makes that race certain.
+    let release: (value: ProviderPreset[]) => void = () => {}
+    const slowPresets = vi.fn(
+      () =>
+        new Promise<ProviderPreset[]>(resolve => {
+          release = resolve
+        }),
+    )
+    renderSection({ getProviders: vi.fn(async () => [HUB]), getProviderPresets: slowPresets })
+    await waitFor(() => expect(slowPresets).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /add a provider/i })).toBeNull()
+    release(PRESETS)
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    expect((within(form).getByLabelText('Base URL') as HTMLInputElement).value).toBe(
+      'https://openrouter.ai/api/v1',
+    )
+  })
+
   it('a refused verify shows the provider\'s reason and keeps the form open', async () => {
     const { api } = renderSection({
       getProviders: vi.fn(async () => [HUB]),

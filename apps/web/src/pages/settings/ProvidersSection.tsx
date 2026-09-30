@@ -338,7 +338,12 @@ export function ProvidersSection({
         </div>
       )}
 
-      {!adding ? (
+      {/* Offered only once the first load has settled. Before it, `presets`
+          is still [], so a click opened the form as Custom with an empty Base
+          URL instead of the first preset — a real race on a slow link, and
+          CI run 36719466510 (2026-09-30) caught it. A failed load still
+          offers it, exactly as before. */}
+      {providers === null && !loadError ? null : !adding ? (
         <div className="mt-3">
           <Button
             size="sm"
