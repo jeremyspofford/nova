@@ -4513,3 +4513,39 @@ in the worktree.
   - `deploy/README.md`: a new "Adding devices and phones" section (the four QR codes, step zero,
     what is not built yet) and the `v4_status` volume in the volumes list.
   - Commit on a docs branch, PR, and ask the owner to merge — the same path as the code.
+
+## Close-out (2026-09-30)
+
+**Status: SHIPPED 2026-09-26, walked 2026-09-30.**
+
+**What shipped.** PR #76 (merged 747eebbb, 2026-09-26): `nova_address` and
+`show_setup_qr`, the setup QR cards for a phone, a machine, a model server, and the
+not-yet-built native app; the derived-address sidecar status file; the setup pages
+`/install`, `/app`, `/add`; the guards against an invented code or a wrong address. Suites
+at merge: core 5,281 passed, with only the known-red timing tests still failing; web 85
+files / 1,245 tests with tsc and build clean; the shell suites at their known-red counts
+too. Deployed from
+`~/workspace/nova` the same day; core, web and tailscale were recreated and healthy that
+evening.
+
+A same-day follow-up (PR #77) made core send a setup card itself when a message plainly
+asked for one, matched by a phrase matcher. The owner rejected the phrase matcher as
+brittle, and PR #78 reverted it the next day, back to exactly what PR #76 shipped.
+
+**The walk.** The first attempt (2026-09-26, the owner's real chat) failed: asked "How do I
+put you on my phone?", the chat model made no tool call and invented a Dell-hosted web page
+and a sideloaded iOS app instead, echoing two of the owner's own memory notes from
+2026-09-15 about an earlier, unrelated app idea. Measured the next day through the eval
+runner with no owner memory in play, the same phrasing called `show_setup_qr` correctly on
+every run — the failure was a stale memory taking over the reply, not a gap in the tool or
+the guards. The recall fix (PR #79, 2026-09-27 — recall serves only the words in the
+exchange, never a memory of her own past answer) and the decision role (PR #85 and PR #86,
+2026-09-29; see `decision-role/plan.md`'s close-out) fixed it together: recall now sets the
+stale notes aside, and the decision role's hint points her at the right tool. The
+2026-09-30 walk recorded there passes the phone question; measured with the owner's own
+memory in play, the same case went from 1 of 3 right to 3 of 3 once both fixes had landed.
+
+**Not built:** the native app itself and its store listings; the models role that would let
+a paired model server actually serve (S44); Tailscale invites and joins (S43a, S43b) — step
+zero is stated, never performed; a phone as a machine Nova controls, which needs the native
+app.

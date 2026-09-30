@@ -27,10 +27,9 @@ pick the cloud model.
 **Tech Stack:** Python 3.12, FastAPI, asyncpg, httpx, pytest + pytest-asyncio (core also
 pytest-timeout); React 18, TypeScript, Vite, vitest, @testing-library/react.
 
-**Spec:** [`spec.md`](spec.md) (this directory) — read it before any task. Background, in the
-SDD workspace (not in git): `/home/jeremy/workspace/nova/.worktrees/qr/.superpowers/sdd/decisions/`
-— `typesafe-recipes.md` (the question shapes and thresholds), `codebase-map.md`,
-`notes.md` (the spikes). House rules: the worktree's `CLAUDE.md`.
+**Spec:** [`spec.md`](spec.md) (this directory) — read it before any task. Background research
+was kept in a measurement workspace outside the repo — the question shapes and thresholds,
+a codebase map, spike notes. House rules: the worktree's `CLAUDE.md`.
 
 **Scope:** spec §1–§4. §5, the Kev engine on the Dell, is a separate later plan. Here Kev is
 a plain `systemone` provider row at `http://100.122.40.93:8009/v1`, where a Kev-4B server
@@ -194,7 +193,8 @@ decision)` where it is used.
   decision to refuse a call.
 - **No emojis** anywhere — code, copy, commits.
 - **`$SCRATCHPAD`** in a command means your session's scratchpad directory (never `/tmp`).
-  **`$SDD`** means `/home/jeremy/workspace/nova/.worktrees/qr/.superpowers/sdd/decisions`.
+  **`$SDD`** means the plan's own measurement workspace, kept outside the repo (see the
+  close-out at the end of this plan for what it produced).
 
 ## Before Task 1: prepare the worktree
 
@@ -5929,3 +5929,60 @@ test is written out in that task: 1 → Tasks 1, 3, 8; 2 → Tasks 2, 4, 12; 3 �
 - "Done means" measures the deployed stack, and deploys come only from `main`: the gate
   is checked after the merge (Task 14, Step 7), so a failed gate is follow-up work, not a
   blocked merge.
+
+## Close-out (2026-09-30)
+
+**Shipped:** PR #85 (merged 16d00ccd, 2026-09-29) built the decision role — the gateway's
+`decisions` role and `POST /v1/systemone`, core's two questions before a typed turn, and
+Routing and Models. PR #86 (merged 1854060a, 2026-09-29) added the local (alpha) and cloud
+(beta) switches beside the decisions chain. Both are deployed from `main`.
+
+**Measured** (deployed stack, chat model `dell:qwen3:8b`, the whole eval corpus — 30 cases
+× 3):
+
+- Kev first, while the chat model shared the Dell's GPU: the decision step failed open on
+  89 of 90 corpus turns ("no decision within the 5 s budget"). A dedicated latency run
+  decided 0 of 10 turns with the 8B model loaded, and 5 of 5 alone and warm (1.8 s median).
+  This arm measured nothing about the role's own effect — almost every "on" turn ran
+  exactly as "off" would have.
+- Jev (cloud) answering: 90 of 90 turns decided, 0.7 s median (1.7 s max). No case scored
+  worse than with the role off; one apparent three-run drop
+  (`points-wsl-at-the-windows-agent`) turned out to be noise — a ten-run re-run scored 1 of
+  10 in both arms. Three cases scored better. The S47 phone case, judged with the owner's
+  own memory in play, went from 1 of 3 right to 3 of 3.
+- The walk in the owner's real chat (2026-09-30, read by turn id): Jev decided in 1.3
+  seconds ($0.0003); Kev was passed over because local is switched off (alpha); the hint
+  was `show_setup_qr` (fit 0.84); the stale 2026-09-15 and 2026-09-28 notes were set aside;
+  she called `show_setup_qr` herself; the owner saw the card and said it looked good.
+
+**"Done means":** met with the cloud decision model, which is the default now that local
+ships off. Not judgeable for Kev on a GPU shared with the chat model — the reason local
+ships as an alpha switch. Not walked: the wall-based fallback walks and the Jev Router
+switch walks (owed, optional).
+
+**Decisions that changed during the build:**
+
+- The switch counts `chat.model` as the first link of any role whose turns send it, with
+  one state model: it reads on exactly when the first cloud model a turn reaches is Jev
+  Router.
+- The `llm_call` span records `upstream_model`, not `routed_to`.
+- A 404, a 405, or a 200 that is not a JSON object from a decision server's `/systemone`
+  passes that link over rather than walling it.
+- A local decision server recovers from its wall on its first clean answer after the wall
+  lapses, the same as any walled link.
+- Jev's fallback walk (not yet run — see "Not walked" above) is designed to take Jev out
+  with a $0 OpenRouter cap, because no product path walls a cloud model on demand.
+- Local decision models ship as an alpha switch, off by default; cloud decision models ship
+  as a beta switch, on by default.
+
+**Follow-ups:**
+
+- A per-link time slice, so a slow local decision server can hand over to the next link
+  inside the 5-second budget, instead of the whole step failing open.
+- A narrow stale "in place of" path in the Jev Router switch (a hand-typed router link,
+  plus a cloud `chat.model` whose provider is deleted between switching on and off).
+- Nova has no tool of her own to flip the decision switches; they are a Settings page only.
+- When Kev becomes an engine (spec §5), a switched-off engine must still never have its
+  machine checked — the routing order already skips a switched-off link before asking
+  anything of its wall, its cap, or its machine, and that order has to hold once Kev is one
+  too.
