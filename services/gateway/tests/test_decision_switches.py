@@ -6,7 +6,9 @@ decision call, as X-Nova-Decision-Kinds.
 Pins: a link whose kind the header does not name is passed over for the
 request — never dialled, never walled, never metered — in words, and the next
 link answers, whether it is local or cloud, and whether it is in the chain or
-the requested model; with nothing left the 503 says so and nothing is dialled;
+the requested model; the kind is the provider's `local` flag and nothing else
+— a hosted decision server on Kev's own adapter, named for Kev, is cloud;
+with nothing left the 503 says so and nothing is dialled;
 no header allows every kind, and so does a header naming both; a header naming
 a kind that does not exist is a 400 in words. And explain, with
 `?decision_kinds=`, gives such a link its own verdict, `kind_off`, ahead of a
@@ -21,7 +23,7 @@ import pytest
 
 from app import backends, engines, routing
 from tests.conftest import requires_db
-from tests.fakes import FakeOllama
+from tests.fakes import FakeOllama, FakeOpenAICompat
 from tests.test_systemone_route import (
     JEV,
     KEV,
@@ -148,6 +150,60 @@ async def test_with_nothing_left_the_503_says_so_and_nothing_is_dialled(
     assert (_asked(kev), _asked(jev)) == ([], [])
     assert await pool.fetchval("SELECT count(*) FROM usage_events") == 0
     assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+HOSTED = "kev-hosted:kev-latest"
+
+
+async def _hosted_kev(client, mount_backend) -> FakeOpenAICompat:
+    """A Kev server someone else runs: the Dell's own `systemone` adapter and a
+    name with "kev" in it, but never marked as running on the owner's machine."""
+    fake = FakeOpenAICompat(models_body={"models": [{"name": "kev-latest"}]})
+    mount_backend("http://kev-hosted.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "kev-hosted",
+            "adapter": "systemone",
+            "base_url": "http://kev-hosted.test/v1",
+            "auth_shape": "none",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return fake
+
+
+async def test_the_kind_is_the_providers_local_flag_never_its_adapter_or_its_name(
+    client, pool, local, mount_backend
+):
+    """A decision server not marked local is cloud, though its adapter is the
+    one the Dell's Kev uses and its name says "kev": used while the cloud
+    switch is on, passed over as cloud when it is off. A kind derived from the
+    adapter or the name would pass every other test here and fail this one."""
+    hosted = await _hosted_kev(client, mount_backend)
+    kev = await _kev(client, mount_backend)
+    await _chain(client, HOSTED, KEV)
+
+    cloud_on = await _decide(client, "cloud")
+
+    assert cloud_on.status_code == 200, cloud_on.text
+    assert cloud_on.headers["x-nova-served-by"] == HOSTED
+    assert cloud_on.headers["x-nova-route"] == "role=decisions;link=1"
+    assert (len(_asked(hosted)), _asked(kev)) == (1, [])
+
+    cloud_off = await _decide(client, "local")
+
+    assert cloud_off.headers["x-nova-served-by"] == KEV
+    assert cloud_off.json()["route"]["reason"] == (
+        f"fell back to link 2 ({KEV}) — {HOSTED}: cloud decision models are switched off in "
+        "Settings (beta)"
+    )
+    assert (len(_asked(hosted)), len(_asked(kev))) == (1, 1), "passed over undialled"
+    ex = (await client.get("/admin/route/explain?role=decisions&decision_kinds=local")).json()
+    assert [(v["id"], v["local"], v["verdict"]) for v in ex["chain"]] == [
+        (HOSTED, False, "kind_off"),
+        (KEV, True, "runnable"),
+    ]
 
 
 @pytest.mark.parametrize("kinds", [None, "cloud,local", " local , cloud "])
