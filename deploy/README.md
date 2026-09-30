@@ -339,6 +339,33 @@ control plane flaps). In this order:
   unaffected. The other direction holds too: nothing but this sidecar (and
   an explicit tunnel or funnel) exposes the stack beyond loopback.
 
+## Adding devices and phones
+
+Since S47, ask Nova in chat to put herself on a device and she sends a QR card — a QR
+code, a short link and, for a machine, a one-time code. She never says the code out loud;
+it is only ever on the card. This comes from her `show_setup_qr` tool; `nova_address` is
+what she reads first to know her own address.
+
+- **A phone or tablet, as the PWA:** "How do I put you on my phone?" sends a card whose
+  link opens `/install` on that device — the add-to-home-screen steps for its own browser,
+  then sign in.
+- **The Nova app:** "Where do I download your app?" sends a card whose link opens `/app`.
+  There is no native app yet, so that page shows the same PWA install steps instead.
+- **A machine Nova controls:** "Add my laptop" sends a card with a one-time pairing code,
+  good for 10 minutes, and the one-line command for Nova's agent. The code rides in the
+  link's fragment, which a browser never sends anywhere — it reaches no server, proxy or
+  log, and never her own reply.
+- **A model server:** the same card as a machine, plus a note that serving its models
+  needs the models role (S44), not built yet — today it just pairs as a machine Nova
+  controls.
+
+**Step zero:** the phone and app cards say the other device must already be signed in to
+Tailscale on the same tailnet before the link works — Nova cannot check this, so the page
+loading there is the check. The machine and model-server cards don't carry that line.
+
+Every QR encodes the derived tailnet address (above), never `127.0.0.1` or a LAN address.
+With no address to give out, she says so and sends no card.
+
 ## Backup
 
 `./install backup` writes **one encrypted file** that carries everything a
