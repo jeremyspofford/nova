@@ -7,12 +7,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,7 +20,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +27,7 @@ import (
 	"novad/internal/audit"
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/install"
 	"novad/internal/platform"
 	"novad/internal/state"
 	"novad/internal/supervise"
@@ -115,41 +112,13 @@ func cmdEnroll(argv []string) {
 		fail("could not generate a device key: %v", err)
 	}
 
-	reqBody, err := enrollBody(*code, hex.EncodeToString(pub), devName, hostname)
+	// install.Enroll is the one enroll call (S42b): its errors are this
+	// command's own words — "could not reach <url>: …", the server's reason
+	// verbatim as "enrollment refused (<status>): <reason>" (spent/expired
+	// code, name taken), or an unreadable answer.
+	ok, err := install.Enroll(context.Background(), *server, *code, devName, hostname, pub)
 	if err != nil {
-		fail("could not build the enroll request: %v", err)
-	}
-	enrollURL := strings.TrimRight(*server, "/") + "/api/v1/devices/enroll"
-
-	httpc := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpc.Post(enrollURL, "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		fail("could not reach %s: %v", enrollURL, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-
-	if resp.StatusCode != http.StatusOK {
-		// Surface the server's own reason verbatim (spent/expired code, name taken).
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(body, &e) == nil && e.Error != "" {
-			fail("enrollment refused (%d): %s", resp.StatusCode, e.Error)
-		}
-		fail("enrollment refused (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var ok struct {
-		DeviceID   string `json:"device_id"`
-		Name       string `json:"name"`
-		CorePubKey string `json:"core_pubkey"`
-	}
-	if err := json.Unmarshal(body, &ok); err != nil {
-		fail("enrollment response was unreadable: %v", err)
-	}
-	if ok.DeviceID == "" || ok.CorePubKey == "" {
-		fail("enrollment response was missing device_id or core_pubkey")
+		fail("%v", err)
 	}
 
 	cfg := config.Config{
@@ -200,15 +169,11 @@ func enrollPreflight() error {
 
 // enrollBody is the POST /api/v1/devices/enroll payload: the pairing code and
 // the identity this machine will be known by. Nothing else travels — core has
-// no per-device settings to seed.
+// no per-device settings to seed. It is install.Body, the one builder `enroll`
+// and `install` share; the S42a pin (TestEnrollBodyCarriesIdentityOnly) stays
+// here.
 func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
-	return json.Marshal(map[string]string{
-		"code":     code,
-		"pubkey":   pubkeyHex,
-		"name":     name,
-		"platform": runtime.GOOS,
-		"hostname": hostname,
-	})
+	return install.Body(code, pubkeyHex, name, hostname)
 }
 
 // exitConfig (EX_CONFIG, 78) is the exit status for "this daemon has no
@@ -295,31 +260,6 @@ func afterRun(paths config.Paths, err error, now time.Time) (int, string) {
 	}
 }
 
-// errNotEnrolled is checkEnrolled's return when the config or key is simply
-// MISSING — never enrolled, or wiped after a revoke. Any OTHER error
-// checkEnrolled returns is the real cause (permission, I/O, a config dir
-// that is itself unreadable) and must never be folded into the same "not
-// enrolled" message: re-enrolling cannot fix a real error, so cmdRun exits 1
-// on it, never 78.
-var errNotEnrolled = errors.New("not enrolled")
-
-// checkEnrolled distinguishes confirmed-missing (errNotEnrolled) from every
-// other Lstat failure (returned as itself). Paths.Enrolled is a plain bool
-// cmdEnroll uses only to decide whether --force is needed; cmdRun needs this
-// finer distinction because a real error and "run novad enroll" are not the
-// same advice, and printing the wrong one hides the real problem.
-func checkEnrolled(paths config.Paths) error {
-	for _, f := range []string{paths.ConfigFile, paths.KeyFile} {
-		if _, err := os.Lstat(f); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return errNotEnrolled
-			}
-			return err
-		}
-	}
-	return nil
-}
-
 func cmdRun(argv []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	_ = fs.Parse(argv)
@@ -328,8 +268,11 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	if err := checkEnrolled(paths); err != nil {
-		if errors.Is(err, errNotEnrolled) {
+	// config.ErrNotEnrolled only when the config or key is confirmed MISSING
+	// (exit 78: re-enrolling is the fix); any other failure to check is the
+	// real cause and exits 1 — re-enrolling cannot fix it.
+	if err := paths.CheckEnrolled(); err != nil {
+		if errors.Is(err, config.ErrNotEnrolled) {
 			fmt.Fprintf(os.Stderr, "novad: not enrolled — run `novad enroll` first (config dir: %s)\n", paths.ConfigDir)
 			os.Exit(exitConfig)
 		}

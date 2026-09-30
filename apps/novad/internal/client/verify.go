@@ -36,6 +36,15 @@ func (e *KeyMismatch) Error() string {
 		short(e.Presented), short(e.Pinned))
 }
 
+// RefusedError is VerifyServer's answer when a server holds the pinned core
+// key but refused this device — revoked, or a database that no longer knows
+// it. install reads it as "this pairing is dead" (S42b).
+type RefusedError struct{ Server, Reason string }
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%s holds the core key you pinned, but it refused this device: %s", e.Server, e.Reason)
+}
+
 // VerifyServer dials cfg.Server's device socket and completes the FULL
 // handshake against it — challenge, pinned-key comparison, a signature over
 // the raw nonce, ready — then closes.
@@ -111,7 +120,7 @@ func VerifyServer(ctx context.Context, cfg config.Config, priv ed25519.PrivateKe
 		if reason == "" {
 			reason = "no reason given"
 		}
-		return fmt.Errorf("%s holds the core key you pinned, but it refused this device: %s", wsURL, reason)
+		return &RefusedError{Server: wsURL, Reason: reason}
 	default:
 		return fmt.Errorf("expected ready or auth_error from %s, got %q", wsURL, t)
 	}

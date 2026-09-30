@@ -98,6 +98,33 @@ func (p Paths) Enrolled() bool {
 	return true
 }
 
+// ErrNotEnrolled is CheckEnrolled's answer when the config or the key is
+// simply MISSING — never enrolled, or wiped after a revoke. Any OTHER error
+// CheckEnrolled returns is the real cause (permission, I/O, a config dir
+// that is itself unreadable) and must never be folded into "not enrolled":
+// pairing again cannot fix a real error, so `run` exits 1 on it, never 78,
+// and `install` stops instead of pairing over it.
+var ErrNotEnrolled = errors.New("not enrolled")
+
+// CheckEnrolled distinguishes confirmed-missing (ErrNotEnrolled) from every
+// other Lstat failure (returned as itself); nil means both files exist. It is
+// the one enrollment check `run` and `install` share (S42b). Enrolled is a
+// plain bool that `enroll` uses only to decide whether --force is needed;
+// these callers need the finer distinction because a real error and "pair
+// this machine" are not the same advice, and giving the wrong one hides the
+// real problem.
+func (p Paths) CheckEnrolled() error {
+	for _, f := range []string{p.ConfigFile, p.KeyFile} {
+		if _, err := os.Lstat(f); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return ErrNotEnrolled
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // Save writes the config and the private key with 0600 in a 0700 dir. The key
 // is stored as its 32-byte seed (hex): ed25519.NewKeyFromSeed re-derives the
 // full private key, and a seed is all that ever needs to be secret.
