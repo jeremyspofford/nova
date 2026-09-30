@@ -1526,3 +1526,54 @@ describe('setup cards (S47)', () => {
     expect(messages(carded)[1].cards).toEqual([REDRAWN])
   })
 })
+
+// said-not-done fix round 3 (T6): a `correction` frame is part of the message
+// the owner reads — live, not only after a reload re-reads the stored reply.
+describe('chatReducer — correction frames', () => {
+  const SAID = 'Notepad is now open on your DELL-XPS-8950.'
+  const RECORD = '(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)'
+
+  function event(state: ChatState, e: StreamEvent): ChatState {
+    return chatReducer(state, { type: 'event', event: e })
+  }
+
+  it('joins the reply as its own paragraph, exactly as core stores it', () => {
+    let state = started()
+    state = event(state, { type: 'delta', text: SAID })
+    state = event(state, { type: 'correction', text: RECORD })
+    state = event(state, { type: 'done' })
+    // core appends a correction to the stored reply as "\n\n" + correction
+    expect(messages(state)[1].text).toBe(`${SAID}\n\n${RECORD}`)
+    expect(messages(state)[1].streaming).toBe(false)
+    expect(errors(state)).toEqual([])
+  })
+
+  it('keeps each correction, in order, one paragraph each', () => {
+    let state = started()
+    state = event(state, { type: 'delta', text: 'Here you go:' })
+    state = event(state, { type: 'correction', text: '(I wrote device_run as text; it did not run.)' })
+    state = event(state, { type: 'correction', text: RECORD })
+    expect(messages(state)[1].text).toBe(
+      `Here you go:\n\n(I wrote device_run as text; it did not run.)\n\n${RECORD}`,
+    )
+  })
+
+  it('text that streams after a correction starts its own paragraph', () => {
+    // A redirect's note, then the reply it introduces.
+    let state = started()
+    state = event(state, { type: 'delta', text: 'Looks like the device is still offline.' })
+    state = event(state, { type: 'correction', text: 'Checking the device now instead of describing it unchecked.' })
+    state = event(state, { type: 'delta', text: 'DELL-XPS-8950 ' })
+    state = event(state, { type: 'delta', text: 'is online.' })
+    expect(messages(state)[1].text).toBe(
+      'Looks like the device is still offline.\n\n' +
+        'Checking the device now instead of describing it unchecked.\n\n' +
+        'DELL-XPS-8950 is online.',
+    )
+  })
+
+  it('is a no-op once the turn has no pending row', () => {
+    const state = event(emptyChat(), { type: 'correction', text: RECORD })
+    expect(state).toEqual(emptyChat())
+  })
+})

@@ -4,6 +4,7 @@
  * Core's frame contract, each line `data: <json>`:
  *   {"meta":{conversation_id,model,turn_id}}   exactly once, first
  *   {"t":"<delta>"}                            zero or more
+ *   {"correction":"<text>"}                    zero or more (see below)
  *   {"error":"<stated reason>"}                at most one, on failure
  *   [DONE]                                     always last
  *
@@ -50,6 +51,14 @@
  * `card` (S47) is a UI-only card beside the reply — a setup QR code. It
  * never enters her context; a machine card's code exists only here and in
  * the tab that renders it.
+ *
+ * `correction` is a line the BACKEND adds to her reply — an honesty guard's
+ * correction ("(No device_launch_app or device_run call ran on DELL-XPS-8950
+ * this turn.)"), or a redirect's note. Core always sent it; this client
+ * ignored it as an unknown key, so a correction appeared only after a reload
+ * re-read the stored message (said-not-done fix round 3, T6). It is shown
+ * live now, as its own paragraph of the message, the way core stores an
+ * appended correction.
  */
 
 import { createLineBuffer } from './lineBuffer'
@@ -61,6 +70,10 @@ import type { SetupCard } from './api'
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string; agent: string | null }
   | { type: 'delta'; text: string }
+  /** A line the backend adds to her reply (an honesty guard's correction, a
+   *  redirect's note): shown as its own paragraph of the message, the way
+   *  core appends a correction to the stored reply. */
+  | { type: 'correction'; text: string }
   /** A reasoning model's own thinking, streamed BEFORE the reply (2026-09-15).
    *  Deliberately its own event and not a delta: it is not what she said, so
    *  it must never join the message body — the transcript, memory and every
@@ -160,6 +173,7 @@ export function failureReason(err: unknown): string {
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
 const KNOWN_FRAME_KEYS = new Set([
   't',
+  'correction',
   'error',
   'stopped',
   'meta',
@@ -185,6 +199,7 @@ function frameToEvent(payload: string): StreamEvent | null {
 
   const obj = data as Record<string, unknown>
   if (typeof obj.t === 'string') return { type: 'delta', text: obj.t }
+  if (typeof obj.correction === 'string') return { type: 'correction', text: obj.correction }
   if (typeof obj.think === 'string') return { type: 'thinking', text: obj.think }
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
   if (typeof obj.stopped === 'string') return { type: 'stopped', note: obj.stopped }
