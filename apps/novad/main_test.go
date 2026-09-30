@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/install"
+	"novad/internal/platform"
 	"novad/internal/state"
 	"novad/internal/supervise"
 )
@@ -317,9 +322,11 @@ func TestTheUsageNamesTheInstallVerbsAndTheirFlags(t *testing.T) {
 }
 
 // Review focus 4: a second copy of one identity is refused by run.lock, and
-// the refusal is written into the agent's status before run fails — install
-// waits on that file, and names the holder from it.
+// when it is the child a supervisor started — the one install's restart
+// started — the refusal is written into the agent's status before run fails:
+// install waits on that file, and names the holder from it.
 func TestARefusedRunLockIsWrittenIntoTheStatusForInstallToName(t *testing.T) {
+	t.Setenv(platform.SupervisorEnv, strconv.Itoa(os.Getppid())) // this process is its supervisor's child
 	dir := t.TempDir()
 	first, err := state.Acquire(filepath.Join(dir, state.RunLockFile))
 	if err != nil {
@@ -354,6 +361,88 @@ func TestARefusedRunLockIsWrittenIntoTheStatusForInstallToName(t *testing.T) {
 	if said != "" || why != nil {
 		t.Fatalf("a lock that was taken wrote a status: %q %v", said, why)
 	}
+}
+
+// Fix round 1 (controller ruling; P5): agent-status.json is the running
+// holder's. Supervise's swap confirmation and install --if-missing decide on
+// it, so a copy started by hand that is refused the lock writes NOTHING
+// there — its refusal, naming the holder's pid, is on its own stderr. That
+// holds for a copy started from a terminal, and for one started through the
+// agent's own hands, which inherits NOVA_SUPERVISOR_PID but is not that
+// supervisor's child. The control proves the same writer does rewrite the
+// file for the supervisor's own child, so the byte-identical check is not
+// vacuous.
+func TestAHandStartedCopyRefusedTheLockLeavesTheHoldersStatusAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name, supervisorPID string
+	}{
+		{"started from a terminal", ""},
+		{"started through the agent's hands, the variable inherited", strconv.Itoa(os.Getpid())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(platform.SupervisorEnv, tc.supervisorPID)
+			dir, statusPath := heldIdentity(t)
+			before := readFile(t, statusPath)
+			lock, err := holdIdentity(dir, agentStatusWriter(dir, log.New(io.Discard, "", 0)))
+			if err == nil {
+				_ = lock.Release()
+				t.Fatal("a second holder of the identity must be refused")
+			}
+			var held *state.HeldError
+			if !errors.As(err, &held) || held.PID != os.Getpid() {
+				t.Fatalf("the refusal must name the holder's pid for stderr: %v", err)
+			}
+			if after := readFile(t, statusPath); !bytes.Equal(before, after) {
+				t.Fatalf("a copy started by hand rewrote the holder's status:\nbefore %s\nafter  %s", before, after)
+			}
+		})
+	}
+
+	t.Run("control: the supervisor's own child", func(t *testing.T) {
+		t.Setenv(platform.SupervisorEnv, strconv.Itoa(os.Getppid()))
+		dir, statusPath := heldIdentity(t)
+		before := readFile(t, statusPath)
+		if lock, err := holdIdentity(dir, agentStatusWriter(dir, log.New(io.Discard, "", 0))); err == nil {
+			_ = lock.Release()
+			t.Fatal("a second holder of the identity must be refused")
+		}
+		var got state.AgentStatus
+		if err := state.ReadJSON(statusPath, &got); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(before, readFile(t, statusPath)) || got.State != state.StateStopped ||
+			!strings.Contains(got.Error, fmt.Sprintf("another novad (pid %d)", os.Getpid())) {
+			t.Fatalf("the supervisor's child must write its refusal, naming the holder: %+v", got)
+		}
+	})
+}
+
+// heldIdentity is a state dir whose run.lock this test process holds, with
+// the holder's own status in it: connected.
+func heldIdentity(t *testing.T) (dir, statusPath string) {
+	t.Helper()
+	dir = t.TempDir()
+	first, err := state.Acquire(filepath.Join(dir, state.RunLockFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Release() }) // a held lock would stop Windows removing dir
+	statusPath = filepath.Join(dir, state.AgentStatusFile)
+	holder := state.AgentStatus{V: 1, PID: os.Getpid(), Version: "aaaaaaaaaaaa", Mode: "systemd-user",
+		State: state.StateReady, Server: "https://nova.fake-tailnet.ts.net", Since: time.Now().UTC()}
+	if err := state.WriteJSON(statusPath, holder); err != nil {
+		t.Fatal(err)
+	}
+	return dir, statusPath
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // The code reaches install by --code or NOVA_PAIRING_CODE, and never goes

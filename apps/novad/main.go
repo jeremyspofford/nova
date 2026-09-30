@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -292,17 +293,7 @@ func cmdRun(argv []string) {
 	}
 
 	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
-	statusPath := filepath.Join(paths.StateDir, state.AgentStatusFile)
-	writeStatus := func(st, server string, e error) {
-		s := state.AgentStatus{V: 1, PID: os.Getpid(), Version: version, Mode: platform.Mode(),
-			State: st, Server: server, Since: time.Now().UTC()}
-		if e != nil {
-			s.Error = e.Error()
-		}
-		if err := state.WriteJSON(statusPath, s); err != nil {
-			logger.Printf("could not write %s: %v", statusPath, err)
-		}
-	}
+	writeStatus := agentStatusWriter(paths.StateDir, logger)
 
 	lock, err := holdIdentity(paths.StateDir, writeStatus)
 	if err != nil {
@@ -347,16 +338,53 @@ func cmdRun(argv []string) {
 	os.Exit(code)
 }
 
-// holdIdentity takes run.lock, one copy per identity (P5). A refusal is
-// written into the agent's status before it is returned: `install` waits on
-// that file, and names the copy holding the identity from it (Review Focus 4).
+// agentStatusWriter is `novad run`'s writer of agent-status.json: each call
+// writes the whole status, as this process, now.
+func agentStatusWriter(stateDir string, logger *log.Logger) func(st, server string, e error) {
+	statusPath := filepath.Join(stateDir, state.AgentStatusFile)
+	return func(st, server string, e error) {
+		s := state.AgentStatus{V: 1, PID: os.Getpid(), Version: version, Mode: platform.Mode(),
+			State: st, Server: server, Since: time.Now().UTC()}
+		if e != nil {
+			s.Error = e.Error()
+		}
+		if err := state.WriteJSON(statusPath, s); err != nil {
+			logger.Printf("could not write %s: %v", statusPath, err)
+		}
+	}
+}
+
+// holdIdentity takes run.lock, one copy per identity (P5). Refused, the
+// supervisor's own child writes the refusal into agent-status.json before it
+// is returned: that child is the one install's restart started, and install
+// names the copy holding the identity from it (Review Focus 4). Any other
+// copy writes nothing there — the file is the running holder's, and
+// supervise's swap confirmation and install --if-missing decide on it — so
+// its refusal, naming the holder's pid, is only on its own stderr (fix round
+// 1, controller ruling).
 func holdIdentity(stateDir string, writeStatus func(st, server string, e error)) (*state.Lock, error) {
 	lock, err := state.Acquire(filepath.Join(stateDir, state.RunLockFile))
 	if err != nil {
-		writeStatus(state.StateStopped, "", err)
+		if supervisorsChild() {
+			writeStatus(state.StateStopped, "", err)
+		}
 		return nil, err
 	}
 	return lock, nil
+}
+
+// supervisorsChild is whether this process is the child a supervisor
+// started: platform.Supervised() — NOVA_SUPERVISOR_PID is set — and that
+// supervisor is this process's parent, as supervise starts its agent
+// directly. The variable alone is not enough: every program the agent runs
+// for her inherits it, so a `novad run` started through her hands would pass
+// for the supervisor's own child.
+func supervisorsChild() bool {
+	if !platform.Supervised() {
+		return false
+	}
+	pid, err := strconv.Atoi(os.Getenv(platform.SupervisorEnv))
+	return err == nil && pid > 0 && pid == os.Getppid()
 }
 
 func cmdStatus(argv []string) {
