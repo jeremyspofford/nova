@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Trash2, Waypoints, X } from 'lucide-react'
 import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
-import { InlineSave, type SaveMessage } from '../settings/shared'
+import { InlineSave, storedFrom, type SaveMessage } from '../settings/shared'
 import {
   clearWall as apiClearWall,
   deleteRoute as apiDeleteRoute,
@@ -141,23 +141,6 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** The value core says it stored for a switch, or a failure that says why
- * the write cannot be shown as done: an answer that states no stored
- * true/false is a write nobody verified, never one to render as taken. */
-function storedSwitch(written: unknown, key: string): boolean {
-  if (
-    written === null ||
-    typeof written !== 'object' ||
-    (written as { key?: unknown }).key !== key ||
-    typeof (written as { value?: unknown }).value !== 'boolean'
-  ) {
-    throw new Error(
-      `the write of ${key} did not say what core stored, so the switch is shown as it was; reload the page to read it`,
-    )
-  }
-  return (written as { value: boolean }).value
-}
-
 /** A decision model: the catalogue says it outputs decisions — read from the
  * provider's own listing, never a list kept here. It is offered to the
  * decisions role and to no chat role; the gateway refuses the other pairing
@@ -257,6 +240,16 @@ export function RoutingSection({
   // it wrote before a newer load started.
   const loadSeq = useRef(0)
   const loadPromise = useRef<Promise<void> | null>(null)
+  // Core reads the decision switches when it explains the decisions walk, so a
+  // walk read before a switch was stored says nothing true about the switch
+  // beside it — "local decision models are switched off" next to a Local
+  // switch that reads ON. `explainedAt` is the load whose explanations are on
+  // the page, `switchedAt` the latest load begun before a switch was stored:
+  // the decisions walk is shown only once a load begun after that has landed.
+  // So it is blank while the page re-reads, and stays blank if the re-read
+  // fails — the error above says why.
+  const [explainedAt, setExplainedAt] = useState(0)
+  const [switchedAt, setSwitchedAt] = useState(0)
 
   const load = useCallback((overrideChatModel?: string): Promise<void> => {
     const seq = ++loadSeq.current
@@ -298,6 +291,7 @@ export function RoutingSection({
           )
           if (seq === loadSeq.current) {
             setExplains(Object.fromEntries(entries))
+            setExplainedAt(seq)
           }
         }
       } catch (err) {
@@ -331,8 +325,10 @@ export function RoutingSection({
   // One decision switch: written through the settings API, shown as core
   // stored it, and then the page re-reads — the decisions walk follows the
   // switches (core states them to the gateway), so its explanation moves too.
+  // Until that re-read lands, nothing read under the old value is shown.
   const onDecisionSwitch = async (key: string, on: boolean): Promise<void> => {
-    const stored = storedSwitch(await api.putSetting(key, on), key)
+    const { value: stored } = storedFrom(await api.putSetting(key, on), key, 'boolean')
+    setSwitchedAt(loadSeq.current)
     onSettingChanged(key, stored)
     await load()
   }
@@ -368,7 +364,9 @@ export function RoutingSection({
               chatModel={chatModel}
               catalog={catalog}
               protocol={entry.protocol ?? 'chat'}
-              explain={explains[entry.role]}
+              // The decisions walk only once it was read under the switches
+              // as they are now stored (see `switchedAt`).
+              explain={entry.protocol === 'systemone' && explainedAt <= switchedAt ? undefined : explains[entry.role]}
               router={entry.router ?? null}
               routerLink={routerLink}
               routerUnavailableReason={routerUnavailableReason}

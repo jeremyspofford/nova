@@ -750,28 +750,36 @@ describe('RoutingSection', () => {
       expect(screen.queryByRole('switch', { name: 'Cloud decision model' })).toBeNull()
     })
 
-    it('writes the setting, moves only with what core stored, and reloads the decisions explanation', async () => {
-      let allowed: 'cloud' | 'every' = 'cloud'
-      const explainRoute = vi.fn(async (role: string) =>
+    /** The decisions walk as core explains it under what it has stored: Kev
+     * passed over while local is off, Kev answering once it is on. */
+    function explainUnder(stored: { local: boolean }) {
+      return vi.fn(async (role: string) =>
         role === 'decisions'
-          ? allowed === 'cloud' ? EXPLAIN_LOCAL_OFF : EXPLAIN_EVERY_KIND
+          ? stored.local ? EXPLAIN_EVERY_KIND : EXPLAIN_LOCAL_OFF
           : { role, chain: [], would_serve: null, reason: 'no chain' },
       )
-      const putSetting = vi.fn(async (key: string, value: boolean | string | number) => {
-        allowed = 'every'
-        return { key, value }
-      })
+    }
+
+    /** The section under a parent that holds the switches the way SettingsPage
+     * does — it re-renders with whatever onSettingChanged hands it. `stored`
+     * is core's side: putSetting writes it and answers with it. */
+    function renderWithSwitches(over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {}) {
+      const stored = { local: false }
       const onSettingChanged = vi.fn()
       const api = {
         getRoutes: vi.fn(async () => ROUTES_DECIDING),
         putRoute: vi.fn(),
         putJevRouter: vi.fn(),
-        explainRoute,
+        explainRoute: explainUnder(stored),
         clearWall: vi.fn(),
         getCatalog: catalogWith(),
         deleteRoute: vi.fn(),
         listAgents: vi.fn(async () => AGENTS),
-        putSetting,
+        putSetting: vi.fn(async (key: string, value: boolean | string | number) => {
+          if (key === 'decisions.local') stored.local = value === true
+          return { key, value }
+        }),
+        ...over,
       }
       function Parent() {
         const [defs, setDefs] = useState(switches(false, true))
@@ -789,16 +797,78 @@ describe('RoutingSection', () => {
         )
       }
       render(<Parent />)
+      return { api, onSettingChanged }
+    }
+
+    const localSwitch = () => screen.getByRole('switch', { name: 'Local decision model' }) as HTMLInputElement
+    const switchAlert = (key: string) => within(screen.getByTestId(`decision-switch-${key}`)).getByRole('alert').textContent
+
+    it('writes the setting, moves with what core stored, and reloads the decisions explanation', async () => {
+      const { api, onSettingChanged } = renderWithSwitches()
       await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
       const badge = screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')
       expect(badge?.getAttribute('data-verdict')).toBe('kind_off')
-      const local = screen.getByRole('switch', { name: 'Local decision model' }) as HTMLInputElement
-      fireEvent.click(local)
-      await waitFor(() => expect(putSetting).toHaveBeenCalledWith('decisions.local', true))
-      await waitFor(() => expect(local.checked).toBe(true))
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('decisions.local', true))
+      await waitFor(() => expect(localSwitch().checked).toBe(true))
       expect(onSettingChanged).toHaveBeenCalledWith('decisions.local', true)
       await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(`right now: ${KEV} would answer`))
-      expect(explainRoute.mock.calls.filter(([role]) => role === 'decisions').length).toBe(2)
+      expect(api.explainRoute.mock.calls.filter(([role]) => role === 'decisions').length).toBe(2)
+    })
+
+    it('while the page re-reads, shows nothing read under the switch as it was', async () => {
+      // The switch moves as soon as core has stored it; the walk beside it was
+      // read under the old value, and said "local decision models are switched
+      // off" next to a Local switch reading ON for the whole re-read.
+      let release: (routes: Routes) => void = () => {}
+      const getRoutes = vi
+        .fn()
+        .mockResolvedValueOnce(ROUTES_DECIDING)
+        .mockReturnValueOnce(new Promise<Routes>(resolve => { release = resolve }))
+      renderWithSwitches({ getRoutes })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
+
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(getRoutes).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(localSwitch().checked).toBe(true))
+
+      // Held: nothing beside the switch still says what it said before.
+      const panel = screen.getByTestId('route-decisions')
+      expect(panel.textContent).not.toContain('local decision models are switched off')
+      expect(panel.querySelector('[data-verdict]')).toBeNull()
+      expect(screen.queryByTestId('route-decisions-would-serve')).toBeNull()
+
+      release(ROUTES_DECIDING)
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(`right now: ${KEV} would answer`))
+      expect(screen.getByTestId('route-decisions-link-1').querySelector('[data-verdict]')?.getAttribute('data-verdict')).toBe('runnable')
+    })
+
+    it('when the re-read fails, still shows nothing read under the switch as it was, and says why', async () => {
+      const getRoutes = vi
+        .fn()
+        .mockResolvedValueOnce(ROUTES_DECIDING)
+        .mockRejectedValueOnce(new Error('the gateway is unreachable — ConnectError: connection refused'))
+      renderWithSwitches({ getRoutes })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve').textContent).toContain(`${JEV} would answer`))
+
+      fireEvent.click(localSwitch())
+      await waitFor(() =>
+        expect(screen.getByTestId('routing-section').textContent).toContain('the gateway is unreachable — ConnectError: connection refused'),
+      )
+      expect(localSwitch().checked).toBe(true)
+      const panel = screen.getByTestId('route-decisions')
+      expect(panel.textContent).not.toContain('local decision models are switched off')
+      expect(panel.querySelector('[data-verdict]')).toBeNull()
+      expect(screen.queryByTestId('route-decisions-would-serve')).toBeNull()
+    })
+
+    it('moves with what core stored, even when core stored something other than what was clicked', async () => {
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async (key: string) => ({ key, value: false })) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions-would-serve')).toBeTruthy())
+      fireEvent.click(localSwitch())
+      await waitFor(() => expect(onSettingChanged).toHaveBeenCalledWith('decisions.local', false))
+      expect(onSettingChanged).not.toHaveBeenCalledWith('decisions.local', true)
+      expect(localSwitch().checked).toBe(false)
     })
 
     it('leaves a refused switch where it was and says why in core\'s words', async () => {
@@ -810,26 +880,35 @@ describe('RoutingSection', () => {
       await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
       const cloud = screen.getByRole('switch', { name: 'Cloud decision model' }) as HTMLInputElement
       fireEvent.click(cloud)
-      await waitFor(() =>
-        expect(within(screen.getByTestId('decision-switch-decisions.cloud')).getByRole('alert').textContent).toBe(
-          'could not switch — setting decisions.cloud expects bool, got str',
-        ),
-      )
+      await waitFor(() => expect(switchAlert('decisions.cloud')).toBe('could not switch — setting decisions.cloud expects bool, got str'))
       expect(cloud.checked).toBe(true)
       expect(onSettingChanged).not.toHaveBeenCalled()
     })
 
     it('never shows a write as done when the answer does not say what core stored', async () => {
-      const onSettingChanged = vi.fn()
-      renderSection({ putSetting: vi.fn(async () => ({})) }, { decisionSwitches: switches(false, true), onSettingChanged })
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async () => ({})) })
       await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
-      fireEvent.click(screen.getByRole('switch', { name: 'Local decision model' }))
+      fireEvent.click(localSwitch())
       await waitFor(() =>
-        expect(within(screen.getByTestId('decision-switch-decisions.local')).getByRole('alert').textContent).toBe(
-          'could not switch — the write of decisions.local did not say what core stored, so the switch is shown as it was; reload the page to read it',
+        expect(switchAlert('decisions.local')).toBe(
+          'could not switch — the write of decisions.local returned no stored value, so what is stored is unknown — reload the page',
         ),
       )
       expect(onSettingChanged).not.toHaveBeenCalled()
+      expect(localSwitch().checked).toBe(false)
+    })
+
+    it('never shows a write as done when the value core says it stored is not true or false', async () => {
+      const { onSettingChanged } = renderWithSwitches({ putSetting: vi.fn(async (key: string) => ({ key, value: 'true' })) })
+      await waitFor(() => expect(screen.getByTestId('route-decisions')).toBeTruthy())
+      fireEvent.click(localSwitch())
+      await waitFor(() =>
+        expect(switchAlert('decisions.local')).toBe(
+          'could not switch — the write of decisions.local returned "true", which is not a boolean, so what is stored is unknown — reload the page',
+        ),
+      )
+      expect(onSettingChanged).not.toHaveBeenCalled()
+      expect(localSwitch().checked).toBe(false)
     })
 
     it('with both off, says the step is off and costs nothing', async () => {
