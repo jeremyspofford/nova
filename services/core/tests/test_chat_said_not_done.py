@@ -31,6 +31,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import re
+from pathlib import Path
 
 import pytest
 
@@ -1216,3 +1219,559 @@ async def test_a_real_launch_backs_the_claim_and_nothing_fires(
     assert await _stored(pool) == reply
     assert await _named(pool, "device_completion") == []
     assert await _named(pool, "written_call") == []
+
+
+# -- fix round 4 (2026-09-30, the controller's rulings R1, R5, R6) ---------------
+
+LAUNCHED_NOTEPAD = (
+    f"{DEVICE}: asked Windows to launch notepad — whether a window opened is not confirmed."
+)
+
+
+async def _reply_of(pool, kind: str) -> str | None:
+    return await pool.fetchval(
+        "SELECT m.content FROM messages m JOIN turns t ON t.id = m.turn_id "
+        "WHERE m.role = 'assistant' AND t.kind = $1",
+        kind,
+    )
+
+
+async def _guard_spans_of(pool, kind: str) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT s.name FROM turn_spans s JOIN turns t ON t.id = s.turn_id "
+        "WHERE s.kind = 'guard' AND t.kind = $1",
+        kind,
+    )
+    return [row["name"] for row in rows]
+
+
+# R1 — a delegation ran an agent. The re-review's repro (scratchpad
+# rr4/test_rr4_chat.py), now a test: Nova delegates to "ops", which holds
+# device_launch_app; ops really launches Notepad on the Dell in ITS turn; Nova
+# relays it truthfully — and the relay got "(No device_launch_app or
+# device_run call ran on DELL-XPS-8950 this turn.)", because her turn's record
+# holds only the delegation. That record cannot say what the agent did, so the
+# pair says nothing on a turn whose delegation ran an agent.
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "relay",
+    [
+        f"Done — ops opened Notepad on your {DEVICE}.",
+        f"Notepad is now open on your {DEVICE}.",
+        f'Launching Notepad via ops:\n{F}\ndevice_launch_app "{DEVICE}" "notepad"\n{F}\n'
+        f"Notepad is now open on your {DEVICE}.",
+    ],
+)
+async def test_R1_a_launch_an_agent_made_is_relayed_with_no_sentence(
+    relay, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    from tests.test_chat_agents import _create
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    await _create(pool, mount_peers, name="ops", tools=("device_launch_app",))
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                call(
+                    "delegate_to_agent", {"agent": "ops", "task": f"open notepad on {DEVICE}"}, "n1"
+                ),
+            ),
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad"}, "c1"),),
+            (text(f"I launched Notepad on {DEVICE}; Windows accepted it."),),
+            (text(relay),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "have ops open notepad on my dell")
+
+    assert launcher.calls == [{"device": DEVICE, "app": "notepad"}]  # the agent's call
+    assert await _reply_of(pool, "chat") == relay
+    assert _corrections(sent) == []
+    assert await _guard_spans_of(pool, "chat") == []
+    await chat.drain_background()
+    assert relay in [i["exchange"]["assistant"] for i in memory.ingests]
+
+
+@requires_db
+async def test_R1_a_delegation_refused_before_any_run_leaves_the_sentence(
+    owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    """No agent by that name: nothing ran anywhere, so her turn's record is the
+    whole record, and "Notepad is now open" still gets its true sentence."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("delegate_to_agent", {"agent": "opz", "task": "open notepad"}, "n1"),),
+            (text(T98ECFB11),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "have opz open notepad on my dell")
+
+    assert launcher.calls == []
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{NONE_ON_DELL}"
+    assert _corrections(sent) == [NONE_ON_DELL]
+
+
+# R5 — the WSL twin, through the live rows. "Notepad is now open on your
+# DELL-XPS-8950" after a device_run of notepad.exe on "DELL-XPS-8950 (WSL)" got
+# "No … call ran on DELL-XPS-8950": true of the row, misleading about the
+# machine. The machine each agent reported is read from the device rows at the
+# end of the turn (devices.live_machines); the WSL agent's is not readable (its
+# machine id is WSL's own), so the claim is silent. Another machine's agent
+# still leaves the sentence; a second agent reporting the same machine backs it.
+
+WSL = f"{DEVICE} (WSL)"
+UID_DELL = "d" * 64
+UID_BOX = "b" * 64
+
+
+def _facts(uid: str, *, wsl: bool = False) -> dict:
+    return {
+        "v": 2,
+        "agent": {"version": "0.2.0", "mode": "foreground", "session_interactive": True},
+        "os": {
+            "goos": "linux" if wsl else "windows",
+            "arch": "amd64",
+            "version": "Ubuntu 26.04 LTS" if wsl else "Windows 11 Pro",
+            "wsl": {"distro": "Ubuntu-26.04"} if wsl else None,
+        },
+        "hostname": "dell" if not wsl else "dell-wsl",
+        "machine_uid": uid,
+    }
+
+
+async def _pair_reporting(pool, name: str, platform: str, facts: dict | None) -> None:
+    """A paired row as an agent left it: its facts and when, or neither (an
+    agent that predates S42a sends none)."""
+    await pool.execute(
+        "INSERT INTO devices (name, platform, hostname, pubkey, facts, facts_at) "
+        "VALUES ($1, $2, 'host', $3, $4, CASE WHEN $4::jsonb IS NULL THEN NULL ELSE now() END)",
+        name,
+        platform,
+        "a" * 64,
+        facts,
+    )
+
+
+@requires_db
+@pytest.mark.parametrize("wsl_facts", ["pre-S42a, no facts", "S42a, its own machine id"])
+async def test_R5_a_run_on_the_wsl_twin_leaves_the_windows_claim_silent(
+    wsl_facts, owner_client, pool, mount_peers, monkeypatch
+):
+    await _pair_reporting(pool, DEVICE, "windows", _facts(UID_DELL))
+    twin = None if wsl_facts.startswith("pre") else _facts(UID_BOX, wsl=True)
+    await _pair_reporting(pool, WSL, "linux", twin)
+    runner = _arm(monkeypatch, "device_run", f"{WSL} ran ['notepad.exe'] — exit 0\n")
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("device_run", {"device": WSL, "argv": ["notepad.exe"]}, "c1"),),
+            (text(T98ECFB11),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert runner.calls == [{"device": WSL, "argv": ["notepad.exe"]}]
+    assert await _stored(pool) == T98ECFB11
+    assert _corrections(sent) == []
+    assert await _named(pool, "device_completion") == []
+
+
+@requires_db
+async def test_R5_a_launch_on_another_machines_agent_leaves_the_sentence(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    await _pair_reporting(pool, DEVICE, "windows", _facts(UID_DELL))
+    await _pair_reporting(pool, "office-box", "windows", _facts(UID_BOX))
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("device_launch_app", {"device": "office-box", "app": "notepad"}, "c1"),),
+            (text(T98ECFB11),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert launcher.calls == [{"device": "office-box", "app": "notepad"}]
+    assert await _stored(pool) == f"{T98ECFB11}\n\n{NONE_ON_DELL}"
+    assert _corrections(sent) == [NONE_ON_DELL]
+
+
+@requires_db
+async def test_R5_a_launch_on_a_second_agent_of_the_same_machine_backs_the_claim(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    await _pair_reporting(pool, DEVICE, "windows", _facts(UID_DELL))
+    await _pair_reporting(pool, "dell-second-agent", "windows", _facts(UID_DELL))
+    _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    gateway = ScriptedGateway(
+        rounds=(
+            (call("device_launch_app", {"device": "dell-second-agent", "app": "notepad"}, "c1"),),
+            (text(T98ECFB11),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, T98ECFB11_ASKED)
+
+    assert await _stored(pool) == T98ECFB11
+    assert _corrections(sent) == []
+
+
+@requires_db
+async def test_R5_the_machines_are_read_from_the_live_rows_never_a_revoked_one(pool):
+    from app import devices
+
+    await _pair_reporting(pool, DEVICE, "windows", _facts(UID_DELL))
+    await _pair_reporting(pool, WSL, "linux", _facts(UID_BOX, wsl=True))
+    await _pair_reporting(pool, "old-box", "linux", None)
+    await _pair_reporting(pool, "gone", "windows", _facts(UID_DELL))
+    await pool.execute("UPDATE devices SET revoked_at = now() WHERE name = 'gone'")
+    assert await devices.live_machines(pool) == {DEVICE: UID_DELL, WSL: None, "old-box": None}
+
+
+# R6 — emit what persists. A redirect whose own call RAN but whose report did not
+# survive stored the true "[I ran X but could not report the result…]" while
+# the live frame said "[I said I'd check but did not…]" or "I asked instead of
+# doing it… I did not…" — a false line the owner saw once the web client showed
+# correction frames (fix round 3, T6). The redirect now emits exactly the text
+# that persists, and a note it stores (its closing round's markup) is emitted
+# too. The web client's own parser and reducer read these very streams in
+# apps/web/src/pages/chat/liveStored.test.ts (the fixture test below).
+
+NOTEPAD_OFFER = (
+    f"Notepad is now open on your {DEVICE}. Want me to search the web for its keyboard shortcuts?"
+)
+BARE_CHECK = f"Got it. Checking your {DEVICE} now…"
+
+
+def _ran_note(names: str) -> str:
+    return chat._bare_intent_ran_but_unreported_note(names)
+
+
+@requires_db
+async def test_R6_an_offer_redirect_whose_call_ran_shows_what_it_stores(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    await _pair(pool)
+    launcher = _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(NOTEPAD_OFFER),),
+            (call("device_launch_app", {"device": DEVICE, "app": "notepad"}),),
+            Refusal(502, {"error": {"message": "upstream down"}}),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(
+        owner_client, "open notepad on my dell and search the web for its keyboard shortcuts"
+    )
+
+    assert launcher.calls == [{"device": DEVICE, "app": "notepad"}]
+    note = _ran_note("device_launch_app")
+    assert await _stored(pool) == f"{NOTEPAD_OFFER}\n\n{note}"
+    assert _corrections(sent) == [note]
+
+
+@requires_db
+async def test_R6_a_completion_redirect_whose_call_ran_shows_what_it_stores(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    from tests.test_chat_deferral import COMPLETION, REMINDER_INSTRUCTION, _arm_create_timer
+
+    spy = _arm_create_timer(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(COMPLETION),),
+            (call("create_timer", {"text": "blink", "in_minutes": 5}),),
+            Refusal(502, {"error": {"message": "upstream down"}}),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, REMINDER_INSTRUCTION)
+
+    assert spy.calls == [{"text": "blink", "in_minutes": 5}]
+    note = _ran_note("create_timer")
+    assert await _stored(pool) == f"{COMPLETION}\n\n{note}"
+    assert _corrections(sent) == [note]
+
+
+@requires_db
+async def test_R6_a_bare_intent_redirect_whose_call_ran_shows_what_it_stores(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """REPLACE-class: the note alone persists, and the one correction shown
+    live is exactly it."""
+    await _pair(pool)
+    info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(BARE_CHECK),),
+            (call("device_info", {"device": DEVICE}),),
+            Refusal(502, {"error": {"message": "upstream down"}}),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "what OS is my dell on?")
+
+    assert info.calls == [{"device": DEVICE}]
+    note = _ran_note("device_info")
+    assert await _stored(pool) == note
+    assert _corrections(sent) == [note]
+    assert chat.BARE_INTENT_HONEST_NOTE not in _corrections(sent)
+
+
+@requires_db
+async def test_R6_a_closing_round_written_as_markup_shows_the_note_it_stores(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The bare-intent redirect ran its call, and its closing round wrote a
+    call as markup (refused, never run): both backend lines persist, so both
+    are shown live, in order."""
+    from app import markup_calls
+    from tests.test_chat_bare_intent import (
+        AUTO_ACTION,
+        BARE_INTENT,
+        BARE_INTENT_MARKUP,
+        _arm_auto_tool,
+        auto_call,
+    )
+
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((text(BARE_INTENT),), (auto_call("r1"),), (text(BARE_INTENT_MARKUP),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "show me my workspace directory structure")
+
+    assert len(spy.calls) == 1
+    note = _ran_note(AUTO_ACTION)
+    markup = markup_calls.no_tool_round_note([AUTO_ACTION])
+    assert await _stored(pool) == f"{note}\n\n{markup}"
+    assert _corrections(sent) == [note, markup]
+
+
+@requires_db
+async def test_R6_a_consent_redirects_markup_note_is_shown_where_it_is_stored(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The consent redirect ran its probe, and its closing round wrote a call
+    as markup (refused): its correction and the backend's markup note are both
+    stored, so both are shown live, in the stored order (R6: the note was
+    stored and never streamed)."""
+    from app import markup_calls
+    from tests.test_chat_markup import FABRICATION, PROBE, _arm_probe, real_call
+    from tests.test_markup_calls import OBSERVED
+
+    spy = await _arm_probe(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(FABRICATION),),
+            (real_call("r1", PROBE, {"device": DEVICE, "argv": ["tree"]}),),
+            (text(OBSERVED),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "try again")
+
+    assert spy.calls == [{"device": DEVICE, "argv": ["tree"]}]
+    markup = markup_calls.no_tool_round_note(["device_run"])
+    stored = await _stored(pool)
+    corrections = _corrections(sent)
+    assert corrections[-1] == markup
+    assert stored == "\n\n".join(corrections)
+
+
+# -- R6, through the web client's own parser and reducer --------------------------
+#
+# The re-review ran core's raw SSE for these turns through the web client's real
+# stream parser and chat reducer (scratchpad rr4/web/src/live_vs_stored.test.ts)
+# and compared what the owner sees live with what a reload shows. That check is
+# kept as two halves of one contract, like tests/fixtures/envelope_vectors.json
+# between core and the device agent:
+#
+#   * HERE, core's half: each turn's raw stream (ids zeroed) and stored reply
+#     must equal the committed fixture tests/fixtures/live_stored_frames.json,
+#     and every correction core streams is, in order, how the stored reply ends;
+#   * apps/web/src/pages/chat/liveStored.test.ts, the client's half: the same
+#     streams, through createSseParser and chatReducer, show exactly the stored
+#     reply — "append" turns end to end; for a "replace" turn (the bare-intent
+#     redirect drops the "Checking…" she streamed), the streamed prose above
+#     exactly the stored text, which a reload then shows alone.
+#
+# A red here means core's streams or stored replies changed. Regenerate the
+# fixture with NOVA_WRITE_LIVE_STORED=1, commit it, and run the web suite: it is
+# what says whether the owner still sees what is kept.
+
+LIVE_STORED = Path(__file__).parent / "fixtures" / "live_stored_frames.json"
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_NO_ID = "00000000-0000-0000-0000-000000000000"
+
+
+async def _teams_turn(pool, mount_peers, monkeypatch):
+    await _pair(pool)
+    return "append", None, T890B1C63_ASKED, ((text(T890B1C63),),)
+
+
+async def _notepad_turn(pool, mount_peers, monkeypatch):
+    await _pair(pool)
+    return "append", None, T98ECFB11_ASKED, ((text(T98ECFB11),),)
+
+
+async def _failed_launch(pool, mount_peers, monkeypatch):
+    await _pair(pool)
+    _arm_failing(monkeypatch, "device_launch_app", f"{DEVICE}: {FAILED_REASON}")
+    rounds = (
+        (call("device_launch_app", {"device": DEVICE, "app": "notepad++"}, "c1"),),
+        (text(f"I launched Notepad++ on your {DEVICE}."),),
+    )
+    return "append", None, "open notepad++ on my dell", rounds
+
+
+async def _delegated_launch(pool, mount_peers, monkeypatch):
+    from tests.test_chat_agents import _create
+
+    await _pair(pool)
+    _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    await _create(pool, mount_peers, name="ops", tools=("device_launch_app",))
+    rounds = (
+        (call("delegate_to_agent", {"agent": "ops", "task": f"open notepad on {DEVICE}"}, "n1"),),
+        (call("device_launch_app", {"device": DEVICE, "app": "notepad"}, "c1"),),
+        (text(f"I launched Notepad on {DEVICE}; Windows accepted it."),),
+        (text(f"Done — ops opened Notepad on your {DEVICE}."),),
+    )
+    return "append", None, "have ops open notepad on my dell", rounds
+
+
+async def _offer_ran_report_failed(pool, mount_peers, monkeypatch):
+    await _pair(pool)
+    _arm(monkeypatch, "device_launch_app", LAUNCHED_NOTEPAD)
+    rounds = (
+        (text(NOTEPAD_OFFER),),
+        (call("device_launch_app", {"device": DEVICE, "app": "notepad"}),),
+        Refusal(502, {"error": {"message": "upstream down"}}),
+    )
+    ask = "open notepad on my dell and search the web for its keyboard shortcuts"
+    return "append", None, ask, rounds
+
+
+async def _completion_ran_report_failed(pool, mount_peers, monkeypatch):
+    from tests.test_chat_deferral import COMPLETION, REMINDER_INSTRUCTION, _arm_create_timer
+
+    _arm_create_timer(monkeypatch)
+    rounds = (
+        (text(COMPLETION),),
+        (call("create_timer", {"text": "blink", "in_minutes": 5}),),
+        Refusal(502, {"error": {"message": "upstream down"}}),
+    )
+    return "append", None, REMINDER_INSTRUCTION, rounds
+
+
+async def _bare_intent_ran_report_failed(pool, mount_peers, monkeypatch):
+    await _pair(pool)
+    _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+    rounds = (
+        (text(BARE_CHECK),),
+        (call("device_info", {"device": DEVICE}),),
+        Refusal(502, {"error": {"message": "upstream down"}}),
+    )
+    return "replace", BARE_CHECK, "what OS is my dell on?", rounds
+
+
+async def _bare_intent_closing_markup(pool, mount_peers, monkeypatch):
+    from tests.test_chat_bare_intent import (
+        BARE_INTENT,
+        BARE_INTENT_MARKUP,
+        _arm_auto_tool,
+        auto_call,
+    )
+
+    await _arm_auto_tool(pool, monkeypatch)
+    rounds = ((text(BARE_INTENT),), (auto_call("r1"),), (text(BARE_INTENT_MARKUP),))
+    return "replace", BARE_INTENT, "show me my workspace directory structure", rounds
+
+
+async def _consent_closing_markup(pool, mount_peers, monkeypatch):
+    from tests.test_chat_markup import FABRICATION, PROBE, _arm_probe, real_call
+    from tests.test_markup_calls import OBSERVED
+
+    await _arm_probe(pool, monkeypatch)
+    rounds = (
+        (text(FABRICATION),),
+        (real_call("r1", PROBE, {"device": DEVICE, "argv": ["tree"]}),),
+        (text(OBSERVED),),
+    )
+    return "replace", FABRICATION, "try again", rounds
+
+
+LIVE_STORED_TURNS = {
+    "consent_closing_markup": _consent_closing_markup,
+    "teams_turn": _teams_turn,
+    "notepad_turn": _notepad_turn,
+    "failed_launch": _failed_launch,
+    "delegated_launch": _delegated_launch,
+    "offer_ran_report_failed": _offer_ran_report_failed,
+    "completion_ran_report_failed": _completion_ran_report_failed,
+    "bare_intent_ran_report_failed": _bare_intent_ran_report_failed,
+    "bare_intent_closing_markup": _bare_intent_closing_markup,
+}
+
+
+@requires_db
+@pytest.mark.parametrize("name", sorted(LIVE_STORED_TURNS))
+async def test_R6_what_core_streams_for_a_turn_is_what_it_stores(
+    name, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
+    kind, streamed, ask, rounds = await LIVE_STORED_TURNS[name](pool, mount_peers, monkeypatch)
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    resp = await owner_client.post("/api/v1/chat/stream", json={"message": ask})
+    assert resp.status_code == 200, resp.text
+    await chat.drain_background()
+    raw = _UUID.sub(_NO_ID, resp.text)
+    stored = await _reply_of(pool, "chat")
+
+    # Core's own half: what it streams as corrections is how the stored reply
+    # ends, in order — never a line it does not keep.
+    corrections = _corrections(frames(raw))
+    assert stored.endswith("\n\n".join(corrections)), (corrections, stored)
+    if kind == "replace":
+        assert stored == "\n\n".join(corrections)
+
+    entry = {"class": kind, "raw": raw, "stored": stored}
+    if streamed is not None:
+        entry["streamed"] = streamed
+    fixture = json.loads(LIVE_STORED.read_text()) if LIVE_STORED.exists() else {}
+    if os.environ.get("NOVA_WRITE_LIVE_STORED") == "1":
+        fixture[name] = entry
+        LIVE_STORED.write_text(
+            json.dumps(fixture, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+        )
+    assert fixture.get(name) == entry, (
+        f"{name}: core's stream or stored reply changed — regenerate {LIVE_STORED.name} with "
+        "NOVA_WRITE_LIVE_STORED=1 and run apps/web's liveStored.test.ts"
+    )
+
+
+def test_R6_the_fixture_holds_exactly_these_turns():
+    """No stale turn is left in the file the web suite reads."""
+    assert sorted(json.loads(LIVE_STORED.read_text())) == sorted(LIVE_STORED_TURNS)

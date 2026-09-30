@@ -355,11 +355,18 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     `_GERUND_NOT_HERS`, the heading / generic-object / warning cut on the
     gerund fragment above a fence (the re-review's R1: "Running this formats
     your C: drive:" above a `format C: /q` fence read as her lead): 196 -> 197,
-    257 -> 258."""
+    257 -> 258.
+
+    Its fix round 4 (2026-09-30) moved them again, deliberately, and not the
+    difference: 3 new BARE module Patterns, reached by both walks —
+    `_DEVICE_TIMED_OUT` (R3: the device's own answer that its command timed
+    out, told apart from the hub's no-answer), `_INVITATION` and
+    `_REASON_CLAUSE_END` (R2: a quoted failure reason never invites a retry):
+    197 -> 200, 258 -> 261."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 197, len(old)
-    assert len(new) == 258, len(new)
+    assert len(old) == 200, len(old)
+    assert len(new) == 261, len(new)
     assert len(new) - len(old) == 61
 
 
@@ -692,6 +699,29 @@ _THIRTY_FAILED = [
     _recorded("device_run", {"device": "DELL-XPS-8950", "argv": _LONG_COMMAND}, ok=False)
     for _ in range(30)
 ]
+# (fix round 4, R4) One successful call of another family beside the claims —
+# the re-review's shape (scratchpad rr4/probe_timing4.py: 98-129 ms) — alone,
+# among thirty recorded spans, and as thirty of its own.
+_ONE_SEARCH = [_recorded("web_search", {"query": "pixel"})]
+_ONE_SEARCH_IN_THIRTY = [
+    *_ONE_SEARCH,
+    *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
+]
+_THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range(30)]
+
+
+def _distinct(unit: str) -> str:
+    """50 KB of `unit` with a different number in each copy, so no sentence
+    repeats one read before."""
+    out: list[str] = []
+    size = 0
+    index = 0
+    while size < 50_000:
+        piece = unit.format(i=index)
+        out.append(piece)
+        size += len(piece)
+        index += 1
+    return "".join(out)[:50_000]
 
 
 @pytest.mark.parametrize(
@@ -726,6 +756,32 @@ _THIRTY_FAILED = [
             "distinct negated claims",
             "".join(f"App{i} is not open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
             _THIRTY_OK,
+        ),
+        # fix round 4, R4: claims naming no device, beside another tool's work
+        (
+            "distinct unanchored launches beside one search",
+            _distinct("I launched App{i}. "),
+            _ONE_SEARCH,
+        ),
+        (
+            "distinct unanchored launches beside one search in thirty spans",
+            _distinct("I launched App{i}. "),
+            _ONE_SEARCH_IN_THIRTY,
+        ),
+        (
+            "distinct unanchored launches beside thirty searches",
+            _distinct("I launched App{i}. "),
+            _THIRTY_SEARCHES,
+        ),
+        (
+            "distinct unanchored opens for you beside thirty searches",
+            _distinct("I opened App{i} for you. "),
+            _THIRTY_SEARCHES,
+        ),
+        (
+            "distinct unanchored pronouns beside thirty searches",
+            _distinct("I launched it. Item {i}. "),
+            _THIRTY_SEARCHES,
         ),
     ],
 )

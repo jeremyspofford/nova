@@ -641,3 +641,100 @@ def test_what_still_reads_as_her_call_costs_one_true_sentence(label, reply, tool
     assert claim is not None, label
     assert claim.tools == (tool,), label
     assert claim.text == f"(I wrote {tool} as text; it did not run.)", label
+
+
+# -- fix round 4 (2026-09-30, the controller's ruling R1): a delegation ran -------
+#
+# The re-review's repro (scratchpad rr4/probe_fresh.py): Nova delegates to an
+# agent that holds device_launch_app, the agent launches Notepad in ITS OWN
+# turn, and Nova's relay shows the call it had the agent make. The parent turn's
+# record holds only the delegate_to_agent span — the call ran in the child's —
+# so "(I wrote device_launch_app as text; it did not run.)" was false. When a
+# delegation RAN an agent this turn, this turn's record cannot say what was
+# done, and the guard is silent for the turn. The child's spans are not read.
+
+DEVICE = "DELL-XPS-8950"
+F = "```"
+DELEGATED = _span(
+    "delegate_to_agent",
+    args_redacted={"agent": "ops", "task": f"open notepad on {DEVICE}"},
+    facts=[
+        {
+            "agent": "ops",
+            "agent_turn_id": "t2",
+            "status": "ok",
+            "files": [],
+            "rounds": 2,
+            "calls_ok": 1,
+            "calls_failed": 0,
+        }
+    ],
+    result_head=f"ops finished — status ok … I launched Notepad on {DEVICE}.",
+)
+# Its child turn ran, then the run ended in an error: what it did before that is
+# in the child's record just the same.
+DELEGATED_THEN_FAILED = _span(
+    "delegate_to_agent",
+    ok=False,
+    args_redacted={"agent": "ops", "task": f"open notepad on {DEVICE}"},
+    error="Error: ops did not finish — its run ended in an error",
+    facts=[{"agent": "ops", "agent_turn_id": "t2", "status": "error"}],
+)
+LAUNCH_FENCE = f'{F}\ndevice_launch_app "{DEVICE}" "notepad"\n{F}'
+RELAYS = [
+    f"Launching Notepad via ops:\n{LAUNCH_FENCE}",
+    f"Running it through ops:\n{LAUNCH_FENCE}",
+    f"I'll have ops run it:\n{LAUNCH_FENCE}",
+    f"ops ran this:\n{LAUNCH_FENCE}",
+    f"Here is what ops ran:\n{LAUNCH_FENCE}",
+    T890B1C63,
+]
+
+
+@pytest.mark.parametrize("reply", RELAYS)
+def test_R1_a_delegation_that_ran_an_agent_silences_the_turn(reply):
+    assert check(reply, [DELEGATED]) is None
+    assert check(reply, [DELEGATED_THEN_FAILED]) is None
+
+
+def test_R1_the_relays_fire_without_the_delegation():
+    """Not vacuous: the relays that read as her call still do when no agent
+    ran — the delegation is what silences them."""
+    for reply in (RELAYS[0], RELAYS[1], T890B1C63):
+        claim = check(reply)
+        assert claim is not None, reply
+        assert claim.text == "(I wrote device_launch_app as text; it did not run.)"
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
+        (
+            "refused before any run (no agent by that name)",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                args_redacted={"agent": "opz", "task": "open notepad"},
+                error="Error: no agent named 'opz'",
+                facts=[{"agent": "opz", "status": "refused"}],
+            ),
+        ),
+        (
+            "written as markup and refused",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                refused_markup=True,
+                args_redacted={"agent": "ops", "task": "open notepad"},
+            ),
+        ),
+        ("another agent tool that ran", _span("create_agent", args_redacted={"name": "ops"})),
+    ],
+)
+def test_R1_a_delegation_that_ran_no_agent_leaves_the_record_readable(label, span):
+    """A delegation refused before any child turn ran (an unknown agent, a call
+    written as markup) ran nothing anywhere: the turn's record is the whole
+    record, and the sentence it supports is still true."""
+    claim = check(f"Launching Notepad via ops:\n{LAUNCH_FENCE}", [span])
+    assert claim is not None, label
+    assert claim.text == "(I wrote device_launch_app as text; it did not run.)", label

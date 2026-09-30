@@ -1444,3 +1444,77 @@ async def test_a_launch_sent_and_never_answered_is_read_as_not_known(pool, monke
         assert claim.text == (
             "(device_launch_app was sent but did not answer — whether it worked is not known.)"
         )
+
+
+# -- the device ANSWERED that its command did not finish (said-not-done R3) -----
+#
+# Fix round 4 (2026-09-30): round 3 read every "timed out" as the hub's
+# no-answer, so a command the Dell RAN until its deadline and then answered
+# "timed out; partial output: …" (novad's internal/caps/shell.go) was stated as
+# "was sent but did not answer". The device answered: the sentence says it
+# timed out, and where. Its words are read from the agent's own source — never
+# a copy — and travel the real path: the device's result frame, the hub, the
+# tool's `_require_ok`, dispatch. A reworded agent turns this red.
+
+_SHELL_GO = Path(__file__).resolve().parents[3] / "apps/novad/internal/caps/shell.go"
+
+
+def _agent_refusal(starts: str) -> str:
+    """The format string novad's shell.exec fails with, beginning `starts`,
+    as the agent fills it (partial output in place of its verb)."""
+    import re
+
+    for m in re.finditer(r'fail\(\s*"((?:[^"\\]|\\.)*)"', _SHELL_GO.read_text()):
+        # Go's escapes (\n, \") decoded; its UTF-8 (the em dash) kept as is.
+        words = m.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+        if words.startswith(starts):
+            return words.replace("%s", "C:\\> start notepad\nsecond line")
+    raise AssertionError(f"shell.go has no refusal starting {starts!r}")
+
+
+@pytest.mark.parametrize(
+    "starts,case,text",
+    [
+        ("timed out", "timed_out", "(device_run timed out on DELL-XPS-8950.)"),
+        ("cancelled", "failed", "(device_run failed: cancelled before it finished.)"),
+    ],
+)
+async def test_a_run_the_device_answered_did_not_finish_is_read_as_its_answer(
+    pool, starts, case, text
+):
+    from types import SimpleNamespace
+
+    from app import guards
+
+    _device_id, device, conn, task = await _connect(pool, name="DELL-XPS-8950", platform="windows")
+    person = await _person(pool)
+    words = _agent_refusal(starts)
+    argv = ["cmd", "/c", "start", "notepad"]
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["envelope"]["capability"] == "shell.exec"
+        conn.feed(device.result(frame["envelope"], ok=False, exit_code=None, error=words))
+
+    answering = asyncio.create_task(answer())
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "DELL-XPS-8950", "argv": argv}, _ctx(person)
+    )
+    await asyncio.wait_for(answering, 2)
+    await _close(conn, task)
+    assert ok is False
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_run",
+        meta={
+            "ok": False,
+            "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"},
+            "error": result,
+        },
+    )
+    claim = guards.device_completion_check(
+        "Notepad is now open on your DELL-XPS-8950.", [span], tools.tool_names(), ["DELL-XPS-8950"]
+    )
+    assert claim is not None, result
+    assert claim.record.case == case, result
+    assert claim.text == text, result

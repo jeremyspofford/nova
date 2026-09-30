@@ -62,6 +62,9 @@ suffixed Start-menu name — and a false correction is worse than a missed one:
 
 from __future__ import annotations
 
+import ast
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -411,10 +414,15 @@ NONE_ON_DELL = "(No device_launch_app or device_run call ran on DELL-XPS-8950 th
 )
 def test_a_read_or_a_call_on_another_device_leaves_the_claim(label, span):
     """The review's C1, still: a read, a connectivity fact, a backend check
-    or a call on ANOTHER device performs nothing on this one. What the turn
-    says is the record — no call that opens anything ran on the Dell."""
+    or a call on ANOTHER machine performs nothing on this one. What the turn
+    says is the record — no call that opens anything ran on the Dell. (Fix
+    round 4, R5: "another machine" is read from the machine each agent
+    reported; without that grouping a call elsewhere silences the claim.)"""
+    machines = {DEVICE: "d" * 64, MAC: "b" * 64}
     for claim in ("I opened Notepad on your DELL-XPS-8950.", T98ECFB11):
-        found = check(claim, [span], devices=(DEVICE, "TRAVEL-MACBOOK"))
+        found = guards.device_completion_check(
+            claim, [span], NAMES, (DEVICE, MAC), machines=machines
+        )
         assert found is not None, label
         assert found.text == NONE_ON_DELL, label
 
@@ -463,11 +471,15 @@ def test_a_word_for_a_machine_names_any_device(word):
 
 
 def test_a_word_of_a_paired_name_takes_that_device():
-    """ "your Dell" is DELL-XPS-8950 (or its WSL twin), not the MacBook."""
+    """ "your Dell" is DELL-XPS-8950 (or its WSL twin), not the MacBook — a
+    machine of its own by what each agent reported (fix round 4, R5)."""
     devices = (DEVICE, f"{DEVICE} (WSL)", "TRAVEL-MACBOOK")
-    assert check("Notepad is now open on your Dell.", [_launch()], devices=devices) is None
+    machines = {DEVICE: "d" * 64, f"{DEVICE} (WSL)": "e" * 64, MAC: "b" * 64}
+    reply = "Notepad is now open on your Dell."
+    assert check(reply, [_launch()], devices=devices) is None
     mac = _launch("notepad", "TRAVEL-MACBOOK")
-    assert check("Notepad is now open on your Dell.", [mac], devices=devices) is not None
+    found = guards.device_completion_check(reply, [mac], NAMES, devices, machines=machines)
+    assert found is not None
 
 
 def test_a_failed_launch_is_the_claims_failure_with_its_reason():
@@ -1051,12 +1063,12 @@ def test_a_launch_that_was_sent_and_never_answered_is_not_known_either_way():
     never answered: whether it worked is not known, and the sentence says only
     that — never "it did not open", and never what she named
     (guards._NO_ANSWER, pinned to app/devices_ws.py's own words in
-    tests/test_devices_ws.py)."""
+    tests/test_devices_ws.py). The DEVICE's own "timed out" is an answer, and
+    is stated as one (fix round 4, R3 — its tests are below)."""
     for reason in (
         f"Error: device '{DEVICE}' did not answer within 120s",
         "Error: the device disconnected before it answered",
         "Error: device connection closed: revoked",
-        f"Error: {DEVICE}: timed out; partial output:",
     ):
         claim = check(T98ECFB11, [_launch("notepad", ok=False, error=reason)])
         assert claim is not None and claim.record.case == "no_answer", reason
@@ -1073,7 +1085,9 @@ def test_the_sentence_never_says_nothing_ran_when_something_did():
         assert check(T98ECFB11, [span]) is None
     failed = check(T98ECFB11, [_launch("notepad", ok=False, error="Error: x")])
     assert failed is not None and failed.text == "(device_launch_app failed: x.)"
-    claim = check(T98ECFB11, [_launch("notepad", MAC)], devices=TWO)
+    claim = guards.device_completion_check(
+        T98ECFB11, [_launch("notepad", MAC)], NAMES, TWO, machines={DEVICE: "d" * 64, MAC: "b" * 64}
+    )
     assert claim is not None and claim.text == NONE_ON_DELL
 
 
@@ -1365,3 +1379,460 @@ def test_a_read_that_performs_no_action_is_stated_as_none_ran():
     claim = check("I deleted the old logs on your DELL-XPS-8950.", [listed], devices=WIN)
     assert claim is not None
     assert claim.text == "(No device_run call ran on DELL-XPS-8950 this turn.)"
+
+
+# -- fix round 4 (2026-09-30, the controller's rulings R1-R5) --------------------
+
+# R1 — a delegation ran an agent. The re-review's repro (scratchpad
+# rr4/probe_deleg.py): Nova delegates to "ops", which holds device_launch_app;
+# ops launches Notepad on the Dell in its OWN turn, and Nova's relay got "(No
+# device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)". The
+# parent's record holds only the delegate_to_agent span, so it cannot say what
+# was done: when a delegation RAN an agent this turn, the guard is silent for
+# the turn. The child's spans are not read.
+DELEGATED = _span(
+    "delegate_to_agent",
+    args_redacted={"agent": "ops", "task": f"open notepad on {DEVICE}"},
+    facts=[
+        {
+            "agent": "ops",
+            "agent_turn_id": "t2",
+            "status": "ok",
+            "files": [],
+            "rounds": 2,
+            "calls_ok": 1,
+            "calls_failed": 0,
+        }
+    ],
+    result_head=f"ops finished — status ok … I launched Notepad on {DEVICE}.",
+)
+# Its child turn ran and then ended in an error: whatever it did before that is
+# in the child's record, not this one, just the same.
+DELEGATED_THEN_FAILED = _span(
+    "delegate_to_agent",
+    ok=False,
+    args_redacted={"agent": "ops", "task": f"open notepad on {DEVICE}"},
+    error="Error: ops did not finish — its run ended in an error",
+    facts=[{"agent": "ops", "agent_turn_id": "t2", "status": "error"}],
+)
+RELAYED = [
+    f"Notepad is now open on your {DEVICE}.",
+    f"Done — ops opened Notepad on your {DEVICE}.",
+    f"Your ops agent launched Notepad on your {DEVICE}.",
+    f"The ops agent has launched Notepad on your {DEVICE}.",
+    f"I had ops open Notepad on your {DEVICE}, and it's up now.",
+    f"I asked ops to do it, and Notepad is now open on your {DEVICE}.",
+    f"Notepad has been opened on your {DEVICE} by the ops agent.",
+    f"Via the ops agent, Notepad is now open on your {DEVICE}.",
+    "Notepad is now open on your PC.",
+    "I launched Notepad.",
+    f"Notepad is now open on your {DEVICE} (ops did it).",
+]
+
+
+@pytest.mark.parametrize("reply", RELAYED)
+def test_R1_a_delegation_that_ran_an_agent_silences_the_turn(reply):
+    assert check(reply, [DELEGATED]) is None, reply
+    assert check(reply, [DELEGATED_THEN_FAILED]) is None, reply
+    # …whatever else the turn holds beside it
+    assert check(reply, [DELEGATED, _launch("notepad", ok=False, error="Error: x")]) is None
+
+
+def test_R1_the_relays_the_delegation_silences_fire_without_it():
+    """Not vacuous: without the delegation these are her claims with nothing
+    run, and each gets its sentence."""
+    fired = [reply for reply in RELAYED if check(reply) is not None]
+    assert len(fired) >= 7, fired
+    assert check(RELAYED[0]).text == NONE_ON_DELL
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
+        (
+            "refused before any run (no agent by that name)",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                args_redacted={"agent": "opz", "task": "open notepad"},
+                error="Error: no agent named 'opz'",
+                facts=[{"agent": "opz", "status": "refused"}],
+            ),
+        ),
+        (
+            "written as markup and refused",
+            _span(
+                "delegate_to_agent",
+                ok=False,
+                refused_markup=True,
+                args_redacted={"agent": "ops", "task": "open notepad"},
+            ),
+        ),
+        ("another agent tool that ran", _span("create_agent", args_redacted={"name": "ops"})),
+    ],
+)
+def test_R1_a_delegation_that_ran_no_agent_leaves_the_record_readable(label, span):
+    """A delegation refused before any child turn ran reached no agent: the
+    turn's record is the whole record, and its sentence is still true."""
+    claim = check(T98ECFB11, [span])
+    assert claim is not None, label
+    assert claim.text == NONE_ON_DELL, label
+
+
+# R2 — a failure reason is quoted as a fact, never as advice. The re-review
+# (rr4/probe_reasons.py) found "… — remove the malformed character and try
+# again." and four lines of partial output inside the sentence. The sentence
+# quotes the reason's FIRST line, cut at its first " — " (what follows is advice
+# to her), clipped to 120 characters, and never says again/retry/try/ask.
+
+_REPO = Path(__file__).resolve().parents[3]
+_INVITES = re.compile(
+    r"\b(?:again|retry|retries|retrying|try|tries|trying|ask|asks|asking)\b", re.I
+)
+_SAMPLE = DEVICE
+
+
+def _rendered(node: ast.expr) -> str | None:
+    """A refusal's words as the source writes them: a literal, or an f-string
+    with every placeholder filled by one sample value."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        out = []
+        for part in node.values:
+            if isinstance(part, ast.Constant):
+                out.append(str(part.value))
+            else:
+                out.append(repr(_SAMPLE) if part.conversion == ord("r") else _SAMPLE)
+        return "".join(out)
+    return None
+
+
+def _python_refusals(relative: str) -> list[str]:
+    """Every ToolFailure / DeviceRefused a core module raises with words of
+    its own, read from its source (never a copy kept here)."""
+    tree = ast.parse((_REPO / relative).read_text())
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name in ("ToolFailure", "DeviceRefused"):
+            text = _rendered(node.args[0])
+            if text is not None:
+                found.append(text)
+    return found
+
+
+_GO_FORMAT = re.compile(r'\b(?:fail|refuse)\(\s*"((?:[^"\\]|\\.)*)"')
+_GO_VERB = re.compile(r"%[-+# 0]*\d*(?:\.\d+)?[vqsd%]")
+
+
+def _go_refusals(pattern: str) -> list[str]:
+    """Every fail(...) / refuse(...) the device agent answers with, read from
+    its Go source: the format string with its verbs filled."""
+    found = []
+    for path in sorted(_REPO.glob(pattern)):
+        if path.name.endswith("_test.go"):
+            continue
+        for m in _GO_FORMAT.finditer(path.read_text()):
+            # Go's escapes (\n, \") decoded; its UTF-8 (an em dash) kept as is.
+            text = m.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+            text = _GO_VERB.sub(
+                lambda v: {"%": "%", "q": '"notepad"', "d": "1"}.get(v.group(0)[-1], "exit 1"),
+                text,
+            )
+            found.append(text)
+    return found
+
+
+def _known_refusals() -> list[tuple[str, str]]:
+    """(where, the error as core records it) for every refusal a device call
+    can come back with: core's own words ("Error: <reason>"), the hub's, and
+    the agent's, which core prefixes with the device's name (`_require_ok`)."""
+    core = [
+        *_python_refusals("services/core/app/tools/devices.py"),
+        *_python_refusals("services/core/app/devices_ws.py"),
+        *_python_refusals("services/core/app/devices.py"),
+    ]
+    agent = [
+        *_go_refusals("apps/novad/internal/caps/*.go"),
+        *_go_refusals("apps/novad/internal/wire/envelope.go"),
+    ]
+    return [("core", f"Error: {text}") for text in core] + [
+        ("agent", f"Error: {DEVICE}: {text}") for text in agent
+    ]
+
+
+def test_R2_the_known_refusals_are_read_from_their_sources():
+    """The scan must find what it is about, or it proves nothing — and read
+    each as it is written (the agent's em dash intact, not mangled bytes)."""
+    known = [error for _, error in _known_refusals()]
+    assert len(known) >= 40, len(known)
+    assert f"Error: {DEVICE}: cancelled before it finished — novad stopped serving it" in "\n".join(
+        known
+    )
+    for expected in (
+        "an unpaired UTF-16 surrogate",
+        "is not connected — its tile is stale",
+        "did not answer within",
+        "the device disconnected before it answered",
+        "timed out; partial output:",
+        "cancelled before it finished",
+        "no Start-menu app named",
+        "signature did not verify",
+    ):
+        assert any(expected in error for error in known), expected
+
+
+@pytest.mark.parametrize("tool", ["device_launch_app", "device_run"])
+def test_R2_no_known_refusal_is_quoted_as_advice(tool):
+    """Every refusal a device call can come back with, as the sentence quotes
+    it: one line, no " — " advice, at most 120 characters of reason, and none
+    of again / retry / try / ask."""
+    for where, error in _known_refusals():
+        span = _span(
+            tool,
+            ok=False,
+            error=error,
+            args_redacted={"device": DEVICE, "app": "notepad", "argv": ["notepad"]},
+        )
+        claim = check(T98ECFB11, [span])
+        assert claim is not None, error
+        said = claim.text
+        assert "\n" not in said, (where, said)
+        assert _INVITES.search(said) is None, (where, said)
+        if claim.record.case == "failed" and claim.record.reason is not None:
+            assert " — " not in claim.record.reason, (where, said)
+            assert len(claim.record.reason) <= 120, (where, said)
+
+
+@pytest.mark.parametrize(
+    "error,text",
+    [
+        (
+            "Error: an argument contains an unpaired UTF-16 surrogate, which cannot be signed "
+            "for the device — remove the malformed character and try again",
+            "(device_launch_app failed: an argument contains an unpaired UTF-16 surrogate, "
+            "which cannot be signed for the device.)",
+        ),
+        (
+            f"Error: device '{DEVICE}' is not connected — its tile is stale; check it is powered "
+            "on and online",
+            f"(device_launch_app failed: device '{DEVICE}' is not connected.)",
+        ),
+        (
+            f"Error: {DEVICE}: cancelled before it finished — novad stopped serving it (the "
+            "connection to Nova dropped, or novad is stopping); partial output:\nC:\\> start "
+            "notepad\nsome output line one\nline two",
+            "(device_launch_app failed: cancelled before it finished.)",
+        ),
+        (
+            f'Error: {DEVICE}: could not run "notepad": exec: not found\nline two\nline three',
+            '(device_launch_app failed: could not run "notepad": exec: not found.)',
+        ),
+        # the backstop: an invitation the cuts above leave is cut with its clause
+        (
+            f"Error: {DEVICE}: the launcher is busy, please try again later",
+            "(device_launch_app failed: the launcher is busy.)",
+        ),
+        (
+            f"Error: {DEVICE}: the launcher is busy; retry in a minute",
+            "(device_launch_app failed: the launcher is busy.)",
+        ),
+        (f"Error: {DEVICE}: try again later", "(device_launch_app failed.)"),
+        (f"Error: {DEVICE}: Ask the owner to re-pair it", "(device_launch_app failed.)"),
+        # a word that only contains one is no invitation
+        (
+            f"Error: {DEVICE}: the registry entry for the task is missing",
+            "(device_launch_app failed: the registry entry for the task is missing.)",
+        ),
+    ],
+)
+def test_R2_the_reason_is_its_first_line_before_any_advice(error, text):
+    claim = check(T98ECFB11, [_launch("notepad", ok=False, error=error)])
+    assert claim is not None and claim.record.case == "failed", error
+    assert claim.text == text
+
+
+def test_R2_a_long_reason_is_clipped_to_120_characters_at_a_word():
+    words = " ".join(f"word{i}" for i in range(80))
+    claim = check(T98ECFB11, [_launch("notepad", ok=False, error=f"Error: {DEVICE}: {words}")])
+    assert claim is not None
+    reason = claim.record.reason
+    assert len(reason) <= 120 and reason.endswith("…"), reason
+    assert words.startswith(reason[:-1].rstrip()), reason
+    assert claim.text == f"(device_launch_app failed: {reason})"
+
+
+# R3 — the device ANSWERED that the command timed out (novad's shell.go:
+# "timed out; partial output:"). Round 3 read every "timed out" as the hub's
+# no-answer, and said "was sent but did not answer". Now: the device's own
+# answer that it timed out is stated as that; a call that got no answer at all
+# keeps "whether it worked is not known". Both are read off the words the hub
+# and the agent really use — pinned against the running code in
+# tests/test_devices_ws.py.
+
+
+def test_R3_a_command_the_device_answered_had_timed_out_is_stated_as_that():
+    error = f"Error: {DEVICE}: timed out; partial output:\nC:\\> start notepad"
+    for tool in ("device_run", "device_launch_app"):
+        span = _span(
+            tool,
+            ok=False,
+            error=error,
+            args_redacted={"device": DEVICE, "argv": ["cmd", "/c", "start", "notepad"]},
+        )
+        claim = check(T98ECFB11, [span])
+        assert claim is not None, tool
+        assert claim.record.case == "timed_out", tool
+        assert claim.text == f"({tool} timed out on {DEVICE}.)", tool
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        f"Error: device '{DEVICE}' did not answer within 120s",
+        "Error: the device disconnected before it answered",
+        "Error: device connection closed: revoked",
+    ],
+)
+def test_R3_a_call_that_got_no_answer_at_all_is_not_known_either_way(error):
+    claim = check(T98ECFB11, [_launch("notepad", ok=False, error=error)])
+    assert claim is not None and claim.record.case == "no_answer", error
+    assert claim.text == (
+        "(device_launch_app was sent but did not answer — whether it worked is not known.)"
+    )
+
+
+def test_R3_the_hubs_words_inside_the_devices_own_answer_are_its_answer():
+    """The device answered: whatever words its answer holds, it is a failure
+    it stated — never read as a call that got no answer."""
+    error = f'Error: {DEVICE}: could not run "curl": connection closed by peer'
+    claim = check(T98ECFB11, [_launch("notepad", ok=False, error=error)])
+    assert claim is not None and claim.record.case == "failed"
+    assert claim.text == (
+        '(device_launch_app failed: could not run "curl": connection closed by peer.)'
+    )
+
+
+def test_R3_an_unknown_outcome_is_stated_before_a_failure():
+    """Two calls: one failed, one the device answered had timed out. Whether
+    the claim is true is not known, so the timeout is what the turn says."""
+    failed = _launch("notepad", ok=False, error=f"Error: {DEVICE}: no Start-menu app named x")
+    timed = _run(
+        ["cmd", "/c", "start", "notepad"],
+        ok=False,
+        error=f"Error: {DEVICE}: timed out; partial output:\n",
+    )
+    claim = check(T98ECFB11, [failed, timed])
+    assert claim is not None and claim.text == f"(device_run timed out on {DEVICE}.)"
+
+
+# R5 — the WSL twin. "Notepad is now open on your DELL-XPS-8950" after a
+# device_run of notepad.exe on "DELL-XPS-8950 (WSL)" got "No … call ran on
+# DELL-XPS-8950": true of the row, misleading about the machine. A claim is
+# backed by a call of its family on that device OR on any agent of the SAME
+# machine — grouped by what each agent reported (facts.machine_uid, as
+# machine_status groups them), passed as `machines` and derived from the live
+# rows by the caller. An agent inside WSL reports WSL's own machine id (app/
+# checks/devices.py), so the Windows machine it runs on cannot be read from its
+# facts; neither can an agent that reported none. Where the grouping cannot be
+# read and a call ran on another device, the guard is silent for that claim.
+
+WSL = f"{DEVICE} (WSL)"
+UID_DELL = "d" * 64
+UID_BOX = "b" * 64
+
+
+def _twins(**extra) -> dict:
+    return {DEVICE: UID_DELL, **extra}
+
+
+def test_R5_a_call_on_an_agent_of_the_same_machine_backs_the_claim():
+    machines = _twins(**{"dell-second-agent": UID_DELL})
+    names = tuple(machines)
+    for span in (
+        _launch("notepad", "dell-second-agent"),
+        _run(["notepad.exe"], "dell-second-agent"),
+    ):
+        assert (
+            guards.device_completion_check(T98ECFB11, [span], NAMES, names, machines=machines)
+            is None
+        )
+
+
+def test_R5_the_wsl_twins_call_is_on_a_machine_that_cannot_be_read_so_the_claim_is_silent():
+    """The re-review's repro, as the Dell's rows are: the WSL agent reports no
+    machine the Windows one shares — pre-S42a it sends no facts, and since
+    S42a its machine id is WSL's own — so it is read as None."""
+    machines = _twins(**{WSL: None})
+    names = tuple(machines)
+    for span in (
+        _run(["notepad.exe"], WSL),
+        _run(["notepad.exe"], WSL, ok=False, error=f"Error: {WSL}: exit 1"),
+        _launch("notepad", WSL),
+    ):
+        for reply in (T98ECFB11, f"I opened Notepad on your {DEVICE}."):
+            found = guards.device_completion_check(reply, [span], NAMES, names, machines=machines)
+            assert found is None, (reply, span.meta)
+
+
+def test_R5_a_claim_about_the_wsl_twin_after_a_call_on_windows_is_silent_too():
+    machines = _twins(**{WSL: None})
+    reply = f"Notepad is now open on your {WSL}."
+    found = guards.device_completion_check(
+        reply, [_launch("notepad")], NAMES, tuple(machines), machines=machines
+    )
+    assert found is None
+
+
+def test_R5_a_call_on_another_machine_leaves_the_claim():
+    machines = _twins(box=UID_BOX)
+    for span in (_launch("notepad", "box"), _run(["notepad.exe"], "box")):
+        claim = guards.device_completion_check(
+            T98ECFB11, [span], NAMES, tuple(machines), machines=machines
+        )
+        assert claim is not None and claim.text == NONE_ON_DELL
+
+
+def test_R5_without_the_grouping_a_call_elsewhere_silences_the_claim():
+    """No `machines` (a caller that read none, or a registry read that failed):
+    no grouping can be read, so a call on any other device may be on the same
+    machine."""
+    for span in (_launch("notepad", "office-mac"), _run(["notepad.exe"], WSL)):
+        assert check(T98ECFB11, [span], devices=(DEVICE, "office-mac", WSL)) is None
+
+
+@pytest.mark.parametrize("machines", [None, {}, {DEVICE: UID_DELL}, {DEVICE: None, WSL: None}])
+def test_R5_nothing_run_anywhere_is_stated_whatever_the_grouping(machines):
+    names = (DEVICE, WSL)
+    for spans in ([], [_span("device_info", args_redacted={"device": WSL})]):
+        claim = guards.device_completion_check(T98ECFB11, spans, NAMES, names, machines=machines)
+        assert claim is not None and claim.text == NONE_ON_DELL, machines
+
+
+def test_R5_a_failure_on_an_agent_of_the_same_machine_is_stated():
+    machines = _twins(**{"dell-second-agent": UID_DELL})
+    failed = _launch(
+        "notepad", "dell-second-agent", ok=False, error="Error: dell-second-agent: nope"
+    )
+    claim = guards.device_completion_check(
+        T98ECFB11, [failed], NAMES, tuple(machines), machines=machines
+    )
+    assert claim is not None and claim.text == "(device_launch_app failed: nope.)"
+
+
+def test_R5_the_machine_an_agent_runs_on_is_read_from_its_own_facts():
+    """device_facts.machine: the agent's machine_uid — never inside WSL, whose
+    machine id is WSL's own, and never when it reported none."""
+    from app import device_facts
+
+    native = {"os": {"goos": "windows", "wsl": None}, "machine_uid": UID_DELL}
+    inside = {"os": {"goos": "linux", "wsl": {"distro": "Ubuntu"}}, "machine_uid": UID_BOX}
+    assert device_facts.machine(native) == UID_DELL
+    assert device_facts.machine(inside) is None
+    assert device_facts.machine({"os": {"goos": "linux", "wsl": None}}) is None
+    assert device_facts.machine({"machine_uid": ""}) is None
+    assert device_facts.machine(None) is None

@@ -2275,6 +2275,20 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
         return []
 
 
+async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
+    """Every LIVE paired device's name and the machine its agent reported
+    (devices.live_machines), for the said-not-done device claim: a call on
+    another agent of the same machine is a call on that machine (fix round 4,
+    R5). Read from the rows, never a list. None on ANY failure — no grouping
+    can then be read, and the guard stays silent for a claim that a call on
+    another device might back (a blip costs a sentence, never a false one)."""
+    try:
+        return await devices.live_machines(pool)
+    except Exception:
+        logger.exception("device machine read failed; the device claim reads no grouping")
+        return None
+
+
 # The two exemption reads behind _agent_names, as ONE round trip. Each half
 # names an agent this conversation ALREADY has on record before this turn:
 # it wrote an assistant row here (an @mention ran it in this very
@@ -4657,6 +4671,12 @@ async def _run_turn(
         # that takes it back). Found by what was added, never by searching for
         # a note's words.
         text_note = ""
+        # Whether `backend_note` is a note a consent/state/listing REDIRECT
+        # earned (its closing round wrote a call as markup): the turn's own
+        # notes stream as they are added, but that one is only stored — so it
+        # is shown live where it is stored (said-not-done fix round 4, R6: emit
+        # what persists).
+        redirect_note_unshown = False
 
         # Tool-call MARKUP in what streamed. _gateway_round already parsed it out
         # of each round's returned text (and dispatched or refused what it
@@ -4958,7 +4978,8 @@ async def _run_turn(
             stood_prose = outcome.prose if outcome.redirected else stood_prose
             redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
-            backend_note = backend_note or outcome.markup_note
+            if backend_note is None and outcome.markup_note:
+                backend_note, redirect_note_unshown = outcome.markup_note, True
         # The turn's single redirect budget: ONE regeneration per turn, first
         # claim wins, never two. Spent by TRYING, not by succeeding.
         redirect_spent = consent_correction is not None
@@ -5148,7 +5169,8 @@ async def _run_turn(
                     # claim's text, so the claim carries the new one.
                     state_claim = dataclasses.replace(state_claim, text=state_text)
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
-                backend_note = backend_note or outcome.markup_note
+                if backend_note is None and outcome.markup_note:
+                    backend_note, redirect_note_unshown = outcome.markup_note, True
                 redirect_spent = True
 
         # The PRESENTED-LISTING guard, on the same raw reply, same fail-OPEN
@@ -5251,7 +5273,8 @@ async def _run_turn(
                 stood_prose = outcome.prose if outcome.redirected else stood_prose
                 redirect_appended += outcome.appended
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
-                backend_note = backend_note or outcome.markup_note
+                if backend_note is None and outcome.markup_note:
+                    backend_note, redirect_note_unshown = outcome.markup_note, True
                 redirect_spent = True
 
         # Compose the DURABLE text once, from the outcome above. The consent,
@@ -5358,6 +5381,8 @@ async def _run_turn(
         elif prose_dropped:
             said_prose = None
         if backend_note is not None and prose_dropped:
+            if redirect_note_unshown:
+                emit(_frame({"correction": backend_note}))  # stored, so shown (R6)
             persisted = f"{persisted}\n\n{backend_note}" if persisted else backend_note
         if listing_unverified:
             # Appended after whatever the composition kept — the prose itself in
@@ -5492,12 +5517,19 @@ async def _run_turn(
             and not redirect_spent
             and not out_of_rounds
         ):
-            # Measured BEFORE the redirect: the offer shape can fire with some
-            # OTHER tool's span already on the turn (a memory search, then
-            # "want me to check the web?"), in which case _claim_redirect
-            # refuses to regenerate at all — so a successful span AFTER it is
-            # only the redirect's own work when there was none before.
-            ran_before = guards.ran_a_tool(turn.spans)
+            # The offer shape can fire with some OTHER tool's span already on
+            # the turn (a memory search, then "want me to check the web?"), in
+            # which case _claim_redirect refuses to regenerate at all and its
+            # honest note stands. When the redirect's own first round
+            # dispatched a successful tool but its report did not survive, that
+            # note would say it did not — a call that RAN is never reported as
+            # nothing ran — so `_claim_redirect` names what ran instead
+            # (`still_unbacked`, read only when it dispatched: its precondition
+            # guarantees nothing had run before, so any successful span then is
+            # its own). It EMITS the text it returns, and this block persists
+            # exactly that text (said-not-done fix round 4, R6: it once emitted
+            # the honest note live and stored "[I ran X but could not
+            # report…]" — the owner saw a false line).
             outcome = await _claim_redirect(
                 app,
                 turn,
@@ -5520,6 +5552,7 @@ async def _run_turn(
                     else (lambda ran: offer_redirect_nudge(ran_a_tool=ran))
                 ),
                 redirect_note=DEFERRAL_NOTE,
+                still_unbacked=lambda: not guards.ran_a_tool(turn.spans),
                 out_of_rounds=out_of_rounds,
                 messages=messages,
                 advertised=advertised,
@@ -5537,16 +5570,11 @@ async def _run_turn(
             if offer_redirected:
                 persisted = outcome.text
                 said_prose = outcome.prose
-            elif not ran_before and guards.ran_a_tool(turn.spans):
-                # The redirect's own first round dispatched a successful tool
-                # but its report did not survive — the same rule as the
-                # bare-intent block: a call that RAN is never reported as
-                # nothing ran, so the note names what actually happened.
-                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
-                persisted = f"{persisted}\n\n{_bare_intent_ran_but_unreported_note(ran_names)}"
             else:
                 persisted = f"{persisted}\n\n{outcome.text}"
             if outcome.markup_note:
+                # Stored, so shown live too (R6: emit what persists).
+                emit(_frame({"correction": outcome.markup_note}))
                 persisted = f"{persisted}\n\n{outcome.markup_note}"
             backend_note = backend_note or outcome.markup_note
             # Spent by TRYING, not by succeeding — same rule as consent/state.
@@ -5571,6 +5599,17 @@ async def _run_turn(
             and not redirect_spent
             and not out_of_rounds
         ):
+            # The redirect's OWN first round may actually dispatch a successful
+            # tool (bare_intent only ever fires when nothing had run yet, so any
+            # span here is this redirect's) even though the closing round's
+            # report does not survive — empty, refused as markup, or rejected
+            # by the guard set. BARE_INTENT_HONEST_NOTE says "did not" and would
+            # then be a LIE: a call that RAN is never reported as nothing ran
+            # (the same rule the consent-wave's markup fix established). So
+            # `_claim_redirect` names what actually ran instead
+            # (`still_unbacked`), and EMITS exactly the text it returns, which
+            # is what persists (said-not-done fix round 4, R6: it once emitted
+            # the "did not" note live and stored "[I ran X…]").
             outcome = await _claim_redirect(
                 app,
                 turn,
@@ -5584,6 +5623,7 @@ async def _run_turn(
                 },
                 nudge_for=lambda ran: bare_intent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=DEFERRAL_NOTE,
+                still_unbacked=lambda: not guards.ran_a_tool(turn.spans),
                 out_of_rounds=out_of_rounds,
                 messages=messages,
                 advertised=advertised,
@@ -5602,27 +5642,15 @@ async def _run_turn(
             # REPLACE-class: what persists is the regeneration, or a note that
             # drops her prose — none of it hers to read then.
             said_prose = outcome.prose if bare_intent_redirected else None
-            if not bare_intent_redirected and guards.ran_a_tool(turn.spans):
-                # The redirect's OWN first round actually dispatched a
-                # successful tool (bare_intent only ever fires when nothing
-                # had run yet, so any span here was created by this
-                # redirect) even though the closing round's report did not
-                # survive — empty, refused as markup, or rejected by the
-                # guard set. BARE_INTENT_HONEST_NOTE says "did not" and
-                # would then be a LIE: a call that RAN is never reported as
-                # nothing ran (the same rule the consent-wave's markup fix
-                # established). Name what actually ran instead.
-                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
-                persisted = _bare_intent_ran_but_unreported_note(ran_names)
-            else:
-                persisted = outcome.text
+            persisted = outcome.text
             if outcome.markup_note:
                 # This block runs AFTER the turn's one shared backend-note
                 # append (the "compose the DURABLE text once" section,
                 # above) already ran, so setting `backend_note` alone would
                 # leave this note computed and never attached to anything —
                 # append it directly, here, the one place left that still
-                # writes `persisted`.
+                # writes `persisted`. Stored, so shown live too (R6).
+                emit(_frame({"correction": outcome.markup_note}))
                 persisted = f"{persisted}\n\n{outcome.markup_note}"
             backend_note = backend_note or outcome.markup_note
             # Spent by TRYING, not by succeeding — same rule as consent/state.
@@ -5691,9 +5719,15 @@ async def _run_turn(
         # contradict each other or the record. Each files ONE span, and the turn
         # stays out of memory (`plumbing_turn`). Fail-open, each on its own: a
         # guard that raises appends nothing.
+        #
+        # Fix round 4 (2026-09-30, R1/R5): both are silent for a turn whose
+        # delegation ran an agent (the calls are on the agent's turn), and a
+        # device claim is backed by a call on any agent of the same machine —
+        # the machine each agent reported, read here from the live rows.
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
+            machines = await _paired_machines(pool)
             for name, check in (
                 (
                     "written_call",
@@ -5702,7 +5736,7 @@ async def _run_turn(
                 (
                     "device_completion",
                     lambda: guards.device_completion_check(
-                        said, turn.spans, persona.tool_names, device_names
+                        said, turn.spans, persona.tool_names, device_names, machines=machines
                     ),
                 ),
             ):
