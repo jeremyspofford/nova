@@ -48,7 +48,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import shlex
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -6313,14 +6313,26 @@ def _a_delegation_ran(spans: Sequence[Any]) -> bool:
     return False
 
 
+def _mark_positions(text: str, mark: str) -> list[int]:
+    """Every index of the one-character `mark` in `text`, in order: one pass,
+    so counting the marks before any position is a bisect, never a re-read."""
+    found: list[int] = []
+    at = text.find(mark)
+    while at >= 0:
+        found.append(at)
+        at = text.find(mark, at + 1)
+    return found
+
+
 def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim | None:
     """The first unbacked claim in one non-question clause, or None.
 
     A candidate that a successful call silences is dropped as soon as its
     action and device are known, before any cut is read (fix round 3, T5):
-    silent is silent whatever the cuts say. The cuts are found at most ONCE
-    per clause, when a candidate first needs them, and compared by position
-    (bisect), so a long clause costs one pass."""
+    silent is silent whatever the cuts say. The cuts, and the quotation marks
+    (said-not-done final review, I-2), are found at most ONCE per clause, when
+    a candidate first needs them, and compared by position (bisect), so a long
+    clause costs one pass."""
     text = _MD_LINK.sub(r"\1", clause) if "](" in clause else clause
     if "*" in text:
         text = text.replace("*", "")
@@ -6389,6 +6401,24 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
         index = bisect_right(break_starts, at - 1)
         return break_starts[index] if index < len(break_starts) else len(text)
 
+    # Where each quotation mark sits in this clause, found on first need.
+    marks: dict[str, list[int]] = {}
+
+    def quoted(at: int) -> bool:
+        """Is `at` inside a quotation: an odd number of straight double quotes
+        or backticks before it, or more opening curly quotes than closing
+        ones? Each mark's positions are found ONCE per clause and counted by
+        bisect — four `text.count(…, 0, at)` per candidate read the clause from
+        its start for every candidate, so a long clause of claims dropped after
+        this test was quadratic (said-not-done final review, I-2)."""
+
+        def before(mark: str) -> int:
+            if mark not in marks:
+                marks[mark] = _mark_positions(text, mark)
+            return bisect_left(marks[mark], at)
+
+        return bool(before('"') % 2 or before("`") % 2 or before("“") > before("”"))
+
     for position, shape, m in candidates:
         verb_end = m.end()
         place = place_after(verb_end)
@@ -6443,11 +6473,7 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
             continue  # a negation, hedge, intent or report in its own segment
         if any_in(found_at("conditions"), segment_start, segment_end(verb_end)):
             continue  # "…when a timer fires", "…after the update": conditioned (C2)
-        if (
-            text.count('"', 0, begin) % 2
-            or text.count("`", 0, begin) % 2
-            or text.count("“", 0, begin) > text.count("”", 0, begin)
-        ):
+        if quoted(begin):
             continue  # inside a quotation: someone else's words
         if place is not None and any_in(found_at("negations"), verb_end, place.start()):
             continue  # "I launched nothing on your Dell"

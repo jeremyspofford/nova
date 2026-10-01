@@ -552,105 +552,200 @@ def test_the_sweep_walks_the_said_not_done_legs():
 
 
 # The WHOLE guards, not one pattern each: a reply is read line by line and
-# clause by clause, and every cut is found once per line or clause, so 50 KB of
-# the worst shapes each guard reads stays inside 100 ms — guards run in core's
-# only event loop (one took 15.4 s on an honest reply).
-WHOLE_GUARD_BUDGET_S = 0.1
+# clause by clause, and every cut is found once per line or clause — guards run
+# in core's only event loop (one took 15.4 s on an honest reply).
+#
+# Each pin times one input at TWO sizes, a 4x step apart, and holds BOTH
+# (said-not-done final review, I-2):
+#
+#   * GROWTH: t(4n) / t(n) < GROWTH_LIMIT. Reading in linear time measures
+#     about x4 (every pin here measured x2.8 to x4.7, the top one under load
+#     from another process); a quadratic heads for x16. This is what catches an
+#     algorithm going wrong, on any runner: one 50 KB budget missed
+#     device_completion recounting a clause's quotation marks from its start
+#     for every claim in it, and a budget widened so a slower runner stopped
+#     flaking would have hidden that for good.
+#   * CAP: the larger input stays under an absolute cap with real headroom,
+#     BIG_INPUT_CAP_S per 50 KB, so a slower runner (CI runs this suite on
+#     every push) passes while a blow-up of the constant does not. Where these
+#     were set, the slowest 50 KB read took 85 ms (89 ms under load) and the
+#     slowest 200 KB one 344 ms (420 ms under load): the cap is 3.5x the
+#     unloaded figures. It was 100 ms per 50 KB, which left that read 15 ms.
+#
+# Each sample is looped until it lasts _SAMPLE_S, so a call of a few
+# microseconds is timed as reliably as one of 50 ms, and both sizes are looped
+# alike.
 _NAMES = tools.tool_names()
+GROWTH_LIMIT = 6.0
+BIG_INPUT_CAP_S = 0.3
+_SAMPLE_S = 0.002
 
 
-def _fifty_kb(unit: str) -> str:
-    return (unit * (50_000 // len(unit) + 1))[:50_000]
+def _per_call(fn, loops: int, runs: int) -> float:
+    """Best-of-`runs` seconds per call of `fn`, each sample `loops` calls."""
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        for _ in range(loops):
+            fn()
+        best = min(best, (time.perf_counter() - start) / loops)
+    return best
 
 
+def _assert_linear(
+    label: str,
+    check,
+    build,
+    *,
+    small: int = 12_500,
+    large: int = 50_000,
+    cap_s: float | None = None,
+    runs: int = 3,
+) -> None:
+    """`check(build(n))` grows linearly from `small` to `large` (a 4x step)
+    and stays under its cap at `large` — BIG_INPUT_CAP_S per 50 KB unless a
+    cap is given. One warming call first: a per-name pattern is built once."""
+    assert large == 4 * small, "GROWTH_LIMIT is for a 4x step"
+    short, long = build(small), build(large)
+    check(short)
+    start = time.perf_counter()
+    check(short)
+    loops = max(1, int(_SAMPLE_S / max(time.perf_counter() - start, 1e-7)) + 1)
+    t_small = _per_call(lambda: check(short), loops, runs)
+    t_large = _per_call(lambda: check(long), loops, runs)
+    cap = cap_s if cap_s is not None else BIG_INPUT_CAP_S * large / 50_000
+    assert t_large < cap, (
+        f"{label}: {large:,} chars took {t_large * 1000:.1f} ms (cap {cap * 1000:.0f})"
+    )
+    growth = t_large / t_small
+    assert growth < GROWTH_LIMIT, (
+        f"{label}: x4 the input took x{growth:.1f} the time "
+        f"({t_small * 1000:.2f} -> {t_large * 1000:.2f} ms); linear is about x4"
+    )
+
+
+def _repeat(unit: str):
+    """`unit` repeated to exactly n characters."""
+    return lambda n: (unit * (n // len(unit) + 1))[:n]
+
+
+def _distinct(unit: str):
+    """`unit` with a different number in each copy, to n characters, so no
+    sentence repeats one read before."""
+
+    def build(n: int) -> str:
+        out: list[str] = []
+        size = index = 0
+        while size < n:
+            piece = unit.format(i=index)
+            out.append(piece)
+            size += len(piece)
+            index += 1
+        return "".join(out)[:n]
+
+    return build
+
+
+# Each shape at n characters; at 50 KB, the shape each pinned before.
 FIFTY_KB = [
-    ("written_names_and_spaces", _fifty_kb("device_run " + " " * 40)),
-    ("written_names_then_quotes", _fifty_kb('device_info "x" ')),
-    ("written_names_glued", _fifty_kb("device_rundevice_info")),
-    ("written_open_parens", _fifty_kb("device_run(" + " " * 30)),
-    ("written_fences", _fifty_kb('```\ndevice_launch_app "DELL" "Teams"\n```\n')),
-    ("written_one_padded_line", "device_info" + " " * 50_000 + '"x"'),
-    ("written_quotes", _fifty_kb('"device_run" ')),
-    ("written_examples", _fifty_kb('for example device_run(["ls"]) ')),
-    ("claims", _fifty_kb("Notepad is now open on your DELL-XPS-8950 ")),
-    ("copulas", _fifty_kb("it is now now now ")),
-    ("first_person", _fifty_kb("I opened ")),
-    ("padded_copula", "Notepad is" + " " * 50_000 + "open on your Dell"),
-    ("padded_anchor", "Notepad is now open" + " " * 50_000 + "on your Dell"),
-    ("no_sentence_breaks", _fifty_kb("I have just opened and started and ran ")),
-    ("anchors", _fifty_kb("on your Dell to the PC ")),
-    ("capitalised_run", "I opened " + "A" * 50_000),
-    ("prose", _fifty_kb("The quick brown fox jumps over the lazy dog. ")),
-    ("stars", _fifty_kb("**DELL-XPS-8950** ")),
+    ("written_names_and_spaces", _repeat("device_run " + " " * 40)),
+    ("written_names_then_quotes", _repeat('device_info "x" ')),
+    ("written_names_glued", _repeat("device_rundevice_info")),
+    ("written_open_parens", _repeat("device_run(" + " " * 30)),
+    ("written_fences", _repeat('```\ndevice_launch_app "DELL" "Teams"\n```\n')),
+    ("written_one_padded_line", lambda n: "device_info" + " " * n + '"x"'),
+    ("written_quotes", _repeat('"device_run" ')),
+    ("written_examples", _repeat('for example device_run(["ls"]) ')),
+    ("claims", _repeat("Notepad is now open on your DELL-XPS-8950 ")),
+    ("copulas", _repeat("it is now now now ")),
+    ("first_person", _repeat("I opened ")),
+    ("padded_copula", lambda n: "Notepad is" + " " * n + "open on your Dell"),
+    ("padded_anchor", lambda n: "Notepad is now open" + " " * n + "on your Dell"),
+    ("no_sentence_breaks", _repeat("I have just opened and started and ran ")),
+    ("anchors", _repeat("on your Dell to the PC ")),
+    ("capitalised_run", lambda n: "I opened " + "A" * n),
+    ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
+    ("stars", _repeat("**DELL-XPS-8950** ")),
     # fix round 1's paths: a line of inline calls, one sentence of them, fenced
     # calls under leads, a recap list, subject verbs, links, a dot run.
-    ("inline_calls_one_line", _fifty_kb('Let me run `device_info "x"` now. ')),
-    ("inline_calls_one_sentence", _fifty_kb('I\'ll run `device_info "x"` and ')),
-    ("fence_intros", _fifty_kb('I\'ll check:\n```\ndevice_info "x"\n```\n')),
-    ("recap_list", "Here's what I did today:\n" + _fifty_kb("- I opened Notepad on your Dell\n")),
-    ("subject_verbs", _fifty_kb("Notepad opened on your Dell and ")),
-    ("links", _fifty_kb("[DELL-XPS-8950](https://x.invalid/d) ")),
-    ("negated_calls", _fifty_kb('I did not run `device_run ["x"]` and ')),
-    ("dots", "." * 50_000),
+    ("inline_calls_one_line", _repeat('Let me run `device_info "x"` now. ')),
+    ("inline_calls_one_sentence", _repeat('I\'ll run `device_info "x"` and ')),
+    ("fence_intros", _repeat('I\'ll check:\n```\ndevice_info "x"\n```\n')),
+    (
+        "recap_list",
+        lambda n: "Here's what I did today:\n" + _repeat("- I opened Notepad on your Dell\n")(n),
+    ),
+    ("subject_verbs", _repeat("Notepad opened on your Dell and ")),
+    ("links", _repeat("[DELL-XPS-8950](https://x.invalid/d) ")),
+    ("negated_calls", _repeat('I did not run `device_run ["x"]` and ')),
+    ("dots", lambda n: "." * n),
     # fix round 2's paths. The reviewer's shape first (minor: 41 KB took 13.8 s):
     # one long intro line, then fence after fence, each re-reading it.
-    ("one_long_intro_many_fences", "I'll check " + "a" * 20_000 + ":\n" + "```\n```\n" * 7_500),
+    (
+        "one_long_intro_many_fences",
+        lambda n: "I'll check " + "a" * (n * 2 // 5) + ":\n" + "```\n```\n" * (n * 3 // 20),
+    ),
     (
         "one_long_intro_fenced_calls",
-        "I'll check " + "b " * 10_000 + ":\n" + _fifty_kb('```\ndevice_info "x"\n```\n')[:30_000],
+        lambda n: (
+            "I'll check "
+            + "b " * (n // 5)
+            + ":\n"
+            + _repeat('```\ndevice_info "x"\n```\n')(n * 3 // 5)
+        ),
     ),
-    ("intros_and_fences", _fifty_kb('I\'ll check it now:\n```\ndevice_info "x"\n```\n')),
-    ("gerund_intros", _fifty_kb('Launching it via the shell.\n```\ndevice_run ["x"]\n```\n')),
+    ("intros_and_fences", _repeat('I\'ll check it now:\n```\ndevice_info "x"\n```\n')),
+    ("gerund_intros", _repeat('Launching it via the shell.\n```\ndevice_run ["x"]\n```\n')),
     (
         "distinct_ruled_out_intros",
-        "".join(
-            f'I\'ll run this once you confirm {i}:\n```\ndevice_run ["x"]\n```\n'
-            for i in range(1_300)
-        )[:50_000],
+        _distinct('I\'ll run this once you confirm {i}:\n```\ndevice_run ["x"]\n```\n'),
     ),
     (
         "distinct_intros_and_follows",
-        "".join(
-            f'Launching item {i} via the shell.\n```\ndevice_run ["x"]\n```\nShall I {i}?\n'
-            for i in range(900)
-        )[:50_000],
+        _distinct('Launching item {i} via the shell.\n```\ndevice_run ["x"]\n```\nShall I {i}?\n'),
     ),
-    ("one_long_follow", '```\ndevice_info "x"\n```\n' + "Shall " + "d " * 25_000 + "?"),
-    ("ifs", 'I\'ll run `device_info "x"` ' + "if " * 16_600),
-    ("whether_ifs", 'I\'ll run `device_info "x"` ' + "check if " * 5_550),
-    ("lead_adverbs", "I'll " + "now just first " * 3_300 + 'run `device_info "x"`'),
-    ("conditioned_claims", _fifty_kb("Notepad is now open on your DELL-XPS-8950 when ")),
-    ("fronted_conditions", "When " * 10_000 + "Notepad is now open on your DELL-XPS-8950"),
-    ("platform_words", _fifty_kb("Notepad is now open on your Windows PC and on your Mac ")),
+    ("one_long_follow", lambda n: '```\ndevice_info "x"\n```\n' + "Shall " + "d " * (n // 2) + "?"),
+    ("ifs", lambda n: 'I\'ll run `device_info "x"` ' + "if " * (n // 3)),
+    ("whether_ifs", lambda n: 'I\'ll run `device_info "x"` ' + "check if " * (n // 9)),
+    ("lead_adverbs", lambda n: "I'll " + "now just first " * (n // 15) + 'run `device_info "x"`'),
+    ("conditioned_claims", _repeat("Notepad is now open on your DELL-XPS-8950 when ")),
+    (
+        "fronted_conditions",
+        lambda n: "When " * (n // 5) + "Notepad is now open on your DELL-XPS-8950",
+    ),
+    ("platform_words", _repeat("Notepad is now open on your Windows PC and on your Mac ")),
     # fix round 3's paths: gerund labels and warnings above fences, a heading
     # above each, modal futures, and conditional list intros.
-    ("gerund_labels", _fifty_kb('Launching an app:\n```\ndevice_run ["x"]\n```\n')),
-    ("gerund_warnings", _fifty_kb('Running this formats it:\n```\ndevice_run ["x"]\n```\n')),
-    ("heading_fences", _fifty_kb('### Running a command\n```\ndevice_run ["x"]\n```\n')),
-    ("modal_futures", _fifty_kb("Notepad will have opened on your DELL-XPS-8950. ")),
-    ("conditional_lists", _fifty_kb("If it works:\n- Notepad is now open on your DELL-XPS-8950\n")),
+    ("gerund_labels", _repeat('Launching an app:\n```\ndevice_run ["x"]\n```\n')),
+    ("gerund_warnings", _repeat('Running this formats it:\n```\ndevice_run ["x"]\n```\n')),
+    ("heading_fences", _repeat('### Running a command\n```\ndevice_run ["x"]\n```\n')),
+    ("modal_futures", _repeat("Notepad will have opened on your DELL-XPS-8950. ")),
+    ("conditional_lists", _repeat("If it works:\n- Notepad is now open on your DELL-XPS-8950\n")),
 ]
 
 
-@pytest.mark.parametrize("label,reply", FIFTY_KB, ids=[c[0] for c in FIFTY_KB])
-def test_the_said_not_done_guards_read_50_kb_in_100_ms(label, reply):
-    for check in (
-        lambda: guards.written_call_check(reply, [], _NAMES),
-        lambda: guards.device_completion_check(reply, [], _NAMES, ["DELL-XPS-8950"]),
-    ):
-        took = _best_of(check)
-        assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+@pytest.mark.parametrize("label,build", FIFTY_KB, ids=[c[0] for c in FIFTY_KB])
+def test_the_said_not_done_guards_read_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"written_call {label}", lambda r: guards.written_call_check(r, [], _NAMES), build
+    )
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, [], _NAMES, ["DELL-XPS-8950"]),
+        build,
+    )
 
 
-def test_a_huge_command_record_is_read_in_100_ms():
+def test_a_huge_command_record_is_read_in_linear_time():
     """(fix rounds 2 and 3, C1) device_completion reads a FAILED device_run's
     argv to choose which failure to state. A record is bounded where it is
-    written (chat's span caps), but the reading must not depend on that: 50 KB
-    of argv, as a list and as one string, is read in 100 ms."""
+    written (chat's span caps), but the reading must not depend on that: an
+    argv of 50 KB, as a list of words, as one long command and as one word, is
+    read in linear time and under the cap."""
     from types import SimpleNamespace
 
-    for argv in (["x"] * 25_000, ["cmd", "/c", "start " + "x " * 25_000], ["a" * 50_000]):
-        spans = [
+    def failed_run(argv: list[str]) -> list:
+        return [
             SimpleNamespace(
                 kind="tool",
                 name="device_run",
@@ -661,12 +756,19 @@ def test_a_huge_command_record_is_read_in_100_ms():
                 },
             )
         ]
-        took = _best_of(
-            lambda spans=spans: guards.device_completion_check(
+
+    for label, argv in (
+        ("a list of words", lambda n: ["x"] * (n // 2)),
+        ("one long command", lambda n: ["cmd", "/c", "start " + "x " * (n // 2)]),
+        ("one word", lambda n: ["a" * n]),
+    ):
+        _assert_linear(
+            label,
+            lambda spans: guards.device_completion_check(
                 "Notepad is now open on your DELL-XPS-8950.", spans, _NAMES, ["DELL-XPS-8950"]
-            )
+            ),
+            lambda n, argv=argv: failed_run(argv(n)),
         )
-        assert took < WHOLE_GUARD_BUDGET_S, f"{len(argv)} argv words: {took * 1000:.1f} ms"
 
 
 def _recorded(name: str, args: dict, *, ok: bool = True) -> object:
@@ -710,51 +812,37 @@ _ONE_SEARCH_IN_THIRTY = [
 _THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range(30)]
 
 
-def _distinct(unit: str) -> str:
-    """50 KB of `unit` with a different number in each copy, so no sentence
-    repeats one read before."""
-    out: list[str] = []
-    size = 0
-    index = 0
-    while size < 50_000:
-        piece = unit.format(i=index)
-        out.append(piece)
-        size += len(piece)
-        index += 1
-    return "".join(out)[:50_000]
-
-
 @pytest.mark.parametrize(
-    "label,reply,spans",
+    "label,build,spans",
     [
         (
             "the same backed claim, over and over",
-            _fifty_kb("Notepad is now open on your DELL-XPS-8950. "),
+            _repeat("Notepad is now open on your DELL-XPS-8950. "),
             _THIRTY_OK,
         ),
         (
             "distinct backed claims",
-            "".join(f"App{i} is now open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _distinct("App{i} is now open on your DELL-XPS-8950. "),
             _THIRTY_OK,
         ),
         (
             "distinct backed close claims",
-            "".join(f"I closed App{i} on your DELL-XPS-8950. " for i in range(1_500))[:50_000],
+            _distinct("I closed App{i} on your DELL-XPS-8950. "),
             _THIRTY_OK,
         ),
         (
             "distinct claims on a machine word",
-            "".join(f"App{i} is now open on your PC. " for i in range(1_800))[:50_000],
+            _distinct("App{i} is now open on your PC. "),
             _THIRTY_OK,
         ),
         (
             "claims over thirty failed commands",
-            "".join(f"App{i} is now open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _distinct("App{i} is now open on your DELL-XPS-8950. "),
             _THIRTY_FAILED,
         ),
         (
             "distinct negated claims",
-            "".join(f"App{i} is not open on your DELL-XPS-8950. " for i in range(1_400))[:50_000],
+            _distinct("App{i} is not open on your DELL-XPS-8950. "),
             _THIRTY_OK,
         ),
         # fix round 4, R4: claims naming no device, beside another tool's work
@@ -785,19 +873,67 @@ def _distinct(unit: str) -> str:
         ),
     ],
 )
-def test_the_pair_reads_50_kb_against_thirty_recorded_spans_in_100_ms(label, reply, spans):
+def test_the_pair_reads_50_kb_against_thirty_recorded_spans_in_linear_time(label, build, spans):
     """(fix round 3, T5) The re-review's probe: 1,100 claims BACKED by a call —
     every one read to the end — against 30 spans recorded as chat records them
     took 96-105 ms. A claim a successful call silences is now dropped as soon
     as its action and device are known, the record is read once per check,
     each command's argv split once, and a sentence already read is not read
     again."""
-    for check in (
-        lambda: guards.written_call_check(reply, spans, _NAMES),
-        lambda: guards.device_completion_check(reply, spans, _NAMES, ["DELL-XPS-8950"]),
-    ):
-        took = _best_of(check)
-        assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+    _assert_linear(
+        f"written_call {label}", lambda r: guards.written_call_check(r, spans, _NAMES), build
+    )
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, spans, _NAMES, ["DELL-XPS-8950"]),
+        build,
+    )
+
+
+# (final review, I-2) ONE clause with no terminator, its claims dropped one by
+# one — the reviewer's eight shapes (scratchpad snd-final/probe_timing_final.py).
+# Seven read every claim as far as the quotation test and drop it there or
+# after; the backticked one drops its claims before it (one in 50 KB reaches
+# it). Each claim used to count the clause's quotation marks from its start:
+# present passives took 25 ms at 12.5 KB, 155 ms at 50 KB and 1,520 ms at
+# 200 KB. Timed at 50 and 200 KB, because the recount only overtakes the
+# per-claim work past about 60 KB: from 12.5 to 50 KB it grew x6.2 at most, and
+# x5.5 for plain states — too close to linear's x4 to tell apart on a noisy
+# runner. From 50 to 200 KB the seven grew x6.6 to x9.8.
+LONG_CLAUSE = [
+    ("plain states", _repeat("Notepad is open on your DELL-XPS-8950 ")),
+    (
+        "quoted claims",
+        lambda n: '"' + _repeat("Notepad is now open on your DELL-XPS-8950 ")(n - 1),
+    ),
+    ("another actor", _repeat("the file was saved on your DELL-XPS-8950 by Windows Backup ")),
+    ("present passives", _repeat("Teams is launched on your DELL-XPS-8950 ")),
+    (
+        "backticked claims",
+        lambda n: "`" + _repeat("Notepad is now open on your DELL-XPS-8950 ")(n - 1),
+    ),
+    ("installed states", _repeat("Teams is installed on your DELL-XPS-8950 ")),
+    ("subjects then verbs", _repeat("Teams started on your DELL-XPS-8950 stays running ")),
+    ("serving subjects", _repeat("qwen3:8b is running now on your DELL-XPS-8950 ")),
+]
+
+
+@pytest.mark.parametrize("label,build", LONG_CLAUSE, ids=[c[0] for c in LONG_CLAUSE])
+def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, [], _NAMES, ["DELL-XPS-8950"]),
+        build,
+        small=50_000,
+        large=200_000,
+    )
+    _assert_linear(
+        f"written_call {label}",
+        lambda r: guards.written_call_check(r, [], _NAMES),
+        build,
+        small=50_000,
+        large=200_000,
+    )
 
 
 # -- _sentences() is linear (said-not-done fix round 1, M2) --------------------
@@ -860,7 +996,12 @@ def test_sentences_splits_exactly_as_before(text):
 
 
 @pytest.mark.parametrize("mark", [".", "!", "?"])
-def test_sentences_reads_20_kb_of_one_terminator_in_50_ms(mark):
-    for text in (mark * 20_000 + "x", "x" + mark * 20_000, (mark * 999 + "y") * 20):
-        took = _best_of(lambda text=text: guards._sentences(text))
-        assert took < BUDGET_S, f"{mark!r} x {len(text)}: {took * 1000:.1f} ms"
+def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
+    for label, build in (
+        ("a run, then a letter", lambda n: mark * n + "x"),
+        ("a letter, then a run", lambda n: "x" + mark * n),
+        ("runs of 999", lambda n: (mark * 999 + "y") * (n // 1_000)),
+    ):
+        _assert_linear(
+            f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
+        )
