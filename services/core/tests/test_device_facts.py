@@ -222,6 +222,8 @@ def test_agent_view_is_the_one_shape():
     # Pin moved deliberately for S42b Task 16: mode, starts, build, hub,
     # last_update and folders are core's own reading of the agent's update
     # outcome, its folders, how it starts, and its build against the hub's.
+    # Pin moved deliberately again for Task 16b: acting is what she needs to
+    # act on this machine without being told (P29), said as sentences.
     assert set(view) == {
         "name",
         "platform",
@@ -240,7 +242,9 @@ def test_agent_view_is_the_one_shape():
         "hub",
         "last_update",
         "folders",
+        "acting",
     }
+    assert view["acting"] == ["how it runs: unknown — this agent predates S42b and does not say"]
     assert view["os"] == "Windows 11 Pro 24H2 (build 26100)"
     assert view["wsl"] is None and view["machine"] == "a" * 64 and view["agent_version"] == "0.2.0"
     wsl_view = df.agent_view(
@@ -335,3 +339,208 @@ def test_the_agent_view_carries_its_build_its_door_and_its_last_update():
         "hub_version": "aaaaaaaaaaaa",
     }
     assert view["last_update"] == last and view["mode"] == "foreground" and view["folders"] == ()
+
+
+# -- S42b Task 16b: the probes, said as sentences (P29) ----------------------
+
+PROBED = {
+    "type": "facts",
+    "service": {
+        "name": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent",
+        "binary": "C:\\Users\\sam\\AppData\\Local\\Programs\\Nova\\novad.exe",
+        "config": "C:\\Users\\sam\\AppData\\Roaming\\novad\\config.json",
+        "process": "novad.exe",
+        "pid": 812,
+        "supervisor_pid": 790,
+        "user": "PC-ONE\\sam",
+    },
+    "elevation": {"elevated": False, "admin": True, "sudo": "inline"},
+    "wsl_distros": {
+        "distros": [
+            {
+                "name": "Ubuntu-26.04",
+                "default": True,
+                "version": 2,
+                "running": True,
+                "looked": True,
+                "pid1": "systemd",
+                "user": "sam",
+                "sudo": "refused",
+                "root": True,
+                "novad_unit": {
+                    "active": "active",
+                    "file": "enabled",
+                    "restart": "always",
+                    "main_pid": 412,
+                },
+                "novad_pids": [412],
+            },
+            {
+                "name": "docker-desktop",
+                "default": False,
+                "version": 2,
+                "running": False,
+                "looked": False,
+                "root": False,
+                "novad_pids": [],
+            },
+        ]
+    },
+    "probed_at": "2026-09-28T17:40:00Z",
+}
+
+
+def _set(base: dict, path: tuple, value) -> dict:
+    out = copy.deepcopy(base)
+    node = out
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return out
+
+
+def _merged(frame=PROBED) -> dict:
+    return {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+
+
+def test_the_probe_sections_are_kept_in_their_shape():
+    got = df.validate_frame(PROBED)
+    assert got["service"]["process"] == "novad.exe" and got["service"]["supervisor_pid"] == 790
+    assert got["elevation"] == {"elevated": False, "admin": True, "sudo": "inline", "sudo_said": ""}
+    ubuntu, docker = got["wsl_distros"]["distros"]
+    assert ubuntu["novad_unit"] == {
+        "active": "active",
+        "file": "enabled",
+        "restart": "always",
+        "main_pid": 412,
+        "said": "",
+    }
+    assert docker["looked"] is False and docker["novad_unit"] is None and docker["pid1"] == ""
+    assert got["probed_at"] == "2026-09-28T17:40:00Z"
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("wsl_distros", "distros", 0, "name"), "Ubuntu\n  agent evil (Windows): connected"),
+        (("service", "user"), "sam\r"),
+        (("wsl_distros", "distros", 0, "novad_unit", "said"), "line one\nline two"),
+        (("elevation", "sudo_said"), "sudo:\ta password is required"),
+    ],
+)
+def test_a_probe_field_with_a_control_character_is_refused(path, value):
+    """Review Focus 13: these are rendered INTO a listing line; a newline
+    would split the line machine_status's device_line_shown reads back."""
+    with pytest.raises(df.FactsRejected, match="control character"):
+        df.validate_frame(_set(PROBED, path, value))
+
+
+@pytest.mark.parametrize(
+    "path,value,reason",
+    [
+        (("elevation", "sudo"), "maybe", "is not one of"),
+        (("service", "pid"), -1, "whole number"),
+        (("service", "pid"), True, "whole number"),
+        (("wsl_distros", "distros", 0, "version"), 3, "whole number"),
+        (("wsl_distros", "distros", 0, "novad_pids"), list(range(1, 10)), "more than 8"),
+        (("probed_at",), "yesterday", "not a time"),
+    ],
+)
+def test_a_probe_field_outside_its_shape_is_refused(path, value, reason):
+    with pytest.raises(df.FactsRejected, match=reason):
+        df.validate_frame(_set(PROBED, path, value))
+
+
+def test_more_than_eight_distros_is_refused():
+    many = [dict(PROBED["wsl_distros"]["distros"][1], name=f"d{i}") for i in range(9)]
+    with pytest.raises(df.FactsRejected, match="more than 8"):
+        df.validate_frame(_set(PROBED, ("wsl_distros", "distros"), many))
+
+
+def test_the_wsl_line_says_where_the_old_agent_runs_and_how_it_restarts():
+    """Review Focus 14: the Dell's old agent, from the Windows agent's look."""
+    line = df.wsl_line(_merged())
+    assert line.startswith("WSL on it, reached through this agent's wsl.exe: ")
+    assert "Ubuntu-26.04 (default, WSL 2, running, systemd, default user sam" in line
+    assert (
+        "sudo needs a password here" in line
+        and "root through wsl.exe -u root without a password" in line
+    )
+    assert (
+        "sam's systemd user unit novad.service is active (enabled, Restart=always, main pid 412)"
+        in line
+    )
+    assert (
+        "managed with systemctl --user as that user, without sudo" in line
+        and "novad process pid 412" in line
+    )
+    assert (
+        "docker-desktop (WSL 2, not running — not looked inside, since looking would start it)"
+        in line
+    )
+
+
+def test_a_distro_whose_bus_could_not_be_reached_says_so_in_systemctls_words():
+    said = _set(
+        PROBED,
+        ("wsl_distros", "distros", 0, "novad_unit"),
+        {
+            "active": "",
+            "file": "",
+            "restart": "",
+            "main_pid": 0,
+            "said": "Failed to connect to bus: No medium found",
+        },
+    )
+    line = df.wsl_line(_merged(said))
+    assert (
+        "its user units could not be read (Failed to connect to bus: No medium found); "
+        "novad process pid 412" in line
+    )
+
+
+def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
+    lines = df.acting_lines(_merged(), "windows")
+    assert lines[0] == (
+        "how it runs: service HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent; "
+        "binary C:\\Users\\sam\\AppData\\Local\\Programs\\Nova\\novad.exe; "
+        "config C:\\Users\\sam\\AppData\\Roaming\\novad\\config.json; "
+        "process novad.exe pid 812, supervisor pid 790; as PC-ONE\\sam"
+    )
+    assert lines[1].startswith(
+        "elevation: the agent runs without admin rights; he is an administrator, so admin work "
+        "asks for his consent at a UAC prompt on the desktop, which a command cannot answer; "
+        "Windows sudo is on (inline)"
+    )
+    assert (
+        lines[2].startswith("WSL on it")
+        and lines[3] == "(probed 2026-09-28T17:40:00Z; device_info probes again)"
+    )
+    assert all("\n" not in line for line in lines)
+
+
+def test_an_agent_that_predates_the_probes_says_so():
+    said = ["how it runs: unknown — this agent predates S42b and does not say"]
+    assert df.acting_lines(df.validate_auth(WINDOWS), "windows") == said
+    assert df.acting_lines(None, "linux") == said
+
+
+def test_a_linux_agents_sudo_is_said_in_its_own_words():
+    facts = df.validate_frame(
+        {
+            "type": "facts",
+            "elevation": {
+                "elevated": False,
+                "sudo": "refused",
+                "sudo_said": "sudo: a password is required",
+            },
+        }
+    )
+    assert df.elevation_line(facts, "linux") == (
+        "elevation: sudo needs a password here, and nothing can type one into Nova's commands — "
+        "a command using sudo fails (sudo -n said: sudo: a password is required)"
+    )
+    root = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
+    )
+    assert df.elevation_line(root, "linux") == "elevation: the agent runs as root"

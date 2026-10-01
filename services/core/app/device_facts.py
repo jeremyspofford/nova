@@ -44,7 +44,15 @@ FACTS_VERSION = 2
 AGENT_MODES: tuple[str, ...] = ("systemd-user", "launch-agent", "run-key", "foreground")
 # The sections a facts frame may carry. A later slice adds its own (power,
 # ollama, compute, hold, overlay) HERE, beside its validator.
-FRAME_SECTIONS: tuple[str, ...] = ("net", "unreadable", "folders")
+FRAME_SECTIONS: tuple[str, ...] = (
+    "net",
+    "unreadable",
+    "folders",
+    "service",
+    "elevation",
+    "wsl_distros",
+    "probed_at",
+)
 # S42b P16: the folders a fs path may name as @<name>, as the agent's OS names them.
 FOLDER_NAMES: tuple[str, ...] = ("home", "desktop", "documents", "downloads")
 # S42b P8: what an agent's supervisor records about its last update.
@@ -57,6 +65,41 @@ _STARTS = {
     "launch-agent": "by itself at login (a LaunchAgent)",
     "foreground": "by hand — Nova cannot restart it or update it",
 }
+# S42b P29: what `sudo -n true` did on Linux and macOS, or Windows sudo's setting.
+SUDO_STATES: tuple[str, ...] = (
+    "no_password",
+    "refused",
+    "absent",
+    "off",
+    "new_window",
+    "input_off",
+    "inline",
+    "unknown",
+)
+# What Windows sudo does when Nova's agent runs it — the sentence Task 1
+# recorded. Branch S-fails (below); on S-prompts it reads:
+# " — and from Nova's agent it puts a UAC prompt on his desktop that her command cannot answer".
+WINDOWS_SUDO_FROM_AGENT = (
+    " — and from Nova's agent it fails at once: nobody is at a console to approve it"
+)
+_MAX_DISTROS = 8
+_MAX_PIDS = 8
+_PID_MAX = 2**31 - 1
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_SUDO_WORDS = {
+    "no_password": "sudo runs without a password",
+    "refused": (
+        "sudo needs a password here, and nothing can type one into Nova's commands — "
+        "a command using sudo fails"
+    ),
+    "absent": "no sudo",
+    "off": "Windows sudo is off",
+    "new_window": "Windows sudo is on (a new window)",
+    "input_off": "Windows sudo is on (input closed)",
+    "inline": "Windows sudo is on (inline)",
+    "unknown": "Windows sudo is in a mode Nova does not know",
+}
+_UNKNOWN_RUNS = "how it runs: unknown — this agent predates S42b and does not say"
 
 # Every role on an agent inside WSL (r2-integration S42a; the in-WSL agent is
 # retired for the Windows one, which reaches WSL through wsl.exe).
@@ -256,6 +299,110 @@ def _folders(raw: object) -> dict:
     return out
 
 
+def _line(value: object, where: str) -> str:
+    """Text core renders INTO a line: one line. A newline in an agent-reported
+    name would split the line tools.machines.device_line_shown reads back —
+    it fails closed, and her facts would be dropped (Review Focus 13)."""
+    text = _text(value, where)
+    if _CONTROL.search(text):
+        raise FactsRejected(f"{where} contains a control character")
+    return text
+
+
+def _count(value: object, where: str, most: int = _PID_MAX) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= most:
+        raise FactsRejected(f"{where} must be a whole number from 0 to {most}")
+    return value
+
+
+def _state(value: object, where: str) -> str:
+    state = _line(value, where)
+    if state not in SUDO_STATES:
+        raise FactsRejected(f"{where} {state!r} is not one of {', '.join(SUDO_STATES)}")
+    return state
+
+
+def _service(raw: object) -> dict:
+    s = _object(raw, "facts.service")
+    out = {
+        k: _line(s.get(k, ""), f"facts.service.{k}")
+        for k in ("name", "binary", "config", "process", "user")
+    }
+    out["pid"] = _count(s.get("pid", 0), "facts.service.pid")
+    out["supervisor_pid"] = _count(s.get("supervisor_pid", 0), "facts.service.supervisor_pid")
+    return out
+
+
+def _elevation(raw: object) -> dict:
+    e = _object(raw, "facts.elevation")
+    out = {
+        "elevated": _bool(e.get("elevated"), "facts.elevation.elevated"),
+        "sudo": _state(e.get("sudo"), "facts.elevation.sudo"),
+        "sudo_said": _line(e.get("sudo_said", ""), "facts.elevation.sudo_said"),
+    }
+    if e.get("admin") is not None:
+        out["admin"] = _bool(e["admin"], "facts.elevation.admin")
+    return out
+
+
+def _unit(raw: object, where: str) -> dict:
+    u = _object(raw, where)
+    out = {k: _line(u.get(k, ""), f"{where}.{k}") for k in ("active", "file", "restart")}
+    out["main_pid"] = _count(u.get("main_pid", 0), f"{where}.main_pid")
+    out["said"] = _line(u.get("said", ""), f"{where}.said")
+    return out
+
+
+def _distro(raw: object, where: str) -> dict:
+    d = _object(raw, where)
+    pids = d.get("novad_pids") or []
+    if not isinstance(pids, list) or len(pids) > _MAX_PIDS:
+        raise FactsRejected(
+            f"{where}.novad_pids must be a list of at most {_MAX_PIDS} — more than "
+            f"{_MAX_PIDS} is refused"
+        )
+    sudo = d.get("sudo", "")
+    return {
+        "name": _line(d.get("name"), f"{where}.name"),
+        "default": _bool(d.get("default", False), f"{where}.default"),
+        "version": _count(d.get("version", 0), f"{where}.version", 2),
+        "running": _bool(d.get("running", False), f"{where}.running"),
+        "looked": _bool(d.get("looked", False), f"{where}.looked"),
+        "root": _bool(d.get("root", False), f"{where}.root"),
+        "pid1": _line(d.get("pid1", ""), f"{where}.pid1"),
+        "user": _line(d.get("user", ""), f"{where}.user"),
+        "sudo": _state(sudo, f"{where}.sudo") if sudo else "",
+        "novad_unit": None
+        if d.get("novad_unit") is None
+        else _unit(d["novad_unit"], f"{where}.novad_unit"),
+        "novad_pids": [_count(p, f"{where}.novad_pids[{i}]") for i, p in enumerate(pids)],
+    }
+
+
+def _wsl_distros(raw: object) -> dict:
+    w = _object(raw, "facts.wsl_distros")
+    items = w.get("distros")
+    if not isinstance(items, list):
+        raise FactsRejected("facts.wsl_distros.distros must be a list")
+    if len(items) > _MAX_DISTROS:
+        raise FactsRejected(f"facts.wsl_distros lists more than {_MAX_DISTROS} distributions")
+    return {
+        "distros": [
+            _distro(item, f"facts.wsl_distros.distros[{i}]") for i, item in enumerate(items)
+        ],
+        "running_said": _line(w.get("running_said", ""), "facts.wsl_distros.running_said"),
+    }
+
+
+def _probed_at(raw: object) -> str:
+    text = _line(raw, "facts.probed_at")
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise FactsRejected(f"facts.probed_at {text!r} is not a time") from exc
+    return text
+
+
 def validate_frame(raw: object) -> dict:
     """The SECTIONS of a facts frame, as core merges them into devices.facts,
     or FactsRejected. `type` is the frame's, not a fact, and is not returned;
@@ -271,6 +418,14 @@ def validate_frame(raw: object) -> dict:
         out["unreadable"] = _unreadable(frame["unreadable"])
     if "folders" in frame:
         out["folders"] = _folders(frame["folders"])
+    if "service" in frame:
+        out["service"] = _service(frame["service"])
+    if "elevation" in frame:
+        out["elevation"] = _elevation(frame["elevation"])
+    if "wsl_distros" in frame:
+        out["wsl_distros"] = _wsl_distros(frame["wsl_distros"])
+    if "probed_at" in frame:
+        out["probed_at"] = _probed_at(frame["probed_at"])
     if not out:
         raise FactsRejected(f"the facts frame carries none of {', '.join(FRAME_SECTIONS)}")
     return out
@@ -346,6 +501,127 @@ def folders_of(facts: dict | None) -> tuple[str, ...]:
     admitted only for these."""
     folders = facts.get("folders") if isinstance(facts, dict) else None
     return tuple(name for name in FOLDER_NAMES if isinstance(folders, dict) and folders.get(name))
+
+
+# -- what she needs to act (S42b P29) ----------------------------------------
+
+
+def runs_line(facts: dict | None) -> str:
+    """How this agent runs, from what it probed about itself."""
+    s = facts.get("service") if isinstance(facts, dict) else None
+    if not isinstance(s, dict):
+        return _UNKNOWN_RUNS
+    by = f"service {s['name']}" if s["name"] else "no service — started by hand"
+    sup = f", supervisor pid {s['supervisor_pid']}" if s["supervisor_pid"] else ""
+    return (
+        f"how it runs: {by}; binary {s['binary']}; config {s['config']}; "
+        f"process {s['process']} pid {s['pid']}{sup}; as {s['user']}"
+    )
+
+
+def elevation_line(facts: dict | None, platform: str) -> str | None:
+    """Whether elevating from this agent would need a person — and why."""
+    e = facts.get("elevation") if isinstance(facts, dict) else None
+    if not isinstance(e, dict):
+        return None
+    sudo = _SUDO_WORDS.get(e["sudo"], e["sudo"])
+    if platform == "windows":
+        if e["elevated"]:
+            head = "the agent runs with admin rights (an elevated token)"
+        elif e.get("admin"):
+            head = (
+                "the agent runs without admin rights; he is an administrator, so admin work asks "
+                "for his consent at a UAC prompt on the desktop, which a command cannot answer"
+            )
+        else:
+            head = (
+                "the agent runs without admin rights, and this account is not an administrator: "
+                "admin work needs an administrator's password at a UAC prompt, which a command "
+                "cannot answer"
+            )
+        if e["sudo"] not in ("off", "absent"):
+            sudo += WINDOWS_SUDO_FROM_AGENT
+        return f"elevation: {head}; {sudo}"
+    if e["elevated"]:
+        return "elevation: the agent runs as root"
+    said = f" (sudo -n said: {e['sudo_said']})" if e["sudo"] == "refused" and e["sudo_said"] else ""
+    return f"elevation: {sudo}{said}"
+
+
+def _nova_agent_in(d: dict) -> str:
+    pids = d["novad_pids"]
+    procs = f"novad process pid {', '.join(map(str, pids))}" if pids else "no novad process"
+    unit = d["novad_unit"]
+    if unit is None:
+        return procs
+    if not unit["active"]:
+        return f"its user units could not be read ({unit['said'] or 'no answer'}); {procs}"
+    if not unit["file"] and unit["active"] == "inactive":
+        return f"no novad.service user unit; {procs}"
+    return (
+        f"{d['user'] or 'its default user'}'s systemd user unit novad.service is {unit['active']} "
+        f"({unit['file'] or 'no unit file'}, Restart={unit['restart'] or 'unknown'}, "
+        f"main pid {unit['main_pid']}) — a user unit is managed with systemctl --user as that "
+        f"user, without sudo; {procs}"
+    )
+
+
+def _distro_words(d: dict, why: dict[str, str]) -> str:
+    bits = ["default"] if d["default"] else []
+    bits.append(f"WSL {d['version']}" if d["version"] else "WSL version unknown")
+    if not d["running"]:
+        bits.append("not running — not looked inside, since looking would start it")
+    elif not d["looked"]:
+        reason = why.get("wsl_distros." + d["name"], "no reason given")
+        bits.append(f"running; could not look inside: {reason}")
+    else:
+        bits.append("running")
+        bits.append(
+            "systemd"
+            if d["pid1"] == "systemd"
+            else f"no systemd (PID 1 is {d['pid1'] or 'unknown'})"
+        )
+        if d["user"]:
+            bits.append(f"default user {d['user']}")
+        if d["sudo"]:
+            bits.append(_SUDO_WORDS.get(d["sudo"], d["sudo"]))
+        bits.append(
+            "root through wsl.exe -u root without a password"
+            if d["root"]
+            else "wsl.exe -u root did not run"
+        )
+        bits.append(_nova_agent_in(d))
+    return f"{d['name']} ({', '.join(bits)})"
+
+
+def wsl_line(facts: dict | None) -> str | None:
+    """The WSL distributions beside a Windows agent, as it looked at them."""
+    w = facts.get("wsl_distros") if isinstance(facts, dict) else None
+    if not isinstance(w, dict):
+        return None
+    if not w["distros"]:
+        return "WSL: no distribution is installed for this account"
+    why = {u["item"]: u["reason"] for u in facts.get("unreadable") or [] if isinstance(u, dict)}
+    said = f" (wsl.exe --list --running said: {w['running_said']})" if w.get("running_said") else ""
+    return (
+        "WSL on it, reached through this agent's wsl.exe: "
+        + "; ".join(_distro_words(d, why) for d in w["distros"])
+        + said
+    )
+
+
+def acting_lines(facts: dict | None, platform: str) -> list[str]:
+    """What she needs to act on this machine without being told (S42b P29),
+    as sentences for device_info, device_list and machine_status — derived
+    from what the agent probed, with when; never a prompt list."""
+    lines = [runs_line(facts)]
+    if lines[0] == _UNKNOWN_RUNS:
+        return lines
+    lines.extend(line for line in (elevation_line(facts, platform), wsl_line(facts)) if line)
+    lines.append(
+        f"(probed {facts.get('probed_at') or 'at an unknown time'}; device_info probes again)"
+    )
+    return lines
 
 
 # -- roles -----------------------------------------------------------------
@@ -440,4 +716,5 @@ def agent_view(
         "hub": last_transport == "host",
         "last_update": last_update,
         "folders": folders_of(facts),
+        "acting": acting_lines(facts, platform),
     }
