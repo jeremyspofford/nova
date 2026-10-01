@@ -200,6 +200,20 @@ DEFERRAL_NOTE = "Doing that now instead of just saying I would."
 # phrase, so the mechanical guards stay clean over it.
 CONSENT_REDIRECT_NOTE = "Nothing was pending — doing it now instead of waiting."
 
+# The same live notes when the regeneration that stands dispatched NO call — no
+# call of it reached a tool's executor (said-not-done fix round 5, P6 — the
+# state note's rule, C14, for every claim kind; a call refused as text or naming
+# no registered tool ran nothing). "Doing that now" and "doing it now" beside a
+# reply that did nothing are the backend claiming work the turn never did, and
+# once the client showed correction frames live (fix round 3, T6) the owner
+# read them. Each of these says only what is true of a regeneration that ran
+# nothing: it is a second answer, and what it no longer carries.
+# `_claim_redirect` takes one for every claim kind (no default), and the
+# text-only commitment redirect, which can never dispatch, always uses its own.
+DEFERRAL_NOTE_NO_CALL = "Answering again, without saying I would."
+DEFERRAL_COMPLETION_NOTE_NO_CALL = "Answering again, without saying it is done."
+CONSENT_REDIRECT_NOTE_NO_CALL = "Nothing was pending — answering again."
+
 
 def consent_redirect_nudge(*, ran_a_tool: bool) -> str:
     """The redirect's nudge, DERIVED from the fact the caller measured.
@@ -235,8 +249,8 @@ MACHINE_REDIRECT_NOTE = "Checking the machine now instead of describing it unche
 # The same redirect when it dispatched NO call (S40b final fix wave, C14): a
 # regeneration that stood by saying plainly it did not check ran nothing, and
 # "Checking the machine now" beside it is the backend claiming a check that
-# never happened. Derived from the redirect's own dispatch count, the way the
-# nudge is derived from ran_a_tool.
+# never happened. Derived from what the redirect's own dispatch did (a call that
+# reached a tool's executor — P6), the way the nudge is derived from ran_a_tool.
 STATE_REDIRECT_NOTE_NO_CALL = "Answering again, without the unchecked claim."
 
 
@@ -275,6 +289,8 @@ def state_redirect_nudge(*, device: str, ran_a_tool: bool, kind: str = "device")
 PRESENTED_LISTING_REDIRECT_NOTE = (
     "Listing the files now instead of presenting a listing from memory."
 )
+# The same note when the regeneration dispatched NO call (fix round 5, P6).
+PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL = "Answering again, without the listing from memory."
 
 
 def presented_listing_redirect_nudge(*, ran_a_tool: bool) -> str:
@@ -417,6 +433,38 @@ def bare_intent_redirect_nudge(*, ran_a_tool: bool) -> str:
 # salvageable content). Rides `_claim_redirect`'s `correction_text`, so it is
 # exactly what persists whenever that redirect does not stand.
 BARE_INTENT_HONEST_NOTE = "[I said I'd check but did not — ask again and I'll do it]"
+
+
+# The SAID-NOT-DONE pair (the owner's test, 2026-09-28: a tool written as a
+# fence, "Notepad is now open on your DELL-XPS-8950", zero calls each time —
+# guards.written_call_check, guards.device_completion_check). Fix round 3
+# (2026-09-29): APPEND-ONLY, with NO redirects. Each claim carries the ONE
+# sentence the turn appends (`claim.text`), read at the END of the turn from the
+# FINAL spans (`_run_turn`), so nothing here builds a nudge, a note or a
+# correction of its own. What the guard span records is below.
+def _said_not_done_meta(name: str, claim: object) -> dict:
+    """The facts a said-not-done guard span records: what she wrote or
+    claimed, and the sentence the turn appended — the trace says what was
+    added, not only that something was."""
+    if name == "written_call":
+        return {
+            "detected": True,
+            "tools": list(claim.tools),
+            "phrase": claim.phrase,
+            "where": claim.where,
+            "sentence": claim.text,
+        }
+    return {
+        "detected": True,
+        "phrase": claim.phrase,
+        "device": claim.device,
+        "action": claim.action,
+        "kind": claim.kind,
+        "record": claim.record.case,
+        "record_tool": claim.record.tool,
+        "sentence": claim.text,
+    }
+
 
 # How much of a tool call lands in its span. The result head is the
 # Activity page's evidence that the call did what it says; the argument
@@ -1865,6 +1913,40 @@ def _ran_clause(spans: Sequence[traces.Span]) -> str:
     return f"Before that, {' and '.join(pieces)}."
 
 
+def _consent_correction(spans: Sequence[traces.Span]) -> str:
+    """The pending-approval correction as this turn's record allows it
+    (said-not-done fix round 5, P5). guards.CONSENT_CLAIM_CORRECTION says
+    "nothing has run", which is true only while nothing has: the consent
+    redirect's own probe can run and its report fail, and a turn whose tools
+    already ran is not redirected at all — and "nothing has run" beside a call
+    that ran is the backend's own false line. So when anything ran this turn
+    the correction says what, and what failed, DERIVED from the spans
+    (`_tool_outcomes`: a refused call never ran), and invites no retry of work
+    that may be done.
+
+    A call that never REACHED its executor — no such tool, arguments that
+    could not be read (`reached_executor` False, dispatch's own record) — is
+    left out too: it ran nothing, and "turn_on_light failed" says a tool exists
+    that does not. The redirect's live note reads the same fact (P6), so the
+    note and the correction cannot disagree about whether anything ran
+    (said-not-done final review, M-1). An absent key is "not recorded", never
+    "not reached", so only an explicit False is left out."""
+    ran, failed = _tool_outcomes(
+        [span for span in spans if (span.meta or {}).get("reached_executor") is not False]
+    )
+    if not ran and not failed:
+        return guards.CONSENT_CLAIM_CORRECTION
+    pieces = []
+    if ran:
+        pieces.append(f"{_names(ran)} ran")
+    if failed:
+        pieces.append(f"{_names(failed)} failed")
+    return (
+        "Correction: there is no approval step — nothing is waiting on you. "
+        f"This turn, {' and '.join(pieces)}."
+    )
+
+
 # What to do next, in terms of things the OWNER can say to HER (S15).
 #
 # It used to read "Try again, or check the model in Settings → Models", and the
@@ -2243,6 +2325,20 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
         return []
 
 
+async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
+    """Every LIVE paired device's name and the machine its agent reported
+    (devices.live_machines), for the said-not-done device claim: a call on
+    another agent of the same machine is a call on that machine (fix round 4,
+    R5). Read from the rows, never a list. None on ANY failure — no grouping
+    can then be read, and the guard stays silent for a claim that a call on
+    another device might back (a blip costs a sentence, never a false one)."""
+    try:
+        return await devices.live_machines(pool)
+    except Exception:
+        logger.exception("device machine read failed; the device claim reads no grouping")
+        return None
+
+
 # The two exemption reads behind _agent_names, as ONE round trip. Each half
 # names an agent this conversation ALREADY has on record before this turn:
 # it wrote an assistant row here (an @mention ran it in this very
@@ -2420,6 +2516,7 @@ async def _run_tool(
     call: ToolCall,
     *,
     subset: Collection[str] | None = None,
+    reached: list[str] | None = None,
 ) -> tuple[str, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
@@ -2435,6 +2532,13 @@ async def _run_tool(
     tool refused with "not connected" established the machine is offline, and
     the span carries `facts: [{"device": …, "connected": false}]` so a guard can
     tell "it checked and reports offline" from "it never looked".
+
+    Whether the call got as far as its tool's executor is recorded the same
+    way, from dispatch's own record (tools.dispatch `reached`), never from the
+    result: `reached_executor` is False on a call dispatch refused first (no
+    such tool, arguments unreadable or off the schema — nothing ran) and True
+    on one whose executor ran, whatever it returned. `reached`, when given,
+    collects that record for the caller (_dispatch_calls; said-not-done P6).
 
     `subset` (S12) is the toolset the turn's persona was advertised (an
     agent's); None is Nova, who holds the whole registry. A call naming a
@@ -2461,7 +2565,16 @@ async def _run_tool(
         span.meta["ok"] = False
         span.meta["result_head"] = NEVER_RETURNED
         facts_before = len(facts) if facts is not None else 0
-        result, ok = await tools.dispatch(call.name, call.arguments, ctx)
+        record = reached if reached is not None else []
+        reached_before = len(record)
+        result, ok = await tools.dispatch(call.name, call.arguments, ctx, reached=record)
+        # Recorded HERE only, on the spans this function files. A tool span
+        # without the key — a call refused before dispatch (_refuse_call,
+        # _refuse_unknown_tool), a scripted step, a backend check run
+        # unasked, a call cut off mid-dispatch, any span filed before this
+        # existed — means "not recorded", never "not reached": read only
+        # an explicit True or False (said-not-done final review, M-2).
+        span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if facts is not None and len(facts) > facts_before:
@@ -2524,6 +2637,7 @@ async def _dispatch_calls(
     emit: Callable[[str | None], None],
     *,
     subset: Collection[str] | None = None,
+    reached: list[str] | None = None,
 ) -> bool:
     """Run one round's tool calls, append their results, stream what happened.
 
@@ -2541,6 +2655,12 @@ async def _dispatch_calls(
     successful call was an ephemeral (point-in-time) read. The caller ORs it
     into its own. `subset` is handed to _run_tool unchanged (S12: the
     persona's toolset, or None for Nova) — it marks, it never gates.
+
+    `reached`, when given, collects every call of the batch that got as far as
+    its tool's executor — dispatch's own record, through _run_tool. A call
+    refused here (written as text, or naming no tool in a subset) or by
+    dispatch before its executor (no such tool, bad arguments) is never in it;
+    one whose executor ran and failed is (said-not-done P6).
     """
     ran_ephemeral = False
     for call in calls:
@@ -2593,7 +2713,7 @@ async def _dispatch_calls(
         # What the turn is doing right now, for whoever asks (traces.DOING):
         # the tool's name, set synchronously so no await joins the funnel.
         traces.set_doing(turn.id, call.name)
-        result, ok = await _run_tool(turn, call_ctx, call, subset=subset)
+        result, ok = await _run_tool(turn, call_ctx, call, subset=subset, reached=reached)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True
@@ -3381,12 +3501,14 @@ async def _deferral_redirect(
     user_message: str = "",
     *,
     persona: agents.Persona,
-) -> str:
+) -> tuple[str, bool]:
     """Regenerate ONCE to actually do the promised action, or say so honestly.
 
     Reuses the responsiveness redirect's shape: one corrective regeneration off
     the turn's EXISTING message context (so this turn's context is reused) plus a
-    nudge to do it now by calling the tool. Returns the durable text:
+    nudge to do it now by calling the tool. Returns (durable_text, redirected),
+    like the responsiveness redirect — the caller reads which it was rather
+    than looking for the note in the text:
 
       * On a regeneration that no longer defers, the corrected reply is emitted
         after a brief note and REPLACES the durable text (the deferral already
@@ -3426,7 +3548,7 @@ async def _deferral_redirect(
             )
             note = _deferral_honest_note(claim.action_phrase)
             emit(_frame({"correction": note}))
-            return f"{reply}\n\n{note}"
+            return f"{reply}\n\n{note}", False
 
         # Bounded to ONE redirect: the regenerated reply is judged once, never
         # re-redirected. A redirect that STILL commits to the tool without
@@ -3448,12 +3570,16 @@ async def _deferral_redirect(
             span.meta["redirected"] = False
             note = _deferral_honest_note(claim.action_phrase)
             emit(_frame({"correction": note}))
-            return f"{reply}\n\n{note}"
+            return f"{reply}\n\n{note}", False
 
         span.meta["redirected"] = True
-        emit(_frame({"correction": DEFERRAL_NOTE}))
+        # This regeneration is text-only (`_collect_completion`: no tools are
+        # advertised), so it can never have done what was promised — "Doing
+        # that now" beside it would be a line about work the turn never did
+        # (said-not-done fix round 5, P6).
+        emit(_frame({"correction": DEFERRAL_NOTE_NO_CALL}))
         emit(_frame({"t": corrected}))
-        return corrected
+        return corrected, True
 
 
 # -- the CLAIM redirect: one path, several claim kinds ----------------------
@@ -3505,6 +3631,24 @@ def _state_claim_stands(
         logger.exception("state-claim re-check raised; keeping the correction")
         return True
     return claim is not None and claim.device == subject
+
+
+def _listing_claim_stands(
+    text: str, turn: traces.Turn, listing_tools: Sequence[str], message: str
+) -> bool:
+    """Is the presented listing in `text` STILL unbacked, read over the turn's
+    spans as they are now? The listing guard's own check, re-asked exactly as it
+    first fired (the same reply, tools and message), so whether the listing
+    redirect's live note may say "Listing the files now" is the guard's call —
+    a call of another kind, a web search, leaves it unbacked (said-not-done
+    final review, I-1). Fail-open toward the claim: a check that raises reads
+    as still unbacked, so the note never claims a listing nobody confirmed."""
+    try:
+        claim = guards.presented_listing_check(text, turn.spans, listing_tools, message)
+    except Exception:
+        logger.exception("presented-listing re-check raised; reading the claim as unbacked")
+        return True
+    return claim is not None
 
 
 def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
@@ -3788,6 +3932,11 @@ class _ClaimRedirect:
     # that STOOD (S40b final fix wave, A9). Their corrections are already in
     # `text`; the caller reads the names to keep the turn out of memory.
     appended: tuple[str, ...] = ()
+    # The regeneration ALONE when it stood — `text` less the corrections
+    # appended to it — so what she wrote can be read apart from what the
+    # backend added (said-not-done fix round 3: the pair reads her prose at the
+    # end of the turn, never the backend's own lines). None when it did not.
+    prose: str | None = None
 
 
 async def _claim_redirect(
@@ -3796,12 +3945,13 @@ async def _claim_redirect(
     model: str,
     *,
     claim_kind: str,
-    correction_text: str,
+    correction_text: str | Callable[[], str],
     span_meta: dict,
     nudge_for: Callable[[bool], str],
     redirect_note: str,
-    redirect_note_no_call: str | None = None,
+    redirect_note_no_call: str,
     still_unbacked: Callable[[], bool] | None = None,
+    claim_backed: Callable[[], bool] | None = None,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
@@ -3821,15 +3971,32 @@ async def _claim_redirect(
     the caller measured them; `nudge_for` DERIVES the system nudge from
     ran_a_tool (measured here, from the spans) so the sentence it sends the
     model is true by construction rather than by a comment promising it is; and
-    `redirect_note` is the live frame shipped ahead of a successful regeneration,
-    and `redirect_note_no_call` the one to send instead when the regeneration
-    dispatched NOTHING (S40b final fix wave, C14: "Checking the machine now"
-    beside a regeneration that said plainly it did not check is the backend
-    claiming a check that never ran). `still_unbacked` (A9) re-asks the
-    ORIGINATING guard over the turn's final spans when the correction is about
-    to persist: if this redirect's own call backed the claim after all, the
-    correction saying nothing was checked would itself be false, and what
-    persists names what ran instead.
+    `redirect_note` is the live frame shipped ahead of a successful regeneration
+    that DISPATCHED a call, and `redirect_note_no_call` — required, for every
+    claim kind — the one sent instead when it dispatched NOTHING (S40b final fix
+    wave, C14: "Checking the machine now" beside a regeneration that said
+    plainly it did not check is the backend claiming a check that never ran;
+    said-not-done fix round 5, P6: the same held for "Doing that now…",
+    "Nothing was pending — doing it now…" and "Listing the files now…").
+    DISPATCHED means a call REACHED a tool's executor, read from what the
+    dispatch did (tools.dispatch `reached`), never from what the regeneration
+    asked for: a call refused as text or naming no registered tool ran
+    nothing, while one whose executor ran and failed was an attempt, and the
+    append-class corrections state its failure (said-not-done P6, at the cap).
+    A note that names a KIND of work ("Checking the device now…", "Listing the
+    files now…") needs more than a call: `claim_backed` re-runs the
+    ORIGINATING guard on the ORIGINAL reply against the FINAL spans, and that
+    note streams only when it finds the claim now backed — a regeneration that
+    ran only a web search did not list the files or check the device
+    (said-not-done final review, I-1). None for a generic note (consent,
+    offer, bare intent): any call that reached an executor earns it (P6).
+    `correction_text` is the correction, or a callable that states it from the
+    spans at the moment it is shown (fix round 5, P5: the consent correction's
+    "nothing has run" holds only while nothing has). `still_unbacked` (A9)
+    re-asks the ORIGINATING guard over the turn's final spans when the
+    correction is about to persist: if this redirect's own call backed the
+    claim after all, the correction saying nothing was checked would itself be
+    false, and what persists names what ran instead.
 
     Outcomes, all recorded on the turn's single guard span:
 
@@ -3896,28 +4063,37 @@ async def _claim_redirect(
         blocked = (
             "tools_already_ran" if ran_a_tool else ("out_of_rounds" if out_of_rounds else None)
         )
+
+        def _stated() -> str:
+            """The guard's correction as it stands NOW — read when it is shown,
+            so one derived from the spans says what the record holds then."""
+            return correction_text() if callable(correction_text) else correction_text
+
         if blocked is not None:
             # No regeneration at all: doing the work twice, or past the cap, is
             # not a correction. The lie is still contradicted, as before.
             span.meta.update(redirected=False, not_redirected_because=blocked)
             logger.info("%s redirect skipped (%s); shipping the correction", claim_kind, blocked)
-            emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(
-                correction_text, False, read_ephemeral, markup_note=_markup_note()
-            )
+            text = _stated()
+            emit(_frame({"correction": text}))
+            return _ClaimRedirect(text, False, read_ephemeral, markup_note=_markup_note())
 
-        dispatched = False
+        # Every call of this redirect that REACHED a tool's executor —
+        # dispatch's own record, filled as the calls run — never the calls the
+        # regeneration asked for (said-not-done P6: a call refused as text, or
+        # naming no registered tool, reached none).
+        reached: list[str] = []
 
         def _correction() -> str:
             """What persists when the regeneration does not stand. Ordinarily
             the guard's own correction — but a redirect that RAN something may
             have backed the very claim it was correcting (A9), and then that
             correction is a false statement about the turn: name what ran."""
-            if dispatched and still_unbacked is not None and not still_unbacked():
+            if reached and still_unbacked is not None and not still_unbacked():
                 ran = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
                 span.meta["correction_replaced_by"] = "ran_but_unreported"
                 return _bare_intent_ran_but_unreported_note(ran)
-            return correction_text
+            return _stated()
 
         try:
             attempt: list[dict] = [
@@ -3955,10 +4131,10 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
-                dispatched = True
                 read_ephemeral = await _dispatch_calls(
-                    turn, tool_ctx, calls, attempt, emit, subset=subset
+                    turn, tool_ctx, calls, attempt, emit, subset=subset, reached=reached
                 )
+                span.meta["redirect_calls_reached"] = len(reached)
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
                 # the action, never a loop of its own. A call it makes anyway is
@@ -4025,7 +4201,21 @@ async def _claim_redirect(
         span.meta["redirected"] = True
         if appended:
             span.meta["regen_appended"] = [name for name, _ in appended]
-        note = redirect_note if dispatched else (redirect_note_no_call or redirect_note)
+        # "Doing it now" only beside a regeneration whose call REACHED a tool's
+        # executor; otherwise the kind's own no-call note (C14; fix round 5, P6).
+        # A note naming a kind of work also needs the originating guard to find
+        # its claim backed now — a call of another kind did not do that work
+        # (final review, I-1). Read once, and recorded: the trace says why. A
+        # re-check that raises falls to the no-call note, which claims nothing.
+        did_the_work = bool(reached)
+        if did_the_work and claim_backed is not None:
+            try:
+                did_the_work = bool(claim_backed())
+            except Exception:
+                logger.exception("%s re-check raised; showing the no-call note", claim_kind)
+                did_the_work = False
+            span.meta["claim_backed"] = did_the_work
+        note = redirect_note if did_the_work else redirect_note_no_call
         emit(_frame({"correction": note}))
         emit(_frame({"t": corrected}))
         for name, claim in appended:
@@ -4038,6 +4228,7 @@ async def _claim_redirect(
             read_ephemeral,
             markup_note=_markup_note(),
             appended=tuple(name for name, _ in appended),
+            prose=corrected,
         )
 
 
@@ -4611,6 +4802,18 @@ async def _run_turn(
         # a state-claim correction on a capped turn silently swallowed the cap
         # note, and a capped turn then read exactly like an ordinary one).
         backend_note: str | None = None
+        # The note exactly as it was added to the reply's own text, so the text
+        # SHE wrote can be read without it (said-not-done fix round 3, T5: a
+        # "[stopped after N tool rounds…]" after her fence read as the sentence
+        # that takes it back). Found by what was added, never by searching for
+        # a note's words.
+        text_note = ""
+        # Whether `backend_note` is a note a consent/state/listing REDIRECT
+        # earned (its closing round wrote a call as markup): the turn's own
+        # notes stream as they are added, but that one is only stored — so it
+        # is shown live where it is stored (said-not-done fix round 4, R6: emit
+        # what persists).
+        redirect_note_unshown = False
 
         # Tool-call MARKUP in what streamed. _gateway_round already parsed it out
         # of each round's returned text (and dispatched or refused what it
@@ -4682,6 +4885,7 @@ async def _run_turn(
             backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
             note = f"\n\n{backend_note}" if parts else backend_note
             parts.append(note)
+            text_note = note
             emit(_frame({"t": note}))
         elif (
             streamed_scan.found
@@ -4705,6 +4909,7 @@ async def _run_turn(
                 else markup_calls.MALFORMED_MARKUP_NOTE
             )
             parts.append(backend_note)
+            text_note = backend_note
             emit(_frame({"t": backend_note}))
 
         text = "".join(parts)
@@ -4803,6 +5008,15 @@ async def _run_turn(
             emit(_frame({"correction": claim.text}))
             text = claim.rewritten
         rewrite_claims = [claim for _, claim in rewrites]
+        # What SHE wrote, for the said-not-done pair at the END of the turn
+        # (fix round 3, T5): the reply as rewritten, without the backend's own
+        # note. A rewrite swaps a pairing code or an address and a note holds
+        # neither, so the note is still the tail it was added as. Followed below
+        # through every composition and redirect, so it is always the prose that
+        # persists as hers — or None when none of hers does.
+        said_prose: str | None = (
+            text[: -len(text_note)] if text_note and text.endswith(text_note) else text
+        )
 
         try:
             correction = guards.narration_check(text, turn.spans)
@@ -4868,18 +5082,24 @@ async def _run_turn(
         # text, so the turn is plumbing for the same reason an original
         # reply's are. Collected from every redirect that stood.
         redirect_appended: tuple[str, ...] = ()
+        # The regeneration alone, when a REPLACE-class redirect stood (only one
+        # can: the budget is one per turn) — what `said_prose` becomes then.
+        stood_prose: str | None = None
         if consent_correction is not None:
             outcome = await _claim_redirect(
                 app,
                 turn,
                 model,
                 claim_kind="consent_claim",
-                correction_text=consent_correction.text,
+                # "…nothing has run" only while nothing has: stated from the
+                # spans when it is shown (said-not-done fix round 5, P5).
+                correction_text=lambda: _consent_correction(turn.spans),
                 # The guard fired on the text alone — there is no external
                 # fact to record; the redirect records ran_a_tool itself.
                 span_meta={},
                 nudge_for=lambda ran: consent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=CONSENT_REDIRECT_NOTE,
+                redirect_note_no_call=CONSENT_REDIRECT_NOTE_NO_CALL,
                 # A turn already at its round cap gets no extra dispatch
                 # through the redirect's side door.
                 out_of_rounds=out_of_rounds,
@@ -4895,9 +5115,14 @@ async def _run_turn(
             )
             consent_text = outcome.text
             consent_redirected = outcome.redirected
+            if not consent_redirected:
+                # What was shown is what the composition below persists.
+                consent_correction = dataclasses.replace(consent_correction, text=outcome.text)
+            stood_prose = outcome.prose if outcome.redirected else stood_prose
             redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
-            backend_note = backend_note or outcome.markup_note
+            if backend_note is None and outcome.markup_note:
+                backend_note, redirect_note_unshown = outcome.markup_note, True
         # The turn's single redirect budget: ONE regeneration per turn, first
         # claim wins, never two. Spent by TRYING, not by succeeding.
         redirect_spent = consent_correction is not None
@@ -5064,6 +5289,11 @@ async def _run_turn(
                     still_unbacked=lambda: _state_claim_stands(
                         text, turn, device_names, state_claim.device
                     ),
+                    # "Checking the device now" only when the state guard's
+                    # own re-check finds the device was read (I-1).
+                    claim_backed=lambda: (
+                        not _state_claim_stands(text, turn, device_names, state_claim.device)
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,
@@ -5077,6 +5307,7 @@ async def _run_turn(
                 )
                 state_text = outcome.text
                 state_redirected = outcome.redirected
+                stood_prose = outcome.prose if outcome.redirected else stood_prose
                 redirect_appended += outcome.appended
                 if not state_redirected and state_text != state_claim.text:
                     # The redirect replaced the correction with one that is
@@ -5086,7 +5317,8 @@ async def _run_turn(
                     # claim's text, so the claim carries the new one.
                     state_claim = dataclasses.replace(state_claim, text=state_text)
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
-                backend_note = backend_note or outcome.markup_note
+                if backend_note is None and outcome.markup_note:
+                    backend_note, redirect_note_unshown = outcome.markup_note, True
                 redirect_spent = True
 
         # The PRESENTED-LISTING guard, on the same raw reply, same fail-OPEN
@@ -5150,7 +5382,9 @@ async def _run_turn(
                         not_redirected_because="tools_already_ran",
                         appended_note=True,
                     )
-                emit(_frame({"correction": PRESENTED_LISTING_UNVERIFIED_NOTE}))
+                # Emitted where it is APPENDED (the composition below), so the
+                # live order is the stored order — after a backend note a
+                # redirect earned (said-not-done fix round 5, P2).
             elif redirect_spent:
                 # An earlier claim took the turn's one redirect and its own
                 # regeneration did not stand. Both are still contradicted (the
@@ -5173,6 +5407,19 @@ async def _run_turn(
                     span_meta=listing_meta,
                     nudge_for=lambda ran: presented_listing_redirect_nudge(ran_a_tool=ran),
                     redirect_note=PRESENTED_LISTING_REDIRECT_NOTE,
+                    redirect_note_no_call=PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL,
+                    # "I did not actually list those files" is false once this
+                    # redirect's own call listed them and only its report was
+                    # lost: the listing guard's own re-check then names what
+                    # ran instead (A9 — the state path's rule).
+                    still_unbacked=lambda: _listing_claim_stands(
+                        text, turn, listing_tools, message
+                    ),
+                    # "Listing the files now" only when the listing guard's
+                    # own re-check finds a listing ran (I-1).
+                    claim_backed=lambda: (
+                        not _listing_claim_stands(text, turn, listing_tools, message)
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,
@@ -5186,9 +5433,18 @@ async def _run_turn(
                 )
                 listing_text = outcome.text
                 listing_redirected = outcome.redirected
+                stood_prose = outcome.prose if outcome.redirected else stood_prose
                 redirect_appended += outcome.appended
+                if not listing_redirected and listing_text != listing_claim.text:
+                    # The redirect replaced the correction with one that is true
+                    # of the turn's final state (its own call listed the files),
+                    # and the composition below carries the claim's text — so
+                    # the claim carries the new one, as on the state path, and
+                    # what persists is what was shown.
+                    listing_claim = dataclasses.replace(listing_claim, text=listing_text)
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
-                backend_note = backend_note or outcome.markup_note
+                if backend_note is None and outcome.markup_note:
+                    backend_note, redirect_note_unshown = outcome.markup_note, True
                 redirect_spent = True
 
         # Compose the DURABLE text once, from the outcome above. The consent,
@@ -5287,11 +5543,23 @@ async def _run_turn(
             or listing_redirected
             or bool(replace_corrections)
         )
+        # …and what persists as HERS, for the said-not-done pair at the end of
+        # the turn: a REPLACE-class redirect's regeneration that stood, or none
+        # of her prose when a REPLACE-class correction dropped it.
+        if consent_redirected or state_redirected or listing_redirected:
+            said_prose = stood_prose
+        elif prose_dropped:
+            said_prose = None
         if backend_note is not None and prose_dropped:
+            if redirect_note_unshown:
+                emit(_frame({"correction": backend_note}))  # stored, so shown (R6)
             persisted = f"{persisted}\n\n{backend_note}" if persisted else backend_note
         if listing_unverified:
             # Appended after whatever the composition kept — the prose itself in
             # the ordinary case — so the operator sees the listing AND the doubt.
+            # Shown live HERE, where it joins the stored text, never before a
+            # line stored ahead of it (said-not-done fix round 5, P2).
+            emit(_frame({"correction": PRESENTED_LISTING_UNVERIFIED_NOTE}))
             persisted = f"{persisted}\n\n{PRESENTED_LISTING_UNVERIFIED_NOTE}"
 
         # The OPT-IN responsiveness check (agents.responsiveness_check, default
@@ -5385,7 +5653,7 @@ async def _run_turn(
             # REPLACES persisted with the corrected reply — or, if it still
             # defers/errors, appends an honest note. Either way it consumes the
             # turn's one redirect, so the responsiveness check below is skipped.
-            persisted = await _deferral_redirect(
+            persisted, deferral_redirected = await _deferral_redirect(
                 app,
                 turn,
                 model,
@@ -5396,6 +5664,8 @@ async def _run_turn(
                 user_message=message,
                 persona=persona,
             )
+            if deferral_redirected:
+                said_prose = persisted  # the regeneration, and nothing else
 
         # The OFFER shape of the same guard (owner ruling 2026-09-03: "want me
         # to?" for what he already instructed is the instruction handed back,
@@ -5420,12 +5690,19 @@ async def _run_turn(
             and not redirect_spent
             and not out_of_rounds
         ):
-            # Measured BEFORE the redirect: the offer shape can fire with some
-            # OTHER tool's span already on the turn (a memory search, then
-            # "want me to check the web?"), in which case _claim_redirect
-            # refuses to regenerate at all — so a successful span AFTER it is
-            # only the redirect's own work when there was none before.
-            ran_before = guards.ran_a_tool(turn.spans)
+            # The offer shape can fire with some OTHER tool's span already on
+            # the turn (a memory search, then "want me to check the web?"), in
+            # which case _claim_redirect refuses to regenerate at all and its
+            # honest note stands. When the redirect's own first round
+            # dispatched a successful tool but its report did not survive, that
+            # note would say it did not — a call that RAN is never reported as
+            # nothing ran — so `_claim_redirect` names what ran instead
+            # (`still_unbacked`, read only when it dispatched: its precondition
+            # guarantees nothing had run before, so any successful span then is
+            # its own). It EMITS the text it returns, and this block persists
+            # exactly that text (said-not-done fix round 4, R6: it once emitted
+            # the honest note live and stored "[I ran X but could not
+            # report…]" — the owner saw a false line).
             outcome = await _claim_redirect(
                 app,
                 turn,
@@ -5448,6 +5725,12 @@ async def _run_turn(
                     else (lambda ran: offer_redirect_nudge(ran_a_tool=ran))
                 ),
                 redirect_note=DEFERRAL_NOTE,
+                redirect_note_no_call=(
+                    DEFERRAL_COMPLETION_NOTE_NO_CALL
+                    if deferral.kind == "completion"
+                    else DEFERRAL_NOTE_NO_CALL
+                ),
+                still_unbacked=lambda: not guards.ran_a_tool(turn.spans),
                 out_of_rounds=out_of_rounds,
                 messages=messages,
                 advertised=advertised,
@@ -5464,16 +5747,12 @@ async def _run_turn(
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
             if offer_redirected:
                 persisted = outcome.text
-            elif not ran_before and guards.ran_a_tool(turn.spans):
-                # The redirect's own first round dispatched a successful tool
-                # but its report did not survive — the same rule as the
-                # bare-intent block: a call that RAN is never reported as
-                # nothing ran, so the note names what actually happened.
-                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
-                persisted = f"{persisted}\n\n{_bare_intent_ran_but_unreported_note(ran_names)}"
+                said_prose = outcome.prose
             else:
                 persisted = f"{persisted}\n\n{outcome.text}"
             if outcome.markup_note:
+                # Stored, so shown live too (R6: emit what persists).
+                emit(_frame({"correction": outcome.markup_note}))
                 persisted = f"{persisted}\n\n{outcome.markup_note}"
             backend_note = backend_note or outcome.markup_note
             # Spent by TRYING, not by succeeding — same rule as consent/state.
@@ -5498,6 +5777,17 @@ async def _run_turn(
             and not redirect_spent
             and not out_of_rounds
         ):
+            # The redirect's OWN first round may actually dispatch a successful
+            # tool (bare_intent only ever fires when nothing had run yet, so any
+            # span here is this redirect's) even though the closing round's
+            # report does not survive — empty, refused as markup, or rejected
+            # by the guard set. BARE_INTENT_HONEST_NOTE says "did not" and would
+            # then be a LIE: a call that RAN is never reported as nothing ran
+            # (the same rule the consent-wave's markup fix established). So
+            # `_claim_redirect` names what actually ran instead
+            # (`still_unbacked`), and EMITS exactly the text it returns, which
+            # is what persists (said-not-done fix round 4, R6: it once emitted
+            # the "did not" note live and stored "[I ran X…]").
             outcome = await _claim_redirect(
                 app,
                 turn,
@@ -5511,6 +5801,8 @@ async def _run_turn(
                 },
                 nudge_for=lambda ran: bare_intent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=DEFERRAL_NOTE,
+                redirect_note_no_call=DEFERRAL_NOTE_NO_CALL,
+                still_unbacked=lambda: not guards.ran_a_tool(turn.spans),
                 out_of_rounds=out_of_rounds,
                 messages=messages,
                 advertised=advertised,
@@ -5526,27 +5818,18 @@ async def _run_turn(
             redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
 
-            if not bare_intent_redirected and guards.ran_a_tool(turn.spans):
-                # The redirect's OWN first round actually dispatched a
-                # successful tool (bare_intent only ever fires when nothing
-                # had run yet, so any span here was created by this
-                # redirect) even though the closing round's report did not
-                # survive — empty, refused as markup, or rejected by the
-                # guard set. BARE_INTENT_HONEST_NOTE says "did not" and
-                # would then be a LIE: a call that RAN is never reported as
-                # nothing ran (the same rule the consent-wave's markup fix
-                # established). Name what actually ran instead.
-                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
-                persisted = _bare_intent_ran_but_unreported_note(ran_names)
-            else:
-                persisted = outcome.text
+            # REPLACE-class: what persists is the regeneration, or a note that
+            # drops her prose — none of it hers to read then.
+            said_prose = outcome.prose if bare_intent_redirected else None
+            persisted = outcome.text
             if outcome.markup_note:
                 # This block runs AFTER the turn's one shared backend-note
                 # append (the "compose the DURABLE text once" section,
                 # above) already ran, so setting `backend_note` alone would
                 # leave this note computed and never attached to anything —
                 # append it directly, here, the one place left that still
-                # writes `persisted`.
+                # writes `persisted`. Stored, so shown live too (R6).
+                emit(_frame({"correction": outcome.markup_note}))
                 persisted = f"{persisted}\n\n{outcome.markup_note}"
             backend_note = backend_note or outcome.markup_note
             # Spent by TRYING, not by succeeding — same rule as consent/state.
@@ -5587,11 +5870,68 @@ async def _run_turn(
             and not deferral_fired
             and not redirect_spent
         ):
-            # The redirect REPLACES persisted on drift; its redirected flag is
-            # recorded in the span it files, not needed further here.
-            persisted, _redirected = await _responsiveness_redirect(
+            # The redirect REPLACES persisted on drift (its span records it); the
+            # refocused answer is then the prose the said-not-done pair reads.
+            persisted, refocused = await _responsiveness_redirect(
                 app, turn, model, message, persisted, messages, emit
             )
+            if refocused:
+                said_prose = persisted  # the refocused answer replaced it whole
+
+        # The SAID-NOT-DONE pair (the owner's test, 2026-09-28): a call to one of
+        # her own tools written as text (guards.written_call_check), and a claim
+        # that an action happened on a device with nothing run to do it
+        # (guards.device_completion_check). Zero calls each time, no guard
+        # fired, and all four of his turns went into her memory.
+        #
+        # Fix round 3 (2026-09-29, the controller's rulings T1-T5): APPEND-ONLY,
+        # with NO redirects. The owner shelved the handback guard the same day
+        # for the same reason — a redirect that invites action cannot be made
+        # safe with regex detection — so a false fire here costs ONE true
+        # sentence, never an action: no nudge, no tools, nothing taken from the
+        # redirect budget and nothing held off (T1). Both are read ONCE, HERE, at
+        # the END of the turn, after every other guard's redirect has run, over
+        # the prose that persists as HERS (`said_prose`: never the backend's own
+        # notes or another guard's correction, T5) and the turn's FINAL spans
+        # (T4). So a redirect that really made the call leaves nothing to say,
+        # each guard appends exactly one sentence, and the two can never
+        # contradict each other or the record. Each files ONE span, and the turn
+        # stays out of memory (`plumbing_turn`). Fail-open, each on its own: a
+        # guard that raises appends nothing.
+        #
+        # Fix rounds 4 and 5 (2026-09-30, R1/P1, R5): both are silent for a
+        # turn whose delegation may have run an agent — any not refused before
+        # it ran (the calls are on the agent's turn) — and a device claim is
+        # backed by a call on any agent of the same machine: the machine each
+        # agent reported, read here from the live rows.
+        said_claims: list[tuple[str, Any]] = []
+        if said_prose is not None and said_prose.strip():
+            said = without_markup(said_prose)
+            machines = await _paired_machines(pool)
+            for name, check in (
+                (
+                    "written_call",
+                    lambda: guards.written_call_check(said, turn.spans, persona.tool_names),
+                ),
+                (
+                    "device_completion",
+                    lambda: guards.device_completion_check(
+                        said, turn.spans, persona.tool_names, device_names, machines=machines
+                    ),
+                ),
+            ):
+                try:
+                    claim = check()
+                except Exception:
+                    logger.exception("%s guard raised; shipping the reply uncorrected", name)
+                    claim = None
+                if claim is not None:
+                    said_claims.append((name, claim))
+        for name, claim in said_claims:
+            with turn.span("guard", name) as span:
+                span.meta.update(_said_not_done_meta(name, claim))
+            emit(_frame({"correction": claim.text}))
+            persisted = f"{persisted}\n\n{claim.text}" if persisted else claim.text
 
         # The record boundary. Everything above has already been cleaned where it
         # was produced; this is the one line that makes the invariant hold for
@@ -5674,6 +6014,14 @@ async def _run_turn(
             # back in as if it were an answer. A redirect that stood either
             # ran a tool or said plainly it did not — ordinary knowledge again.
             or (bare_intent is not None and not bare_intent_redirected)
+            # The said-not-done pair (2026-09-28), the same shape as the
+            # completion claim below: a call written as text that never ran, or
+            # "Notepad is now open" with nothing run, is a fabricated fact — and
+            # a recalled fabrication is how the next one gets its wording (the
+            # Notepad turn was a replay of an honest one, out of recall). Read
+            # at the end of the turn over what persists as hers, so a sentence
+            # was appended exactly when this holds (fix round 3, T4).
+            or bool(said_claims)
             # An offer-shape deferral that did not redirect is the same shape
             # again: "want me to?" plus the honest note is choreography about
             # the instruction handed back, and recalling it later is how the

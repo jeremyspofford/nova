@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { act, render } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { ChatProvider, useChatStore } from './chat-store'
 import type { ChatState } from '../pages/chat/chatReducer'
+import { MessageBubble } from '../pages/chat/MessageBubble'
 
 /**
  * The nav bug: the SSE stream used to be owned by ChatPage, so navigating
@@ -233,6 +234,48 @@ describe('ChatProvider', () => {
  * under the previous identity is ever dispatched again, however late it
  * arrives.
  */
+describe('ChatProvider — a correction frame (said-not-done fix round 3, T6)', () => {
+  it('a stream carrying a correction frame shows its text in the message', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    act(() => probe.store!.sendMessage('can you open notepad on my dell'))
+    await tick()
+    stream.push('data: {"t":"Notepad is now open on your DELL-XPS-8950."}\n\n')
+    await tick()
+    stream.push(
+      'data: {"correction":"(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"}\n\n',
+    )
+    await tick()
+    // Live, while the turn is still open — not only after a reload.
+    const live = probe.store!.state.rows.find(r => r.kind === 'message' && r.role === 'assistant')
+    expect(live && live.kind === 'message' && live.text).toBe(
+      'Notepad is now open on your DELL-XPS-8950.\n\n' +
+        '(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)',
+    )
+    stream.push('data: [DONE]\n\n')
+    stream.end()
+    await tick()
+
+    const row = probe.store!.state.rows.find(r => r.kind === 'message' && r.role === 'assistant')
+    expect(row && row.kind === 'message').toBe(true)
+    if (!row || row.kind !== 'message') return
+    // The bubble shows it, the way a reload of the stored reply would.
+    render(<MessageBubble row={row} />)
+    expect(
+      screen.getByText('(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)'),
+    ).toBeTruthy()
+    expect(screen.getByText('Notepad is now open on your DELL-XPS-8950.')).toBeTruthy()
+  })
+})
+
 describe('ChatProvider — the identity boundary (sign-out, or someone else signing in)', () => {
   it('a stream still in flight when its owner signs out is aborted and stops updating the store', async () => {
     const stream = controlledStream()

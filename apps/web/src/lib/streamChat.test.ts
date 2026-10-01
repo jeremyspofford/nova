@@ -518,3 +518,33 @@ describe('thinking frames', () => {
     expect(events[0]).toEqual({ type: 'delta', text: 'hi' })
   })
 })
+
+/**
+ * The `correction` frame (said-not-done fix round 3, T6) — a line the BACKEND
+ * adds to her reply: an honesty guard's correction, or a redirect's note.
+ * Core always sent it; this client dropped it as an unknown key, so it
+ * appeared only after a reload re-read the stored reply. Now a known frame.
+ */
+describe('correction frames', () => {
+  it('turns a correction frame into its own event, after the text it follows', () => {
+    const events = parseAll([
+      'data: {"t":"Notepad is now open on your DELL-XPS-8950."}\n\n' +
+        'data: {"correction":"(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"}\n\n' +
+        'data: [DONE]\n\n',
+    ])
+    expect(events).toEqual([
+      { type: 'delta', text: 'Notepad is now open on your DELL-XPS-8950.' },
+      {
+        type: 'correction',
+        text: '(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)',
+      },
+      { type: 'done' },
+    ])
+  })
+
+  it('a correction that is not a string is a broken frame, said out loud', () => {
+    const events = parseAll(['data: {"correction":{"text":"x"}}\n\n'])
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('error')
+  })
+})

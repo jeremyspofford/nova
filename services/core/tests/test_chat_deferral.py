@@ -120,7 +120,9 @@ async def test_a_deferral_with_no_tool_call_redirects_once_and_persists_the_corr
     assert deltas[0] == DEFER
     assert deltas[-1] == corrected
     corrections = [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
-    assert corrections == [chat.DEFERRAL_NOTE]
+    # The text-only redirect ran nothing, so its note never claims it did
+    # (said-not-done fix round 5, P6: it said "Doing that now…").
+    assert corrections == [chat.DEFERRAL_NOTE_NO_CALL]
     assert sent[-1] == DONE
 
     spans = await _deferral_spans(pool)
