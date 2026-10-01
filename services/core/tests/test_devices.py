@@ -412,6 +412,15 @@ async def test_a_device_spec_says_its_door_how_it_starts_and_its_build(pool):
     assert spec["starts"].startswith("unknown") and spec["last_update"] is None
 
 
+def test_last_update_fails_loudly_without_the_join():
+    """Task 16 fix round 1, I3: a row fetched WITHOUT rows_with_last_update's
+    lateral join is missing the u_version column entirely — _last_update
+    reads `row["u_version"]`, not `.get`, so this is a loud KeyError rather
+    than a silent "never updated"."""
+    with pytest.raises(KeyError):
+        devices._last_update({"id": "not-a-joined-row"})
+
+
 # -- rename ------------------------------------------------------------
 
 

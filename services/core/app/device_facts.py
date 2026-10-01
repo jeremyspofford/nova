@@ -179,6 +179,23 @@ def _bool(value: object, where: str) -> bool:
     return value
 
 
+def _line(value: object, where: str) -> str:
+    """Text core renders INTO a line: one line. A newline in an agent-reported
+    name would split the line tools.machines.device_line_shown reads back —
+    it fails closed, and her facts would be dropped (Review Focus 13).
+
+    Promoted to sit beside `_text`/`_object`/`_bool` (Task 16 fix round 1,
+    I2): `validate_auth`'s `agent.update.*` fields need it too — Task 22
+    renders `reason` into machine_status's one-line agent line, and a
+    newline there would make `device_line_shown` fail closed (dropping
+    that agent's connected fact) or let a crafted reason print a line that
+    reads as another agent's."""
+    text = _text(value, where)
+    if _CONTROL.search(text):
+        raise FactsRejected(f"{where} contains a control character")
+    return text
+
+
 def validate_auth(raw: object) -> dict:
     """The auth-frame facts as core records them, or FactsRejected.
 
@@ -202,16 +219,20 @@ def validate_auth(raw: object) -> dict:
     clean_update: dict | None = None
     if update is not None:
         u = _object(update, "facts.agent.update")
-        outcome = _text(u.get("outcome"), "facts.agent.update.outcome")
+        # Every agent.update.* text field goes through _line, not _text
+        # (Task 16 fix round 1, I2): Task 20 stores `reason`, and Task 22
+        # renders it into machine_status's one-line agent line — a control
+        # character there is never just cosmetic.
+        outcome = _line(u.get("outcome"), "facts.agent.update.outcome")
         if outcome not in UPDATE_OUTCOMES:
             raise FactsRejected(
                 f"facts.agent.update.outcome {outcome!r} is not one of {', '.join(UPDATE_OUTCOMES)}"
             )
         clean_update = {
-            "version": _text(u.get("version"), "facts.agent.update.version"),
+            "version": _line(u.get("version"), "facts.agent.update.version"),
             "outcome": outcome,
-            "reason": _text(u.get("reason", ""), "facts.agent.update.reason"),
-            "at": _text(u.get("at", ""), "facts.agent.update.at"),
+            "reason": _line(u.get("reason", ""), "facts.agent.update.reason"),
+            "at": _line(u.get("at", ""), "facts.agent.update.at"),
         }
     os_ = _object(facts.get("os"), "facts.os")
     goos = _text(os_.get("goos"), "facts.os.goos")
@@ -325,16 +346,6 @@ def _folders(raw: object) -> dict:
                 )
             out[name] = path
     return out
-
-
-def _line(value: object, where: str) -> str:
-    """Text core renders INTO a line: one line. A newline in an agent-reported
-    name would split the line tools.machines.device_line_shown reads back —
-    it fails closed, and her facts would be dropped (Review Focus 13)."""
-    text = _text(value, where)
-    if _CONTROL.search(text):
-        raise FactsRejected(f"{where} contains a control character")
-    return text
 
 
 def _sanitized_line(text: str) -> str:
@@ -527,11 +538,20 @@ def place(d: Mapping) -> str:
 
 def starts(facts: dict | None) -> str:
     """How this agent starts, for a person — from the mode its supervisor
-    gave it (S42b P4), never assumed."""
-    if not isinstance(facts, dict):
-        return "unknown — it reports no facts (it predates S42a)"
-    mode = (facts.get("agent") or {}).get("mode")
-    return _STARTS.get(mode, f"unknown (mode {mode!r})")
+    gave it (S42b P4), never assumed.
+
+    `facts` is None far more often than "predates S42a" (Task 16 fix round
+    1, I1): a paired agent that has not connected yet (enroll writes no
+    facts), one that never came up, every device between a re-pair and its
+    new agent's first connect, and a connection whose auth facts were
+    refused all leave it None too — machine_status (Task 22) and the tile
+    (Task 29) would otherwise give a wrong diagnosis. A facts dict with no
+    "agent" key (so `mode` resolves to None) reads the same way, never a
+    Python repr: `unknown (mode None)` would have been exactly that leak."""
+    mode = (facts.get("agent") or {}).get("mode") if isinstance(facts, dict) else None
+    if mode is None:
+        return "unknown — it has reported no facts"
+    return _STARTS.get(mode, f"unknown (mode {mode})")
 
 
 def build_state(agent_version: str | None, hub_version: str | None) -> dict:

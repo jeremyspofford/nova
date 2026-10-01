@@ -984,6 +984,53 @@ async def test_the_gateway_plant_reads_agents_from_the_rows_and_the_hub(pool):
     await _close(conn, task)
 
 
+async def test_each_devices_last_update_rides_the_one_lateral_join(pool):
+    """Task 16 fix round 1, I3: devices.list_devices and
+    machines.GatewayPlant.agents both read devices.rows_with_last_update —
+    one source, never duplicated — actually run here against a real
+    agent_updates row (nothing had before). One device has an older
+    DECIDED row and a newer SENT one; the newer one is what rides along.
+    The other device has no rows at all."""
+    updated_id, _ = await _enroll(pool, name="updated")
+    await _enroll(pool, name="quiet")  # the second device: enrolled, never updated
+    older, newer = "a" * 12, "b" * 12
+    sha = "c" * 64
+    await pool.execute(
+        "INSERT INTO agent_updates (device_id, version, sha256, path, requested_by, "
+        "sent_at, outcome, outcome_at, reason) VALUES "
+        "($1, $2, $3, 'capability', 'owner', now() - interval '1 hour', 'confirmed', "
+        "now() - interval '50 minutes', 'ok')",
+        updated_id,
+        older,
+        sha,
+    )
+    await pool.execute(
+        "INSERT INTO agent_updates (device_id, version, sha256, path, requested_by, sent_at) "
+        "VALUES ($1, $2, $3, 'capability', 'owner', now())",
+        updated_id,
+        newer,
+        sha,
+    )
+    sent_at = await pool.fetchval(
+        "SELECT sent_at FROM agent_updates WHERE device_id = $1 AND version = $2",
+        updated_id,
+        newer,
+    )
+
+    specs = await devices.list_devices(pool)
+    assert len(specs) == 2
+    by_name = {s["name"]: s for s in specs}
+    last = by_name["updated"]["last_update"]
+    assert last["version"] == newer and last["outcome"] == "sent"
+    assert last["at"] == sent_at.isoformat()
+    assert by_name["quiet"]["last_update"] is None
+
+    views = await machines.GatewayPlant().agents(None)
+    by_name_view = {v["name"]: v for v in views}
+    assert by_name_view["updated"]["last_update"] == last
+    assert by_name_view["quiet"]["last_update"] is None
+
+
 async def test_a_bad_signature_records_no_facts(pool):
     device_id, device = await _enroll(pool, name="pc")
     conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS, key=FakeDevice())

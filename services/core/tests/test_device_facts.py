@@ -279,6 +279,24 @@ def test_an_update_outcome_is_kept_and_a_bad_one_refused():
         df.validate_auth(_with(WINDOWS, "agent.update", {**update, "outcome": "staged"}))
 
 
+@pytest.mark.parametrize("field", ["version", "outcome", "reason", "at"])
+def test_an_update_fields_control_character_is_refused(field):
+    """Task 16 fix round 1, I2: Task 20 stores agent.update.reason, and
+    Task 22 renders it into machine_status's one-line agent line — a
+    newline there would make device_line_shown fail closed (dropping that
+    agent's connected fact), and a crafted reason could print a line that
+    reads as another agent's."""
+    update = {
+        "version": "aaaaaaaaaaaa",
+        "outcome": "rolled_back",
+        "reason": "did not connect",
+        "at": "2026-09-28T12:00:00Z",
+    }
+    update[field] = update[field] + "\nfake (Windows): connected"
+    with pytest.raises(df.FactsRejected, match="control character"):
+        df.validate_auth(_with(WINDOWS, "agent.update", update))
+
+
 def test_the_folders_section_keeps_known_names_only():
     got = df.validate_frame(
         {
@@ -302,7 +320,21 @@ def test_the_folders_section_keeps_known_names_only():
 )
 def test_how_an_agent_starts_is_said_from_its_mode(mode, said):
     assert df.starts(df.validate_auth(_with(WINDOWS, "agent.mode", mode))) == said
-    assert df.starts(None) == "unknown — it reports no facts (it predates S42a)"
+
+
+def test_how_an_agent_starts_is_unknown_without_guessing_a_cause():
+    """Task 16 fix round 1, I1: facts is None far more often than "predates
+    S42a" — a paired agent that has not connected yet, one that never came
+    up, every device between a re-pair and its new agent's first connect,
+    and a connection whose auth facts were refused all leave it None too.
+    machine_status (Task 22) and the tile (Task 29) would otherwise give a
+    wrong diagnosis. Pin moved: was "unknown — it reports no facts (it
+    predates S42a)"."""
+    assert df.starts(None) == "unknown — it has reported no facts"
+    # A facts dict with no "agent" key must never leak a Python repr
+    # ("unknown (mode None)") — the same honest "no facts" message.
+    assert df.starts({}) == "unknown — it has reported no facts"
+    assert "None" not in df.starts({})
 
 
 def test_behind_means_not_the_hubs_build_never_older():

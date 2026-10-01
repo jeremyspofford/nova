@@ -44,21 +44,6 @@ ENGINES_PATH = "/admin/engines"
 # its per-engine cache (ready 30 s, failure 10 s) or one bounded observation.
 TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
-# S42b: the same lateral join as devices._LIST_SQL — each device's door and
-# latest update attempt in one query, never one per device — kept as its own
-# copy because the WHERE/ORDER here (live devices, by name) differ from that
-# one's (every device, revoked included, by enrollment).
-_AGENTS_SQL = """
-SELECT d.*, u.version AS u_version, u.outcome AS u_outcome, u.reason AS u_reason,
-       COALESCE(u.outcome_at, u.sent_at) AS u_at
-  FROM devices d
-  LEFT JOIN LATERAL (
-      SELECT * FROM agent_updates a WHERE a.device_id = d.id ORDER BY a.sent_at DESC LIMIT 1
-  ) u ON true
- WHERE d.revoked_at IS NULL
- ORDER BY d.name
-"""
-
 
 class PlantUnavailable(RuntimeError):
     """The gateway could not be asked, refused, or answered something that is
@@ -155,12 +140,14 @@ class GatewayPlant:
         overlay its declared devices the same way it overlays machines.
 
         S42b: each device's door and latest update attempt ride along from
-        the same lateral join `devices._LIST_SQL` uses, read with
-        `devices._last_update`. `hub_version` is not wired in here yet —
-        Task 18 passes it; until then `agent_view` reads the comparison as
-        unknown, which is the truth of what this call knows."""
+        `devices.rows_with_last_update` (the ONE place that lateral join is
+        written — Task 16 fix round 1, I3; it used to be a second copy of
+        the SQL here), read with `devices._last_update`. `hub_version` is
+        not wired in here yet — Task 18 passes it; until then `agent_view`
+        reads the comparison as unknown, which is the truth of what this
+        call knows."""
         pool = await db.get_pool()
-        rows = await pool.fetch(_AGENTS_SQL)
+        rows = await devices.rows_with_last_update(pool, live_only=True)
         connected = devices_ws.hub.connected_ids()
         return [
             device_facts.agent_view(

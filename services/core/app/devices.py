@@ -454,22 +454,41 @@ async def get_live_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | No
     return await pool.fetchrow("SELECT * FROM devices WHERE name = $1 AND revoked_at IS NULL", name)
 
 
-_LIST_SQL = """
+# Task 16 fix round 1, I3: the ONE place this lateral join is written —
+# it used to be duplicated verbatim here and in machines.py, nothing ran
+# it against a real agent_updates row, and a silent drift between the two
+# copies would have read "never updated" rather than failing anything.
+_DEVICES_WITH_LAST_UPDATE_SELECT = """
 SELECT d.*, u.version AS u_version, u.outcome AS u_outcome, u.reason AS u_reason,
        COALESCE(u.outcome_at, u.sent_at) AS u_at
   FROM devices d
   LEFT JOIN LATERAL (
       SELECT * FROM agent_updates a WHERE a.device_id = d.id ORDER BY a.sent_at DESC LIMIT 1
   ) u ON true
- ORDER BY d.enrolled_at DESC
 """
 
 
+async def rows_with_last_update(pool: asyncpg.Pool, *, live_only: bool) -> list[asyncpg.Record]:
+    """Every device row, each with its latest agent_updates row's columns
+    (u_version/u_outcome/u_reason/u_at) joined in by one lateral join per
+    query, never one per device. `live_only` is machines.GatewayPlant.agents'
+    need (live devices only, by name); `list_devices` below wants every
+    device, revoked included, by enrollment. Read with `_last_update`."""
+    if live_only:
+        sql = _DEVICES_WITH_LAST_UPDATE_SELECT + " WHERE d.revoked_at IS NULL ORDER BY d.name"
+    else:
+        sql = _DEVICES_WITH_LAST_UPDATE_SELECT + " ORDER BY d.enrolled_at DESC"
+    return await pool.fetch(sql)
+
+
 def _last_update(row: asyncpg.Record | dict) -> dict | None:
-    """The device's latest update attempt (S42b decision 2), from the
-    lateral-joined columns `_LIST_SQL` (and GatewayPlant.agents) select —
-    None when the device has never had one."""
-    if row.get("u_version") is None:
+    """The device's latest update attempt (S42b decision 2), from
+    `rows_with_last_update`'s lateral join — None when the device has
+    never had one. `row["u_version"]`, not `.get` (Task 16 fix round 1,
+    I3): a row fetched WITHOUT that join is missing the column entirely,
+    and this fails loudly (KeyError) rather than silently reading "never
+    updated"."""
+    if row["u_version"] is None:
         return None
     return {
         "version": row["u_version"],
@@ -484,7 +503,7 @@ async def list_devices(pool: asyncpg.Pool, *, hub_version: str | None = None) ->
     was revoked is part of what the operator needs to see. Each device's
     latest update attempt rides along from one lateral join rather than a
     query per device."""
-    rows = await pool.fetch(_LIST_SQL)
+    rows = await rows_with_last_update(pool, live_only=False)
     return [
         device_spec(row, hub_version=hub_version, last_update=_last_update(row)) for row in rows
     ]
