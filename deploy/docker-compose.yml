@@ -67,12 +67,19 @@ services:
       # Stated here rather than left to the code's default so the boundary
       # is visible next to the mount that backs it.
       WORKSPACE_ROOT: /data/workspace
+      # Her browser (S38): where the engine listens, and where core sees the
+      # files it writes (the same volume as its /output).
+      BROWSER_MCP_URL: http://browser:8931/mcp
+      BROWSER_OUTPUT_DIR: /data/browser-output
     volumes:
       # Nova's own scratch space, on a volume of its own: not the memory
       # store, not the repo, not the host. A file she writes lives here and
       # survives a rebuild, and nothing outside this volume is reachable
       # from a workspace tool.
       - v4_workspace:/data/workspace
+      # The browser engine's output (S38). Core copies a reported download or
+      # screenshot from here into the workspace and removes the engine's copy.
+      - v4_browser_output:/data/browser-output
       # The tailnet's state as the sidecar last wrote it — how core learns the
       # address a QR code encodes (app/network.py, S47). Read-only: core never
       # writes it, and nothing in core may pretend to be the sidecar.
@@ -260,6 +267,80 @@ services:
       retries: 10
       start_period: 15s
 
+  browser:
+    # Her browser (S38): Microsoft's Playwright MCP server, pinned by digest
+    # in ./browser/Dockerfile. Core alone calls it, at http://browser:8931/mcp,
+    # through its own MCP client (app/browser/engine.py) — never through her
+    # mcp_call, and never as a row in mcp_servers. Her five tools are core's
+    # (app/tools/browser.py) and never call the engine's run-any-code tools.
+    #
+    # No host port. The engine has no authentication of its own; anything on
+    # this network could drive it, and only core does. One browser that
+    # reaches everything — the internet, the LAN, the tailnet and Nova's own
+    # UI — by the owner's choice (2026-09-30); the other services still need
+    # their service token, so reaching them gains a page nothing.
+    #
+    # No depends_on in either direction: a browser that is down is a stated
+    # failure in her tools, never a core that will not start.
+    build:
+      context: ./browser
+    restart: unless-stopped
+    # Chromium forks helpers; the image runs node as PID 1 with no reaper.
+    init: true
+    command:
+      - "--port"
+      - "8931"
+      - "--host"
+      - "0.0.0.0"
+      # The engine refuses any other Host header (measured: 403 "Access is
+      # only allowed at browser:8931"). 127.0.0.1 is the healthcheck's.
+      - "--allowed-hosts"
+      - "browser:8931,127.0.0.1:8931"
+      # A page may not hand her tools of its own.
+      - "--no-webmcp"
+      # A persistent profile serves one browser instance, so every session —
+      # a core restart starts a new one — shares this one context and page.
+      - "--shared-browser-context"
+      - "--user-data-dir"
+      - "/profile"
+      # Downloads, screenshots and the engine's console logs. Core copies
+      # what the engine REPORTS into her workspace (app/browser/files.py);
+      # the rest is evicted past this size, oldest first.
+      - "--output-dir"
+      - "/output"
+      - "--output-max-size"
+      - "2147483648"
+      # A screenshot never travels as image data; actions carry no snapshot
+      # (browser_read reads the page); paths come back absolute, so core can
+      # map /output/… to its own mount.
+      - "--image-responses"
+      - "omit"
+      - "--snapshot-mode"
+      - "none"
+      - "--file-paths"
+      - "absolute"
+      # Under core's 60 s call timeout, so a slow page is the engine's own
+      # stated timeout rather than a client that gave up.
+      - "--timeout-navigation"
+      - "45000"
+      - "--console-level"
+      - "error"
+      # Chromium closes after an idle hour and relaunches on the next call.
+      - "--idle-timeout"
+      - "3600000"
+    volumes:
+      - v4_browser_profile:/profile
+      - v4_browser_output:/output
+    healthcheck:
+      # A bare GET of the MCP endpoint answers exactly 400 "Invalid request"
+      # (measured 2026-10-01): the server is up and past its Host check. A 403
+      # means the Host check moved; anything else, it is not serving.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8931/mcp').then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
   ollama:
     # PINNED, not `latest`. An untagged image is only pulled when it is absent,
     # so a host that already had `ollama/ollama:latest` from months ago keeps
@@ -446,6 +527,16 @@ volumes:
     x-nova-backup: include
     x-nova-backup-reason: >-
       Nova's own scratch space; a file she wrote lives only here.
+  v4_browser_profile:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      her browser profile (S38): the sites she is signed in to. The bundle is
+      encrypted. Chromium's caches ride along; they cost size, nothing else.
+  v4_browser_output:
+    x-nova-backup: exclude-ephemeral
+    x-nova-backup-reason: >-
+      the browser engine's scratch: downloads and screenshots before core
+      copies them into v4_workspace (which carries them), and its console logs.
   v4_ollama:
     x-nova-backup: exclude-redownload
     x-nova-backup-reason: >-
