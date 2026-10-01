@@ -40,7 +40,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import db, devices, identity
+from app import agent_dist, db, devices, identity
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -165,9 +165,11 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
 @router.get("")
 async def list_devices(_person: Person = Depends(identity.require_person)) -> dict:
     """Revoked devices included, marked as such: a machine that was revoked is
-    part of what the operator needs to see, not something to hide."""
+    part of what the operator needs to see, not something to hide. Each
+    device's build is compared with the hub's (S42b) — "unknown" when the hub
+    has no build to read."""
     pool = await db.get_pool()
-    return {"devices": await devices.list_devices(pool)}
+    return {"devices": await devices.list_devices(pool, hub_version=await agent_dist.version())}
 
 
 @router.patch("/{device_id}")

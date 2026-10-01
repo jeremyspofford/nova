@@ -41,12 +41,24 @@ SESSION_TTL_SECONDS = SESSION_TTL_DAYS * 24 * 60 * 60
 # authenticated operator, shown once, stored hashed, single-use, ten-minute
 # TTL — and rate-limited in devices_api). Everything else under /api/v1 needs a
 # cookie or a bearer.
+#
+# S42b (P19): Nova's agent is downloaded before a machine has any identity —
+# the card's one-liner fetches it first — so the manifest and the six builds
+# are public, exactly, and rate-limited (agent_dist_api). They carry nothing
+# secret: the repo is public, and the manifest is signed.
 PUBLIC_PATHS = frozenset(
     {
         "/api/v1/auth/state",
         "/api/v1/auth/register",
         "/api/v1/auth/login",
         "/api/v1/devices/enroll",
+        "/api/v1/agent/manifest",
+        "/api/v1/agent/dist/novad-linux-amd64",
+        "/api/v1/agent/dist/novad-linux-arm64",
+        "/api/v1/agent/dist/novad-darwin-amd64",
+        "/api/v1/agent/dist/novad-darwin-arm64",
+        "/api/v1/agent/dist/novad-windows-amd64.exe",
+        "/api/v1/agent/dist/novad-windows-arm64.exe",
     }
 )
 

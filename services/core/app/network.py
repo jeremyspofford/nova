@@ -179,3 +179,19 @@ def door_of(peer: str | None, forwarded: str | None) -> str | None:
     if peer == _addr(GATEWAY_ENV):
         return "host"
     return None
+
+
+def client_of(peer: str | None, real_ip: str | None) -> str:
+    """Who sent a request, as far as core can tell (S42b; agent_dist_api's
+    per-client limit): nginx's X-Real-IP when the request came from web's
+    fixed address — nginx writes its own $remote_addr over whatever the
+    caller sent — and the peer itself otherwise. door_of's rule: a header any
+    other sender wrote counts for nothing, so it can neither buy a new
+    identity nor borrow another's. Behind nginx this is the door: the hub's
+    loopback port arrives from the subnet gateway, the tailnet from the
+    sidecar."""
+    if peer is not None and peer == _addr(WEB_ADDR_ENV):
+        said = (real_ip or "").strip()
+        if said:
+            return said
+    return peer or "unknown"

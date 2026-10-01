@@ -6,9 +6,11 @@ reads as "no machines"."""
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import re
+import uuid
 from pathlib import Path
 
 import httpx
@@ -20,6 +22,7 @@ from app.evals.cases import FixtureMachine
 from app.main import app as core_app
 from app.tools import machines as machine_tools
 from tests import fakes
+from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
 # The gateway pins its EngineView dataclass to this file
@@ -429,3 +432,88 @@ async def test_a_fixture_plant_overlays_its_declared_devices_on_the_real_agents(
 def test_a_fixture_device_must_carry_the_prefix():
     with pytest.raises(ValueError):
         machines.FixturePlant({}, devices={"real-pc": {"name": "real-pc"}})
+
+
+# -- S42b: the hub's build each agent is compared with (Task 18, ruling F11) --
+
+
+async def _paired_agent(pool, name: str, version: str) -> None:
+    from app import devices
+
+    minted = await devices.mint_pairing_code(pool, created_by=None)
+    enrolled = await devices.enroll(
+        pool,
+        code=minted["code"],
+        pubkey=hashlib.sha256(name.encode()).hexdigest(),
+        name=name,
+        platform="linux",
+        hostname=name.upper(),
+    )
+    await pool.execute(
+        "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1",
+        uuid.UUID(enrolled["device_id"]),
+        {"v": 2, "agent": {"version": version, "mode": "foreground"}},
+    )
+
+
+@requires_db
+async def test_the_real_plant_compares_each_agent_with_the_hubs_build(pool, monkeypatch):
+    from app import agent_dist
+
+    async def the_hubs_build() -> str:
+        return "aaaaaaaaaaaa"
+
+    monkeypatch.setattr(agent_dist, "version", the_hubs_build)
+    await _paired_agent(pool, "on-the-build", "aaaaaaaaaaaa")
+    await _paired_agent(pool, "on-another", "0a0a0a0a0a0a")
+    builds = {view["name"]: view["build"] for view in await machines.GatewayPlant().agents(None)}
+    assert builds == {
+        "on-the-build": {"state": "current", "hub_version": "aaaaaaaaaaaa"},
+        "on-another": {"state": "behind", "hub_version": "aaaaaaaaaaaa"},
+    }
+
+
+@requires_db
+async def test_a_replay_names_one_hub_build_and_never_reads_the_real_one(pool, monkeypatch):
+    """F11: no build is read during an eval. Every agent a replay lists — the
+    real rows and the case's declared devices alike — is compared with the
+    fixture's hub build, the one FixturePlant.update_agent (Task 22) answers
+    too, so one replay never names two hub builds."""
+    from app import agent_dist
+
+    async def never_in_a_replay() -> str:
+        raise AssertionError("a replay read the hub's real build")
+
+    def never_current():
+        raise AssertionError("a replay read the hub's real build")
+
+    monkeypatch.setattr(agent_dist, "version", never_in_a_replay)
+    monkeypatch.setattr(agent_dist, "read", never_in_a_replay)
+    monkeypatch.setattr(agent_dist, "current", never_current)
+    await _paired_agent(pool, "real-pc", "0a0a0a0a0a0a")
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            # Views as FixtureDevice.as_view() makes them: no hub build known.
+            "eval_laptop": {
+                "name": "eval_laptop",
+                "agent_version": "0a0a0a0a0a0a",
+                "build": {"state": "unknown", "hub_version": None},
+            },
+            "eval_current": {
+                "name": "eval_current",
+                "agent_version": machines.FIXTURE_HUB_VERSION,
+                "build": {"state": "unknown", "hub_version": None},
+            },
+        },
+    )
+    builds = {view["name"]: view["build"] for view in await plant.agents(None)}
+    fixture = machines.FIXTURE_HUB_VERSION
+    assert builds == {
+        "real-pc": {"state": "behind", "hub_version": fixture},
+        "eval_laptop": {"state": "behind", "hub_version": fixture},
+        "eval_current": {"state": "current", "hub_version": fixture},
+    }
+    assert {build["hub_version"] for build in builds.values()} == {await plant.hub_version()}
+    # The declaration itself is untouched: each listing is computed fresh.
+    assert plant._devices["eval_laptop"]["build"] == {"state": "unknown", "hub_version": None}

@@ -1,0 +1,45 @@
+{
+  "_comment": "Written by services/core/tests/fixtures/gen_manifest_golden.py: core's own signer (agent_dist.signed_manifest) over a fake build, with a throwaway TEST key — never core's real key. manifest_golden_test.go holds novad's CheckManifest to it; test_agent_dist.py fails when it is stale. Do not edit by hand.",
+  "public_key_hex": "785684ea11406f7a7b14fb48b172fbc312eea563712f8eb825d15706e63c2034",
+  "response": {
+    "manifest": {
+      "built_at": "2026-09-28T12:00:00Z",
+      "files": {
+        "darwin-amd64": {
+          "name": "novad-darwin-amd64",
+          "sha256": "a0bf7cfe4da6038652ce7da897c7e6f103c0015a0fd252a17a30656b5b264e21",
+          "size": 53
+        },
+        "darwin-arm64": {
+          "name": "novad-darwin-arm64",
+          "sha256": "7d9f6fb0aa50500b539639d25e6b6b46857cb0fc5ce98adaf328516c359117d8",
+          "size": 53
+        },
+        "linux-amd64": {
+          "name": "novad-linux-amd64",
+          "sha256": "3c6e8104ed2b33790f5b6a2c823b6bed93c69399aeb1b939cff5ac3333dfc1dc",
+          "size": 52
+        },
+        "linux-arm64": {
+          "name": "novad-linux-arm64",
+          "sha256": "4018f7c1f9b6b50d0ed18e8e73989c9558ca3e5f5db65ced96fd5251e9ae7ea8",
+          "size": 52
+        },
+        "windows-amd64": {
+          "name": "novad-windows-amd64.exe",
+          "sha256": "4659408004f6255f8730506bdf996882a08b3a2a3e1fc1db38431ea6ba53c18f",
+          "size": 54
+        },
+        "windows-arm64": {
+          "name": "novad-windows-arm64.exe",
+          "sha256": "b57773512432ad376b2a59a24f32b8d8cc4e088cc0f5eaef4a90f7b73251979f",
+          "size": 54
+        }
+      },
+      "go": "go1.27.1",
+      "v": 1,
+      "version": "aaaaaaaaaaaa"
+    },
+    "sig": "60d5930b1a89eb641f67aba5e146effb03f529de0ba3bf295b333c68c653fe0f8019283f08854258711ad128764d16abbe4ed3d81feb35fcbf444cb79ff0ee07"
+  }
+}

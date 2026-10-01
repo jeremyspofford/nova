@@ -35,7 +35,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app import db, device_facts, devices, devices_ws, peers
+from app import agent_dist, db, device_facts, devices, devices_ws, peers
 
 logger = logging.getLogger("core")
 
@@ -132,6 +132,12 @@ class GatewayPlant:
             )
         return await self.engine(app, name)
 
+    async def hub_version(self) -> str | None:
+        """The hub's build of Nova's agent, which every agent this plant lists
+        is compared with (S42b) — None when there is no build to read, so
+        each comparison reads "unknown" rather than a guess."""
+        return await agent_dist.version()
+
     async def agents(self, app) -> list[dict]:
         """Nova's agent on each paired machine (S42a): the live device rows,
         whether each is connected NOW (the hub's registry — never a stored
@@ -142,13 +148,13 @@ class GatewayPlant:
         S42b: each device's door and latest update attempt ride along from
         `devices.rows_with_last_update` (the ONE place that lateral join is
         written — Task 16 fix round 1, I3; it used to be a second copy of
-        the SQL here), read with `devices._last_update`. `hub_version` is
-        not wired in here yet — Task 18 passes it; until then `agent_view`
-        reads the comparison as unknown, which is the truth of what this
-        call knows."""
+        the SQL here), read with `devices._last_update`; each build is
+        compared with `self.hub_version()` — the hub's real build here, the
+        replay's own in FixturePlant."""
         pool = await db.get_pool()
         rows = await devices.rows_with_last_update(pool, live_only=True)
         connected = devices_ws.hub.connected_ids()
+        hub_version = await self.hub_version()
         return [
             device_facts.agent_view(
                 name=row["name"],
@@ -158,6 +164,7 @@ class GatewayPlant:
                 last_seen=row["last_seen"],
                 facts=row["facts"],
                 facts_at=row["facts_at"],
+                hub_version=hub_version,
                 last_transport=row["last_transport"],
                 last_update=devices._last_update(row),
             )
@@ -275,6 +282,13 @@ def _fixture_state(spec: dict, serving: object) -> str:
     return "ready" if declared == "switched_off" else declared
 
 
+# A replay's hub build (S42b, ruling F11): no build is read during an eval.
+# Every agent a replay lists — the real rows and the case's declared devices
+# alike — is compared with this, and FixturePlant.update_agent (Task 22)
+# answers it, so one replay never names two hub builds.
+FIXTURE_HUB_VERSION = "0f1e2d3c4b5a"
+
+
 class FixturePlant(GatewayPlant):
     """The eval harness's world: named `eval_*` machines that exist only for
     one replay, overlaid on the real list.
@@ -339,13 +353,28 @@ class FixturePlant(GatewayPlant):
         ]
         return real + [self._stamped(view) for view in self._views.values()]
 
+    async def hub_version(self) -> str | None:
+        """The replay's own hub build — never the real one (F11)."""
+        return FIXTURE_HUB_VERSION
+
     async def agents(self, app) -> list[dict]:
         """The real agents, then this case's declared devices (S42a) — a real
         row that happens to carry the eval prefix is shadowed, never listed
         twice. Nothing is written: a declared device exists for this replay
-        only, and the device TOOLS do not see it (no key exists to sign for)."""
+        only, and the device TOOLS do not see it (no key exists to sign for).
+
+        S42b: every agent here is compared with the replay's hub build — the
+        real rows through GatewayPlant.agents, which asks `self.hub_version()`,
+        and each declared device's `build` recomputed from its own
+        agent_version, fresh on every listing."""
         real = [view for view in await super().agents(app) if not self._mine(view["name"])]
-        return real + [copy.deepcopy(view) for view in self._devices.values()]
+        hub_version = await self.hub_version()
+        declared = []
+        for view in self._devices.values():
+            out = copy.deepcopy(view)
+            out["build"] = device_facts.build_state(out.get("agent_version"), hub_version)
+            declared.append(out)
+        return real + declared
 
     async def engine(self, app, name: str) -> dict:
         if not self._mine(name):
