@@ -1118,16 +1118,29 @@ async def test_a_facts_frame_with_a_nul_byte_leaves_the_device_connected_and_rec
     pool,
 ):
     """device_facts.validate_frame now refuses the NUL byte itself
-    (FactsRejected, from _unreadable's _text call), so this no longer even
+    (FactsRejected, from _net's _text call), so this no longer even
     reaches postgres — but the OBSERVABLE property is the same one that was
     broken: the socket stays up and nothing is recorded. A heartbeat fed
     right after the bad frame proves serve()'s loop is still alive to process
     it (before either fix, this and the DataError-injection tests below both
     hung this same way: the agent resets its backoff after any authenticated
     session and resends facts immediately, so the crash-reconnect-crash loop
-    was ~1s)."""
+    was ~1s).
+
+    The NUL byte rides in `net.ifaces[].name`, not `unreadable[].item` as it
+    used to: the Task 16b review moved a malformed `unreadable` ENTRY to
+    drop just that entry rather than reject the whole frame (see
+    test_a_malformed_unreadable_entrys_nul_byte_still_lets_the_rest_of_the_
+    frame_record, below), so a NUL byte there no longer demonstrates this
+    property — `net`'s validator is untouched and still rejects the whole
+    frame, which is what this test is about."""
     device_id, device, conn, task = await _connect(pool, name="pc")
-    conn.feed({"type": "facts", "unreadable": [{"item": "x\x00", "reason": "y"}]})
+    conn.feed(
+        {
+            "type": "facts",
+            "net": {"ifaces": [{"name": "eth0\x00", "mac": "", "ipv4_cidr": [], "up": True}]},
+        }
+    )
     conn.feed({"type": "heartbeat", "ts": int(time.time())})
 
     async def heartbeat_landed():
@@ -1137,6 +1150,34 @@ async def test_a_facts_frame_with_a_nul_byte_leaves_the_device_connected_and_rec
     await _until(heartbeat_landed)
     assert devices_ws.hub.is_connected(device_id)
     assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+async def test_a_malformed_unreadable_entrys_nul_byte_still_lets_the_rest_of_the_frame_record(
+    pool,
+):
+    """Task 16b review, the opposite of the test above: one malformed
+    unreadable entry is dropped on its own, so a frame that ALSO carries a
+    NUL byte in `unreadable[].item` still records everything else the frame
+    sent — net.ifaces, and unreadable itself, minus the one bad entry."""
+    device_id, device, conn, task = await _connect(pool, name="pc")
+    conn.feed(
+        {
+            "type": "facts",
+            "net": {"ifaces": []},
+            "unreadable": [{"item": "x\x00", "reason": "y"}],
+        }
+    )
+
+    async def recorded():
+        row = await _facts_of(pool, device_id)
+        return row["facts"] is not None
+
+    await _until(recorded)
+    facts = (await _facts_of(pool, device_id))["facts"]
+    assert facts["net"] == {"ifaces": []}
+    assert facts["unreadable"] == []
+    assert devices_ws.hub.is_connected(device_id)
     await _close(conn, task)
 
 

@@ -147,10 +147,14 @@ def test_a_frame_keeps_its_known_sections_and_drops_the_rest():
         ),
         ({"type": "facts", "unreadable": [{"item": "x"}] * 33}, "more than 32"),
         ({"type": "facts", "unreadable": [], "pad": "x" * 17000}, "over the 16384-byte cap"),
-        (
-            {"type": "facts", "unreadable": [{"item": "x\x00", "reason": "y"}]},
-            "unreadable[0].item",
-        ),
+        # A NUL byte in an unreadable entry's `item` used to reject the
+        # whole frame here — moved deliberately (Task 16b review, "F3, core
+        # side"): one bad entry is now dropped on its own, and that case now
+        # lives in test_a_malformed_unreadable_entry_is_dropped_not_the_
+        # whole_frame, proving the opposite of what it asserted here. A
+        # surrogate STAYS here, unmoved: it is caught by _encoded_size's
+        # frame-wide UTF-8 encode, before any per-entry check runs, for ANY
+        # field anywhere in the frame — never just dropping one entry.
         (
             {"type": "facts", "unreadable": [{"item": "x", "reason": "y\ud800"}]},
             "surrogate",
@@ -507,14 +511,20 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
         "config C:\\Users\\sam\\AppData\\Roaming\\novad\\config.json; "
         "process novad.exe pid 812, supervisor pid 790; as PC-ONE\\sam"
     )
+    # Pin moved deliberately (Task 16b review, "do not gender the account"):
+    # "he is an administrator" / "for his consent" -> "the account it runs
+    # as is an administrator" / "for consent" — a device can belong to
+    # someone other than the owner.
     assert lines[1].startswith(
-        "elevation: the agent runs without admin rights; he is an administrator, so admin work "
-        "asks for his consent at a UAC prompt on the desktop, which a command cannot answer; "
-        "Windows sudo is on (inline)"
+        "elevation: the agent runs without admin rights; the account it runs as is an "
+        "administrator, so admin work asks for consent at a UAC prompt on the desktop, "
+        "which a command cannot answer; Windows sudo is on (inline)"
     )
-    assert (
-        lines[2].startswith("WSL on it")
-        and lines[3] == "(probed 2026-09-28T17:40:00Z; device_info probes again)"
+    # Pin moved deliberately (Task 16b review, "probes take time"): the
+    # final line now notes the ~45s Windows-with-WSL probe bound.
+    assert lines[2].startswith("WSL on it") and lines[3] == (
+        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
+        "on Windows with WSL this can take up to about 45 seconds)"
     )
     assert all("\n" not in line for line in lines)
 
@@ -544,3 +554,245 @@ def test_a_linux_agents_sudo_is_said_in_its_own_words():
         {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
     )
     assert df.elevation_line(root, "linux") == "elevation: the agent runs as root"
+
+
+# -- S42b Task 16b amendment (controller review, post-dispatch) --------------
+
+
+@pytest.mark.parametrize(
+    "novad_pids,said",
+    [
+        (None, "whether a novad process runs there could not be read"),
+        ([], "no novad process"),
+        ([412], "novad process pid 412"),
+    ],
+    ids=["absent-is-unknown", "empty-is-none-found", "listed-pids"],
+)
+def test_novad_pids_distinguishes_unknown_none_and_listed(novad_pids, said):
+    probe = copy.deepcopy(PROBED)
+    probe["wsl_distros"]["distros"][0]["novad_unit"] = None
+    if novad_pids is None:
+        del probe["wsl_distros"]["distros"][0]["novad_pids"]
+    else:
+        probe["wsl_distros"]["distros"][0]["novad_pids"] = novad_pids
+    assert said in df.wsl_line(_merged(probe))
+
+
+def test_an_absent_novad_pids_never_reads_as_none_found():
+    probe = copy.deepcopy(PROBED)
+    probe["wsl_distros"]["distros"][0]["novad_unit"] = None
+    del probe["wsl_distros"]["distros"][0]["novad_pids"]
+    assert "no novad process" not in df.wsl_line(_merged(probe))
+
+
+def test_when_the_running_list_itself_failed_a_distro_never_says_not_running():
+    said = _set(PROBED, ("wsl_distros", "running_said"), "wsl.exe --list --running: access denied")
+    line = df.wsl_line(_merged(said))
+    assert "whether it runs could not be read" in line
+    assert "not running —" not in line
+
+
+def test_an_unreadable_distro_list_never_reads_as_none_installed():
+    frame = {
+        "type": "facts",
+        "wsl_distros": {"distros": []},
+        "unreadable": [
+            {"item": "wsl_distros", "reason": "wsl.exe --list --verbose: exit status 1"}
+        ],
+    }
+    merged = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    line = df.wsl_line(merged)
+    assert "could not be read" in line
+    assert "no distribution is installed" not in line
+
+
+def test_an_empty_and_truly_readable_distro_list_still_says_none_installed():
+    merged = {
+        **df.validate_auth(WINDOWS),
+        **df.validate_frame({"type": "facts", "wsl_distros": {"distros": []}}),
+    }
+    assert df.wsl_line(merged) == "WSL: no distribution is installed for this account"
+
+
+def test_an_unreadable_reasons_control_characters_are_sanitized_not_rejected():
+    frame = {
+        "type": "facts",
+        "wsl_distros": {
+            "distros": [
+                {
+                    "name": "Ubuntu-26.04",
+                    "default": True,
+                    "version": 2,
+                    "running": True,
+                    "looked": False,
+                }
+            ]
+        },
+        "unreadable": [
+            {"item": "wsl_distros.Ubuntu-26.04", "reason": "exit 1\n  fake (Windows): connected"}
+        ],
+    }
+    got = df.validate_frame(frame)  # never rejected over a control character in `reason`
+    assert "\n" in got["unreadable"][0]["reason"]  # stored exactly as the agent sent it
+    line = df.wsl_line({**df.validate_auth(WINDOWS), **got})
+    assert "\n" not in line
+    assert "exit 1" in line and "fake (Windows): connected" in line
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "not an object",
+        {"item": 5},
+        {"item": "x\x00", "reason": "y"},
+    ],
+    ids=["not-an-object", "item-not-text", "item-has-a-nul-byte"],
+)
+def test_a_malformed_unreadable_entry_is_dropped_not_the_whole_frame(entry):
+    """The NUL-byte case used to be pinned in test_a_frame_that_does_not_fit_
+    is_refused_with_the_reason as a frame-level refusal — moved here,
+    proving the opposite, now that one bad entry is dropped on its own. (A
+    surrogate is NOT one of these cases: it is caught by _encoded_size's
+    frame-wide UTF-8 encode before any per-entry check runs, and still
+    rejects the whole frame — see the other test, unmoved.)"""
+    frame = {
+        "type": "facts",
+        "net": {"ifaces": []},
+        "unreadable": [{"item": "ok", "reason": "fine"}, entry],
+    }
+    got = df.validate_frame(frame)
+    assert got["unreadable"] == [{"item": "ok", "reason": "fine"}]
+    assert got["net"] == {"ifaces": []}
+
+
+def test_elevation_lines_never_gender_the_account():
+    admin = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "off"}}
+    )
+    line = df.elevation_line(admin, "windows")
+    for word in (" he ", " his ", " him ", " she ", " her "):
+        assert word not in f" {line} "
+    assert "the account it runs as is an administrator" in line
+
+
+def test_the_sudo_unknown_wording_never_says_windows_on_linux_or_macos():
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "sudo": "unknown"}}
+    )
+    for plat in ("linux", "darwin"):
+        line = df.elevation_line(facts, plat)
+        assert "Windows" not in line
+        assert "sudo is in a mode Nova does not know" in line
+    win_facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "unknown"}}
+    )
+    assert "Windows sudo is in a mode Nova does not know" in df.elevation_line(win_facts, "windows")
+
+
+def test_a_wsl_distros_own_sudo_unknown_never_says_windows():
+    said = _set(PROBED, ("wsl_distros", "distros", 0, "sudo"), "unknown")
+    line = df.wsl_line(_merged(said))
+    assert "sudo is in a mode Nova does not know" in line
+    assert "Windows sudo is in a mode" not in line
+
+
+def test_windows_sudo_from_nova_states_it_has_not_been_measured_yet():
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "inline"}}
+    )
+    line = df.elevation_line(facts, "windows")
+    assert "has not been measured yet" in line
+    assert "fails at once" not in line
+    assert "puts a UAC prompt" not in line
+    # Both measured outcomes stay as named constants for when Task 1's Dell
+    # reading lands — neither is asserted as true yet.
+    assert "fails at once" in df._WINDOWS_SUDO_FROM_AGENT_S_FAILS
+    assert "UAC prompt" in df._WINDOWS_SUDO_FROM_AGENT_S_PROMPTS
+
+
+def test_the_unit_sentence_notes_xdg_runtime_dir_for_a_command_nova_runs():
+    line = df.wsl_line(_merged())
+    assert "XDG_RUNTIME_DIR=/run/user/<uid>" in line
+    # The existing substring this sentence was already pinned on still holds
+    # — the note is appended after it, not spliced into the middle:
+    assert "managed with systemctl --user as that user, without sudo" in line
+
+
+def test_the_probed_again_line_notes_45_seconds_on_windows_never_elsewhere():
+    lines = df.acting_lines(_merged(), "windows")
+    assert lines[-1] == (
+        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
+        "on Windows with WSL this can take up to about 45 seconds)"
+    )
+    linux_frame = {
+        "type": "facts",
+        "service": {
+            "name": "",
+            "binary": "/usr/bin/novad",
+            "config": "/etc/novad/config.json",
+            "process": "novad",
+            "pid": 500,
+            "supervisor_pid": 1,
+            "user": "sam",
+        },
+        "probed_at": "2026-09-28T17:40:00Z",
+    }
+    linux_facts = {**df.validate_auth(WSL), **df.validate_frame(linux_frame)}
+    assert df.acting_lines(linux_facts, "linux")[-1] == (
+        "(probed 2026-09-28T17:40:00Z; device_info probes again)"
+    )
+
+
+def test_elevation_lines_never_promise_or_rule_out_a_future_admin_path():
+    cases = [
+        (
+            df.validate_frame(
+                {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "off"}}
+            ),
+            "windows",
+        ),
+        (
+            df.validate_frame(
+                {
+                    "type": "facts",
+                    "elevation": {"elevated": False, "admin": False, "sudo": "absent"},
+                }
+            ),
+            "windows",
+        ),
+        (
+            df.validate_frame(
+                {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
+            ),
+            "windows",
+        ),
+        (
+            df.validate_frame(
+                {
+                    "type": "facts",
+                    "elevation": {"elevated": False, "sudo": "refused", "sudo_said": "x"},
+                }
+            ),
+            "linux",
+        ),
+        (
+            df.validate_frame(
+                {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
+            ),
+            "linux",
+        ),
+    ]
+    banned = (
+        "will never",
+        "cannot ever",
+        "permanently",
+        "forever",
+        "always will",
+        "going forward",
+        "in the future",
+        "not yet supported",
+    )
+    for facts, platform in cases:
+        line = df.elevation_line(facts, platform).lower()
+        for word in banned:
+            assert word not in line

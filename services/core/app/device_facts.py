@@ -76,16 +76,33 @@ SUDO_STATES: tuple[str, ...] = (
     "inline",
     "unknown",
 )
-# What Windows sudo does when Nova's agent runs it — the sentence Task 1
-# recorded. Branch S-fails (below); on S-prompts it reads:
-# " — and from Nova's agent it puts a UAC prompt on his desktop that her command cannot answer".
-WINDOWS_SUDO_FROM_AGENT = (
+# What Windows sudo does when Nova's agent runs it, with no console attached
+# to answer a prompt. Task 1 named two possible outcomes but has not yet
+# MEASURED which one is true — the Dell reading is pending (Task 16b review:
+# "no unmeasured fact" — asserting either one here would be a guess). These
+# two stay as named constants for when that measurement lands and picks one;
+# the ACTIVE sentence (WINDOWS_SUDO_FROM_AGENT, below) states only that it
+# is not yet known, never either branch.
+_WINDOWS_SUDO_FROM_AGENT_S_FAILS = (
     " — and from Nova's agent it fails at once: nobody is at a console to approve it"
+)
+_WINDOWS_SUDO_FROM_AGENT_S_PROMPTS = (
+    " — and from Nova's agent it puts a UAC prompt on the desktop that a command cannot answer"
+)
+WINDOWS_SUDO_FROM_AGENT = (
+    " — whether this works when Nova's agent runs it, with no console attached, "
+    "has not been measured yet"
 )
 _MAX_DISTROS = 8
 _MAX_PIDS = 8
 _PID_MAX = 2**31 - 1
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# S42b P29: Windows' sudo has run-modes (off/new_window/input_off/inline)
+# native sudo does not — this table is WINDOWS' words. A WSL distro's own
+# account, and a native Linux/macOS agent, never run "Windows sudo", so
+# _sudo_words (below) overrides the words that would otherwise claim that
+# (Task 16b review: the "unknown" wording never says "Windows sudo…" on
+# Linux or macOS).
 _SUDO_WORDS = {
     "no_password": "sudo runs without a password",
     "refused": (
@@ -98,6 +115,9 @@ _SUDO_WORDS = {
     "input_off": "Windows sudo is on (input closed)",
     "inline": "Windows sudo is on (inline)",
     "unknown": "Windows sudo is in a mode Nova does not know",
+}
+_SUDO_WORDS_NOT_WINDOWS = {
+    "unknown": "sudo is in a mode Nova does not know",
 }
 _UNKNOWN_RUNS = "how it runs: unknown — this agent predates S42b and does not say"
 
@@ -274,13 +294,21 @@ def _unreadable(raw: object) -> list[dict]:
     out = []
     for index, item in enumerate(raw):
         where = f"facts.unreadable[{index}]"
-        entry = _object(item, where)
-        out.append(
-            {
-                "item": _text(entry.get("item"), f"{where}.item"),
-                "reason": _text(entry.get("reason", ""), f"{where}.reason"),
-            }
-        )
+        try:
+            entry = _object(item, where)
+            out.append(
+                {
+                    "item": _text(entry.get("item"), f"{where}.item"),
+                    "reason": _text(entry.get("reason", ""), f"{where}.reason"),
+                }
+            )
+        except FactsRejected:
+            # One malformed entry — not an object, or a field outside its
+            # shape — is dropped on its own; it must never take the whole
+            # facts frame down with it, since net/service/elevation/… rode
+            # in on the same frame and said nothing wrong (Task 16b review,
+            # "F3, core side").
+            continue
     return out
 
 
@@ -307,6 +335,19 @@ def _line(value: object, where: str) -> str:
     if _CONTROL.search(text):
         raise FactsRejected(f"{where} contains a control character")
     return text
+
+
+def _sanitized_line(text: str) -> str:
+    """The RENDER-time twin of `_line`, for text `_unreadable` already
+    accepted and stored under S42a's looser `_text`-only check (no control-
+    character refusal there — tightening it would throw out an existing
+    fact over a byte that only matters once it reaches a line). Every
+    `unreadable[].reason` this module interpolates into a sentence goes
+    through this one function first: control characters stripped, never
+    rejected, and the result bounded to `_MAX_TEXT` (Task 16b review, "F3,
+    core side")."""
+    clean = _CONTROL.sub("", text)
+    return clean if len(clean) <= _MAX_TEXT else clean[: _MAX_TEXT - 1] + "…"
 
 
 def _count(value: object, where: str, most: int = _PID_MAX) -> int:
@@ -355,12 +396,20 @@ def _unit(raw: object, where: str) -> dict:
 
 def _distro(raw: object, where: str) -> dict:
     d = _object(raw, where)
-    pids = d.get("novad_pids") or []
-    if not isinstance(pids, list) or len(pids) > _MAX_PIDS:
+    raw_pids = d.get("novad_pids")
+    if raw_pids is None:
+        # Absent or explicit null: UNKNOWN whether a novad process runs
+        # there — never collapsed into "none found" (Task 16b review,
+        # "unknown is never none"). Only an explicit [] means the agent
+        # looked and found none.
+        pids: list[int] | None = None
+    elif not isinstance(raw_pids, list) or len(raw_pids) > _MAX_PIDS:
         raise FactsRejected(
             f"{where}.novad_pids must be a list of at most {_MAX_PIDS} — more than "
             f"{_MAX_PIDS} is refused"
         )
+    else:
+        pids = [_count(p, f"{where}.novad_pids[{i}]") for i, p in enumerate(raw_pids)]
     sudo = d.get("sudo", "")
     return {
         "name": _line(d.get("name"), f"{where}.name"),
@@ -375,7 +424,7 @@ def _distro(raw: object, where: str) -> dict:
         "novad_unit": None
         if d.get("novad_unit") is None
         else _unit(d["novad_unit"], f"{where}.novad_unit"),
-        "novad_pids": [_count(p, f"{where}.novad_pids[{i}]") for i, p in enumerate(pids)],
+        "novad_pids": pids,
     }
 
 
@@ -519,19 +568,33 @@ def runs_line(facts: dict | None) -> str:
     )
 
 
+def _sudo_words(state: str, *, windows: bool) -> str:
+    """The words for a sudo/elevation state. `_SUDO_WORDS` is Windows'
+    table (it alone has run-modes); on anything else — a native Linux or
+    macOS agent, or a WSL distro's own account, which is never "Windows
+    sudo" however the Windows host beside it is configured — the words
+    that would claim "Windows sudo…" are overridden (Task 16b review)."""
+    table = _SUDO_WORDS if windows else {**_SUDO_WORDS, **_SUDO_WORDS_NOT_WINDOWS}
+    return table.get(state, state)
+
+
 def elevation_line(facts: dict | None, platform: str) -> str | None:
-    """Whether elevating from this agent would need a person — and why."""
+    """Whether elevating from this agent would need a person right now —
+    and why. States only the present: it is never a promise, or a ruling
+    out, of some other admin path (Task 16b review)."""
     e = facts.get("elevation") if isinstance(facts, dict) else None
     if not isinstance(e, dict):
         return None
-    sudo = _SUDO_WORDS.get(e["sudo"], e["sudo"])
-    if platform == "windows":
+    windows = platform == "windows"
+    sudo = _sudo_words(e["sudo"], windows=windows)
+    if windows:
         if e["elevated"]:
             head = "the agent runs with admin rights (an elevated token)"
         elif e.get("admin"):
             head = (
-                "the agent runs without admin rights; he is an administrator, so admin work asks "
-                "for his consent at a UAC prompt on the desktop, which a command cannot answer"
+                "the agent runs without admin rights; the account it runs as is an "
+                "administrator, so admin work asks for consent at a UAC prompt on the "
+                "desktop, which a command cannot answer"
             )
         else:
             head = (
@@ -550,7 +613,15 @@ def elevation_line(facts: dict | None, platform: str) -> str | None:
 
 def _nova_agent_in(d: dict) -> str:
     pids = d["novad_pids"]
-    procs = f"novad process pid {', '.join(map(str, pids))}" if pids else "no novad process"
+    if pids is None:
+        # Absent or null, never collapsed into "none" (Task 16b review,
+        # "unknown is never none") — only an explicit [] means confirmed
+        # empty, handled by the `elif pids` branch below.
+        procs = "whether a novad process runs there could not be read"
+    elif pids:
+        procs = f"novad process pid {', '.join(map(str, pids))}"
+    else:
+        procs = "no novad process"
     unit = d["novad_unit"]
     if unit is None:
         return procs
@@ -562,15 +633,23 @@ def _nova_agent_in(d: dict) -> str:
         f"{d['user'] or 'its default user'}'s systemd user unit novad.service is {unit['active']} "
         f"({unit['file'] or 'no unit file'}, Restart={unit['restart'] or 'unknown'}, "
         f"main pid {unit['main_pid']}) — a user unit is managed with systemctl --user as that "
-        f"user, without sudo; {procs}"
+        f"user, without sudo (a command Nova runs may need XDG_RUNTIME_DIR=/run/user/<uid> set "
+        f"— the agent's own look set it); {procs}"
     )
 
 
-def _distro_words(d: dict, why: dict[str, str]) -> str:
+def _distro_words(d: dict, why: dict[str, str], running_said: str) -> str:
     bits = ["default"] if d["default"] else []
     bits.append(f"WSL {d['version']}" if d["version"] else "WSL version unknown")
     if not d["running"]:
-        bits.append("not running — not looked inside, since looking would start it")
+        if running_said:
+            # The list that says who is running could not itself be read
+            # (below) — this distro's own `running: false` is only as good
+            # as that list, so it is never read as a confirmed "not
+            # running" (Task 16b review).
+            bits.append("whether it runs could not be read")
+        else:
+            bits.append("not running — not looked inside, since looking would start it")
     elif not d["looked"]:
         reason = why.get("wsl_distros." + d["name"], "no reason given")
         bits.append(f"running; could not look inside: {reason}")
@@ -584,7 +663,7 @@ def _distro_words(d: dict, why: dict[str, str]) -> str:
         if d["user"]:
             bits.append(f"default user {d['user']}")
         if d["sudo"]:
-            bits.append(_SUDO_WORDS.get(d["sudo"], d["sudo"]))
+            bits.append(_sudo_words(d["sudo"], windows=False))
         bits.append(
             "root through wsl.exe -u root without a password"
             if d["root"]
@@ -599,13 +678,27 @@ def wsl_line(facts: dict | None) -> str | None:
     w = facts.get("wsl_distros") if isinstance(facts, dict) else None
     if not isinstance(w, dict):
         return None
+    # Sanitized once here (Task 16b review, "F3, core side") — every reason
+    # text this function or _distro_words renders into a line reads from
+    # this dict, never the raw unreadable entry.
+    why = {
+        u["item"]: _sanitized_line(u["reason"])
+        for u in facts.get("unreadable") or []
+        if isinstance(u, dict)
+    }
     if not w["distros"]:
+        unread = why.get("wsl_distros")
+        if unread:
+            # An empty list is not the same claim as a list that could not
+            # be read at all (Task 16b review) — the agent never confirmed
+            # zero distros, so this never reads as "none installed".
+            return f"WSL: the list of distributions could not be read ({unread})"
         return "WSL: no distribution is installed for this account"
-    why = {u["item"]: u["reason"] for u in facts.get("unreadable") or [] if isinstance(u, dict)}
-    said = f" (wsl.exe --list --running said: {w['running_said']})" if w.get("running_said") else ""
+    running_said = w.get("running_said", "")
+    said = f" (wsl.exe --list --running said: {running_said})" if running_said else ""
     return (
         "WSL on it, reached through this agent's wsl.exe: "
-        + "; ".join(_distro_words(d, why) for d in w["distros"])
+        + "; ".join(_distro_words(d, why, running_said) for d in w["distros"])
         + said
     )
 
@@ -618,9 +711,16 @@ def acting_lines(facts: dict | None, platform: str) -> list[str]:
     if lines[0] == _UNKNOWN_RUNS:
         return lines
     lines.extend(line for line in (elevation_line(facts, platform), wsl_line(facts)) if line)
-    lines.append(
-        f"(probed {facts.get('probed_at') or 'at an unknown time'}; device_info probes again)"
+    # A Windows probe also walks the WSL distributions beside it (P29), the
+    # slow part — bounded at 45s (global constraint), worth saying so here
+    # rather than leaving a 45-second wait unexplained (Task 16b review).
+    takes = (
+        " — on Windows with WSL this can take up to about 45 seconds"
+        if platform == "windows"
+        else ""
     )
+    when = facts.get("probed_at") or "at an unknown time"
+    lines.append(f"(probed {when}; device_info probes again{takes})")
     return lines
 
 
