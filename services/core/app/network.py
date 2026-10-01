@@ -139,3 +139,43 @@ def address(now: datetime | None = None) -> Address:
             "enabled for this tailnet (admin console: DNS -> HTTPS Certificates)"
         )
     return Address(f"https://{name}", None, now)
+
+
+# -- S42b: which door a device socket came through (P15) ---------------------
+
+# The stack's own addresses (deploy/docker-compose.yml; decide_subnet writes
+# them to .env when 172.18 is taken). Core reads them to tell which door a
+# device socket came through; the defaults are compose's.
+WEB_ADDR_ENV = "NOVA_WEB_ADDR"
+TAILSCALE_ADDR_ENV = "NOVA_TAILSCALE_ADDR"
+GATEWAY_ENV = "NOVA_SUBNET_GATEWAY"
+_ADDR_DEFAULTS = {
+    WEB_ADDR_ENV: "172.18.128.10",
+    TAILSCALE_ADDR_ENV: "172.18.128.20",
+    GATEWAY_ENV: "172.18.0.1",
+}
+
+
+def _addr(name: str) -> str:
+    return os.environ.get(name) or _ADDR_DEFAULTS[name]
+
+
+def door_of(peer: str | None, forwarded: str | None) -> str | None:
+    """Which door a device socket came through: "host" — the hub machine's own
+    published loopback port, whose traffic docker hands to the stack from the
+    subnet gateway (measured, Task 2 — docs/plans/rebuild/hub-p0-measurements.md,
+    "The loopback door": a loopback request arrives at `web` carrying
+    NOVA_SUBNET_GATEWAY as its client address); "tailnet" — through the
+    sidecar; None when it cannot be told. nginx's X-Real-IP is believed ONLY
+    from web's fixed address: on a bridge a connection cannot be completed
+    from a spoofed source, so any other sender's header counts for nothing
+    (P15)."""
+    if peer == _addr(WEB_ADDR_ENV):
+        if forwarded == _addr(GATEWAY_ENV):
+            return "host"
+        if forwarded == _addr(TAILSCALE_ADDR_ENV):
+            return "tailnet"
+        return None
+    if peer == _addr(GATEWAY_ENV):
+        return "host"
+    return None

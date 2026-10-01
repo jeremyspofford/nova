@@ -48,7 +48,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app import db, device_facts, devices, envelopes, governance
+from app import db, device_facts, devices, envelopes, governance, network
 
 logger = logging.getLogger("core")
 
@@ -423,6 +423,20 @@ async def authenticate(conn: object, pool) -> object | None:
     if row is None:
         gone = await devices.get(pool, device_id)
         if gone is not None and gone["revoked_at"] is not None:
+            sig = frame.get("sig")
+            if not isinstance(sig, str) or not verify_nonce(gone["pubkey"], nonce, sig):
+                # The signed proof goes only to whoever holds the revoked key
+                # (S42a's carry): anyone else learns nothing and leaves no knock.
+                await _auth_error(conn, "the challenge signature did not verify")
+                return None
+            # P28: the revoked agent is still running. Its knock is a record,
+            # so "is it still running?" has an answer. No `AND audit_epoch`
+            # here, unlike every live-row write below: a revoked row has no
+            # live epoch to protect — get_live never returns it again for
+            # ANY key, so nothing else can ever write onto it either.
+            await pool.execute(
+                "UPDATE devices SET last_refused_at = now() WHERE id = $1", device_id
+            )
             await _auth_error_revoked(conn, pool, device_id, nonce.hex())
         else:
             await _auth_error(conn, UNKNOWN_DEVICE_REASON)
@@ -435,6 +449,17 @@ async def authenticate(conn: object, pool) -> object | None:
 
     epoch = row["audit_epoch"]
     await _record_auth_facts(pool, device_id, frame.get("facts"), epoch=epoch)
+    # S42b P15: the door this socket came through, written only while the row
+    # is still at `epoch` (the note above _record_auth_facts) — a re-pair
+    # mid-handshake must not let this socket's door land on the rebound row.
+    # NULL — conn has no `door` attribute, or door_of could not tell — is
+    # stored exactly as told, never guessed.
+    await pool.execute(
+        "UPDATE devices SET last_transport = $2 WHERE id = $1 AND audit_epoch = $3",
+        device_id,
+        getattr(conn, "door", None),
+        epoch,
+    )
 
     last_seq = await pool.fetchval(
         "SELECT max(seq) FROM device_audit WHERE device_id = $1 AND epoch = $2",
@@ -896,8 +921,9 @@ class WebSocketConn:
     WebSocketDisconnect becomes ConnectionClosed so serve() unwinds identically
     to the fake."""
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(self, websocket: WebSocket, door: str | None = None) -> None:
         self._ws = websocket
+        self.door = door
 
     async def send(self, frame: dict) -> None:
         await self._ws.send_json(frame)
@@ -933,4 +959,6 @@ async def devices_ws_route(websocket: WebSocket) -> None:
     exemption anyone can widen (it is NOT in PUBLIC_PATHS)."""
     await websocket.accept()
     pool = await db.get_pool()
-    await serve(WebSocketConn(websocket), pool)
+    peer = websocket.client.host if websocket.client else None
+    door = network.door_of(peer, websocket.headers.get("x-real-ip"))
+    await serve(WebSocketConn(websocket, door=door), pool)

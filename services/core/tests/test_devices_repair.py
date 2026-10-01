@@ -538,6 +538,43 @@ async def test_a_socket_that_authenticated_as_the_repair_landed_is_dropped_once_
     assert row["facts"] == NEW_AGENT_FACTS
 
 
+async def test_a_repair_mid_handshake_leaves_the_old_sockets_door_unwritten(pool, monkeypatch):
+    """S42b's last_transport write carries the same `AND audit_epoch = $n`
+    every socket-originated UPDATE does (Task 15 review): authenticate() runs
+    it before it has any way to know the row is doomed — serve's re-read is
+    what finally drops the socket, same race as the facts test above — so
+    without the guard the old key's own door would land on a row a re-pair
+    has already moved past."""
+    device_id, old = await _enroll(pool, name="pc")
+    real_record = devices_ws._record_auth_facts
+    repaired: list[bool] = []
+
+    async def _repaired_meanwhile(*args, **kwargs):
+        if not repaired:
+            await _repair(pool, device_id, FakeDevice(), platform="linux")
+            await devices_ws.hub.disconnect(device_id, "re-paired")
+            # Stand-in for the new key's own connection already having
+            # recorded ITS door — what the old socket's write must not clobber.
+            await pool.execute(
+                "UPDATE devices SET last_transport = 'tailnet' WHERE id = $1", device_id
+            )
+            repaired.append(True)
+        await real_record(*args, **kwargs)
+
+    monkeypatch.setattr(devices_ws, "_record_auth_facts", _repaired_meanwhile)
+    # The old socket's own door (FakeWSConn's default is None) — if its write
+    # had landed, last_transport below would read NULL, not the new key's
+    # "tailnet".
+    conn, task, reply = await _auth_with(pool, device_id, old, None)
+    assert reply["type"] == "ready"
+    await asyncio.wait_for(task, 2)
+    assert conn.closed_code == devices_ws.REVOKED_CLOSE
+    assert (
+        await pool.fetchval("SELECT last_transport FROM devices WHERE id = $1", device_id)
+        == "tailnet"
+    )
+
+
 async def test_a_command_never_reaches_a_socket_the_repair_left_behind(pool, monkeypatch):
     """The narrowest window: the old pairing's socket is already in the hub,
     and serve has not yet re-read the row to drop it. A tool that fires right

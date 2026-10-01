@@ -1651,3 +1651,66 @@ async def test_the_adapter_turns_unparseable_json_into_one_unreadable_frame():
         assert await devices_ws.WebSocketConn(_Stub(exc)).receive() == {
             "type": devices_ws.UNREADABLE_FRAME
         }
+
+
+# -- S42b: the door (P15) and a revoked agent's knocks (P28) -------------------
+
+
+async def _connect_through(pool, door, *, name="minipc"):
+    device_id, device = await _enroll(pool, name=name)
+    device.device_id = str(device_id)
+    conn = FakeWSConn(door=door)
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    ready = await asyncio.wait_for(device.handshake(conn, None), 2)
+    assert ready["type"] == "ready"
+    return device_id, device, conn, task
+
+
+async def test_the_hubs_own_door_is_recorded_on_connect(pool):
+    device_id, _device, conn, task = await _connect_through(pool, "host")
+    assert (
+        await pool.fetchval("SELECT last_transport FROM devices WHERE id = $1", device_id) == "host"
+    )
+    await _close(conn, task)
+
+
+async def test_a_connect_through_no_known_door_records_none(pool):
+    device_id, device, conn, task = await _connect_through(pool, "host")
+    await _close(conn, task)
+    conn = FakeWSConn(door=None)
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    await asyncio.wait_for(device.handshake(conn, None), 2)
+    assert (
+        await pool.fetchval("SELECT last_transport FROM devices WHERE id = $1", device_id) is None
+    )
+    await _close(conn, task)
+
+
+async def test_a_revoked_devices_verified_knock_is_recorded_and_answered_with_the_proof(pool):
+    device_id, device = await _enroll(pool, name="old-wsl")
+    person = await _person(pool)
+    await devices.revoke(pool, device_id=device_id, actor=str(person.id))
+    _conn, task, reply = await _auth_with(pool, device_id, device, None)
+    assert (
+        reply["type"] == "auth_error"
+        and reply["reason"] == devices_ws.REVOKED_REASON
+        and "proof" in reply
+    )
+    assert (
+        await pool.fetchval("SELECT last_refused_at FROM devices WHERE id = $1", device_id)
+        is not None
+    )
+    await asyncio.wait_for(task, 2)
+
+
+async def test_an_unverified_knock_for_a_revoked_id_gets_no_proof_and_records_nothing(pool):
+    device_id, device = await _enroll(pool, name="old-wsl")
+    person = await _person(pool)
+    await devices.revoke(pool, device_id=device_id, actor=str(person.id))
+    _conn, task, reply = await _auth_with(pool, device_id, device, None, key=FakeDevice())
+    assert reply["type"] == "auth_error" and "proof" not in reply
+    assert reply["reason"] != devices_ws.REVOKED_REASON
+    assert (
+        await pool.fetchval("SELECT last_refused_at FROM devices WHERE id = $1", device_id) is None
+    )
+    await asyncio.wait_for(task, 2)

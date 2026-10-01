@@ -138,3 +138,33 @@ def test_as_json_is_the_api_shape(status):
         "reason": None,
         "read_at": NOW.isoformat(),
     }
+
+
+# -- S42b: the door a device socket came through (P15) -----------------------
+
+
+@pytest.mark.parametrize(
+    "peer,forwarded,door",
+    [
+        ("172.18.128.10", "172.18.0.1", "host"),  # web, forwarding the published loopback port
+        ("172.18.128.10", "172.18.128.20", "tailnet"),  # web, forwarding the sidecar
+        ("172.18.128.10", "192.0.2.7", None),  # web, forwarding something else
+        ("172.18.0.1", None, "host"),  # straight to core's own loopback port
+        ("172.18.0.99", "172.18.0.1", None),  # a header from anyone but web counts for nothing
+        (None, None, None),
+    ],
+)
+def test_the_door_is_told_from_the_peer_and_webs_forwarded_address(
+    monkeypatch, peer, forwarded, door
+):
+    for key in ("NOVA_WEB_ADDR", "NOVA_TAILSCALE_ADDR", "NOVA_SUBNET_GATEWAY"):
+        monkeypatch.delenv(key, raising=False)
+    assert network.door_of(peer, forwarded) == door
+
+
+def test_the_doors_follow_the_subnet_install_chose(monkeypatch):
+    monkeypatch.setenv("NOVA_WEB_ADDR", "172.22.128.10")
+    monkeypatch.setenv("NOVA_TAILSCALE_ADDR", "172.22.128.20")
+    monkeypatch.setenv("NOVA_SUBNET_GATEWAY", "172.22.0.1")
+    assert network.door_of("172.22.128.10", "172.22.0.1") == "host"
+    assert network.door_of("172.18.128.10", "172.18.0.1") is None

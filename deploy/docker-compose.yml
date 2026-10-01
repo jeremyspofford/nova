@@ -67,6 +67,12 @@ services:
       # Stated here rather than left to the code's default so the boundary
       # is visible next to the mount that backs it.
       WORKSPACE_ROOT: /data/workspace
+      # S42b P15: the stack's own addresses, so core can tell which door an
+      # agent's socket came through (app/network.py door_of). The same .env
+      # keys and defaults web and the tailnet sidecar use below.
+      NOVA_WEB_ADDR: ${NOVA_WEB_ADDR:-172.18.128.10}
+      NOVA_TAILSCALE_ADDR: ${NOVA_TAILSCALE_ADDR:-172.18.128.20}
+      NOVA_SUBNET_GATEWAY: ${NOVA_SUBNET_GATEWAY:-172.18.0.1}
     volumes:
       # Nova's own scratch space, on a volume of its own: not the memory
       # store, not the repo, not the host. A file she writes lives here and
