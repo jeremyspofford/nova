@@ -219,6 +219,9 @@ def test_agent_view_is_the_one_shape():
         facts=WINDOWS,
         facts_at=AT,
     )
+    # Pin moved deliberately for S42b Task 16: mode, starts, build, hub,
+    # last_update and folders are core's own reading of the agent's update
+    # outcome, its folders, how it starts, and its build against the hub's.
     assert set(view) == {
         "name",
         "platform",
@@ -231,6 +234,12 @@ def test_agent_view_is_the_one_shape():
         "agent_version",
         "machine",
         "roles",
+        "mode",
+        "starts",
+        "build",
+        "hub",
+        "last_update",
+        "folders",
     }
     assert view["os"] == "Windows 11 Pro 24H2 (build 26100)"
     assert view["wsl"] is None and view["machine"] == "a" * 64 and view["agent_version"] == "0.2.0"
@@ -244,3 +253,85 @@ def test_agent_view_is_the_one_shape():
         facts_at=AT,
     )
     assert wsl_view["wsl"] == "Ubuntu-26.04"
+
+
+# -- S42b Task 16: the update outcome, the folders, how it starts, its build -
+
+
+def test_an_update_outcome_is_kept_and_a_bad_one_refused():
+    update = {
+        "version": "aaaaaaaaaaaa",
+        "outcome": "rolled_back",
+        "reason": "did not connect",
+        "at": "2026-09-28T12:00:00Z",
+    }
+    assert df.validate_auth(_with(WINDOWS, "agent.update", update))["agent"]["update"] == update
+    assert "update" not in df.validate_auth(WINDOWS)["agent"]
+    with pytest.raises(df.FactsRejected):
+        df.validate_auth(_with(WINDOWS, "agent.update", {**update, "outcome": "staged"}))
+
+
+def test_the_folders_section_keeps_known_names_only():
+    got = df.validate_frame(
+        {
+            "type": "facts",
+            "folders": {"desktop": "C:\\Users\\sam\\OneDrive\\Desktop", "pictures": "/p"},
+        }
+    )
+    assert got == {"folders": {"desktop": "C:\\Users\\sam\\OneDrive\\Desktop"}}
+    with pytest.raises(df.FactsRejected):
+        df.validate_frame({"type": "facts", "folders": {"desktop": ""}})
+
+
+@pytest.mark.parametrize(
+    "mode,said",
+    [
+        ("run-key", "by itself at sign-in (the Windows Run key)"),
+        ("systemd-user", "by itself (a systemd user service)"),
+        ("launch-agent", "by itself at login (a LaunchAgent)"),
+        ("foreground", "by hand — Nova cannot restart it or update it"),
+    ],
+)
+def test_how_an_agent_starts_is_said_from_its_mode(mode, said):
+    assert df.starts(df.validate_auth(_with(WINDOWS, "agent.mode", mode))) == said
+    assert df.starts(None) == "unknown — it reports no facts (it predates S42a)"
+
+
+def test_behind_means_not_the_hubs_build_never_older():
+    assert df.build_state("aaaaaaaaaaaa", "aaaaaaaaaaaa") == {
+        "state": "current",
+        "hub_version": "aaaaaaaaaaaa",
+    }
+    assert df.build_state("dcde74c4b9a8", "aaaaaaaaaaaa") == {
+        "state": "behind",
+        "hub_version": "aaaaaaaaaaaa",
+    }
+    assert df.build_state(None, "aaaaaaaaaaaa")["state"] == "unknown"
+    assert df.build_state("aaaaaaaaaaaa", None) == {"state": "unknown", "hub_version": None}
+
+
+def test_the_agent_view_carries_its_build_its_door_and_its_last_update():
+    facts = df.validate_auth(WINDOWS)
+    last = {
+        "version": "aaaaaaaaaaaa",
+        "outcome": "confirmed",
+        "at": "2026-09-28T12:00:00+00:00",
+        "reason": None,
+    }
+    view = df.agent_view(
+        name="minipc",
+        platform="windows",
+        hostname="PC-ONE",
+        connected=True,
+        last_seen=None,
+        facts=facts,
+        facts_at=None,
+        hub_version="aaaaaaaaaaaa",
+        last_transport="host",
+        last_update=last,
+    )
+    assert view["hub"] is True and view["build"] == {
+        "state": "behind",
+        "hub_version": "aaaaaaaaaaaa",
+    }
+    assert view["last_update"] == last and view["mode"] == "foreground" and view["folders"] == ()

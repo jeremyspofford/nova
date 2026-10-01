@@ -122,7 +122,9 @@ RETURNING d.*, old.pubkey AS old_pubkey
 """
 
 
-def device_spec(row: asyncpg.Record | dict) -> dict:
+def device_spec(
+    row: asyncpg.Record | dict, *, hub_version: str | None = None, last_update: dict | None = None
+) -> dict:
     """The shape every device route returns and the web tile renders.
 
     `connected` is included from day one so the web contract does not change
@@ -130,6 +132,10 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
     no hub exists yet, so nothing is connected, and `last_seen` (NULL until the
     first heartbeat) is the only liveness fact core has. T2 overwrites this
     field from live hub membership — never from a stored flag.
+
+    `hub_version` and `last_update` are core's own records, not stored on the
+    row itself (S42b) — a caller that has not read them passes nothing, and
+    `build_state` and `last_update` read as "unknown" / None rather than lie.
     """
     facts = row.get("facts")
     facts_at = row.get("facts_at")
@@ -149,6 +155,17 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
         "wsl": device_facts.in_wsl(facts),
         "agent_version": device_facts.agent_version(facts),
         "facts_at": facts_at.isoformat() if facts_at else None,
+        # S42b: the door (P15), how it starts (P4), and its build against the
+        # hub's (decision 2).
+        "hub": row.get("last_transport") == "host",
+        "door": row.get("last_transport"),
+        "mode": ((facts or {}).get("agent") or {}).get("mode") if isinstance(facts, dict) else None,
+        "starts": device_facts.starts(facts),
+        "build_state": device_facts.build_state(device_facts.agent_version(facts), hub_version)[
+            "state"
+        ],
+        "hub_version": hub_version,
+        "last_update": last_update,
     }
 
 
@@ -437,11 +454,40 @@ async def get_live_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | No
     return await pool.fetchrow("SELECT * FROM devices WHERE name = $1 AND revoked_at IS NULL", name)
 
 
-async def list_devices(pool: asyncpg.Pool) -> list[dict]:
+_LIST_SQL = """
+SELECT d.*, u.version AS u_version, u.outcome AS u_outcome, u.reason AS u_reason,
+       COALESCE(u.outcome_at, u.sent_at) AS u_at
+  FROM devices d
+  LEFT JOIN LATERAL (
+      SELECT * FROM agent_updates a WHERE a.device_id = d.id ORDER BY a.sent_at DESC LIMIT 1
+  ) u ON true
+ ORDER BY d.enrolled_at DESC
+"""
+
+
+def _last_update(row: asyncpg.Record | dict) -> dict | None:
+    """The device's latest update attempt (S42b decision 2), from the
+    lateral-joined columns `_LIST_SQL` (and GatewayPlant.agents) select —
+    None when the device has never had one."""
+    if row.get("u_version") is None:
+        return None
+    return {
+        "version": row["u_version"],
+        "outcome": row["u_outcome"],
+        "at": row["u_at"].isoformat() if row["u_at"] else None,
+        "reason": row["u_reason"],
+    }
+
+
+async def list_devices(pool: asyncpg.Pool, *, hub_version: str | None = None) -> list[dict]:
     """Every device, revoked ones included and marked as such — a machine that
-    was revoked is part of what the operator needs to see."""
-    rows = await pool.fetch("SELECT * FROM devices ORDER BY enrolled_at DESC")
-    return [device_spec(row) for row in rows]
+    was revoked is part of what the operator needs to see. Each device's
+    latest update attempt rides along from one lateral join rather than a
+    query per device."""
+    rows = await pool.fetch(_LIST_SQL)
+    return [
+        device_spec(row, hub_version=hub_version, last_update=_last_update(row)) for row in rows
+    ]
 
 
 async def _live_or_refuse(conn: asyncpg.Connection, device_id: uuid.UUID) -> asyncpg.Record:

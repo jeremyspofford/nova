@@ -375,6 +375,10 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
     # Moved deliberately again for S42a: os / wsl / agent_version / facts_at are
     # what the agent OBSERVED about its machine — facts, never grants; roles are
     # derived on every read and never stored or returned here.
+    # Moved deliberately again for S42b Task 16: hub / door / mode / starts /
+    # build_state / hub_version / last_update are core's own reading of the
+    # door the agent last came through, how it starts, its build against the
+    # hub's, and its latest update attempt — none of them stored as a grant.
     assert set(spec) == {
         "id",
         "name",
@@ -388,7 +392,24 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
         "wsl",
         "agent_version",
         "facts_at",
+        "hub",
+        "door",
+        "mode",
+        "starts",
+        "build_state",
+        "hub_version",
+        "last_update",
     }
+
+
+async def test_a_device_spec_says_its_door_how_it_starts_and_its_build(pool):
+    enrolled = await _enrolled(pool, await _owner(pool))
+    device_id = uuid.UUID(enrolled["device_id"])
+    await pool.execute("UPDATE devices SET last_transport = 'host' WHERE id = $1", device_id)
+    spec = devices.device_spec(await devices.get(pool, device_id), hub_version="aaaaaaaaaaaa")
+    assert spec["hub"] is True and spec["door"] == "host"
+    assert spec["build_state"] == "unknown" and spec["hub_version"] == "aaaaaaaaaaaa"
+    assert spec["starts"].startswith("unknown") and spec["last_update"] is None
 
 
 # -- rename ------------------------------------------------------------

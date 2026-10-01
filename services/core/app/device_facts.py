@@ -44,7 +44,19 @@ FACTS_VERSION = 2
 AGENT_MODES: tuple[str, ...] = ("systemd-user", "launch-agent", "run-key", "foreground")
 # The sections a facts frame may carry. A later slice adds its own (power,
 # ollama, compute, hold, overlay) HERE, beside its validator.
-FRAME_SECTIONS: tuple[str, ...] = ("net", "unreadable")
+FRAME_SECTIONS: tuple[str, ...] = ("net", "unreadable", "folders")
+# S42b P16: the folders a fs path may name as @<name>, as the agent's OS names them.
+FOLDER_NAMES: tuple[str, ...] = ("home", "desktop", "documents", "downloads")
+# S42b P8: what an agent's supervisor records about its last update.
+UPDATE_OUTCOMES: tuple[str, ...] = ("applied", "rolled_back")
+# The modes in which a supervisor started the agent: the ones Nova can restart.
+SERVICE_MODES: tuple[str, ...] = ("systemd-user", "launch-agent", "run-key")
+_STARTS = {
+    "run-key": "by itself at sign-in (the Windows Run key)",
+    "systemd-user": "by itself (a systemd user service)",
+    "launch-agent": "by itself at login (a LaunchAgent)",
+    "foreground": "by hand — Nova cannot restart it or update it",
+}
 
 # Every role on an agent inside WSL (r2-integration S42a; the in-WSL agent is
 # retired for the Windows one, which reaches WSL through wsl.exe).
@@ -123,6 +135,21 @@ def validate_auth(raw: object) -> dict:
     mode = _text(agent.get("mode"), "facts.agent.mode")
     if mode not in AGENT_MODES:
         raise FactsRejected(f"facts.agent.mode {mode!r} is not one of {', '.join(AGENT_MODES)}")
+    update = agent.get("update")
+    clean_update: dict | None = None
+    if update is not None:
+        u = _object(update, "facts.agent.update")
+        outcome = _text(u.get("outcome"), "facts.agent.update.outcome")
+        if outcome not in UPDATE_OUTCOMES:
+            raise FactsRejected(
+                f"facts.agent.update.outcome {outcome!r} is not one of {', '.join(UPDATE_OUTCOMES)}"
+            )
+        clean_update = {
+            "version": _text(u.get("version"), "facts.agent.update.version"),
+            "outcome": outcome,
+            "reason": _text(u.get("reason", ""), "facts.agent.update.reason"),
+            "at": _text(u.get("at", ""), "facts.agent.update.at"),
+        }
     os_ = _object(facts.get("os"), "facts.os")
     goos = _text(os_.get("goos"), "facts.os.goos")
     if goos not in PLATFORMS:
@@ -144,6 +171,7 @@ def validate_auth(raw: object) -> dict:
             "session_interactive": _bool(
                 agent.get("session_interactive"), "facts.agent.session_interactive"
             ),
+            **({"update": clean_update} if clean_update else {}),
         },
         "os": {
             "goos": goos,
@@ -213,6 +241,21 @@ def _unreadable(raw: object) -> list[dict]:
     return out
 
 
+def _folders(raw: object) -> dict:
+    folders = _object(raw, "facts.folders")
+    out = {}
+    for name in FOLDER_NAMES:
+        if name in folders:
+            path = _text(folders[name], f"facts.folders.{name}")
+            if not path:
+                raise FactsRejected(
+                    f"facts.folders.{name} is empty — an unnamed folder is left "
+                    "out, never sent empty"
+                )
+            out[name] = path
+    return out
+
+
 def validate_frame(raw: object) -> dict:
     """The SECTIONS of a facts frame, as core merges them into devices.facts,
     or FactsRejected. `type` is the frame's, not a fact, and is not returned;
@@ -226,6 +269,8 @@ def validate_frame(raw: object) -> dict:
         out["net"] = _net(frame["net"])
     if "unreadable" in frame:
         out["unreadable"] = _unreadable(frame["unreadable"])
+    if "folders" in frame:
+        out["folders"] = _folders(frame["folders"])
     if not out:
         raise FactsRejected(f"the facts frame carries none of {', '.join(FRAME_SECTIONS)}")
     return out
@@ -274,6 +319,33 @@ def place(d: Mapping) -> str:
     if d["wsl"] is not None:
         where += f", inside WSL{' ' + d['wsl'] if d['wsl'] else ''}"
     return where
+
+
+def starts(facts: dict | None) -> str:
+    """How this agent starts, for a person — from the mode its supervisor
+    gave it (S42b P4), never assumed."""
+    if not isinstance(facts, dict):
+        return "unknown — it reports no facts (it predates S42a)"
+    mode = (facts.get("agent") or {}).get("mode")
+    return _STARTS.get(mode, f"unknown (mode {mode!r})")
+
+
+def build_state(agent_version: str | None, hub_version: str | None) -> dict:
+    """current | behind | unknown, against the hub's build. A version is a
+    hash with no order: behind means "not the hub's build", never "older"."""
+    if not hub_version or not agent_version:
+        return {"state": "unknown", "hub_version": hub_version}
+    return {
+        "state": "current" if agent_version == hub_version else "behind",
+        "hub_version": hub_version,
+    }
+
+
+def folders_of(facts: dict | None) -> tuple[str, ...]:
+    """The known folders this agent reported (P16) — an @folder path is
+    admitted only for these."""
+    folders = facts.get("folders") if isinstance(facts, dict) else None
+    return tuple(name for name in FOLDER_NAMES if isinstance(folders, dict) and folders.get(name))
 
 
 # -- roles -----------------------------------------------------------------
@@ -334,10 +406,16 @@ def agent_view(
     last_seen: datetime | None,
     facts: dict | None,
     facts_at: datetime | None,
+    hub_version: str | None = None,
+    last_transport: str | None = None,
+    last_update: dict | None = None,
 ) -> dict:
     """One machine's agent, as the plant, machine_status and an eval fixture
     all see it. `machine` is the agent's machine_uid (None when it said
-    none) — what "grouped by machine" groups on."""
+    none) — what "grouped by machine" groups on. `hub_version`, the door
+    (`last_transport`) and `last_update` are core's own records, not facts
+    the agent reported, so they ride in as arguments rather than being read
+    out of `facts` (S42b)."""
     return {
         "name": name,
         "platform": platform,
@@ -356,4 +434,10 @@ def agent_view(
             connected=connected,
             last_seen=last_seen,
         ),
+        "mode": (facts.get("agent") or {}).get("mode") if isinstance(facts, dict) else None,
+        "starts": starts(facts),
+        "build": build_state(agent_version(facts), hub_version),
+        "hub": last_transport == "host",
+        "last_update": last_update,
+        "folders": folders_of(facts),
     }
