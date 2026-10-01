@@ -592,7 +592,7 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
                 "INSERT INTO device_audit (device_id, seq, prev_hash, hash, ts, envelope_id, "
                 "capability, summary, ok, exit_code) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
-                "ON CONFLICT (device_id, seq) DO NOTHING",
+                "ON CONFLICT (device_id, epoch, seq) DO NOTHING",
                 device_uuid,
                 seq,
                 got_prev or None,
