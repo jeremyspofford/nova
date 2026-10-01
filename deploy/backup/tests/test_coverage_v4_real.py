@@ -118,7 +118,8 @@ def test_the_anonymous_searxng_volume_is_classified_from_docker_inspect_alone():
 def test_the_carried_set_is_exactly_what_the_compose_file_says():
     entries, _ = coverage(real_facts(), "routine")
     carried = sorted(e.name for e in entries if e.kind == "volume" and e.disposition == "include")
-    assert carried == ["v4_memdata", "v4_workspace"]
+    # S38 (2026-10-01): her browser profile — the sites she is signed in to.
+    assert carried == ["v4_browser_profile", "v4_memdata", "v4_workspace"]
     dumped = [e.name for e in entries if e.kind == "volume" and e.disposition == "dump-pg"]
     assert dumped == ["v4_pgdata"]
 
