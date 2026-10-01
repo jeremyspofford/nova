@@ -14,12 +14,30 @@ the files it downloads.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 # Where the engine writes the files it reports (`--output-dir`, deploy/
 # docker-compose.yml). A path outside it is never taken from an answer.
 ENGINE_OUTPUT = "/output/"
+
+# The engine writes each section at most once, in this order (coreBundle.js
+# _build / renderTabMarkdown). A page's own words can hold a "### "-looking
+# line (a dialog message, a typed value); it is never mistaken for a real
+# header unless it is this name, strictly later than the last one accepted.
+SECTION_ORDER = (
+    "Error",
+    "Result",
+    "Ran Playwright code",
+    "Open tabs",
+    "Page",
+    "Modal state",
+    "Snapshot",
+    "Events",
+)
+
+# The literal ending the engine always writes for a modal bullet. A dialog's
+# own message can hold a newline, so a bullet is never just one physical line.
+_DIALOG_END = "]: can be handled by browser_handle_dialog"
 
 
 @dataclass(frozen=True)
@@ -68,7 +86,9 @@ def parse(text: str) -> EngineAnswer:
         status=status,
         status_text=status_text,
         snapshot=_fenced(sections.get("Snapshot", ())),
-        dialogs=tuple(d for d in (_dialog(line) for line in sections.get("Modal state", ())) if d),
+        dialogs=tuple(
+            d for d in (_dialog(b) for b in _dialog_bullets(sections.get("Modal state", []))) if d
+        ),
         downloads=tuple(d for d in (_download(line) for line in sections.get("Events", ())) if d),
         files=tuple(f for f in (_result_file(line) for line in sections.get("Result", ())) if f),
         error=_error(sections.get("Error")),
@@ -77,12 +97,23 @@ def parse(text: str) -> EngineAnswer:
 
 
 def _sections(text: str) -> dict[str, list[str]]:
+    """Split the engine's answer on its own `### ` headers — each accepted
+    at most once, and only strictly later in SECTION_ORDER than the last one
+    accepted. A `### ` line that fails that (a repeat, or one out of order) is
+    a page's own words, never a real header: content of whichever section is
+    currently open, exactly like any other line."""
     sections: dict[str, list[str]] = {}
     current: list[str] | None = None
+    seen = -1
     for line in text.splitlines():
         if line.startswith("### "):
-            current = sections.setdefault(line[4:].strip(), [])
-        elif current is not None:
+            name = line[4:].strip()
+            at = SECTION_ORDER.index(name) if name in SECTION_ORDER else -1
+            if at > seen:
+                seen = at
+                current = sections.setdefault(name, [])
+                continue
+        if current is not None:
             current.append(line)
     return sections
 
@@ -109,22 +140,39 @@ def _fenced(lines: list[str] | tuple[str, ...]) -> str | None:
 
 
 def _unquote(value: str) -> str:
+    """The dialog message between its outer quotes, exactly as the engine
+    wrote it. Never JSON-decoded: renderModalStates interpolates the page's
+    own `dialog.message()` raw, with no escaping, so a backslash in it (a
+    Windows path) is two literal characters, not an escape sequence."""
     value = value.strip()
     if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
-        try:
-            loaded = json.loads(value)
-        except ValueError:
-            return value[1:-1]
-        return loaded if isinstance(loaded, str) else value[1:-1]
+        return value[1:-1]
     return value
 
 
-def _dialog(line: str) -> Dialog | None:
+def _dialog_bullets(lines: list[str]) -> list[str]:
+    """Modal-state lines regrouped into one bullet per dialog. The message a
+    page chose can hold a newline (or forge a fake section header inside
+    it), so a bullet is never just one physical line: it runs until the
+    ending the engine always writes."""
+    bullets: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if not current and not line.startswith("- ["):
+            continue  # content outside any bullet — never real, dropped
+        current.append(line)
+        if current[-1].endswith(_DIALOG_END):
+            bullets.append("\n".join(current))
+            current = []
+    return bullets
+
+
+def _dialog(bullet: str) -> Dialog | None:
     # - ["alert" dialog with message "Hello from the page"]: can be handled by browser_handle_dialog
-    if not line.startswith("- ["):
+    if not bullet.startswith("- ["):
         return None
-    end = line.rfind("]:")
-    inner = line[3:end] if end > 3 else line[3:]
+    end = bullet.rfind("]:")
+    inner = bullet[3:end] if end > 3 else bullet[3:]
     kind = inner
     if inner.startswith('"'):
         close = inner.find('"', 1)

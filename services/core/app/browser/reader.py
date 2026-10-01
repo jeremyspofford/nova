@@ -122,6 +122,9 @@ class _Flow:
 
 
 def read(snapshot: str, part_chars: int = DEFAULT_PART_CHARS) -> Page:
+    # Clamped here, not trusted from a caller's schema: `read(s, 0)` cut
+    # zero characters per piece and never returned (measured 2026-10-01).
+    part_chars = max(MIN_PART_CHARS, min(part_chars, MAX_PART_CHARS))
     lines = tuple(render(snapshot))
     parts, starts = _paginate(lines, part_chars)
     return Page(lines=lines, parts=tuple(parts), starts=tuple(starts))
@@ -154,7 +157,10 @@ def outline(page: Page) -> Outline:
 
 def search(page: Page, query: str) -> tuple[list[Match], int]:
     """Every line holding every word of `query` (case-insensitive), at most
-    MAX_MATCHES of them, and how many there were in all."""
+    MAX_MATCHES of them, and how many there were in all. The part named, and
+    the snippet shown, are centred on where the FIRST query word actually
+    sits — a line cut into several parts can hold the word past the first
+    one, and the snippet would otherwise be some other, wordless, stretch."""
     words = [word.casefold() for word in query.split() if word]
     if not words:
         return [], 0
@@ -168,21 +174,40 @@ def search(page: Page, query: str) -> tuple[list[Match], int]:
         if all(word in folded for word in words):
             total += 1
             if len(found) < MAX_MATCHES:
-                part = _part_of(page, index)
-                text = (
-                    line.text
-                    if len(line.text) <= MAX_MATCH_CHARS
-                    else line.text[:MAX_MATCH_CHARS] + " …"
-                )
+                offset = folded.find(words[0])
+                part = _part_of(page, index, offset)
+                text = _snippet(line.text, offset)
                 found.append(Match(part=part, heading=None if line.heading else heading, text=text))
     return found, total
 
 
-def _part_of(page: Page, index: int) -> int:
-    """The 1-based part a line begins in (the first part, for a line cut
-    across several)."""
+def _part_of(page: Page, index: int, offset: int = 0) -> int:
+    """The 1-based part holding character `offset` of line `index`. A line
+    cut into several consecutive parts (all sharing one `starts` entry)
+    walks forward through them, each piece's length against `offset`, since
+    a word can live past the first one."""
     at = bisect.bisect_left(page.starts, index)
-    return at + 1 if at < len(page.starts) and page.starts[at] == index else at
+    if at >= len(page.starts) or page.starts[at] != index:
+        return at
+    while (
+        at + 1 < len(page.starts) and page.starts[at + 1] == index and offset >= len(page.parts[at])
+    ):
+        offset -= len(page.parts[at])
+        at += 1
+    return at + 1
+
+
+def _snippet(text: str, offset: int) -> str:
+    """`text`, trimmed to MAX_MATCH_CHARS and centred on `offset` — where the
+    query was actually found, never just the line's own start."""
+    if len(text) <= MAX_MATCH_CHARS or offset < 0:
+        return text
+    half = MAX_MATCH_CHARS // 2
+    start = max(0, min(offset - half, len(text) - MAX_MATCH_CHARS))
+    end = start + MAX_MATCH_CHARS
+    prefix = "… " if start > 0 else ""
+    suffix = " …" if end < len(text) else ""
+    return prefix + text[start:end] + suffix
 
 
 # ── the tree ────────────────────────────────────────────────────────────────
@@ -217,32 +242,76 @@ def _parse_line(raw: str) -> tuple[int, _Node] | None:
     if body.startswith("/"):
         key, _, value = body.partition(":")
         return indent, _Node(role=key, text=_scalar(value))
+    if body.startswith("'"):
+        # The engine single-quotes the WHOLE key when it holds ": ", " #",
+        # "{", "}" or a backtick (yamlEscapeKeyIfNeeded): a heading "Step 1:
+        # Install", a link "fix(core): a bug #90". `''` is one literal `'`.
+        key, after = _single_quoted(body)
+        node, _ = _parse_key(key)
+        trailer = body[after:]
+    else:
+        node, consumed = _parse_key(body)
+        trailer = body[consumed:]
+    if trailer.startswith(":"):
+        node.text = _scalar(trailer[1:]) or None
+    return indent, node
+
+
+def _single_quoted(body: str) -> tuple[str, int]:
+    """The YAML-single-quoted key at the start of `body` (its opening `'` is
+    body[0]), unescaped (`''` -> `'`), and the index right after its closing
+    `'`. One slice per escaped-quote pair, never per character: linear even
+    across many of them."""
+    out: list[str] = []
+    start = i = 1
+    while i < len(body):
+        if body[i] != "'":
+            i += 1
+            continue
+        if i + 1 < len(body) and body[i + 1] == "'":
+            out.append(body[start : i + 1])  # text so far, plus one '
+            i += 2
+            start = i
+            continue
+        out.append(body[start:i])
+        return "".join(out), i + 1
+    out.append(body[start:])
+    return "".join(out), len(body)
+
+
+def _parse_key(key: str) -> tuple[_Node, int]:
+    """`role ["name"] [attr]...` from the start of `key` (already YAML-
+    unescaped, if it came from a single-quoted key). Returns the node and
+    how far into `key` it read — the caller reads what follows as a
+    trailing `: value`."""
     end = 0
-    while end < len(body) and (body[end].isalnum() or body[end] in "-_"):
+    while end < len(key) and (key[end].isalnum() or key[end] in "-_"):
         end += 1
     if end == 0:
-        return indent, _Node(role="text", text=_scalar(body))
-    node = _Node(role=body[:end])
-    rest = body[end:].lstrip(" ")
-    if rest.startswith('"'):
-        node.name, rest = _quoted(rest)
-        rest = rest.lstrip(" ")
-    # By index, never by re-slicing `rest`: a slice per attribute copies the
+        return _Node(role="text", text=_scalar(key)), len(key)
+    node = _Node(role=key[:end])
+    at = end
+    while at < len(key) and key[at] == " ":
+        at += 1
+    if at < len(key) and key[at] == '"':
+        name, remainder = _quoted(key[at:])
+        node.name = name
+        at = len(key) - len(remainder)
+        while at < len(key) and key[at] == " ":
+            at += 1
+    # By index, never by re-slicing `key`: a slice per attribute copies the
     # rest of the line each time, and 200,000 attributes took 9 s that way
     # (measured 2026-10-01). One pass, one slice at the end.
-    at = 0
-    while at < len(rest) and rest[at] == "[":
-        close = rest.find("]", at)
+    while at < len(key) and key[at] == "[":
+        close = key.find("]", at)
         if close == -1:
             break
-        key, sep, value = rest[at + 1 : close].partition("=")
-        node.attrs[key] = value if sep else ""
+        attr_key, sep, value = key[at + 1 : close].partition("=")
+        node.attrs[attr_key] = value if sep else ""
         at = close + 1
-        while at < len(rest) and rest[at] == " ":
+        while at < len(key) and key[at] == " ":
             at += 1
-    if rest.startswith(":", at):
-        node.text = _scalar(rest[at + 1 :]) or None
-    return indent, node
+    return node, at
 
 
 def _quoted(text: str) -> tuple[str, str]:
@@ -303,9 +372,16 @@ def _walk(node: _Node, out: list[Line], flow: _Flow, *, in_block: bool) -> None:
         words = node.name or node.text or " ".join(_inline_words(node))
         if words:
             out.append(Line("#" * depth + " " + words, heading=True))
+        for text in _actionable_lines(node):
+            out.append(Line(text))
         return
-    if role in INTERACTIVE:
-        flow.parts.append(_element(node))
+    if role in INTERACTIVE or _clickable(node):
+        flow.parts.append(_marker(node))
+        nested = _actionable_lines(node)
+        if nested:
+            _flush(out, flow)
+            for text in nested:
+                out.append(Line(text))
         return
     if role == "img":
         if node.name:
@@ -350,13 +426,55 @@ def _inline_words(node: _Node) -> list[str]:
 
 
 def _cell(node: _Node) -> str:
-    words = [node.name or node.text or ""]
+    words = _cell_words(node) or [node.name or node.text or ""]
+    return " ".join(word for word in words if word).replace("|", "/")
+
+
+def _cell_words(node: _Node) -> list[str]:
+    """Every word of a cell's content, found however deep a wrapper nests
+    it: plain text, and anything she can act on, with its ref (a cell whose
+    links sit inside a generic wrapper, the common "100 points by X | N
+    comments" shape, otherwise rendered empty)."""
+    words: list[str] = []
     for child in node.children:
-        if child.role in INTERACTIVE:
-            words.append(_element(child))
+        if child.role in INTERACTIVE or _clickable(child):
+            words.append(_marker(child))
         elif child.role == "text" and child.text:
             words.append(child.text)
-    return " ".join(word for word in words if word).replace("|", "/")
+        elif not child.role.startswith("/"):
+            words.extend(_cell_words(child))
+    return words
+
+
+def _clickable(node: _Node) -> bool:
+    """A node the PAGE marked clickable (the engine's own [cursor=pointer]
+    signal) and that carries a ref — rendered as actionable even off the
+    maintained INTERACTIVE list: a cookie-banner div, a clickable image."""
+    return node.attrs.get("cursor") == "pointer" and "ref" in node.attrs
+
+
+def _marker(node: _Node) -> str:
+    """`_element(node)`, or — for a clickable node with no name of its own
+    (a plain clickable wrapper div) — its ref and role with its flowed
+    words standing in for a name."""
+    if node.role in INTERACTIVE or node.name:
+        return _element(node)
+    ref = node.attrs.get("ref")
+    label = " ".join(_inline_words(node))
+    return f'[{ref}] {node.role} "{label}"' if label else f"[{ref}] {node.role}"
+
+
+def _actionable_lines(node: _Node) -> list[str]:
+    """Every interactive-or-clickable element inside `node`'s subtree (not
+    `node` itself), each with its own ref, found however deep it sits: a
+    heading's or a listbox's nested link, an open listbox's options, a
+    tree's nested treeitems. Depth is already capped at parse time."""
+    found: list[str] = []
+    for child in node.children:
+        if child.role in INTERACTIVE or _clickable(child):
+            found.append(_marker(child))
+        found.extend(_actionable_lines(child))
+    return found
 
 
 def _element(node: _Node) -> str:
@@ -396,14 +514,17 @@ def _paginate(lines: tuple[Line, ...], part_chars: int) -> tuple[list[str], list
     current: list[str] = []
     size = 0
     for index, line in enumerate(lines):
-        text = line.text
-        while len(text) > part_chars:
+        full = line.text
+        at = 0
+        while len(full) - at > part_chars:
             if current:
                 parts.append("\n".join(current))
                 current, size = [], 0
             starts.append(index)
-            parts.append(text[:part_chars])
-            text = text[part_chars:]
+            cut = _cut_point(full, at, at + part_chars)
+            parts.append(full[at:cut])
+            at = cut
+        text = full[at:] if at else full
         if not text:
             continue
         added = len(text) + (1 if current else 0)
@@ -419,3 +540,19 @@ def _paginate(lines: tuple[Line, ...], part_chars: int) -> tuple[list[str], list
     if not parts:
         return [""], [0]
     return parts, starts
+
+
+def _cut_point(text: str, at: int, limit: int) -> int:
+    """Where to end a piece of `text` starting at `at`, no later than
+    `limit`: at the last space in the window if there is one, moved earlier
+    still if that would land inside an unclosed `[...]` token — a ref is
+    never split, so "[e17]" cut after "[e1" can never read as the valid,
+    but wrong, "[e1]" (refs are prefixes of one another). Falls back to the
+    hard limit only when neither leaves room to make progress, so a run of
+    nothing but "[" (never a real ref) still reads in linear time."""
+    space = text.rfind(" ", at + 1, limit)
+    cut = space + 1 if space != -1 else limit
+    open_bracket = text.rfind("[", at, cut)
+    if open_bracket != -1 and text.find("]", open_bracket, cut) == -1:
+        cut = open_bracket
+    return cut if cut > at else limit
