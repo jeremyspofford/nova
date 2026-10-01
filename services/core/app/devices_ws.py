@@ -85,6 +85,10 @@ NONCE_BYTES = 32
 AUTH_FAILED_CLOSE = 4401
 REVOKED_CLOSE = 4403
 
+# P27: a frame that is not readable JSON — or not an object — becomes this one
+# marker, which _handle_frame logs and drops. A frame never ends a session.
+UNREADABLE_FRAME = "unreadable"
+
 # The auth_error reasons. REVOKED_REASON is the ONE the agent treats as final
 # (wipe, exit 78 — apps/novad client.ErrRevoked), so it is sent for a revoked
 # row and nothing else: a restored database that forgot a device must never
@@ -383,16 +387,54 @@ async def authenticate(conn: object, pool) -> object | None:
 
 # -- audit ingestion ---------------------------------------------------------
 
+# P27: what an audit entry must be for postgres to store it as sent. The chain
+# hash covers exactly what the device sent, so core never repairs an entry —
+# one it cannot store is a stated break, and nothing past it is stored.
+_BIGINT = (-(2**63), 2**63 - 1)
+_TS_RANGE = (0, 253_402_300_799)  # 1970-01-01 .. 9999-12-31T23:59:59Z
+_ENTRY_TEXT_MAX = 4096
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _entry_problem(entry: dict) -> str | None:
+    """Why this audit entry cannot be stored as sent, or None."""
+    seq = entry.get("seq")
+    if not _is_int(seq) or not 0 <= seq <= _BIGINT[1]:
+        return f"seq {seq!r} is not a non-negative 64-bit integer"
+    ts = entry.get("ts")
+    if not _is_int(ts) or not _TS_RANGE[0] <= ts <= _TS_RANGE[1]:
+        return f"ts {ts!r} is not a time between 1970 and 9999"
+    code = entry.get("exit_code")
+    if code is not None and (not _is_int(code) or not _BIGINT[0] <= code <= _BIGINT[1]):
+        return f"exit_code {code!r} does not fit a 64-bit integer"
+    if not isinstance(entry.get("ok"), bool):
+        return f"ok {entry.get('ok')!r} is not true or false"
+    for key in ("envelope_id", "capability", "summary", "prev_hash", "hash"):
+        value = entry.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return f"{key} is not text"
+        if "\x00" in value:
+            return f"{key} contains a NUL byte, which postgres cannot store"
+        if len(value) > _ENTRY_TEXT_MAX:
+            return f"{key} is longer than {_ENTRY_TEXT_MAX} characters"
+    return None
+
 
 async def _audit_break(
     pool,
     device_id: uuid.UUID,
-    seq: int,
+    seq: int | None,
     expected_prev: str | None,
     got_prev: str,
     *,
     expected_hash: str | None = None,
     got_hash: str | None = None,
+    reason: str | None = None,
 ) -> None:
     meta: dict = {
         "device_id": str(device_id),
@@ -403,12 +445,15 @@ async def _audit_break(
     if expected_hash is not None:
         meta["expected_hash"] = expected_hash
         meta["got_hash"] = got_hash
+    if reason is not None:
+        meta["reason"] = reason
     logger.error(
-        "device audit chain break: device=%s seq=%s expected_prev=%s got_prev=%s",
+        "device audit chain break: device=%s seq=%s expected_prev=%s got_prev=%s%s",
         device_id,
         seq,
         expected_prev,
         got_prev,
+        f" reason={reason}" if reason is not None else "",
     )
     # A standalone event: the break records no state mutation of its own (the
     # bad entry is NOT stored), so it opens its own transaction to be durable.
@@ -435,16 +480,37 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
     DEVICE_AUDIT_BREAK, since the chain was never tampered with; only an
     ERROR log names the device and seq."""
     device_uuid = _as_uuid(device_id)
-    ordered = sorted(
-        (e for e in entries if isinstance(e, dict) and isinstance(e.get("seq"), int)),
-        key=lambda e: e["seq"],
-    )
+    if not all(isinstance(e, dict) and _is_int(e.get("seq")) for e in entries):
+        await _audit_break(
+            pool,
+            device_uuid,
+            None,
+            None,
+            "",
+            reason=(
+                "a replayed batch carried an entry with no integer seq; nothing from it is stored"
+            ),
+        )
+        return {"stored": 0, "break": None}
+    ordered = sorted(entries, key=lambda e: e["seq"])
     stored = 0
     for entry in ordered:
         seq = entry["seq"]
         got_prev = entry.get("prev_hash") or ""
         claimed_hash = entry.get("hash")
         without_hash = {k: v for k, v in entry.items() if k != "hash"}
+
+        problem = _entry_problem(entry)
+        if problem is not None:
+            await _audit_break(
+                pool,
+                device_uuid,
+                seq,
+                None,
+                got_prev,
+                reason=f"the entry cannot be stored: {problem}",
+            )
+            return {"stored": stored, "break": seq}
 
         if seq == 0:
             expected_prev: str | None = ""
@@ -615,7 +681,15 @@ async def serve(conn: object, pool) -> None:
                 frame = await conn.receive()
             except ConnectionClosed:
                 break
-            await _handle_frame(pool, device_id, frame)
+            try:
+                await _handle_frame(pool, device_id, frame)
+            except Exception:  # noqa: BLE001 — P27: one frame never ends a session
+                kind = frame.get("type") if isinstance(frame, dict) else type(frame).__name__
+                logger.exception(
+                    "device %s: a %r frame could not be handled — dropped; the session stays up",
+                    device_id,
+                    kind,
+                )
     finally:
         hub.unregister(device_id, conn)
 
@@ -639,6 +713,14 @@ class WebSocketConn:
             return await self._ws.receive_json()
         except WebSocketDisconnect as exc:
             raise ConnectionClosed() from exc
+        except (ValueError, KeyError, RecursionError) as exc:
+            # Not JSON, a binary frame, or JSON nested past the recursion
+            # limit: one unreadable frame, never the end of the socket (P27).
+            logger.warning(
+                "a device sent a frame that is not a readable JSON text frame (%s)",
+                type(exc).__name__,
+            )
+            return {"type": UNREADABLE_FRAME}
 
     async def close(self, code: int = 1000) -> None:
         try:

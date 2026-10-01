@@ -23,6 +23,7 @@ socket; test_devices_e2e.py walks the whole lifecycle through it.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from pathlib import Path
@@ -910,15 +911,18 @@ async def test_an_injected_data_error_on_audit_insert_never_takes_the_socket_dow
 async def test_a_windows_exit_code_over_int32_range_is_stored_after_the_migration(pool):
     """The actual bug, fixed, with no monkeypatch: novad sent 0x80070005
     (2147942405) as exit_code — migration 037 widened the column, so this is
-    now an ordinary value that stores and reads back exactly."""
+    now an ordinary value that stores and reads back exactly. P27 (Task 13)
+    extends this pin with the top of the uint32 DWORD range a Windows exit
+    code can ever carry, 0xFFFFFFFF, stored right beside it."""
     device_id, _device = await _enroll(pool, name="dell", platform="windows")
-    e0 = _entry(0, "", exit_code=2147942405)
-    res = await devices_ws.ingest_audit(pool, device_id, [e0])
-    assert res == {"stored": 1, "break": None}
-    stored = await pool.fetchval(
-        "SELECT exit_code FROM device_audit WHERE device_id = $1 AND seq = 0", device_id
+    e0 = _entry(0, "", exit_code=0x80070005)
+    e1 = _entry(1, e0["hash"], exit_code=0xFFFFFFFF)
+    res = await devices_ws.ingest_audit(pool, device_id, [e0, e1])
+    assert res == {"stored": 2, "break": None}
+    rows = await pool.fetch(
+        "SELECT exit_code FROM device_audit WHERE device_id = $1 ORDER BY seq", device_id
     )
-    assert stored == 2147942405
+    assert [r["exit_code"] for r in rows] == [0x80070005, 0xFFFFFFFF]
 
 
 # -- S42a: facts on the socket ------------------------------------------------
@@ -1305,3 +1309,199 @@ async def test_a_device_whose_platform_is_unknown_cannot_have_a_path_checked(poo
         "device_read_file", {"device": "old-box", "path": "/etc/hosts"}, _ctx(person)
     )
     assert ok is False and "cannot: platform unknown" in result
+
+
+# -- P27: a frame core cannot handle never ends the session --------------------
+#
+# 2026-09-28: Windows' sudo exited 0x80070005, the audit insert overflowed an
+# int4, and the exception ended the Dell agent's session — which reconnected,
+# replayed the same entry, and crash-looped. The hotfix widened the column;
+# these pin the class: one test per frame type.
+
+
+def _chain(*overrides: dict) -> list[dict]:
+    """A hash-chained audit batch from seq 0, each entry overridden as given, so
+    a value core cannot store sits inside an otherwise valid chain."""
+    prev, out = "", []
+    for seq, over in enumerate(overrides):
+        entry = {
+            "seq": seq,
+            "prev_hash": prev,
+            "ts": 1_790_000_000,
+            "envelope_id": f"e{seq}",
+            "capability": "shell.exec",
+            "summary": "ran, exit 0",
+            "ok": True,
+            "exit_code": 0,
+            **over,
+        }
+        entry["hash"] = devices_ws.chain_hash(prev, {k: v for k, v in entry.items() if k != "hash"})
+        out.append(entry)
+        prev = entry["hash"]
+    return out
+
+
+async def _still_up(pool, conn: FakeWSConn, device_id) -> None:
+    """A heartbeat after the bad frame lands: the session is still serving."""
+    await pool.execute("UPDATE devices SET last_seen = NULL WHERE id = $1", device_id)
+    conn.feed({"type": "heartbeat", "ts": int(time.time())})
+
+    async def landed():
+        return (
+            await pool.fetchval("SELECT last_seen FROM devices WHERE id = $1", device_id)
+            is not None
+        )
+
+    await _until(landed)
+    assert devices_ws.hub.is_connected(device_id)
+
+
+@pytest.mark.parametrize(
+    "override,named",
+    [
+        ({"exit_code": 2**64}, "exit_code"),
+        ({"ts": 10**20}, "ts"),
+        ({"ok": "yes"}, "ok"),
+        ({"summary": "ran\x00"}, "summary"),
+    ],
+)
+async def test_an_audit_entry_core_cannot_store_is_a_stated_break_and_the_session_stays_up(
+    pool, override, named
+):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    conn.feed({"type": "audit", "entries": _chain({}, override)})
+    await _still_up(pool, conn, device_id)
+    assert (
+        await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
+        == 1
+    )
+    event = await pool.fetchrow(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",
+        governance.DEVICE_AUDIT_BREAK,
+        device_id,
+    )
+    assert event is not None and named in event["meta"]["reason"]
+    await _close(conn, task)
+
+
+async def test_a_batch_with_any_malformed_seq_stores_nothing_from_it(pool):
+    """The top-of-batch check rejects the WHOLE replayed batch when even one
+    entry has no integer seq — never a silent per-entry filter that lets a
+    good entry land while quietly dropping the bad one beside it. A stated
+    break says why nothing from the batch was stored."""
+    device_id, _device = await _enroll(pool, name="pc")
+    e0 = _entry(0, "")
+    res = await devices_ws.ingest_audit(pool, device_id, [e0, {"seq": "one"}])
+    assert res == {"stored": 0, "break": None}
+    count = await pool.fetchval(
+        "SELECT count(*) FROM device_audit WHERE device_id = $1", device_id
+    )
+    assert count == 0
+    event = await pool.fetchrow(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",
+        governance.DEVICE_AUDIT_BREAK,
+        device_id,
+    )
+    assert event is not None and "no integer seq" in event["meta"]["reason"]
+
+
+# Controller ruling (2026-10-01): as written, a result frame for an envelope
+# nobody is waiting on was ALREADY a no-op before this task — hub.resolve pops
+# nothing for an unknown envelope_id and simply returns, so a bare "absurd
+# exit_code" case never exercised anything new and was green before this
+# change. This case is the one that is actually red beforehand: it makes the
+# result path itself raise, the same shape test_a_facts_frame_... below uses
+# on validate_frame, so the `result` frame type has one genuine proof the new
+# per-frame guard (not pre-existing no-op behavior) is what keeps it up.
+async def test_a_result_frame_that_cannot_be_handled_does_not_end_the_session(pool, monkeypatch):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+
+    def _boom(device_id, envelope_id, payload):
+        raise RuntimeError("simulated: a fault in the result reader")
+
+    monkeypatch.setattr(devices_ws.hub, "resolve", _boom)
+    conn.feed(
+        {
+            "type": "result",
+            "envelope_id": "nobody-waits",
+            "ok": True,
+            "exit_code": 0,
+            "output": "",
+            "error": "",
+        }
+    )
+    await _still_up(pool, conn, device_id)
+    await _close(conn, task)
+
+
+async def test_a_result_frame_with_an_absurd_exit_code_does_not_end_the_session(pool):
+    """A pin, not a red case — see the test above for the one that is
+    actually red before this task's change. A result frame for an envelope
+    nobody is awaiting was already a silent no-op for any exit_code, absurd
+    or not; kept so an absurd value in THIS frame type stays covered too."""
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    conn.feed(
+        {
+            "type": "result",
+            "envelope_id": "nobody-waits",
+            "ok": True,
+            "exit_code": 10**30,
+            "output": "",
+            "error": "",
+        }
+    )
+    await _still_up(pool, conn, device_id)
+    await _close(conn, task)
+
+
+async def test_a_facts_frame_that_cannot_be_handled_does_not_end_the_session(pool, monkeypatch):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+
+    def _boom(frame):
+        raise RuntimeError("simulated: a fault in the facts reader")
+
+    monkeypatch.setattr(devices_ws.device_facts, "validate_frame", _boom)
+    conn.feed({"type": "facts", "net": {"ifaces": []}})
+    await _still_up(pool, conn, device_id)
+    await _close(conn, task)
+
+
+async def test_a_malformed_heartbeat_does_not_end_the_session(pool, monkeypatch):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    real_execute = type(pool).execute
+    failed: list[bool] = []
+
+    async def _once(self, query, *args, **kwargs):
+        if "SET last_seen = now()" in query and not failed:
+            failed.append(True)
+            raise asyncpg.DataError("simulated: postgres refused the heartbeat")
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _once)
+    conn.feed({"type": "heartbeat", "ts": "not a number"})
+    await _still_up(pool, conn, device_id)
+    assert failed == [True]
+    await _close(conn, task)
+
+
+async def test_an_unreadable_frame_is_dropped_and_the_session_stays_up(pool):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    conn.feed([1, 2, 3])
+    conn.feed({"type": devices_ws.UNREADABLE_FRAME})
+    conn.feed({"type": "audit", "entries": [{"seq": "zero"}]})
+    await _still_up(pool, conn, device_id)
+    await _close(conn, task)
+
+
+async def test_the_adapter_turns_unparseable_json_into_one_unreadable_frame():
+    class _Stub:
+        def __init__(self, exc):
+            self.exc = exc
+
+        async def receive_json(self):
+            raise self.exc
+
+    for exc in (json.JSONDecodeError("bad", "{", 0), RecursionError(), KeyError("text")):
+        assert await devices_ws.WebSocketConn(_Stub(exc)).receive() == {
+            "type": devices_ws.UNREADABLE_FRAME
+        }
