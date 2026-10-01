@@ -70,6 +70,35 @@ async def test_a_legacy_fake_refuses_discovery_in_all_three_measured_shapes():
     response = await _post(playwright, _discover(), MODERN_HEADERS)
     assert response.status_code == 400 and response.json()["error"]["code"] == -32000
     assert "not initialized" in response.json()["error"]["message"]
+    assert response.json()["id"] is None  # the real engine (TS SDK), never the request's id
+
+
+async def test_a_playwright_fakes_forgotten_session_is_plain_text_not_json_rpc():
+    """The real engine answers a forgotten session with a PLAIN-TEXT 404
+    "Session not found" — never the generic legacy shape's JSON-RPC -32001,
+    which every OTHER legacy_refusal value still gets (fix round 1, item 3)."""
+    server = fake.FakeServer(
+        fake.FakeSpec(era="legacy", legacy_refusal="playwright", tools=(fake.FakeTool("echo"),))
+    )
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "t", "version": "0"},
+        },
+    }
+    await _post(server, init)
+    server.expire_session()
+    listing = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    forgotten = await _post(
+        server, listing, {"MCP-Protocol-Version": "2025-11-25", "Mcp-Session-Id": fake.SESSION}
+    )
+    assert forgotten.status_code == 404
+    assert forgotten.headers.get("content-type", "").split(";")[0] != "application/json"
+    assert forgotten.text == "Session not found"
 
 
 async def test_a_legacy_fake_demands_the_session_it_handed_out():

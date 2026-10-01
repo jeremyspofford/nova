@@ -209,7 +209,10 @@ class FakeServer:
                 )
                 return 400, _JSON, _error("server-error", -32600, message)
             if self.spec.legacy_refusal == "playwright":
-                return 400, _JSON, _error(rid, -32000, "Bad Request: Server not initialized")
+                # The real engine (TS SDK): id:null, never the request's —
+                # it refuses before it has read the request far enough to
+                # echo anything.
+                return 400, _JSON, _error(None, -32000, "Bad Request: Server not initialized")
             return 200, _JSON, _error(rid, -32601, "Method not found")
         if method == "initialize":
             offered = params.get("protocolVersion")
@@ -221,6 +224,11 @@ class FakeServer:
         if headers.get("mcp-session-id") != SESSION:
             return 400, _JSON, _error(rid, -32600, "Bad Request: No valid session ID provided")
         if not self.session_live:
+            if self.spec.legacy_refusal == "playwright":
+                # The real engine answers a forgotten session with a
+                # PLAIN-TEXT 404, not the generic legacy shape's JSON-RPC
+                # envelope — replayed from a cached playwright-core bundle.
+                return 404, {"content-type": "text/plain"}, b"Session not found"
             return 404, _JSON, _error(rid, -32001, "Session not found")
         if method == "notifications/initialized":
             return 202, {}, b""

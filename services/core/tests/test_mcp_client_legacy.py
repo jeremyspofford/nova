@@ -166,4 +166,253 @@ async def test_a_legacy_progress_callback_makes_the_client_declare_a_token():
         await client.call(endpoint, "echo", {})
         assert "progressToken" not in (server.calls[-1]["params"].get("_meta") or {})
         await client.call(endpoint, "echo", {}, progress=lambda _l: None)
-    assert server.calls[-1]["params"]["_meta"]["progressToken"] == str(server.calls[-1]["id"])
+    # Exact equality, not just containment: the legacy fake does not check
+    # _meta, so sending the modern io.modelcontextprotocol/* keys too would
+    # still pass a weaker assertion (fix round 1, item 4).
+    assert server.calls[-1]["params"]["_meta"] == {"progressToken": str(server.calls[-1]["id"])}
+
+
+# -- fix round 1, item 1: true handshake failure reasons ----------------------
+
+
+async def test_a_proxy_502_during_the_handshake_is_stated_without_a_false_claim():
+    """A proxy's 502 used to read "is not an MCP server this client can
+    speak to" — a false claim for a common homelab shape (a reverse proxy
+    in front of a real server that is merely down or restarting)."""
+
+    async def bad_gateway(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            headers={"content-type": "text/html"},
+            content=b"<html><body>502 Bad Gateway</body></html>",
+        )
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(bad_gateway)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="ha", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "is not an MCP server" not in caught.value.reason
+    assert "502" in caught.value.reason and "Bad Gateway" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_initialize_timing_out_says_so_not_http_none():
+    async def discover_then_hang(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("method") == "server/discover":
+            payload = {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32601, "message": "Method not found"},
+            }
+            return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+        raise httpx.ReadTimeout("fixture")
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(discover_then_hang)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "HTTP None" not in caught.value.reason
+    assert "did not answer the" in caught.value.reason and "handshake" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_an_initialize_json_rpc_refusal_carries_the_servers_words():
+    """A TS-SDK-style server answering `initialize` with its own JSON-RPC
+    error ("Server already initialized") must not be swallowed into the
+    generic "not an MCP server" sentence — her Error: text and the row's
+    last_error both read this."""
+
+    async def rpc_refusal(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("method") == "server/discover":
+            payload = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32000,
+                    "message": "Bad Request: Mcp-Session-Id header is required",
+                },
+            }
+            return httpx.Response(400, headers={"content-type": "application/json"}, json=payload)
+        payload = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32600, "message": "Invalid Request: Server already initialized"},
+        }
+        return httpx.Response(400, headers={"content-type": "application/json"}, json=payload)
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(rpc_refusal)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "Server already initialized" in caught.value.reason
+    assert "-32600" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_the_notification_timing_out_says_so_not_http_none():
+    """Same treatment as `initialize` itself: no answer to
+    notifications/initialized is "did not answer", never "(HTTP None)"."""
+
+    async def initialize_then_hang(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        method = body.get("method")
+        if method == "server/discover":
+            payload = {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32601, "message": "Method not found"},
+            }
+            return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+        if method == "initialize":
+            payload = {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "serverInfo": {"name": "x"},
+                },
+            }
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json", "mcp-session-id": "s-1"},
+                json=payload,
+            )
+        raise httpx.ReadTimeout("fixture")
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(initialize_then_hang)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "HTTP None" not in caught.value.reason
+    assert "did not answer the" in caught.value.reason and "handshake" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+# -- fix round 1, item 2: only known legacy versions, visible-ASCII session --
+
+
+def _initialize_answers(method: str, body: dict, *, version, session="s-1"):
+    if method == "server/discover":
+        payload = {
+            "jsonrpc": "2.0",
+            "id": body.get("id"),
+            "error": {"code": -32601, "message": "Method not found"},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+    if method == "initialize":
+        payload = {
+            "jsonrpc": "2.0",
+            "id": body.get("id"),
+            "result": {"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "x"}},
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "mcp-session-id": session},
+            json=payload,
+        )
+    return httpx.Response(202)
+
+
+async def test_a_non_ascii_protocol_version_is_a_stated_refusal_not_a_crash():
+    """Probe B: a server-supplied protocolVersion using U+2011 (non-breaking
+    hyphen) instead of ASCII '-' used to escape probe() as a raw
+    UnicodeEncodeError once that string was sent back as a header."""
+
+    async def answers(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return _initialize_answers(body.get("method"), body, version="2025‑11‑25")
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(answers)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "unsupported protocol version" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_an_unknown_protocol_version_is_a_stated_refusal_not_accepted():
+    """Probe J: any string used to be accepted verbatim ("1.0" ->
+    legacy:1.0) and then sent back as MCP-Protocol-Version on every later
+    request. Only a KNOWN_LEGACY version is accepted now."""
+
+    async def answers(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return _initialize_answers(body.get("method"), body, version="1.0")
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(answers)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "unsupported protocol version" in caught.value.reason and "1.0" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_a_version_with_crlf_is_a_stated_refusal_reachable_true():
+    """A version with CR/LF used to read "nothing was sent", reachable
+    False, for a server that just answered — the same unsupported-version
+    rejection as above, not a transport-level classification."""
+
+    async def answers(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return _initialize_answers(body.get("method"), body, version="2025-11-25\r\nX-Injected: 1")
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(answers)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "unsupported protocol version" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+async def test_a_session_id_with_characters_a_header_cannot_carry_is_refused():
+    """The 2025 spec requires a visible-ASCII Mcp-Session-Id; a padded or
+    control-bearing one used to be echoed verbatim on every later request."""
+
+    async def answers(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return _initialize_answers(
+            body.get("method"), body, version="2025-11-25", session=" padded-session "
+        )
+
+    handle = client.plant({ORIGIN: httpx.MockTransport(answers)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="old", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "session id" in caught.value.reason
+    assert caught.value.reachable is True
+
+
+# -- fix round 1, item 3: Playwright fidelity, client-level regression pin ----
+
+
+async def test_a_playwright_style_forgotten_session_is_a_plain_text_404():
+    """The real engine's cached bundle answers a forgotten session with a
+    PLAIN-TEXT 404 "Session not found", never JSON-RPC's -32001 (see
+    test_mcp_fake.py for the wire-shape pin). The client's re-establish-once
+    logic reads only the status code, so this stays green either way — a
+    regression pin against a future change that starts reading the body."""
+    spec = fake.FakeSpec(era="legacy", legacy_refusal="playwright", tools=(ECHO,))
+    with planted(spec) as (server, endpoint):
+        await client.call(endpoint, "echo", {})
+        server.expire_session()
+        assert (await client.call(endpoint, "echo", {})).text == "hello"
+    assert [c["method"] for c in server.calls].count("initialize") == 2

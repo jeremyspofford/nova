@@ -22,9 +22,9 @@ an empty or unrecognised body, a JSON-RPC error inside an HTTP 200 (Home
 Assistant's /api/mcp), a 400 with -32600 (DeepWiki, probed 2026-09-30) or
 -32000 (the Playwright MCP engine S38 drives, v0.0.82, measured 2026-10-01)
 — means legacy, spoken to through the `initialize` handshake below, never
-refused for being old. A result or a -32022 naming only OLDER versions
-follows the newest one named, through that same handshake. 401 and 403 are
-neither: they refuse the credentials, and say so.
+refused for being old. A result or a -32022 that does not name 2026-07-28
+follows the newest LEGACY version it does name, through that same
+handshake. 401 and 403 are neither: they refuse the credentials, and say so.
 
 Hand-rolled on httpx rather than the official SDK: measured 2026-09-30,
 `mcp` 2.2.0 adds twelve packages to core including a second HTTP stack, and
@@ -97,10 +97,11 @@ class ClientError(Exception):
     BACK (a 401, a JSON-RPC error) is reachable, and so is a transport
     failure or the deadline once sending began, because the call may or may
     not have run. False means the server was never contacted at all, or
-    nothing was sent — a bad credential, an unsupported URL scheme, a
-    header this transport cannot encode, a failed connection. The store
-    stamps it on the row and the tools file it as a fact, which is what the
-    guards read."""
+    nothing was sent — a credential this client refused to send (never a
+    401, which the server DID answer and so is reachable True), an
+    unsupported URL scheme, a header this transport cannot encode, a failed
+    connection. The store stamps it on the row and the tools file it as a
+    fact, which is what the guards read."""
 
     def __init__(self, reason: str, *, reachable: bool) -> None:
         super().__init__(reason)
@@ -412,7 +413,14 @@ async def _initialize(endpoint: Endpoint, *, offer: str) -> _Era:
     """The 2025-era handshake: initialize, then notifications/initialized,
     and the session id the server may hand out, echoed on every later
     request. `_detect`'s fallback for everything server/discover does not
-    answer as a 2026-07-28 server."""
+    answer as a 2026-07-28 server.
+
+    Every failure here is reachable=True: `_post` already raised directly,
+    before returning, for anything that means otherwise (a bad credential,
+    an unsupported URL scheme, a header this transport cannot encode, a
+    failed connection) — this function only ever sees the post-send shapes
+    (ruling R3-A's "may or may not have run" included), so a status of None
+    here still means the request was sent, not that it wasn't."""
     message = {
         "jsonrpc": "2.0",
         "id": next(_ids),
@@ -422,8 +430,26 @@ async def _initialize(endpoint: Endpoint, *, offer: str) -> _Era:
     status, headers, answer, excerpt = await _post(endpoint, message, {}, timeout_s=PROBE_TIMEOUT_S)
     if status in (401, 403):
         raise ClientError(_refused(endpoint, status, answer, excerpt), reachable=True)
+    if status is None:
+        raise ClientError(f"{endpoint.name} did not answer the {offer} handshake", reachable=True)
+    refused = _handshake_refusal(answer)
+    if refused is not None:
+        raise ClientError(
+            f"{endpoint.name} refused the {offer} handshake: {refused}", reachable=True
+        )
     result = answer.get("result") if isinstance(answer, dict) else None
     if not isinstance(result, dict):
+        if status >= 500:
+            # A 5xx — a proxy or gateway in front of a real server, most
+            # often — is not evidence the server cannot speak MCP at all;
+            # state only what happened (ruling: the "not an MCP server"
+            # claim below is for a body this client can read and reject,
+            # never for one it never got a chance to).
+            raise ClientError(
+                f"{endpoint.name} at {endpoint.origin} does not answer the {offer} initialize "
+                f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
+                reachable=True,
+            )
         raise ClientError(
             f"{endpoint.name} at {endpoint.origin} is not an MCP server this client can speak "
             f"to: it answered neither a {MODERN} discovery nor a {offer} initialize "
@@ -433,7 +459,23 @@ async def _initialize(endpoint: Endpoint, *, offer: str) -> _Era:
     version = (
         result.get("protocolVersion") if isinstance(result.get("protocolVersion"), str) else offer
     )
+    if version not in KNOWN_LEGACY:
+        # Anything else used to be accepted verbatim and then sent back as
+        # MCP-Protocol-Version on every later request — a non-ASCII or
+        # CR/LF-bearing value crashed or was misclassified unreachable at
+        # that point, far from this, the only place that can read it.
+        raise ClientError(
+            f"{endpoint.name} answered initialize with an unsupported protocol version {version!r}",
+            reachable=True,
+        )
     session = headers.get("mcp-session-id")
+    if session is not None and not _safe_credential(session):
+        # The 2025 spec requires a visible-ASCII session id; one that is
+        # not would otherwise be echoed verbatim on every later request.
+        raise ClientError(
+            f"{endpoint.name} handed out a session id with characters a header cannot carry",
+            reachable=True,
+        )
     era = _Era(
         modern=False, version=version, title=_title(result.get("serverInfo")), session=session
     )
@@ -442,19 +484,36 @@ async def _initialize(endpoint: Endpoint, *, offer: str) -> _Era:
         "MCP-Protocol-Version": version,
         **({"Mcp-Session-Id": session} if session else {}),
     }
-    status, _headers, _answer, excerpt = await _post(
+    status, _headers, answer, excerpt = await _post(
         endpoint, note, note_headers, timeout_s=PROBE_TIMEOUT_S
     )
-    if status is None or status >= 400:
-        # No answer at all is as much a refused handshake as a 4xx: either
-        # way the session this client just read from `initialize` is not
-        # one the server has confirmed, so nothing after this can be trusted.
+    if status is None:
+        raise ClientError(f"{endpoint.name} did not answer the {offer} handshake", reachable=True)
+    refused = _handshake_refusal(answer)
+    if refused is not None:
         raise ClientError(
-            f"{endpoint.name} refused the end of the handshake "
+            f"{endpoint.name} refused the {offer} handshake: {refused}", reachable=True
+        )
+    if status >= 400:
+        raise ClientError(
+            f"{endpoint.name} refused the end of the {offer} handshake "
             f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
             reachable=True,
         )
     return era
+
+
+def _handshake_refusal(answer: dict | None) -> str | None:
+    """The error's "{message} ({code})", when `answer` is a JSON-RPC error
+    object — so a handshake refusal carries the server's own words, never
+    None's silent swap for "not an MCP server" or a bare HTTP status."""
+    error = answer.get("error") if isinstance(answer, dict) else None
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    return (
+        f"{message if isinstance(message, str) and message else 'no message'} ({error.get('code')})"
+    )
 
 
 def _best_legacy(versions: Any) -> str:
@@ -678,8 +737,10 @@ async def _post(
     that answers only once a tool finishes sends no status at all while it
     runs, so "no status yet" is the COMMON shape of an ordinary slow call,
     not a sign the server was unreachable. Only a refusal before sending
-    (`_check_credentials`) or `ConnectError`/`ConnectTimeout`/`PoolTimeout` —
-    which can only happen before the request reaches the wire — raise
+    (`_check_credentials`), `ConnectError`/`ConnectTimeout`/`PoolTimeout`, or
+    a request this transport refused to build or frame at all
+    (`UnsupportedProtocol`, `LocalProtocolError`) — none of which can happen
+    once anything of the request reaches the wire — raise
     ClientError(reachable=False): the server was never reached. Every other
     failure (a read or protocol error, or the deadline), with or without a
     status, means the request was sent or might have been; it is reported
