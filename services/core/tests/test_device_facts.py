@@ -248,7 +248,10 @@ def test_agent_view_is_the_one_shape():
         "folders",
         "acting",
     }
-    assert view["acting"] == ["how it runs: unknown — this agent predates S42b and does not say"]
+    # Pin moved deliberately (Task 16b fix round 1, I1): "predates S42b and
+    # does not say" claimed a cause the agent never reported — the probe
+    # frame can simply not have landed yet (up to ~45s), among others.
+    assert view["acting"] == ["how it runs: unknown — this agent has not reported it"]
     assert view["os"] == "Windows 11 Pro 24H2 (build 26100)"
     assert view["wsl"] is None and view["machine"] == "a" * 64 and view["agent_version"] == "0.2.0"
     wsl_view = df.agent_view(
@@ -547,10 +550,15 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     # "he is an administrator" / "for his consent" -> "the account it runs
     # as is an administrator" / "for consent" — a device can belong to
     # someone other than the owner.
+    # Pin moved again (Task 16b fix round 1, M7): "so admin work asks for
+    # consent at a UAC prompt on the desktop, which a command cannot
+    # answer" inferred a specific prompt BEHAVIOR (ConsentPromptBehaviorAdmin)
+    # the agent never reads — now states only what it read: the account IS
+    # an administrator, and its own token is NOT elevated.
     assert lines[1].startswith(
         "elevation: the agent runs without admin rights; the account it runs as is an "
-        "administrator, so admin work asks for consent at a UAC prompt on the desktop, "
-        "which a command cannot answer; Windows sudo is on (inline)"
+        "administrator, but its own token is not elevated (UAC) — admin work needs "
+        "elevating first, which a command cannot do for itself; Windows sudo is on (inline)"
     )
     # Pin moved deliberately (Task 16b review, "probes take time"): the
     # final line now notes the ~45s Windows-with-WSL probe bound.
@@ -561,8 +569,14 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     assert all("\n" not in line for line in lines)
 
 
-def test_an_agent_that_predates_the_probes_says_so():
-    said = ["how it runs: unknown — this agent predates S42b and does not say"]
+def test_an_agent_that_has_not_reported_any_probe_says_so():
+    """Renamed and its pin moved (Task 16b fix round 1, I1): "predates
+    S42b" was a guessed cause — an S42b agent that has simply not probed
+    yet (auth-only facts, no service/elevation/wsl_distros/probed_at at
+    all) reads identically, and claiming "predates" for it would be a
+    wrong diagnosis once this is rendered into machine_status (Task 22)
+    and the tile (Task 29)."""
+    said = ["how it runs: unknown — this agent has not reported it"]
     assert df.acting_lines(df.validate_auth(WINDOWS), "windows") == said
     assert df.acting_lines(None, "linux") == said
 
@@ -708,24 +722,29 @@ def test_elevation_lines_never_gender_the_account():
 
 
 def test_the_sudo_unknown_wording_never_says_windows_on_linux_or_macos():
+    """Pin moved (Task 16b fix round 1, I4): "unknown" is a FAILED READ —
+    sudo -n gave no answer in time or never started — never "a mode Nova
+    does not know", which reads as an exotic-but-reported value."""
     facts = df.validate_frame(
         {"type": "facts", "elevation": {"elevated": False, "sudo": "unknown"}}
     )
     for plat in ("linux", "darwin"):
         line = df.elevation_line(facts, plat)
         assert "Windows" not in line
-        assert "sudo is in a mode Nova does not know" in line
+        assert "whether sudo could be used could not be read" in line
     win_facts = df.validate_frame(
         {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "unknown"}}
     )
-    assert "Windows sudo is in a mode Nova does not know" in df.elevation_line(win_facts, "windows")
+    assert "whether Windows sudo could be used could not be read" in df.elevation_line(
+        win_facts, "windows"
+    )
 
 
 def test_a_wsl_distros_own_sudo_unknown_never_says_windows():
     said = _set(PROBED, ("wsl_distros", "distros", 0, "sudo"), "unknown")
     line = df.wsl_line(_merged(said))
-    assert "sudo is in a mode Nova does not know" in line
-    assert "Windows sudo is in a mode" not in line
+    assert "whether sudo could be used could not be read" in line
+    assert "Windows" not in line
 
 
 def test_windows_sudo_from_nova_states_it_has_not_been_measured_yet():
@@ -828,3 +847,315 @@ def test_elevation_lines_never_promise_or_rule_out_a_future_admin_path():
         line = df.elevation_line(facts, platform).lower()
         for word in banned:
             assert word not in line
+
+
+# -- S42b Task 16b fix round 1 (controller review of fa3658de..803da005) ----
+
+
+def test_elevation_and_wsl_lines_render_even_when_service_has_not_landed():
+    """I1: the probe frame can leave `service` absent while `elevation` or
+    `wsl_distros` are present — too big for one frame, refused, or simply
+    not landed yet (up to ~45s after every fresh connect) — so those lines
+    must never be gated on `service`'s own presence."""
+    frame = {
+        "type": "facts",
+        "elevation": {"elevated": False, "admin": True, "sudo": "off"},
+        "wsl_distros": {"distros": []},
+    }
+    facts = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    lines = df.acting_lines(facts, "windows")
+    assert lines[0] == "how it runs: unknown — this agent has not reported it"
+    assert any(line.startswith("elevation:") for line in lines)
+    assert any(line.startswith("WSL:") for line in lines)
+
+
+def test_the_probe_unreadable_reason_is_said_when_service_is_absent():
+    """I1: a probe too big for the frame — the agent leaves the sections
+    out and says why under unreadable item "probe"."""
+    frame = {
+        "type": "facts",
+        "unreadable": [{"item": "probe", "reason": "probe is 20000 bytes, over the 16384 cap"}],
+    }
+    facts = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    assert df.runs_line(facts) == (
+        "how it runs: unknown — this agent has not reported it "
+        "(probe is 20000 bytes, over the 16384 cap)"
+    )
+
+
+def test_admin_absent_is_never_read_as_not_an_administrator():
+    """I2: Admin is nil exactly when the membership read failed
+    (elevation_windows.go), never a confirmed "no"."""
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "sudo": "off"}}
+    )  # no "admin" key at all
+    line = df.elevation_line(facts, "windows")
+    assert "whether the account it runs as is an administrator could not be read" in line
+    assert "is not an administrator" not in line
+
+
+def test_an_empty_pid1_is_never_read_as_confirmed_no_systemd():
+    """I2: the agent prints an empty pid1 when it cannot read
+    /proc/1/comm — never a confirmed "no systemd"."""
+    said = _set(PROBED, ("wsl_distros", "distros", 0, "pid1"), "")
+    line = df.wsl_line(_merged(said))
+    assert "whether systemd runs could not be read" in line
+    assert "no systemd" not in line
+
+
+def test_an_unreadable_entrys_empty_reason_still_counts_as_the_entry_existing():
+    """I3a: `if unread:` tested the reason's truthiness, not the entry's
+    existence — a "wsl_distros" entry with an empty reason still printed
+    "no distribution is installed"."""
+    frame = {
+        "type": "facts",
+        "wsl_distros": {"distros": []},
+        "unreadable": [{"item": "wsl_distros", "reason": ""}],
+    }
+    merged = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    line = df.wsl_line(merged)
+    assert "could not be read" in line
+    assert "no distribution is installed" not in line
+    assert "no reason given" in line
+
+
+def test_an_unreadable_entrys_control_character_only_reason_still_counts():
+    """I3a: an all-control-character reason sanitizes to empty, which must
+    still count as the entry EXISTING, not as it never having been sent."""
+    frame = {
+        "type": "facts",
+        "wsl_distros": {"distros": []},
+        "unreadable": [{"item": "wsl_distros", "reason": "\x01\x02\x03"}],
+    }
+    merged = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    assert "could not be read" in df.wsl_line(merged)
+
+
+def test_a_readable_item_with_an_unreadable_reason_is_kept_with_a_placeholder():
+    """I3a: when the item is readable but its reason is bad (a NUL byte),
+    the entry is kept with a placeholder reason, not dropped entirely —
+    dropping it would make "wsl_distros" indistinguishable from never
+    having been reported at all."""
+    got = df.validate_frame(
+        {"type": "facts", "unreadable": [{"item": "wsl_distros", "reason": "x\x00y"}]}
+    )
+    assert got["unreadable"] == [{"item": "wsl_distros", "reason": "(reason unreadable)"}]
+    merged = {**df.validate_auth(WINDOWS), **got, "wsl_distros": {"distros": []}}
+    assert "could not be read" in df.wsl_line(merged)
+
+
+def test_wsl_distros_omitted_with_an_unreadable_entry_still_produces_a_line():
+    """I3b: the agent's own failed-probe shape omits wsl_distros entirely
+    and adds unreadable "wsl_distros" instead of an empty distros list.
+    wsl_line used to return None for this — no WSL line, the reason never
+    said."""
+    frame = {
+        "type": "facts",
+        "unreadable": [{"item": "wsl_distros", "reason": "wsl.exe --list --verbose: not found"}],
+    }
+    facts = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    line = df.wsl_line(facts)
+    assert line is not None
+    assert "could not be read (wsl.exe --list --verbose: not found)" in line
+
+
+def test_sudo_unknown_appends_sudo_said_on_every_platform():
+    """I4: Linux/macOS sends "unknown" when sudo -n true gave no answer in
+    time or never started, with the reason in sudo_said — previously only
+    "refused" showed it. Windows "unknown" also covers a failed registry
+    read, and sudo_said was never rendered there at all."""
+    linux_facts = df.validate_frame(
+        {
+            "type": "facts",
+            "elevation": {"elevated": False, "sudo": "unknown", "sudo_said": "timed out"},
+        }
+    )
+    assert "(sudo -n said: timed out)" in df.elevation_line(linux_facts, "linux")
+    win_facts = df.validate_frame(
+        {
+            "type": "facts",
+            "elevation": {
+                "elevated": False,
+                "admin": True,
+                "sudo": "unknown",
+                "sudo_said": "registry key not found",
+            },
+        }
+    )
+    assert "(it said: registry key not found)" in df.elevation_line(win_facts, "windows")
+
+
+def test_windows_sudo_off_never_says_windows_on_linux_and_never_contradicts_itself():
+    """M1: no "Windows sudo is on (inline)" for Linux "inline" — every
+    Windows-only state (off/new_window/input_off/inline) is overridden on
+    non-Windows, not just "unknown". Windows "refused" must not
+    contradict itself with "...fails — whether this works...has not been
+    measured yet"."""
+    inline_facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "sudo": "inline"}}
+    )
+    # The word "Windows" may still appear (acknowledging the reported value
+    # NAMES a Windows-only state), but never "Windows sudo is on" — that
+    # would claim actual Windows sudo behavior on a non-Windows platform.
+    assert "Windows sudo is on" not in df.elevation_line(inline_facts, "linux")
+    said = _set(PROBED, ("wsl_distros", "distros", 0, "sudo"), "inline")
+    assert "Windows sudo is on" not in df.wsl_line(_merged(said))
+
+    refused_win = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "refused"}}
+    )
+    line = df.elevation_line(refused_win, "windows")
+    assert "fails" in line
+    assert "has not been measured yet" not in line
+
+
+def test_windows_sudo_absent_means_never_turned_on_not_no_sudo():
+    """M1: Windows "absent" means sudo.exe was never turned on
+    (elevation_windows.go), not "no sudo" (which stays accurate for
+    Linux/macOS, where sudo really can just not exist)."""
+    win_facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "absent"}}
+    )
+    assert "never been turned on" in df.elevation_line(win_facts, "windows")
+    linux_facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "sudo": "absent"}}
+    )
+    assert df.elevation_line(linux_facts, "linux") == "elevation: no sudo"
+
+
+def test_blank_service_fields_say_unknown_not_a_broken_sentence():
+    """M2: a blank service field used to render as a literal blank —
+    "binary ; config ; process  pid 0; as " — never "unknown", and never
+    its own unreadable reason."""
+    frame = {
+        "type": "facts",
+        "service": {
+            "name": "novad",
+            "binary": "",
+            "config": "",
+            "process": "",
+            "pid": 0,
+            "supervisor_pid": 0,
+            "user": "",
+        },
+        "unreadable": [{"item": "service.binary", "reason": "could not resolve argv[0]"}],
+    }
+    facts = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    line = df.runs_line(facts)
+    assert "binary ;" not in line and "pid 0;" not in line and "as \n" not in line
+    assert "binary unknown (could not resolve argv[0])" in line
+    assert "config unknown; " in line
+    assert "process unknown pid unknown" in line
+    assert line.endswith("as unknown")
+
+
+def test_a_run_key_is_never_called_a_service():
+    """M2: a Run-key value is not a service — it is a registry value under
+    HKCU\\...\\Run, read at sign-in by the shell."""
+    frame = {
+        "type": "facts",
+        "service": {
+            "name": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent",
+            "binary": "novad.exe",
+            "config": "config.json",
+            "process": "novad.exe",
+            "pid": 1,
+            "supervisor_pid": 0,
+            "user": "sam",
+        },
+    }
+    run_key_auth = _with(WINDOWS, "agent.mode", "run-key")
+    facts = {**df.validate_auth(run_key_auth), **df.validate_frame(frame)}
+    line = df.runs_line(facts)
+    assert line.startswith(
+        "how it runs: the Windows Run key "
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent"
+    )
+    assert "service HKCU" not in line
+
+
+def test_why_keeps_every_reason_of_a_repeated_item_not_only_the_last():
+    """M3: a naive dict comprehension keeps only the LAST reason for a
+    repeated item — every reason must be kept."""
+    frame = {
+        "type": "facts",
+        "wsl_distros": {"distros": []},
+        "unreadable": [
+            {"item": "wsl_distros", "reason": "first attempt: access denied"},
+            {"item": "wsl_distros", "reason": "retry: timed out"},
+        ],
+    }
+    merged = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    line = df.wsl_line(merged)
+    assert "first attempt: access denied" in line
+    assert "retry: timed out" in line
+
+
+def test_a_distros_sudo_said_is_kept_and_rendered_not_dropped():
+    """M3: a distro's sudo_said used to be silently dropped — only `sudo`
+    (the state) was ever read."""
+    with_said = _set(PROBED, ("wsl_distros", "distros", 0, "sudo"), "refused")
+    with_said = _set(
+        with_said, ("wsl_distros", "distros", 0, "sudo_said"), "sudo: a password is required"
+    )
+    got = df.validate_frame(with_said)
+    assert got["wsl_distros"]["distros"][0]["sudo_said"] == "sudo: a password is required"
+    line = df.wsl_line(_merged(with_said))
+    assert "(sudo -n said: sudo: a password is required)" in line
+
+
+def test_more_than_eight_distros_or_pids_says_the_list_is_cut_off():
+    """M3: a cut-off or partial list says so — a non-empty distros list
+    is not proof it is the WHOLE list, and neither is a non-empty pids
+    list."""
+    said = _set(
+        PROBED,
+        ("unreadable",),
+        [{"item": "wsl_distros", "reason": "12 distributions found, 8 shown"}],
+    )
+    line = df.wsl_line(_merged(said))
+    assert "not every distribution is shown: 12 distributions found, 8 shown" in line
+
+    pids_said = _set(
+        PROBED,
+        ("unreadable",),
+        [{"item": "wsl_distros.Ubuntu-26.04.novad_pids", "reason": "14 processes found, 8 shown"}],
+    )
+    pids_line = df.wsl_line(_merged(pids_said))
+    assert "more may be running: 14 processes found, 8 shown" in pids_line
+
+
+def test_the_root_path_names_a_non_default_distro():
+    """M6: wsl.exe -u root with no -d targets the DEFAULT distro — right
+    only for one of them."""
+    non_default = copy.deepcopy(PROBED)
+    non_default["wsl_distros"]["distros"][0]["default"] = False
+    line = df.wsl_line(_merged(non_default))
+    assert "root through wsl.exe -d Ubuntu-26.04 -u root without a password" in line
+    assert "wsl.exe -u root without a password" not in line.split("Ubuntu-26.04 (")[1].split(")")[0]
+
+
+def test_a_failed_units_zero_main_pid_is_not_said_as_a_pid():
+    """M6: a failed unit's main_pid is 0 — not a pid."""
+    failed = _set(
+        PROBED,
+        ("wsl_distros", "distros", 0, "novad_unit"),
+        {"active": "failed", "file": "enabled", "restart": "always", "main_pid": 0},
+    )
+    line = df.wsl_line(_merged(failed))
+    assert "main pid 0" not in line
+    assert "not running)" in line
+
+
+def test_elevation_states_only_what_was_read_never_an_inferred_uac_prompt():
+    """M7: "admin work asks for consent at a UAC prompt" was inferred from
+    the DEFAULT UAC policy — the agent never reads
+    ConsentPromptBehaviorAdmin. Say only what it read: admin behind UAC,
+    limited token."""
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "off"}}
+    )
+    line = df.elevation_line(facts, "windows")
+    assert "is an administrator, but its own token is not elevated (UAC)" in line
+    assert "asks for consent" not in line
+    assert "UAC prompt" not in line
