@@ -7,8 +7,10 @@ teardown does not run in the test's task."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import time
 
 import httpx
 import pytest
@@ -77,6 +79,31 @@ class _Scripted(httpx.AsyncBaseTransport):
         self.calls.append({"id": sent.get("id"), "method": sent.get("method")})
         if sent.get("method") == self._method:
             return await self._respond(sent)
+        return await self._inner.handle_async_request(request)
+
+
+class _FailsBeforeStatus(httpx.AsyncBaseTransport):
+    """Discover (and any other method) answers normally through a real
+    FakeServer; a request for `method` instead sleeps `delay` seconds (if
+    given, long enough to blow a short timeout_s) and then raises `exc` (if
+    given) — never returning a response at all, simulating a read/protocol
+    failure or the deadline before any status comes back."""
+
+    def __init__(self, method: str, exc: Exception | None = None, *, delay: float = 0.0) -> None:
+        self._method = method
+        self._exc = exc
+        self._delay = delay
+        self._inner = fake.transport(fake.FakeServer(fake.FakeSpec()))
+        self.calls: list[dict] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)
+        self.calls.append({"id": sent.get("id"), "method": sent.get("method")})
+        if sent.get("method") == self._method:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            if self._exc is not None:
+                raise self._exc
         return await self._inner.handle_async_request(request)
 
 
@@ -429,3 +456,198 @@ async def test_unreadable_content_is_a_stated_error_not_an_empty_success():
     finally:
         client.unplant(handle)
     assert "no readable content" in caught.value.reason
+
+
+# -- fix round 2 (R3-A..D) -----------------------------------------------------
+
+
+async def test_a_call_after_a_read_timeout_may_or_may_not_have_run():
+    transport = _FailsBeforeStatus("tools/call", httpx.ReadTimeout("fixture"))
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "may or may not have run" in caught.value.reason
+    assert caught.value.reachable is True
+    assert "could not reach" not in caught.value.reason
+
+
+async def test_a_call_after_a_remote_protocol_error_may_or_may_not_have_run():
+    transport = _FailsBeforeStatus(
+        "tools/call",
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+    )
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "may or may not have run" in caught.value.reason
+    assert caught.value.reachable is True
+    assert "could not reach" not in caught.value.reason
+
+
+async def test_a_call_past_the_deadline_while_the_server_still_runs_it():
+    """The common real case: a plain application/json server sends its
+    status only once the tool finishes, so a slow tool that outlives
+    timeout_s must not be stamped unreachable."""
+    transport = _FailsBeforeStatus("tools/call", delay=1.0)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {}, timeout_s=0.2)
+    finally:
+        client.unplant(handle)
+    assert "may or may not have run" in caught.value.reason
+    assert caught.value.reachable is True
+    assert "could not reach" not in caught.value.reason
+
+
+async def test_a_listing_after_a_read_error_is_resent_once():
+    transport = _FailsBeforeStatus("tools/list", httpx.ReadError("fixture"))
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.list_tools(client.Endpoint(name="srv", url=URL))
+    finally:
+        client.unplant(handle)
+    ids = [c["id"] for c in transport.calls if c["method"] == "tools/list"]
+    assert len(ids) == 2 and ids[0] != ids[1]
+    assert caught.value.reachable is True
+
+
+async def test_a_content_list_of_non_object_blocks_is_a_stated_error():
+    """{"content": ["the real answer"]}: a note about a skipped block is
+    not content (ruling R3-B) — it still refuses, exactly like a result
+    with no content block at all."""
+
+    async def respond(sent):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": sent.get("id"),
+            "result": {"content": ["the real answer"]},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "no readable content" in caught.value.reason
+
+
+async def test_content_missing_entirely_is_a_stated_error():
+    async def respond(sent):
+        payload = {"jsonrpc": "2.0", "id": sent.get("id"), "result": {}}
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "no readable content" in caught.value.reason
+
+
+async def test_malformed_content_beside_is_error_is_noted_not_dropped():
+    async def respond(sent):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": sent.get("id"),
+            "result": {"content": "no such run", "isError": True},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        result = await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert (result.is_error, result.text) == (True, "")
+    assert result.notes and "not a list of blocks" in result.notes[0]
+
+
+async def test_an_empty_content_list_is_a_legal_empty_success():
+    async def respond(sent):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": sent.get("id"),
+            "result": {"content": [], "isError": False},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        result = await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert (result.text, result.is_error) == ("", False)
+    assert result.notes and "no content" in result.notes[0]
+
+
+async def test_a_huge_sse_line_in_small_chunks_is_read_in_linear_time():
+    """Regression pin for the quadratic rescan-from-0 in _sse_lines: at
+    1460-byte chunks the old O(n^2) rescan measured 32 s for one ~4 MiB
+    unterminated line. A linear reader does this in well under a second."""
+    size = 4 * 1024 * 1024 - 4096
+    chunk_size = 1460
+
+    async def respond(sent):
+        prefix = (
+            b'data: {"jsonrpc": "2.0", "id": '
+            + str(sent.get("id")).encode()
+            + b', "result": {"resultType": "complete", "isError": false, '
+            + b'"content": [{"type": "text", "text": "'
+        )
+        suffix = b'"}]}}\n\n'
+
+        async def body():
+            yield prefix
+            left = size
+            while left > 0:
+                piece = b"x" * min(chunk_size, left)
+                yield piece
+                left -= len(piece)
+            yield suffix
+
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_GenStream(body())
+        )
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        start = time.perf_counter()
+        got = await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+        elapsed = time.perf_counter() - start
+    finally:
+        client.unplant(handle)
+    assert len(got.text) == size
+    assert elapsed < 3.0, f"took {elapsed:.1f}s — _sse_lines may be rescanning from 0 again"
+
+
+async def test_a_probe_after_a_read_timeout_during_discovery_does_not_crash():
+    """_detect does its own numeric status comparisons; _post can now return
+    status=None for a non-connect-phase failure, so _detect must handle that
+    without a TypeError on `200 <= None` — not named in item A's own fix
+    location (_send), but reachable through the same _post change."""
+    transport = _FailsBeforeStatus("server/discover", httpx.ReadTimeout("fixture"))
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="srv", url=URL))
+    finally:
+        client.unplant(handle)
+    assert caught.value.reachable is True
+    ids = [c["id"] for c in transport.calls if c["method"] == "server/discover"]
+    assert len(ids) == 2 and ids[0] != ids[1]

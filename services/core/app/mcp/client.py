@@ -358,8 +358,11 @@ async def _detect(endpoint: Endpoint) -> _Era:
         status, _headers, answer, excerpt = await _post(
             endpoint, message, headers, timeout_s=PROBE_TIMEOUT_S
         )
-        if answer is None and 200 <= status < 300 and attempt == 1:
-            continue  # the stream ended before the answer: a discovery changes nothing, ask again
+        if answer is None and attempt == 1:
+            # No answer — a clean close, a failure once the request was
+            # sent, or the deadline, with or without a status (ruling
+            # R3-A): a discovery changes nothing, so ask again once.
+            continue
         break
     if status in (401, 403):
         raise ClientError(_refused(endpoint, status, answer, excerpt), reachable=True)
@@ -374,6 +377,11 @@ async def _detect(endpoint: Endpoint) -> _Era:
         # A modern server that refused the discovery itself is still modern:
         # the calls after it will say what it wants.
         return _Era(modern=True, version=MODERN)
+    if status is None:
+        raise ClientError(
+            f"{endpoint.name} at {endpoint.origin} did not answer MCP {MODERN} discovery",
+            reachable=True,
+        )
     raise ClientError(
         f"{endpoint.name} at {endpoint.origin} does not answer MCP {MODERN} "
         f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
@@ -433,10 +441,12 @@ async def _send(
 ) -> dict:
     """One JSON-RPC request in the endpoint's era; its `result` object.
 
-    `resend`: a stream that ends before the answer is sent again once, with a
-    new id — only for a request that changes nothing (a listing). A legacy
-    session the server forgot (404) is established again once, for any request:
-    the server refused it outright, so nothing ran."""
+    `resend`: no answer at all — a clean close, a failure once the request
+    was sent, or the deadline, WITH OR WITHOUT a status (ruling R3-A) — is
+    sent again once, with a new id, only for a request that changes nothing
+    (a listing). A legacy session the server forgot (404) is established
+    again once, for any request: the server refused it outright, so nothing
+    ran."""
     for attempt in (1, 2):
         era = await _era(endpoint)
         message, headers = _framed(era, method, params, extra, want_progress=progress is not None)
@@ -449,8 +459,13 @@ async def _send(
             _ERAS.pop(_key(endpoint), None)
             continue
         if answer is None:
-            if 200 <= status < 300 and resend and attempt == 1:
+            if resend and attempt == 1:
                 continue
+            if status is None:
+                raise ClientError(
+                    f"{endpoint.name} did not answer at all; the call may or may not have run",
+                    reachable=True,
+                )
             if 200 <= status < 300:
                 raise ClientError(
                     f"the stream from {endpoint.name} ended before the answer; the call may "
@@ -560,18 +575,25 @@ async def _post(
     *,
     timeout_s: float,
     progress: Callable[[str], None] | None = None,
-) -> tuple[int, httpx.Headers, dict | None, str]:
+) -> tuple[int | None, httpx.Headers, dict | None, str]:
     """One POST: (status, response headers, the JSON-RPC response, or None and
-    an excerpt of a body that was not one).
+    an excerpt of a body that was not one). `status` is None when nothing
+    came back at all — including when `timeout_s` elapsed before anything did.
 
-    A failure BEFORE any status arrived — refused credentials never sent
-    (`_check_credentials`), a refused connection, a connect-phase timeout, or
-    the deadline while still connecting — raises ClientError(reachable=False):
-    the server was never reached. A failure AFTER a status arrived (the
-    connection dropped mid-body, or the deadline during a slow read) is
-    reported exactly like a stream that closed cleanly without an answer —
-    (status, headers, None, "") — because the server WAS there and the call
-    may have run (ruling R2-4); the caller's own resend rule then applies."""
+    Classified by EXCEPTION TYPE, never by whether a status happened to
+    arrive (ruling R3-A): a status is not proof the request was sent, and
+    its absence is not proof it was not — a plain `application/json` server
+    that answers only once a tool finishes sends no status at all while it
+    runs, so "no status yet" is the COMMON shape of an ordinary slow call,
+    not a sign the server was unreachable. Only a refusal before sending
+    (`_check_credentials`) or `ConnectError`/`ConnectTimeout`/`PoolTimeout` —
+    which can only happen before the request reaches the wire — raise
+    ClientError(reachable=False): the server was never reached. Every other
+    failure (a read or protocol error, or the deadline), with or without a
+    status, means the request was sent or might have been; it is reported
+    exactly like a stream that closed cleanly without an answer: (status,
+    headers, None, ""). The caller's resend rule then applies — never for a
+    call, once for a listing — and says the call may or may not have run."""
     _check_credentials(endpoint)
     planted = _planted(endpoint.origin)
     sent = {
@@ -607,19 +629,8 @@ async def _post(
             f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
             reachable=False,
         ) from None
-    except TimeoutError:
-        if status is not None:
-            return status, response_headers, None, ""
-        raise ClientError(
-            f"{endpoint.name} did not answer within {timeout_s:g} s", reachable=False
-        ) from None
-    except httpx.HTTPError as exc:
-        if status is not None:
-            return status, response_headers, None, ""
-        raise ClientError(
-            f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
-            reachable=False,
-        ) from None
+    except (TimeoutError, httpx.HTTPError):
+        return status, response_headers, None, ""
     text = raw.decode("utf-8", errors="replace")
     try:
         parsed = json.loads(text) if text.strip() else None
@@ -656,9 +667,19 @@ async def _sse_lines(endpoint: Endpoint, response: httpx.Response) -> AsyncItera
     `aiter_lines()` use (U+2028, U+2029, U+0085), which are legal unescaped
     inside a JSON string and would cut it open (ruling R2-5). Bytes are
     counted as they arrive, including an unterminated buffered remainder, so
-    one huge line is refused as it streams rather than fully buffered first."""
+    one huge line is refused as it streams rather than fully buffered first.
+
+    Each search resumes where the last one stopped (ruling R3-C) rather than
+    rescanning `buf` from 0 on every chunk, which was quadratic in the
+    number of chunks making up one unterminated line — measured at 32 s for
+    a ~4 MiB line delivered in 1460-byte pieces. `scanned` is the prefix of
+    `buf` already proven to hold no line ending; it is kept one byte short
+    of the end when nothing matched, since a trailing `\\r` there may still
+    turn into `\\r\\n` once more bytes arrive, and reset to 0 whenever `buf`
+    itself shrinks (a line was just removed from its front)."""
     buf = bytearray()
     total = 0
+    scanned = 0
     async for chunk in response.aiter_bytes():
         buf += chunk
         total += len(chunk)
@@ -669,13 +690,16 @@ async def _sse_lines(endpoint: Endpoint, response: httpx.Response) -> AsyncItera
                 reachable=True,
             )
         while True:
-            match = _SSE_LINE_END.search(buf)
+            match = _SSE_LINE_END.search(buf, scanned)
             if match is None:
+                scanned = max(0, len(buf) - 1)
                 break
             if match.group() == b"\r" and match.end() == len(buf):
-                break  # a lone trailing \r may be the start of \r\n; wait for more
+                scanned = match.start()  # a lone trailing \r may become \r\n; wait for more
+                break
             yield bytes(buf[: match.start()]).decode("utf-8", errors="replace")
             del buf[: match.end()]
+            scanned = 0
     if buf:
         yield bytes(buf).decode("utf-8", errors="replace")
 
@@ -834,48 +858,70 @@ def _param_headers(schema: dict | None, arguments: Mapping[str, Any]) -> dict[st
 def _as_result(endpoint: Endpoint, result: Mapping[str, Any]) -> CallResult:
     parts: list[str] = []
     notes: list[str] = []
+    saw_content = False  # a well-formed ContentBlock object, text or not
     content = result.get("content")
-    if not isinstance(content, list):
-        # Absent or a malformed shape, not a block the spec defines — not
-        # noted like one (ruling R2-7): read on, so a genuinely empty,
-        # well-shaped result (e.g. every block a kind this client doesn't
-        # read) can still succeed quietly below, while this one falls
-        # through to the "nothing readable at all" check and is refused.
-        content = []
-    for block in content:
-        if not isinstance(block, dict):
-            notes.append("the server returned a content block that is not an object; skipped")
-            continue
-        kind = block.get("type")
-        if kind == "text":
-            parts.append(str(block.get("text", "")))
-        elif kind in ("image", "audio"):
-            size = len(str(block.get("data", ""))) * 3 // 4
-            noun = "an image" if kind == "image" else "audio"
-            notes.append(
-                f"the server returned {noun} ({block.get('mimeType', '?')}, about "
-                f"{max(1, size // 1024)} KB), which is not read yet"
-            )
-        elif kind == "resource_link":
-            parts.append(f"[link] {block.get('name') or ''} {block.get('uri') or ''}".strip())
-        elif kind == "resource":
-            resource = block.get("resource") if isinstance(block.get("resource"), dict) else {}
-            if "text" in resource:
-                parts.append(str(resource["text"]))
-            else:
+    well_formed = isinstance(content, list)
+    if well_formed:
+        for block in content:
+            if not isinstance(block, dict):
+                # A note, never counted as content seen (ruling R3-B): a
+                # list of {"content": ["the real answer"]} is as unreadable
+                # as a result with no content block at all.
+                notes.append("the server returned a content block that is not an object; skipped")
+                continue
+            saw_content = True
+            kind = block.get("type")
+            if kind == "text":
+                parts.append(str(block.get("text", "")))
+            elif kind in ("image", "audio"):
+                size = len(str(block.get("data", ""))) * 3 // 4
+                noun = "an image" if kind == "image" else "audio"
                 notes.append(
-                    f"the server returned an embedded binary resource "
-                    f"({resource.get('uri', '?')}); not read"
+                    f"the server returned {noun} ({block.get('mimeType', '?')}, about "
+                    f"{max(1, size // 1024)} KB), which is not read yet"
                 )
-        else:
-            notes.append(f"the server returned a {kind!r} block this client does not read")
+            elif kind == "resource_link":
+                parts.append(f"[link] {block.get('name') or ''} {block.get('uri') or ''}".strip())
+            elif kind == "resource":
+                resource = block.get("resource") if isinstance(block.get("resource"), dict) else {}
+                if "text" in resource:
+                    parts.append(str(resource["text"]))
+                else:
+                    notes.append(
+                        f"the server returned an embedded binary resource "
+                        f"({resource.get('uri', '?')}); not read"
+                    )
+            else:
+                notes.append(f"the server returned a {kind!r} block this client does not read")
+    elif content is not None:
+        # Present but not a list — a malformed shape, not a block the spec
+        # defines. Noted (ruling R3-B: this used to be silently dropped
+        # beside isError/structuredContent), but never counted as content
+        # seen, so it still falls through to the raise below when nothing
+        # else redeems the result.
+        notes.append("the server's content was not a list of blocks; nothing could be read")
     structured = result.get("structuredContent")
     if not parts and structured is not None:
         parts.append(json.dumps(structured, ensure_ascii=False, indent=1))
-    if not parts and not notes and structured is None and not result.get("isError"):
-        # Nothing to show, nothing to explain, and the server did not even
-        # say the call failed: the old shape here was an empty "success"
-        # (ruling R2-7) — never report one we did not establish.
+    empty_success = well_formed and not content  # content was exactly []
+    if not parts and empty_success and structured is None:
+        # The protocol's own sanctioned empty result (ruling R3-D) — the
+        # official SDK documents CallToolResult(content=[]) for one — is a
+        # SUCCESS, never the stated failure below.
+        notes.append("the tool returned no content")
+    if (
+        not parts
+        and not saw_content
+        and not empty_success
+        and structured is None
+        and not result.get("isError")
+    ):
+        # Nothing to show, nothing recognisable, no sanctioned empty
+        # success, and the server did not even say the call failed: the old
+        # shape here was an empty "success" (ruling R2-7) — never report one
+        # we did not establish. A note about a skipped or malformed block
+        # does not count as content (ruling R3-B): it says what could not
+        # be read, not that something was.
         raise ClientError(
             f"{endpoint.name}'s result has no readable content and no structuredContent",
             reachable=True,
