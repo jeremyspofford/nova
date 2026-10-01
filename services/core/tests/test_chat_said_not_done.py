@@ -2597,3 +2597,172 @@ async def test_P6_dispatch_calls_records_only_a_call_that_reached_its_executor(
     assert (span.meta.get("reached_executor") is True) is reached
     statuses = [json.loads(frame[len("data: ") :])["activity"]["status"] for frame in sent]
     assert statuses == ["start", ended]
+
+
+# -- the final review (I-1, M-1): a note names its kind of work only after it ----
+#
+# I-1 (U1 re-opened): a call of ANOTHER kind reached its executor — a web search
+# — and the listing redirect streamed "Listing the files now instead of
+# presenting a listing from memory.", the state redirect "Checking the device
+# now…". A note that names a kind of work streams only when the ORIGINATING
+# guard, re-run on the ORIGINAL reply against the FINAL spans, finds the claim
+# backed; otherwise the kind's no-call note. The generic notes keep P6's rule.
+
+
+async def _i1_listing(pool, monkeypatch, tmp_path, *, its_own_kind: bool):
+    from tests.test_chat_deferral import _arm_web_search, _search_call
+    from tests.test_chat_presented_listing import ASK, FABRICATED, HONEST, REAL_FILES, tool_call
+
+    root = tmp_path / "workspace"
+    for rel, body in REAL_FILES.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(root))
+    if its_own_kind:
+        answer = HONEST
+        regen = (tool_call("r1", "workspace_list_files", {}),)
+    else:  # the reviewer's X5
+        _arm_web_search(monkeypatch)
+        answer = "Your workspace holds a config file, a readme, some notes and a src folder."
+        regen = (_search_call("r1"),)
+    notes = (chat.PRESENTED_LISTING_REDIRECT_NOTE, chat.PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL)
+    return (
+        "presented_listing",
+        FABRICATED,
+        ASK,
+        ((text(FABRICATED),), regen, (text(answer),)),
+        answer,
+        notes,
+    )
+
+
+async def _i1_state(pool, monkeypatch, tmp_path, *, its_own_kind: bool):
+    from tests.test_chat_deferral import _arm_web_search, _search_call
+
+    await _pair(pool)
+    reply = "The device is still offline."
+    if its_own_kind:
+        _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
+        answer = f"{DEVICE} is connected — it came back online."
+        regen = (call("device_info", {"device": DEVICE}, "r1"),)
+    else:  # the reviewer's X6
+        _arm_web_search(monkeypatch)
+        answer = "I looked this up on the web; I cannot say more about it from here."
+        regen = (_search_call("r1"),)
+    notes = (chat.STATE_REDIRECT_NOTE, chat.STATE_REDIRECT_NOTE_NO_CALL)
+    return (
+        "state_claim",
+        reply,
+        "is my dell up?",
+        ((text(reply),), regen, (text(answer),)),
+        answer,
+        notes,
+    )
+
+
+I1_KINDS = {"listing": _i1_listing, "state": _i1_state}
+
+
+@requires_db
+@pytest.mark.parametrize("its_own_kind", [True, False], ids=["its own kind", "another kind"])
+@pytest.mark.parametrize("kind", sorted(I1_KINDS))
+async def test_I1_a_note_naming_its_work_streams_only_when_the_guard_finds_it_done(
+    kind, its_own_kind, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    guard, reply, ask, rounds, answer, (doing, no_call) = await I1_KINDS[kind](
+        pool, monkeypatch, tmp_path, its_own_kind=its_own_kind
+    )
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, ask)
+
+    # A call reached its executor either way; only its kind differs.
+    assert len(await _reached_executor(pool)) == 1
+    assert _corrections(sent) == [doing if its_own_kind else no_call]
+    assert (no_call if its_own_kind else doing) not in json.dumps(sent, ensure_ascii=False)
+    # The regeneration stood: live is her prose, the note, then exactly what is
+    # stored; the note itself is live-only.
+    assert _texts(sent) == [reply, answer]
+    assert await _stored(pool) == answer
+    # The trace says why the note was chosen: the guard's own re-check.
+    (redirect,) = [
+        meta for meta in map(_meta, await _named(pool, guard)) if "redirect_tool_calls" in meta
+    ]
+    assert redirect["redirect_calls_reached"] == 1
+    assert redirect["claim_backed"] is its_own_kind
+
+
+@requires_db
+async def test_I1_a_recheck_that_raises_shows_the_no_call_note(
+    owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    """The re-check runs after the regeneration stood, outside the redirect's
+    own fail-open: if it raises, the note that claims nothing is shown, and the
+    turn still stands."""
+    guard, reply, ask, rounds, answer, (doing, no_call) = await _i1_listing(
+        pool, monkeypatch, tmp_path, its_own_kind=True
+    )
+
+    def raises(*args, **kwargs):
+        raise RuntimeError("re-check broke")
+
+    monkeypatch.setattr(chat, "_listing_claim_stands", raises)
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, ask)
+
+    assert _corrections(sent) == [no_call]
+    assert await _stored(pool) == answer
+    (redirect,) = [
+        meta for meta in map(_meta, await _named(pool, guard)) if "redirect_tool_calls" in meta
+    ]
+    assert redirect["claim_backed"] is False
+
+
+# M-1: a call that never reached an executor is not "X failed". The consent
+# correction read every tool span that was not refused, so a tool that does not
+# exist was "turn_on_light failed" — which says a turn_on_light exists.
+
+
+def test_M1_a_call_that_never_reached_its_executor_is_not_said_to_have_failed():
+    unknown = _span("turn_on_light", ok=False, reached_executor=False)
+    assert chat._consent_correction([unknown]) == guards.CONSENT_CLAIM_CORRECTION
+    failed = (
+        "Correction: there is no approval step — nothing is waiting on you. "
+        "This turn, device_run failed."
+    )
+    # An executor that ran and failed is said; so is a span with no record of
+    # it (absent is "not recorded", never "not reached").
+    for span in (
+        _span("device_run", ok=False, reached_executor=True),
+        _span("device_run", ok=False),
+    ):
+        assert chat._consent_correction([unknown, span]) == failed
+
+
+@requires_db
+async def test_M1_X1_a_tool_that_does_not_exist_is_never_said_to_have_failed(
+    owner_client, pool, mount_peers
+):
+    """The reviewer's X1: the consent redirect's regeneration names a tool that
+    does not exist, and its closing round repeats the pending claim, so the
+    correction persists — and says nothing ran, live and stored."""
+    from tests.test_chat_pending_claim import FABRICATION
+
+    assert "turn_on_light" not in tools.REGISTRY
+    rounds = (
+        (text(FABRICATION),),
+        (call("turn_on_light", {"room": "desk"}, "r1"),),
+        (text(FABRICATION),),
+    )
+    mount_peers(gateway=ScriptedGateway(rounds=rounds), memory=FakeMemory())
+
+    sent = await _say(owner_client, "turn on the desk light")
+
+    assert await _reached_executor(pool) == []
+    (span,) = await pool.fetch("SELECT name, meta FROM turn_spans WHERE kind = 'tool'")
+    assert (span["name"], _meta(span)["reached_executor"]) == ("turn_on_light", False)
+    stored = await _stored(pool)
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    assert _corrections(sent) == [stored]

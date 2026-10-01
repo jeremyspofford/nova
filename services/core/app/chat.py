@@ -1922,8 +1922,18 @@ def _consent_correction(spans: Sequence[traces.Span]) -> str:
     that ran is the backend's own false line. So when anything ran this turn
     the correction says what, and what failed, DERIVED from the spans
     (`_tool_outcomes`: a refused call never ran), and invites no retry of work
-    that may be done."""
-    ran, failed = _tool_outcomes(spans)
+    that may be done.
+
+    A call that never REACHED its executor — no such tool, arguments that
+    could not be read (`reached_executor` False, dispatch's own record) — is
+    left out too: it ran nothing, and "turn_on_light failed" says a tool exists
+    that does not. The redirect's live note reads the same fact (P6), so the
+    note and the correction cannot disagree about whether anything ran
+    (said-not-done final review, M-1). An absent key is "not recorded", never
+    "not reached", so only an explicit False is left out."""
+    ran, failed = _tool_outcomes(
+        [span for span in spans if (span.meta or {}).get("reached_executor") is not False]
+    )
     if not ran and not failed:
         return guards.CONSENT_CLAIM_CORRECTION
     pieces = []
@@ -2558,6 +2568,12 @@ async def _run_tool(
         record = reached if reached is not None else []
         reached_before = len(record)
         result, ok = await tools.dispatch(call.name, call.arguments, ctx, reached=record)
+        # Recorded HERE only, on the spans this function files. A tool span
+        # without the key — a call refused before dispatch (_refuse_call,
+        # _refuse_unknown_tool), a scripted step, a backend check run
+        # unasked, a call cut off mid-dispatch, any span filed before this
+        # existed — means "not recorded", never "not reached": read only
+        # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
@@ -3617,6 +3633,24 @@ def _state_claim_stands(
     return claim is not None and claim.device == subject
 
 
+def _listing_claim_stands(
+    text: str, turn: traces.Turn, listing_tools: Sequence[str], message: str
+) -> bool:
+    """Is the presented listing in `text` STILL unbacked, read over the turn's
+    spans as they are now? The listing guard's own check, re-asked exactly as it
+    first fired (the same reply, tools and message), so whether the listing
+    redirect's live note may say "Listing the files now" is the guard's call —
+    a call of another kind, a web search, leaves it unbacked (said-not-done
+    final review, I-1). Fail-open toward the claim: a check that raises reads
+    as still unbacked, so the note never claims a listing nobody confirmed."""
+    try:
+        claim = guards.presented_listing_check(text, turn.spans, listing_tools, message)
+    except Exception:
+        logger.exception("presented-listing re-check raised; reading the claim as unbacked")
+        return True
+    return claim is not None
+
+
 def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
     """Tool names THIS TURN she attempted (guards._attempted's own definition —
     round 3, D clarified: never a refused markup/closed-round call) and never
@@ -3917,6 +3951,7 @@ async def _claim_redirect(
     redirect_note: str,
     redirect_note_no_call: str,
     still_unbacked: Callable[[], bool] | None = None,
+    claim_backed: Callable[[], bool] | None = None,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
@@ -3948,6 +3983,13 @@ async def _claim_redirect(
     asked for: a call refused as text or naming no registered tool ran
     nothing, while one whose executor ran and failed was an attempt, and the
     append-class corrections state its failure (said-not-done P6, at the cap).
+    A note that names a KIND of work ("Checking the device now…", "Listing the
+    files now…") needs more than a call: `claim_backed` re-runs the
+    ORIGINATING guard on the ORIGINAL reply against the FINAL spans, and that
+    note streams only when it finds the claim now backed — a regeneration that
+    ran only a web search did not list the files or check the device
+    (said-not-done final review, I-1). None for a generic note (consent,
+    offer, bare intent): any call that reached an executor earns it (P6).
     `correction_text` is the correction, or a callable that states it from the
     spans at the moment it is shown (fix round 5, P5: the consent correction's
     "nothing has run" holds only while nothing has). `still_unbacked` (A9)
@@ -4161,7 +4203,19 @@ async def _claim_redirect(
             span.meta["regen_appended"] = [name for name, _ in appended]
         # "Doing it now" only beside a regeneration whose call REACHED a tool's
         # executor; otherwise the kind's own no-call note (C14; fix round 5, P6).
-        note = redirect_note if reached else redirect_note_no_call
+        # A note naming a kind of work also needs the originating guard to find
+        # its claim backed now — a call of another kind did not do that work
+        # (final review, I-1). Read once, and recorded: the trace says why. A
+        # re-check that raises falls to the no-call note, which claims nothing.
+        did_the_work = bool(reached)
+        if did_the_work and claim_backed is not None:
+            try:
+                did_the_work = bool(claim_backed())
+            except Exception:
+                logger.exception("%s re-check raised; showing the no-call note", claim_kind)
+                did_the_work = False
+            span.meta["claim_backed"] = did_the_work
+        note = redirect_note if did_the_work else redirect_note_no_call
         emit(_frame({"correction": note}))
         emit(_frame({"t": corrected}))
         for name, claim in appended:
@@ -5235,6 +5289,11 @@ async def _run_turn(
                     still_unbacked=lambda: _state_claim_stands(
                         text, turn, device_names, state_claim.device
                     ),
+                    # "Checking the device now" only when the state guard's
+                    # own re-check finds the device was read (I-1).
+                    claim_backed=lambda: (
+                        not _state_claim_stands(text, turn, device_names, state_claim.device)
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,
@@ -5349,6 +5408,11 @@ async def _run_turn(
                     nudge_for=lambda ran: presented_listing_redirect_nudge(ran_a_tool=ran),
                     redirect_note=PRESENTED_LISTING_REDIRECT_NOTE,
                     redirect_note_no_call=PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL,
+                    # "Listing the files now" only when the listing guard's
+                    # own re-check finds a listing ran (I-1).
+                    claim_backed=lambda: (
+                        not _listing_claim_stands(text, turn, listing_tools, message)
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,
