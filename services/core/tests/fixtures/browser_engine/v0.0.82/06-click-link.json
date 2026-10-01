@@ -1,0 +1,31 @@
+{
+  "step": "click-link",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_click",
+      "arguments": {
+        "target": "f3e4",
+        "element": "Page two link"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Ran Playwright code\n```js\nawait page.getByRole('link', { name: 'Page two' }).click();\n```\n### Page\n- Page URL: http://site:8000/page2.html\n- Page Title: Page two"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 6
+    }
+  ]
+}

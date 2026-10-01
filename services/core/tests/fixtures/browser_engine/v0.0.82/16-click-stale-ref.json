@@ -1,0 +1,31 @@
+{
+  "step": "click-stale-ref",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 16,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_click",
+      "arguments": {
+        "target": "e9999"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Error\nError: Ref e9999 not found in the current page snapshot. Try capturing new snapshot."
+          }
+        ],
+        "isError": true
+      },
+      "jsonrpc": "2.0",
+      "id": 16
+    }
+  ]
+}

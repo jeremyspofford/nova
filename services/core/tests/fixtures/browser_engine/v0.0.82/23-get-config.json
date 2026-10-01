@@ -1,0 +1,29 @@
+{
+  "step": "get-config",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 23,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_get_config",
+      "arguments": {}
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Error\nTool \"browser_get_config\" not found"
+          }
+        ],
+        "isError": true
+      },
+      "jsonrpc": "2.0",
+      "id": 23
+    }
+  ]
+}

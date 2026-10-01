@@ -1,0 +1,28 @@
+{
+  "step": "back",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_navigate_back",
+      "arguments": {}
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Ran Playwright code\n```js\nawait page.goBack();\n```\n### Page\n- Page URL: http://site:8000/index.html\n- Page Title: Capture index"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 7
+    }
+  ]
+}

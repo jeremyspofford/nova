@@ -1,0 +1,36 @@
+{
+  "step": "initialize",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-11-25",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "s38-capture",
+        "version": "0"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {
+          "tools": {
+            "listChanged": true
+          }
+        },
+        "serverInfo": {
+          "name": "Playwright",
+          "version": "1.64.0-alpha-1789764292000"
+        }
+      },
+      "jsonrpc": "2.0",
+      "id": 2
+    }
+  ]
+}

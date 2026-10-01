@@ -1,0 +1,30 @@
+{
+  "step": "navigate-404",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 21,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_navigate",
+      "arguments": {
+        "url": "http://site:8000/missing.html"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Ran Playwright code\n```js\nawait page.goto('http://site:8000/missing.html');\n```\n### Page\n- Page URL: http://site:8000/missing.html\n- Page Title: Error response\n- HTTP status: 404 File not found\n- Console: 1 errors, 0 warnings\n### Events\n- New console entries: /output/console-2026-09-30T20-25-35-315Z.log#L1"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 21
+    }
+  ]
+}
