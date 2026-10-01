@@ -1557,6 +1557,15 @@ async def test_the_fixture_code_can_never_enroll():
     assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
 
 
+async def test_the_fixture_mint_takes_a_repair_cards_keywords():
+    """S42b (Task 19): the seam is called (person, device_id=...) — a re-pair
+    card inside a case gets the fixture's code too, which can enroll nothing."""
+    minted = await runner._fixture_mint(None, device_id=uuid.uuid4())
+    from app import devices
+
+    assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
+
+
 async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monkeypatch):
     """A suite replays a case every run, and the repeated report reads
     several runs: a switch-off made in one replay must not be the world the

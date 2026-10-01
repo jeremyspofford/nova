@@ -393,7 +393,11 @@ async def stream(opened: OpenFile, chunk_size: int = CHUNK) -> AsyncIterator[byt
         opened.close()
 
 
-async def signed_manifest(pool) -> dict:
-    """The manifest, signed by core's own key over its canonical bytes."""
-    body = (await read()).manifest()
+async def signed_manifest(pool, build: Build | None = None) -> dict:
+    """`build`'s manifest — or, with none given, the current build's, read
+    once here — signed by core's own key over its canonical bytes. A caller
+    that describes a build beside its manifest passes the Build it read, so
+    what is signed is exactly what it describes (S42b Task 19: a second read
+    could find /dist/current flipped to another build)."""
+    body = (build if build is not None else await read()).manifest()
     return {"manifest": body, "sig": envelopes.sign(await devices.signing_key(pool), body)}

@@ -417,10 +417,11 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     )
 
 
-async def _fixture_mint(person) -> dict:
+async def _fixture_mint(person, **_kwargs) -> dict:
     """What show_setup_qr mints inside a case, instead of a real code (S47).
     The code is all zeros, and 0 is not in the pairing alphabet, so it can never
-    enroll a machine; nothing is written anywhere."""
+    enroll a machine; nothing is written anywhere. It takes the seam's keywords
+    (S42b: device_id, for a re-pair card) and binds nothing to anything."""
     expires = datetime.now(UTC) + timedelta(seconds=devices.PAIRING_CODE_TTL_SECONDS)
     return {"code": "00000000", "expires_at": expires.isoformat()}
 

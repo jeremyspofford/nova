@@ -34,7 +34,16 @@ from urllib.parse import unquote
 import httpx
 import pytest
 
-from app import agent_dist, agent_dist_api, devices, envelopes, identity, network
+from app import (
+    agent_card,
+    agent_dist,
+    agent_dist_api,
+    devices,
+    envelopes,
+    identity,
+    network,
+    platform_walks,
+)
 from app.main import app as core_app
 from tests.conftest import BASE_URL, SERVICE_TOKEN, requires_db
 from tests.fixtures import gen_manifest_golden
@@ -751,3 +760,128 @@ async def test_the_golden_manifest_novad_reads_is_what_core_signs_today():
         golden["public_key_hex"]
         == gen_manifest_golden.fixture_key().public_key().public_bytes_raw().hex()
     )
+
+
+# -- the card's commands on the public manifest (S42b Task 19, P18) -----------
+
+NOVA = "https://nova.fake-tailnet.ts.net"
+
+
+def _tailnet(tmp_path: Path, monkeypatch) -> None:
+    """The sidecar's status file, fresh: Nova's address is NOVA."""
+    status = tmp_path / "tailscale.json"
+    status.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "backend_state": "Running",
+                "dns_name": "nova.fake-tailnet.ts.net",
+                "serve_ok": True,
+                "https_cert": True,
+                "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+        )
+    )
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(status))
+
+
+@requires_db
+async def test_the_manifest_carries_the_commands_with_a_code_slot_and_the_walks(
+    client, dist, monkeypatch, tmp_path
+):
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(tmp_path / "absent.json"))
+    resp = await client.get("/api/v1/agent/manifest?origin=loopback")
+    body = resp.json()
+    assert (
+        "--hub http://127.0.0.1:3000" in body["commands"]["linux"]
+        and "{CODE}" in body["commands"]["windows"]
+    )
+    assert set(body["walks"]) == {"linux", "macos", "windows"} and body["version"] == VERSION
+    assert set(body["notes"]) == {"linux", "macos", "windows"}
+    # No tailnet: the loopback is the only locator the hub's own agent gets.
+    assert "install --hub http://127.0.0.1:3000 --code {CODE};" in body["commands"]["linux"]
+    assert body["commands_reason"] is None
+
+
+@requires_db
+async def test_the_manifests_commands_download_from_novas_address(
+    client, dist, monkeypatch, tmp_path
+):
+    _tailnet(tmp_path, monkeypatch)
+    body = (await client.get("/api/v1/agent/manifest")).json()
+    assert set(body["commands"]) == {"linux", "macos", "windows"}
+    for os_key, command in body["commands"].items():
+        assert f"{NOVA}/api/v1/agent/dist/novad-" in command, os_key
+        assert f"install --hub {NOVA} --code {{CODE}}" in command, os_key
+        assert "127.0.0.1" not in command, os_key
+    assert body["commands_reason"] is None
+    assert body["walks"] == platform_walks.statuses() and body["notes"] == agent_card.notes()
+
+
+@requires_db
+async def test_the_hub_machines_command_tries_its_loopback_then_the_tailnet(
+    client, dist, monkeypatch, tmp_path
+):
+    """?origin=loopback (F9): the command for the machine running the stack —
+    a WSL hub's Windows side — downloads through the hub's own door and is
+    given the tailnet after it, so that PC's agent reads Hub."""
+    _tailnet(tmp_path, monkeypatch)
+    body = (await client.get("/api/v1/agent/manifest?origin=loopback")).json()
+    for os_key, command in body["commands"].items():
+        assert "http://127.0.0.1:3000/api/v1/agent/dist/novad-" in command, os_key
+        assert f"install --hub http://127.0.0.1:3000 --hub {NOVA} --code {{CODE}}" in command, (
+            os_key
+        )
+
+
+@requires_db
+async def test_with_no_address_the_manifest_says_why_there_is_no_command(
+    client, dist, monkeypatch, tmp_path
+):
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(tmp_path / "absent.json"))
+    resp = await client.get("/api/v1/agent/manifest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["commands"] is None and body["commands_reason"] == network.NO_FILE
+    assert body["version"] == VERSION and set(body["walks"]) == {"linux", "macos", "windows"}
+    assert set(body) >= {"manifest", "sig"}
+
+
+@requires_db
+async def test_an_origin_the_manifest_does_not_know_is_refused(client, dist):
+    resp = await client.get("/api/v1/agent/manifest?origin=lan")
+    assert resp.status_code == 400 and "loopback" in resp.json()["error"]
+
+
+@requires_db
+async def test_the_manifest_signs_the_very_build_it_describes(
+    client, dist, pool, monkeypatch, tmp_path
+):
+    """Sign the build you read, once (Task 18's carry): the route reads the
+    build ONE time and signs exactly that Build. A second read could find
+    /dist/current flipped to another build, and the signed manifest would
+    then name one build while the version and the commands beside it name
+    another."""
+    _tailnet(tmp_path, monkeypatch)
+    first = agent_dist.current()
+    other = agent_dist.Build(
+        version="bbbbbbbbbbbb",
+        built_at=first.built_at,
+        go=first.go,
+        files={key: {**entry, "sha256": "b" * 64} for key, entry in first.files.items()},
+    )
+    reads: list = []
+
+    async def flipping() -> agent_dist.Build:
+        reads.append(1)
+        return first if len(reads) == 1 else other
+
+    monkeypatch.setattr(agent_dist, "read", flipping)
+    body = (await client.get("/api/v1/agent/manifest")).json()
+    assert len(reads) == 1
+    assert body["version"] == body["manifest"]["version"] == VERSION
+    assert envelopes.verify(await devices.core_public_key_hex(pool), body["manifest"], body["sig"])
+    for os_key, goos in (("linux", "linux"), ("macos", "darwin"), ("windows", "windows")):
+        for arch in ("amd64", "arm64"):
+            assert body["manifest"]["files"][f"{goos}-{arch}"]["sha256"] in body["commands"][os_key]
+    assert "b" * 64 not in json.dumps(body)

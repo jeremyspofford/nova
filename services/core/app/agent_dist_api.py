@@ -16,6 +16,11 @@ straight to core) neither buys a fresh budget nor spends another client's.
 
 A download streams from the open file agent_dist checked (agent_dist.stream):
 a response that completes is the manifest's bytes.
+
+The manifest also carries the card's one command per OS (S42b P18), with a
+{CODE} slot that /add and Settings fill in on the page — so it never carries
+a code — plus where each OS has been walked and each OS's note. The build is
+read ONCE and that very Build is both described and signed.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
-from app import agent_dist, db, network
+from app import agent_card, agent_dist, db, network, platform_walks
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
@@ -76,15 +81,41 @@ def _too_many(retry_after: int) -> HTTPException:
 
 
 @router.get("/manifest")
-async def manifest(request: Request) -> dict:
+async def manifest(request: Request, origin: str | None = None) -> dict:
+    if origin not in (None, "loopback"):
+        raise HTTPException(
+            status_code=400, detail="origin is loopback or left out — no other is known"
+        )
     wait = _admit(_client(request))
     if wait is not None:
         raise _too_many(wait)
     pool = await db.get_pool()
     try:
-        return await agent_dist.signed_manifest(pool)
+        build = await agent_dist.read()
     except agent_dist.DistUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # The build read above, signed as it is: never read a second time.
+    signed = await agent_dist.signed_manifest(pool, build)
+    got = network.address()
+    where, hubs = got.origin, None
+    if origin == "loopback":
+        # The machine running the stack (./install on a WSL hub prints the
+        # Windows command, F9): it downloads through the hub's own loopback
+        # door, and gets the tailnet origin behind it as a second locator.
+        where = agent_card.LOOPBACK
+        hubs = [agent_card.LOOPBACK, *([got.origin] if got.origin else [])]
+    return {
+        **signed,
+        "version": build.version,
+        "commands": (
+            agent_card.commands(build, origin=where, hubs=hubs, code=agent_card.CODE_SLOT)
+            if where
+            else None
+        ),
+        "commands_reason": None if where else got.reason,
+        "walks": platform_walks.statuses(),
+        "notes": agent_card.notes(),
+    }
 
 
 @router.get("/dist/{name}")

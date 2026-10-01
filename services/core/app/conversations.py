@@ -309,8 +309,17 @@ def _card_json(facts: object) -> dict | None:
 
     Built from the span's FACTS, which never carry a pairing code: a machine
     card comes back as "shown once", with its link and expiry and no code.
-    A span with no readable fact redraws nothing rather than a guessed card."""
-    fact = facts[0] if isinstance(facts, list) and facts and isinstance(facts[0], dict) else None
+    A span with no readable fact redraws nothing rather than a guessed card.
+
+    S42b: read from the first fact that names a setup; a machine card also
+    redraws which machine it re-paired, the OS it opened on and that OS's
+    walk, each when its fact states one. Only these keys are ever copied —
+    never a code, and never the commands, which carry it."""
+    fact = (
+        next((f for f in facts if isinstance(f, dict) and "setup" in f), None)
+        if isinstance(facts, list)
+        else None
+    )
     if fact is None:
         return None
     setup, address, url = fact.get("setup"), fact.get("address"), fact.get("url")
@@ -325,6 +334,9 @@ def _card_json(facts: object) -> dict | None:
     }
     if isinstance(fact.get("expires_at"), str):
         card["expires_at"] = fact["expires_at"]
+    for key in ("machine", "for_os", "walk"):
+        if isinstance(fact.get(key), str) and fact[key]:
+            card[key] = fact[key]
     return card
 
 
