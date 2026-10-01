@@ -2325,14 +2325,19 @@ for c in fact["containers"]:
 PY
 # browser (S38, 2026-10-01): containers-v4.json is refresh.sh's capture of
 # the real hub, which has not deployed the engine yet (Task 11 does), so the
-# fixture alone carries no id for it. Every id here is opaque plumbing for
-# bkt_ps/bkt_inspect to key on — never a claim about what is really
-# running, which BKT_RUNNING alone decides — so browser gets the same kind
-# of placeholder id the other seven already have, not a real one.
-printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
-  > "$BK_WORLD/svc/browser"
-printf 'browser' \
-  > "$BK_WORLD/id2svc/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+# fixture alone carries no id for it yet. The other EIGHT ids above are
+# CAPTURED from that fixture, not placeholders. This one is a placeholder
+# ONLY until a real one exists: guarded so that once Task 11 deploys the
+# engine and refreshes again, the loop above (a real browser container, a
+# real entry) is never overwritten by it. Either way the id is opaque
+# plumbing for bkt_ps/bkt_inspect to key on — never a claim about what is
+# really running, which BKT_RUNNING alone decides.
+[ -s "$BK_WORLD/svc/browser" ] || {
+  printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    > "$BK_WORLD/svc/browser"
+  printf 'browser' \
+    > "$BK_WORLD/id2svc/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
 
 # Two small binaries, so the SHIPPED dump script runs for real against them.
 cat > "$BK_WORLD/bin/pg_dump" <<'SH'

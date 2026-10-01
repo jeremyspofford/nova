@@ -80,10 +80,17 @@ def test_the_engine_runs_with_the_measured_flags():
 
 
 def test_the_healthcheck_wants_exactly_the_400_a_bare_get_measures():
+    # Pinned exactly, not by substring (fix round 2): a JS edit that ALSO
+    # accepts 403 ("r.status===400||r.status===403?0:1") still contains both
+    # substrings a looser check would look for, and would stay green.
     check = _service("browser")["healthcheck"]
-    assert check["test"][:3] == ["CMD", "node", "-e"]
-    assert "http://127.0.0.1:8931/mcp" in check["test"][3]
-    assert "r.status===400" in check["test"][3]
+    assert check["test"] == [
+        "CMD",
+        "node",
+        "-e",
+        "fetch('http://127.0.0.1:8931/mcp')"
+        ".then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))",
+    ]
 
 
 def test_the_profile_is_carried_and_the_output_is_not():
