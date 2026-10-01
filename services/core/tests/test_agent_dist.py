@@ -156,10 +156,26 @@ async def test_a_name_outside_the_build_is_not_public(client, dist):
 @requires_db
 async def test_downloads_are_rate_limited(client, dist, monkeypatch):
     monkeypatch.setattr(agent_dist_api, "RATE_PER_MINUTE", 2)
-    codes = [
-        (await client.get("/api/v1/agent/dist/novad-linux-amd64")).status_code for _ in range(3)
-    ]
-    assert codes == [200, 200, 429]
+    now = [1000.0]
+    monkeypatch.setattr(agent_dist_api, "_clock", lambda: now[0])
+
+    async def download() -> httpx.Response:
+        return await client.get("/api/v1/agent/dist/novad-linux-amd64")
+
+    answers = []
+    for step in (0.0, 10.4, 9.8):  # asked at 1000.0, 1010.4 and 1020.2
+        now[0] += step
+        answers.append(await download())
+    assert [a.status_code for a in answers] == [200, 200, 429]
+    # Fix round 1: Retry-After is the seconds until the oldest hit (1000.0)
+    # leaves this client's minute — 39.8, rounded up...
+    assert answers[2].headers["retry-after"] == "40"
+    # ...and never 0: half a second to go reads 1.
+    now[0] = 1059.5
+    late = await download()
+    assert late.status_code == 429 and late.headers["retry-after"] == "1"
+    now[0] = 1060.0  # the oldest hit has left the window
+    assert (await download()).status_code == 200
 
 
 @requires_db
@@ -349,6 +365,19 @@ def test_a_size_the_manifest_misstates_makes_the_build_unavailable(dist):
         (lambda m: m.update(version="bbbbbbbbbbbb"), "does not describe it"),
         (lambda m: m.update(files=[]), "does not describe it"),
         (lambda m: m["files"].pop("darwin-arm64"), "does not describe darwin-arm64"),
+        # Fix round 1: a file this core does not serve is refused, never dropped
+        # from what core signs — the reviewer's case (no such file on disk)...
+        (
+            lambda m: m["files"].update(
+                {"plan9-amd64": {"name": "novad-plan9-amd64", "sha256": "a" * 64, "size": 5}}
+            ),
+            "describes files this core does not serve",
+        ),
+        # ...and a well-formed entry whose file is there.
+        (
+            lambda m: m["files"].update({"linux-386": dict(m["files"]["linux-amd64"])}),
+            "describes files this core does not serve",
+        ),
         (lambda m: m["files"]["linux-amd64"].update(size=True), "does not describe linux-amd64"),
         (lambda m: m["files"]["linux-amd64"].update(size=-1), "does not describe linux-amd64"),
         (
@@ -606,6 +635,12 @@ def _to_dir(path: Path) -> None:
     path.mkdir()
 
 
+def _extra_entry(d: Path, key: str) -> None:
+    manifest = _manifest_of(d)
+    manifest["files"][key] = dict(manifest["files"]["linux-amd64"])
+    _write_manifest(d, manifest)
+
+
 BREAKAGES = {
     "no current pointer": lambda d: _unlink(d / "current"),
     "a current pointer that is a directory": lambda d: _to_dir(d / "current"),
@@ -619,6 +654,8 @@ BREAKAGES = {
     "a missing file": lambda d: _unlink(d / VERSION / "novad-linux-amd64"),
     "a file that is a directory": lambda d: _to_dir(d / VERSION / "novad-linux-amd64"),
     "a changed file": lambda d: (d / VERSION / "novad-linux-amd64").write_bytes(b"x" * 20),
+    # The keys are never echoed: this one is a host path.
+    "a manifest entry this core does not serve": lambda d: _extra_entry(d, str(d)),
 }
 
 

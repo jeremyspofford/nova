@@ -21,6 +21,7 @@ a response that completes is the manifest's bytes.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import deque
 
@@ -45,7 +46,11 @@ def _client(request: Request) -> str:
     return network.client_of(peer, request.headers.get("x-real-ip"))
 
 
-def _limited(client: str) -> bool:
+def _admit(client: str) -> int | None:
+    """Count this request against `client`'s minute and return None — or,
+    when its minute is spent, return the whole seconds until the oldest hit
+    in its window leaves it (rounded up, at least 1): the 429's Retry-After,
+    which a client that waits that long finds true (fix round 1)."""
     now = _clock()
     cutoff = now - WINDOW_SECONDS
     for key in list(_HITS):
@@ -56,22 +61,25 @@ def _limited(client: str) -> bool:
             del _HITS[key]
     hits = _HITS.setdefault(client, deque())
     if len(hits) >= RATE_PER_MINUTE:
-        return True
+        oldest = hits[0] if hits else now
+        return max(1, math.ceil(oldest + WINDOW_SECONDS - now))
     hits.append(now)
-    return False
+    return None
 
 
-def _too_many() -> HTTPException:
+def _too_many(retry_after: int) -> HTTPException:
     return HTTPException(
         status_code=429,
         detail="too many requests for Nova's agent in the last minute — try again shortly",
+        headers={"Retry-After": str(retry_after)},
     )
 
 
 @router.get("/manifest")
 async def manifest(request: Request) -> dict:
-    if _limited(_client(request)):
-        raise _too_many()
+    wait = _admit(_client(request))
+    if wait is not None:
+        raise _too_many(wait)
     pool = await db.get_pool()
     try:
         return await agent_dist.signed_manifest(pool)
@@ -83,8 +91,9 @@ async def manifest(request: Request) -> dict:
 async def dist_file(name: str, request: Request) -> StreamingResponse:
     if name not in agent_dist.FILE_NAMES:
         raise HTTPException(status_code=404, detail="no such agent build")
-    if _limited(_client(request)):
-        raise _too_many()
+    wait = _admit(_client(request))
+    if wait is not None:
+        raise _too_many(wait)
     try:
         opened = await asyncio.to_thread(agent_dist.open_file, name)
     except agent_dist.DistUnavailable as exc:

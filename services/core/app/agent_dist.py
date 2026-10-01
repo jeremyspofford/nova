@@ -87,6 +87,7 @@ def file_name(goos: str, arch: str) -> str:
 
 
 FILE_NAMES = frozenset(file_name(g, a) for g, a in TARGETS)
+_FILE_KEYS = frozenset(file_key(g, a) for g, a in TARGETS)
 # A served name back to its target: the one way a caller's name becomes a
 # file is this lookup — the path is then built from the target's own name.
 _TARGET_OF: dict[str, tuple[str, str]] = {file_name(g, a): (g, a) for g, a in TARGETS}
@@ -277,6 +278,13 @@ def _current(root: Path) -> Build:
         raise DistUnavailable(f"{what} is not version {MANIFEST_VERSION}, the one this core reads")
     if raw.get("version") != version or not isinstance(raw.get("files"), dict):
         raise DistUnavailable(f"{what} does not describe it")
+    # Exactly the six (fix round 1): an entry for a file this core does not
+    # serve is refused, never dropped from what core signs — a target set
+    # core and agent-dist disagree on is said here, not later as an
+    # unexplained "not the hub's build". The keys are the build's, and every
+    # reason is public, so none is echoed. A missing one is the loop's below.
+    if not set(raw["files"]) <= _FILE_KEYS:
+        raise DistUnavailable(f"{what} describes files this core does not serve")
     files = {}
     for goos, arch in TARGETS:
         key, name = file_key(goos, arch), file_name(goos, arch)
