@@ -1370,6 +1370,13 @@ async def _still_up(pool, conn: FakeWSConn, device_id) -> None:
         # is not text at all, which a NaN float demonstrates cheaply).
         ({"prev_hash": "x\x00"}, "prev_hash"),
         ({"prev_hash": float("nan")}, "prev_hash"),
+        # Fix round 2 (re-review of faabe935): a lone UTF-16 surrogate is
+        # valid JSON off the wire and a valid Python str, so it passed round
+        # 1's isinstance/NUL/length checks in _entry_problem untouched and
+        # reached a call site round 1 did not fix. Now caught here too (the
+        # same _text_problem both _entry_problem and _echoable_text share).
+        ({"prev_hash": "\ud800"}, "prev_hash"),
+        ({"summary": "\ud800"}, "summary"),
     ],
 )
 async def test_an_audit_entry_core_cannot_store_is_a_stated_break_and_the_session_stays_up(
@@ -1389,6 +1396,52 @@ async def test_an_audit_entry_core_cannot_store_is_a_stated_break_and_the_sessio
     )
     assert event is not None and named in event["meta"]["reason"]
     await _close(conn, task)
+
+
+async def test_a_mismatch_breaks_got_prev_is_never_echoed_when_it_is_a_lone_surrogate(
+    pool, monkeypatch
+):
+    """Fix round 2, direct test of the mismatch call site specifically.
+
+    In the real flow, _entry_problem (now fixed) catches a lone-surrogate
+    prev_hash before the mismatch branch is ever reached, which is exactly
+    why fix round 1's call-site fix alone did not show up as a reachable
+    gap in the normal path — only the re-reviewer's reachability probe,
+    which built the entry directly, found it. Monkeypatching _entry_problem
+    to pass everything through isolates the mismatch branch's OWN
+    _echoable_text filtering, so this test stays red if a future change
+    (to _entry_problem's field list, or any other new path into this
+    branch) ever revives the gap this round closes — the ruling's "no
+    future path can echo" made testable on its own, not only as a
+    byproduct of round 1's fix."""
+    device_id, _device = await _enroll(pool, name="pc")
+    monkeypatch.setattr(devices_ws, "_entry_problem", lambda entry: None)
+    # Built by hand, not via _entry(): that helper computes a real
+    # chain_hash over the entry, and chain_hash concatenates prev_hash as a
+    # raw Python string rather than JSON-escaping it, so a raw surrogate in
+    # prev_hash crashes hash construction itself — before ingest_audit ever
+    # sees it. The mismatch branch returns before this entry's own "hash"
+    # is ever read, so its value here is unchecked and arbitrary.
+    entry = {
+        "seq": 0,
+        "prev_hash": "\ud800",  # seq 0: expected_prev is "", so this mismatches
+        "ts": 1_790_000_000,
+        "envelope_id": "e0",
+        "capability": "shell.exec",
+        "summary": "ran, exit 0",
+        "ok": True,
+        "exit_code": 0,
+        "hash": "unchecked-the-mismatch-branch-returns-first",
+    }
+    res = await devices_ws.ingest_audit(pool, device_id, [entry])
+    assert res == {"stored": 0, "break": 0}
+    event = await pool.fetchrow(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",
+        governance.DEVICE_AUDIT_BREAK,
+        device_id,
+    )
+    assert event is not None
+    assert event["meta"]["got_prev"] is None
 
 
 async def test_a_batch_with_any_malformed_seq_stores_nothing_from_it(pool):

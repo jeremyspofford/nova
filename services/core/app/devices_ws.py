@@ -399,6 +399,34 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _text_problem(value: object) -> str | None:
+    """Why `value` is not text postgres can store or carry verbatim, or None.
+
+    Fix round 2 (re-review of faabe935): shared by _entry_problem (names the
+    field a problem belongs to) and _echoable_text (silently withholds an
+    unsafe value rather than naming why) so the two check exactly the same
+    shapes by construction. Fix round 1 added NUL/non-text/length checks to
+    both independently and missed a lone UTF-16 surrogate in BOTH — nothing
+    forced them to agree, so they drifted the same way at once. One
+    definition now; a future postgres-hostile shape found in either caller
+    is fixed for both. The UTF-8 encode is the real test for a surrogate:
+    json.dumps with ensure_ascii=True (envelopes.canonical) happily escapes
+    one to text without raising, so an isinstance/NUL/length check alone
+    never catches it — only an actual encode attempt does (the same probe
+    device_facts._encoded_size already uses, for the same reason)."""
+    if not isinstance(value, str):
+        return "is not text"
+    if "\x00" in value:
+        return "contains a NUL byte, which postgres cannot store"
+    if len(value) > _ENTRY_TEXT_MAX:
+        return f"is longer than {_ENTRY_TEXT_MAX} characters"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "contains an unpaired UTF-16 surrogate, which postgres cannot store"
+    return None
+
+
 def _entry_problem(entry: dict) -> str | None:
     """Why this audit entry cannot be stored as sent, or None."""
     seq = entry.get("seq")
@@ -416,12 +444,9 @@ def _entry_problem(entry: dict) -> str | None:
         value = entry.get(key)
         if value is None:
             continue
-        if not isinstance(value, str):
-            return f"{key} is not text"
-        if "\x00" in value:
-            return f"{key} contains a NUL byte, which postgres cannot store"
-        if len(value) > _ENTRY_TEXT_MAX:
-            return f"{key} is longer than {_ENTRY_TEXT_MAX} characters"
+        problem = _text_problem(value)
+        if problem is not None:
+            return f"{key} {problem}"
     return None
 
 
@@ -429,22 +454,11 @@ def _echoable_text(value: object) -> str | None:
     """`value` if a governance event can safely carry it verbatim, else None.
 
     Fix round 1 (review of 2c1fbef0): a break must never echo the exact
-    value that broke it. postgres refuses a NUL byte, a lone UTF-16
-    surrogate, and anything that is not text at all (a NaN float, say) in a
-    jsonb column — so putting an entry's raw `prev_hash` straight into the
+    value that broke it — putting an entry's raw field straight into the
     break's own meta or log line can make the RECORD of the break fail the
     same way the entry did, silently losing the device.audit_break event
-    the brief's Interfaces line promises. Same text bounds _entry_problem
-    checks for a field, plus an actual UTF-8 encode (the same probe
-    device_facts._encoded_size uses, for the same reason) to catch a lone
-    surrogate, which a plain `isinstance` and NUL check both miss."""
-    if not isinstance(value, str) or "\x00" in value or len(value) > _ENTRY_TEXT_MAX:
-        return None
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:
-        return None  # an unpaired UTF-16 surrogate — postgres refuses this too
-    return value
+    the brief's Interfaces line promises."""
+    return None if _text_problem(value) is not None else value
 
 
 async def _audit_break(
@@ -547,21 +561,29 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
             )
         if expected_prev is None:
             # seq-1 is neither stored nor earlier in this batch: a gap.
-            await _audit_break(pool, device_uuid, seq, None, got_prev)
+            await _audit_break(pool, device_uuid, seq, None, _echoable_text(got_prev))
             return {"stored": stored, "break": seq}
         if got_prev != expected_prev:
-            await _audit_break(pool, device_uuid, seq, expected_prev, got_prev)
+            await _audit_break(pool, device_uuid, seq, expected_prev, _echoable_text(got_prev))
             return {"stored": stored, "break": seq}
         recomputed = chain_hash(got_prev, without_hash)
         if recomputed != claimed_hash:
+            # Fix round 2: got_prev and claimed_hash (-> got_hash) are both
+            # device-supplied — every _audit_break call site that passes a
+            # device-supplied value passes it through _echoable_text, not
+            # just the one the re-review happened to cite (the ruling: "one
+            # rule for every site, so no future path can echo an unstorable
+            # value"). expected_prev/expected_hash are core's own ("" or a
+            # hash postgres already stored once, or one core just computed),
+            # never device-supplied, so neither is filtered.
             await _audit_break(
                 pool,
                 device_uuid,
                 seq,
                 expected_prev,
-                got_prev,
+                _echoable_text(got_prev),
                 expected_hash=recomputed,
-                got_hash=claimed_hash,
+                got_hash=_echoable_text(claimed_hash),
             )
             return {"stored": stored, "break": seq}
 
