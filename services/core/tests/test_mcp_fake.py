@@ -56,7 +56,7 @@ async def test_missing_request_meta_is_refused_by_name():
     assert response.json()["error"]["code"] == -32602
 
 
-async def test_a_legacy_fake_refuses_discovery_in_both_measured_shapes():
+async def test_a_legacy_fake_refuses_discovery_in_all_three_measured_shapes():
     home_assistant = fake.FakeServer(fake.FakeSpec(era="legacy", legacy_refusal="200"))
     response = await _post(home_assistant, _discover(), MODERN_HEADERS)
     assert response.status_code == 200 and response.json()["error"]["code"] == -32601
@@ -65,6 +65,11 @@ async def test_a_legacy_fake_refuses_discovery_in_both_measured_shapes():
     response = await _post(deepwiki, _discover(), MODERN_HEADERS)
     assert response.status_code == 400 and response.json()["error"]["code"] == -32600
     assert "Supported versions" in response.json()["error"]["message"]
+
+    playwright = fake.FakeServer(fake.FakeSpec(era="legacy", legacy_refusal="playwright"))
+    response = await _post(playwright, _discover(), MODERN_HEADERS)
+    assert response.status_code == 400 and response.json()["error"]["code"] == -32000
+    assert "not initialized" in response.json()["error"]["message"]
 
 
 async def test_a_legacy_fake_demands_the_session_it_handed_out():

@@ -15,11 +15,16 @@ engine with `call` directly. It speaks two eras of the protocol:
 
 Which era a server speaks is FOUND, once per endpoint per process, by the
 specification's own probe (2026-07-28 transports, "Backward Compatibility"):
-POST `server/discover`. A result, or a recognised modern error (-32020,
--32021 or -32022 on a 400; -32601 on a 404), means modern. Anything else —
+POST `server/discover`. A result that omits its supported versions, or
+names 2026-07-28 among them, means modern; so does a recognised modern
+error (-32020, -32021 or -32022 on a 400; -32601 on a 404). Anything else —
 an empty or unrecognised body, a JSON-RPC error inside an HTTP 200 (Home
-Assistant's /api/mcp), a 400 with -32600 (DeepWiki, probed 2026-09-30) —
-means legacy. 401 and 403 are neither: they refuse the credentials, and say so.
+Assistant's /api/mcp), a 400 with -32600 (DeepWiki, probed 2026-09-30) or
+-32000 (the Playwright MCP engine S38 drives, v0.0.82, measured 2026-10-01)
+— means legacy, spoken to through the `initialize` handshake below, never
+refused for being old. A result or a -32022 naming only OLDER versions
+follows the newest one named, through that same handshake. 401 and 403 are
+neither: they refuse the credentials, and say so.
 
 Hand-rolled on httpx rather than the official SDK: measured 2026-09-30,
 `mcp` 2.2.0 adds twelve packages to core including a second HTTP stack, and
@@ -87,10 +92,15 @@ _ids = itertools.count(1)
 class ClientError(Exception):
     """A call that could not be made, or that the server refused, in words.
 
-    `reachable` says whether the server answered at all. A refusal it SENT
-    (a 401, a JSON-RPC error) is reachable; a timeout or a refused connection
-    is not. The store stamps it on the row and the tools file it as a fact,
-    which is what the guards read."""
+    `reachable` says whether the server HAD the request: True means the
+    connection succeeded and the request was sent — a refusal it then SENT
+    BACK (a 401, a JSON-RPC error) is reachable, and so is a transport
+    failure or the deadline once sending began, because the call may or may
+    not have run. False means the server was never contacted at all, or
+    nothing was sent — a bad credential, an unsupported URL scheme, a
+    header this transport cannot encode, a failed connection. The store
+    stamps it on the row and the tools file it as a fact, which is what the
+    guards read."""
 
     def __init__(self, reason: str, *, reachable: bool) -> None:
         super().__init__(reason)
@@ -372,7 +382,14 @@ async def _detect(endpoint: Endpoint) -> _Era:
         if not isinstance(versions, list) or MODERN in versions:
             info = (result.get("_meta") or {}).get("io.modelcontextprotocol/serverInfo") or {}
             return _Era(modern=True, version=MODERN, title=_title(info))
+        # The probe answered and the server understood it, but 2026-07-28
+        # is not among what it lists: speak the newest it does, through the
+        # handshake below — the same case as the -32022 branch just after.
+        return await _initialize(endpoint, offer=_best_legacy(versions))
     code = _error_code(answer)
+    supported = _supported(answer)
+    if status == 400 and code == -32022 and supported is not None and MODERN not in supported:
+        return await _initialize(endpoint, offer=_best_legacy(supported))
     if (status == 400 and code in _MODERN_400_CODES) or (status == 404 and code == -32601):
         # A modern server that refused the discovery itself is still modern:
         # the calls after it will say what it wants.
@@ -382,11 +399,78 @@ async def _detect(endpoint: Endpoint) -> _Era:
             f"{endpoint.name} at {endpoint.origin} did not answer MCP {MODERN} discovery",
             reachable=True,
         )
-    raise ClientError(
-        f"{endpoint.name} at {endpoint.origin} does not answer MCP {MODERN} "
-        f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
-        reachable=True,
+    # An empty or unrecognised body, a JSON-RPC error inside a 200 (Home
+    # Assistant), a 400 with -32600 (DeepWiki) or -32000 (the Playwright MCP
+    # engine): nothing this probe recognises as modern. The spec's rule for
+    # all of it is the same — fall back to the handshake, never a refusal
+    # for being old — and the handshake itself says so in words if even
+    # THAT goes unanswered.
+    return await _initialize(endpoint, offer=LEGACY_OFFER)
+
+
+async def _initialize(endpoint: Endpoint, *, offer: str) -> _Era:
+    """The 2025-era handshake: initialize, then notifications/initialized,
+    and the session id the server may hand out, echoed on every later
+    request. `_detect`'s fallback for everything server/discover does not
+    answer as a 2026-07-28 server."""
+    message = {
+        "jsonrpc": "2.0",
+        "id": next(_ids),
+        "method": "initialize",
+        "params": {"protocolVersion": offer, "capabilities": {}, "clientInfo": CLIENT_INFO},
+    }
+    status, headers, answer, excerpt = await _post(endpoint, message, {}, timeout_s=PROBE_TIMEOUT_S)
+    if status in (401, 403):
+        raise ClientError(_refused(endpoint, status, answer, excerpt), reachable=True)
+    result = answer.get("result") if isinstance(answer, dict) else None
+    if not isinstance(result, dict):
+        raise ClientError(
+            f"{endpoint.name} at {endpoint.origin} is not an MCP server this client can speak "
+            f"to: it answered neither a {MODERN} discovery nor a {offer} initialize "
+            f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
+            reachable=True,
+        )
+    version = (
+        result.get("protocolVersion") if isinstance(result.get("protocolVersion"), str) else offer
     )
+    session = headers.get("mcp-session-id")
+    era = _Era(
+        modern=False, version=version, title=_title(result.get("serverInfo")), session=session
+    )
+    note = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    note_headers = {
+        "MCP-Protocol-Version": version,
+        **({"Mcp-Session-Id": session} if session else {}),
+    }
+    status, _headers, _answer, excerpt = await _post(
+        endpoint, note, note_headers, timeout_s=PROBE_TIMEOUT_S
+    )
+    if status is None or status >= 400:
+        # No answer at all is as much a refused handshake as a 4xx: either
+        # way the session this client just read from `initialize` is not
+        # one the server has confirmed, so nothing after this can be trusted.
+        raise ClientError(
+            f"{endpoint.name} refused the end of the handshake "
+            f"(HTTP {status}{': ' + excerpt if excerpt else ''})",
+            reachable=True,
+        )
+    return era
+
+
+def _best_legacy(versions: Any) -> str:
+    """The newest 2025-era version a server lists, or this client's own
+    offer when none of what it lists is a version this client knows."""
+    listed = [v for v in versions or () if v in KNOWN_LEGACY]
+    return max(listed) if listed else LEGACY_OFFER  # ISO-dated strings sort as dates
+
+
+def _supported(answer: dict | None) -> list | None:
+    """The list an error's `error.data.supported` carries (the -32022
+    shape), or None when there is no such list to read."""
+    error = answer.get("error") if isinstance(answer, dict) else None
+    data = error.get("data") if isinstance(error, dict) else None
+    supported = data.get("supported") if isinstance(data, dict) else None
+    return supported if isinstance(supported, list) else None
 
 
 # -- one request --------------------------------------------------------------
@@ -426,6 +510,14 @@ def _framed(
         headers["MCP-Protocol-Version"] = era.version
         if era.session:
             headers["Mcp-Session-Id"] = era.session
+        if want_progress:
+            # The same progressToken the modern branch sends in `_meta`,
+            # above — the legacy spec carries it the same way. This used to
+            # send no `_meta` at all, so a legacy call's progress callback
+            # was never driven; the fake's legacy progress is gated on it.
+            meta = dict(body["params"].get("_meta") or {})
+            meta["progressToken"] = str(body["id"])
+            body["params"]["_meta"] = meta
     return body, headers
 
 
@@ -627,6 +719,14 @@ async def _post(
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
         raise ClientError(
             f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
+            reachable=False,
+        ) from None
+    except (httpx.UnsupportedProtocol, httpx.LocalProtocolError) as exc:
+        # Raised building or framing the request — an unsupported URL scheme,
+        # a header this transport cannot encode — never once anything of it
+        # reached the wire, unlike every other exception caught below.
+        raise ClientError(
+            f"nothing was sent to {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
             reachable=False,
         ) from None
     except (TimeoutError, httpx.HTTPError):
@@ -869,11 +969,12 @@ def _as_result(endpoint: Endpoint, result: Mapping[str, Any]) -> CallResult:
                 # as a result with no content block at all.
                 notes.append("the server returned a content block that is not an object; skipped")
                 continue
-            saw_content = True
             kind = block.get("type")
             if kind == "text":
+                saw_content = True
                 parts.append(str(block.get("text", "")))
             elif kind in ("image", "audio"):
+                saw_content = True
                 size = len(str(block.get("data", ""))) * 3 // 4
                 noun = "an image" if kind == "image" else "audio"
                 notes.append(
@@ -881,8 +982,10 @@ def _as_result(endpoint: Endpoint, result: Mapping[str, Any]) -> CallResult:
                     f"{max(1, size // 1024)} KB), which is not read yet"
                 )
             elif kind == "resource_link":
+                saw_content = True
                 parts.append(f"[link] {block.get('name') or ''} {block.get('uri') or ''}".strip())
             elif kind == "resource":
+                saw_content = True
                 resource = block.get("resource") if isinstance(block.get("resource"), dict) else {}
                 if "text" in resource:
                     parts.append(str(resource["text"]))
@@ -891,8 +994,17 @@ def _as_result(endpoint: Endpoint, result: Mapping[str, Any]) -> CallResult:
                         f"the server returned an embedded binary resource "
                         f"({resource.get('uri', '?')}); not read"
                     )
-            else:
+            elif isinstance(kind, str) and kind:
+                # An unknown but NAMED kind (breaker ruling B): still content
+                # seen, for forward compatibility with a block type this
+                # client does not know about yet.
+                saw_content = True
                 notes.append(f"the server returned a {kind!r} block this client does not read")
+            else:
+                # No `type` at all, or not a string: never content seen — a
+                # {"text": "the real answer"} with no `type` key is as
+                # unreadable as a block that is not an object at all.
+                notes.append("the server returned a content block with no type; skipped")
     elif content is not None:
         # Present but not a list — a malformed shape, not a block the spec
         # defines. Noted (ruling R3-B: this used to be silently dropped

@@ -651,3 +651,96 @@ async def test_a_probe_after_a_read_timeout_during_discovery_does_not_crash():
     assert caught.value.reachable is True
     ids = [c["id"] for c in transport.calls if c["method"] == "server/discover"]
     assert len(ids) == 2 and ids[0] != ids[1]
+
+
+# -- Task 3 carries: pre-send classification, content kinds (breaker B) ------
+
+
+async def test_an_unsupported_url_scheme_is_refused_before_sending():
+    """httpx raises this from URL-scheme resolution, before any connection
+    is attempted — nothing was sent, same bucket as a connect failure, never
+    "may or may not have run"."""
+    with pytest.raises(client.ClientError) as caught:
+        await client.probe(client.Endpoint(name="srv", url="ftp://old.mcp.invalid/mcp"))
+    assert "nothing was sent" in caught.value.reason
+    assert caught.value.reachable is False
+
+
+async def test_a_header_the_transport_cannot_encode_is_refused_before_sending():
+    """A header NAME with a space is illegal HTTP/1.1 — h11 raises while
+    FRAMING the request, before any byte of it reaches the wire, and httpx
+    re-raises it as its own LocalProtocolError."""
+
+    class _IllegalHeaderName(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            raise httpx.LocalProtocolError("Illegal header name b'X Bad'")
+
+    handle = client.plant({ORIGIN: _IllegalHeaderName()})
+    try:
+        endpoint = client.Endpoint(name="srv", url=URL, headers={"X Bad": "v"})
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(endpoint)
+    finally:
+        client.unplant(handle)
+    assert "nothing was sent" in caught.value.reason
+    assert caught.value.reachable is False
+
+
+async def test_a_text_like_block_with_no_type_is_unreadable_not_empty():
+    """Task 2 breaker ruling B: a dict content block with no `type` key at
+    all is a note, never counted as content seen — it used to give an empty
+    success just because the block was an object."""
+
+    async def respond(sent):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": sent.get("id"),
+            "result": {"content": [{"text": "the real answer"}]},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "no readable content" in caught.value.reason
+
+
+async def test_an_empty_block_object_is_unreadable_not_empty_success():
+    async def respond(sent):
+        payload = {"jsonrpc": "2.0", "id": sent.get("id"), "result": {"content": [{}]}}
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert "no readable content" in caught.value.reason
+
+
+async def test_an_unknown_typed_block_is_read_as_noted_content():
+    """An unknown but NAMED kind is content seen, for forward compatibility —
+    unlike the typeless objects above: a future block type should not look
+    like a server refusing to say anything at all."""
+
+    async def respond(sent):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": sent.get("id"),
+            "result": {"content": [{"type": "weird"}]},
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        result = await client.call(client.Endpoint(name="srv", url=URL), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert result.notes and "weird" in result.notes[0]

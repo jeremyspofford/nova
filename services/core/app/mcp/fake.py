@@ -62,10 +62,13 @@ class FakeTool:
 class FakeSpec:
     title: str = "Fake MCP server"
     era: str = "modern"  # "modern" | "legacy"
-    # How a LEGACY fake refuses a 2026-07-28 server/discover — the two shapes
-    # measured in the wild: "200" is HTTP 200 carrying a JSON-RPC error (Home
-    # Assistant's /api/mcp, 2026.9); "400" is HTTP 400 with -32600 and a
-    # sentence listing its versions (DeepWiki, probed 2026-09-30).
+    # How a LEGACY fake refuses a 2026-07-28 server/discover — the three
+    # shapes measured in the wild: "200" is HTTP 200 carrying a JSON-RPC
+    # error (Home Assistant's /api/mcp, 2026.9); "400" is HTTP 400 with
+    # -32600 and a sentence listing its versions (DeepWiki, probed
+    # 2026-09-30); "playwright" is HTTP 400 with -32000 "Bad Request: Server
+    # not initialized" (the Playwright MCP engine, v0.0.82, measured
+    # 2026-10-01 — S38's own browser engine).
     legacy_refusal: str = "200"
     respond: str = "json"  # "json" | "sse"
     progress: bool = False  # sse only: a notifications/progress before each tools/call answer
@@ -205,6 +208,8 @@ class FakeServer:
                     f"Supported versions: {versions}"
                 )
                 return 400, _JSON, _error("server-error", -32600, message)
+            if self.spec.legacy_refusal == "playwright":
+                return 400, _JSON, _error(rid, -32000, "Bad Request: Server not initialized")
             return 200, _JSON, _error(rid, -32601, "Method not found")
         if method == "initialize":
             offered = params.get("protocolVersion")
