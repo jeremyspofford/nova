@@ -268,21 +268,26 @@ class FakeServer:
             result["structuredContent"] = canned["structured"]
         if modern:
             result["resultType"] = "complete"
-        return self._answer(rid, result, progress=self.spec.progress)
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        token = meta.get("progressToken") if self.spec.progress else None
+        return self._answer(rid, result, progress_token=token)
 
-    def _answer(self, rid, result, *, extra: dict | None = None, progress: bool = False):
+    def _answer(self, rid, result, *, extra: dict | None = None, progress_token: Any = None):
         response = {"jsonrpc": "2.0", "id": rid, "result": result}
         headers = dict(extra or {})
         if self.spec.respond != "sse":
             return 200, {**_JSON, **headers}, _dump(response)
         events: list[dict] = []
-        if progress:
+        if progress_token is not None:
+            # The spec sends progress only for a request that carried a
+            # token, and echoes that same token back — never one the server
+            # invents (this fake used to send str(rid) unconditionally).
             events.append(
                 {
                     "jsonrpc": "2.0",
                     "method": "notifications/progress",
                     "params": {
-                        "progressToken": str(rid),
+                        "progressToken": progress_token,
                         "progress": 1,
                         "total": 2,
                         "message": "halfway",

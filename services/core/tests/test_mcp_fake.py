@@ -120,3 +120,36 @@ async def test_an_unreachable_fixture_refuses_the_connection():
     async with httpx.AsyncClient(transport=fake.Unreachable()) as http:
         with pytest.raises(httpx.ConnectError):
             await http.post(URL, json={})
+
+
+async def test_progress_fires_only_when_the_request_carries_a_token_and_echoes_it():
+    """The spec sends notifications/progress only for a request whose _meta
+    carried a progressToken, echoing that same value — never one the server
+    invents (fix round 1, R2-6)."""
+    server = fake.FakeServer(
+        fake.FakeSpec(respond="sse", progress=True, tools=(fake.FakeTool("echo"),))
+    )
+    call_headers = {**MODERN_HEADERS, "Mcp-Method": "tools/call", "Mcp-Name": "echo"}
+
+    def events(response: httpx.Response) -> list[dict]:
+        lines = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+        return [json.loads(line) for line in lines]
+
+    no_token = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "echo", "arguments": {}, "_meta": META},
+    }
+    response = await _post(server, no_token, call_headers)
+    assert all(e.get("method") != "notifications/progress" for e in events(response))
+
+    with_token = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "echo", "arguments": {}, "_meta": {**META, "progressToken": "tok-1"}},
+    }
+    response = await _post(server, with_token, call_headers)
+    found = [e for e in events(response) if e.get("method") == "notifications/progress"]
+    assert len(found) == 1 and found[0]["params"]["progressToken"] == "tok-1"

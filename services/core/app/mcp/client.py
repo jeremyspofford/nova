@@ -49,7 +49,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
@@ -110,19 +110,39 @@ class RpcError(ClientError):
         self.data = data
 
 
-@dataclass(frozen=True, eq=False)
+def _normalize_origin(url: str) -> str:
+    """scheme://host:port — scheme and host lowercased, IPv6 bracketed, no
+    userinfo and no path (ruling R2-3). THE single derivation: `Endpoint.origin`
+    and `plant()` both go through this, so a plant's key always matches a
+    request's origin regardless of how either was cased or decorated, and
+    neither can carry a credential that rode in the URL's userinfo."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:  # urlsplit's .hostname strips IPv6 brackets; put them back
+        host = f"[{host}]"
+    port = f":{parts.port}" if parts.port is not None else ""
+    return f"{(parts.scheme or '').lower()}://{host}{port}"
+
+
+@dataclass(frozen=True, eq=False, repr=False)
 class Endpoint:
-    """Where a server is and what to send it. `name` is for sentences only."""
+    """Where a server is and what to send it. `name` is for sentences only.
+
+    `token`, `headers` and `url` never appear in `repr`/`str` (ruling R2-1):
+    a URL's path can itself be a secret (ha-mcp authenticates by a secret
+    path), so only `name` and the derived `origin` are ever shown."""
 
     name: str
     url: str
     token: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        return f"Endpoint(name={self.name!r}, origin={self.origin!r})"
+
     @property
     def origin(self) -> str:
-        parts = urlsplit(self.url)
-        return f"{parts.scheme}://{parts.netloc}"
+        return _normalize_origin(self.url)
 
 
 @dataclass(frozen=True)
@@ -167,7 +187,7 @@ def plant(transports: Mapping[str, httpx.AsyncBaseTransport]) -> Token:
     for this task and what it spawns. Returns the token `unplant` takes."""
     merged = dict(TRANSPORTS.get() or {})
     for origin, transport in transports.items():
-        merged[origin.rstrip("/")] = _Planted(transport, uuid.uuid4().hex)
+        merged[_normalize_origin(origin)] = _Planted(transport, uuid.uuid4().hex)
     return TRANSPORTS.set(merged)
 
 
@@ -315,7 +335,7 @@ async def call(
                 await list_tools(endpoint, refresh=True)
                 continue
             raise
-        return _as_result(result)
+        return _as_result(endpoint, result)
     raise AssertionError("unreachable: the loop returns or raises")
 
 
@@ -364,7 +384,14 @@ async def _detect(endpoint: Endpoint) -> _Era:
 # -- one request --------------------------------------------------------------
 
 
-def _framed(era: _Era, method: str, params: Mapping[str, Any], extra: Mapping[str, str] | None):
+def _framed(
+    era: _Era,
+    method: str,
+    params: Mapping[str, Any],
+    extra: Mapping[str, str] | None,
+    *,
+    want_progress: bool = False,
+):
     body = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": dict(params)}
     headers = dict(extra or {})
     if era.modern:
@@ -376,6 +403,11 @@ def _framed(era: _Era, method: str, params: Mapping[str, Any], extra: Mapping[st
                 "io.modelcontextprotocol/clientInfo": CLIENT_INFO,
             }
         )
+        if want_progress:
+            # The spec sends notifications/progress only for a request that
+            # carried this (ruling R2-6) — an unprefixed _meta key, unlike
+            # Nova's own namespaced ones above.
+            meta["progressToken"] = str(body["id"])
         body["params"]["_meta"] = meta
         headers["MCP-Protocol-Version"] = MODERN
         headers["Mcp-Method"] = method
@@ -407,7 +439,7 @@ async def _send(
     the server refused it outright, so nothing ran."""
     for attempt in (1, 2):
         era = await _era(endpoint)
-        message, headers = _framed(era, method, params, extra)
+        message, headers = _framed(era, method, params, extra, want_progress=progress is not None)
         status, _headers, answer, excerpt = await _post(
             endpoint, message, headers, timeout_s=timeout_s, progress=progress
         )
@@ -491,6 +523,36 @@ async def _send_call(endpoint, params, headers, *, timeout_s, progress) -> dict:
     )
 
 
+def _safe_credential(value: str) -> bool:
+    """Whether `value` can be sent as a header verbatim: visible ASCII, no
+    leading/trailing whitespace, no control characters (ruling R2-2) — the
+    same shape `header_value()` treats as plain. A credential that fails
+    this is refused outright, never silently re-encoded like a mirrored tool
+    argument, because Authorization and a caller's own extra headers are not
+    base64-sentinel aware on the other end."""
+    return value != "" and value == value.strip() and all(0x20 <= ord(ch) <= 0x7E for ch in value)
+
+
+def _check_credentials(endpoint: Endpoint) -> None:
+    """Refuse BEFORE sending anything when a credential cannot be a header
+    value, naming the header but never the value (ruling R2-2): httpx/h11
+    would otherwise quote a bad value verbatim in their own exception text —
+    e.g. a pasted token with a trailing newline — and `from exc` would carry
+    that into a traceback."""
+    if endpoint.token and not _safe_credential(endpoint.token):
+        raise ClientError(
+            f"{endpoint.name}'s token has characters a header cannot carry; nothing was sent",
+            reachable=False,
+        )
+    for key in endpoint.headers:
+        if not _safe_credential(endpoint.headers[key]):
+            raise ClientError(
+                f"{endpoint.name}'s header {key!r} has characters a header cannot carry; "
+                "nothing was sent",
+                reachable=False,
+            )
+
+
 async def _post(
     endpoint: Endpoint,
     message: dict,
@@ -500,8 +562,17 @@ async def _post(
     progress: Callable[[str], None] | None = None,
 ) -> tuple[int, httpx.Headers, dict | None, str]:
     """One POST: (status, response headers, the JSON-RPC response, or None and
-    an excerpt of a body that was not one). A transport failure or a timeout
-    raises ClientError(reachable=False)."""
+    an excerpt of a body that was not one).
+
+    A failure BEFORE any status arrived — refused credentials never sent
+    (`_check_credentials`), a refused connection, a connect-phase timeout, or
+    the deadline while still connecting — raises ClientError(reachable=False):
+    the server was never reached. A failure AFTER a status arrived (the
+    connection dropped mid-body, or the deadline during a slow read) is
+    reported exactly like a stream that closed cleanly without an answer —
+    (status, headers, None, "") — because the server WAS there and the call
+    may have run (ruling R2-4); the caller's own resend rule then applies."""
+    _check_credentials(endpoint)
     planted = _planted(endpoint.origin)
     sent = {
         "Accept": "application/json, text/event-stream",
@@ -513,6 +584,8 @@ async def _post(
         sent["Authorization"] = f"Bearer {endpoint.token}"
     want = message.get("id")
     raw = b""
+    status: int | None = None
+    response_headers: httpx.Headers = httpx.Headers()
     try:
         async with asyncio.timeout(timeout_s):
             async with httpx.AsyncClient(
@@ -523,21 +596,30 @@ async def _post(
                 async with http.stream(
                     "POST", endpoint.url, json=message, headers=sent
                 ) as response:
-                    kind = response.headers.get("content-type", "").split(";")[0].strip().lower()
                     status, response_headers = response.status_code, response.headers
+                    kind = response.headers.get("content-type", "").split(";")[0].strip().lower()
                     if kind == "text/event-stream":
                         answer = await _read_sse(endpoint, response, want, progress)
                         return status, response_headers, answer, ""
                     raw = await _read_capped(endpoint, response)
-    except TimeoutError as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        raise ClientError(
+            f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
+            reachable=False,
+        ) from None
+    except TimeoutError:
+        if status is not None:
+            return status, response_headers, None, ""
         raise ClientError(
             f"{endpoint.name} did not answer within {timeout_s:g} s", reachable=False
-        ) from exc
+        ) from None
     except httpx.HTTPError as exc:
+        if status is not None:
+            return status, response_headers, None, ""
         raise ClientError(
-            f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}: {exc}",
+            f"could not reach {endpoint.name} at {endpoint.origin} — {type(exc).__name__}",
             reachable=False,
-        ) from exc
+        ) from None
     text = raw.decode("utf-8", errors="replace")
     try:
         parsed = json.loads(text) if text.strip() else None
@@ -565,19 +647,45 @@ async def _read_capped(endpoint: Endpoint, response: httpx.Response) -> bytes:
     return bytes(body)
 
 
+_SSE_LINE_END = re.compile(rb"\r\n|\r|\n")
+
+
+async def _sse_lines(endpoint: Endpoint, response: httpx.Response) -> AsyncIterator[str]:
+    """Decoded lines of an SSE body, split only on CR, LF or CRLF — SSE's own
+    line ending, never the wider Unicode set `str.splitlines()`/httpx's
+    `aiter_lines()` use (U+2028, U+2029, U+0085), which are legal unescaped
+    inside a JSON string and would cut it open (ruling R2-5). Bytes are
+    counted as they arrive, including an unterminated buffered remainder, so
+    one huge line is refused as it streams rather than fully buffered first."""
+    buf = bytearray()
+    total = 0
+    async for chunk in response.aiter_bytes():
+        buf += chunk
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise ClientError(
+                f"{endpoint.name} streamed more than "
+                f"{MAX_RESPONSE_BYTES // (1024 * 1024)} MiB for one answer; stopped reading",
+                reachable=True,
+            )
+        while True:
+            match = _SSE_LINE_END.search(buf)
+            if match is None:
+                break
+            if match.group() == b"\r" and match.end() == len(buf):
+                break  # a lone trailing \r may be the start of \r\n; wait for more
+            yield bytes(buf[: match.start()]).decode("utf-8", errors="replace")
+            del buf[: match.end()]
+    if buf:
+        yield bytes(buf).decode("utf-8", errors="replace")
+
+
 async def _read_sse(endpoint, response, want, progress) -> dict | None:
     """The response whose id matches, from a stream scoped to one request.
     Progress notifications go to `progress`; comments and other events are
     skipped. None when the stream ends without the answer."""
     data: list[str] = []
-    seen = 0
-    async for line in response.aiter_lines():
-        seen += len(line) + 1
-        if seen > MAX_RESPONSE_BYTES:
-            raise ClientError(
-                f"{endpoint.name} streamed more than 4 MiB for one answer; stopped reading",
-                reachable=True,
-            )
+    async for line in _sse_lines(endpoint, response):
         if line == "":
             answer = _sse_event(data, want, progress)
             data = []
@@ -723,11 +831,20 @@ def _param_headers(schema: dict | None, arguments: Mapping[str, Any]) -> dict[st
     return out
 
 
-def _as_result(result: Mapping[str, Any]) -> CallResult:
+def _as_result(endpoint: Endpoint, result: Mapping[str, Any]) -> CallResult:
     parts: list[str] = []
     notes: list[str] = []
-    for block in result.get("content") or []:
+    content = result.get("content")
+    if not isinstance(content, list):
+        # Absent or a malformed shape, not a block the spec defines — not
+        # noted like one (ruling R2-7): read on, so a genuinely empty,
+        # well-shaped result (e.g. every block a kind this client doesn't
+        # read) can still succeed quietly below, while this one falls
+        # through to the "nothing readable at all" check and is refused.
+        content = []
+    for block in content:
         if not isinstance(block, dict):
+            notes.append("the server returned a content block that is not an object; skipped")
             continue
         kind = block.get("type")
         if kind == "text":
@@ -755,6 +872,14 @@ def _as_result(result: Mapping[str, Any]) -> CallResult:
     structured = result.get("structuredContent")
     if not parts and structured is not None:
         parts.append(json.dumps(structured, ensure_ascii=False, indent=1))
+    if not parts and not notes and structured is None and not result.get("isError"):
+        # Nothing to show, nothing to explain, and the server did not even
+        # say the call failed: the old shape here was an empty "success"
+        # (ruling R2-7) — never report one we did not establish.
+        raise ClientError(
+            f"{endpoint.name}'s result has no readable content and no structuredContent",
+            reachable=True,
+        )
     return CallResult(
         text="\n".join(parts),
         is_error=bool(result.get("isError")),
