@@ -1,7 +1,7 @@
 {
   "v": 1,
   "rows": [
-    {"os": "linux", "arch": "amd64", "mode": "systemd-user", "role": "hands", "slice": "S5", "walked_at": "2026-09-03"},
+    {"os": "linux", "arch": "amd64", "mode": "systemd-user", "role": "hands", "slice": "S42b", "walked_at": null},
     {"os": "linux", "arch": "arm64", "mode": "systemd-user", "role": "hands", "slice": "S42b", "walked_at": null},
     {"os": "darwin", "arch": "amd64", "mode": "launch-agent", "role": "hands", "slice": "S42b", "walked_at": null},
     {"os": "darwin", "arch": "arm64", "mode": "launch-agent", "role": "hands", "slice": "S42b", "walked_at": null},

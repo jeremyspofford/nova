@@ -16,6 +16,7 @@ read back only for reporting.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import json
 import uuid
@@ -1564,6 +1565,215 @@ async def test_the_fixture_mint_takes_a_repair_cards_keywords():
     from app import devices
 
     assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
+
+
+# -- S42b fix round 1: a machine card in a replay reads nothing real ---------
+
+REPLAY_ORIGIN = "https://nova.fake-tailnet.ts.net"
+
+
+def _tailnet_status(tmp_path, monkeypatch) -> None:
+    status = tmp_path / "tailscale.json"
+    status.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "backend_state": "Running",
+                "dns_name": "nova.fake-tailnet.ts.net",
+                "serve_ok": True,
+                "https_cert": True,
+                "written_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+    )
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(status))
+
+
+def _card_case(*declared: FixtureDevice, cid: str) -> Case:
+    return Case(
+        id=cid,
+        suite="corpus",
+        suite_version=1,
+        message="add my machine",
+        contract=(PredicateSpec("tool_called", "show_setup_qr"),),
+        devices=tuple(declared),
+    )
+
+
+def _card_turn(arguments: dict) -> ScriptedGateway:
+    return ScriptedGateway(
+        rounds=(
+            (_call("show_setup_qr", "c1", arguments),),
+            (text("The card is in the chat."),),
+        )
+    )
+
+
+def _show_setup_qr_recorded(monkeypatch) -> list[dict]:
+    """show_setup_qr — its real schema and its REAL executor — run inside the
+    replayed turn, with what it sent, said or refused recorded, and the pairing
+    seam's keywords. While it runs, a read of the real devices table or of the
+    hub's real build is an alarm: a replay's card reads neither."""
+    from app import agent_dist, devices
+    from app.tools import setup as setup_tools
+
+    seen: list[dict] = []
+    inside = [False]
+
+    def alarm(module, name: str, what: str) -> None:
+        real = getattr(module, name)
+
+        async def guarded(*args, **kwargs):
+            if inside[0]:
+                raise AssertionError(f"a replay's machine card read {what}")
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, guarded)
+
+    alarm(devices, "rows_with_last_update", "the real devices table")
+    alarm(devices, "get_live_by_name", "the real devices table")
+    alarm(agent_dist, "read", "the hub's real agent build")
+
+    live = tools.REGISTRY["show_setup_qr"]
+
+    async def recording(args: dict, ctx: ToolContext) -> str:
+        cards: list = []
+        minted: list = []
+        mint = setup_tools.PAIRING.get()
+
+        async def seeing_mint(person, **kw) -> dict:
+            minted.append(kw)
+            return await mint(person, **kw)
+
+        token = setup_tools.PAIRING.set(seeing_mint)
+        inside[0] = True
+        try:
+            said = await setup_tools.show_setup_qr(
+                args, dataclasses.replace(ctx, card=cards.append)
+            )
+        except Exception as exc:
+            seen.append({"refused": str(exc), "cards": cards, "minted": minted})
+            raise
+        finally:
+            inside[0] = False
+            setup_tools.PAIRING.reset(token)
+        seen.append({"said": said, "cards": cards, "minted": minted, "mint": mint})
+        return said
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "show_setup_qr",
+        Tool(live.name, live.description, live.parameters, recording),
+    )
+    return seen
+
+
+async def test_a_replays_machine_card_needs_no_build_on_the_hub(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(a) A case's machine card is built from the replay's own build —
+    machines.FIXTURE_HUB_VERSION, the build its agents are compared with
+    (F11) — so a hub with no /dist at all still makes the case's card, and
+    the hub's real build is never read (an alarm here)."""
+    from app import agent_card, agent_dist
+
+    _tailnet_status(tmp_path, monkeypatch)
+    monkeypatch.setenv(agent_dist.DIST_DIR_ENV, str(tmp_path / "no-dist"))
+    seen = _show_setup_qr_recorded(monkeypatch)
+    mount_peers(gateway=_card_turn({"setup": "add_machine"}), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _card_case(cid="replay-card"), MODEL)
+
+    assert run.ungradeable is False, run.detail
+    [call] = seen
+    assert "said" in call, call
+    [card] = call["cards"]
+    fixture = await runner._fixture_build()
+    assert fixture.version == machines.FIXTURE_HUB_VERSION == card["version"]
+    assert card["code"] == "0000-0000" and call["mint"] is runner._fixture_mint
+    assert card["commands"] == agent_card.commands(fixture, origin=REPLAY_ORIGIN, code="0000-0000")
+
+
+async def test_a_replay_repairs_a_machine_the_case_declares(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(b) A re-pair card inside a replay resolves the machine through
+    machines.plant() — the case's declared device — reads no real row, and
+    binds nothing (the fixture's code, no device id)."""
+    _tailnet_status(tmp_path, monkeypatch)
+    seen = _show_setup_qr_recorded(monkeypatch)
+    case = _card_case(
+        FixtureDevice(name="eval_office_pc", platform="windows", hostname="OFFICE-PC"),
+        cid="replay-repair",
+    )
+    mount_peers(
+        gateway=_card_turn({"setup": "add_machine", "machine": "eval_office_pc"}),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is False, run.detail
+    [call] = seen
+    assert "said" in call, call
+    [card] = call["cards"]
+    assert card["machine"] == "eval_office_pc" and card["for_os"] == "windows"
+    assert card["version"] == machines.FIXTURE_HUB_VERSION
+    assert "re-pairs eval_office_pc" in call["said"]
+    assert call["minted"] == [{"device_id": None}]
+
+
+async def test_a_replays_refusal_never_names_a_real_machine(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(c) A real paired machine is not in a replay's world: asked for a
+    machine the case does not declare, the refusal lists the case's devices
+    alone — and the real machine itself cannot be re-paired from a replay."""
+    from tests.test_devices_ws import _enroll
+
+    _tailnet_status(tmp_path, monkeypatch)
+    await _enroll(pool, name="OFFICE-PC", platform="windows")
+    seen = _show_setup_qr_recorded(monkeypatch)
+    case = _card_case(
+        FixtureDevice(name="eval_travel_macbook", platform="darwin", hostname="TRAVEL-MACBOOK"),
+        cid="replay-refusal",
+    )
+    for asked in ("nope", "OFFICE-PC"):
+        mount_peers(
+            gateway=_card_turn({"setup": "add_machine", "machine": asked}),
+            memory=FakeMemory(),
+        )
+        run = await runner.run_case(app, pool, case, MODEL)
+        assert run.ungradeable is False, run.detail
+
+    nope, real = seen
+    for call in (nope, real):
+        assert call["cards"] == [] and call["minted"] == [], call
+        _, listing = call["refused"].split(" — ", 1)
+        assert listing.startswith("the paired machines are: eval_travel_macbook;"), call
+        assert "OFFICE-PC" not in listing
+    assert "OFFICE-PC" not in nope["refused"]
+
+
+async def test_every_case_reads_the_fixture_build_and_leaves_the_seam_as_it_was(
+    pool, mount_peers, monkeypatch
+):
+    """The build seam, beside the pairing seam: inside a case's turn it is
+    the fixture; after the case it is what it was before."""
+    from app.tools import setup as setup_tools
+
+    before = setup_tools.BUILD.get()
+    seen: list = []
+
+    async def peek(args: dict, ctx: ToolContext) -> str:
+        seen.append(setup_tools.BUILD.get())
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, peek)
+    mount_peers(gateway=_time_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _machine_case(), MODEL)
+
+    assert run.passed is True, run.detail
+    assert seen == [runner._fixture_build]
+    assert setup_tools.BUILD.get() is before
 
 
 async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monkeypatch):

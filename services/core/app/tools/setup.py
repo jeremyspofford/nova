@@ -21,6 +21,11 @@ re-pair card — the code is bound to that paired machine's row, which keeps
 its name and history — and `for_os` opens it on one OS; her result says
 where that OS has been walked on real hardware (platform_walks), never more.
 
+Inside an eval replay a card reads nothing real: the build comes through
+BUILD (runner._fixture_build, the replay's one hub build) beside PAIRING
+(runner._fixture_mint), and `machine` is resolved through machines.plant(),
+whose replay overlay answers with the case's declared devices alone.
+
 Neither is an approval of anything (owner ruling 2026-09-03). A setup that
 cannot be shown — no address another device can reach, no chat to show it in,
 a mint that failed — says it cannot and why, and sends nothing.
@@ -35,7 +40,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 
-from app import agent_card, agent_dist, db, devices, native_app, network, platform_walks
+from app import agent_card, agent_dist, db, devices, machines, native_app, network, platform_walks
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 logger = logging.getLogger("core")
@@ -78,6 +83,20 @@ async def _mint_for(person, *, device_id=None) -> dict:
 # The seam an eval replay swaps (machines.PLANT's pattern): a turn inside a case
 # must never mint a code that could enroll a real machine.
 PAIRING: ContextVar[Mint] = ContextVar("setup_pairing", default=_mint_for)
+
+
+async def _read_build() -> agent_dist.Build:
+    """The real reader: the hub's current agent build, every file checked."""
+    return await agent_dist.read()
+
+
+# The build a machine card is made from — the seam an eval replay swaps
+# beside PAIRING (S42b fix round 1): a card made inside a case reads the
+# replay's own build (runner._fixture_build), never the hub's, so one replay
+# names one hub build (F11) and a hub with no build still makes its card.
+BUILD: ContextVar[Callable[[], Awaitable[agent_dist.Build]]] = ContextVar(
+    "setup_build", default=_read_build
+)
 
 
 def _dashed(code: str) -> str:
@@ -158,7 +177,7 @@ async def send_machine_card(
         raise ToolFailure("cannot show a setup QR: this turn has no chat to show it in")
     # The build first (F4): a card that cannot carry a command mints no code.
     try:
-        build = await agent_dist.read()
+        build = await BUILD.get()()
     except agent_dist.DistUnavailable as exc:
         raise ToolFailure(
             f"cannot show a pairing card: the hub has no agent build to install — {exc}"
@@ -231,17 +250,21 @@ def _given(args: dict, key: str) -> str | None:
     return str(value).strip() or None
 
 
-async def _paired_machine(name: str):
-    """The live machine named `name` (as device_list shows it), or a stated
-    refusal naming the ones there are — what she needs to try again herself."""
-    pool = await db.get_pool()
-    row = await devices.get_live_by_name(pool, name)
-    if row is not None:
-        return row
-    names = [r["name"] for r in await devices.rows_with_last_update(pool, live_only=True)]
-    paired = f"the paired machines are: {', '.join(names)}" if names else "no machine is paired yet"
+async def _paired_machine(app, name: str) -> dict:
+    """The paired machine named `name` (as device_list shows it), read through
+    machines.plant(): core's live device rows — or, inside an eval replay, the
+    case's declared devices alone, never a real one. Else a stated refusal
+    naming the ones there are, which is what she needs to try again herself."""
+    paired = await machines.plant().paired_machines(app)
+    for machine in paired:
+        if machine["name"] == name:
+            return machine
+    names = [machine["name"] for machine in paired]
+    listing = (
+        f"the paired machines are: {', '.join(names)}" if names else "no machine is paired yet"
+    )
     raise ToolFailure(
-        f"no paired machine named {name!r} — {paired}; a re-pair card is for a paired "
+        f"no paired machine named {name!r} — {listing}; a re-pair card is for a paired "
         "machine — omit machine and the card adds a new one"
     )
 
@@ -259,7 +282,7 @@ async def show_setup_qr(args: dict, ctx: ToolContext) -> str:
     if for_os is not None and for_os not in FOR_OS:
         raise ToolFailure(f"for_os must be one of {', '.join(FOR_OS)}")
     if setup in MACHINE_SETUPS:
-        machine_row = await _paired_machine(machine) if machine is not None else None
+        machine_row = await _paired_machine(ctx.app, machine) if machine is not None else None
         fact = await send_machine_card(ctx, setup=setup, machine_row=machine_row, for_os=for_os)
         if ctx.facts_sink is not None:
             ctx.facts_sink.append(fact)

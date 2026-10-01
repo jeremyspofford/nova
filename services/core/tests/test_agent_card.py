@@ -211,12 +211,14 @@ def test_the_windows_command_is_powershell_5_1_and_checks_before_it_runs():
 
 
 # The Windows line, whole (F10: pwsh parses it in CI, Task 30; here its text is
-# the pin, so any change to it is a deliberate one).
+# the pin, so any change to it is a deliberate one). Fix round 1 moved it: the
+# arch is the MACHINE's, PROCESSOR_ARCHITEW6432 first.
 WINDOWS_LINE = (
     "$d=Join-Path $env:TEMP ('nova-'+[guid]::NewGuid()); "
     "$null=New-Item -ItemType Directory -Path $d; "
-    "try { $a=@{AMD64='amd64';ARM64='arm64'}[$env:PROCESSOR_ARCHITECTURE]; "
-    'if(-not $a){throw "cannot: Nova\'s agent has no build for $env:PROCESSOR_ARCHITECTURE"}; '
+    "try { $p=$env:PROCESSOR_ARCHITEW6432; if(-not $p){$p=$env:PROCESSOR_ARCHITECTURE}; "
+    "$a=@{AMD64='amd64';ARM64='arm64'}[$p]; "
+    'if(-not $a){throw "cannot: Nova\'s agent has no build for $p"}; '
     "$h=@{amd64='<AMD>';arm64='<ARM>'}[$a]; $f=Join-Path $d 'novad.exe'; "
     "curl.exe -fsSL -o $f "
     '"https://nova.fake-tailnet.ts.net/api/v1/agent/dist/novad-windows-$a.exe"; '
@@ -235,6 +237,20 @@ def _windows_build() -> agent_dist.Build:
     files["windows-amd64"] = {**files["windows-amd64"], "sha256": "1" * 64}
     files["windows-arm64"] = {**files["windows-arm64"], "sha256": "2" * 64}
     return agent_dist.Build(version=build.version, built_at="", go="", files=files)
+
+
+def test_the_windows_command_reads_the_machines_arch_not_a_32_bit_shells():
+    """Fix round 1: a 32-bit PowerShell on x64 or ARM64 Windows (SysWOW64)
+    reads PROCESSOR_ARCHITECTURE as x86, so the line would say "no build for
+    x86" on a machine that has one. PROCESSOR_ARCHITEW6432 holds the
+    machine's own arch there; it is read first, and the native value only
+    when it is unset — with no && or || (PowerShell 5.1)."""
+    cmd = agent_card.commands(_build("a" * 64), origin=ORIGIN, code="ABCD-2345")["windows"]
+    reads = "$p=$env:PROCESSOR_ARCHITEW6432; if(-not $p){$p=$env:PROCESSOR_ARCHITECTURE}; "
+    assert reads in cmd
+    assert cmd.index(reads) < cmd.index("$a=@{AMD64='amd64';ARM64='arm64'}[$p]")
+    assert "[$env:PROCESSOR_ARCHITECTURE]" not in cmd
+    assert 'throw "cannot: Nova\'s agent has no build for $p"' in cmd
 
 
 def test_the_windows_command_is_exactly_this_line():

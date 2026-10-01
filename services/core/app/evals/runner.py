@@ -86,6 +86,14 @@ Three properties are enforced mechanically, not by intention:
     every other frame. There is no orphan sweep for it because there is nothing
     to orphan.
 
+    THE BUILD FIXTURE (S42b fix round 1), beside it. A machine card carries a
+    command per OS made from the hub's agent build; inside a case it is made
+    from runner._fixture_build instead — machines.FIXTURE_HUB_VERSION, the
+    one hub build a replay names (F11), with sums no download can match — so
+    no case reads /dist, and a hub with no build still makes the case's card.
+    A re-pair card's `machine` is read through the plant, whose replay
+    overlay answers with the case's declared devices alone, never a real one.
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -142,6 +150,7 @@ startup (a fresh process runs no jobs by construction), one WARNING per row.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shutil
@@ -155,7 +164,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agents, chat, devices, machines, peers, settings_store, skills, traces
+from app import agent_dist, agents, chat, devices, machines, peers, settings_store, skills, traces
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
@@ -431,6 +440,34 @@ def _install_fixture_pairing() -> Token:
     back the token that removes it. A ContextVar, like the plant: the turn sees
     it, and nothing else in the process ever does."""
     return setup_tools.PAIRING.set(_fixture_mint)
+
+
+async def _fixture_build() -> agent_dist.Build:
+    """What a machine card reads inside a case, instead of the hub's agent
+    build (S42b fix round 1). Its version is machines.FIXTURE_HUB_VERSION —
+    the one hub build a replay names, the one its agents are compared with
+    (F11) — and its sums are of no build at all, so a command on a case's
+    card could install nothing, as its code (_fixture_mint) can enroll
+    nothing. Nothing is read from /dist: a hub with no build still makes the
+    case's card."""
+    files = {
+        agent_dist.file_key(goos, arch): {
+            "name": agent_dist.file_name(goos, arch),
+            "sha256": hashlib.sha256(
+                f"an eval fixture, not a build: {goos}-{arch}".encode()
+            ).hexdigest(),
+            "size": 0,
+        }
+        for goos, arch in agent_dist.TARGETS
+    }
+    return agent_dist.Build(version=machines.FIXTURE_HUB_VERSION, built_at="", go="", files=files)
+
+
+def _install_fixture_build() -> Token:
+    """Make _fixture_build THIS task's build seam for the turn, beside the
+    pairing seam, and hand back the token that removes it — the same
+    ContextVar discipline: the turn sees it, nothing else ever does."""
+    return setup_tools.BUILD.set(_fixture_build)
 
 
 async def _create_fixture_agents(
@@ -1019,6 +1056,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # None only until it is installed: a world that failed to build before it
     # leaves nothing.
     pairing_token: Token | None = None
+    # The case's build seam (S42b fix round 1), installed and reset beside the
+    # pairing seam: a machine card inside the case reads _fixture_build.
+    build_token: Token | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -1040,6 +1080,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             fixture_skills = await _build_fixture_skills(pool, case)
             plant_token = _install_fixture_plant(case)
             pairing_token = _install_fixture_pairing()
+            build_token = _install_fixture_build()
         except Exception as exc:
             logger.exception(
                 "eval run_case: the declared world for case %s could not be built", case.id
@@ -1186,6 +1227,8 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # fixture.
         if pairing_token is not None:
             setup_tools.PAIRING.reset(pairing_token)
+        if build_token is not None:
+            setup_tools.BUILD.reset(build_token)
 
         # The cleanup must not race the turn's queued ingest (/forget before
         # the journal is written leaves the journal behind). The settle above

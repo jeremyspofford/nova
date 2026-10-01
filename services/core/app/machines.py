@@ -171,6 +171,15 @@ class GatewayPlant:
             for row in rows
         ]
 
+    async def paired_machines(self, app) -> list[dict]:
+        """The paired machines a re-pair card can name (S42b): each live
+        device's id, name and platform, by name — core's own records, the
+        rows `agents` lists. FixturePlant answers with a replay's declared
+        devices alone."""
+        pool = await db.get_pool()
+        rows = await devices.rows_with_last_update(pool, live_only=True)
+        return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
+
 
 PLANT: ContextVar[GatewayPlant] = ContextVar("machines_plant", default=GatewayPlant())
 
@@ -375,6 +384,16 @@ class FixturePlant(GatewayPlant):
             out["build"] = device_facts.build_state(out.get("agent_version"), hub_version)
             declared.append(out)
         return real + declared
+
+    async def paired_machines(self, app) -> list[dict]:
+        """This replay's declared devices ALONE — never a real row (S42b fix
+        round 1): a card made inside a replay must not name a real machine,
+        list one, or bind a code to one. A declared device has no row, so no
+        id; the replay's code (runner._fixture_mint) binds nothing anyway."""
+        return [
+            {"id": None, "name": name, "platform": view["platform"]}
+            for name, view in sorted(self._devices.items())
+        ]
 
     async def engine(self, app, name: str) -> dict:
         if not self._mine(name):

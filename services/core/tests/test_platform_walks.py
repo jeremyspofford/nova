@@ -19,6 +19,15 @@ def test_every_target_has_a_row_of_the_right_shape():
         assert r["mode"] in {"systemd-user", "launch-agent", "run-key", "foreground"}
         assert r["role"] == "hands" and re.fullmatch(r"S\d+[a-z]?", r["slice"])
         assert r["walked_at"] is None or re.fullmatch(r"\d{4}-\d{2}-\d{2}", r["walked_at"])
+    # The walks on record, whole (fix round 1, a moved pin): S42a's Windows
+    # walk alone. S5's 2026-09-03 walk ran inside WSL2 on the Dell, which
+    # the card's Linux command cannot produce (since S42a an agent inside
+    # WSL is "cannot" and `novad enroll` refuses there), so no native Linux
+    # install has been walked; Task 32's mini PC walk dates the first.
+    walked = {
+        (r["os"], r["arch"], r["mode"], r["slice"], r["walked_at"]) for r in rows if r["walked_at"]
+    }
+    assert walked == {("windows", "amd64", "foreground", "S42a", "2026-09-28")}
 
 
 def test_a_mac_is_said_not_walked_and_windows_walked():
@@ -28,13 +37,13 @@ def test_a_mac_is_said_not_walked_and_windows_walked():
 
 
 def test_a_walked_os_names_the_walk_the_arch_and_the_mode():
-    """What was walked is said exactly, so it is never read as more: Linux on
-    amd64 under its systemd user unit (S5's DoD walk, slice-05-carries.md
-    "LIVE WALK 2026-09-03", the day novad moved to that unit), and Windows on
-    amd64 started by hand (S42a's walk; the Run key is S42b's, not walked
-    yet). An arm64 machine reads the arch and knows it was not that one."""
+    """What was walked is said exactly, so it is never read as more: Windows
+    on amd64 started by hand (S42a's walk; the Run key is S42b's, not walked
+    yet) — an arm64 machine reads the arch and knows it was not that one.
+    Linux reads not walked (fix round 1, a moved pin): S5's walk ran inside
+    WSL2, a configuration the card's Linux command cannot produce."""
     assert platform_walks.statuses() == {
-        "linux": "Linux: walked on real hardware (S5, 2026-09-03, amd64 as systemd-user)",
+        "linux": "Linux: built and tested in CI, not walked on Linux",
         "macos": "macOS: built and tested in CI, not walked on a Mac",
         "windows": "Windows: walked on real hardware (S42a, 2026-09-28, amd64 as foreground)",
     }

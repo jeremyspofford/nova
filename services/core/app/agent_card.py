@@ -100,8 +100,12 @@ def _powershell(build: Build, origin: str, hubs: Sequence[str], code: str | None
     return (
         "$d=Join-Path $env:TEMP ('nova-'+[guid]::NewGuid()); "
         "$null=New-Item -ItemType Directory -Path $d; "
-        "try { $a=@{AMD64='amd64';ARM64='arm64'}[$env:PROCESSOR_ARCHITECTURE]; "
-        'if(-not $a){throw "cannot: Nova\'s agent has no build for $env:PROCESSOR_ARCHITECTURE"}; '
+        # The MACHINE's arch: a 32-bit PowerShell on x64 or ARM64 Windows
+        # reads PROCESSOR_ARCHITECTURE as x86, and PROCESSOR_ARCHITEW6432
+        # holds the real one there (fix round 1).
+        "try { $p=$env:PROCESSOR_ARCHITEW6432; if(-not $p){$p=$env:PROCESSOR_ARCHITECTURE}; "
+        "$a=@{AMD64='amd64';ARM64='arm64'}[$p]; "
+        'if(-not $a){throw "cannot: Nova\'s agent has no build for $p"}; '
         f"$h=@{{amd64='{amd}';arm64='{arm}'}}[$a]; $f=Join-Path $d 'novad.exe'; "
         f'curl.exe -fsSL -o $f "{origin}/api/v1/agent/dist/novad-windows-$a.exe"; '
         "if($LASTEXITCODE -ne 0){throw 'the download failed'}; "
