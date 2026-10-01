@@ -18,13 +18,18 @@ behave; every property it holds is held by a statement:
     WHO is pairing — the person who minted the code — never what the machine
     may do. Enrollment and its governance event share a transaction, so a name
     collision rolls the burn back and the operator retries with the same code.
+  * re-pair (S42b decision 4) — a code minted for ONE live device rebinds that
+    row to the enrolling key instead of inserting one: name, owner and history
+    stay, and the audit epoch moves on in the same UPDATE that swaps the key.
+    The row is fixed when the code is minted; nothing the enrolling caller
+    sends can point it at another.
   * revoke — stamps revoked_at. get_live stops answering (which is how the
     hub refuses the socket), rename refuses, the name frees up, and the row
     stays so the audit trail survives the device.
 
 Refusals are raised as DeviceRefused carrying the reason and the status the API
 should state. They are deliberately exceptions rather than None returns: enroll
-alone has five distinct ways to be refused, and collapsing them into a single
+alone has several distinct ways to be refused, and collapsing them into a single
 falsy value would leave the operator reading "enrollment failed" while the
 actual cause — a name already taken — sits in nobody's output.
 """
@@ -50,6 +55,10 @@ PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_NAME_LENGTH = 64
 
+# D8: `hub` is the bundled engine's name, and machine_status groups engines
+# and agents by name — a device called hub would read as the engine.
+RESERVED_NAMES = frozenset({"hub"})
+
 # Refusing a rename on a revoked device is 409, not 410: the record is still
 # there and still listed (GET /devices shows it with revoked_at set), so "Gone"
 # would be a lie about the resource. The request conflicts with the device's
@@ -73,6 +82,8 @@ class DeviceRefused(Exception):
 # rows or none), and the UPDATE spends it. No row out means no valid code —
 # nothing is spent and nothing is enrolled. This is identity (which minted code
 # this machine holds), not permission: it decides who paired, never what runs.
+# It returns the code's binding (S42b): the one device a re-pair code rebinds,
+# or the name a new machine takes — both fixed when the code was minted.
 _BURN_CODE_SQL = """
 UPDATE pairing_codes SET used_at = now()
 WHERE id = (
@@ -83,13 +94,31 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, created_by
+RETURNING id, created_by, device_id, name
 """
 
 _INSERT_DEVICE_SQL = """
 INSERT INTO devices (name, platform, hostname, pubkey, owner_person)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING *
+"""
+
+# A re-pair (decision 4): the live row takes the new key, platform and host;
+# its reported facts and door clear (they described the old agent); the audit
+# epoch moves on so the new key's chain starts at seq 0. The CTE reads the old
+# key before the update, for the ledger. Key and epoch move in this ONE
+# statement, so no reader ever sees the new key on the old epoch or the
+# reverse — and a socket that authenticated against one row read holds a
+# matching pair (devices_ws). A row revoked since the code was minted matches
+# nothing, and enroll refuses.
+_REBIND_SQL = """
+WITH old AS (SELECT pubkey FROM devices WHERE id = $1 AND revoked_at IS NULL FOR UPDATE)
+UPDATE devices d
+   SET pubkey = $2, platform = $3, hostname = $4, facts = NULL, facts_at = NULL,
+       last_seen = NULL, last_transport = NULL, audit_epoch = d.audit_epoch + 1
+  FROM old
+ WHERE d.id = $1 AND d.revoked_at IS NULL
+RETURNING d.*, old.pubkey AS old_pubkey
 """
 
 
@@ -170,15 +199,50 @@ def hash_code(code: str) -> str:
     return hashlib.sha256(normalize_code(code).encode("utf-8")).hexdigest()
 
 
-async def mint_pairing_code(pool: asyncpg.Pool, *, created_by: uuid.UUID) -> dict:
-    """Mint a single-use code and return it in the clear — ONCE."""
+async def mint_pairing_code(
+    pool: asyncpg.Pool,
+    *,
+    created_by: uuid.UUID | None,
+    device_id: uuid.UUID | None = None,
+    name: str | None = None,
+) -> dict:
+    """Mint a single-use code and return it in the clear — ONCE.
+
+    `device_id` makes it a RE-PAIR code (S42b decision 4): whoever enrolls
+    with it within ten minutes becomes that live machine — its row, name and
+    history — under a new key. `name` is the name a NEW machine takes (a card
+    that names it); a re-pair keeps the row's own. `created_by` is None only
+    for ./install's hub agent before anyone has registered (devices_cli)."""
+    clean_name = None
+    if device_id is not None:
+        row = await pool.fetchrow("SELECT name, revoked_at FROM devices WHERE id = $1", device_id)
+        if row is None:
+            raise DeviceRefused(f"no device {device_id}", status_code=404)
+        if row["revoked_at"] is not None:
+            raise DeviceRefused(
+                f"{row['name']} was revoked — a revoked machine cannot be re-paired; pair it "
+                "again with a new code",
+                status_code=_REVOKED_STATUS,
+            )
+        if _reserved(row["name"]):
+            # A row named before D8 reserved the name: a re-pair keeps the
+            # row's name, so it would keep reading as the bundled engine.
+            raise DeviceRefused(
+                f"{row['name']!r} cannot be re-paired under that name — it is the bundled "
+                "engine's name (hub decision D8); rename the machine first, then re-pair it",
+                status_code=409,
+            )
+    elif name is not None:
+        clean_name = _clean_name(name)
     code = "".join(secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_LENGTH))
     expires_at = await pool.fetchval(
-        "INSERT INTO pairing_codes (code_hash, created_by, expires_at) "
-        "VALUES ($1, $2, now() + make_interval(secs => $3)) RETURNING expires_at",
+        "INSERT INTO pairing_codes (code_hash, created_by, expires_at, device_id, name) "
+        "VALUES ($1, $2, now() + make_interval(secs => $3), $4, $5) RETURNING expires_at",
         hash_code(code),
         created_by,
         PAIRING_CODE_TTL_SECONDS,
+        device_id,
+        clean_name,
     )
     return {"code": code, "expires_at": expires_at.isoformat()}
 
@@ -195,12 +259,23 @@ def _clean_pubkey(pubkey: str) -> str:
     return candidate
 
 
+def _reserved(name: str) -> bool:
+    """D8, defined once: a name that reads as the bundled engine's, however
+    it is cased or padded."""
+    return name.strip().casefold() in RESERVED_NAMES
+
+
 def _clean_name(name: str) -> str:
     candidate = (name or "").strip()
     if not candidate:
         raise DeviceRefused("a device needs a name — it is how you and Nova address the machine")
     if len(candidate) > _MAX_NAME_LENGTH:
         raise DeviceRefused(f"device name is longer than {_MAX_NAME_LENGTH} characters")
+    if _reserved(candidate):
+        raise DeviceRefused(
+            f"a machine cannot be named {candidate!r} — that is the bundled engine's name "
+            "(hub decision D8); name it after the machine itself"
+        )
     return candidate
 
 
@@ -231,13 +306,23 @@ async def enroll(
     platform: str,
     hostname: str,
 ) -> dict:
-    """Spend a pairing code to bind this key to this name, and hand back core's
+    """Spend a pairing code to bind this key to a machine, and hand back core's
     own key so each side has pinned the other.
 
-    Shape validation happens BEFORE the burn, so a mistyped key does not cost
-    the operator their code. Everything after the burn shares one transaction
-    with the governance event, so a name collision (caught from the partial
-    unique index — a pre-SELECT would be a race) rolls the burn back too.
+    What the code was minted for decides which machine (S42b). A re-pair code
+    rebinds its one live row — name, owner and history kept, the audit epoch
+    moved on — and says so (`repaired`). Any other code inserts a new row,
+    named by the code when it carries a name and by the agent otherwise
+    (P14). The agent's name is checked only when it IS the name the row
+    takes: the card's command carries no --name, so the agent sends its
+    hostname, and that must never refuse a code that decides the name itself.
+
+    Shape validation of the key and platform happens BEFORE the burn, so a
+    mistyped key does not cost the operator their code. Everything after the
+    burn shares one transaction with the governance event, so every refusal
+    there — the agent's name, a name collision (caught from the partial unique
+    index — a pre-SELECT would be a race), a machine revoked since its re-pair
+    code was minted — rolls the burn back too.
 
     Core's own key is resolved FIRST, for the same reason: the daemon is only
     enrolled once it holds core_pubkey, so failing to produce it after the burn
@@ -245,49 +330,88 @@ async def enroll(
     code is already spent. Order it before, and that failure costs nothing.
     """
     clean_pubkey = _clean_pubkey(pubkey)
-    clean_name = _clean_name(name)
     clean_platform = _clean_platform(platform)
     clean_hostname = (hostname or "").strip() or "unknown"
     core_pubkey = await core_public_key_hex(pool)
 
-    async with pool.acquire() as conn:
-        try:
-            async with conn.transaction():
-                burned = await conn.fetchrow(_BURN_CODE_SQL, hash_code(code))
-                if burned is None:
-                    raise DeviceRefused(
-                        "that pairing code is not usable — it is unknown, expired, "
-                        "or already used. Mint a new one in Settings -> Devices.",
-                        status_code=403,
-                    )
+    async with pool.acquire() as conn, conn.transaction():
+        burned = await conn.fetchrow(_BURN_CODE_SQL, hash_code(code))
+        if burned is None:
+            raise DeviceRefused(
+                "that pairing code is not usable — it is unknown, expired, "
+                "or already used. Mint a new one in Settings -> Devices.",
+                status_code=403,
+            )
+        actor = str(burned["created_by"]) if burned["created_by"] else None
+        repaired = burned["device_id"] is not None
+        if repaired:
+            row = await conn.fetchrow(
+                _REBIND_SQL, burned["device_id"], clean_pubkey, clean_platform, clean_hostname
+            )
+            if row is None:
+                raise DeviceRefused(
+                    "that machine was revoked after this code was made, so it cannot be "
+                    "re-paired — pair it again with a new code from Settings -> Devices",
+                    status_code=_REVOKED_STATUS,
+                )
+            await governance.record_event(
+                conn,
+                kind=governance.DEVICE_REPAIRED,
+                actor=actor,
+                subject_ref=row["id"],
+                meta={
+                    "name": row["name"],
+                    "old_pubkey": row["old_pubkey"],
+                    "new_pubkey": clean_pubkey,
+                    "epoch": row["audit_epoch"],
+                    "platform": clean_platform,
+                    "hostname": clean_hostname,
+                },
+            )
+        else:
+            named_by_code = burned["name"] is not None
+            name_used = burned["name"] if named_by_code else _clean_name(name)
+            try:
                 row = await conn.fetchrow(
                     _INSERT_DEVICE_SQL,
-                    clean_name,
+                    name_used,
                     clean_platform,
                     clean_hostname,
                     clean_pubkey,
                     burned["created_by"],
                 )
-                await governance.record_event(
-                    conn,
-                    kind=governance.DEVICE_ENROLLED,
-                    actor=str(burned["created_by"]) if burned["created_by"] else None,
-                    subject_ref=row["id"],
-                    meta={
-                        "name": clean_name,
-                        "platform": clean_platform,
-                        "hostname": clean_hostname,
-                        "pubkey": clean_pubkey,
-                    },
+            except asyncpg.UniqueViolationError as exc:
+                # The agent cannot pick another name when the code chose it,
+                # so the way out names what can actually be done.
+                remedy = (
+                    f"this code names the machine {name_used!r}, so rename or revoke that one "
+                    "first, or mint a code that names it differently"
+                    if named_by_code
+                    else "pick another name, or revoke that one first"
                 )
-        except asyncpg.UniqueViolationError as exc:
-            raise DeviceRefused(
-                f"a device named {clean_name!r} is already enrolled — "
-                "pick another name, or revoke that one first",
-                status_code=409,
-            ) from exc
+                raise DeviceRefused(
+                    f"a device named {name_used!r} is already enrolled — {remedy}",
+                    status_code=409,
+                ) from exc
+            await governance.record_event(
+                conn,
+                kind=governance.DEVICE_ENROLLED,
+                actor=actor,
+                subject_ref=row["id"],
+                meta={
+                    "name": name_used,
+                    "platform": clean_platform,
+                    "hostname": clean_hostname,
+                    "pubkey": clean_pubkey,
+                },
+            )
 
-    return {"device_id": str(row["id"]), "name": row["name"], "core_pubkey": core_pubkey}
+    return {
+        "device_id": str(row["id"]),
+        "name": row["name"],
+        "core_pubkey": core_pubkey,
+        "repaired": repaired,
+    }
 
 
 # -- lookups -----------------------------------------------------------
@@ -327,7 +451,7 @@ async def _live_or_refuse(conn: asyncpg.Connection, device_id: uuid.UUID) -> asy
     if row["revoked_at"] is not None:
         raise DeviceRefused(
             f"{row['name']} was revoked — a revoked device cannot be edited, "
-            "only re-paired with a new code",
+            "only paired again with a new code",
             status_code=_REVOKED_STATUS,
         )
     return row

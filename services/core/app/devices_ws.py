@@ -24,6 +24,14 @@ Four mechanical properties live here, and each is code, not a request:
   * The device's own audit chain is verified into device_audit link by link; a
     break is a loud DEVICE_AUDIT_BREAK governance event naming the seq and never
     a silent reindex — a chain that quietly heals proves nothing afterward.
+
+A re-pair (S42b decision 4) gives a live row a new key and moves its audit
+epoch on in the same UPDATE. A socket is bound to the (key, epoch) pair of the
+ONE row read it authenticated against: its audit lands in that epoch's chain
+and no other, its heartbeats and facts write the row only while the row is
+still at that epoch, and serve re-reads the row after the socket joins the hub
+so a re-pair (or revoke) that landed mid-handshake drops it rather than
+leaving the old key connected.
 """
 
 from __future__ import annotations
@@ -57,7 +65,9 @@ NONCE_BYTES = 32
 #
 #   core -> device
 #     challenge  {nonce: hex(32 bytes), core_pubkey: hex}
-#     ready      {last_seq: int | null}
+#     ready      {last_seq: int | null}           the last seq core holds in the
+#                row's CURRENT audit epoch — a re-paired key's chain starts at
+#                null even though the old key's chain is still stored
 #     auth_error {reason, proof?, sig?}           then close 4401. reason is
 #                exactly "revoked" for a revoked device, and ONLY then paired
 #                with a proof core signs ({kind, v, device_id, nonce}, plus
@@ -81,7 +91,8 @@ NONCE_BYTES = 32
 
 # WebSocket close codes in the application-private 4000-4999 range. 4401 mirrors
 # HTTP 401 (the challenge did not authenticate); 4403 mirrors 403 (the row is
-# gone from under a live socket — a revoke).
+# gone from under a live socket — a revoke — or no longer holds the key the
+# socket authenticated with — a re-pair).
 AUTH_FAILED_CLOSE = 4401
 REVOKED_CLOSE = 4403
 
@@ -167,11 +178,23 @@ class Hub:
     def __init__(self) -> None:
         self._conns: dict[str, object] = {}
         self._pending: dict[str, dict[str, asyncio.Future]] = {}
+        # S42b: the audit epoch each registered socket authenticated at.
+        # command() sends only over a socket at the row's CURRENT epoch, so a
+        # socket a re-pair left behind never carries a command — not even in
+        # the moment before serve's re-read drops it. serve always passes the
+        # epoch; a bare socket a test registers without one is not checked.
+        self._epochs: dict[str, int] = {}
 
     # registry ---------------------------------------------------------------
-    def register(self, device_id: str | uuid.UUID, conn: object) -> None:
+    def register(
+        self, device_id: str | uuid.UUID, conn: object, *, epoch: int | None = None
+    ) -> None:
         did = str(device_id)
         self._conns[did] = conn
+        if epoch is None:
+            self._epochs.pop(did, None)
+        else:
+            self._epochs[did] = epoch
         self._pending.setdefault(did, {})
 
     def unregister(self, device_id: str | uuid.UUID, conn: object) -> None:
@@ -182,6 +205,7 @@ class Hub:
         if self._conns.get(did) is not conn:
             return
         del self._conns[did]
+        self._epochs.pop(did, None)
         for fut in self._pending.pop(did, {}).values():
             if not fut.done():
                 fut.set_exception(
@@ -229,13 +253,19 @@ class Hub:
         both record it here, the same {"device", "connected"} shape
         `_require_connected` uses, so a span's `facts` ends on the truth the
         refusal is actually reporting rather than staying stuck on the earlier
-        stale True."""
+        stale True.
+
+        A socket registered at an epoch the row has since moved past
+        authenticated with a key the row no longer holds (a re-pair landed
+        while it was joining): it is not this device's socket, so it reads as
+        no socket at all, and nothing is signed or sent over it."""
         did = str(device_id)
         row = await devices.get_live(pool, _as_uuid(device_id))
         if row is None:
             raise devices.DeviceRefused(f"device {name!r} is not paired or has been revoked")
         conn = self._conns.get(did)
-        if conn is None:
+        current = row["audit_epoch"]
+        if conn is None or self._epochs.get(did, current) != current:
             if facts_sink is not None:
                 facts_sink.append({"device": name, "connected": False})
             raise devices.DeviceRefused(
@@ -271,10 +301,12 @@ class Hub:
 
     async def disconnect(self, device_id: str | uuid.UUID, reason: str) -> bool:
         """Kill a device's socket now — the revoke path calls this so a revoked
-        machine drops immediately rather than at its next heartbeat. Returns
-        True only if a live socket was actually closed."""
+        machine drops immediately rather than at its next heartbeat, and a
+        re-pair so the old key's socket does. Returns True only if a live
+        socket was actually closed."""
         did = str(device_id)
         conn = self._conns.pop(did, None)
+        self._epochs.pop(did, None)
         for fut in self._pending.pop(did, {}).values():
             if not fut.done():
                 fut.set_exception(devices.DeviceRefused(f"device connection closed: {reason}"))
@@ -343,7 +375,12 @@ async def authenticate(conn: object, pool) -> object | None:
     Sends the nonce and core's pubkey; the device must return a valid signature
     over the raw nonce with the key its live row pins. A revoked device has no
     live row, so this is where its reconnect is refused — by the absence of the
-    row, not a flag."""
+    row, not a flag. A re-paired device's old key fails here too: the row now
+    pins the new one.
+
+    The returned row is the ONE read the socket authenticated against: its
+    `audit_epoch` belongs to the key that verified, because a re-pair swaps
+    both in one UPDATE. Everything this socket writes is bound to it."""
     nonce = secrets.token_bytes(NONCE_BYTES)
     core_pubkey = await devices.core_public_key_hex(pool)
     await conn.send({"type": "challenge", "nonce": nonce.hex(), "core_pubkey": core_pubkey})
@@ -376,10 +413,13 @@ async def authenticate(conn: object, pool) -> object | None:
         await _auth_error(conn, "the challenge signature did not verify")
         return None
 
-    await _record_auth_facts(pool, device_id, frame.get("facts"))
+    epoch = row["audit_epoch"]
+    await _record_auth_facts(pool, device_id, frame.get("facts"), epoch=epoch)
 
     last_seq = await pool.fetchval(
-        "SELECT max(seq) FROM device_audit WHERE device_id = $1", device_id
+        "SELECT max(seq) FROM device_audit WHERE device_id = $1 AND epoch = $2",
+        device_id,
+        epoch,
     )
     await conn.send({"type": "ready", "last_seq": last_seq})
     return row
@@ -468,12 +508,16 @@ async def _audit_break(
     expected_prev: str | None,
     got_prev: str | None,
     *,
+    epoch: int,
     expected_hash: str | None = None,
     got_hash: str | None = None,
     reason: str | None = None,
 ) -> None:
+    # The epoch is named because a re-paired device has two chains that both
+    # start at seq 0: a break that said only the seq could not be placed.
     meta: dict = {
         "device_id": str(device_id),
+        "epoch": epoch,
         "seq": seq,
         "expected_prev": expected_prev,
         "got_prev": got_prev,
@@ -484,8 +528,9 @@ async def _audit_break(
     if reason is not None:
         meta["reason"] = reason
     logger.error(
-        "device audit chain break: device=%s seq=%s expected_prev=%s got_prev=%s%s",
+        "device audit chain break: device=%s epoch=%s seq=%s expected_prev=%s got_prev=%s%s",
         device_id,
+        epoch,
         seq,
         expected_prev,
         got_prev,
@@ -499,16 +544,22 @@ async def _audit_break(
         )
 
 
-async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
+async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch: int = 0) -> dict:
     """Verify and store a replayed audit batch, in seq order, stopping at the
     first break.
 
-    For each entry: prev_hash must equal the stored hash of seq-1 (or "" at seq
-    0), and recomputing the entry's own hash must reproduce it. A mismatch does
-    NOT store past the break — it writes DEVICE_AUDIT_BREAK and returns, leaving
-    the socket alive (the operator decides what a tampered device means).
-    Good entries are stored with ON CONFLICT DO NOTHING, so replaying a batch
-    core already has is a no-op.
+    The batch belongs to ONE chain: `epoch`, the audit epoch of the row the
+    sending socket authenticated against (serve passes it). A re-pair moves
+    the row to a new epoch, so the new key's chain starts at seq 0 beside the
+    old one, which stays stored as history; nothing here ever reads or writes
+    across epochs.
+
+    For each entry: prev_hash must equal the stored hash of seq-1 in the same
+    epoch (or "" at seq 0), and recomputing the entry's own hash must
+    reproduce it. A mismatch does NOT store past the break — it writes
+    DEVICE_AUDIT_BREAK and returns, leaving the socket alive (the operator
+    decides what a tampered device means). Good entries are stored with ON
+    CONFLICT DO NOTHING, so replaying a batch core already has is a no-op.
 
     A verified entry postgres itself refuses (asyncpg.DataError — an
     out-of-range exit_code was the live case) also does NOT store past
@@ -523,6 +574,7 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
             None,
             None,
             "",
+            epoch=epoch,
             reason=(
                 "a replayed batch carried an entry with no integer seq; nothing from it is stored"
             ),
@@ -547,6 +599,7 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
                 seq,
                 None,
                 _echoable_text(got_prev),
+                epoch=epoch,
                 reason=f"the entry cannot be stored: {problem}",
             )
             return {"stored": stored, "break": seq}
@@ -555,16 +608,19 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
             expected_prev: str | None = ""
         else:
             expected_prev = await pool.fetchval(
-                "SELECT hash FROM device_audit WHERE device_id = $1 AND seq = $2",
+                "SELECT hash FROM device_audit WHERE device_id = $1 AND epoch = $2 AND seq = $3",
                 device_uuid,
+                epoch,
                 seq - 1,
             )
         if expected_prev is None:
             # seq-1 is neither stored nor earlier in this batch: a gap.
-            await _audit_break(pool, device_uuid, seq, None, _echoable_text(got_prev))
+            await _audit_break(pool, device_uuid, seq, None, _echoable_text(got_prev), epoch=epoch)
             return {"stored": stored, "break": seq}
         if got_prev != expected_prev:
-            await _audit_break(pool, device_uuid, seq, expected_prev, _echoable_text(got_prev))
+            await _audit_break(
+                pool, device_uuid, seq, expected_prev, _echoable_text(got_prev), epoch=epoch
+            )
             return {"stored": stored, "break": seq}
         recomputed = chain_hash(got_prev, without_hash)
         if recomputed != claimed_hash:
@@ -582,6 +638,7 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
                 seq,
                 expected_prev,
                 _echoable_text(got_prev),
+                epoch=epoch,
                 expected_hash=recomputed,
                 got_hash=_echoable_text(claimed_hash),
             )
@@ -590,8 +647,8 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
         try:
             await pool.execute(
                 "INSERT INTO device_audit (device_id, seq, prev_hash, hash, ts, envelope_id, "
-                "capability, summary, ok, exit_code) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+                "capability, summary, ok, exit_code, epoch) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) "
                 "ON CONFLICT (device_id, epoch, seq) DO NOTHING",
                 device_uuid,
                 seq,
@@ -603,6 +660,7 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
                 entry.get("summary"),
                 bool(entry.get("ok")),
                 entry.get("exit_code"),
+                epoch,
             )
         except asyncpg.DataError as exc:
             # A poison entry (an out-of-range exit_code was the live case —
@@ -616,8 +674,9 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
             # and nothing after it in the batch is attempted, so the return
             # shape below never claims more than what actually landed.
             logger.error(
-                "device %s: audit entry seq=%s not stored — postgres refused it: %s",
+                "device %s: audit entry epoch=%s seq=%s not stored — postgres refused it: %s",
                 device_uuid,
+                epoch,
                 seq,
                 exc,
             )
@@ -629,9 +688,19 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
 # -- the connection lifecycle ------------------------------------------------
 
 
-async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object) -> None:
+# Every write a socket makes to its device row carries `AND audit_epoch = $n`,
+# the epoch of the row read it authenticated against (authenticate). A re-pair
+# moves the epoch in the same UPDATE that swaps the key and clears the old
+# agent's facts and last_seen, so a socket still open for the OLD key — its
+# frames in flight before the drop lands, or one that authenticated just as the
+# re-pair committed — stamps nothing on the rebound row: those columns describe
+# the key the row holds now.
+
+
+async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: int) -> None:
     """Record the auth frame's facts — AFTER the signature verified — REPLACING
-    what the device said before: a new connection is a fresh truth.
+    what the device said before: a new connection is a fresh truth. Written
+    only while the row is still at `epoch` (the note above).
 
     Facts that are ABSENT, REJECTED, or that postgres itself refuses
     (asyncpg.DataError — UntranslatableCharacterError, a NUL byte, is one
@@ -652,9 +721,11 @@ async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object) -> None:
         else:
             try:
                 await pool.execute(
-                    "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1",
+                    "UPDATE devices SET facts = $2, facts_at = now() "
+                    "WHERE id = $1 AND audit_epoch = $3",
                     device_id,
                     clean,
+                    epoch,
                 )
                 return
             except asyncpg.DataError as exc:
@@ -663,16 +734,21 @@ async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object) -> None:
                     device_id,
                     exc,
                 )
-    await pool.execute("UPDATE devices SET facts = NULL, facts_at = NULL WHERE id = $1", device_id)
+    await pool.execute(
+        "UPDATE devices SET facts = NULL, facts_at = NULL WHERE id = $1 AND audit_epoch = $2",
+        device_id,
+        epoch,
+    )
 
 
-async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict) -> None:
+async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict, *, epoch: int) -> None:
     """MERGE a facts frame's sections into what the device said (jsonb ||), so
     the auth facts survive a frame that carries only net/unreadable. A shape
     device_facts refuses, or one postgres itself refuses (asyncpg.DataError —
     the belt-and-suspenders half, beside device_facts already catching the
     two known postgres-hostile shapes before the write), is logged and
-    dropped: never a reason to take the socket down."""
+    dropped: never a reason to take the socket down. Merged only while the
+    row is still at `epoch`."""
     try:
         sections = device_facts.validate_frame(frame)
     except device_facts.FactsRejected as exc:
@@ -681,9 +757,10 @@ async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict) -> None:
     try:
         await pool.execute(
             "UPDATE devices SET facts = COALESCE(facts, '{}'::jsonb) || $2::jsonb, "
-            "facts_at = now() WHERE id = $1",
+            "facts_at = now() WHERE id = $1 AND audit_epoch = $3",
             device_id,
             sections,
+            epoch,
         )
     except asyncpg.DataError as exc:
         logger.warning(
@@ -691,12 +768,19 @@ async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict) -> None:
         )
 
 
-async def _handle_frame(pool, device_id: uuid.UUID, frame: object) -> None:
+async def _handle_frame(pool, device_id: uuid.UUID, frame: object, *, epoch: int = 0) -> None:
+    """One frame from a socket authenticated at `epoch`: its audit lands in
+    that epoch's chain, and its row writes hold only while the row is still
+    there (the note above `_record_auth_facts`)."""
     if not isinstance(frame, dict):
         return
     kind = frame.get("type")
     if kind == "heartbeat":
-        await pool.execute("UPDATE devices SET last_seen = now() WHERE id = $1", device_id)
+        await pool.execute(
+            "UPDATE devices SET last_seen = now() WHERE id = $1 AND audit_epoch = $2",
+            device_id,
+            epoch,
+        )
     elif kind == "result":
         envelope_id = frame.get("envelope_id")
         if isinstance(envelope_id, str):
@@ -704,11 +788,23 @@ async def _handle_frame(pool, device_id: uuid.UUID, frame: object) -> None:
     elif kind == "audit":
         entries = frame.get("entries")
         if isinstance(entries, list):
-            await ingest_audit(pool, device_id, entries)
+            await ingest_audit(pool, device_id, entries, epoch=epoch)
     elif kind == "facts":
-        await _record_facts_frame(pool, device_id, frame)
+        await _record_facts_frame(pool, device_id, frame, epoch=epoch)
     else:
         logger.info("device %s sent an unknown frame type %r", device_id, kind)
+
+
+async def _still_bound(pool, row) -> bool:
+    """True while the device's live row still holds the key and audit epoch
+    this socket authenticated against — False once a re-pair rebound it or a
+    revoke ended it."""
+    current = await devices.get_live(pool, row["id"])
+    return (
+        current is not None
+        and current["pubkey"] == row["pubkey"]
+        and current["audit_epoch"] == row["audit_epoch"]
+    )
 
 
 async def serve(conn: object, pool) -> None:
@@ -721,15 +817,32 @@ async def serve(conn: object, pool) -> None:
     if row is None:
         return
     device_id = row["id"]
-    hub.register(device_id, conn)
+    epoch = row["audit_epoch"]
+    hub.register(device_id, conn, epoch=epoch)
     try:
+        # authenticate read the row before this socket joined the hub. A
+        # re-pair or revoke that committed in between called hub.disconnect
+        # while there was nothing to drop, and the socket would stay
+        # connected for a key the row no longer holds. Joined first, read
+        # second: whatever commits after this read finds the socket in the
+        # hub and drops it there.
+        if not await _still_bound(pool, row):
+            logger.warning(
+                "device %s: re-paired or revoked while this socket authenticated — dropped",
+                device_id,
+            )
+            try:
+                await conn.close(REVOKED_CLOSE)
+            except Exception:
+                logger.warning("closing device socket %s failed", device_id, exc_info=True)
+            return
         while True:
             try:
                 frame = await conn.receive()
             except ConnectionClosed:
                 break
             try:
-                await _handle_frame(pool, device_id, frame)
+                await _handle_frame(pool, device_id, frame, epoch=epoch)
             except Exception:  # noqa: BLE001 — P27: one frame never ends a session
                 kind = frame.get("type") if isinstance(frame, dict) else type(frame).__name__
                 logger.exception(

@@ -16,6 +16,7 @@ writes this table (tests/test_no_approvals.py pins it), and nothing reads it to
 decide anything — it is the audit, not an authority. Tool calls themselves are
 recorded in turn_spans, one per call, by the chat loop.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -33,6 +34,9 @@ import asyncpg
 DEVICE_ENROLLED = "device.enrolled"
 DEVICE_REVOKED = "device.revoked"
 DEVICE_AUDIT_BREAK = "device.audit_break"
+# S42b: a re-pair rebound a live row to a new key (decision 4) — the old and
+# new keys and the new audit epoch, so the arc stays readable.
+DEVICE_REPAIRED = "device.repaired"
 # Agents (S12): the row's whole arc — created with the spec it was given,
 # each update with the keys that moved, the delete with the timers it paused.
 # Written by app/agents.py in the same transaction as the row.

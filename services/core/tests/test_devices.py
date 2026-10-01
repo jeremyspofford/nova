@@ -527,6 +527,8 @@ async def test_every_device_route_except_enroll_needs_an_identity(client, pool):
     rename = await client.patch(f"/api/v1/devices/{device_id}", json={"name": "x"})
     assert rename.status_code == 401
     assert (await client.post(f"/api/v1/devices/{device_id}/revoke")).status_code == 401
+    # S42b: a re-pair code authorises a whole machine's identity, like a pairing code.
+    assert (await client.post(f"/api/v1/devices/{device_id}/repair-code")).status_code == 401
 
 
 async def test_enroll_is_reachable_with_no_identity_at_all(client, pool):
@@ -564,7 +566,9 @@ async def test_enroll_returns_the_device_id_name_and_cores_pubkey(owner_client, 
     resp = await _api_enrol(owner_client, await _api_code(owner_client))
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == {"device_id", "name", "core_pubkey"}
+    # S42b: `repaired` joins the wire contract (decision 4) — an old agent's decoder ignores it.
+    assert set(body) == {"device_id", "name", "core_pubkey", "repaired"}
+    assert body["repaired"] is False
     assert body["name"] == "laptop"
     assert body["core_pubkey"] == await devices.core_public_key_hex(pool)
     uuid.UUID(body["device_id"])

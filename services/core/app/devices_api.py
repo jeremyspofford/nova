@@ -1,4 +1,4 @@
-"""/api/v1/devices — mint a pairing code, enroll a machine, rename or revoke it.
+"""/api/v1/devices — mint a pairing code, enroll a machine, re-pair, rename or revoke it.
 
 Every route here is authenticated the way the rest of core is
 (identity.require_person — a session cookie or the service bearer) with ONE
@@ -11,7 +11,8 @@ Two consequences of that exception are handled here rather than assumed:
 
   * /pairing-code stays authed. Minting a code is the authorisation for an
     entire machine, so if that route were public, enrollment being public would
-    stop meaning anything.
+    stop meaning anything. /{id}/repair-code is authed for the same reason: its
+    code hands that machine's whole identity to whoever enrolls with it.
   * /enroll is rate-limited per address, copying auth_api's login limiter
     (5 failures / 15 minutes / 429). Only the CODE refusal counts as a failure
     — a name collision is an operator typing the same name twice, not somebody
@@ -29,6 +30,7 @@ Handlers do nothing devices.py does not already do. Refusals are its
 DeviceRefused, re-stated with the status it chose, so the reason the operator
 reads is the reason the database enforced.
 """
+
 from __future__ import annotations
 
 import logging
@@ -98,6 +100,22 @@ async def mint_pairing_code(person: Person = Depends(identity.require_person)) -
     return await devices.mint_pairing_code(pool, created_by=person.id)
 
 
+@router.post("/{device_id}/repair-code")
+async def mint_repair_code(
+    device_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """A re-pair code for ONE machine (decision 4): single use, ten minutes,
+    shown once. The machine's command keeps a pairing Nova still knows and
+    leaves the code unused; it rebinds the row only when the old pairing is
+    gone."""
+    pool = await db.get_pool()
+    try:
+        minted = await devices.mint_pairing_code(pool, created_by=person.id, device_id=device_id)
+    except devices.DeviceRefused as exc:
+        raise _refuse(exc) from exc
+    return {**minted, "device": devices.device_spec(await devices.get(pool, device_id))}
+
+
 @router.post("/enroll")
 async def enroll(request: Request, body: EnrollBody) -> dict:
     """The one unauthenticated write in core (identity.PUBLIC_PATHS)."""
@@ -127,7 +145,20 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
         raise _refuse(exc) from exc
 
     _ENROLL_FAILURES.pop(caller, None)
-    logger.info("device enrolled: %s (%s)", result["name"], result["device_id"])
+    logger.info(
+        "device %s: %s (%s)",
+        "re-paired" if result["repaired"] else "enrolled",
+        result["name"],
+        result["device_id"],
+    )
+    if result["repaired"]:
+        # The old key's socket, if one is still open, speaks for a key the row
+        # no longer holds: drop it now (its reconnect then fails the challenge).
+        # One that was still authenticating finds the new key when serve
+        # re-reads the row after joining the hub, and drops itself.
+        from app import devices_ws
+
+        await devices_ws.hub.disconnect(uuid.UUID(result["device_id"]), "re-paired")
     return result
 
 
