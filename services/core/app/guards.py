@@ -5757,7 +5757,7 @@ def _command(argv: object) -> list[str] | None:
         if at is not None:
             words = rest[at + 1 :]
         else:
-            # A flag starts with "/" only for cmd: to a POSIX shell "/home/j/x.sh"
+            # A flag starts with "/" only for cmd: to a POSIX shell "/home/owner/x.sh"
             # is the script it runs (fix round 3, C1).
             flag = ("/",) if program == "cmd" else ("-",)
             words = [word for word in rest if not word.startswith(flag)]

@@ -786,7 +786,7 @@ def _recorded(name: str, args: dict, *, ok: bool = True) -> object:
 
 
 _LONG_COMMAND = ["powershell", "-NoProfile", "-Command"] + [
-    "Get-ChildItem C:\\Users\\j\\Documents -Recurse | Where-Object {$_.Length -gt 1MB}"
+    "Get-ChildItem C:\\Users\\owner\\Documents -Recurse | Where-Object {$_.Length -gt 1MB}"
 ] * 7
 # 30 spans: the production cap on what one turn records (6 rounds of calls), as
 # the re-review measured it (scratchpad rr3/probe_timing2.py).

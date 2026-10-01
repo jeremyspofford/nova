@@ -956,7 +956,7 @@ def test_a_launch_shaped_command_performs_its_launch(argv, claimed):
     [
         ["tasklist"],
         ["cmd", "/c", "start", "", "teams"],
-        ["open", "/Users/j/notes.txt"],
+        ["open", "/Users/owner/notes.txt"],
         ["explorer.exe", "shell:AppsFolder\\MSTeams_8wekyb3d8bbwe!MSTeams"],
         ["notepad++"],
         ["powershell", "-c", "Get-Process notepad"],
@@ -1040,7 +1040,7 @@ def test_a_command_that_does_not_perform_the_action_still_silences(reply, argv):
 
 def test_a_write_of_another_file_still_silences():
     wrote = _span(
-        "device_write_file", args_redacted={"device": DEVICE, "path": "C:\\Users\\j\\notes.txt"}
+        "device_write_file", args_redacted={"device": DEVICE, "path": "C:\\Users\\owner\\notes.txt"}
     )
     assert check("I saved notes.txt to your DELL-XPS-8950.", [wrote]) is None
     assert check("I saved the notes to your DELL-XPS-8950.", [wrote]) is None
@@ -1051,7 +1051,7 @@ def test_a_write_of_another_file_still_silences():
 @pytest.mark.parametrize(
     "reply,program",
     [
-        ("I ran the cleanup script on your DELL-XPS-8950.", ["bash", "/home/j/cleanup.sh"]),
+        ("I ran the cleanup script on your DELL-XPS-8950.", ["bash", "/home/owner/cleanup.sh"]),
         ("I executed backup.ps1 on your DELL-XPS-8950.", ["powershell", "-File", "backup.ps1"]),
         ("I ran deploy.ps1 on your DELL-XPS-8950.", ["pwsh", "-c", "C:\\s\\deploy.ps1"]),
         ("I ran the backup on your DELL-XPS-8950.", ["python3", "backup.py"]),
@@ -1066,7 +1066,7 @@ def test_ran_is_backed_by_the_program_that_ran_never_by_a_read_of_it(reply, prog
     the claim anyway (T3), so this chooses only which failure is stated —
     consistently with the program rule."""
     read = {
-        "I ran the cleanup script on your DELL-XPS-8950.": ["cat", "/home/j/cleanup.sh"],
+        "I ran the cleanup script on your DELL-XPS-8950.": ["cat", "/home/owner/cleanup.sh"],
         "I executed backup.ps1 on your DELL-XPS-8950.": ["cmd", "/c", "type", "backup.ps1"],
         "I ran deploy.ps1 on your DELL-XPS-8950.": ["powershell", "-c", "Get-Content deploy.ps1"],
         "I ran the backup on your DELL-XPS-8950.": ["echo", "backup"],
