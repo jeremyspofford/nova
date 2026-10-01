@@ -52,6 +52,8 @@ _TABLES = (
     # timers. agents ↔ turns reference each other (turns.agent_id and
     # agents.created_turn_id), so no order satisfies both — the CASCADE on
     # the DROP and on the TRUNCATE is what makes the cycle a non-issue.
+    # S42b: agent_updates references devices, so it drops ahead of it.
+    "agent_updates",
     "agents",
     "device_audit",
     "devices",
