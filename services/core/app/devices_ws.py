@@ -183,19 +183,39 @@ class Hub:
         # socket a re-pair left behind never carries a command — not even in
         # the moment before serve's re-read drops it. serve always passes the
         # epoch; a bare socket a test registers without one is not checked.
+        # register() itself refuses to move this number backward (T15
+        # review): epochs only grow, so it is also what stops an old-key
+        # socket from displacing a newer one that already joined.
         self._epochs: dict[str, int] = {}
 
     # registry ---------------------------------------------------------------
     def register(
         self, device_id: str | uuid.UUID, conn: object, *, epoch: int | None = None
-    ) -> None:
+    ) -> bool:
+        """Join the hub as this device's one live socket. Returns False —
+        nothing touched — when a socket at a HIGHER epoch is already
+        registered: epochs only grow (a re-pair is the only thing that
+        advances one), so that can only be an old-key socket whose
+        authenticate() paused and resumed after a re-pair, once the new
+        key's socket had already joined (T15 review). Displacing it would
+        tear out the live connection from under the new socket, which stays
+        open and heartbeating while the hub forgets it — exactly the bug a
+        residual race left behind. A socket at an equal or higher epoch
+        still replaces an older one, same as before (the ordinary
+        reconnect). `epoch=None` — what a bare test registers — is never
+        checked, and clears any epoch this device id was tracked under."""
         did = str(device_id)
+        if epoch is not None:
+            current = self._epochs.get(did)
+            if current is not None and epoch < current:
+                return False
         self._conns[did] = conn
         if epoch is None:
             self._epochs.pop(did, None)
         else:
             self._epochs[did] = epoch
         self._pending.setdefault(did, {})
+        return True
 
     def unregister(self, device_id: str | uuid.UUID, conn: object) -> None:
         """Drop this conn only if it is still the registered one — a device that
@@ -818,7 +838,21 @@ async def serve(conn: object, pool) -> None:
         return
     device_id = row["id"]
     epoch = row["audit_epoch"]
-    hub.register(device_id, conn, epoch=epoch)
+    if not hub.register(device_id, conn, epoch=epoch):
+        # A socket at a higher epoch already holds the hub's entry for this
+        # device: this one authenticated against a row snapshot a re-pair has
+        # since moved past (T15 review). Refused before it could displace the
+        # live connection, and never registered — so unregister() must not
+        # run for it, unlike the _still_bound drop below.
+        logger.warning(
+            "device %s: a socket at a later epoch is already connected — dropped",
+            device_id,
+        )
+        try:
+            await conn.close(REVOKED_CLOSE)
+        except Exception:
+            logger.warning("closing device socket %s failed", device_id, exc_info=True)
+        return
     try:
         # authenticate read the row before this socket joined the hub. A
         # re-pair or revoke that committed in between called hub.disconnect

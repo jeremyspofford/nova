@@ -582,6 +582,81 @@ async def test_a_command_never_reaches_a_socket_the_repair_left_behind(pool, mon
     assert conn.closed_code == devices_ws.REVOKED_CLOSE
 
 
+async def test_an_old_sockets_delayed_register_never_displaces_the_new_one(pool, monkeypatch):
+    """T15 review: the old key's handshake reads the row (epoch 0) and pauses
+    inside authenticate(); only then does the re-pair commit, the route's own
+    drop find no socket yet, the new agent connect and register at epoch 1,
+    and a command go in flight to it. The old handshake then resumes and
+    tries to join the hub — hub.register refuses it (epochs only grow), since
+    a HIGHER epoch is already registered there, so serve closes the old
+    socket without ever registering it. The new socket, and its in-flight
+    command, are untouched."""
+    device_id, old = await _enroll(pool, name="pc")
+    new = FakeDevice()
+    real_record = devices_ws._record_auth_facts
+    state: dict = {}
+
+    async def _resumes_after_the_new_socket_is_working(*args, **kwargs):
+        if not state:
+            await _repair(pool, device_id, new, platform="linux")
+            state["route_drop_found"] = await devices_ws.hub.disconnect(device_id, "re-paired")
+            new_conn, new_task, new_ready = await _auth_with(pool, device_id, new, None)
+            assert new_ready["type"] == "ready"
+            state["new"] = (new_conn, new_task)
+            cmd = asyncio.create_task(
+                devices_ws.hub.command(
+                    pool,
+                    device_id=device_id,
+                    name="pc",
+                    capability="system.info",
+                    args={},
+                    timeout=3,
+                )
+            )
+
+            async def command_sent():
+                return any(f.get("type") == "command" for f in new_conn.sent)
+
+            await _until(command_sent)
+            state["cmd"] = cmd
+        await real_record(*args, **kwargs)
+
+    monkeypatch.setattr(devices_ws, "_record_auth_facts", _resumes_after_the_new_socket_is_working)
+    old_conn, old_task, old_reply = await _auth_with(pool, device_id, old, None)
+    # The signature verified — the row (and its old epoch) was read before
+    # the repair committed — and the repair's own drop came too early to
+    # find anything in the hub.
+    assert old_reply["type"] == "ready"
+    assert state["route_drop_found"] is False
+    await asyncio.wait_for(old_task, 3)
+
+    # The old socket never joined the hub: refused, and closed with the same
+    # code a re-pair's own drop uses — never registered, so its unregister()
+    # must not tear out the live entry either.
+    assert old_conn.closed_code == devices_ws.REVOKED_CLOSE
+
+    # The hub still holds exactly the new socket.
+    new_conn, new_task = state["new"]
+    assert devices_ws.hub.is_connected(device_id)
+    assert devices_ws.hub._conns[str(device_id)] is new_conn
+
+    # Its in-flight command was never failed by the old socket's cleanup — it
+    # still resolves, over the new socket, once the new device answers it.
+    command_frame = await new.answer_command(new_conn)
+    assert command_frame["envelope"]["capability"] == "system.info"
+    result = await state["cmd"]
+    assert result["ok"] is True
+
+    # And the new socket is still alive: it can still heartbeat.
+    new_conn.feed({"type": "heartbeat", "ts": 1_790_000_000})
+
+    async def seen():
+        return (await devices.get(pool, device_id))["last_seen"] is not None
+
+    await _until(seen)
+    await _close(new_conn, new_task)
+
+
 async def test_a_repair_that_fails_before_commit_leaves_the_old_key_on_the_old_epoch(
     pool, monkeypatch
 ):
