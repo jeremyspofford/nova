@@ -1363,6 +1363,13 @@ async def _still_up(pool, conn: FakeWSConn, device_id) -> None:
         ({"ts": 10**20}, "ts"),
         ({"ok": "yes"}, "ok"),
         ({"summary": "ran\x00"}, "summary"),
+        # Fix round 1 (review of 2c1fbef0): prev_hash is the field whose raw
+        # value _audit_break used to echo straight into its own governance
+        # event and ERROR line — these are the two shapes the reviewer's
+        # probe found postgres refuses there (a NUL byte, and a value that
+        # is not text at all, which a NaN float demonstrates cheaply).
+        ({"prev_hash": "x\x00"}, "prev_hash"),
+        ({"prev_hash": float("nan")}, "prev_hash"),
     ],
 )
 async def test_an_audit_entry_core_cannot_store_is_a_stated_break_and_the_session_stays_up(
@@ -1393,9 +1400,7 @@ async def test_a_batch_with_any_malformed_seq_stores_nothing_from_it(pool):
     e0 = _entry(0, "")
     res = await devices_ws.ingest_audit(pool, device_id, [e0, {"seq": "one"}])
     assert res == {"stored": 0, "break": None}
-    count = await pool.fetchval(
-        "SELECT count(*) FROM device_audit WHERE device_id = $1", device_id
-    )
+    count = await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
     assert count == 0
     event = await pool.fetchrow(
         "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",

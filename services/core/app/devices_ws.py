@@ -425,12 +425,34 @@ def _entry_problem(entry: dict) -> str | None:
     return None
 
 
+def _echoable_text(value: object) -> str | None:
+    """`value` if a governance event can safely carry it verbatim, else None.
+
+    Fix round 1 (review of 2c1fbef0): a break must never echo the exact
+    value that broke it. postgres refuses a NUL byte, a lone UTF-16
+    surrogate, and anything that is not text at all (a NaN float, say) in a
+    jsonb column — so putting an entry's raw `prev_hash` straight into the
+    break's own meta or log line can make the RECORD of the break fail the
+    same way the entry did, silently losing the device.audit_break event
+    the brief's Interfaces line promises. Same text bounds _entry_problem
+    checks for a field, plus an actual UTF-8 encode (the same probe
+    device_facts._encoded_size uses, for the same reason) to catch a lone
+    surrogate, which a plain `isinstance` and NUL check both miss."""
+    if not isinstance(value, str) or "\x00" in value or len(value) > _ENTRY_TEXT_MAX:
+        return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None  # an unpaired UTF-16 surrogate — postgres refuses this too
+    return value
+
+
 async def _audit_break(
     pool,
     device_id: uuid.UUID,
     seq: int | None,
     expected_prev: str | None,
-    got_prev: str,
+    got_prev: str | None,
     *,
     expected_hash: str | None = None,
     got_hash: str | None = None,
@@ -502,12 +524,15 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
 
         problem = _entry_problem(entry)
         if problem is not None:
+            # Fix round 1: got_prev is exactly what made THIS entry
+            # unstorable when prev_hash is the field named above — never
+            # echo it raw, or the break's own record can fail the same way.
             await _audit_break(
                 pool,
                 device_uuid,
                 seq,
                 None,
-                got_prev,
+                _echoable_text(got_prev),
                 reason=f"the entry cannot be stored: {problem}",
             )
             return {"stored": stored, "break": seq}
