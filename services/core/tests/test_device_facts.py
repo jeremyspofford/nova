@@ -438,8 +438,15 @@ def _set(base: dict, path: tuple, value) -> dict:
     return out
 
 
+# The auth block an agent whose probe names the Run-key value sends: probe.go's
+# serviceOf names it HKCU\<RunKeyPath>\<RunKeyValue> only in mode run-key, so
+# one agent never pairs that name with WINDOWS' "foreground" (Task 16b fix
+# round 2, M2: _merged used WINDOWS, a pairing no single agent produces).
+WINDOWS_RUN_KEY = _with(WINDOWS, "agent.mode", "run-key")
+
+
 def _merged(frame=PROBED) -> dict:
-    return {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
+    return {**df.validate_auth(WINDOWS_RUN_KEY), **df.validate_frame(frame)}
 
 
 def test_the_probe_sections_are_kept_in_their_shape():
@@ -501,9 +508,13 @@ def test_the_wsl_line_says_where_the_old_agent_runs_and_how_it_restarts():
     line = df.wsl_line(_merged())
     assert line.startswith("WSL on it, reached through this agent's wsl.exe: ")
     assert "Ubuntu-26.04 (default, WSL 2, running, systemd, default user sam" in line
+    # Pins moved (Task 16b fix round 2): "sudo needs a password here" was
+    # said for every refusal, "not in sudoers" included (finding 7); and the
+    # default distro got a bare `wsl.exe -u root`, though the agent always
+    # ran `-d <name>` and the default may have changed since (M6).
     assert (
-        "sudo needs a password here" in line
-        and "root through wsl.exe -u root without a password" in line
+        "sudo -n true failed here" in line
+        and "root through wsl.exe -d Ubuntu-26.04 -u root without a password" in line
     )
     assert (
         "sam's systemd user unit novad.service is active (enabled, Restart=always, main pid 412)"
@@ -540,8 +551,12 @@ def test_a_distro_whose_bus_could_not_be_reached_says_so_in_systemctls_words():
 
 def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     lines = df.acting_lines(_merged(), "windows")
+    # Pin moved (Task 16b fix round 2, M2): a Run-key value is not a service.
+    # This pin held "service HKCU\..." only because _merged paired the Run-key
+    # name with mode "foreground" — an agent never sends that pair.
     assert lines[0] == (
-        "how it runs: service HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent; "
+        "how it runs: the Run-key value "
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent; "
         "binary C:\\Users\\sam\\AppData\\Local\\Programs\\Nova\\novad.exe; "
         "config C:\\Users\\sam\\AppData\\Roaming\\novad\\config.json; "
         "process novad.exe pid 812, supervisor pid 790; as PC-ONE\\sam"
@@ -555,10 +570,14 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     # answer" inferred a specific prompt BEHAVIOR (ConsentPromptBehaviorAdmin)
     # the agent never reads — now states only what it read: the account IS
     # an administrator, and its own token is NOT elevated.
+    # Pin moved again (Task 16b fix round 2, M7): "admin work needs elevating
+    # first, which a command cannot do for itself" still answered a question
+    # nobody measured — and the sudo tail on the same line says it is open.
     assert lines[1].startswith(
-        "elevation: the agent runs without admin rights; the account it runs as is an "
-        "administrator, but its own token is not elevated (UAC) — admin work needs "
-        "elevating first, which a command cannot do for itself; Windows sudo is on (inline)"
+        "elevation: the agent runs without admin rights (its token is not elevated); "
+        "the account it runs as is an administrator; whether admin work from Nova's "
+        "commands would stop at a UAC prompt has not been measured yet; "
+        "Windows sudo is on (inline)"
     )
     # Pin moved deliberately (Task 16b review, "probes take time"): the
     # final line now notes the ~45s Windows-with-WSL probe bound.
@@ -592,9 +611,11 @@ def test_a_linux_agents_sudo_is_said_in_its_own_words():
             },
         }
     )
+    # Pin moved (Task 16b fix round 2, finding 7): the agent files EVERY
+    # failure of `sudo -n true` as "refused" — "not in sudoers" too — so the
+    # line says only that it failed, and sudo's own words say why.
     assert df.elevation_line(facts, "linux") == (
-        "elevation: sudo needs a password here, and nothing can type one into Nova's commands — "
-        "a command using sudo fails (sudo -n said: sudo: a password is required)"
+        "elevation: sudo -n true failed here (sudo -n said: sudo: a password is required)"
     )
     root = df.validate_frame(
         {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
@@ -964,13 +985,23 @@ def test_sudo_unknown_appends_sudo_said_on_every_platform():
     time or never started, with the reason in sudo_said — previously only
     "refused" showed it. Windows "unknown" also covers a failed registry
     read, and sudo_said was never rendered there at all."""
+    # Pins moved (Task 16b fix round 2, finding 10): an "unknown" sudo_said
+    # is the AGENT's words — probe.go's failed(err) on Linux and macOS,
+    # windowsSudo's read on Windows — never what sudo said; and the fixtures
+    # are now the texts the agent really sends.
     linux_facts = df.validate_frame(
         {
             "type": "facts",
-            "elevation": {"elevated": False, "sudo": "unknown", "sudo_said": "timed out"},
+            "elevation": {
+                "elevated": False,
+                "sudo": "unknown",
+                "sudo_said": "sudo: gave no answer in time",
+            },
         }
     )
-    assert "(sudo -n said: timed out)" in df.elevation_line(linux_facts, "linux")
+    assert "(the agent said: sudo: gave no answer in time)" in df.elevation_line(
+        linux_facts, "linux"
+    )
     win_facts = df.validate_frame(
         {
             "type": "facts",
@@ -978,11 +1009,11 @@ def test_sudo_unknown_appends_sudo_said_on_every_platform():
                 "elevated": False,
                 "admin": True,
                 "sudo": "unknown",
-                "sudo_said": "registry key not found",
+                "sudo_said": "Enabled=7",
             },
         }
     )
-    assert "(it said: registry key not found)" in df.elevation_line(win_facts, "windows")
+    assert "(the agent said: Enabled=7)" in df.elevation_line(win_facts, "windows")
 
 
 def test_windows_sudo_off_never_says_windows_on_linux_and_never_contradicts_itself():
@@ -1005,8 +1036,13 @@ def test_windows_sudo_off_never_says_windows_on_linux_and_never_contradicts_itse
         {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "refused"}}
     )
     line = df.elevation_line(refused_win, "windows")
-    assert "fails" in line
-    assert "has not been measured yet" not in line
+    # Pins moved (Task 16b fix round 2): "a command using sudo fails" became
+    # "sudo -n true failed here" (finding 7); and the head now says the UAC
+    # question is unmeasured (M7), so only the sudo TAIL — the last clause —
+    # is checked for the unmeasured-sudo sentence.
+    sudo_tail = line.rsplit("; ", 1)[1]
+    assert sudo_tail == "sudo -n true failed here"
+    assert "has not been measured yet" not in sudo_tail
 
 
 def test_windows_sudo_absent_means_never_turned_on_not_no_sudo():
@@ -1051,7 +1087,9 @@ def test_blank_service_fields_say_unknown_not_a_broken_sentence():
 
 def test_a_run_key_is_never_called_a_service():
     """M2: a Run-key value is not a service — it is a registry value under
-    HKCU\\...\\Run, read at sign-in by the shell."""
+    HKCU\\...\\Run, read at sign-in by the shell. Pin moved (Task 16b fix
+    round 2, M2): "the Windows Run key <path>" named the whole path a key;
+    the path ends in the VALUE, so it is "the Run-key value <path>"."""
     frame = {
         "type": "facts",
         "service": {
@@ -1068,7 +1106,7 @@ def test_a_run_key_is_never_called_a_service():
     facts = {**df.validate_auth(run_key_auth), **df.validate_frame(frame)}
     line = df.runs_line(facts)
     assert line.startswith(
-        "how it runs: the Windows Run key "
+        "how it runs: the Run-key value "
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent"
     )
     assert "service HKCU" not in line
@@ -1107,22 +1145,41 @@ def test_a_distros_sudo_said_is_kept_and_rendered_not_dropped():
 def test_more_than_eight_distros_or_pids_says_the_list_is_cut_off():
     """M3: a cut-off or partial list says so — a non-empty distros list
     is not proof it is the WHOLE list, and neither is a non-empty pids
-    list."""
+    list.
+
+    Pins moved (Task 16b fix round 2): the fixtures are now what the agent
+    sends — eight distributions with probe.go's own "more than 8" reason,
+    and eight pids with its own pids reason (it cuts only at eight, so one
+    pid beside that reason was a shape no agent sends) — and the distro
+    notice no longer says "not every distribution is shown": the agent
+    files other reasons under the same item (finding 5)."""
+    eight = [dict(PROBED["wsl_distros"]["distros"][1], name=f"d{i}") for i in range(8)]
     said = _set(
-        PROBED,
+        _set(PROBED, ("wsl_distros", "distros"), eight),
         ("unreadable",),
-        [{"item": "wsl_distros", "reason": "12 distributions found, 8 shown"}],
+        [{"item": "wsl_distros", "reason": "more than 8 distributions; the rest are not listed"}],
     )
     line = df.wsl_line(_merged(said))
-    assert "not every distribution is shown: 12 distributions found, 8 shown" in line
+    assert (
+        "(part of WSL's list could not be read: more than 8 distributions; "
+        "the rest are not listed)" in line
+    )
 
     pids_said = _set(
-        PROBED,
+        _set(PROBED, ("wsl_distros", "distros", 0, "novad_pids"), list(range(412, 420))),
         ("unreadable",),
-        [{"item": "wsl_distros.Ubuntu-26.04.novad_pids", "reason": "14 processes found, 8 shown"}],
+        [
+            {
+                "item": "wsl_distros.Ubuntu-26.04.novad_pids",
+                "reason": "more than 8 novad processes; the rest are not listed",
+            }
+        ],
     )
     pids_line = df.wsl_line(_merged(pids_said))
-    assert "more may be running: 14 processes found, 8 shown" in pids_line
+    assert (
+        "novad process pid 412, 413, 414, 415, 416, 417, 418, 419 (more may be running: "
+        "more than 8 novad processes; the rest are not listed)" in pids_line
+    )
 
 
 def test_the_root_path_names_a_non_default_distro():
@@ -1136,7 +1193,9 @@ def test_the_root_path_names_a_non_default_distro():
 
 
 def test_a_failed_units_zero_main_pid_is_not_said_as_a_pid():
-    """M6: a failed unit's main_pid is 0 — not a pid."""
+    """M6: a failed unit's main_pid is 0 — not a pid. Pin moved (Task 16b
+    fix round 2, finding 11): a zero main pid is left out, never read as
+    "not running" — the unit's own ActiveState says whether it runs."""
     failed = _set(
         PROBED,
         ("wsl_distros", "distros", 0, "novad_unit"),
@@ -1144,7 +1203,7 @@ def test_a_failed_units_zero_main_pid_is_not_said_as_a_pid():
     )
     line = df.wsl_line(_merged(failed))
     assert "main pid 0" not in line
-    assert "not running)" in line
+    assert "novad.service is failed (enabled, Restart=always) — " in line
 
 
 def test_elevation_states_only_what_was_read_never_an_inferred_uac_prompt():
@@ -1156,6 +1215,387 @@ def test_elevation_states_only_what_was_read_never_an_inferred_uac_prompt():
         {"type": "facts", "elevation": {"elevated": False, "admin": True, "sudo": "off"}}
     )
     line = df.elevation_line(facts, "windows")
-    assert "is an administrator, but its own token is not elevated (UAC)" in line
+    # Pins moved (Task 16b fix round 2, M7): the head says what was read —
+    # the token is not elevated, the account is an administrator — and that
+    # whether a UAC prompt would stop admin work is NOT measured, instead of
+    # answering it ("needs elevating first, which a command cannot do").
+    assert (
+        "without admin rights (its token is not elevated); the account it runs as is an "
+        "administrator; whether admin work from Nova's commands would stop at a UAC prompt "
+        "has not been measured yet" in line
+    )
     assert "asks for consent" not in line
-    assert "UAC prompt" not in line
+    assert "cannot do for itself" not in line and "cannot answer" not in line
+
+
+# -- S42b Task 16b fix round 2 (controller's findings on 22dfabcf) ----------
+# Every fixture below is a shape, and a text, the agent really sends:
+# apps/novad/internal/facts/probe.go, platform/wsl_windows.go,
+# platform/elevation_windows.go, platform/elevation_unix.go, platform/bounded.go.
+
+_UBUNTU = PROBED["wsl_distros"]["distros"][0]
+_LXSS = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss"
+# A distribution the agent could not look inside: probe.go sets none of the
+# look's fields, and leaves its pids null — unknown.
+_NOT_LOOKED = {
+    "name": "Ubuntu-26.04",
+    "default": True,
+    "version": 2,
+    "running": True,
+    "looked": False,
+    "root": False,
+    "novad_pids": None,
+}
+
+
+def _with_distros(*distros: dict, unreadable: list | None = None, **wsl) -> dict:
+    frame = copy.deepcopy(PROBED)
+    frame["wsl_distros"] = {"distros": [copy.deepcopy(d) for d in distros], **wsl}
+    if unreadable is not None:
+        frame["unreadable"] = unreadable
+    return frame
+
+
+@pytest.mark.parametrize(
+    "auth", [None, WINDOWS, WINDOWS_RUN_KEY], ids=["no-auth-block", "foreground", "run-key"]
+)
+def test_a_run_key_value_is_named_from_the_probe_never_from_the_auth_block(auth):
+    """M2, round 2: what the name is comes from the name probe.go gives it —
+    serviceOf names a Run-key entry by its registry path — never from
+    agent.mode, which the row lacks when its auth facts were refused (cleared
+    to NULL; the next facts frame merges into {})."""
+    facts = df.validate_frame(PROBED)
+    if auth is not None:
+        facts = {**df.validate_auth(auth), **facts}
+    assert df.runs_line(facts).startswith(
+        "how it runs: the Run-key value "
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent; binary "
+    )
+
+
+@pytest.mark.parametrize(
+    "name,said",
+    [
+        ("novad.service", "how it runs: service novad.service; "),  # service.UnitName
+        ("nova.novad", "how it runs: service nova.novad; "),  # service.Label
+        ("", "how it runs: no service — started by hand; "),  # foreground: no name
+    ],
+    ids=["systemd-user", "launch-agent", "foreground"],
+)
+def test_the_other_managers_names_read_as_the_probe_gives_them(name, said):
+    facts = df.validate_frame(_set(PROBED, ("service", "name"), name))
+    assert df.runs_line(facts).startswith(said)
+
+
+# The items probe.go files after a distribution, as facts.go's clip leaves
+# them: at most 255 BYTES of UTF-8, cut back to a character's start. Written
+# out by hand from that rule — never with core's own helper — and checked
+# against the agent's clip run in Go (task-16-report.md, section 7).
+_LONG_NAMES = [
+    # name, look item, novad_pids item, root item
+    pytest.param(
+        "U" * 232,
+        "wsl_distros." + "U" * 232,
+        "wsl_distros." + "U" * 232 + ".novad_pids",
+        "wsl_distros." + "U" * 232 + ".root",
+        id="ascii-232-every-item-fits",
+    ),
+    pytest.param(
+        "U" * 233,
+        "wsl_distros." + "U" * 233,
+        "wsl_distros." + "U" * 233 + ".novad_pid",
+        "wsl_distros." + "U" * 233 + ".root",
+        id="ascii-233-pids-item-clipped",
+    ),
+    pytest.param(
+        "U" * 242,
+        "wsl_distros." + "U" * 242,
+        "wsl_distros." + "U" * 242 + ".",
+        "wsl_distros." + "U" * 242 + ".",
+        id="ascii-242-root-and-pids-items-meet",
+    ),
+    pytest.param(
+        "U" * 243,
+        "wsl_distros." + "U" * 243,
+        "wsl_distros." + "U" * 243,
+        "wsl_distros." + "U" * 243,
+        id="ascii-243-look-item-fits-exactly",
+    ),
+    pytest.param(
+        "U" * 244,
+        "wsl_distros." + "U" * 243,
+        "wsl_distros." + "U" * 243,
+        "wsl_distros." + "U" * 243,
+        id="ascii-244-look-item-clipped",
+    ),
+    pytest.param(
+        "日" * 78,
+        "wsl_distros." + "日" * 78,
+        "wsl_distros." + "日" * 78 + ".novad_pi",
+        "wsl_distros." + "日" * 78 + ".root",
+        id="cjk-78-characters-234-bytes",
+    ),
+    pytest.param(
+        "a" + "日" * 81,
+        "wsl_distros.a" + "日" * 80,
+        "wsl_distros.a" + "日" * 80 + ".n",
+        "wsl_distros.a" + "日" * 80 + ".r",
+        id="cjk-cut-back-to-a-character-start",
+    ),
+]
+
+
+@pytest.mark.parametrize("name,look_item,pids_item,root_item", _LONG_NAMES)
+def test_the_agents_clipped_items_are_found_for_long_distro_names(
+    name, look_item, pids_item, root_item
+):
+    """M3, round 2: core builds its keys exactly as the agent clips its
+    items, or every reason filed after a long name goes unsaid. Each case
+    files ONE reason, so a key the agent's clip makes shared (242 bytes and
+    up) still has one owner — read from the distro's own fields."""
+    assert all(len(item.encode()) <= 255 for item in (look_item, pids_item, root_item))
+
+    def line_with(distro: dict, item: str, reason: str) -> str:
+        frame = _with_distros(distro, unreadable=[{"item": item, "reason": reason}])
+        return df.wsl_line(_merged(frame))
+
+    looked_not = line_with(dict(_NOT_LOOKED, name=name), look_item, "the look printed no answer")
+    assert "running; could not look inside: the look printed no answer" in looked_not
+
+    eight_pids = line_with(
+        dict(_UBUNTU, name=name, novad_pids=list(range(412, 420))),
+        pids_item,
+        "more than 8 novad processes; the rest are not listed",
+    )
+    assert (
+        "(more may be running: more than 8 novad processes; the rest are not listed)" in eight_pids
+    )
+    assert "not confirmed" not in eight_pids
+
+    no_pgrep = line_with(
+        dict(_UBUNTU, name=name, novad_pids=None),
+        pids_item,
+        "its novad processes could not be listed: pgrep is missing there, or failed",
+    )
+    assert (
+        "whether a novad process runs there could not be read (its novad processes could "
+        "not be listed: pgrep is missing there, or failed)" in no_pgrep
+    )
+    assert "not confirmed" not in no_pgrep
+
+    no_root = line_with(
+        dict(_UBUNTU, name=name, root=False), root_item, "wsl.exe: gave no answer in time"
+    )
+    assert "-u root not confirmed (wsl.exe: gave no answer in time)" in no_root
+    # One pid is not the agent's cut at eight: the root reason a shared key
+    # carries is never read as a cut-off pid list.
+    assert "more may be running" not in no_root
+
+
+@pytest.mark.parametrize(
+    "name,written",
+    [
+        ("Ubuntu-26.04", "wsl.exe -d Ubuntu-26.04 -u root"),
+        ("Ubuntu Dev", 'wsl.exe -d "Ubuntu Dev" -u root'),
+        ("dev&test", 'wsl.exe -d "dev&test" -u root'),
+        ('say "hi"', 'wsl.exe -d "say \\"hi\\"" -u root'),
+        ("tail\\", 'wsl.exe -d "tail\\\\" -u root'),
+    ],
+    ids=["owners-default-distro", "space", "shell-character", "quote", "trailing-backslash"],
+)
+def test_the_root_path_always_names_the_distro_quoted_as_windows_reads_it(name, written):
+    """M6, round 2: the agent ran `wsl.exe -d <name> -u root` (probe.go), and
+    the default may have changed since — so even the default distro (the
+    owner's own case) is named. A name with anything but letters, digits,
+    '.', '_' and '-' is quoted by the rule a Windows program reads its
+    command line with: a quote inside is \\", and backslashes before a quote
+    double."""
+    line = df.wsl_line(_merged(_with_distros(dict(_UBUNTU, name=name))))
+    assert f"root through {written} without a password" in line
+    assert "wsl.exe -u root" not in line
+
+
+_ADMIN_UNREAD = "reading whether this account is in Administrators: Access is denied."
+
+
+@pytest.mark.parametrize("sudo", ["off", "absent", "inline"])
+@pytest.mark.parametrize(
+    "elevation,unreadable,head",
+    [
+        (
+            {"admin": True},
+            [],
+            "elevation: the agent runs without admin rights (its token is not elevated); "
+            "the account it runs as is an administrator; whether admin work from Nova's "
+            "commands would stop at a UAC prompt has not been measured yet; ",
+        ),
+        (
+            {"admin": False},
+            [],
+            "elevation: the agent runs without admin rights (its token is not elevated); "
+            "the account it runs as is not an administrator; ",
+        ),
+        (
+            {},
+            [{"item": "elevation", "reason": _ADMIN_UNREAD}],
+            "elevation: the agent runs without admin rights (its token is not elevated); "
+            "whether the account it runs as is an administrator could not be read "
+            f"({_ADMIN_UNREAD}); ",
+        ),
+        (
+            {"elevated": True, "admin": True},
+            [],
+            "elevation: the agent runs with admin rights (an elevated token); ",
+        ),
+    ],
+    ids=["administrator", "standard-account", "membership-unread", "elevated"],
+)
+def test_windows_elevation_says_only_the_token_and_membership_it_read(
+    elevation, unreadable, head, sudo
+):
+    """M7, round 2: elevation_windows.go reads the token's elevation and the
+    Administrators membership — never ConsentPromptBehaviorAdmin or
+    ConsentPromptBehaviorUser. The head says those two things and, for an
+    administrator, that a UAC prompt is unmeasured; it never answers what
+    the sudo tail on the same line says is open."""
+    frame = {
+        "type": "facts",
+        "elevation": {"elevated": False, "sudo": sudo, **elevation},
+        "unreadable": unreadable,
+    }
+    line = df.elevation_line(df.validate_frame(frame), "windows")
+    assert line.startswith(head)
+    for claim in ("cannot do for itself", "cannot answer", "password at a UAC", "needs elevating"):
+        assert claim not in line
+    if elevation.get("admin") is False:
+        assert "UAC" not in line
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        f"reading {_LXSS}\\DefaultDistribution: unexpected key value type",
+        f"opening {_LXSS}\\{{00000000-0000-0000-0000-000000000001}}: Access is denied.",
+        f"reading {_LXSS}\\{{00000000-0000-0000-0000-000000000001}}\\DistributionName: "
+        "Access is denied.",
+    ],
+    ids=["default-distribution-unread", "key-not-opened", "distribution-name-unread"],
+)
+def test_a_reason_beside_wsls_list_never_says_a_distribution_is_missing(reason):
+    """Finding 5: probe.go files more than its "more than 8" reason under
+    "wsl_distros" — a DefaultDistribution it could not read, a key it could
+    not open (which may not be a distribution at all), a name it could not
+    read (wsl_windows.go). Each is said in the agent's words as part of WSL's
+    list that could not be read; "not every distribution is shown", or the
+    whole list "could not be read", is never said for them."""
+    item = [{"item": "wsl_distros", "reason": reason}]
+    # DefaultDistribution unread: the agent marks no distribution default.
+    listed = df.wsl_line(
+        _merged(_with_distros(dict(_UBUNTU, default=False), _NOT_LOOKED, unreadable=item))
+    )
+    assert listed.endswith(f"(part of WSL's list could not be read: {reason})")
+    assert "not every distribution is shown" not in listed
+    empty = df.wsl_line(_merged(_with_distros(unreadable=item)))
+    assert empty == (
+        f"WSL: no distribution is listed; part of WSL's list could not be read: {reason}"
+    )
+    # The list itself unread (probe.go:180): wsl_distros is left out entirely.
+    whole = f"reading {_LXSS}: Access is denied."
+    frame = {"type": "facts", "unreadable": [{"item": "wsl_distros", "reason": whole}]}
+    assert df.wsl_line(df.validate_frame(frame)) == (
+        f"WSL: the list of distributions could not be read ({whole})"
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["wsl.exe: gave no answer in time", "wsl.exe did not start: had no time left to start"],
+    ids=["gave-no-answer", "never-started"],
+)
+def test_a_root_check_that_failed_says_the_agents_reason_never_did_not_run(reason):
+    """Finding 6: probe.go files the root check's failure under
+    "<item>.root" — a timeout among them, and the agent never claims that a
+    program it stopped waiting for stopped (bounded.go). Not confirmed, with
+    the agent's reason; never "did not run"."""
+    no_root = dict(_UBUNTU, root=False)
+    item = [{"item": "wsl_distros.Ubuntu-26.04.root", "reason": reason}]
+    line = df.wsl_line(_merged(_with_distros(no_root, unreadable=item)))
+    assert f"root through wsl.exe -d Ubuntu-26.04 -u root not confirmed ({reason})" in line
+    assert "did not run" not in line
+    unsaid = df.wsl_line(_merged(_with_distros(no_root)))
+    assert "root through wsl.exe -d Ubuntu-26.04 -u root not confirmed (no reason given)" in unsaid
+
+
+def test_every_sudo_refusal_says_only_that_sudo_n_true_failed():
+    """Finding 7: the agent files EVERY failure of `sudo -n true` as
+    "refused" — elevation_unix.go's default branch, and the look's `else echo
+    sudo=refused` — "not in sudoers" as well as a password. The words claim
+    neither; sudo's own words say which."""
+    native = df.validate_frame(
+        {
+            "type": "facts",
+            "elevation": {
+                "elevated": False,
+                "sudo": "refused",
+                "sudo_said": "sudo: exit status 1: sam is not in the sudoers file.",
+            },
+        }
+    )
+    assert df.elevation_line(native, "linux") == (
+        "elevation: sudo -n true failed here "
+        "(sudo -n said: sudo: exit status 1: sam is not in the sudoers file.)"
+    )
+    in_wsl = dict(_UBUNTU, sudo="refused", sudo_said="sam is not in the sudoers file.")
+    line = df.wsl_line(_merged(_with_distros(in_wsl)))
+    assert "sudo -n true failed here (sudo -n said: sam is not in the sudoers file.)" in line
+    assert "needs a password" not in line and "nothing can type" not in line
+
+
+def test_an_elevated_agent_on_an_unknown_platform_is_elevated_never_root():
+    """Finding 8: a row whose platform is 'unknown' (migration 036) cannot
+    tell an euid of 0 from an elevated Windows token."""
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": True, "sudo": "no_password"}}
+    )
+    assert df.elevation_line(facts, "unknown") == "elevation: the agent runs elevated"
+    assert df.elevation_line(facts, "linux") == "elevation: the agent runs as root"
+
+
+def test_a_look_failure_with_an_empty_reason_says_no_reason_given():
+    """Finding 9: an empty reason rendered "could not look inside: )"."""
+    item = [{"item": "wsl_distros.Ubuntu-26.04", "reason": ""}]
+    line = df.wsl_line(_merged(_with_distros(_NOT_LOOKED, unreadable=item)))
+    assert "running; could not look inside: no reason given)" in line
+    assert ": )" not in line
+
+
+@pytest.mark.parametrize(
+    "said", ["sudo: gave no answer in time", "sudo did not start: had no time left to start"]
+)
+def test_the_agents_own_failure_words_are_never_labelled_as_a_programs(said):
+    """Finding 10: for sudo "unknown" the words are probe.go's failed(err) —
+    sudo gave no answer, or never started, and said nothing. The same holds
+    for running_said (failed(listErr)): the agent's words about a wsl.exe
+    that may never have answered, not wsl.exe's."""
+    facts = df.validate_frame(
+        {"type": "facts", "elevation": {"elevated": False, "sudo": "unknown", "sudo_said": said}}
+    )
+    assert df.elevation_line(facts, "linux") == (
+        f"elevation: whether sudo could be used could not be read (the agent said: {said})"
+    )
+    stopped = dict(_NOT_LOOKED, running=False)
+    listed = _with_distros(stopped, running_said="wsl.exe: gave no answer in time")
+    line = df.wsl_line(_merged(listed))
+    assert line.endswith("(wsl.exe --list --running failed: wsl.exe: gave no answer in time)")
+    assert "--running said" not in line
+
+
+def test_an_active_units_zero_main_pid_is_never_said_as_not_running():
+    """Finding 11: systemd's MainPID is 0 for a unit with no main process it
+    tracks, and the agent's parse leaves 0 when the line is missing — "is
+    active (…, not running)" contradicted itself. A zero main pid is left
+    out."""
+    unit = {"active": "active", "file": "enabled", "restart": "always", "main_pid": 0}
+    line = df.wsl_line(_merged(_with_distros(dict(_UBUNTU, novad_unit=unit))))
+    assert "novad.service is active (enabled, Restart=always) — " in line
+    assert "not running" not in line

@@ -95,8 +95,8 @@ WINDOWS_SUDO_FROM_AGENT = (
 )
 # The only states where "does this work headlessly" is a live, unmeasured
 # question (Task 16b fix round 1, M1): "refused" already has a DEFINITE
-# outcome regardless of console (no password, no admin access, full stop)
-# and "off"/"absent"/"unknown" have nothing to measure in the first place.
+# outcome regardless of console (sudo -n true was run, and failed) and
+# "off"/"absent"/"unknown" have nothing to measure in the first place.
 # WINDOWS_SUDO_FROM_AGENT is appended only for these three, never
 # contradicting a state that already says what happens — "…a command using
 # sudo fails — whether this works…" was exactly that contradiction.
@@ -114,10 +114,12 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # Linux and inside a WSL distro before this).
 _SUDO_WORDS = {
     "no_password": "sudo runs without a password",
-    "refused": (
-        "sudo needs a password here, and nothing can type one into Nova's commands — "
-        "a command using sudo fails"
-    ),
+    # The agent files EVERY failure of `sudo -n true` as "refused" —
+    # elevation_unix.go's default branch, the look's `else echo
+    # sudo=refused` — "not in sudoers" as well as a password required. So
+    # the words say only that it failed; sudo's own words (_said_suffix)
+    # say why (Task 16b fix round 2, finding 7).
+    "refused": "sudo -n true failed here",
     # Windows' sudo.exe ships off by default (elevation_windows.go) —
     # "absent" there means never turned on, not "no sudo" (Task 16b fix
     # round 1, I2/M1); _SUDO_WORDS_NOT_WINDOWS restores "no sudo" for a
@@ -145,6 +147,11 @@ _SUDO_WORDS_NOT_WINDOWS = {
 # can be absent for reasons that have nothing to do with the agent's age —
 # see runs_line.
 _UNKNOWN_RUNS = "how it runs: unknown — this agent has not reported it"
+# A command-line argument that reads the same, unquoted, in cmd.exe,
+# PowerShell, a POSIX shell and a Windows program's own argv parser.
+_BARE_ARG = re.compile(r"[A-Za-z0-9._-]+")
+# A Windows registry path, as probe.go names a Run-key entry: HKCU\...
+_REGISTRY_PATH = re.compile(r"HK[A-Z_]+\\", re.IGNORECASE)
 
 # Every role on an agent inside WSL (r2-integration S42a; the in-WSL agent is
 # retired for the Windows one, which reaches WSL through wsl.exe).
@@ -633,6 +640,74 @@ def _reason_for(facts: dict | None, item: str) -> str:
     return _reasons_by_item(facts).get(item, "")
 
 
+def _clip(text: str) -> str:
+    """The agent's clip (facts.go): at most _MAX_TEXT BYTES of UTF-8, cut
+    back to the start of a character. probe.go clips every unreadable item it
+    files after a distribution — "wsl_distros.<name>", then that clipped
+    item plus ".root" or ".novad_pids" — so core builds its lookup keys the
+    same way, or never finds a long name's reason (Task 16b fix round 2,
+    M3). Text core holds is valid UTF-8: _encoded_size refused a surrogate."""
+    raw = text.encode("utf-8")
+    if len(raw) <= _MAX_TEXT:
+        return text
+    cut = _MAX_TEXT
+    while cut > 0 and raw[cut] & 0xC0 == 0x80:  # a continuation byte
+        cut -= 1
+    return raw[:cut].decode("utf-8")
+
+
+def _distro_item(name: str, part: str = "") -> str:
+    """The unreadable item probe.go files for a distribution (its look), or
+    for one part of it ("root", "novad_pids") — clipped exactly as the agent
+    clips it. From 242 bytes of name up, the agent's clip makes the root and
+    pids items one string; a caller reads which one a reason is from the
+    distro's own fields."""
+    item = _clip("wsl_distros." + name)
+    return _clip(f"{item}.{part}") if part else item
+
+
+def _windows_arg(text: str) -> str:
+    """One argument of a Windows command line, written so the command runs
+    as written: bare when it is only letters, digits, '.', '_' and '-',
+    else in double quotes by the rule a Windows program's argv parser reads
+    back (CommandLineToArgvW — what wsl.exe reads its own -d with): a quote
+    inside is \\", and the backslashes just before a quote, or before the
+    closing one, double (Task 16b fix round 2, M6)."""
+    if _BARE_ARG.fullmatch(text):
+        return text
+    out: list[str] = []
+    slashes = 0
+    for ch in text:
+        if ch == "\\":
+            slashes += 1
+            continue
+        if ch == '"':
+            out.append("\\" * (2 * slashes + 1) + '"')
+        else:
+            out.append("\\" * slashes + ch)
+        slashes = 0
+    return '"' + "".join(out) + "\\" * (2 * slashes) + '"'
+
+
+def _service_kind(name: str) -> str:
+    """What the agent's service is, read from the name its probe gives it
+    (Task 16b fix round 2, M2) — never from facts.agent.mode, which the row
+    lacks whenever its auth facts were refused (the row is cleared to NULL,
+    and the next facts frame merges into {}). probe.go's serviceOf names a
+    systemd unit or a LaunchAgent by the name its manager knows it by, and a
+    Run-key entry by its registry path, HKCU\\<RunKeyPath>\\<RunKeyValue>: a
+    registry path is a registry value, never a service. "" is the agent's
+    own word for started by hand (Service.Name in probe.go)."""
+    if not name:
+        return "no service — started by hand"
+    if not _REGISTRY_PATH.match(name):
+        return f"service {name}"
+    key = name.rpartition("\\")[0]
+    if key.rpartition("\\")[2].lower() == "run":
+        return f"the Run-key value {name}"
+    return f"the registry value {name}"
+
+
 def _service_field(value: str | int, facts: dict | None, item: str) -> str:
     """One service field, as "unknown" (with the agent's own reason, when
     given) rather than a bare blank — "binary ; config ;" and "process
@@ -658,16 +733,7 @@ def runs_line(facts: dict | None) -> str:
         # is None outright. Never guessed which.
         reason = _reason_for(facts, "probe")
         return f"{_UNKNOWN_RUNS} ({reason})" if reason else _UNKNOWN_RUNS
-    mode = (facts.get("agent") or {}).get("mode") if isinstance(facts, dict) else None
-    if not s["name"]:
-        by = "no service — started by hand"
-    elif mode == "run-key":
-        # A Windows Run-key value is not a service (Task 16b fix round 1,
-        # M2) — it is a registry value under HKCU\...\Run, read at
-        # sign-in by the shell, with none of a real service's lifecycle.
-        by = f"the Windows Run key {s['name']}"
-    else:
-        by = f"service {s['name']}"
+    by = _service_kind(s["name"])
     binary = _service_field(s["binary"], facts, "service.binary")
     config = _service_field(s["config"], facts, "service.config")
     process = _service_field(s["process"], facts, "service.process")
@@ -691,18 +757,45 @@ def _sudo_words(state: str, *, windows: bool) -> str:
 
 
 def _said_suffix(e: dict, *, windows: bool) -> str:
-    """The agent's own words for why a sudo state reads as it does —
-    "refused" (needs a password) and "unknown" (could not be read) both
-    carry one, on every platform (Task 16b fix round 1, I4: Windows
-    dropped sudo_said entirely; Linux/macOS only showed it for
-    "refused"). The mechanism differs by platform — `sudo -n` on
-    Linux/macOS and inside a WSL distro, a registry read on Windows — so
-    the words naming it do too."""
+    """The words behind a sudo state — "refused" and "unknown" both carry
+    them, on every platform (Task 16b fix round 1, I4), each labelled as
+    whose words they are (Task 16b fix round 2, finding 10). A refusal's
+    sudo_said is sudo's own first line (elevation_unix.go, the look's
+    sudo.said). An "unknown" one is the AGENT's: probe.go's failed(err) for
+    a sudo that gave no answer or never started — sudo said nothing — and
+    windowsSudo's read on Windows, where no sudo -n ever runs."""
     if e["sudo"] not in ("refused", "unknown") or not e["sudo_said"]:
         return ""
-    if windows:
-        return f" (it said: {e['sudo_said']})"
+    if e["sudo"] == "unknown" or windows:
+        return f" (the agent said: {e['sudo_said']})"
     return f" (sudo -n said: {e['sudo_said']})"
+
+
+def _windows_head(facts: dict, e: dict) -> str:
+    """What elevation_windows.go read: whether the agent's own token is
+    elevated, and whether the account is in Administrators — never
+    ConsentPromptBehaviorAdmin or ConsentPromptBehaviorUser, which decide
+    whether admin work meets a UAC prompt. So the head says those two
+    things and nothing about prompts but that, for an administrator, it is
+    not measured yet — Task 1's Dell reading settles it, as it settles
+    Windows sudo — and it never answers what the sudo tail on the same line
+    says is open (Task 16b fix round 2, M7)."""
+    if e["elevated"]:
+        return "the agent runs with admin rights (an elevated token)"
+    head = "the agent runs without admin rights (its token is not elevated); "
+    admin = e.get("admin")
+    if admin is True:
+        return head + (
+            "the account it runs as is an administrator; whether admin work from Nova's "
+            "commands would stop at a UAC prompt has not been measured yet"
+        )
+    if admin is False:
+        return head + "the account it runs as is not an administrator"
+    # admin is nil exactly when the token or membership read failed, and the
+    # agent says why under unreadable item "elevation" (elevation_windows.go,
+    # probe.go) — never read as "no" (Task 16b fix round 1, I2).
+    reason = _reason_for(facts, "elevation") or "no reason given"
+    return head + f"whether the account it runs as is an administrator could not be read ({reason})"
 
 
 def elevation_line(facts: dict | None, platform: str) -> str | None:
@@ -710,67 +803,46 @@ def elevation_line(facts: dict | None, platform: str) -> str | None:
     and why. States only the present: it is never a promise, or a ruling
     out, of some other admin path (Task 16b review). States only what the
     agent actually READ, never an inferred UAC prompt behavior the agent
-    never checked (Task 16b fix round 1, M7)."""
+    never checked (Task 16b fix round 1, M7; round 2, M7)."""
     e = facts.get("elevation") if isinstance(facts, dict) else None
     if not isinstance(e, dict):
         return None
     windows = platform == "windows"
     sudo = _sudo_words(e["sudo"], windows=windows) + _said_suffix(e, windows=windows)
     if windows:
-        if e["elevated"]:
-            head = "the agent runs with admin rights (an elevated token)"
-        else:
-            admin = e.get("admin")
-            if admin is True:
-                # Not "asks for consent at a UAC prompt": the agent reads
-                # whether the account IS an administrator and whether its
-                # OWN token is elevated — never
-                # ConsentPromptBehaviorAdmin, the registry value that
-                # actually decides what a UAC prompt looks like, or
-                # whether there is one at all (Task 16b fix round 1, M7 —
-                # say only what the agent read).
-                head = (
-                    "the agent runs without admin rights; the account it runs as is an "
-                    "administrator, but its own token is not elevated (UAC) — admin work "
-                    "needs elevating first, which a command cannot do for itself"
-                )
-            elif admin is False:
-                head = (
-                    "the agent runs without admin rights, and this account is not an "
-                    "administrator: admin work needs an administrator's password at a UAC "
-                    "prompt, which a command cannot answer"
-                )
-            else:
-                # admin is nil exactly when the membership read failed
-                # (elevation_windows.go) — never read as "no" (Task 16b
-                # fix round 1, I2).
-                head = (
-                    "the agent runs without admin rights, and whether the account it runs "
-                    "as is an administrator could not be read"
-                )
         if e["sudo"] in _SUDO_NEEDS_MEASUREMENT:
             sudo += WINDOWS_SUDO_FROM_AGENT
-        return f"elevation: {head}; {sudo}"
+        return f"elevation: {_windows_head(facts, e)}; {sudo}"
     if e["elevated"]:
-        return "elevation: the agent runs as root"
+        # elevated is geteuid() == 0 on Linux and macOS, an elevated token
+        # on Windows: a row whose platform is 'unknown' (migration 036)
+        # cannot say which (Task 16b fix round 2, finding 8).
+        root = platform in PLATFORMS
+        return f"elevation: the agent runs {'as root' if root else 'elevated'}"
     return f"elevation: {sudo}"
 
 
 def _nova_agent_in(d: dict, why: dict[str, str]) -> str:
     pids = d["novad_pids"]
+    pids_said = why.get(_distro_item(d["name"], "novad_pids"))
     if pids is None:
         # Absent or null, never collapsed into "none" (Task 16b review,
         # "unknown is never none") — only an explicit [] means confirmed
-        # empty, handled by the `elif pids` branch below.
+        # empty, handled by the `elif pids` branch below. probe.go says
+        # why under the pids item (pgrep missing, or failed).
         procs = "whether a novad process runs there could not be read"
+        if pids_said is not None:
+            procs += f" ({pids_said or 'no reason given'})"
     elif pids:
         procs = f"novad process pid {', '.join(map(str, pids))}"
-        cut_off = why.get("wsl_distros." + d["name"] + ".novad_pids")
-        if cut_off is not None:
+        if len(pids) == _MAX_PIDS and pids_said is not None:
             # More than 8 novad processes were found (probe.go); the
             # agent lists only the first 8 and says so (Task 16b fix
             # round 1, M3) — never silently as if that were all of them.
-            procs += f" (more may be running: {cut_off or 'no reason given'})"
+            # It cuts only at eight, so a reason beside fewer is not this
+            # one: from 242 bytes of name up the pids item IS the root
+            # item, and a root check's reason is never a cut-off list.
+            procs += f" (more may be running: {pids_said or 'no reason given'})"
     else:
         procs = "no novad process"
     unit = d["novad_unit"]
@@ -780,11 +852,15 @@ def _nova_agent_in(d: dict, why: dict[str, str]) -> str:
         return f"its user units could not be read ({unit['said'] or 'no answer'}); {procs}"
     if not unit["file"] and unit["active"] == "inactive":
         return f"no novad.service user unit; {procs}"
-    # A failed unit's main_pid is 0 — not a pid (Task 16b fix round 1, M6).
-    main_pid = f"main pid {unit['main_pid']}" if unit["main_pid"] else "not running"
+    # A main_pid of 0 is not a pid (Task 16b fix round 1, M6), and not "not
+    # running" either: systemd says 0 for a unit with no main process it
+    # tracks, and the agent's parse leaves 0 when the line is missing — an
+    # active unit read "active (…, not running)" (Task 16b fix round 2,
+    # finding 11). Left out; the unit's own state says whether it runs.
+    main_pid = f", main pid {unit['main_pid']}" if unit["main_pid"] else ""
     return (
         f"{d['user'] or 'its default user'}'s systemd user unit novad.service is {unit['active']} "
-        f"({unit['file'] or 'no unit file'}, Restart={unit['restart'] or 'unknown'}, "
+        f"({unit['file'] or 'no unit file'}, Restart={unit['restart'] or 'unknown'}"
         f"{main_pid}) — a user unit is managed with systemctl --user as that "
         f"user, without sudo (a command Nova runs may need XDG_RUNTIME_DIR=/run/user/<uid> set "
         f"— the agent's own look set it); {procs}"
@@ -804,7 +880,9 @@ def _distro_words(d: dict, why: dict[str, str], running_said: str) -> str:
         else:
             bits.append("not running — not looked inside, since looking would start it")
     elif not d["looked"]:
-        reason = why.get("wsl_distros." + d["name"], "no reason given")
+        # An empty reason is no reason, never "could not look inside: )"
+        # (Task 16b fix round 2, finding 9).
+        reason = why.get(_distro_item(d["name"])) or "no reason given"
         bits.append(f"running; could not look inside: {reason}")
     else:
         bits.append("running")
@@ -820,59 +898,66 @@ def _distro_words(d: dict, why: dict[str, str], running_said: str) -> str:
             bits.append(f"default user {d['user']}")
         if d["sudo"]:
             bits.append(_sudo_words(d["sudo"], windows=False) + _said_suffix(d, windows=False))
-        # wsl.exe -u root with no -d targets the DEFAULT distro — right
-        # only for one of them (Task 16b fix round 1, M6).
-        wsl_cmd = "wsl.exe -u root" if d["default"] else f"wsl.exe -d {d['name']} -u root"
-        bits.append(
-            f"root through {wsl_cmd} without a password" if d["root"] else f"{wsl_cmd} did not run"
-        )
+        # Always -d <name> (Task 16b fix round 2, M6): the agent ran
+        # `wsl.exe -d <name> -u root` (probe.go), and which distro is the
+        # default may have changed since — so the default one is named too.
+        wsl_cmd = f"wsl.exe -d {_windows_arg(d['name'])} -u root"
+        if d["root"]:
+            bits.append(f"root through {wsl_cmd} without a password")
+        else:
+            # The check failed, gave no answer in time, or never started —
+            # the agent says which under the root item, and never claims a
+            # program it stopped waiting for stopped (bounded.go). Not
+            # confirmed, never "did not run" (Task 16b fix round 2, finding 6).
+            said = why.get(_distro_item(d["name"], "root")) or "no reason given"
+            bits.append(f"root through {wsl_cmd} not confirmed ({said})")
         bits.append(_nova_agent_in(d, why))
     return f"{d['name']} ({', '.join(bits)})"
 
 
-def _wsl_unreadable_line(why: dict[str, str]) -> str | None:
-    """The one place "the distribution list could not be read" is
-    composed — used whether wsl_distros was omitted entirely (the agent's
-    own failed-probe shape) or sent with an empty distros list (Task 16b
-    fix round 1, I3)."""
-    if "wsl_distros" not in why:
-        return None
-    reason = why["wsl_distros"] or "no reason given"
-    return f"WSL: the list of distributions could not be read ({reason})"
-
-
 def wsl_line(facts: dict | None) -> str | None:
-    """The WSL distributions beside a Windows agent, as it looked at them."""
+    """The WSL distributions beside a Windows agent, as it looked at them.
+
+    Under unreadable item "wsl_distros" probe.go files several things: the
+    whole list it could not read (and then wsl_distros is left out), and,
+    beside a list it did read, a DefaultDistribution it could not read, a
+    key under Lxss it could not open (which may not be a distribution at
+    all), a name it could not read, or "more than 8 distributions; the rest
+    are not listed". Only the shape tells the first apart; the rest are said
+    by a wording true of all of them — part of WSL's list could not be read
+    — in the agent's own words, never "not every distribution is shown"
+    (Task 16b fix round 2, finding 5). Membership (`in`), never a reason's
+    truthiness, says whether the agent filed one (Task 16b fix round 1, I3a)."""
     if not isinstance(facts, dict):
         return None
     why = _reasons_by_item(facts)
+    filed = why.get("wsl_distros")
     w = facts.get("wsl_distros")
     if not isinstance(w, dict):
-        # The agent's own failed-probe shape omits wsl_distros entirely
-        # and says why under unreadable item "wsl_distros" (Task 16b fix
-        # round 1, I3b) — still a WSL line, never silence.
-        return _wsl_unreadable_line(why)
+        # The agent's own failed-list shape omits wsl_distros entirely and
+        # says why under "wsl_distros" (Task 16b fix round 1, I3b) — still a
+        # WSL line, never silence.
+        if filed is None:
+            return None
+        return f"WSL: the list of distributions could not be read ({filed or 'no reason given'})"
+    part = None
+    if filed is not None:
+        part = f"part of WSL's list could not be read: {filed or 'no reason given'}"
     if not w["distros"]:
-        # An empty list is not the same claim as a list that could not be
-        # read at all (Task 16b review) — the agent never confirmed zero
-        # distros, so this never reads as "none installed" (I3a: tests
-        # the entry's EXISTENCE via `in`, not its reason's truthiness, so
-        # an empty or all-control-character reason still counts).
-        return _wsl_unreadable_line(why) or "WSL: no distribution is installed for this account"
+        # Read, and empty — but beside a reason it is not "none installed"
+        # (Task 16b review): the key it could not open may be one.
+        if part is not None:
+            return f"WSL: no distribution is listed; {part}"
+        return "WSL: no distribution is installed for this account"
     running_said = w.get("running_said", "")
-    said = f" (wsl.exe --list --running said: {running_said})" if running_said else ""
-    # More than 8 distros were found; the agent lists only the first 8 and
-    # says so under the same item (Task 16b fix round 1, M3) — a
-    # non-empty list is not proof it is the WHOLE list.
-    cut_off = (
-        f" (not every distribution is shown: {why['wsl_distros'] or 'no reason given'})"
-        if "wsl_distros" in why
-        else ""
-    )
+    # running_said is failed(listErr): the agent's words about the list
+    # command, which may never have answered — not wsl.exe's (Task 16b fix
+    # round 2, finding 10).
+    said = f" (wsl.exe --list --running failed: {running_said})" if running_said else ""
     return (
         "WSL on it, reached through this agent's wsl.exe: "
         + "; ".join(_distro_words(d, why, running_said) for d in w["distros"])
-        + cut_off
+        + ("" if part is None else f" ({part})")
         + said
     )
 
