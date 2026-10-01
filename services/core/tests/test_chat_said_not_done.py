@@ -2766,3 +2766,39 @@ async def test_M1_X1_a_tool_that_does_not_exist_is_never_said_to_have_failed(
     stored = await _stored(pool)
     assert stored == guards.CONSENT_CLAIM_CORRECTION
     assert _corrections(sent) == [stored]
+
+
+# The listing redirect's own call listed the files, then its closing round
+# failed (a 502). "I did not actually list those files this turn" would be
+# false: the listing guard's own re-check (A9, the state path's rule) names what
+# ran instead — and what is stored is what was shown. A call of another kind
+# lists nothing, so there the correction stands, and is true.
+@requires_db
+@pytest.mark.parametrize("its_own_kind", [True, False], ids=["it listed", "it searched"])
+async def test_A9_a_listing_redirect_that_listed_and_lost_its_report_says_what_ran(
+    its_own_kind, owner_client, pool, mount_peers, monkeypatch, tmp_path
+):
+    guard, reply, ask, rounds, answer, notes = await _i1_listing(
+        pool, monkeypatch, tmp_path, its_own_kind=its_own_kind
+    )
+    down = Refusal(502, {"error": {"message": "upstream down"}})
+    mount_peers(gateway=ScriptedGateway(rounds=(rounds[0], rounds[1], down)), memory=FakeMemory())
+
+    sent = await _say(owner_client, ask)
+
+    ran = "workspace_list_files" if its_own_kind else "web_search"
+    assert await _reached_executor(pool) == [ran]
+    stored = await _stored(pool)
+    if its_own_kind:
+        assert stored == chat._bare_intent_ran_but_unreported_note(ran)
+        assert "did not actually list" not in json.dumps(sent, ensure_ascii=False)
+    else:
+        assert stored == guards.PRESENTED_LISTING_CORRECTION
+    assert _corrections(sent) == [stored]  # what was shown is what is stored
+    (redirect,) = [
+        meta for meta in map(_meta, await _named(pool, guard)) if "redirect_tool_calls" in meta
+    ]
+    assert redirect["redirected"] is False
+    assert redirect.get("correction_replaced_by") == (
+        "ran_but_unreported" if its_own_kind else None
+    )

@@ -5408,6 +5408,13 @@ async def _run_turn(
                     nudge_for=lambda ran: presented_listing_redirect_nudge(ran_a_tool=ran),
                     redirect_note=PRESENTED_LISTING_REDIRECT_NOTE,
                     redirect_note_no_call=PRESENTED_LISTING_REDIRECT_NOTE_NO_CALL,
+                    # "I did not actually list those files" is false once this
+                    # redirect's own call listed them and only its report was
+                    # lost: the listing guard's own re-check then names what
+                    # ran instead (A9 — the state path's rule).
+                    still_unbacked=lambda: _listing_claim_stands(
+                        text, turn, listing_tools, message
+                    ),
                     # "Listing the files now" only when the listing guard's
                     # own re-check finds a listing ran (I-1).
                     claim_backed=lambda: (
@@ -5428,6 +5435,13 @@ async def _run_turn(
                 listing_redirected = outcome.redirected
                 stood_prose = outcome.prose if outcome.redirected else stood_prose
                 redirect_appended += outcome.appended
+                if not listing_redirected and listing_text != listing_claim.text:
+                    # The redirect replaced the correction with one that is true
+                    # of the turn's final state (its own call listed the files),
+                    # and the composition below carries the claim's text — so
+                    # the claim carries the new one, as on the state path, and
+                    # what persists is what was shown.
+                    listing_claim = dataclasses.replace(listing_claim, text=listing_text)
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 if backend_note is None and outcome.markup_note:
                     backend_note, redirect_note_unshown = outcome.markup_note, True
