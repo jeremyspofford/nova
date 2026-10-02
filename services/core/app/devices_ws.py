@@ -40,6 +40,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -132,6 +133,21 @@ class ConnectionClosed(Exception):
     unwinds the same way whether the socket is real or in-process."""
 
 
+class NotSent(devices.DeviceRefused):
+    """Hub.command refused BEFORE anything reached the device's socket: no
+    live row, no socket at the row's epoch, a row that moved past the epoch
+    the caller prepared the command for, or a write that failed. Nothing was
+    put on the wire, so nothing can have run there.
+
+    Every other DeviceRefused from Hub.command — a timeout, a socket that
+    dropped before its answer, a disconnect — comes AFTER the send, when the
+    device may have acted. The difference is load-bearing for an update
+    (S42b): a command that was sent and not answered may have staged a new
+    build, so only the agent's reconnect can say what happened; one that was
+    never sent can be said to have done nothing. Callers that need neither
+    distinction catch DeviceRefused, as before."""
+
+
 def _as_uuid(device_id: str | uuid.UUID) -> uuid.UUID:
     return device_id if isinstance(device_id, uuid.UUID) else uuid.UUID(str(device_id))
 
@@ -187,6 +203,10 @@ class Hub:
         # review): epochs only grow, so it is also what stops an old-key
         # socket from displacing a newer one that already joined.
         self._epochs: dict[str, int] = {}
+        # S42b P10: when core last sent each device a command (monotonic
+        # seconds) — what idle() reads, so the update job restarts an agent
+        # only when that cuts nothing off.
+        self._last_command: dict[str, float] = {}
 
     # registry ---------------------------------------------------------------
     def register(
@@ -238,6 +258,22 @@ class Hub:
     def connected_ids(self) -> set[str]:
         return set(self._conns)
 
+    def in_flight(self, device_id: str | uuid.UUID) -> int:
+        """Commands core sent this device that have not answered yet — the
+        ones that end "cancelled" if its agent restarts now (S42b P25)."""
+        return len(self._pending.get(str(device_id), {}))
+
+    def idle(self, device_id: str | uuid.UUID, quiet_s: float) -> bool:
+        """Connected, nothing in flight, and no command sent in the last
+        quiet_s (S42b P10) — when restarting its agent cuts nothing off.
+        False for a device with no socket: whether it is connected is
+        stated elsewhere (agent_updates._connected), never from this."""
+        did = str(device_id)
+        if not self.is_connected(did) or self._pending.get(did):
+            return False
+        last = self._last_command.get(did)
+        return last is None or time.monotonic() - last >= quiet_s
+
     def resolve(self, device_id: str | uuid.UUID, envelope_id: str, payload: dict) -> None:
         """A `result` frame arrived: resolve the future keyed by envelope_id and
         nothing else, so a frame for an id core is not awaiting resolves nothing."""
@@ -256,6 +292,7 @@ class Hub:
         args: dict,
         timeout: float,
         facts_sink: list[dict] | None = None,
+        epoch: int | None = None,
     ) -> dict:
         """Send one signed command and await the device's own result.
 
@@ -278,17 +315,31 @@ class Hub:
         A socket registered at an epoch the row has since moved past
         authenticated with a key the row no longer holds (a re-pair landed
         while it was joining): it is not this device's socket, so it reads as
-        no socket at all, and nothing is signed or sent over it."""
+        no socket at all, and nothing is signed or sent over it.
+
+        `epoch` (S42b), when given, is the audit epoch of the row read the
+        caller prepared this command from — an update composes its args from
+        that agent's own facts, and a bootstrap's later steps run a file an
+        earlier step checked ON THAT AGENT. If a re-pair has moved the row on
+        since, the command is not sent to whatever agent holds the new key.
+
+        Every refusal raised before the write is NotSent: nothing reached
+        the device."""
         did = str(device_id)
         row = await devices.get_live(pool, _as_uuid(device_id))
         if row is None:
-            raise devices.DeviceRefused(f"device {name!r} is not paired or has been revoked")
-        conn = self._conns.get(did)
+            raise NotSent(f"device {name!r} is not paired or has been revoked")
         current = row["audit_epoch"]
+        if epoch is not None and current != epoch:
+            raise NotSent(
+                f"device {name!r} was re-paired after this command was prepared for its "
+                "previous agent — nothing was sent to the agent that holds its new key"
+            )
+        conn = self._conns.get(did)
         if conn is None or self._epochs.get(did, current) != current:
             if facts_sink is not None:
                 facts_sink.append({"device": name, "connected": False})
-            raise devices.DeviceRefused(
+            raise NotSent(
                 f"device {name!r} is not connected — its tile is stale; check it is "
                 "powered on and online"
             )
@@ -298,6 +349,8 @@ class Hub:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending.setdefault(did, {})[envelope["envelope_id"]] = fut
         try:
+            # S42b P10: the update job's idle() reads this.
+            self._last_command[did] = time.monotonic()
             try:
                 await conn.send({"type": "command", "envelope": envelope, "sig": sig})
             except Exception as exc:
@@ -307,7 +360,7 @@ class Hub:
                 # an unexpected crash the model has to decode.
                 if facts_sink is not None:
                     facts_sink.append({"device": name, "connected": False})
-                raise devices.DeviceRefused(
+                raise NotSent(
                     f"device {name!r} is not connected — its tile is stale; check it is "
                     "powered on and online"
                 ) from exc
@@ -448,7 +501,17 @@ async def authenticate(conn: object, pool) -> object | None:
         return None
 
     epoch = row["audit_epoch"]
-    await _record_auth_facts(pool, device_id, frame.get("facts"), epoch=epoch)
+    stored = await _record_auth_facts(pool, device_id, frame.get("facts"), epoch=epoch)
+    try:
+        # S42b P8: this connection decides the device's open update, if any —
+        # from the facts it STORED (None when nothing was stored, so nothing
+        # is decided) and only at this socket's own epoch (observe_connect).
+        # Imported here: agent_updates imports this module (its hub).
+        from app import agent_updates
+
+        await agent_updates.observe_connect(pool, device_id, stored, epoch=epoch)
+    except Exception:  # noqa: BLE001 — an update's bookkeeping never refuses a socket
+        logger.exception("device %s: its open update could not be decided", device_id)
     # S42b P15: the door this socket came through, written only while the row
     # is still at `epoch` (the note above _record_auth_facts) — a re-pair
     # mid-handshake must not let this socket's door land on the rebound row.
@@ -742,10 +805,15 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch
 # the key the row holds now.
 
 
-async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: int) -> None:
+async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: int) -> dict | None:
     """Record the auth frame's facts — AFTER the signature verified — REPLACING
     what the device said before: a new connection is a fresh truth. Written
     only while the row is still at `epoch` (the note above).
+
+    Returns the facts it STORED (S42b, for agent_updates.observe_connect), or
+    None: absent, rejected, refused by postgres, or valid but stored nowhere
+    because a re-pair moved the row past `epoch` — what was not recorded is
+    never handed on as though it were.
 
     Facts that are ABSENT, REJECTED, or that postgres itself refuses
     (asyncpg.DataError — UntranslatableCharacterError, a NUL byte, is one
@@ -765,14 +833,16 @@ async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: 
             logger.warning("device %s: auth-frame facts not recorded — %s", device_id, exc.reason)
         else:
             try:
-                await pool.execute(
+                status = await pool.execute(
                     "UPDATE devices SET facts = $2, facts_at = now() "
                     "WHERE id = $1 AND audit_epoch = $3",
                     device_id,
                     clean,
                     epoch,
                 )
-                return
+                # "UPDATE 0": the row moved past this socket's epoch — stored
+                # nowhere, and the clear below would match nothing either.
+                return clean if status == "UPDATE 1" else None
             except asyncpg.DataError as exc:
                 logger.warning(
                     "device %s: auth-frame facts not recorded — postgres refused them: %s",
@@ -784,6 +854,7 @@ async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: 
         device_id,
         epoch,
     )
+    return None
 
 
 async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict, *, epoch: int) -> None:

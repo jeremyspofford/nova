@@ -559,6 +559,8 @@ async def test_every_device_route_except_enroll_needs_an_identity(client, pool):
     assert (await client.post(f"/api/v1/devices/{device_id}/revoke")).status_code == 401
     # S42b: a re-pair code authorises a whole machine's identity, like a pairing code.
     assert (await client.post(f"/api/v1/devices/{device_id}/repair-code")).status_code == 401
+    # S42b: "update it now" sends a build to a machine — a person asks for it.
+    assert (await client.post(f"/api/v1/devices/{device_id}/update")).status_code == 401
 
 
 async def test_enroll_is_reachable_with_no_identity_at_all(client, pool):

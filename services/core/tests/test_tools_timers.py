@@ -535,9 +535,11 @@ async def test_list_shows_the_persons_own_timers_and_the_jobs_never_another_pers
     assert timers.timer_spec(row)["schedule_words"] in result
     assert "homework" not in result
     # The install's jobs are hers to see (the Schedules page shows them too),
-    # stated as system rows.
-    assert "1 housekeeping job (system):" in result
+    # stated as system rows. S42b (decision 2): two — retention and
+    # agent_updates.
+    assert "2 housekeeping jobs (system):" in result
     assert f"job {timers.JOB_TITLES['retention']!r}" in result
+    assert f"job {timers.JOB_TITLES['agent_updates']!r}" in result
     assert "PAUSED" not in result
 
 
@@ -647,7 +649,9 @@ async def test_cancel_refuses_what_is_not_hers_by_name(pool, tmp_path):
     await _create(_ctx(other, tmp_path), text="homework", in_minutes=5)
     (theirs,) = await _rows(pool, other)
     await timers.ensure_jobs(pool)
-    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    job_id = await pool.fetchval(
+        "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
+    )
     ctx = _ctx(jeremy, tmp_path)
 
     # Another person's timer, by id and by title: not hers, so not found.
@@ -662,7 +666,8 @@ async def test_cancel_refuses_what_is_not_hers_by_name(pool, tmp_path):
         assert ok is False
         assert "no timer of yours matches" in result
     assert len(await _rows(pool, other)) == 1
-    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 1
+    # Both of the install's jobs are still there (S42b: retention and agent_updates).
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 2
 
 
 async def test_cancel_with_no_timers_at_all_says_so(pool, tmp_path):
@@ -869,12 +874,13 @@ async def test_list_timers_from_an_agent_turn_lists_the_timers_bound_to_it(pool,
     assert ok is True
     assert result == "no timers are bound to you"
 
-    # The owner's set is unchanged by the binding: both rows and the job.
+    # The owner's set is unchanged by the binding: both rows and the jobs
+    # (S42b: retention and agent_updates).
     result, ok = await tools.dispatch("list_timers", "", ctx)
     assert ok is True
     assert result.startswith("2 timers of yours")
     assert "'stretch'" in result and "'review the diffs'" in result
-    assert "1 housekeeping job (system):" in result
+    assert "2 housekeeping jobs (system):" in result
 
 
 async def test_list_bound_is_the_store_projection_newest_first(pool, tmp_path):

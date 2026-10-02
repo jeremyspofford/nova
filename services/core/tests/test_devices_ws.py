@@ -46,9 +46,11 @@ def _clean_hub():
     # registry around every test so one test's sockets never leak into the next.
     devices_ws.hub._conns.clear()
     devices_ws.hub._pending.clear()
+    devices_ws.hub._last_command.clear()
     yield
     devices_ws.hub._conns.clear()
     devices_ws.hub._pending.clear()
+    devices_ws.hub._last_command.clear()
 
 
 # -- helpers -----------------------------------------------------------------
@@ -286,6 +288,108 @@ async def test_a_command_to_a_revoked_device_is_refused(pool):
             pool, device_id=device_id, name="laptop", capability="system.info", args={}, timeout=1
         )
     assert "revoked" in exc.value.reason
+
+
+# -- S42b: what was sent, how many are in flight, when the hub last sent -----
+
+
+async def test_every_refusal_before_the_send_is_not_sent_and_a_timeout_is_not(pool):
+    """An update reads the difference (agent_updates): a command that never
+    reached the socket did nothing; one sent and left unanswered may have."""
+
+    class _DeadConn(FakeWSConn):
+        async def send(self, frame: dict) -> None:
+            raise ConnectionResetError("socket went away mid-write")
+
+    offline_id, _device = await _enroll(pool, name="offline")  # never joins the hub
+    revoked_id, _device = await _enroll(pool, name="revoked")
+    devices_ws.hub.register(revoked_id, FakeWSConn())
+    await devices.revoke(pool, device_id=revoked_id, actor="tester")
+    dead_id, _device = await _enroll(pool, name="dead")
+    devices_ws.hub.register(dead_id, _DeadConn())
+    for device_id, name in ((offline_id, "offline"), (revoked_id, "revoked"), (dead_id, "dead")):
+        with pytest.raises(devices_ws.NotSent):
+            await devices_ws.hub.command(
+                pool, device_id=device_id, name=name, capability="system.info", args={}, timeout=1
+            )
+    device_id, _device, conn, task = await _connect(pool, name="silent")
+    with pytest.raises(devices.DeviceRefused) as exc:
+        await devices_ws.hub.command(
+            pool, device_id=device_id, name="silent", capability="system.info", args={}, timeout=0.1
+        )
+    assert not isinstance(exc.value, devices_ws.NotSent) and "did not answer" in exc.value.reason
+    await _close(conn, task)
+
+
+async def test_a_command_prepared_for_an_agent_a_repair_replaced_is_never_sent(pool):
+    """`epoch` names the agent a command was prepared for: after a re-pair the
+    new key's socket never receives it, while a command for the new epoch
+    still goes out."""
+    device_id, _old, conn, task = await _connect(pool, name="pc")
+    await devices_ws.hub.disconnect(device_id, "re-paired")
+    await asyncio.wait_for(task, 2)
+    new = FakeDevice()
+    person = await _person(pool)
+    code = await devices.mint_pairing_code(pool, created_by=person.id, device_id=device_id)
+    await devices.enroll(
+        pool,
+        code=code["code"],
+        pubkey=new.pubkey_hex,
+        name="ignored",
+        platform="linux",
+        hostname="h",
+    )
+    new.device_id = str(device_id)
+    conn2 = FakeWSConn()
+    task2 = asyncio.create_task(devices_ws.serve(conn2, pool))
+    assert (await asyncio.wait_for(new.handshake(conn2), 2))["type"] == "ready"
+    with pytest.raises(devices_ws.NotSent, match="re-paired"):
+        await devices_ws.hub.command(
+            pool,
+            device_id=device_id,
+            name="pc",
+            capability="system.info",
+            args={},
+            timeout=1,
+            epoch=0,
+        )
+    assert _command_frames(conn2) == []
+    pending = asyncio.create_task(
+        devices_ws.hub.command(
+            pool,
+            device_id=device_id,
+            name="pc",
+            capability="system.info",
+            args={},
+            timeout=2,
+            epoch=1,
+        )
+    )
+    frame = await new.answer_command(conn2)
+    assert frame["envelope"]["capability"] == "system.info"
+    assert (await asyncio.wait_for(pending, 2))["ok"] is True
+    await _close(conn2, task2)
+
+
+async def test_the_hub_counts_what_is_in_flight_and_when_it_last_sent(pool):
+    device_id, device, conn, task = await _connect(pool, name="pc")
+    assert devices_ws.hub.in_flight(device_id) == 0
+    assert devices_ws.hub.idle(device_id, 300)  # nothing ever sent
+    pending = asyncio.create_task(
+        devices_ws.hub.command(
+            pool, device_id=device_id, name="pc", capability="system.info", args={}, timeout=2
+        )
+    )
+    frame = await asyncio.wait_for(conn.next_sent(), 2)
+    assert devices_ws.hub.in_flight(device_id) == 1
+    assert not devices_ws.hub.idle(device_id, 0)  # one in flight
+    conn.feed(device.result(frame["envelope"]))
+    assert (await asyncio.wait_for(pending, 2))["ok"] is True
+    assert devices_ws.hub.in_flight(device_id) == 0
+    assert not devices_ws.hub.idle(device_id, 300)  # one sent within the quiet window
+    assert devices_ws.hub.idle(device_id, 0)
+    await _close(conn, task)
+    assert not devices_ws.hub.idle(device_id, 0)  # no socket
 
 
 # -- revoke kills the socket -------------------------------------------------

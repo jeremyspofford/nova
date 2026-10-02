@@ -646,6 +646,13 @@ async def test_a_scheduled_turn_with_no_model_set_is_refused_not_run(pool, mount
 async def test_a_due_job_runs_its_handler_under_a_job_span(pool):
     await timers.ensure_jobs(pool)
     job = await pool.fetchrow("SELECT * FROM timers WHERE payload->>'handler' = 'retention'")
+    # S42b: ensure_jobs also seeds agent_updates, every 15 minutes, so it is
+    # due at the tick below too. This test is retention's: move the other
+    # job's next firing past that tick, so exactly one job runs.
+    await pool.execute(
+        "UPDATE timers SET next_fire_at = $1 WHERE payload->>'handler' = 'agent_updates'",
+        job["next_fire_at"] + timedelta(days=1),
+    )
     # Something for retention to prune, so the result is a real count.
     await pool.execute(
         "INSERT INTO timer_firings (timer_id, scheduled_for, started_at, status, ended_at) "

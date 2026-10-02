@@ -12,11 +12,21 @@ It cannot see an agent inside WSL beside its machine's Windows agent: WSL
 has its own machine id by construction. That pair is the WSL role rule's to
 state (device_facts.WSL_REASON), and a pre-S42a agent that sends no facts is
 visible to neither — the owner retires it by hand.
+
+A second (S42b decision 2): an agent behind the hub's build that Nova
+cannot, or did not manage to, update. One the agent_updates job will update
+at its next idle moment is not news; one that cannot be updated says the
+owner's one step, and one whose update failed says how, in its own words.
+Whether Nova can update it is agent_updates.eligibility's — the same
+decision the send and the job read (F14).
 """
 
 from __future__ import annotations
 
-from app.checks import Check, Finding
+from datetime import UTC, datetime, timedelta
+
+from app import agent_dist, agent_updates, device_facts, devices
+from app.checks import CannotCheck, Check, Finding
 
 _SQL = """
 SELECT name, facts->>'machine_uid' AS uid
@@ -49,12 +59,78 @@ async def duplicate_agents(app, pool) -> list[Finding]:
     return findings
 
 
+def _stale(built_at: str) -> bool:
+    """Whether the hub's build was built over a day ago. A time that does
+    not read, or names no zone, is never stale: it says nothing."""
+    try:
+        built = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return built.tzinfo is not None and datetime.now(UTC) - built > timedelta(days=1)
+
+
+async def agents_behind(app, pool) -> list[Finding]:
+    """An agent behind the hub's build that Nova cannot, or did not manage to,
+    update. One the job will update at its next idle moment is not news.
+
+    Each says only what the rows say: an agent that has not reported its
+    build is never called behind, and one still behind a build over a day
+    old is never given a cause nobody checked."""
+    try:
+        build = await agent_dist.read()
+    except agent_dist.DistUnavailable as exc:
+        raise CannotCheck(f"the hub has no agent build to compare with — {exc}") from exc
+    stale = _stale(build.built_at)
+    findings = []
+    for r in await devices.rows_with_last_update(pool, live_only=True):
+        version = device_facts.agent_version(r["facts"])
+        if version == build.version:
+            continue
+        build_words = (
+            f"is behind the hub's build {build.version}"
+            if version
+            else f"has not said which build it runs (the hub's is {build.version})"
+        )
+        able = agent_updates.eligibility(r)
+        if not able.can:
+            token = able.token
+            title = f"{r['name']}'s agent {build_words}, and it {able.said} — {able.step}"
+        elif r["u_version"] == build.version and r["u_outcome"] in agent_updates.FAILED:
+            token = f"failed:{r['u_outcome']}"
+            title = (
+                f"{r['name']}'s agent {build_words}: its update to it {r['u_outcome']}: "
+                f"{r['u_reason'] or 'no reason was recorded'}"
+            )
+        elif stale:
+            token = "stale"
+            title = (
+                f"{r['name']}'s agent {build_words}, which was built over a day ago "
+                f"({build.built_at}) — Nova has not updated it to it yet"
+            )
+        else:
+            continue
+        findings.append(
+            Finding(
+                key=f"agent_behind:{r['id']}",
+                title=title,
+                facts={"device": r["name"], "hub_version": build.version, "why": token},
+            )
+        )
+    return findings
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         name="devices_duplicate_agents",
         describe="Two or more live Nova agents reporting the same machine.",
         urgent=False,
         run=duplicate_agents,
+    ),
+    Check(
+        name="devices_agents_behind",
+        describe="An agent behind the hub's build that Nova cannot, or did not manage to, update.",
+        urgent=False,
+        run=agents_behind,
     ),
 )
 

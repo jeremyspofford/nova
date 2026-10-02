@@ -172,6 +172,31 @@ async def list_devices(_person: Person = Depends(identity.require_person)) -> di
     return {"devices": await devices.list_devices(pool, hub_version=await agent_dist.version())}
 
 
+@router.post("/{device_id}/update")
+async def update_device(
+    device_id: uuid.UUID, _person: Person = Depends(identity.require_person)
+) -> dict:
+    """The tile's Update: send the hub's build now (decision 2's "update it
+    now"). The answer says what happened — sent, or a cannot with its one
+    step — and never "updated": only the agent's reconnect says that."""
+    # Imported here: agent_updates imports devices_ws, which the REST surface
+    # never depends on at load time (the revoke route's rule).
+    from app import agent_updates
+
+    pool = await db.get_pool()
+    row = await devices.get_live(pool, device_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no paired device with that id")
+    o = await agent_updates.update_now(pool, name=row["name"], requested_by="owner", wait_s=0)
+    return {
+        "outcome": o.outcome,
+        "version": o.version,
+        "from_version": o.from_version,
+        "reason": o.reason,
+        "needs_card": o.needs_card,
+    }
+
+
 @router.patch("/{device_id}")
 async def rename_device(
     device_id: uuid.UUID,

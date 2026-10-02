@@ -371,6 +371,14 @@ async def enroll(
                     "re-paired — pair it again with a new code from Settings -> Devices",
                     status_code=_REVOKED_STATUS,
                 )
+            # An update still `sent` went to the agent the OLD key belongs to:
+            # nothing can confirm it now, and the new key's first connection
+            # must never decide it (agent_updates.end_on_repair) — ended in
+            # this same commit. Imported here: agent_updates imports this
+            # module.
+            from app import agent_updates
+
+            await agent_updates.end_on_repair(conn, row["id"])
             await governance.record_event(
                 conn,
                 kind=governance.DEVICE_REPAIRED,

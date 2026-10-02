@@ -371,6 +371,23 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "tear down cleanup state for THIS socket — never returns a connectivity "
         "claim to anything a reply or a guard reads.",
     ),
+    ("devices_ws.py", "Hub.idle"): (
+        _BOOKKEEPING,
+        "S42b P10: idle() is False for a device with no socket, so the update "
+        "job never restarts an agent it cannot reach. Its False is only ever "
+        "read as 'busy' by agent_updates._why_not, which states connectivity "
+        "from agent_updates._connected first — never a connectivity claim of "
+        "its own.",
+    ),
+    ("agent_updates.py", "_connected"): (
+        _RECORDS,
+        "S42b: the ONE place agent_updates reads whether a machine's agent is "
+        "connected — before update_now opens an attempt (its 'not connected' "
+        "cannot) and before the job picks a machine. Records {device, "
+        "connected} onto the facts_sink a tool threads through update_now, the "
+        "shape _require_connected writes; the job passes none (a job span is "
+        "no reply).",
+    ),
     ("devices_ws.py", "Hub.command"): (
         _RECORDS,
         "the not-connected re-check right before sending (the gap `_admit` "
