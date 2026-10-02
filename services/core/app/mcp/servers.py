@@ -28,7 +28,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
+
+import asyncpg
 
 from app import governance
 from app.mcp import client
@@ -198,27 +200,31 @@ async def get(pool, name: str) -> Server | None:
     return Server.from_row(row) if row else None
 
 
-async def record_call(pool, name: str, *, ok: bool, reason: str | None = None) -> None:
-    """Stamp the outcome of a call. Fail-open: a row that could not be stamped
-    costs the roster's failure clause, never the call's own answer.
-
-    A failure's reason is scrubbed of THIS SERVER's own credential values
-    before it is stored: server-supplied text (a 401 body echoing the token
-    straight back) reaches `reason` exactly like a transport failure's own
-    words, so the credential that could carry comes out here, not at every
-    caller."""
+async def record_call(pool, server: Server, *, ok: bool, reason: str | None = None) -> None:
+    """Stamp the outcome of a call made with THIS server's own credentials
+    and endpoint (ruling T5-E) — never whatever the row currently holds. A
+    failure's reason is scrubbed with the credentials the call actually
+    used, and the UPDATE's WHERE clause matches the row's endpoint too, so a
+    server re-pointed between the call and this stamp is never credited or
+    blamed for an outcome that was never actually its own. Fail-open: a row
+    that could not be stamped costs the roster's failure clause, never the
+    call's own answer."""
     now = datetime.now(UTC)
     overlay = OVERLAY.get()
     if overlay is not None:
-        current = overlay.servers.get(name)
-        if current is not None:
-            overlay.servers[name] = (
+        current = overlay.servers.get(server.name)
+        if current is not None and (current.url, current.token, current.headers) == (
+            server.url,
+            server.token,
+            server.headers,
+        ):
+            overlay.servers[server.name] = (
                 replace(current, last_ok_at=now)
                 if ok
                 else replace(
                     current,
                     last_error=_scrub(
-                        reason or "failed", token=current.token, headers=current.headers
+                        reason or "failed", token=server.token, headers=server.headers
                     ),
                     last_error_at=now,
                 )
@@ -227,26 +233,30 @@ async def record_call(pool, name: str, *, ok: bool, reason: str | None = None) -
     try:
         if ok:
             await pool.execute(
-                "UPDATE mcp_servers SET last_ok_at = now(), updated_at = now() WHERE name = $1",
-                name,
+                "UPDATE mcp_servers SET last_ok_at = now(), updated_at = now() "
+                "WHERE name = $1 AND url = $2 AND token IS NOT DISTINCT FROM $3 "
+                "AND headers = $4::jsonb",
+                server.name,
+                server.url,
+                server.token,
+                server.headers,
             )
         else:
-            row = await pool.fetchrow(
-                "SELECT token, headers FROM mcp_servers WHERE name = $1", name
-            )
-            clean = _scrub(
-                reason or "failed",
-                token=row["token"] if row else None,
-                headers=dict(row["headers"] or {}) if row else {},
-            )
+            clean = _scrub(reason or "failed", token=server.token, headers=server.headers)
             await pool.execute(
-                "UPDATE mcp_servers SET last_error = $2, last_error_at = now(), updated_at = now() "
-                "WHERE name = $1",
-                name,
+                "UPDATE mcp_servers SET last_error = $5, last_error_at = now(), updated_at = now() "
+                "WHERE name = $1 AND url = $2 AND token IS NOT DISTINCT FROM $3 "
+                "AND headers = $4::jsonb",
+                server.name,
+                server.url,
+                server.token,
+                server.headers,
                 clean,
             )
+    except asyncpg.PostgresError as exc:
+        _log_pg_refused("record_call", exc)
     except Exception:
-        logger.exception("mcp: could not stamp the last call on %s", name)
+        logger.exception("mcp: could not stamp the last call on %s", server.name)
 
 
 def tools_hash(tools: Sequence[Mapping[str, Any]]) -> str:
@@ -292,20 +302,39 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _scrub(text: str, *, token: str | None, headers: Mapping[str, str], limit: int = 500) -> str:
-    """`text`, with every credential VALUE this endpoint holds — its token and
-    the value of each extra header — removed as an exact substring, then
-    capped. Server-supplied text (a 401 body that echoes the token straight
-    back) reaches a reason exactly like text this client composed itself, so
-    every reason this module records or returns runs through this before it
-    is stored or raised."""
-    scrubbed = str(text)
-    for secret in (token, *headers.values()):
-        if secret:
-            scrubbed = scrubbed.replace(secret, "[redacted]")
-    return _clip(scrubbed, limit)
+    """`text`, scrubbed of every credential value this endpoint holds, then
+    capped. A THIN SECOND PASS (ruling T5-A): the client already scrubs server
+    text at its own decode boundary (`client.scrub_credentials`), so anything
+    reaching here from a `ClientError.reason` is already clean — this exists
+    for reasons THIS module composes itself from a row's own stored
+    credentials (`record_call`) and as defence in depth everywhere else,
+    built from the SAME candidate list (`client.credential_candidates`,
+    ruling F13) rather than a second copy of what counts as a credential."""
+    return _clip(client._scrub_text(str(text), client.credential_candidates(token, headers)), limit)
 
 
 # ── connect, refresh, disconnect (S37a Task 5) ───────────────────────────────
+
+
+def _pg_refused(exc: asyncpg.PostgresError) -> ServerError:
+    """A ServerError naming only the SQLSTATE, and the constraint when there
+    is one (ruling T5-C) — never `str(exc)`: a CHECK violation's own DETAIL
+    text quotes the whole failing row, credentials included."""
+    if exc.constraint_name:
+        return ServerError(f"the database refused the row ({exc.constraint_name})")
+    return ServerError(f"the database refused the row (SQLSTATE {exc.sqlstate or 'unknown'})")
+
+
+def _log_pg_refused(where: str, exc: asyncpg.PostgresError) -> None:
+    """The log line for a refused transaction, carrying only the two safe
+    fields (ruling T5-C) — never `logger.exception`, whose traceback would
+    carry asyncpg's own DETAIL text, and never `str(exc)`."""
+    logger.error(
+        "mcp: %s: the database refused a row — sqlstate=%s constraint=%s",
+        where,
+        exc.sqlstate,
+        exc.constraint_name,
+    )
 
 
 @dataclass(frozen=True)
@@ -325,7 +354,19 @@ class Removed:
 def _validated(
     name: Any, url: Any, token: Any, headers: Any
 ) -> tuple[str, str, str | None, dict[str, str]]:
-    """Everything that can be refused before a byte is sent."""
+    """Everything that can be refused before a byte is sent.
+
+    Ruling T5-D: NO refusal here echoes any part of the address except the
+    scheme — not the netloc, not a raw port, not the path. Userinfo is
+    refused FIRST, before the scheme is even read, so a URL that is both the
+    wrong scheme and carries userinfo (`ftp://user:pw@host/mcp`) is never
+    echoed via the scheme refusal's old wording. `urlsplit` itself raises
+    `ValueError` for some malformed netlocs (an unbalanced `[`, a bracketed
+    value that is not an IP literal) and httpx raises its own `InvalidURL`
+    for a few shapes `urlsplit` accepts but silently cleans (a control
+    character embedded in the URL is STRIPPED by `urlsplit`, so checking the
+    parsed result would miss it — this checks the raw string first); every
+    one of those becomes the same stated, address-free refusal."""
     name = str(name or "").strip()
     if not NAME_RE.match(name):
         raise ServerError(
@@ -333,25 +374,42 @@ def _validated(
             "starting with a letter or a digit"
         )
     url = str(url or "").strip()
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise ServerError(
-            f"that is not an http or https address: {parts.scheme or 'no scheme'}://"
-            f"{parts.netloc or '…'}"
-        )
-    # Closed at the source (deferred from Tasks 2-3): a URL with userinfo
-    # carried a credential where only the origin is ever shown, and a
-    # malformed or out-of-range port made Endpoint.__repr__ raise rather than
-    # name the bad address. Both are refused here, before any probe, so
-    # `connect` never reaches the client with either.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        raise ServerError("that is not a usable http or https address")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise ServerError("that is not a usable http or https address") from None
+    # Userinfo first (ruling T5-D), before the scheme is named in any way.
     if parts.username is not None or parts.password is not None:
         raise ServerError(
             "that address may not carry a username or password; use the token field instead"
         )
+    if parts.scheme not in ("http", "https"):
+        raise ServerError(
+            f"that is not an http or https address — the scheme was {parts.scheme or 'empty'!r}"
+        )
     try:
-        parts.port
-    except ValueError as exc:
-        raise ServerError(f"that address has a bad port ({exc})") from exc
+        port = parts.port
+    except ValueError:
+        port = -1  # out of range below; never echoes urlsplit's own exception text
+    if port is not None and not (1 <= port <= 65535):
+        raise ServerError("that address has a port that is not a number from 1 to 65535")
+    host = parts.hostname
+    if not host:
+        raise ServerError("that is not a usable http or https address")
+    # Closed at the source (Important 2a): migration 038's `url ~
+    # '^https?://…'` CHECK is case-sensitive, so an untouched `Https://` or
+    # `HTTP://HOST` passed this validation, passed the probe, and only then
+    # hit the database — whose CheckViolationError.DETAIL quotes the whole
+    # failing row, token and header values included. `.scheme`/`.hostname`
+    # are already lower-cased by `urlsplit`; only the netloc is rebuilt —
+    # the path, query and fragment are kept exactly as given (a path can be
+    # the secret: ha-mcp authenticates by one).
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
     token = str(token).strip() if token is not None else None
     token = token or None
     if token is not None and (
@@ -363,8 +421,10 @@ def _validated(
     clean: dict[str, str] = {}
     for key, value in (headers or {}).items():
         # The same token-name shape the client itself demands of a header
-        # name (ruling F13: one source, never a second copy of the pattern).
-        if not isinstance(key, str) or not client._TCHAR.match(key):
+        # name (ruling F13: one source, never a second copy of the pattern),
+        # anchored at both ends (ruling M6: `_TCHAR`'s `$` matches before a
+        # trailing newline, so `.fullmatch` is the single fix at every use).
+        if not isinstance(key, str) or not client._TCHAR.fullmatch(key):
             raise ServerError(f"{key!r} is not an HTTP header name")
         lowered = key.lower()
         if lowered in _CLIENT_HEADERS or (lowered == "authorization" and token is not None):
@@ -391,24 +451,33 @@ async def connect(
     one he added."""
     name, url, token, clean = _validated(name, url, token, headers)
     endpoint = client.Endpoint(name=name, url=url, token=token, headers=clean)
+    not_reached: ServerError | None = None
     try:
         async with asyncio.timeout(CONNECT_BUDGET_S):
             found = await client.probe(endpoint)
             listed = await client.list_tools(endpoint, refresh=True)
-    except TimeoutError as exc:
-        raise ServerError(
+    except TimeoutError:
+        not_reached = ServerError(
             f"{name} was not connected: it did not finish answering within {CONNECT_BUDGET_S:g} s. "
             "Nothing was saved."
-        ) from exc
+        )
     except client.ClientError as exc:
-        # Server-supplied text can ride in exc.reason (a refusal's own body);
-        # scrubbed of this connect's own credentials before it is raised, let
-        # alone shown or logged (ruling: every reason the store returns).
-        raise ServerError(
+        # The client already scrubs server text at its own decode boundary
+        # (ruling T5-A), so exc.reason should already be clean; this is the
+        # store's second pass regardless (defence in depth). Built here but
+        # not RAISED until after this `except` has fully exited, same as the
+        # PostgresError handlers below: `from None` alone (ruling M3) only
+        # clears `__cause__` — Python still sets a raised exception's
+        # `__context__` to whatever is currently being handled, so without
+        # this, exc (even though its own text is already scrubbed) would sit
+        # one attribute away from any future caller that reads it.
+        not_reached = ServerError(
             f"{name} was not connected: {_scrub(exc.reason, token=token, headers=clean)}. "
             "Nothing was saved.",
             reachable=exc.reachable,
-        ) from exc
+        )
+    if not_reached is not None:
+        raise not_reached
     tools = tuple(dict(t) for t in listed.tools)
     now = datetime.now(UTC)
     fresh = Server(
@@ -431,45 +500,73 @@ async def connect(
         previous = overlay.servers.get(name)
         overlay.servers[name] = fresh
         return Connected(fresh, previous, listed.rejected, None)
-    async with pool.acquire() as conn, conn.transaction():
-        before = await conn.fetchrow(
-            f"SELECT {_COLUMNS} FROM mcp_servers WHERE name = $1 FOR UPDATE", name
-        )
-        row = await conn.fetchrow(
-            "INSERT INTO mcp_servers (name, url, token, headers, added_by, protocol, title, tools, "
-            "tools_hash, tools_fetched_at, tools_ttl_ms, last_ok_at) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, now()) "
-            "ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, token = EXCLUDED.token, "
-            "headers = EXCLUDED.headers, added_by = EXCLUDED.added_by, "
-            "protocol = EXCLUDED.protocol, "
-            "title = EXCLUDED.title, tools = EXCLUDED.tools, tools_hash = EXCLUDED.tools_hash, "
-            "tools_fetched_at = EXCLUDED.tools_fetched_at, tools_ttl_ms = EXCLUDED.tools_ttl_ms, "
-            "tools_changed_at = NULL, last_ok_at = EXCLUDED.last_ok_at, last_error = NULL, "
-            f"last_error_at = NULL, updated_at = now() RETURNING {_COLUMNS}",
-            name,
-            url,
-            token,
-            clean,
-            added_by,
-            found.protocol,
-            found.title,
-            list(tools),
-            fresh.tools_hash,
-            listed.ttl_ms,
-        )
-        previous = Server.from_row(before) if before else None
-        meta: dict[str, Any] = {
-            "name": name,
-            "origin": fresh.origin,
-            "added_by": added_by,
-            "protocol": found.protocol,
-            "tool_count": len(tools),
-        }
-        if previous is not None:
-            meta["replaced"] = {"origin": previous.origin, "added_by": previous.added_by}
-        event_id = await governance.record_event(
-            conn, kind=governance.MCP_SERVER_CONNECTED, actor=actor, meta=meta
-        )
+    pg_refused: ServerError | None = None
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            # An advisory, transaction-scoped lock keyed on the NAME (ruling
+            # M5): a name that does not exist yet has no row for `FOR UPDATE`
+            # below to lock, so two connects of a brand-new name could both
+            # read "no previous row" and race past each other — nova
+            # replacing the owner's just-inserted server would then record no
+            # `replaced` and file no notice. This serializes the two on the
+            # name itself, so the second always sees the first's row.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('mcp_servers:' || $1, 0))", name
+            )
+            before = await conn.fetchrow(
+                f"SELECT {_COLUMNS} FROM mcp_servers WHERE name = $1 FOR UPDATE", name
+            )
+            row = await conn.fetchrow(
+                "INSERT INTO mcp_servers (name, url, token, headers, added_by, protocol, title, "
+                "tools, tools_hash, tools_fetched_at, tools_ttl_ms, last_ok_at) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, now()) "
+                "ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, token = EXCLUDED.token, "
+                "headers = EXCLUDED.headers, added_by = EXCLUDED.added_by, "
+                "protocol = EXCLUDED.protocol, "
+                "title = EXCLUDED.title, tools = EXCLUDED.tools, tools_hash = EXCLUDED.tools_hash, "
+                "tools_fetched_at = EXCLUDED.tools_fetched_at, "
+                "tools_ttl_ms = EXCLUDED.tools_ttl_ms, "
+                "tools_changed_at = NULL, last_ok_at = EXCLUDED.last_ok_at, last_error = NULL, "
+                f"last_error_at = NULL, updated_at = now() RETURNING {_COLUMNS}",
+                name,
+                url,
+                token,
+                clean,
+                added_by,
+                found.protocol,
+                found.title,
+                list(tools),
+                fresh.tools_hash,
+                listed.ttl_ms,
+            )
+            previous = Server.from_row(before) if before else None
+            meta: dict[str, Any] = {
+                "name": name,
+                "origin": fresh.origin,
+                "added_by": added_by,
+                "protocol": found.protocol,
+                "tool_count": len(tools),
+            }
+            if previous is not None:
+                meta["replaced"] = {"origin": previous.origin, "added_by": previous.added_by}
+            event_id = await governance.record_event(
+                conn, kind=governance.MCP_SERVER_CONNECTED, actor=actor, meta=meta
+            )
+    except asyncpg.PostgresError as exc:
+        # The refused ServerError is built and LOGGED here, but not raised
+        # until after this `except` has fully exited (ruling T5-C): Python
+        # sets a raised exception's `__context__` to whatever is "currently
+        # being handled" at the moment of the `raise`, REGARDLESS of `from
+        # None` — that only clears `__cause__` and hides the chain from a
+        # DEFAULT traceback print, not from `exc.__context__` itself, which
+        # any code (or a logger that does not honour `__suppress_context__`)
+        # can still read. Raising once we are back in plain code, with no
+        # exception being handled, is the only way `__context__` ends up
+        # None rather than this PostgresError and its DETAIL text.
+        _log_pg_refused("connect", exc)
+        pg_refused = _pg_refused(exc)
+    if pg_refused is not None:
+        raise pg_refused
     if previous is not None:
         client.forget(previous.endpoint)
     notice = await _notice(pool, event_id, governance.MCP_SERVER_CONNECTED, meta)
@@ -483,17 +580,40 @@ async def disconnect(pool, *, name: str, by: str, actor: str) -> Removed:
         if gone is None:
             raise ServerError(await no_such_server(pool, name))
         return Removed(gone, None)
-    async with pool.acquire() as conn, conn.transaction():
-        row = await conn.fetchrow(
-            f"DELETE FROM mcp_servers WHERE name = $1 RETURNING {_COLUMNS}", name
-        )
-        if row is None:
-            raise ServerError(await no_such_server(pool, name))
-        gone = Server.from_row(row)
-        meta = {"name": name, "origin": gone.origin, "by": by, "previous_added_by": gone.added_by}
-        event_id = await governance.record_event(
-            conn, kind=governance.MCP_SERVER_REMOVED, actor=actor, meta=meta
-        )
+    # `not_found` and `pg_refused` are read AFTER the `async with` below has
+    # fully exited, and the sentence or the error is only raised then —
+    # never from inside the `except` (ruling M7: `no_such_server`'s own
+    # `list_servers` call would acquire a SECOND pool connection while this
+    # one's transaction still held the first; ruling T5-C: raising while a
+    # PostgresError is still "being handled" sets `__context__` to it
+    # regardless of `from None`, which only clears `__cause__`).
+    not_found = False
+    pg_refused: ServerError | None = None
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                f"DELETE FROM mcp_servers WHERE name = $1 RETURNING {_COLUMNS}", name
+            )
+            if row is None:
+                not_found = True
+            else:
+                gone = Server.from_row(row)
+                meta = {
+                    "name": name,
+                    "origin": gone.origin,
+                    "by": by,
+                    "previous_added_by": gone.added_by,
+                }
+                event_id = await governance.record_event(
+                    conn, kind=governance.MCP_SERVER_REMOVED, actor=actor, meta=meta
+                )
+    except asyncpg.PostgresError as exc:
+        _log_pg_refused("disconnect", exc)
+        pg_refused = _pg_refused(exc)
+    if not_found:
+        raise ServerError(await no_such_server(pool, name))
+    if pg_refused is not None:
+        raise pg_refused
     client.forget(gone.endpoint)
     notice = await _notice(pool, event_id, governance.MCP_SERVER_REMOVED, meta)
     return Removed(gone, notice)
@@ -502,10 +622,41 @@ async def disconnect(pool, *, name: str, by: str, actor: str) -> Removed:
 async def refresh_tools(pool, server: Server, *, actor: str, probe: bool = False) -> Server:
     """Read the server's tools again (and, with `probe`, its era and title).
     A changed list replaces the old one at once and is recorded — never a
-    freeze until someone approves it (v3's shape: an approval). ClientError
-    propagates: the caller states it and stamps the failure."""
-    found = await client.probe(server.endpoint) if probe else None
-    listed = await client.list_tools(server.endpoint, refresh=True)
+    freeze until someone approves it (v3's shape: an approval).
+
+    Ruling T5-E: `change` is computed against the LOCKED row's own
+    `tools`/`tools_hash`, read `FOR UPDATE` inside this call's own
+    transaction — never against `server`, the caller's possibly-stale
+    snapshot. Two concurrent refreshes from one snapshot then serialize on
+    that lock and each sees the true current row in turn, so only the one
+    that is genuinely first finds a change; the second sees its own result
+    already reflected and records nothing twice. If the row's endpoint (url,
+    token, headers) no longer matches `server`'s — a connect or disconnect
+    re-pointed or removed it while this call's network round trip was in
+    flight — nothing is written at all: recording A's tools onto B's row, or
+    stamping B's row with a protocol or title this call never actually
+    probed FROM B, would be reporting something that never happened."""
+    not_reached: client.ClientError | None = None
+    try:
+        found = await client.probe(server.endpoint) if probe else None
+        listed = await client.list_tools(server.endpoint, refresh=True)
+    except client.ClientError as exc:
+        # Defence in depth (ruling T5-A): the client already scrubs server
+        # text at its own decode boundary, so this is a second pass. The
+        # SAME type propagates (`ClientError`, not `ServerError`) — Tasks 7
+        # and 9 catch `client.ClientError` here and call `record_call` to
+        # stamp the failure; `refresh_tools` never states "nothing was
+        # saved" the way `connect` does, because a refresh's row already
+        # exists and is not touched by a failed read of it. Built here but
+        # raised only after this `except` exits (same reasoning as
+        # `connect`'s and the PostgresError handlers below), so its
+        # `__context__` is None rather than this ClientError.
+        not_reached = client.ClientError(
+            _scrub(exc.reason, token=server.token, headers=server.headers),
+            reachable=exc.reachable,
+        )
+    if not_reached is not None:
+        raise not_reached
     tools = tuple(dict(t) for t in listed.tools)
     new_hash = tools_hash(tools)
     now = datetime.now(UTC)
@@ -523,32 +674,57 @@ async def refresh_tools(pool, server: Server, *, actor: str, probe: bool = False
         )
         overlay.servers[server.name] = updated
         return updated
-    change = diff(server.tools, tools) if new_hash != server.tools_hash else None
+    change: dict[str, list[str]] | None = None
     event_id = None
-    async with pool.acquire() as conn, conn.transaction():
-        row = await conn.fetchrow(
-            "UPDATE mcp_servers SET tools = $2, tools_hash = $3, tools_fetched_at = now(), "
-            "tools_ttl_ms = $4, "
-            "tools_changed_at = CASE WHEN $5 THEN now() ELSE tools_changed_at END, "
-            "protocol = COALESCE($6, protocol), title = COALESCE($7, title), "
-            f"last_ok_at = now(), updated_at = now() WHERE name = $1 RETURNING {_COLUMNS}",
-            server.name,
-            list(tools),
-            new_hash,
-            listed.ttl_ms,
-            change is not None,
-            found.protocol if found else None,
-            found.title if found else None,
-        )
-        if row is None:
-            raise ServerError(f"{server.name} was removed while its tools were being read")
-        if change is not None:
-            event_id = await governance.record_event(
-                conn,
-                kind=governance.MCP_TOOLS_CHANGED,
-                actor=actor,
-                meta={"name": server.name, **change},
+    pg_refused: ServerError | None = None
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            locked = await conn.fetchrow(
+                f"SELECT {_COLUMNS} FROM mcp_servers WHERE name = $1 FOR UPDATE", server.name
             )
+            if locked is None:
+                raise ServerError(f"{server.name} was removed while its tools were being read")
+            current = Server.from_row(locked)
+            if (current.url, current.token, current.headers) != (
+                server.url,
+                server.token,
+                server.headers,
+            ):
+                raise ServerError(
+                    f"{server.name} changed while its tools were being read; nothing was recorded"
+                )
+            change = diff(current.tools, tools) if new_hash != current.tools_hash else None
+            row = await conn.fetchrow(
+                "UPDATE mcp_servers SET tools = $2, tools_hash = $3, tools_fetched_at = now(), "
+                "tools_ttl_ms = $4, "
+                "tools_changed_at = CASE WHEN $5 THEN now() ELSE tools_changed_at END, "
+                "protocol = COALESCE($6, protocol), title = COALESCE($7, title), "
+                f"last_ok_at = now(), updated_at = now() WHERE name = $1 RETURNING {_COLUMNS}",
+                server.name,
+                list(tools),
+                new_hash,
+                listed.ttl_ms,
+                change is not None,
+                found.protocol if found else None,
+                found.title if found else None,
+            )
+            if change is not None:
+                event_id = await governance.record_event(
+                    conn,
+                    kind=governance.MCP_TOOLS_CHANGED,
+                    actor=actor,
+                    meta={"name": server.name, **change},
+                )
+    except asyncpg.PostgresError as exc:
+        # Built and logged here, raised only after this `except` has fully
+        # exited (ruling T5-C; see the matching comment in `connect`): that
+        # is the only way the raised ServerError's `__context__` ends up
+        # None rather than this PostgresError and its DETAIL text, which
+        # `from None` alone does not achieve.
+        _log_pg_refused("refresh_tools", exc)
+        pg_refused = _pg_refused(exc)
+    if pg_refused is not None:
+        raise pg_refused
     if change is not None:
         await _notice(pool, event_id, governance.MCP_TOOLS_CHANGED, {"name": server.name, **change})
     return Server.from_row(row)
@@ -556,8 +732,12 @@ async def refresh_tools(pool, server: Server, *, actor: str, probe: bool = False
 
 async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
     """File the notice for a change the owner did not make, if this is one.
-    Returns the sentence her reply and the route carry — also when the notice
-    could NOT be filed, which is said rather than left out.
+    Returns the sentence her reply and the route carry — also when the
+    notice could NOT be filed, which is said rather than left out, and
+    worded by what actually happened (minor, "notice honesty"): a brand new
+    notice, one this folded onto that was already live in his Inbox, or one
+    that folds onto a notice he has MUTED — three different facts, never the
+    same sentence for all three.
 
     `notices` and `app.checks.mcp` are imported HERE, not at module top
     (ruling F1). `app.checks`'s own import pulls in `app.checks.money` ->
@@ -574,7 +754,7 @@ async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
     if finding is None:
         return None
     try:
-        await notices.record(
+        row, is_new = await notices.record(
             pool, finding, check_name=mcp_checks.CHANGES, turn_id=None, firing_id=None
         )
     except Exception as exc:
@@ -583,7 +763,11 @@ async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
             f"The notice for the owner could not be filed ({type(exc).__name__}); the change is "
             "in the governance ledger."
         )
-    return "A notice about this is in the owner's Inbox."
+    if is_new:
+        return "A notice about this is in the owner's Inbox."
+    if row.state == notices.MUTED:
+        return "The owner has muted notices like this one; the change is in the governance ledger."
+    return "This was added to a notice already in the owner's Inbox."
 
 
 async def no_such_server(pool, name: str) -> str:

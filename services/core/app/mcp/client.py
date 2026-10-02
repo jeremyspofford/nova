@@ -54,7 +54,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
@@ -719,6 +719,88 @@ def _check_credentials(endpoint: Endpoint) -> None:
             )
 
 
+# -- scrubbing server text (ruling T5-A) ---------------------------------------
+
+# Below this: a credential value is not a candidate to scrub for unless it is
+# at least this long. A shorter value is not a credential any server issues,
+# and scrubbing it mangles ordinary text a server legitimately sends back —
+# an HTTP status code, a GitHub preset's `actions` header value (review
+# Minor 2: both a bare credential missed and a short value over-redacted).
+_MIN_CREDENTIAL_CHARS = 8
+
+
+def credential_candidates(token: str | None, headers: Mapping[str, str]) -> tuple[str, ...]:
+    """Every exact substring a server could echo back of THIS credential set,
+    longest first — the one list (ruling F13) `scrub_credentials` below and
+    the store's own `servers._scrub` both work from, so a candidate is never
+    computed two different ways.
+
+    Candidates (ruling T5-B): the token, every extra header value, and — for
+    a candidate shaped `<one word> <rest>` (a scheme word then a space:
+    `Bearer abc…`, `Token abc…`, `Basic dXNl…`) — also `<rest>` on its own,
+    because a server may echo the credential ALONE, without the scheme word
+    in front of it. Only a candidate of `_MIN_CREDENTIAL_CHARS` or more
+    counts. Sorted longest first, so replacing one candidate never leaves a
+    shorter one's match sitting inside what a longer candidate already
+    covered."""
+    found: set[str] = set()
+    for value in (token, *headers.values()):
+        if not value:
+            continue
+        found.add(value)
+        _head, sep, rest = value.partition(" ")
+        if sep and rest:
+            found.add(rest)
+    return tuple(
+        sorted((c for c in found if len(c) >= _MIN_CREDENTIAL_CHARS), key=len, reverse=True)
+    )
+
+
+def _scrub_text(text: str, candidates: Sequence[str]) -> str:
+    for candidate in candidates:
+        if candidate in text:
+            text = text.replace(candidate, "[redacted]")
+    return text
+
+
+def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
+    """`value` — text, or anything just decoded from the server's own JSON —
+    with every exact substring of `endpoint`'s own credentials (ruling T5-B)
+    replaced by `[redacted]`.
+
+    Called where server text ENTERS the client (ruling T5-A: one source,
+    the client's decode boundary), so every reason, result, progress line
+    and tool list this module builds afterwards is clean BY CONSTRUCTION —
+    no caller downstream, in this module or in Tasks 7/9, has to remember
+    to scrub again. The store's `servers._scrub` is a thin second pass over
+    its OWN composed text, built from `credential_candidates` above.
+
+    A dict or list is walked ITERATIVELY, with an explicit stack rather than
+    a recursive call, so the cost is linear in the value's size regardless
+    of nesting depth. A string is scrubbed directly; anything else (a
+    number, a bool, None) passes through unchanged. Only VALUES are
+    scrubbed, never keys. Containers are mutated in place — each one is a
+    value this call just decoded from `json.loads` itself, so nothing else
+    holds a reference to it yet."""
+    candidates = credential_candidates(endpoint.token, endpoint.headers)
+    if not candidates:
+        return value
+    if isinstance(value, str):
+        return _scrub_text(value, candidates)
+    if not isinstance(value, (dict, list)):
+        return value
+    stack: list[dict | list] = [value]
+    while stack:
+        node = stack.pop()
+        items = node.items() if isinstance(node, dict) else enumerate(node)
+        for key, item in items:
+            if isinstance(item, str):
+                node[key] = _scrub_text(item, candidates)
+            elif isinstance(item, (dict, list)):
+                stack.append(item)
+    return value
+
+
 async def _post(
     endpoint: Endpoint,
     message: dict,
@@ -802,8 +884,12 @@ async def _post(
         and parsed.get("jsonrpc") == "2.0"
         and ("result" in parsed or "error" in parsed)
     ):
-        return status, response_headers, parsed, ""
-    return status, response_headers, None, " ".join(text.split())[:200]
+        return status, response_headers, scrub_credentials(parsed, endpoint), ""
+    # Scrubbed BEFORE the 200-character clip (ruling T5-A): an echo of this
+    # endpoint's own credentials straddling the cut would otherwise leave an
+    # unscrubbed prefix in the excerpt (review Minor 1).
+    excerpt = scrub_credentials(" ".join(text.split()), endpoint)
+    return status, response_headers, None, excerpt[:200]
 
 
 async def _read_capped(endpoint: Endpoint, response: httpx.Response) -> bytes:
@@ -872,7 +958,7 @@ async def _read_sse(endpoint, response, want, progress) -> dict | None:
     data: list[str] = []
     async for line in _sse_lines(endpoint, response):
         if line == "":
-            answer = _sse_event(data, want, progress)
+            answer = _sse_event(endpoint, data, want, progress)
             data = []
             if answer is not None:
                 return answer
@@ -882,10 +968,10 @@ async def _read_sse(endpoint, response, want, progress) -> dict | None:
         if line.startswith("data:"):
             value = line[5:]
             data.append(value[1:] if value.startswith(" ") else value)
-    return _sse_event(data, want, progress)
+    return _sse_event(endpoint, data, want, progress)
 
 
-def _sse_event(data: list[str], want: Any, progress) -> dict | None:
+def _sse_event(endpoint: Endpoint, data: list[str], want: Any, progress) -> dict | None:
     if not data:
         return None
     try:
@@ -894,6 +980,10 @@ def _sse_event(data: list[str], want: Any, progress) -> dict | None:
         return None
     if not isinstance(message, dict):
         return None
+    # Scrubbed here, at the decode boundary (ruling T5-A), so both the
+    # answer this returns and the progress line built from it below are
+    # clean — every SSE event, not only a plain JSON response.
+    message = scrub_credentials(message, endpoint)
     if ("result" in message or "error" in message) and message.get("id") == want:
         return message
     if message.get("method") == "notifications/progress" and progress is not None:
@@ -971,7 +1061,7 @@ def _tool_problem(raw: Any) -> str | None:
         name = node.get("x-mcp-header")
         if id(node) not in reachable:
             return "an x-mcp-header sits where only a chain of properties may reach it"
-        if not isinstance(name, str) or not _TCHAR.match(name):
+        if not isinstance(name, str) or not _TCHAR.fullmatch(name):
             return f"x-mcp-header {name!r} is not a header-name token"
         if name.lower() in seen:
             return f"x-mcp-header {name!r} is used twice"

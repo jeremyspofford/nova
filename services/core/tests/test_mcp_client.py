@@ -744,3 +744,122 @@ async def test_an_unknown_typed_block_is_read_as_noted_content():
     finally:
         client.unplant(handle)
     assert result.notes and "weird" in result.notes[0]
+
+
+# -- fix round 1: ruling T5-A/T5-B, scrubbing at the client's decode boundary -
+
+
+def test_credential_candidates_applies_the_8_char_floor_and_the_rest_rule():
+    """Ruling T5-B, pinned directly against the function: a short value
+    (review Minor 2's "HTTP 401" mangled by a header value of "1") is never
+    a candidate; a `<scheme word> <rest>` value also yields `<rest>` alone,
+    because a server may echo the credential without the word in front of
+    it; sorted longest first."""
+    assert client.credential_candidates(None, {}) == ()
+    assert client.credential_candidates("short", {}) == ()  # 5 chars
+    assert client.credential_candidates(None, {"X-Flag": "1"}) == ()
+    candidates = client.credential_candidates(
+        "abc123",  # 6 chars: never a candidate on its own
+        {"X-Key": "zz-abc123-zz", "Authorization": "Token s3cr3t-value-123"},
+    )
+    assert "abc123" not in candidates
+    assert "zz-abc123-zz" in candidates
+    assert "Token s3cr3t-value-123" in candidates
+    assert "s3cr3t-value-123" in candidates  # the <rest> of "Token <rest>"
+    assert list(candidates) == sorted(candidates, key=len, reverse=True)
+
+
+def test_scrub_credentials_walks_a_decoded_json_value_iteratively():
+    """The dict/list walk (ruling T5-A) touches only STRING VALUES, at any
+    depth, in place; keys, numbers, booleans and None pass through."""
+    endpoint = client.Endpoint(name="srv", url=URL, token="ghp_ABCDEFGHIJKLMNOP")
+    value = {
+        "error": {"message": "bad cred: ghp_ABCDEFGHIJKLMNOP", "code": -32001},
+        "id": 7,
+        "ok": True,
+        "nested": [{"deep": {"also": "carries ghp_ABCDEFGHIJKLMNOP here"}}, "plain", None],
+        "ghp_ABCDEFGHIJKLMNOP": "a KEY that happens to equal the token stays untouched",
+    }
+    scrubbed = client.scrub_credentials(value, endpoint)
+    assert scrubbed["error"] == {"message": "bad cred: [redacted]", "code": -32001}
+    assert scrubbed["id"] == 7 and scrubbed["ok"] is True
+    assert scrubbed["nested"][0]["deep"]["also"] == "carries [redacted] here"
+    assert scrubbed["nested"][1:] == ["plain", None]
+    assert "ghp_ABCDEFGHIJKLMNOP" in scrubbed  # the KEY, never touched
+    assert scrubbed is value  # mutated in place, per the docstring
+
+
+async def test_a_401_body_echoing_the_token_is_scrubbed_before_the_excerpt_is_clipped():
+    """Ruling T5-A (review Minor 1): the 200-character excerpt clip used to
+    run BEFORE the store's scrub, so a credential straddling the cut left an
+    unscrubbed prefix in a connect reason. Scrubbing now happens at the
+    client's own decode boundary, before any clip — padding the body past
+    200 characters before the token appears is the exact reproduction."""
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    async def respond(sent):
+        body = "x" * 180 + f" got Bearer {token}"
+        assert len(body) > 200  # the token would straddle the old clip point
+        return httpx.Response(401, text=body, headers={"content-type": "text/plain"})
+
+    transport = _Scripted("server/discover", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(client.Endpoint(name="srv", url=URL, token=token))
+    finally:
+        client.unplant(handle)
+    assert token not in caught.value.reason
+    # No prefix of the token either — the old bug left one up to 20 chars
+    # long (the excerpt's last 200 characters, minus the padding consumed).
+    assert not any(token[:n] in caught.value.reason for n in range(4, len(token)))
+
+
+async def test_an_sse_progress_notification_scrubs_the_servers_own_credential():
+    """Ruling T5-A: scrubbing applies to EVERY SSE event, not only the final
+    answer — a progress notification's `message` can carry the same echo."""
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    seen: list[str] = []
+
+    async def respond(sent):
+        meta = sent.get("params", {}).get("_meta", {})
+        progress_token = meta.get("progressToken")
+        events = [
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": progress_token,
+                    "progress": 1,
+                    "total": 2,
+                    "message": f"still using {token}",
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": sent.get("id"),
+                "result": {
+                    "resultType": "complete",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "done"}],
+                },
+            },
+        ]
+        stream = "".join(f"event: message\ndata: {json.dumps(e)}\n\n" for e in events)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=stream.encode("utf-8")
+        )
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        result = await client.call(
+            client.Endpoint(name="srv", url=URL, token=token),
+            "echo",
+            {"text": "hi"},
+            progress=seen.append,
+        )
+    finally:
+        client.unplant(handle)
+    assert result.text == "done"
+    assert seen and token not in seen[0] and "[redacted]" in seen[0]

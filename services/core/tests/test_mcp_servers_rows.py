@@ -68,9 +68,12 @@ async def test_the_table_refuses_a_name_the_store_would_refuse(pool):
 @requires_db
 async def test_failing_is_a_failure_newer_than_the_last_success(pool):
     await _insert(pool)
-    await servers.record_call(pool, "github", ok=False, reason="timed out")
+    # record_call takes the Server the CALL actually used (ruling T5-E), not
+    # a bare name — its UPDATE matches the row's endpoint too.
+    server = await servers.get(pool, "github")
+    await servers.record_call(pool, server, ok=False, reason="timed out")
     assert (await servers.get(pool, "github")).failing is True
-    await servers.record_call(pool, "github", ok=True)
+    await servers.record_call(pool, server, ok=True)
     assert (await servers.get(pool, "github")).failing is False
 
 
@@ -79,7 +82,10 @@ async def test_record_call_on_a_broken_pool_raises_nothing():
         async def execute(self, *args):
             raise RuntimeError("the table is on fire")
 
-    await servers.record_call(Broken(), "github", ok=True)
+    server = servers.Server(
+        name="github", url="http://x.mcp.invalid/mcp", token=None, headers={}, added_by="owner"
+    )
+    await servers.record_call(Broken(), server, ok=True)
 
 
 @requires_db
@@ -92,7 +98,7 @@ async def test_an_overlay_replaces_the_table_and_never_touches_it(pool):
     try:
         assert [s.name for s in await servers.list_servers(None)] == ["eval_x"]
         assert await servers.get(None, "github") is None
-        await servers.record_call(None, "eval_x", ok=False, reason="nope")
+        await servers.record_call(None, declared, ok=False, reason="nope")
         assert (await servers.get(None, "eval_x")).failing is True
     finally:
         servers.OVERLAY.reset(token)
