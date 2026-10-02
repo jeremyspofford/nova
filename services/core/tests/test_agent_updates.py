@@ -754,8 +754,10 @@ async def test_a_machine_that_cannot_take_the_build_halts_nothing_for_the_others
     _b, box, conn_b, task_b = await _online(pool, "b-box", _facts(OLD))
     first = asyncio.create_task(agent_updates.reconcile(pool))
     await asyncio.wait_for(mac.answer_command(conn_m, ok=False, exit_code=None, error=UNKNOWN), 3)
+    # Fix round 1, M2 (pin moved): only the update command went out, and the
+    # machine cannot take the build — never "sent …; cannot — cannot: …".
     assert (await asyncio.wait_for(first, 5)).startswith(
-        f"sent the hub's build {VERSION} to a-mac; cannot"
+        f"a-mac cannot take the hub's build {VERSION}: a-mac's agent predates Nova-managed updates"
     )
     assert await _outcome_of(pool, mac_id) == "refused"
     second = asyncio.create_task(agent_updates.reconcile(pool))
@@ -864,3 +866,307 @@ async def test_a_revoke_ends_the_machines_open_update_and_frees_the_slot(pool):
     await devices_ws.hub.disconnect(a_id, "revoked")  # what the revoke route does
     await asyncio.wait_for(task_a, 2)
     await _close(conn_b, task_b)
+
+
+# -- fix round 1 ----------------------------------------------------------------
+
+
+async def test_a_revoke_during_an_update_halts_nothing_for_the_others(pool):
+    """I1: an attempt a revoke ended is not the build failing."""
+    a_id, a_dev, conn_a, task_a = await _online(pool, "box-a", _facts(OLD))
+    _b, b_dev, conn_b, task_b = await _online(pool, "box-b", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box-a", requested_by="reconciler", wait_s=0)
+    )
+    await a_dev.answer_command(conn_a)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    await devices.revoke(pool, device_id=a_id, actor="tester")
+    await devices_ws.hub.disconnect(a_id, "revoked")
+    await asyncio.wait_for(task_a, 2)
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    await asyncio.wait_for(b_dev.answer_command(conn_b), 3)
+    assert (await asyncio.wait_for(job, 5)).startswith(f"sent the hub's build {VERSION} to box-b")
+    await _close(conn_b, task_b)
+
+
+async def test_a_repair_during_an_update_halts_nothing_for_the_others(pool):
+    """I1: an attempt a re-pair ended is not the build failing."""
+    a_id, a_dev, conn_a, task_a = await _online(pool, "box-a", _facts(OLD))
+    _b, b_dev, conn_b, task_b = await _online(pool, "box-b", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box-a", requested_by="reconciler", wait_s=0)
+    )
+    await a_dev.answer_command(conn_a)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    await _repair(pool, a_id, FakeDevice())  # its new agent has not connected yet
+    await devices_ws.hub.disconnect(a_id, "re-paired")
+    await asyncio.wait_for(task_a, 2)
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    await asyncio.wait_for(b_dev.answer_command(conn_b), 3)
+    assert (await asyncio.wait_for(job, 5)).startswith(f"sent the hub's build {VERSION} to box-b")
+    await _close(conn_b, task_b)
+
+
+async def test_the_job_updates_a_repaired_machines_new_agent(pool):
+    """An attempt a re-pair ended was the OLD agent's: the new one was never
+    tried with this build, so the job does not pass it by as tried."""
+    device_id, old, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="reconciler", wait_s=0)
+    )
+    await old.answer_command(conn)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    new = FakeDevice()
+    await _repair(pool, device_id, new)
+    await devices_ws.hub.disconnect(device_id, "re-paired")
+    await asyncio.wait_for(task, 2)
+    new.device_id = str(device_id)
+    conn2, task2 = await _reconnect(pool, new, _facts(OLD))  # the new agent is behind too
+    # Five minutes on: the old agent's update command no longer makes the
+    # machine busy (P10's quiet window) — this test is about "tried".
+    devices_ws.hub._last_command.pop(str(device_id), None)
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    frame = await asyncio.wait_for(new.answer_command(conn2), 3)
+    assert frame["envelope"]["capability"] == "daemon.update"
+    assert (await asyncio.wait_for(job, 5)).startswith(f"sent the hub's build {VERSION} to box")
+    await _close(conn2, task2)
+
+
+async def test_the_check_never_calls_an_attempt_a_repair_ended_a_failed_build(pool):
+    root = agent_dist.dist_dir()
+    _write_manifest(root, {**_manifest_of(root), "built_at": _now_rfc3339()})
+    device_id, old, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="reconciler", wait_s=0)
+    )
+    await old.answer_command(conn)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    new = FakeDevice()
+    await _repair(pool, device_id, new)
+    await devices_ws.hub.disconnect(device_id, "re-paired")
+    await asyncio.wait_for(task, 2)
+    new.device_id = str(device_id)
+    conn2, task2 = await _reconnect(pool, new, _facts(OLD))
+    assert await device_checks.agents_behind(None, pool) == []  # the job's to update
+    await _close(conn2, task2)
+
+
+async def test_an_update_a_revoke_kept_from_being_sent_leaves_no_attempt(pool, monkeypatch):
+    """I2: the revoke commits between the open and Hub.command's first read.
+    Nothing left core, so the call's own attempt is withdrawn whatever the
+    revoke decided it as — never a ledger row for a command never sent."""
+    a_id, _a_dev, conn_a, task_a = await _online(pool, "box-a", _facts(OLD))
+    real_get_live = devices.get_live
+    fired: list[bool] = []
+
+    async def revoke_then_read(p, device_id):
+        if not fired:
+            fired.append(True)
+            await devices.revoke(pool, device_id=a_id, actor="tester")
+        return await real_get_live(p, device_id)
+
+    monkeypatch.setattr(devices, "get_live", revoke_then_read)
+    outcome = await agent_updates.update_now(pool, name="box-a", requested_by="owner", wait_s=0)
+    monkeypatch.setattr(devices, "get_live", real_get_live)
+    assert fired and outcome.outcome == "cannot" and "nothing was sent" in outcome.reason
+    assert _commands(conn_a) == []
+    count = await pool.fetchval("SELECT count(*) FROM agent_updates WHERE device_id = $1", a_id)
+    assert count == 0
+    await devices_ws.hub.disconnect(a_id, "revoked")
+    await asyncio.wait_for(task_a, 2)
+
+
+def _steps_of(timeouts: dict):
+    real_command = devices_ws.hub.command
+
+    async def recording(pool_, **kw):
+        argv = kw["args"].get("argv") if kw["capability"] == "shell.exec" else None
+        step = (
+            kw["capability"]
+            if argv is None
+            else ("install" if argv[1:2] == ["install"] else argv[0])
+        )
+        timeouts[step] = kw["timeout"]
+        return await real_command(pool_, **kw)
+
+    return recording
+
+
+async def test_the_bootstrap_has_one_deadline_and_each_step_gets_what_remains(
+    pool, tailnet, monkeypatch
+):
+    """I3: one deadline for the whole bootstrap. A step that answers slowly
+    leaves the next steps only what remains of COMMAND_TIMEOUT_S."""
+    now = [1000.0]
+    monkeypatch.setattr(agent_updates, "_clock", lambda: now[0])
+    timeouts: dict[str, float] = {}
+    monkeypatch.setattr(devices_ws.hub, "command", _steps_of(timeouts))
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    entry = agent_dist.current().file_for("linux", "amd64")
+    target = f"/home/sam/.cache/nova-update/{VERSION}/novad"
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    info = await asyncio.wait_for(conn.next_sent(), 2)  # sent: the deadline is set
+    assert info["envelope"]["capability"] == "system.info"
+    now[0] += 100  # it took 100 of the update's 120 s
+    conn.feed(device.result(info["envelope"], output="home=/home/sam"))
+    for output in ("", f"{entry['sha256']}  {target}\n", "", "installed"):
+        await device.answer_command(conn, output=output)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    total = agent_updates.COMMAND_TIMEOUT_S
+    assert timeouts["daemon.update"] == total and timeouts["system.info"] == total
+    for step in ("curl", "sha256sum", "chmod", "install"):
+        assert timeouts[step] == pytest.approx(total - 100), step
+    await _close(conn, task)
+
+
+async def test_a_bootstrap_whose_time_runs_out_says_which_step_was_not_sent(
+    pool, tailnet, monkeypatch
+):
+    now = [1000.0]
+    monkeypatch.setattr(agent_updates, "_clock", lambda: now[0])
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    info = await asyncio.wait_for(conn.next_sent(), 2)
+    now[0] += 130  # it answered, but the update's whole 120 s had gone
+    conn.feed(device.result(info["envelope"], output="home=/home/sam"))
+    outcome = await asyncio.wait_for(run, 3)
+    assert outcome.outcome == "refused"
+    assert outcome.reason == (
+        "the update's 120 s ran out before its download step was sent — nothing past it was run"
+    )
+    assert len(_commands(conn)) == 2, "daemon.update and system.info only"
+    await _close(conn, task)
+
+
+async def test_a_bootstrap_step_that_does_not_finish_in_time_is_named(pool, tailnet, monkeypatch):
+    monkeypatch.setattr(agent_updates, "COMMAND_TIMEOUT_S", 0.5)
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    await device.answer_command(conn, output="home=/home/sam")
+    outcome = await asyncio.wait_for(run, 3)  # the download is never answered
+    assert outcome.outcome == "refused"
+    assert outcome.reason == (
+        "the download step did not finish on box within the update's 0.5 s — nothing past it "
+        "was run"
+    )
+    await _close(conn, task)
+
+
+async def test_a_machine_the_hub_has_no_build_for_never_holds_the_job(pool):
+    """M1: whether the hub has a build for its platform is part of the one
+    eligibility decision, so the job passes such a machine by."""
+    _arm, _a, conn_arm, task_arm = await _online(pool, "a-arm", _facts(OLD, arch="arm"))
+    _b, box, conn_b, task_b = await _online(pool, "b-box", _facts(OLD))
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    await asyncio.wait_for(box.answer_command(conn_b), 3)
+    assert (await asyncio.wait_for(job, 5)).startswith(f"sent the hub's build {VERSION} to b-box")
+    assert _commands(conn_arm) == []
+    out = await agent_updates.update_now(pool, name="a-arm", requested_by="owner", wait_s=0)
+    assert out.outcome == "cannot" and "linux/arm" in out.reason and not out.needs_card
+    behind = {
+        f.facts["device"]: f.facts["why"] for f in await device_checks.agents_behind(None, pool)
+    }
+    assert behind["a-arm"] == "no_build"
+    await _close(conn_arm, task_arm)
+    await _close(conn_b, task_b)
+
+
+async def test_an_expired_attempt_whose_agent_reported_the_build_is_confirmed_not_failed(
+    pool, monkeypatch
+):
+    """M6: a decision a swallowed observe_connect error missed is read from
+    the stored facts at expiry — never turned into a false halt."""
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0)
+    )
+    await device.answer_command(conn)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    await _close(conn, task)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("observe_connect failed")
+
+    monkeypatch.setattr(agent_updates, "observe_connect", broken)
+    conn2, task2 = await _reconnect(pool, device, _facts(VERSION))  # stored; the decision was not
+    assert await _outcome_of(pool, device_id) == "sent"
+    await pool.execute(
+        "UPDATE agent_updates SET sent_at = now() - interval '11 minutes' WHERE device_id = $1",
+        device_id,
+    )
+    assert await agent_updates.expire_stale(pool) == 1
+    assert await _outcome_of(pool, device_id) == "confirmed"
+    assert not (await agent_updates.reconcile(pool)).startswith("halted")
+    await _close(conn2, task2)
+
+
+async def test_an_expired_attempt_whose_agent_reported_a_rollback_is_rolled_back(pool, monkeypatch):
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0)
+    )
+    await device.answer_command(conn)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    await _close(conn, task)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("observe_connect failed")
+
+    monkeypatch.setattr(agent_updates, "observe_connect", broken)
+    rolled = {
+        "version": VERSION,
+        "outcome": "rolled_back",
+        "reason": "the new build did not connect within 2m0s",
+        "at": _now_rfc3339(),
+    }
+    conn2, task2 = await _reconnect(pool, device, _facts(OLD, update=rolled))
+    await pool.execute(
+        "UPDATE agent_updates SET sent_at = now() - interval '11 minutes' WHERE device_id = $1",
+        device_id,
+    )
+    assert await agent_updates.expire_stale(pool) == 1
+    row = await pool.fetchrow(
+        "SELECT outcome, reason FROM agent_updates WHERE device_id = $1", device_id
+    )
+    assert (row["outcome"], row["reason"]) == (
+        "rolled_back",
+        "the new build did not connect within 2m0s",
+    )
+    await _close(conn2, task2)
+
+
+async def test_a_bootstrap_whose_system_info_fails_says_the_agents_own_error(pool, tailnet):
+    """M7: the agent's own words, never "did not name an absolute home"."""
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    await device.answer_command(conn, ok=False, exit_code=None, error="home: permission denied")
+    outcome = await asyncio.wait_for(run, 3)
+    assert outcome.outcome == "refused"
+    assert outcome.reason == (
+        "the system.info step failed on box: home: permission denied — nothing was run"
+    )
+    assert len(_commands(conn)) == 2
+    await _close(conn, task)
+
+
+async def test_end_open_attempt_records_only_the_reasons_the_halt_keys_on(pool):
+    """The halt and the job's skip leave out exactly ENDED_REASONS: any other
+    reason recorded through end_open_attempt would read as a failed build."""
+    device_id, _device = await _enroll(pool, name="box")
+    async with pool.acquire() as conn:
+        with pytest.raises(ValueError, match="ENDED_REASONS"):
+            await agent_updates.end_open_attempt(conn, device_id, reason="the box was moved")
+        for reason in agent_updates.ENDED_REASONS:
+            assert await agent_updates.end_open_attempt(conn, device_id, reason=reason) == 0

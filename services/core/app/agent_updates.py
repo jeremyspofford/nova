@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,6 +72,19 @@ REVOKED_REASON = (
     "the machine was revoked before the agent this was sent to reconnected on the new "
     "build — a revoked agent cannot connect, so nothing can confirm it"
 )
+# The reasons end_open_attempt records, and the only ones it may. An attempt
+# ended for one of them was ended by the AGENT's fate (a new key, a revoke),
+# not by the build: it never halts the build (fix round 1, I1), never counts
+# as a machine already tried with it, and is never called a failed build.
+# Keyed on these constants — the words core itself wrote — never on phrasing.
+ENDED_REASONS = (REPAIRED_REASON, REVOKED_REASON)
+# A confirmation expire_stale made from the stored facts, after the reconnect
+# itself left the attempt open (fix round 1, M6) — said, so it is not read as
+# a reconnect that decided it at the time.
+CONFIRMED_LATE = "confirmed when it expired: its agent's last connection had reported this build"
+# Monotonic seconds for the bootstrap's one deadline (fix round 1, I3) — a
+# name tests can stand a fake clock in for.
+_clock = time.monotonic
 
 # Opened only while the row is still at the epoch the caller read it at. FOR
 # SHARE serializes this with a re-pair's rebind (devices._REBIND_SQL locks the
@@ -95,14 +109,19 @@ _IN_FLIGHT_SQL = (
     "SELECT d.name, u.version, u.sent_at FROM agent_updates u JOIN devices d ON d.id = u.device_id "
     "WHERE u.outcome = 'sent'"
 )
+# A build failure that halts the job: BUILD_FAILED, never an attempt the
+# agent's own fate ended ($3, ENDED_REASONS).
 _FAILED_SQL = (
     "SELECT d.name, u.outcome, u.reason FROM agent_updates u JOIN devices d ON d.id = u.device_id "
-    "WHERE u.version = $1 AND u.outcome = ANY($2::text[]) ORDER BY u.sent_at DESC LIMIT 1"
+    "WHERE u.version = $1 AND u.outcome = ANY($2::text[]) "
+    "AND NOT (COALESCE(u.reason, '') = ANY($3::text[])) ORDER BY u.sent_at DESC LIMIT 1"
 )
-# Every machine already tried with a build, and how its last try was decided.
+# Every machine already tried with a build, and how its last try was decided —
+# an attempt its old agent's fate ended ($2) tried no agent the row has now.
 _TRIED_SQL = (
     "SELECT DISTINCT ON (device_id) device_id, outcome FROM agent_updates "
-    "WHERE version = $1 AND outcome <> 'sent' ORDER BY device_id, sent_at DESC"
+    "WHERE version = $1 AND outcome <> 'sent' AND NOT (COALESCE(reason, '') = ANY($2::text[])) "
+    "ORDER BY device_id, sent_at DESC"
 )
 _HOME = re.compile(r"(?:^|;\s*)home=([^;]+)")
 # What ends or breaks a line wherever a reason is shown: the C0 and C1
@@ -130,10 +149,14 @@ class Eligibility:
     here once (F14); update_now, the reconciler and the devices_agents_behind
     check all read it. Derived from what the agent last reported.
 
-    `token`: "service" (Nova can), or "no_facts" / "by_hand" — a stated
-    cannot, and the check's `why`. `said` and `step`: for a cannot, what is
-    true of the agent (a clause after "<name>'s agent") and the one step the
-    owner takes (P12). `bootstrap` (P11): if the agent answers `unknown
+    `token`: "service" (Nova can), or "no_facts" / "by_hand" / "no_build"
+    — a stated cannot, and the check's `why`. `said` and `step`: for a
+    cannot, what is true of the agent (a clause after "<name>'s agent") and
+    the one step the owner takes (P12) — none for "no_build": the hub's
+    build covers six platforms, and no step adds a seventh. Whether the hub
+    has a build for the agent's platform is decided here too (fix round 1,
+    M1), so the job passes such a machine by instead of choosing it on
+    every pass. `bootstrap` (P11): if the agent answers `unknown
     capability "daemon.update"`, its own shell.exec can still update it —
     only under a Linux systemd user unit, the one manager `install
     --restart-later` restarts from outside the old agent's process tree.
@@ -149,11 +172,17 @@ class Eligibility:
     def can(self) -> bool:
         return self.token == "service"
 
+    @property
+    def needs_card(self) -> bool:
+        """The owner's one step is the machine's setup card (P12)."""
+        return self.token in ("no_facts", "by_hand")
+
     def cannot(self, name: str) -> str:
-        return f"{name}'s agent {self.said} — {self.step}"
+        said = f"{name}'s agent {self.said}"
+        return f"{said} — {self.step}" if self.step else said
 
 
-def eligibility(row) -> Eligibility:
+def eligibility(row, build: agent_dist.Build) -> Eligibility:
     name, facts = row["name"], row["facts"]
     agent = facts.get("agent") if isinstance(facts, dict) else None
     mode = agent.get("mode") if isinstance(agent, dict) else None
@@ -171,7 +200,12 @@ def eligibility(row) -> Eligibility:
             said="was started by hand, not by its service, so Nova cannot restart it",
             step=f"close the window it runs in, then run the command on {name}'s setup card there",
         )
-    goos = (facts.get("os") or {}).get("goos")
+    os_ = facts.get("os") or {}
+    goos, arch = os_.get("goos"), os_.get("arch")
+    if build.file_for(goos, arch) is None:
+        return Eligibility(
+            "no_build", said=f"runs on {goos}/{arch}, which the hub has no build for"
+        )
     return Eligibility("service", bootstrap=goos == "linux" and mode == "systemd-user")
 
 
@@ -216,13 +250,38 @@ def _connected(row, facts_sink: list[dict] | None) -> bool:
 
 
 async def expire_stale(pool) -> int:
-    rows = await pool.fetch(
-        "UPDATE agent_updates SET outcome = 'not_confirmed', outcome_at = now(), reason = $1 "
-        "WHERE outcome = 'sent' AND sent_at < now() - make_interval(secs => $2) RETURNING id",
-        f"no reconnect reporting the new build within {CONFIRM_WITHIN_S // 60} minutes",
+    """Decide every attempt still `sent` after CONFIRM_WITHIN_S. What the
+    agent's last connection STORED is read first (fix round 1, M6): a
+    decision a swallowed observe_connect error missed is made here —
+    confirmed late, or rolled back — and only an attempt nothing confirms is
+    not_confirmed. A missed confirmation never becomes a failed build that
+    halts it for every machine. The row's facts are the attempt's agent's:
+    an attempt is opened at the row's epoch, and the re-pair or revoke that
+    would move the row on ends it (end_open_attempt)."""
+    stale = await pool.fetch(
+        "SELECT u.id, u.version, u.sent_at, d.facts FROM agent_updates u "
+        "JOIN devices d ON d.id = u.device_id "
+        "WHERE u.outcome = 'sent' AND u.sent_at < now() - make_interval(secs => $1)",
         CONFIRM_WITHIN_S,
     )
-    return len(rows)
+    decided = 0
+    for attempt in stale:
+        found = _decision(attempt["facts"], attempt["version"], attempt["sent_at"])
+        if found is None:
+            outcome = "not_confirmed"
+            reason = f"no reconnect reporting the new build within {CONFIRM_WITHIN_S // 60} minutes"
+        else:
+            outcome, reason = found
+            reason = reason if outcome == "rolled_back" else CONFIRMED_LATE
+        status = await pool.execute(
+            "UPDATE agent_updates SET outcome = $2, outcome_at = now(), reason = $3 "
+            "WHERE id = $1 AND outcome = 'sent'",
+            attempt["id"],
+            outcome,
+            _one_line(reason),
+        )
+        decided += status == "UPDATE 1"
+    return decided
 
 
 async def _close(pool, attempt_id, outcome: str, reason: str | None, *, epoch: int) -> bool:
@@ -237,8 +296,12 @@ async def _close(pool, attempt_id, outcome: str, reason: str | None, *, epoch: i
 
 async def _withdraw(pool, attempt_id) -> None:
     """An attempt whose command never reached the device: nothing was sent,
-    so there is nothing to record — a cannot, like every other."""
-    await pool.execute("DELETE FROM agent_updates WHERE id = $1 AND outcome = 'sent'", attempt_id)
+    so there is nothing to record — a cannot, like every other. Deleted by
+    its id whatever its outcome (fix round 1, I2): a re-pair or revoke that
+    committed between the open and the send has already ended it, and
+    "…before the agent this was sent to reconnected" would be a record of a
+    send that never left core. It is this call's own row."""
+    await pool.execute("DELETE FROM agent_updates WHERE id = $1", attempt_id)
 
 
 async def end_open_attempt(conn, device_id, *, reason: str) -> int:
@@ -249,6 +312,10 @@ async def end_open_attempt(conn, device_id, *, reason: str) -> int:
     as that agent's, and a revoked machine must not hold P9's one slot for
     ten minutes. Decided here, as what is true, inside the transaction that
     makes it so."""
+    if reason not in ENDED_REASONS:
+        # The halt and the job's skip key on these exact words: any other
+        # reason recorded here would read as a failed build.
+        raise ValueError(f"end_open_attempt records only ENDED_REASONS, not {reason!r}")
     rows = await conn.fetch(
         "UPDATE agent_updates SET outcome = 'not_confirmed', outcome_at = now(), reason = $2 "
         "WHERE device_id = $1 AND outcome = 'sent' RETURNING id",
@@ -256,6 +323,13 @@ async def end_open_attempt(conn, device_id, *, reason: str) -> int:
         reason,
     )
     return len(rows)
+
+
+def failed_build(outcome: str | None, reason: str | None) -> bool:
+    """Whether an attempt's outcome says the BUILD may not run — not an
+    attempt the agent's own fate ended (ENDED_REASONS). One reading, for the
+    check; the job's halt reads the same constants in _FAILED_SQL."""
+    return outcome in BUILD_FAILED and reason not in ENDED_REASONS
 
 
 def _recorded_after(at: object, sent_at: datetime) -> bool:
@@ -268,6 +342,27 @@ def _recorded_after(at: object, sent_at: datetime) -> bool:
     except ValueError:
         return False
     return when.tzinfo is not None and when >= sent_at.replace(microsecond=0)
+
+
+def _decision(facts: dict | None, version: str, sent_at: datetime) -> tuple[str, str | None] | None:
+    """What an agent's stored facts say about an attempt at `version` sent at
+    `sent_at`, read one way for observe_connect and expire_stale: confirmed
+    when it reports that version; rolled back when its supervisor's record
+    names that version and was written at or after the send (an agent keeps
+    reporting its LAST record — see observe_connect); else nothing."""
+    if facts is None:
+        return None
+    if device_facts.agent_version(facts) == version:
+        return "confirmed", None
+    agent = facts.get("agent") if isinstance(facts, dict) else None
+    update = (agent.get("update") if isinstance(agent, dict) else None) or {}
+    if (
+        update.get("version") == version
+        and update.get("outcome") == "rolled_back"
+        and _recorded_after(update.get("at"), sent_at)
+    ):
+        return "rolled_back", update.get("reason") or "its supervisor put the previous build back"
+    return None
 
 
 async def observe_connect(pool, device_id, facts: dict | None, *, epoch: int) -> str | None:
@@ -291,18 +386,10 @@ async def observe_connect(pool, device_id, facts: dict | None, *, epoch: int) ->
     )
     if open_ is None:
         return None
-    if device_facts.agent_version(facts) == open_["version"]:
-        outcome, reason = "confirmed", None
-    else:
-        update = (facts.get("agent") or {}).get("update") or {}
-        if (
-            update.get("version") != open_["version"]
-            or update.get("outcome") != "rolled_back"
-            or not _recorded_after(update.get("at"), open_["sent_at"])
-        ):
-            return None
-        outcome = "rolled_back"
-        reason = update.get("reason") or "its supervisor put the previous build back"
+    found = _decision(facts, open_["version"], open_["sent_at"])
+    if found is None:
+        return None
+    outcome, reason = found
     return outcome if await _close(pool, open_["id"], outcome, reason, epoch=epoch) else None
 
 
@@ -339,15 +426,11 @@ async def update_now(
     if not _connected(row, facts_sink):
         seen = row["last_seen"].isoformat() if row["last_seen"] else "never"
         return _cannot(name, f"cannot: {name} is not connected (last seen {seen})", **kw)
-    able = eligibility(row)
+    able = eligibility(row, build)
     if not able.can:
-        return _cannot(name, f"cannot: {able.cannot(name)}", needs_card=True, **kw)
+        return _cannot(name, f"cannot: {able.cannot(name)}", needs_card=able.needs_card, **kw)
     os_ = facts.get("os") or {}
-    entry = build.file_for(os_.get("goos"), os_.get("arch"))
-    if entry is None:
-        return _cannot(
-            name, f"cannot: the hub has no build for {os_.get('goos')}/{os_.get('arch')}", **kw
-        )
+    entry = build.file_for(os_.get("goos"), os_.get("arch"))  # eligibility found it
     epoch = row["audit_epoch"]
     in_flight = devices_ws.hub.in_flight(row["id"])
     try:
@@ -456,13 +539,35 @@ async def _await(
         await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
 
 
+def _total() -> str:
+    """The bootstrap's whole bound, in words: "120 s"."""
+    return f"{COMMAND_TIMEOUT_S:g} s"
+
+
 async def _step(
-    pool, row, capability: str, args: dict, step: str, *, epoch: int, sent_is_enough: bool = False
+    pool,
+    row,
+    capability: str,
+    args: dict,
+    step: str,
+    *,
+    epoch: int,
+    deadline: float,
+    sent_is_enough: bool = False,
 ) -> dict | None:
     """One command of the bootstrap, to the agent at `epoch` and no other: a
-    later step runs a file an earlier one checked ON THAT AGENT. None when
-    `sent_is_enough` and it went unanswered — the install step, whose own
-    restart can cut its reply off: only the reconnect can say."""
+    later step runs a file an earlier one checked ON THAT AGENT. Bounded by
+    what remains of the bootstrap's ONE deadline (fix round 1, I3) — never
+    sent once it has passed — so the whole bootstrap waits on an agent no
+    longer than one command would. None when `sent_is_enough` and it went
+    unanswered — the install step, whose own restart can cut its reply off:
+    only the reconnect can say."""
+    remaining = deadline - _clock()
+    if remaining <= 0:
+        raise _BootstrapRefused(
+            f"the update's {_total()} ran out before its {step} step was sent — nothing past it "
+            "was run"
+        )
     try:
         return await devices_ws.hub.command(
             pool,
@@ -470,7 +575,7 @@ async def _step(
             name=row["name"],
             capability=capability,
             args=args,
-            timeout=COMMAND_TIMEOUT_S,
+            timeout=remaining,
             epoch=epoch,
         )
     except devices_ws.NotSent as exc:
@@ -481,16 +586,35 @@ async def _step(
         if sent_is_enough:
             logger.info("update of %s: the %s step went unanswered (%s)", row["name"], step, exc)
             return None
+        if isinstance(exc.__cause__, TimeoutError):
+            raise _BootstrapRefused(
+                f"the {step} step did not finish on {row['name']} within the update's "
+                f"{_total()} — nothing past it was run"
+            ) from exc
         raise _BootstrapRefused(
             f"{row['name']} did not answer the {step} step ({exc.reason}) — nothing past it was run"
         ) from exc
 
 
 async def _exec(
-    pool, row, argv: list[str], step: str, *, epoch: int, sent_is_enough: bool = False
+    pool,
+    row,
+    argv: list[str],
+    step: str,
+    *,
+    epoch: int,
+    deadline: float,
+    sent_is_enough: bool = False,
 ) -> str:
     result = await _step(
-        pool, row, "shell.exec", {"argv": argv}, step, epoch=epoch, sent_is_enough=sent_is_enough
+        pool,
+        row,
+        "shell.exec",
+        {"argv": argv},
+        step,
+        epoch=epoch,
+        deadline=deadline,
+        sent_is_enough=sent_is_enough,
     )
     if result is None:
         return ""
@@ -524,7 +648,14 @@ async def _bootstrap(pool, row, build, entry: dict, *, epoch: int) -> None:
     gets out; it trusts the pairing it runs under and dials no hub (F2)."""
     name = row["name"]
     origin = _origin_for(row)
-    info = await _step(pool, row, "system.info", {}, "system.info", epoch=epoch)
+    deadline = _clock() + COMMAND_TIMEOUT_S
+    info = await _step(pool, row, "system.info", {}, "system.info", epoch=epoch, deadline=deadline)
+    if not info.get("ok"):
+        # The agent's own words (fix round 1, M7), never a guess about home.
+        said = str(info.get("error") or info.get("output") or "").strip()[-200:]
+        raise _BootstrapRefused(
+            f"the system.info step failed on {name}: {said or 'it said nothing'} — nothing was run"
+        )
     match = _HOME.search(str(info.get("output") or ""))
     home = match.group(1).strip() if match else ""
     if not home.startswith("/"):
@@ -535,9 +666,14 @@ async def _bootstrap(pool, row, build, entry: dict, *, epoch: int) -> None:
     target = f"{home}/.cache/nova-update/{build.version}/novad"
     url = f"{origin}/api/v1/agent/dist/{entry['name']}"
     await _exec(
-        pool, row, ["curl", "-fsSL", "--create-dirs", "-o", target, url], "download", epoch=epoch
+        pool,
+        row,
+        ["curl", "-fsSL", "--create-dirs", "-o", target, url],
+        "download",
+        epoch=epoch,
+        deadline=deadline,
     )
-    out = await _exec(pool, row, ["sha256sum", target], "checksum", epoch=epoch)
+    out = await _exec(pool, row, ["sha256sum", target], "checksum", epoch=epoch, deadline=deadline)
     got = (out.split() or [""])[0]
     if got != entry["sha256"]:
         shown = f"{got[:12]}…" if got else "not printed"
@@ -545,31 +681,56 @@ async def _bootstrap(pool, row, build, entry: dict, *, epoch: int) -> None:
             f"the download's sha256 on {name} is {shown}, not the hub's "
             f"{entry['sha256'][:12]}… — nothing was run"
         )
-    await _exec(pool, row, ["chmod", "0755", target], "chmod", epoch=epoch)
+    await _exec(pool, row, ["chmod", "0755", target], "chmod", epoch=epoch, deadline=deadline)
     await _exec(
         pool,
         row,
         [target, "install", "--restart-later"],
         "install",
         epoch=epoch,
+        deadline=deadline,
         sent_is_enough=True,
     )
 
 
 # The words the job says for a machine it passes by.
-_PASSED_BY = {"no_facts": "it has not reported how it runs", "by_hand": "started by hand"}
+_PASSED_BY = {
+    "no_facts": "it has not reported how it runs",
+    "by_hand": "started by hand",
+    "no_build": "the hub has no build for its platform",
+}
 
 
-def _why_not(row) -> str | None:
+def _why_not(row, build: agent_dist.Build) -> str | None:
     """Why the job passes this machine by (P10), or None when it may send."""
     if not _connected(row, None):
         return "offline"
-    able = eligibility(row)
+    able = eligibility(row, build)
     if not able.can:
         return _PASSED_BY[able.token]
     if not devices_ws.hub.idle(row["id"], IDLE_S):
         return "busy: a command is in flight there, or one was sent in the last 5 minutes"
     return None
+
+
+def _sent_words(out: UpdateOutcome, version: str, name: str, *, hub: bool) -> str:
+    """What one pass did, as true as the outcome is (fix round 1, M2). Only
+    the update command went out when a machine cannot take the build, so it
+    is never "sent … ; cannot — cannot: …"."""
+    first = " — the hub's own agent first" if hub else ""
+    said = (out.reason or "no reason was given").removeprefix("cannot: ")
+    if out.outcome == "sent":
+        return (
+            f"sent the hub's build {version} to {name}{first}; not confirmed until it "
+            "reconnects on it"
+        )
+    if out.attempt_id is None:
+        return f"did not send the hub's build {version} to {name}{first}: {said}"
+    if out.outcome in ("cannot", "refused"):
+        who = f"{name}, the hub's own agent," if hub else name
+        return f"{who} cannot take the hub's build {version}: {said}"
+    tail = out.outcome + (f" — {out.reason}" if out.reason else "")
+    return f"sent the hub's build {version} to {name}{first}; {tail}"
 
 
 async def reconcile(pool) -> str:
@@ -589,7 +750,9 @@ async def reconcile(pool) -> str:
         build = await agent_dist.read()
     except agent_dist.DistUnavailable as exc:
         return f"nothing sent: the hub has no agent build to send — {exc}"
-    failed = await pool.fetchrow(_FAILED_SQL, build.version, list(BUILD_FAILED))
+    failed = await pool.fetchrow(
+        _FAILED_SQL, build.version, list(BUILD_FAILED), list(ENDED_REASONS)
+    )
     if failed:
         return (
             f"halted: the hub's build {build.version} {failed['outcome']} on {failed['name']} "
@@ -602,26 +765,23 @@ async def reconcile(pool) -> str:
     behind = [r for r in rows if device_facts.agent_version(r["facts"]) != build.version]
     if not behind:
         return f"every agent runs the hub's build {build.version}"
-    tried = {t["device_id"]: t["outcome"] for t in await pool.fetch(_TRIED_SQL, build.version)}
+    tried = {
+        t["device_id"]: t["outcome"]
+        for t in await pool.fetch(_TRIED_SQL, build.version, list(ENDED_REASONS))
+    }
     # The others wait for a hub agent that may still take this build — not
     # for one already tried with it: a refusal halts nothing for the others.
     hub_first = [r for r in behind if r["last_transport"] == "host" and r["id"] not in tried]
-    first = " — the hub's own agent first" if hub_first else ""
     skipped = []
     for r in hub_first or behind:
         if r["id"] in tried:
             skipped.append(f"{r['name']} (this build was already tried there: {tried[r['id']]})")
             continue
-        why = _why_not(r)
+        why = _why_not(r, build)
         if why:
             skipped.append(f"{r['name']} ({why})")
             continue
         out = await update_now(pool, name=r["name"], requested_by="reconciler", wait_s=0)
-        if out.outcome == "sent":
-            tail = "not confirmed until it reconnects on it"
-        else:
-            tail = out.outcome + (f" — {out.reason}" if out.reason else "")
-        verb = "sent" if out.attempt_id is not None else "did not send"
-        return f"{verb} the hub's build {build.version} to {r['name']}{first}; {tail}"
+        return _sent_words(out, build.version, r["name"], hub=bool(hub_first))
     wait = "; the others wait for the hub's own agent" if hub_first else ""
     return "nothing sent: " + "; ".join(skipped) + wait

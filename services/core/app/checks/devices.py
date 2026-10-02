@@ -96,11 +96,14 @@ async def agents_behind(app, pool) -> list[Finding]:
             if version
             else f"has not said which build it runs (the hub's is {build.version})"
         )
-        able = agent_updates.eligibility(r)
+        able = agent_updates.eligibility(r, build)
         if not able.can:
             token = able.token
-            title = f"{r['name']}'s agent {build_words}, and it {able.said} — {able.step}"
-        elif r["u_version"] == build.version and r["u_outcome"] in agent_updates.BUILD_FAILED:
+            step = f" — {able.step}" if able.step else ""
+            title = f"{r['name']}'s agent {build_words}, and it {able.said}{step}"
+        elif r["u_version"] == build.version and agent_updates.failed_build(
+            r["u_outcome"], r["u_reason"]
+        ):
             token = f"failed:{r['u_outcome']}"
             title = (
                 f"{r['name']}'s agent {build_words}: its update to it was "
