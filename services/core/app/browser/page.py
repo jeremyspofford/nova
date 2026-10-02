@@ -34,11 +34,15 @@ SECTION_ORDER = (
     "Snapshot",
     "Events",
 )
-# ...and nothing after Modal state. While a modal is open the engine's
-# captureSnapshot races it and returns no snapshot and no events, so Modal
-# state is the last section it writes (captures 13 and 14 end there). Every
-# line after its header is the modal bullets' own: a dialog's message is
-# interpolated raw, so it can hold a "### " line, or even the bullet's ending.
+# ...and nothing after Modal state is ever a new section. While a modal is
+# open the engine's captureSnapshot races it: most calls return no snapshot
+# and no events at all (captures 13 and 14 end at Modal state), but a
+# browser_snapshot call that loses the race still writes a "### Snapshot"
+# header after Modal state -- with an empty body, since it captured
+# nothing. Either way this parser reads what follows as the modal bullets'
+# own text, never a section: an empty Snapshot reads the same as a missing
+# one. A dialog's message is interpolated raw, so it can also hold a
+# "### " line, or even the bullet's own ending.
 _LAST_SECTION = SECTION_ORDER.index("Modal state")
 
 # How the engine ends every modal bullet: `]: can be handled by ` and the one
@@ -123,7 +127,7 @@ def _sections(text: str) -> dict[str, list[str]]:
     current: list[str] | None = None
     seen = -1
     for line in text.split("\n"):
-        if line.startswith("### ") and seen < _LAST_SECTION:
+        if line.startswith("### ") and seen != _LAST_SECTION:
             name = line[4:].strip()
             at = SECTION_ORDER.index(name) if name in SECTION_ORDER else -1
             if at > seen:

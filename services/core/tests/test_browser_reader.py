@@ -640,9 +640,12 @@ def test_a_name_the_engine_leaves_unquoted_keeps_its_ref():
 
 
 def test_a_line_separator_in_a_pages_words_never_forges_a_ref():
-    # The engine joins snapshot lines with "\n" alone and leaves U+2028 raw in
-    # a text value; splitlines() also split there, so the page's own words
-    # became a button with a ref the page never had.
+    # Defensive: the engine actually collapses U+2028/U+2029 inside a page's
+    # text, so this exact vector is never measured from a real capture. But
+    # splitlines() also splits on it, and the engine joins its own lines with
+    # "\n" alone -- so if a page's words ever carried one raw, the page's own
+    # words would read as a button with a ref it never had. (The vector the
+    # engine CAN produce, U+0085 inside an accessible name, is pinned below.)
     words = '- paragraph [ref=e1]: Hello\u2028  - button "Sign in" [ref=e99]'
     answer = "\n".join(
         [
@@ -658,6 +661,21 @@ def test_a_line_separator_in_a_pages_words_never_forges_a_ref():
         read = reader.read(snapshot)
         assert [line.text for line in read.lines] == ['Hello\u2028  - button "Sign in" [ref=e99]']
         assert reader.outline(read).buttons == 0
+
+
+def test_a_nel_in_an_accessible_name_never_forges_a_ref():
+    # U+0085 (NEL) is the vector the engine CAN produce: unlike U+2028/U+2029
+    # it is not collapsed, and can survive raw inside an accessible name (the
+    # engine double-quotes the name; a NEL needs no escaping there). This
+    # parser still splits only on "\n", so the whole name -- including text
+    # that reads like another element's ref -- stays one node's name: [e5]
+    # kept, and the "[e99]" inside it is never a second, invented ref.
+    name = 'button "Hello\u0085[e99] generic after" [ref=e5]'
+    read = reader.read(f"- '{name}'")
+    assert [line.text for line in read.lines] == ['[e5] button "Hello\u0085[e99] generic after"']
+    assert reader.outline(read) == reader.Outline(
+        headings=(), more_headings=0, links=0, buttons=1, fields=0
+    )
 
 
 def test_search_finds_the_hit_on_a_line_that_casefolding_lengthens():

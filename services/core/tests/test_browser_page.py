@@ -296,6 +296,33 @@ def test_a_snapshot_keeps_a_line_separator_inside_its_line():
     assert answer.snapshot == line
 
 
+# ── carry: Events after Snapshot, no modal open ────────────────────────────
+
+
+def test_an_events_section_after_a_snapshot_still_reports_its_download():
+    # Page, Snapshot, Events in the engine's own order, no modal open: once
+    # Snapshot (past Modal state's index) was accepted, the old guard
+    # (seen < _LAST_SECTION) stopped accepting ANY further header, so Events
+    # -- and its download -- was read as the Snapshot's own content instead
+    # of a section of its own.
+    answer = page.parse(
+        "\n".join(
+            [
+                "### Page",
+                "- Page URL: http://site:8000/index.html",
+                "### Snapshot",
+                "```yaml",
+                '- button "Download" [ref=e1]',
+                "```",
+                "### Events",
+                '- Downloaded file big.zip to "/output/big.zip"',
+            ]
+        )
+    )
+    assert answer.downloads == (("big.zip", "/output/big.zip"),)
+    assert answer.snapshot == '- button "Download" [ref=e1]'
+
+
 def test_modal_bullets_are_read_in_linear_time():
     # A bullet that never ends, header lines after the modal, many bullets,
     # one long unended message: each read once, at 2-4 MB.

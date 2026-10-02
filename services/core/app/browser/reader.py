@@ -262,10 +262,13 @@ def _unfolded(text: str, folded: str, offset: int) -> int:
 
 
 def _tree(snapshot: str) -> list[_Node]:
-    # Split on "\n" alone, as the engine joins its lines. splitlines() also
-    # splits on U+2028, U+2029 and U+0085, which the engine leaves raw in a
-    # page's text: the page's own words read as a node, with a ref it never
-    # had (`Hello<U+2028>  - button "Sign in" [ref=e99]`, measured).
+    # Split on "\n" alone, as the engine joins its lines: splitlines() also
+    # splits on U+2028, U+2029 and U+0085. The engine collapses U+2028 and
+    # U+2029 inside a page's text, so splitting there is defensive, never
+    # measured -- but U+0085 (NEL) survives raw inside an accessible name,
+    # and splitting on it there would read the name's own tail as a new
+    # node, with a ref it never had (`Hello<U+0085>  - button "Sign in"
+    # [ref=e99]`, measured).
     roots: list[_Node] = []
     stack: list[tuple[int, _Node]] = []
     for raw in snapshot.split("\n"):
