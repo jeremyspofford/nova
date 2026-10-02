@@ -16,9 +16,11 @@ visible to neither — the owner retires it by hand.
 A second (S42b decision 2): an agent behind the hub's build that Nova
 cannot, or did not manage to, update. One the agent_updates job will update
 at its next idle moment is not news; one that cannot be updated says the
-owner's one step, and one whose update failed says how, in its own words.
-Whether Nova can update it is agent_updates.eligibility's — the same
-decision the send and the job read (F14).
+owner's one step; one where the build failed (rolled back, never confirmed)
+says so in its own words; and one that refused it says it cannot take it —
+never that the build failed, which a refusal does not mean. Whether Nova can
+update it is agent_updates.eligibility's — the same decision the send and
+the job read (F14).
 """
 
 from __future__ import annotations
@@ -59,6 +61,9 @@ async def duplicate_agents(app, pool) -> list[Finding]:
     return findings
 
 
+_FAILED_WORDS = {"rolled_back": "rolled back", "not_confirmed": "not confirmed"}
+
+
 def _stale(built_at: str) -> bool:
     """Whether the hub's build was built over a day ago. A time that does
     not read, or names no zone, is never stale: it says nothing."""
@@ -95,12 +100,18 @@ async def agents_behind(app, pool) -> list[Finding]:
         if not able.can:
             token = able.token
             title = f"{r['name']}'s agent {build_words}, and it {able.said} — {able.step}"
-        elif r["u_version"] == build.version and r["u_outcome"] in agent_updates.FAILED:
+        elif r["u_version"] == build.version and r["u_outcome"] in agent_updates.BUILD_FAILED:
             token = f"failed:{r['u_outcome']}"
             title = (
-                f"{r['name']}'s agent {build_words}: its update to it {r['u_outcome']}: "
-                f"{r['u_reason'] or 'no reason was recorded'}"
+                f"{r['name']}'s agent {build_words}: its update to it was "
+                f"{_FAILED_WORDS[r['u_outcome']]}: {r['u_reason'] or 'no reason was recorded'}"
             )
+        elif r["u_version"] == build.version and r["u_outcome"] == "refused":
+            # The MACHINE could not take it (controller ruling on P10): said
+            # as that, never as the build failing.
+            said = (r["u_reason"] or "no reason was recorded").removeprefix("cannot: ")
+            token = "refused"
+            title = f"{r['name']}'s agent {build_words} and cannot take it: {said}"
         elif stale:
             token = "stale"
             title = (

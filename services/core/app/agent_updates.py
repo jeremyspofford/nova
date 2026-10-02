@@ -15,9 +15,10 @@ answered no is `refused`. No sentence confirms an update — only a reconnect
 An attempt belongs to the agent it was sent to: the key, and so the audit
 epoch, the device row held when it was opened. It is opened only while the row
 is still at that epoch, sent only over that epoch's socket, decided only by a
-connection at that epoch, and a re-pair ends it in the very transaction that
-moves the row on (end_on_repair) — so the new key's first connection can never
-decide an update that was sent to the old one.
+connection at that epoch, and a re-pair or a revoke ends it in the very
+transaction that moves the row on (end_open_attempt) — so the new key's first
+connection can never decide an update that was sent to the old one, and a
+revoked machine never holds P9's one slot.
 
 Two ways to send (P11): the daemon.update capability (S42b agents), or — for
 an S42a Linux agent under the README's systemd unit, which answers `unknown
@@ -29,7 +30,9 @@ and the devices_agents_behind check all read (F14).
 
 The timer job `agent_updates` (timers.JOBS) runs reconcile() every 15
 minutes: one idle machine at a time, the hub's own agent first, never a
-version that already failed anywhere (P10).
+version that FAILED anywhere — rolled back or never confirmed, the build may
+not run — and never to a machine already tried with it (P10, as the
+controller ruled it: a refusal is the machine's, and halts nothing else).
 """
 
 from __future__ import annotations
@@ -52,7 +55,11 @@ IDLE_S = 300
 WAIT_S = 120
 COMMAND_TIMEOUT_S = 120
 UNKNOWN_CAPABILITY = 'unknown capability "daemon.update"'
-FAILED = ("rolled_back", "not_confirmed", "refused")
+# P10, as ruled: the outcomes that mean the BUILD may not run. Only these halt
+# the job for every machine. `refused` means the MACHINE could not take it (an
+# agent that predates daemon.update and cannot be bootstrapped, a missing
+# curl, any stated cannot): the job skips that machine and goes on.
+BUILD_FAILED = ("rolled_back", "not_confirmed")
 # A stored reason is shown on ONE line (machine_status's agent line, the
 # tile): never longer than this, never a line break (_one_line).
 REASON_MAX = 300
@@ -60,11 +67,15 @@ REPAIRED_REASON = (
     "the machine was re-paired before the agent this was sent to reconnected on the new "
     "build — that agent's key can no longer connect, so nothing can confirm it"
 )
+REVOKED_REASON = (
+    "the machine was revoked before the agent this was sent to reconnected on the new "
+    "build — a revoked agent cannot connect, so nothing can confirm it"
+)
 
 # Opened only while the row is still at the epoch the caller read it at. FOR
 # SHARE serializes this with a re-pair's rebind (devices._REBIND_SQL locks the
 # row FOR UPDATE): a rebind that committed first leaves nothing to open, and
-# one that commits after finds this attempt and ends it (end_on_repair).
+# one that commits after finds this attempt and ends it (end_open_attempt).
 _OPEN_SQL = """
 INSERT INTO agent_updates (device_id, from_version, version, sha256, path, requested_by)
 SELECT d.id, $2, $3, $4, 'capability', $5
@@ -87,6 +98,11 @@ _IN_FLIGHT_SQL = (
 _FAILED_SQL = (
     "SELECT d.name, u.outcome, u.reason FROM agent_updates u JOIN devices d ON d.id = u.device_id "
     "WHERE u.version = $1 AND u.outcome = ANY($2::text[]) ORDER BY u.sent_at DESC LIMIT 1"
+)
+# Every machine already tried with a build, and how its last try was decided.
+_TRIED_SQL = (
+    "SELECT DISTINCT ON (device_id) device_id, outcome FROM agent_updates "
+    "WHERE version = $1 AND outcome <> 'sent' ORDER BY device_id, sent_at DESC"
 )
 _HOME = re.compile(r"(?:^|;\s*)home=([^;]+)")
 # What ends or breaks a line wherever a reason is shown: the C0 and C1
@@ -225,18 +241,19 @@ async def _withdraw(pool, attempt_id) -> None:
     await pool.execute("DELETE FROM agent_updates WHERE id = $1 AND outcome = 'sent'", attempt_id)
 
 
-async def end_on_repair(conn, device_id) -> int:
-    """A re-pair moved `device_id` to a new key and audit epoch (devices.enroll
-    calls this inside the transaction that does it). An update still `sent`
-    went to the agent that held the OLD key, which can no longer
-    authenticate: no reconnect can confirm it, and the new key's first
-    connection must never be read as that agent's. Decided here, as what is
-    true, in the same commit that moves the row on."""
+async def end_open_attempt(conn, device_id, *, reason: str) -> int:
+    """The agent an update still `sent` went to can never connect again —
+    a re-pair gave the machine a new key (devices.enroll, REPAIRED_REASON),
+    or a revoke ended it (devices.revoke, REVOKED_REASON). No reconnect can
+    confirm the attempt, the new key's first connection must never be read
+    as that agent's, and a revoked machine must not hold P9's one slot for
+    ten minutes. Decided here, as what is true, inside the transaction that
+    makes it so."""
     rows = await conn.fetch(
         "UPDATE agent_updates SET outcome = 'not_confirmed', outcome_at = now(), reason = $2 "
         "WHERE device_id = $1 AND outcome = 'sent' RETURNING id",
         device_id,
-        REPAIRED_REASON,
+        reason,
     )
     return len(rows)
 
@@ -557,7 +574,10 @@ def _why_not(row) -> str | None:
 
 async def reconcile(pool) -> str:
     """The job's one pass (P10): at most ONE update sent, and the words the
-    firing records."""
+    firing records. A build that FAILED anywhere (BUILD_FAILED) halts it; a
+    machine already tried with this build — refused, or anything else — is
+    passed by, and the others still get it. machine_update can still send
+    to any of them."""
     await expire_stale(pool)
     busy = await pool.fetchrow(_IN_FLIGHT_SQL)
     if busy:
@@ -569,7 +589,7 @@ async def reconcile(pool) -> str:
         build = await agent_dist.read()
     except agent_dist.DistUnavailable as exc:
         return f"nothing sent: the hub has no agent build to send — {exc}"
-    failed = await pool.fetchrow(_FAILED_SQL, build.version, list(FAILED))
+    failed = await pool.fetchrow(_FAILED_SQL, build.version, list(BUILD_FAILED))
     if failed:
         return (
             f"halted: the hub's build {build.version} {failed['outcome']} on {failed['name']} "
@@ -582,10 +602,16 @@ async def reconcile(pool) -> str:
     behind = [r for r in rows if device_facts.agent_version(r["facts"]) != build.version]
     if not behind:
         return f"every agent runs the hub's build {build.version}"
-    hub_first = [r for r in behind if r["last_transport"] == "host"]
+    tried = {t["device_id"]: t["outcome"] for t in await pool.fetch(_TRIED_SQL, build.version)}
+    # The others wait for a hub agent that may still take this build — not
+    # for one already tried with it: a refusal halts nothing for the others.
+    hub_first = [r for r in behind if r["last_transport"] == "host" and r["id"] not in tried]
     first = " — the hub's own agent first" if hub_first else ""
     skipped = []
     for r in hub_first or behind:
+        if r["id"] in tried:
+            skipped.append(f"{r['name']} (this build was already tried there: {tried[r['id']]})")
+            continue
         why = _why_not(r)
         if why:
             skipped.append(f"{r['name']} ({why})")

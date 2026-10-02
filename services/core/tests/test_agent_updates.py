@@ -706,7 +706,7 @@ async def test_the_check_says_what_it_knows_and_never_more(pool):
     assert "behind" not in quiet.title and "has not said which build it runs" in quiet.title
     failed = findings["failed"]
     assert failed.facts == {"device": "failed", "hub_version": VERSION, "why": "failed:rolled_back"}
-    assert "rolled_back: the new build did not connect within 2m0s" in failed.title
+    assert "was rolled back: the new build did not connect within 2m0s" in failed.title
     for conn, task in ((conn_c, task_c), (conn_f, task_f), (conn_b, task_b)):
         await _close(conn, task)
 
@@ -723,3 +723,144 @@ async def test_the_check_names_an_agent_behind_a_build_over_a_day_old_without_gu
 async def test_the_route_refuses_a_device_it_does_not_know(owner_client, pool):
     resp = await owner_client.post(f"/api/v1/devices/{uuid.uuid4()}/update")
     assert resp.status_code == 404
+
+
+# -- controller rulings (amendment): a refusal halts nothing; a revoke ends it ---
+
+
+async def _decided(pool, device_id, outcome: str, reason: str) -> None:
+    """An attempt at the hub's build, already decided on this machine."""
+    await pool.execute(
+        "INSERT INTO agent_updates (device_id, version, sha256, path, requested_by, outcome, "
+        "outcome_at, reason) VALUES ($1, $2, $3, 'capability', 'reconciler', $4, now(), $5)",
+        device_id,
+        VERSION,
+        "c" * 64,
+        outcome,
+        reason,
+    )
+
+
+def _old_mac(version: str = OLD) -> dict:
+    return _facts(version, mode="launch-agent", goos="darwin", arch="arm64")
+
+
+async def test_a_machine_that_cannot_take_the_build_halts_nothing_for_the_others(pool, monkeypatch):
+    """Ruling 1 (a): a refusal is the MACHINE's — an old Mac's agent answers
+    `unknown capability` — not the build failing, so the next pass still
+    sends the same build to another machine."""
+    monkeypatch.setattr(agent_updates, "COMMAND_TIMEOUT_S", 2)
+    mac_id, mac, conn_m, task_m = await _online(pool, "a-mac", _old_mac(), platform="darwin")
+    _b, box, conn_b, task_b = await _online(pool, "b-box", _facts(OLD))
+    first = asyncio.create_task(agent_updates.reconcile(pool))
+    await asyncio.wait_for(mac.answer_command(conn_m, ok=False, exit_code=None, error=UNKNOWN), 3)
+    assert (await asyncio.wait_for(first, 5)).startswith(
+        f"sent the hub's build {VERSION} to a-mac; cannot"
+    )
+    assert await _outcome_of(pool, mac_id) == "refused"
+    second = asyncio.create_task(agent_updates.reconcile(pool))
+    frame = await asyncio.wait_for(box.answer_command(conn_b), 3)
+    assert frame["envelope"]["capability"] == "daemon.update"
+    assert (await asyncio.wait_for(second, 5)).startswith(
+        f"sent the hub's build {VERSION} to b-box"
+    )
+    await _close(conn_m, task_m)
+    await _close(conn_b, task_b)
+
+
+@pytest.mark.parametrize("outcome", ["rolled_back", "not_confirmed"])
+async def test_a_build_that_may_not_run_still_halts_the_job_for_every_other_machine(
+    pool, monkeypatch, outcome
+):
+    """Ruling 1 (b): rolled back or never confirmed means the build may not
+    run — that still halts it for everyone (P10)."""
+    monkeypatch.setattr(agent_updates, "COMMAND_TIMEOUT_S", 0.5)
+    a_id, _a = await _enroll(pool, name="a-box")
+    await _decided(pool, a_id, outcome, "the new build did not connect within 2m0s")
+    _b, _box, conn, task = await _online(pool, "b-box", _facts(OLD))
+    words = await agent_updates.reconcile(pool)
+    assert words.startswith(f"halted: the hub's build {VERSION} {outcome} on a-box")
+    assert _commands(conn) == []
+    await _close(conn, task)
+
+
+async def test_the_job_never_resends_a_build_to_a_machine_that_refused_it(pool, monkeypatch):
+    """Ruling 1 (c): a machine already tried with this build is skipped, so
+    the job never loops on one that cannot take it."""
+    monkeypatch.setattr(agent_updates, "COMMAND_TIMEOUT_S", 0.5)
+    mac_id, _mac, conn, task = await _online(pool, "a-mac", _old_mac(), platform="darwin")
+    await _decided(pool, mac_id, "refused", "cannot: a-mac's agent predates Nova-managed updates")
+    words = await agent_updates.reconcile(pool)
+    assert words == "nothing sent: a-mac (this build was already tried there: refused)"
+    assert _commands(conn) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("outcome", ["refused", "rolled_back"])
+async def test_update_it_now_still_retries_a_build_already_tried_there(pool, outcome):
+    """Ruling 1 (d): "update it now" can still retry (P10)."""
+    box_id, box, conn, task = await _online(pool, "box", _facts(OLD))
+    await _decided(pool, box_id, outcome, "an earlier attempt")
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="owner", wait_s=0)
+    )
+    frame = await asyncio.wait_for(box.answer_command(conn), 3)
+    assert frame["envelope"]["capability"] == "daemon.update"
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    count = await pool.fetchval("SELECT count(*) FROM agent_updates WHERE device_id = $1", box_id)
+    assert count == 2
+    await _close(conn, task)
+
+
+async def test_a_hub_agent_that_cannot_take_the_build_does_not_hold_the_others(pool):
+    """A refusal halts nothing for other machines — the hub's own agent's
+    included: once it has been tried with this build, the others go on."""
+    hub_id, _hub, conn_h, task_h = await _online(pool, "minipc", _facts(OLD), door="host")
+    await _decided(
+        pool, hub_id, "refused", "the download step failed on minipc (exit 127): curl: not found"
+    )
+    _l, laptop, conn_l, task_l = await _online(pool, "laptop", _facts(OLD))
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    await asyncio.wait_for(laptop.answer_command(conn_l), 3)
+    assert (await asyncio.wait_for(job, 5)).startswith(f"sent the hub's build {VERSION} to laptop")
+    assert _commands(conn_h) == []
+    await _close(conn_h, task_h)
+    await _close(conn_l, task_l)
+
+
+async def test_the_check_says_a_refused_machine_cannot_take_the_build_never_that_it_failed(pool):
+    root = agent_dist.dist_dir()
+    _write_manifest(root, {**_manifest_of(root), "built_at": _now_rfc3339()})
+    mac_id, _mac, conn, task = await _online(pool, "a-mac", _old_mac(), platform="darwin")
+    await _decided(pool, mac_id, "refused", "cannot: a-mac's agent predates Nova-managed updates")
+    (finding,) = await device_checks.agents_behind(None, pool)
+    assert finding.facts == {"device": "a-mac", "hub_version": VERSION, "why": "refused"}
+    assert "cannot take it: a-mac's agent predates Nova-managed updates" in finding.title
+    assert "fail" not in finding.title and "rolled" not in finding.title
+    await _close(conn, task)
+
+
+async def test_a_revoke_ends_the_machines_open_update_and_frees_the_slot(pool):
+    """Ruling 2: a revoked agent can never connect to confirm its update, so
+    the revoke decides it — not confirmed, and why — in its own commit, and
+    P9's one slot is free for another machine at once."""
+    a_id, a_dev, conn_a, task_a = await _online(pool, "box-a", _facts(OLD))
+    _b, b_dev, conn_b, task_b = await _online(pool, "box-b", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box-a", requested_by="owner", wait_s=5)
+    )
+    await a_dev.answer_command(conn_a)
+    await devices.revoke(pool, device_id=a_id, actor="tester")
+    row = await pool.fetchrow(
+        "SELECT outcome, reason FROM agent_updates WHERE device_id = $1", a_id
+    )
+    assert row["outcome"] == "not_confirmed" and row["reason"] == agent_updates.REVOKED_REASON
+    assert (await asyncio.wait_for(run, 6)).outcome == "not_confirmed"
+    run_b = asyncio.create_task(
+        agent_updates.update_now(pool, name="box-b", requested_by="owner", wait_s=0)
+    )
+    await asyncio.wait_for(b_dev.answer_command(conn_b), 3)
+    assert (await asyncio.wait_for(run_b, 3)).outcome == "sent"
+    await devices_ws.hub.disconnect(a_id, "revoked")  # what the revoke route does
+    await asyncio.wait_for(task_a, 2)
+    await _close(conn_b, task_b)

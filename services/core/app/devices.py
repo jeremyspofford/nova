@@ -373,12 +373,14 @@ async def enroll(
                 )
             # An update still `sent` went to the agent the OLD key belongs to:
             # nothing can confirm it now, and the new key's first connection
-            # must never decide it (agent_updates.end_on_repair) — ended in
+            # must never decide it (agent_updates.end_open_attempt) — ended in
             # this same commit. Imported here: agent_updates imports this
             # module.
             from app import agent_updates
 
-            await agent_updates.end_on_repair(conn, row["id"])
+            await agent_updates.end_open_attempt(
+                conn, row["id"], reason=agent_updates.REPAIRED_REASON
+            )
             await governance.record_event(
                 conn,
                 kind=governance.DEVICE_REPAIRED,
@@ -570,6 +572,13 @@ async def revoke(pool: asyncpg.Pool, *, device_id: uuid.UUID, actor: str) -> dic
         )
         if row is None:
             raise DeviceRefused(f"{exists} was already revoked", status_code=_REVOKED_STATUS)
+        # A revoked agent can never connect to confirm an update still `sent`
+        # to it, so it is decided here, in this commit — and P9's one slot is
+        # free for every other machine at once (agent_updates.end_open_attempt).
+        # Imported here: agent_updates imports this module.
+        from app import agent_updates
+
+        await agent_updates.end_open_attempt(conn, device_id, reason=agent_updates.REVOKED_REASON)
         await governance.record_event(
             conn,
             kind=governance.DEVICE_REVOKED,
