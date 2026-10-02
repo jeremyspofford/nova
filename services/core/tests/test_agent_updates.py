@@ -433,8 +433,22 @@ async def test_an_update_prepared_before_a_repair_is_never_opened_for_the_new_ke
 
 @pytest.mark.parametrize(
     "mode, goos, arch",
-    [("launch-agent", "darwin", "arm64"), ("run-key", "windows", "amd64")],
-    ids=["launch-agent", "run-key"],
+    [
+        ("launch-agent", "darwin", "arm64"),
+        ("run-key", "windows", "amd64"),
+        # Pairs no real agent reports, but the validator accepts: the gate is
+        # the MODE (and the OS), never one standing in for the other.
+        ("launch-agent", "linux", "amd64"),
+        ("run-key", "linux", "amd64"),
+        ("systemd-user", "darwin", "arm64"),
+    ],
+    ids=[
+        "launch-agent",
+        "run-key",
+        "launch-agent-on-linux",
+        "run-key-on-linux",
+        "systemd-user-on-darwin",
+    ],
 )
 async def test_an_old_agent_under_a_run_key_or_a_launch_agent_is_never_bootstrapped(
     pool, tailnet, mode, goos, arch
@@ -501,6 +515,19 @@ async def test_a_bootstrap_install_that_ran_and_failed_is_refused_in_its_words(p
     await _close(conn, task)
 
 
+async def test_a_bootstrap_with_no_absolute_home_runs_nothing(pool, tailnet):
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    await device.answer_command(conn, output="host=box; home=-rf/x")
+    outcome = await asyncio.wait_for(run, 3)
+    assert outcome.outcome == "refused" and "absolute home folder" in outcome.reason
+    assert len(_commands(conn)) == 2, "nothing past system.info"
+    await _close(conn, task)
+
+
 # -- what an update says, and what it counts ------------------------------------
 
 
@@ -528,7 +555,7 @@ async def test_the_update_counts_the_commands_its_restart_will_cancel(pool):
 
 async def test_a_refusal_is_stored_as_one_bounded_line(pool):
     device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
-    said = "cannot: not supervised\nbox: connected\r\x00\x1b[2J  tail " + "x" * 1000
+    said = "cannot: not supervised\nbox: connected\r\x00\x1b[2J\x7f\x9b\u2028 tail " + "x" * 1000
     run = asyncio.create_task(
         agent_updates.update_now(pool, name="box", requested_by="owner", wait_s=0)
     )
@@ -537,7 +564,7 @@ async def test_a_refusal_is_stored_as_one_bounded_line(pool):
     stored = await pool.fetchval("SELECT reason FROM agent_updates WHERE device_id = $1", device_id)
     assert outcome.outcome == "refused" and outcome.reason == stored
     assert stored.startswith("cannot: not supervised box: connected")
-    assert not any(ch in stored for ch in "\n\r\x00\x1b ")
+    assert not any(ch in stored for ch in "\n\r\x00\x1b\x7f\x9b\u2028")
     assert len(stored) == agent_updates.REASON_MAX and stored.endswith("…")
     await _close(conn, task)
 
@@ -585,6 +612,31 @@ async def test_a_rollback_recorded_before_this_attempt_was_sent_never_decides_it
     conn2, task2 = await _reconnect(pool, device, _facts(OLD, update=earlier))
     assert (await asyncio.wait_for(run, 3)).outcome == "sent"
     assert await _outcome_of(pool, device_id) == "sent"
+    await _close(conn2, task2)
+
+
+def test_a_supervisor_record_counts_only_from_the_second_the_attempt_was_sent():
+    sent_at = datetime(2026, 10, 2, 12, 0, 0, 500_000, tzinfo=UTC)
+    # The agent dates its record to the second (RFC 3339): the same second counts.
+    assert agent_updates._recorded_after("2026-10-02T12:00:00Z", sent_at)
+    assert agent_updates._recorded_after("2026-10-02T12:00:01+00:00", sent_at)
+    assert not agent_updates._recorded_after("2026-10-02T11:59:59Z", sent_at)
+    for unreadable in ("", "yesterday", "2026-10-02T12:00:00", None, 1_790_000_000):
+        assert not agent_updates._recorded_after(unreadable, sent_at), unreadable
+
+
+async def test_auth_facts_core_refused_decide_nothing(pool):
+    """Only facts this connection STORED decide an update: a version inside
+    facts core refused is not a version anyone recorded."""
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.6)
+    )
+    await device.answer_command(conn)
+    await _close(conn, task)
+    conn2, task2 = await _reconnect(pool, device, _facts(VERSION, mode="no-such-mode"))
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    assert (await devices.get(pool, device_id))["facts"] is None
     await _close(conn2, task2)
 
 

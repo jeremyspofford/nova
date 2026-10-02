@@ -92,7 +92,7 @@ _HOME = re.compile(r"(?:^|;\s*)home=([^;]+)")
 # What ends or breaks a line wherever a reason is shown: the C0 and C1
 # controls (NUL among them — postgres cannot store it), DEL, and the line and
 # paragraph separators str.splitlines() also splits on.
-_BREAKS = re.compile(r"[\x00-\x1f\x7f-\x9f  ]+")
+_BREAKS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 
 @dataclass(frozen=True)
