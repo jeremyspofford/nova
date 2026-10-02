@@ -377,3 +377,357 @@ def test_read_clamps_a_degenerate_part_chars():
     assert reader.read(short, 0) == reader.read(short, reader.MIN_PART_CHARS)
     assert reader.read(short, -5) == reader.read(short, reader.MIN_PART_CHARS)
     assert reader.read(short, 10**9) == reader.read(short, reader.MAX_PART_CHARS)
+
+
+# ── fix round 2: every snapshot below is the engine's own shape ─────────────
+# (renderAriaTreeAsJSON's conversion, then renderAriaSnapshotAsYaml, from the
+# engine's Playwright 1.64.0-alpha): a sole text child is written as the node's
+# inline text, every visible node that takes pointer events carries a ref, and
+# [cursor=pointer] marks only the OUTERMOST node the page made clickable.
+
+
+def _lines(snapshot: str) -> list[str]:
+    return [line.text for line in reader.read(snapshot).lines]
+
+
+def test_an_open_listboxs_options_keep_their_refs_without_a_pointer_cursor():
+    # The engine gives every visible option a ref; it writes [cursor=pointer]
+    # only when the page's own cursor is a pointer, and an open custom listbox
+    # usually leaves it at the default arrow.
+    snapshot = """- listbox "Country" [ref=e1]:
+  - option "France" [ref=e2]
+  - option "Spain" [selected] [ref=e3]"""
+    assert _lines(snapshot) == [
+        '[e1] listbox "Country" (options: France, Spain [selected])',
+        '[e2] option "France"',
+        '[e3] option "Spain" (selected)',
+    ]
+
+
+def test_a_clickable_nodes_inline_words_are_its_label():
+    # The cookie banner of test_a_clickable_non_interactive_node_keeps_its_ref,
+    # as the engine writes it: its one text child inline. It reads the same.
+    snapshot = """- generic [ref=e1]:
+  - generic [ref=e2] [cursor=pointer]: Accept all cookies
+  - img "Open the gallery" [ref=e3] [cursor=pointer]"""
+    assert _lines(snapshot) == ['[e2] generic "Accept all cookies" [e3] img "Open the gallery"']
+
+
+def test_a_clickable_cell_keeps_its_ref():
+    snapshot = """- grid "October 2026" [ref=e1]:
+  - row [ref=e2]:
+    - gridcell "14" [ref=e3] [cursor=pointer]
+    - gridcell "15" [ref=e4] [cursor=pointer]"""
+    assert _lines(snapshot) == ['| [e3] gridcell "14" | [e4] gridcell "15" |']
+
+
+def test_a_clickable_heading_is_a_heading_and_keeps_its_ref():
+    snapshot = """- generic [ref=e1]:
+  - heading "Shipping details" [level=3] [ref=e2] [cursor=pointer]
+  - paragraph [ref=e3]: Hidden until opened."""
+    read = reader.read(snapshot)
+    assert [line.text for line in read.lines] == [
+        "### Shipping details",
+        '[e2] heading "Shipping details"',
+        "Hidden until opened.",
+    ]
+    assert [line.heading for line in read.lines] == [True, False, False]
+    assert reader.outline(read).headings == ("Shipping details",)
+
+
+def test_a_clickable_card_keeps_its_ref_and_everything_in_it():
+    snapshot = """- generic [ref=e1]:
+  - generic [ref=e10] [cursor=pointer]:
+    - heading "Product name" [level=3] [ref=e11]
+    - paragraph [ref=e12]: A description of the product.
+    - generic [ref=e13]: $19.99"""
+    read = reader.read(snapshot)
+    assert [line.text for line in read.lines] == [
+        "[e10] generic:",
+        "### Product name",
+        "A description of the product.",
+        "$19.99",
+    ]
+    assert reader.outline(read).headings == ("Product name",)
+
+
+def test_a_clickable_video_card_keeps_its_heading_its_links_and_its_words():
+    # A recommended-video card as a real page builds it (YouTube, measured
+    # 2026-09-30): the card is the click target, so the links inside it carry
+    # no pointer mark of their own.
+    snapshot = """- generic [ref=e295]:
+  - generic [ref=e297] [cursor=pointer]:
+    - link [ref=e298]:
+      - /url: /watch?v=one
+    - generic [ref=e310]:
+      - heading "Snow Bear" [level=3] [ref=e312]:
+        - link "Snow Bear 11 minutes" [ref=e313]:
+          - /url: /watch?v=one
+          - text: Snow Bear
+      - generic [ref=e317]: Aaron Blaise
+      - generic "1.2 million views" [ref=e322]: 1.2M"""
+    read = reader.read(snapshot)
+    assert [line.text for line in read.lines] == [
+        "[e297] generic: [e298] link (/watch?v=one)",
+        "### Snow Bear",
+        '[e313] link "Snow Bear 11 minutes" (/watch?v=one)',
+        "Aaron Blaise",
+        "1.2M",
+    ]
+    assert reader.outline(read) == reader.Outline(
+        headings=("Snow Bear",), more_headings=0, links=2, buttons=0, fields=0
+    )
+
+
+def test_clickable_list_items_keep_their_words_and_their_list_form():
+    snapshot = """- list [ref=e1]:
+  - listitem [ref=e2] [cursor=pointer]: Invoice overdue - pay by Friday
+  - listitem [ref=e3] [cursor=pointer]:
+    - generic [ref=e4]: Alice
+    - generic [ref=e5]: Lunch tomorrow?"""
+    assert _lines(snapshot) == [
+        '- [e2] listitem "Invoice overdue - pay by Friday"',
+        '- [e3] listitem "Alice Lunch tomorrow?"',
+    ]
+
+
+def test_clickable_table_rows_keep_their_cells_and_their_ref():
+    snapshot = """- table [ref=e1]:
+  - row "From Subject" [ref=e2]:
+    - columnheader "From" [ref=e3]
+    - columnheader "Subject" [ref=e4]
+  - row "Alice Lunch tomorrow?" [ref=e5] [cursor=pointer]:
+    - cell "Alice" [ref=e6]
+    - cell "Lunch tomorrow?" [ref=e7]"""
+    assert _lines(snapshot) == ["| From | Subject |", "[e5] row: | Alice | Lunch tomorrow? |"]
+
+
+def test_a_cells_words_in_a_span_are_kept():
+    snapshot = """- table [ref=e1]:
+  - row [ref=e2]:
+    - cell "Active Edit" [ref=e3]:
+      - generic [ref=e4]: Active
+      - link "Edit" [ref=e5] [cursor=pointer]:
+        - /url: /edit/1"""
+    assert _lines(snapshot) == ['| Active [e5] link "Edit" (/edit/1) |']
+
+
+def test_a_score_in_a_span_stays_in_its_cell():
+    snapshot = """- table [ref=e1]:
+  - row [ref=e2]:
+    - cell "100 points by someone 2 hours ago | 50 comments" [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: 100 points
+        - text: by
+        - link "someone" [ref=e6] [cursor=pointer]:
+          - /url: user?id=someone
+        - generic [ref=e7]:
+          - link "2 hours ago" [ref=e8] [cursor=pointer]:
+            - /url: item?id=1
+        - text: "|"
+        - link "50 comments" [ref=e9] [cursor=pointer]:
+          - /url: item?id=1"""
+    assert _lines(snapshot) == [
+        '| 100 points by [e6] link "someone" (user?id=someone) [e8] link "2 hours ago"'
+        ' (item?id=1) / [e9] link "50 comments" (item?id=1) |'
+    ]
+
+
+def test_a_list_in_a_cell_stays_one_cell_without_list_marks():
+    # A Wikipedia navbox: the cell is one string, so its list items flow with
+    # their links and the page's own separators, never a "- " each.
+    snapshot = """- table [ref=e1]:
+  - row [ref=e2]:
+    - rowheader "Engines" [ref=e3]
+    - cell [ref=e4]:
+      - list [ref=e5]:
+        - listitem [ref=e6]:
+          - link "Blink" [ref=e7] [cursor=pointer]:
+            - /url: /wiki/Blink
+          - text: ·
+        - listitem [ref=e8]:
+          - link "Gecko" [ref=e9] [cursor=pointer]:
+            - /url: /wiki/Gecko
+          - text: ·
+        - listitem [ref=e10]:
+          - link "WebKit" [ref=e11] [cursor=pointer]:
+            - /url: /wiki/WebKit"""
+    assert _lines(snapshot) == [
+        '| Engines | [e7] link "Blink" (/wiki/Blink) · [e9] link "Gecko" (/wiki/Gecko) ·'
+        ' [e11] link "WebKit" (/wiki/WebKit) |'
+    ]
+
+
+def test_a_layout_table_reads_as_its_inner_rows():
+    # Hacker News lays its front page out in tables nested inside one outer
+    # cell: flattening that cell made one line of every story and lost each
+    # story's rank.
+    snapshot = """- table [ref=e1]:
+  - rowgroup [ref=e2]:
+    - row [ref=e3]:
+      - cell [ref=e4]:
+        - table [ref=e5]:
+          - rowgroup [ref=e6]:
+            - row "1. upvote Story one (example.com)" [ref=e7]:
+              - cell "1." [ref=e8]
+              - cell "upvote" [ref=e9]:
+                - link "upvote" [ref=e10] [cursor=pointer]:
+                  - /url: vote?id=1
+              - cell "Story one (example.com)" [ref=e11]:
+                - generic [ref=e12]:
+                  - link "Story one" [ref=e13] [cursor=pointer]:
+                    - /url: https://example.com/one
+                  - text: (example.com)
+            - row "120 points by alice | 45 comments" [ref=e14]:
+              - cell [ref=e15]
+              - cell "120 points by alice | 45 comments" [ref=e16]:
+                - generic [ref=e17]:
+                  - text: 120 points by
+                  - link "alice" [ref=e18] [cursor=pointer]:
+                    - /url: user?id=alice
+                  - text: "|"
+                  - link "45 comments" [ref=e19] [cursor=pointer]:
+                    - /url: item?id=1"""
+    assert _lines(snapshot) == [
+        '| 1. | [e10] link "upvote" (vote?id=1) | [e13] link "Story one"'
+        " (https://example.com/one) (example.com) |",
+        '|  | 120 points by [e18] link "alice" (user?id=alice) / [e19] link "45 comments"'
+        " (item?id=1) |",
+    ]
+
+
+def test_a_row_built_of_divs_keeps_its_words_and_its_refs():
+    # role=row with plain divs for cells holds generics, not cells: the row
+    # read as nothing at all, its button and its words gone with it.
+    snapshot = """- table [ref=e1]:
+  - row "Alice Lunch tomorrow? Archive" [ref=e2]:
+    - generic [ref=e3]: Alice
+    - generic [ref=e4]: Lunch tomorrow?
+    - button "Archive" [ref=e5]"""
+    assert _lines(snapshot) == ['| Alice | Lunch tomorrow? | [e5] button "Archive" |']
+
+
+def test_controls_inside_an_image_keep_their_refs():
+    # A map widget is role=img, and its controls sit inside it: what an image
+    # holds is decoration, but never a ref she can act on.
+    snapshot = """- generic [ref=e1]:
+  - img "Map of Paris" [ref=e2]:
+    - button "Zoom in" [ref=e3]
+    - button "Zoom out" [ref=e4]"""
+    assert _lines(snapshot) == [
+        "[image: Map of Paris]",
+        '[e3] button "Zoom in"',
+        '[e4] button "Zoom out"',
+    ]
+
+
+def test_a_name_the_engine_leaves_unquoted_keeps_its_ref():
+    # createKey writes a name that starts and ends with "/" raw, unquoted (an
+    # aria template would read it as a regex): `link /docs/ [ref=e6]`.
+    snapshot = """- generic [ref=e1]:
+  - link /docs/ [ref=e6] [cursor=pointer]:
+    - /url: /docs/
+  - button / [ref=e7]
+  - 'button /a: b/ [ref=e8]'
+  - button /x/ [ref=e9]: go/now"""
+    read = reader.read(snapshot)
+    assert [line.text for line in read.lines] == [
+        '[e6] link "/docs/" (/docs/) [e7] button "/" [e8] button "/a: b/" [e9] button "/x/": go/now'
+    ]
+    assert reader.outline(read) == reader.Outline(
+        headings=(), more_headings=0, links=1, buttons=3, fields=0
+    )
+
+
+def test_a_line_separator_in_a_pages_words_never_forges_a_ref():
+    # The engine joins snapshot lines with "\n" alone and leaves U+2028 raw in
+    # a text value; splitlines() also split there, so the page's own words
+    # became a button with a ref the page never had.
+    words = '- paragraph [ref=e1]: Hello\u2028  - button "Sign in" [ref=e99]'
+    answer = "\n".join(
+        [
+            "### Page",
+            "- Page URL: http://site:8000/index.html",
+            "### Snapshot",
+            "```yaml",
+            words,
+            "```",
+        ]
+    )
+    for snapshot in (words, page.parse(answer).snapshot):
+        read = reader.read(snapshot)
+        assert [line.text for line in read.lines] == ['Hello\u2028  - button "Sign in" [ref=e99]']
+        assert reader.outline(read).buttons == 0
+
+
+def test_search_finds_the_hit_on_a_line_that_casefolding_lengthens():
+    # casefold turns "ß" into "ss" and "İ" into "i" plus a combining dot: an
+    # offset found in the folded copy and applied to the line itself drifted
+    # past the word, so the snippet missed it and the part could be wrong.
+    cases = [
+        (
+            "- text: "
+            + "Die Straße ist groß. " * 400
+            + "Treffpunkt zebra-quartz hier. "
+            + "Mehr Text folgt. " * 400,
+            "zebra-quartz",
+        ),
+        (
+            "- paragraph: "
+            + "Grüße aus der Straße. " * 85
+            + "Der Schlüssel liegt im Fuß des Turms. "
+            + "ok " * 100,
+            "schlüssel",
+        ),
+        ("- text: " + "İstanbul İzmir " * 300 + "zebra-quartz " + "son " * 600, "zebra-quartz"),
+        ("- text: " + "Die Straße ist groß. " * 400 + "Am FUSS des Turms. " + "ok " * 900, "fuß"),
+    ]
+    for doc, word in cases:
+        read = reader.read(doc, 2_000)
+        assert len(read.parts) > 1
+        matches, total = reader.search(read, word)
+        assert total == 1, word
+        folded = word.casefold()
+        holds = [i + 1 for i, part in enumerate(read.parts) if folded in part.casefold()]
+        assert [matches[0].part] == holds, word
+        assert folded in matches[0].text.casefold(), word
+
+
+def test_fix_round_2s_loops_stay_linear_on_hostile_input():
+    # Each new pass over a page's text: the single-quoted key read by find()
+    # (one Python step per character took 0.56 s for the unclosed 4 MB key;
+    # 0.04 s now, measured 2026-10-02), the casefold offset map, clickable
+    # wrappers, cells and listbox options. Sized for at least five times the
+    # room on CI's slower runner; a quadratic pass would take minutes.
+    hostile = {
+        "an unclosed 4 MB single-quoted key": "- '" + "a" * 4_000_000,
+        "2 MB of doubled quotes in a single-quoted key": "- '" + "''" * 1_000_000,
+        "a 4 MB line casefolding lengthens, searched at its end": "- text: "
+        + "Straße " * 570_000
+        + "zebra-quartz",
+        "100-deep clickable wrappers, repeated": "\n".join(
+            "  " * depth + f"- generic [ref=e{depth}] [cursor=pointer]:"
+            for _ in range(400)
+            for depth in range(100)
+        ),
+        "a cell nesting 95 wrappers, repeated": "- table:\n"
+        + "\n".join(
+            "  - row:\n    - cell:\n"
+            + "\n".join(
+                "      " + "  " * depth + f"- generic [ref=e{depth}]:" for depth in range(95)
+            )
+            + "\n      "
+            + "  " * 95
+            + "- text: zebra"
+            for _ in range(400)
+        ),
+        "20,000 options with refs": '- listbox "L" [ref=e0]:\n'
+        + "\n".join(f'  - option "o{i}" [ref=e{i}]' for i in range(1, 20_000)),
+    }
+    for label, snapshot in hostile.items():
+        start = time.perf_counter()
+        read = reader.read(snapshot, reader.MIN_PART_CHARS)
+        reader.outline(read)
+        reader.search(read, "zebra-quartz")
+        took = time.perf_counter() - start
+        assert took < 2.0, f"{label}: {took:.2f} s"

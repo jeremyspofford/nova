@@ -34,18 +34,28 @@ SECTION_ORDER = (
     "Snapshot",
     "Events",
 )
+# ...and nothing after Modal state. While a modal is open the engine's
+# captureSnapshot races it and returns no snapshot and no events, so Modal
+# state is the last section it writes (captures 13 and 14 end there). Every
+# line after its header is the modal bullets' own: a dialog's message is
+# interpolated raw, so it can hold a "### " line, or even the bullet's ending.
+_LAST_SECTION = SECTION_ORDER.index("Modal state")
 
-# The literal ending the engine always writes for a modal bullet. A dialog's
-# own message can hold a newline, so a bullet is never just one physical line.
-_DIALOG_END = "]: can be handled by browser_handle_dialog"
+# How the engine ends every modal bullet: `]: can be handled by ` and the one
+# tool that clears it — browser_handle_dialog for a dialog,
+# browser_file_upload for a file chooser (renderModalStates).
+_HANDLED_BY = "]: can be handled by "
 
 
 @dataclass(frozen=True)
 class Dialog:
-    """A modal the page opened. Until it is answered the engine refuses every
-    other tool ("does not handle the modal state", measured)."""
+    """A modal the page opened: a dialog, or a file chooser. Until it is
+    answered the engine refuses every other tool ("does not handle the modal
+    state", measured). One whose bullet never reached the engine's ending (a
+    cut-off answer) is still reported, with what could be read of its message."""
 
-    kind: str  # "alert" | "confirm" | "prompt" | "beforeunload" | the engine's own word
+    # "alert" | "confirm" | "prompt" | "beforeunload" | "File chooser" | the engine's own word
+    kind: str
     message: str  # "" when the engine gave none
 
 
@@ -87,7 +97,8 @@ def parse(text: str) -> EngineAnswer:
         status_text=status_text,
         snapshot=_fenced(sections.get("Snapshot", ())),
         dialogs=tuple(
-            d for d in (_dialog(b) for b in _dialog_bullets(sections.get("Modal state", []))) if d
+            _dialog(bullet, ended)
+            for bullet, ended in _dialog_bullets(sections.get("Modal state", []))
         ),
         downloads=tuple(d for d in (_download(line) for line in sections.get("Events", ())) if d),
         files=tuple(f for f in (_result_file(line) for line in sections.get("Result", ())) if f),
@@ -98,15 +109,21 @@ def parse(text: str) -> EngineAnswer:
 
 def _sections(text: str) -> dict[str, list[str]]:
     """Split the engine's answer on its own `### ` headers — each accepted
-    at most once, and only strictly later in SECTION_ORDER than the last one
-    accepted. A `### ` line that fails that (a repeat, or one out of order) is
-    a page's own words, never a real header: content of whichever section is
-    currently open, exactly like any other line."""
+    at most once, only strictly later in SECTION_ORDER than the last one
+    accepted, and none after Modal state. A `### ` line that fails that (a
+    repeat, one out of order, anything after a modal) is a page's own words,
+    never a real header: content of whichever section is currently open,
+    exactly like any other line.
+
+    Lines are split on "\\n" alone, as the engine joins them. splitlines()
+    also splits on U+2028, U+2029, U+0085 and the like, which a page's title
+    keeps raw (document.title collapses ASCII whitespace only): a title could
+    forge a whole modal state."""
     sections: dict[str, list[str]] = {}
     current: list[str] | None = None
     seen = -1
-    for line in text.splitlines():
-        if line.startswith("### "):
+    for line in text.split("\n"):
+        if line.startswith("### ") and seen < _LAST_SECTION:
             name = line[4:].strip()
             at = SECTION_ORDER.index(name) if name in SECTION_ORDER else -1
             if at > seen:
@@ -150,37 +167,57 @@ def _unquote(value: str) -> str:
     return value
 
 
-def _dialog_bullets(lines: list[str]) -> list[str]:
-    """Modal-state lines regrouped into one bullet per dialog. The message a
-    page chose can hold a newline (or forge a fake section header inside
-    it), so a bullet is never just one physical line: it runs until the
-    ending the engine always writes."""
-    bullets: list[str] = []
+def _dialog_bullets(lines: list[str]) -> list[tuple[str, bool]]:
+    """Modal-state lines regrouped into one bullet per modal, each without
+    the engine's ending, and whether it reached one. The message a page chose
+    can hold a newline, so a bullet is never just one physical line: it runs
+    until a line ending in `]: can be handled by <tool>`, and every line
+    before that — a "### " one, a "- [" one — is the message's own. A bullet
+    that never reaches an ending is still a modal the page has open, and one
+    that blocks every other tool: it is kept, never dropped."""
+    bullets: list[tuple[str, bool]] = []
     current: list[str] = []
     for line in lines:
         if not current and not line.startswith("- ["):
-            continue  # content outside any bullet — never real, dropped
+            continue  # outside any bullet: never the engine's
         current.append(line)
-        if current[-1].endswith(_DIALOG_END):
-            bullets.append("\n".join(current))
+        end = _ending(line)
+        if end != -1:
+            current[-1] = line[:end]
+            bullets.append(("\n".join(current), True))
             current = []
+    if current:
+        bullets.append(("\n".join(current), False))
     return bullets
 
 
-def _dialog(bullet: str) -> Dialog | None:
+def _ending(line: str) -> int:
+    """Where the engine's ending starts in `line` — its last `]: can be
+    handled by `, followed by a tool's name and nothing else — or -1."""
+    at = line.rfind(_HANDLED_BY)
+    if at == -1 or not line[at + len(_HANDLED_BY) :].isidentifier():
+        return -1
+    return at
+
+
+def _dialog(bullet: str, ended: bool) -> Dialog:
     # - ["alert" dialog with message "Hello from the page"]: can be handled by browser_handle_dialog
-    if not bullet.startswith("- ["):
-        return None
-    end = bullet.rfind("]:")
-    inner = bullet[3:end] if end > 3 else bullet[3:]
+    # - [File chooser]: can be handled by browser_file_upload
+    # (the bullet arrives without its ending)
+    inner = bullet[3:]
     kind = inner
     if inner.startswith('"'):
         close = inner.find('"', 1)
-        if close > 0:
-            kind = inner[1:close]
+        kind = inner[1:close] if close > 0 else inner[1:]
     marker = " with message "
     at = inner.find(marker)
-    message = _unquote(inner[at + len(marker) :]) if at != -1 else ""
+    message = ""
+    if at != -1:
+        said = inner[at + len(marker) :]
+        if ended:
+            message = _unquote(said)
+        else:  # what could be read of it, after its opening quote
+            message = said[1:] if said.startswith('"') else said
     return Dialog(kind=kind.strip(), message=message)
 
 

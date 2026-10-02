@@ -7,6 +7,14 @@ a heading as `#`s, a paragraph as its words, a list item as `- …`, a table row
 as `| a | b |`, and every element she can act on as `[e4] link "Page two"
 (page2.html)`, carrying the engine's own ref. Decoration is dropped.
 
+She can act on a role in INTERACTIVE, on an option the engine gave a ref,
+and on any node the page itself made clickable — the engine's
+[cursor=pointer], written on the outermost such node only: a cookie banner's
+div, a calendar's day, a card, an inbox row. Such a node keeps its ref AND
+what it holds: its words as one token when words are all it holds (`[e2]
+generic "Accept all cookies"`), else its ref in front of its content (`[e10]
+generic:`, then the card's heading and paragraphs as lines of their own).
+
 Then cut into parts no longer than she asked for, on line boundaries (only a
 single line longer than a part is cut inside), or searched: the lines holding
 every word of a query, each with its part number and the heading above it.
@@ -71,6 +79,16 @@ BLOCKS = {
 }
 CELLS = frozenset({"cell", "columnheader", "rowheader", "gridcell"})
 FLAGS = ("checked", "selected", "disabled", "expanded", "pressed")
+# A table row whose cells hold a heading or another row is a layout, not a
+# row of data: it reads as the lines inside it, never squeezed into one cell
+# (Hacker News nests its whole front page in one outer cell).
+_LAYOUT = frozenset({"heading", "row"})
+# casefold lengthens some characters ("ß" -> "ss", "İ" -> "i" and a combining
+# dot) and shortens none, folding each character on its own (checked over
+# every code point, 2026-10-02): a folded offset is mapped back to the line by
+# folding it a block at a time.
+_FOLD_BLOCK = 4_096
+_ROLE_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 
 
 @dataclass(frozen=True)
@@ -113,12 +131,16 @@ class _Node:
     attrs: dict[str, str] = field(default_factory=dict)
     text: str | None = None
     children: list[_Node] = field(default_factory=list)
+    blocks: bool = False  # something below it is a heading, a row or a BLOCKS role
+    layout: bool = False  # something below it is a heading or a row
 
 
 @dataclass
 class _Flow:
     prefix: str = ""
     parts: list[str] = field(default_factory=list)
+    marks: int = 0  # how many parts were elements, not words
+    flat: bool = False  # inside a table cell: one string, so a block adds no "- " of its own
 
 
 def read(snapshot: str, part_chars: int = DEFAULT_PART_CHARS) -> Page:
@@ -174,7 +196,7 @@ def search(page: Page, query: str) -> tuple[list[Match], int]:
         if all(word in folded for word in words):
             total += 1
             if len(found) < MAX_MATCHES:
-                offset = folded.find(words[0])
+                offset = _unfolded(line.text, folded, folded.find(words[0]))
                 part = _part_of(page, index, offset)
                 text = _snippet(line.text, offset)
                 found.append(Match(part=part, heading=None if line.heading else heading, text=text))
@@ -210,25 +232,71 @@ def _snippet(text: str, offset: int) -> str:
     return prefix + text[start:end] + suffix
 
 
+def _unfolded(text: str, folded: str, offset: int) -> int:
+    """The index in `text` of the character that position `offset` of its
+    casefolded copy `folded` came from. Where folding changed no length, each
+    character folded to one, and the offset is the same; otherwise the
+    folded length is counted a block at a time, then a character at a time
+    inside the block that holds the offset — linear, and in C but for one
+    block. The search found the word in `folded`; this is where it sits in
+    the line she reads."""
+    if offset <= 0 or len(folded) == len(text):
+        return max(offset, 0)
+    at = seen = 0
+    while at < len(text):
+        size = len(text[at : at + _FOLD_BLOCK].casefold())
+        if seen + size > offset:
+            break
+        seen += size
+        at += _FOLD_BLOCK
+    while at < len(text):
+        size = len(text[at].casefold())
+        if seen + size > offset:
+            break
+        seen += size
+        at += 1
+    return min(at, len(text))
+
+
 # ── the tree ────────────────────────────────────────────────────────────────
 
 
 def _tree(snapshot: str) -> list[_Node]:
+    # Split on "\n" alone, as the engine joins its lines. splitlines() also
+    # splits on U+2028, U+2029 and U+0085, which the engine leaves raw in a
+    # page's text: the page's own words read as a node, with a ref it never
+    # had (`Hello<U+2028>  - button "Sign in" [ref=e99]`, measured).
     roots: list[_Node] = []
     stack: list[tuple[int, _Node]] = []
-    for raw in snapshot.splitlines():
+    for raw in snapshot.split("\n"):
         parsed = _parse_line(raw)
         if parsed is None:
             continue
         indent, node = parsed
         while stack and stack[-1][0] >= indent:
-            stack.pop()
+            _close_node(stack)
         if stack:
             stack[-1][1].children.append(node)
         else:
             roots.append(node)
         stack.append((indent, node))
+    while stack:
+        _close_node(stack)
     return roots
+
+
+def _close_node(stack: list[tuple[int, _Node]]) -> None:
+    """Pop the innermost open node and tell its parent — the node beneath it
+    on the stack — whether it holds a heading, a row or a block: one step
+    per node, so the whole tree knows what each node holds in one pass."""
+    node = stack.pop()[1]
+    if not stack:
+        return
+    parent = stack[-1][1]
+    if node.layout or node.role in _LAYOUT:
+        parent.layout = parent.blocks = True
+    elif node.blocks or node.role in BLOCKS:
+        parent.blocks = True
 
 
 def _parse_line(raw: str) -> tuple[int, _Node] | None:
@@ -247,10 +315,15 @@ def _parse_line(raw: str) -> tuple[int, _Node] | None:
         # "{", "}" or a backtick (yamlEscapeKeyIfNeeded): a heading "Step 1:
         # Install", a link "fix(core): a bug #90". `''` is one literal `'`.
         key, after = _single_quoted(body)
-        node, _ = _parse_key(key)
+        node, _ = _parse_key(key, len(key))
         trailer = body[after:]
     else:
-        node, consumed = _parse_key(body)
+        # A key the engine left unquoted holds no ": " — it quotes one that
+        # does — so the first ": " (or a last ":") ends it.
+        end = body.find(": ")
+        if end == -1:
+            end = len(body) - 1 if body.endswith(":") else len(body)
+        node, consumed = _parse_key(body, end)
         trailer = body[consumed:]
     if trailer.startswith(":"):
         node.text = _scalar(trailer[1:]) or None
@@ -260,44 +333,54 @@ def _parse_line(raw: str) -> tuple[int, _Node] | None:
 def _single_quoted(body: str) -> tuple[str, int]:
     """The YAML-single-quoted key at the start of `body` (its opening `'` is
     body[0]), unescaped (`''` -> `'`), and the index right after its closing
-    `'`. One slice per escaped-quote pair, never per character: linear even
-    across many of them."""
+    `'`. Read with str.find, one step per quote: a 4 MB key that never closes
+    is one search, where a step per character took a Python loop round each
+    of its four million characters."""
     out: list[str] = []
-    start = i = 1
-    while i < len(body):
-        if body[i] != "'":
-            i += 1
+    start = at = 1
+    while True:
+        at = body.find("'", at)
+        if at == -1:
+            out.append(body[start:])
+            return "".join(out), len(body)
+        if body.startswith("'", at + 1):
+            out.append(body[start : at + 1])  # the text so far, and one '
+            at += 2
+            start = at
             continue
-        if i + 1 < len(body) and body[i + 1] == "'":
-            out.append(body[start : i + 1])  # text so far, plus one '
-            i += 2
-            start = i
-            continue
-        out.append(body[start:i])
-        return "".join(out), i + 1
-    out.append(body[start:])
-    return "".join(out), len(body)
+        out.append(body[start:at])
+        return "".join(out), at + 1
 
 
-def _parse_key(key: str) -> tuple[_Node, int]:
+def _parse_key(key: str, limit: int) -> tuple[_Node, int]:
     """`role ["name"] [attr]...` from the start of `key` (already YAML-
-    unescaped, if it came from a single-quoted key). Returns the node and
-    how far into `key` it read — the caller reads what follows as a
-    trailing `: value`."""
-    end = 0
-    while end < len(key) and (key[end].isalnum() or key[end] in "-_"):
-        end += 1
+    unescaped, if it came from a single-quoted key), which ends at `limit`.
+    Returns the node and how far into `key` it read — the caller reads what
+    follows as a trailing `: value`."""
+    # The role: the engine's ARIA role names are ASCII letters, digits, "-"
+    # and "_". Read in C, not a Python step per character — a 4 MB key with
+    # no end to its role took 0.2 s that way (measured 2026-10-02).
+    end = limit - len(key[:limit].lstrip(_ROLE_CHARS))
     if end == 0:
         return _Node(role="text", text=_scalar(key)), len(key)
     node = _Node(role=key[:end])
     at = end
-    while at < len(key) and key[at] == " ":
+    while at < limit and key[at] == " ":
         at += 1
-    if at < len(key) and key[at] == '"':
+    if at < limit and key[at] == '"':
         name, remainder = _quoted(key[at:])
         node.name = name
         at = len(key) - len(remainder)
         while at < len(key) and key[at] == " ":
+            at += 1
+    elif at < limit and key[at] == "/":
+        # A name that starts and ends with "/" is written raw (createKey: an
+        # aria template reads it as a regex): `link /docs/ [ref=e6]`. No
+        # attribute holds a "/", so the key's last one closes the name.
+        close = key.rfind("/", at, limit)
+        node.name = key[at : close + 1]
+        at = close + 1
+        while at < limit and key[at] == " ":
             at += 1
     # By index, never by re-slicing `key`: a slice per attribute copies the
     # rest of the line each time, and 200,000 attributes took 9 s that way
@@ -357,6 +440,13 @@ def _flush(out: list[Line], flow: _Flow) -> None:
     flow.parts.clear()
 
 
+def _mark(flow: _Flow, text: str) -> None:
+    """An element, into the flow — counted, so a clickable node can tell the
+    words it holds from the elements it holds."""
+    flow.parts.append(text)
+    flow.marks += 1
+
+
 def _walk(node: _Node, out: list[Line], flow: _Flow, *, in_block: bool) -> None:
     role = node.role
     if role == "text":
@@ -366,53 +456,137 @@ def _walk(node: _Node, out: list[Line], flow: _Flow, *, in_block: bool) -> None:
     if role.startswith("/"):
         return  # a property (/url, /placeholder) — read by the element that owns it
     if role == "heading":
-        _flush(out, flow)
-        level = node.attrs.get("level", "")
-        depth = int(level) if level.isdigit() and 1 <= int(level) <= 6 else 1
-        words = node.name or node.text or " ".join(_inline_words(node))
-        if words:
-            out.append(Line("#" * depth + " " + words, heading=True))
-        for text in _actionable_lines(node):
-            out.append(Line(text))
+        _heading(node, out, flow)
         return
-    if role in INTERACTIVE or _clickable(node):
-        flow.parts.append(_marker(node))
+    if role in INTERACTIVE or role == "option":
+        _mark(flow, _element(node))
         nested = _actionable_lines(node)
         if nested:
             _flush(out, flow)
-            for text in nested:
-                out.append(Line(text))
+            out.extend(Line(text) for text in nested)
         return
+    clickable = _clickable(node)
     if role == "img":
-        if node.name:
-            flow.parts.append(f"[image: {node.name}]")
+        if clickable:
+            _mark(flow, _element(node))
+        elif node.name:
+            _mark(flow, f"[image: {node.name}]")
+        # What an image holds is decoration — but never a ref she can act on.
+        nested = _actionable_lines(node)
+        if nested:
+            _flush(out, flow)
+            out.extend(Line(text) for text in nested)
         return
-    if role == "row":
-        _flush(out, flow)
-        cells = [_cell(child) for child in node.children if child.role in CELLS]
-        if cells:
-            out.append(Line("| " + " | ".join(cells) + " |"))
+    if role == "row" and not node.layout:
+        _row(node, out, flow, clickable)
         return
     if role in BLOCKS:
         _flush(out, flow)
-        inner = _Flow(prefix=BLOCKS[role])
-        if node.text:
-            inner.parts.append(node.text)
-        for child in node.children:
-            _walk(child, out, inner, in_block=True)
+        inner = _Flow(prefix="" if flow.flat else BLOCKS[role], flat=flow.flat)
+        _content(node, out, inner, clickable, in_block=True)
         _flush(out, inner)
         return
-    # A container (generic, list, table, group, navigation, form, …): it adds
-    # nothing of its own. At the top level its inline content is one line; in
-    # a block it flows on with the block's words.
-    if not in_block:
+    # A container (generic, list, table, group, navigation, form, a layout
+    # row, …) adds nothing of its own. At the top level its inline content is
+    # one line; in a block it flows on with the block's words. A clickable
+    # one flows like any element when it holds no heading, row or block; one
+    # that does (a card) is its ref, then the lines it holds.
+    inline = in_block or (clickable and not node.blocks)
+    if not inline:
         _flush(out, flow)
+    _content(node, out, flow, clickable, in_block=inline)
+    if not inline:
+        _flush(out, flow)
+
+
+def _content(node: _Node, out: list[Line], flow: _Flow, clickable: bool, *, in_block: bool) -> None:
+    """What `node` holds — its inline text, then its children — into `flow`
+    and `out`, behind its ref when the page made it clickable."""
+    opened = _open(node, out, flow) if clickable else None
     if node.text:
         flow.parts.append(node.text)
     for child in node.children:
         _walk(child, out, flow, in_block=in_block)
-    if not in_block:
-        _flush(out, flow)
+    if opened is not None:
+        _close(node, out, flow, opened)
+
+
+def _open(node: _Node, out: list[Line], flow: _Flow) -> tuple[int, int, int]:
+    """A clickable node's ref, ahead of what it holds: `[e10] generic:`.
+    Returns where it went, and the counts _close compares against."""
+    _mark(flow, _element(node, text=False) + ":")
+    return len(flow.parts) - 1, flow.marks, len(out)
+
+
+def _close(node: _Node, out: list[Line], flow: _Flow, opened: tuple[int, int, int]) -> None:
+    """When all a clickable node held was words — no line written since its
+    ref, no element among them — its ref and its words become one token, the
+    words standing in for the name it lacks: `[e2] generic "Accept all
+    cookies"`. Anything else stays as written: its ref, then its content.
+    A part is merged into a token at most once, so this stays linear."""
+    at, marks, lines = opened
+    if len(out) != lines or flow.marks != marks:
+        return
+    words = " ".join(part for part in flow.parts[at + 1 :] if part).strip()
+    del flow.parts[at:]
+    flow.parts.append(_label(node, words))
+
+
+def _label(node: _Node, words: str) -> str:
+    """A clickable node that holds only `words`, as one token."""
+    if not node.name:
+        return _element(node, name=words, text=False)
+    head = _element(node, text=False)
+    return head if not words or words == node.name else f"{head}: {words}"
+
+
+def _heading(node: _Node, out: list[Line], flow: _Flow) -> None:
+    _flush(out, flow)
+    level = node.attrs.get("level", "")
+    depth = int(level) if level in ("1", "2", "3", "4", "5", "6") else 1
+    words = node.name or node.text or " ".join(_inline_words(node))
+    if words:
+        out.append(Line("#" * depth + " " + words, heading=True))
+    if _clickable(node):
+        out.append(Line(_marker(node)))  # an accordion's header: the heading is what she clicks
+    out.extend(Line(text) for text in _actionable_lines(node))
+
+
+def _row(node: _Node, out: list[Line], flow: _Flow, clickable: bool) -> None:
+    _flush(out, flow)
+    # Every child is a cell: a row built of divs holds generics, not cells,
+    # and dropping them dropped their words and their refs with them.
+    cells = [_cell(child) for child in node.children if not child.role.startswith("/")]
+    if not cells:
+        if clickable:
+            out.append(Line(_marker(node)))
+        return
+    line = "| " + " | ".join(cells) + " |"
+    if clickable:
+        # The row is what she clicks (an inbox, a file list): its ref, then
+        # the cells it shows — never its name, which is those cells again.
+        line = f"{_element(node, name='', text=False)}: {line}"
+    out.append(Line(line))
+
+
+def _cell(node: _Node) -> str:
+    """A cell as one string: its words, and every element in it with its ref,
+    however deep a wrapper holds them ("100 points by X | N comments" sits in
+    spans and generics). A cell holding nothing else reads as its name; a
+    row's child that is not a cell at all is read as whatever it is."""
+    is_cell = node.role in CELLS
+    clickable = _clickable(node)
+    if is_cell and not node.children and not clickable:
+        return (node.name or node.text or "").replace("|", "/")
+    lines: list[Line] = []
+    flow = _Flow(flat=True)
+    if is_cell:
+        _content(node, lines, flow, clickable, in_block=True)
+    else:
+        _walk(node, lines, flow, in_block=True)
+    _flush(lines, flow)
+    text = " ".join(line.text for line in lines) or (node.name if is_cell else "") or ""
+    return text.replace("|", "/")
 
 
 def _inline_words(node: _Node) -> list[str]:
@@ -425,27 +599,6 @@ def _inline_words(node: _Node) -> list[str]:
     return words
 
 
-def _cell(node: _Node) -> str:
-    words = _cell_words(node) or [node.name or node.text or ""]
-    return " ".join(word for word in words if word).replace("|", "/")
-
-
-def _cell_words(node: _Node) -> list[str]:
-    """Every word of a cell's content, found however deep a wrapper nests
-    it: plain text, and anything she can act on, with its ref (a cell whose
-    links sit inside a generic wrapper, the common "100 points by X | N
-    comments" shape, otherwise rendered empty)."""
-    words: list[str] = []
-    for child in node.children:
-        if child.role in INTERACTIVE or _clickable(child):
-            words.append(_marker(child))
-        elif child.role == "text" and child.text:
-            words.append(child.text)
-        elif not child.role.startswith("/"):
-            words.extend(_cell_words(child))
-    return words
-
-
 def _clickable(node: _Node) -> bool:
     """A node the PAGE marked clickable (the engine's own [cursor=pointer]
     signal) and that carries a ref — rendered as actionable even off the
@@ -453,33 +606,48 @@ def _clickable(node: _Node) -> bool:
     return node.attrs.get("cursor") == "pointer" and "ref" in node.attrs
 
 
+def _acts(node: _Node) -> bool:
+    """An element she can act on: a role in INTERACTIVE; an option the engine
+    gave a ref (refs are "interactable", whatever the page's cursor — a
+    native <select>'s options have none, and its own line names them); or a
+    node the page made clickable."""
+    if node.role == "option":
+        return "ref" in node.attrs
+    return node.role in INTERACTIVE or _clickable(node)
+
+
 def _marker(node: _Node) -> str:
-    """`_element(node)`, or — for a clickable node with no name of its own
-    (a plain clickable wrapper div) — its ref and role with its flowed
-    words standing in for a name."""
-    if node.role in INTERACTIVE or node.name:
+    """One token for an element she can act on inside another (a listbox's
+    option, a heading's link, a tree's nested item): `_element`, or for a
+    clickable node with no name, its own words standing in for one."""
+    if node.role in INTERACTIVE or node.role == "option" or node.name:
         return _element(node)
-    ref = node.attrs.get("ref")
-    label = " ".join(_inline_words(node))
-    return f'[{ref}] {node.role} "{label}"' if label else f"[{ref}] {node.role}"
+    return _label(node, " ".join(word for word in (node.text, *_inline_words(node)) if word))
 
 
 def _actionable_lines(node: _Node) -> list[str]:
-    """Every interactive-or-clickable element inside `node`'s subtree (not
-    `node` itself), each with its own ref, found however deep it sits: a
-    heading's or a listbox's nested link, an open listbox's options, a
-    tree's nested treeitems. Depth is already capped at parse time."""
+    """Every element she can act on inside `node`'s subtree (not `node`
+    itself), each with its own ref, in document order however deep it sits:
+    a heading's or a listbox's nested link, an open listbox's options, a
+    tree's nested treeitems. One pass, with a stack of its own."""
     found: list[str] = []
-    for child in node.children:
-        if child.role in INTERACTIVE or _clickable(child):
+    stack = node.children[::-1]
+    while stack:
+        child = stack.pop()
+        if _acts(child):
             found.append(_marker(child))
-        found.extend(_actionable_lines(child))
+        stack.extend(reversed(child.children))
     return found
 
 
-def _element(node: _Node) -> str:
+def _element(node: _Node, *, name: str | None = None, text: bool = True) -> str:
+    """`[ref] role "name" (state; options; target)`, then `: inline text`
+    when it says more than the name. `name` stands in for the node's own (a
+    clickable node's words); `text=False` leaves the inline text to a caller
+    that reads it as content."""
     ref = node.attrs.get("ref")
-    label = f'{node.role} "{node.name}"' if node.name else node.role
+    name = node.name if name is None else name
+    label = f'{node.role} "{name}"' if name else node.role
     head = f"[{ref}] {label}" if ref else label
     extras: list[str] = []
     for flag in FLAGS:
@@ -499,10 +667,10 @@ def _element(node: _Node) -> str:
             extras.append(child.text)
         elif child.role == "/placeholder" and child.text:
             extras.append(f"placeholder: {child.text}")
-    text = f"{head} ({'; '.join(extras)})" if extras else head
-    if node.text and node.text != node.name:
-        text += f": {node.text}"
-    return text
+    rendered = f"{head} ({'; '.join(extras)})" if extras else head
+    if text and node.text and node.text != node.name:
+        rendered += f": {node.text}"
+    return rendered
 
 
 # ── parts ───────────────────────────────────────────────────────────────────
