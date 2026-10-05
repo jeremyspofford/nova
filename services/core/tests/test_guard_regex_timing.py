@@ -507,6 +507,93 @@ def test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds(widt
             assert took < BUDGET_S, f"{label} ({width}): {took * 1000:.1f} ms"
 
 
+# Task 23 fix round 2 (N3): an update claim's machine is read against the LIVE
+# paired names, and the timing test above passes none. Walking every name for
+# every claim took 64-94 ms at 6,000 characters beside 500 names (the
+# re-review's measurement); the names are now indexed once per reply. These
+# shapes enter that path: a name slot holding a word that names nothing (the
+# word lookup), a word of every paired name, a machine named on every claim,
+# and file claims between update claims — beside no spans, and beside
+# machine_status's read of every paired agent's confirmed row (each named
+# claim then looks its machine up among the rows, which are read once too).
+PAIRED_COUNTS = (5, 50, 500)
+
+
+def _paired_names(count: int) -> tuple[str, ...]:
+    return tuple(f"eval-machine-{i}" for i in range(count))
+
+
+def _status_of_agents(count: int):
+    facts = []
+    for name in _paired_names(count):
+        facts.append({"device": name, "connected": True})
+        facts.append(
+            {"machine_update": name, "outcome": "confirmed", "version": "a" * 12, "confirmed": True}
+        )
+    return _span("tool", "machine_status", ok=True, facts=facts)
+
+
+def _paired_shapes(n: int) -> dict[str, str]:
+    return {
+        "word_slot": "I updated workstation's agent. " * (n // 31) + "x",
+        "distinct_word_slots": "".join(f"I updated wkst{i}'s agent. " for i in range(n // 25))
+        + "x",
+        "on_slot": "I updated the agent on workstation. " * (n // 36) + "x",
+        "word_of_every_name": "I updated the agent on eval. " * (n // 29) + "x",
+        "each_names_a_machine": "".join(
+            f"I updated eval-machine-{i}'s agent. " for i in range(n // 36)
+        )
+        + "x",
+        "files_and_updates": "".join(
+            f"I wrote f{i}.md and I updated wkst{i}'s agent. " for i in range(n // 45)
+        )
+        + "x",
+    }
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+@pytest.mark.parametrize("count", PAIRED_COUNTS)
+def test_an_update_claim_reads_the_paired_names_in_milliseconds(count, width):
+    names = _paired_names(count)
+    for spans_label, spans in (("no spans", []), ("every row", [_status_of_agents(count)])):
+        for label, text in _paired_shapes(width).items():
+            took = _best_of(
+                lambda text=text, spans=spans: guards.narration_check(text, spans, names)
+            )
+            assert took < BUDGET_S, (
+                f"{label} ({width}, {count} names, {spans_label}): {took * 1000:.1f} ms"
+            )
+
+
+# Task 23 fix round 2 (N2): narration reports each unbacked claim once, and its
+# dedupe walked every claim reported before — quadratic in the DISTINCT
+# unbacked claims of any kind (74.7 ms against 28.1 ms for 1,500 file claims at
+# 24,000 characters, the re-review's measurement). A reply of distinct claims
+# is timed against its twin of the same length that repeats ONE claim: the twin
+# never reaches the dedupe, so the ratio is the dedupe's own cost, and a slower
+# runner slows both alike. Measured on the N150: 1.06 with a set, 3.3 with the
+# walk; at 2,400 claims 1.09 against 5.5.
+def _passive_file_claims(count: int, *, distinct: bool) -> str:
+    return ", ".join(f"f{i if distinct else 0:04d}.md was written" for i in range(count)) + "."
+
+
+def test_many_distinct_unbacked_claims_cost_what_one_repeated_claim_does():
+    distinct = _passive_file_claims(1200, distinct=True)
+    repeated = _passive_file_claims(1200, distinct=False)
+    assert len(distinct) == len(repeated)
+    correction = guards.narration_check(distinct, [])
+    assert correction is not None and len(correction.claims) == 1200
+    took = base = float("inf")
+    for _ in range(5):
+        start = time.perf_counter()
+        guards.narration_check(distinct, [])
+        took = min(took, time.perf_counter() - start)
+        start = time.perf_counter()
+        guards.narration_check(repeated, [])
+        base = min(base, time.perf_counter() - start)
+    assert took < 2 * base, f"{took * 1000:.1f} ms against {base * 1000:.1f} ms"
+
+
 def test_the_global_sweep_reaches_the_update_patterns():
     """They are module constants, so the derived sweep times them on every
     padding input too — and the capability row under its table id as well."""

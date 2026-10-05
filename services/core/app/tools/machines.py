@@ -305,9 +305,9 @@ def _describe_agents(
     one-agent machine's. Each listed agent leaves {"device", "connected"}
     on the span, the record a device tool leaves, so what she says about its
     connection is backed (guards._checked_a_device), and the last update its
-    line states, so what she says about that is backed too (guards.
-    _update_facts; S42b Task 23 fix round 1) — on an unasked check, both only
-    for an agent whose line she was shown (device_line_shown). Under
+    line states, so what she says about that machine is backed too (guards.
+    _update_backed; S42b Task 23 fix rounds 1-2) — on an unasked check, both
+    only for an agent whose line she was shown (device_line_shown). Under
     each agent's line, indented, what she needs to act on it
     (device_facts.acting_lines, the probe's time first) — as device_list
     writes it."""

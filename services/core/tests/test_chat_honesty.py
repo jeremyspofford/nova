@@ -234,10 +234,11 @@ async def test_an_unconfirmed_update_claim_keeps_the_turn_out_of_memory(
         assert corrections == [] and stored == reply
         assert [ingest["exchange"]["assistant"] for ingest in memory.ingests] == [reply]
     else:
-        # Nothing is paired in this database, so the claim names no machine.
+        # Nothing is paired in this database, so the claim names no machine,
+        # and only this turn's machine_update could back it (fix round 2, N1).
         expected = (
-            "Correction: nothing this turn confirmed an update — only the agent reconnecting "
-            "on the hub's build confirms one."
+            "Correction: no machine_update call this turn confirmed an update — only the agent "
+            "reconnecting on the hub's build confirms one."
         )
         assert corrections == [expected]
         assert stored == f"{reply}\n\n{expected}"

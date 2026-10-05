@@ -4012,6 +4012,13 @@ UPDATE_SENT_CORRECTION = (
     "Correction: nothing this turn confirmed an update of a machine named eval_laptop — only "
     "the agent reconnecting on the hub's build confirms one."
 )
+# A claim that names no machine is backed only by this turn's own update (fix
+# round 2, N1), so its sentence says exactly that: "nothing this turn" would be
+# false beside a row machine_status showed confirmed for some other machine.
+UPDATE_UNNAMED_CORRECTION_TEXT = (
+    "Correction: no machine_update call this turn confirmed an update — only the agent "
+    "reconnecting on the hub's build confirms one."
+)
 
 
 def test_the_update_correction_says_only_what_the_record_shows():
@@ -4045,6 +4052,9 @@ def test_the_update_correction_names_every_unconfirmed_machine():
 
 
 def test_an_update_claim_that_names_no_machine_is_backed_by_any_confirmed_update():
+    """Pin moved (fix round 2, N1): the sentence for a claim that names no
+    machine was "nothing this turn confirmed an update"; such a claim is now
+    backed only by this turn's machine_update, and the sentence says so."""
     reply = "I upgraded it to the hub's build."
     assert (
         guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")], PAIRED) is None
@@ -4052,10 +4062,7 @@ def test_an_update_claim_that_names_no_machine_is_backed_by_any_confirmed_update
     for spans in ([other_span()], [_update_span("minipc", outcome="sent")]):
         correction = guards.narration_check(reply, spans, PAIRED)
         assert correction is not None and targets(correction) == [None]
-        assert correction.text == (
-            "Correction: nothing this turn confirmed an update — only the agent reconnecting on "
-            "the hub's build confirms one."
-        )
+        assert correction.text == UPDATE_UNNAMED_CORRECTION_TEXT
 
 
 def test_an_update_claim_beside_another_kind_keeps_both_sentences():
@@ -4159,12 +4166,144 @@ def test_a_word_where_a_name_would_sit_claims_an_update_of_no_machine_in_particu
     assert guards.narration_check(reply, confirmed, names) is None
 
 
+# -- Task 23 fix round 2 (N1): a row machine_status shows backs only its machine --
+#
+# machine_status states every listed agent's LAST ledger row, whatever its age,
+# and records it (fix round 1, I3). A claim that NAMES a machine is backed by
+# that machine's own row. A claim that names none — "the hub's agent", "it",
+# "the mini PC", "on your behalf" — cannot be tied to any one row, so only this
+# turn's own update backs it: a confirmed machine_update (for the state form,
+# also its "current"), or for her act on an agent a successful update_agent.
+# The re-review's evidence: with this turn's update of minipc only SENT, the
+# Dell's weeks-old confirmed row let all four claims below through as honest.
+UNNAMED_UPDATE_CLAIMS = (
+    "Done — I updated the hub's agent.",
+    "I upgraded it to the hub's build.",
+    "I updated the agent on the mini PC.",
+    "I updated the agent on your behalf.",
+)
+
+
+def _rows_status_span(*rows: tuple[str, str]):
+    """machine_status's read of several agents' lines, as _describe_agents
+    records them: each agent's connection, then its last ledger row."""
+    span = tool_span("machine_status")
+    span.meta["facts"] = [
+        fact
+        for machine, outcome in rows
+        for fact in (
+            {"device": machine, "connected": True},
+            {
+                "machine_update": machine,
+                "outcome": outcome,
+                "version": "aaaaaaaaaaaa",
+                "confirmed": outcome == "confirmed",
+            },
+        )
+    ]
+    return span
+
+
+def _old_rows_beside(update_outcome: str | None):
+    """The re-review's two turns. With an outcome: machine_update sent the
+    hub's build to minipc (the hub machine) and answered that outcome, then
+    machine_status showed the Dell's and eval_laptop's last rows — old,
+    confirmed updates — and minipc's. Without one: machine_status alone, the
+    Dell confirmed and minipc rolled back."""
+    if update_outcome is None:
+        return [_rows_status_span(("DELL-XPS-8950", "confirmed"), ("minipc", "rolled_back"))]
+    update = _update_span("minipc", outcome=update_outcome, hub=True)
+    update.meta["facts"].insert(0, {"device": "minipc", "connected": True})
+    status = _rows_status_span(
+        ("DELL-XPS-8950", "confirmed"), ("eval_laptop", "confirmed"), ("minipc", update_outcome)
+    )
+    return [update, status]
+
+
+@pytest.mark.parametrize("update_outcome", ["sent", None], ids=["update_sent", "status_alone"])
+@pytest.mark.parametrize("reply", UNNAMED_UPDATE_CLAIMS)
+def test_a_row_machine_status_showed_backs_no_claim_that_names_no_machine(reply, update_outcome):
+    """The re-review's four replies, in both of its turns: each was let
+    through as honest. The sentence names what such a claim needs — this
+    turn's machine_update — so it stays true beside the Dell's confirmed row."""
+    correction = guards.narration_check(reply, _old_rows_beside(update_outcome), PAIRED)
+    assert correction is not None and targets(correction) == [None], reply
+    assert correction.text == UPDATE_UNNAMED_CORRECTION_TEXT, reply
+
+
+@pytest.mark.parametrize("reply", UNNAMED_UPDATE_CLAIMS)
+def test_this_turns_confirmed_update_still_backs_a_claim_that_names_no_machine(reply):
+    """Not vacuous: the same rows, beside a CONFIRMED update of minipc this turn."""
+    assert guards.narration_check(reply, _old_rows_beside("confirmed"), PAIRED) is None, reply
+
+
+@pytest.mark.parametrize("update_outcome", ["sent", None], ids=["update_sent", "status_alone"])
+def test_a_row_still_backs_a_claim_that_names_its_own_machine(update_outcome):
+    """The named half keeps its result: minipc's own row is not confirmed, so
+    "I updated minipc's agent." is corrected for minipc, and the Dell's
+    confirmed row backs a claim that names the Dell (fix round 1, I3)."""
+    spans = _old_rows_beside(update_outcome)
+    correction = guards.narration_check("I updated minipc's agent.", spans, PAIRED)
+    assert correction is not None and targets(correction) == ["minipc"]
+    for reply in ("DELL-XPS-8950's agent has been updated.", "I updated your Dell's agent."):
+        assert guards.narration_check(reply, spans, PAIRED) is None, reply
+
+
+def test_a_current_row_backs_the_state_that_names_its_machine():
+    """The ruling's own case (fix round 2): "minipc's agent is updated
+    already." stays honest when minipc's row says current — machine_update's
+    "current" is pinned above. The ledger's outcome CHECK never stores
+    "current", so this is the same read on a row, whoever records it; a row
+    of another machine backs nothing, and neither does it back her act."""
+    state = "minipc's agent is updated already."
+    assert (
+        guards.narration_check(state, [_status_span("minipc", outcome="current")], PAIRED) is None
+    )
+    other = guards.narration_check(state, [_status_span("eval_pc", outcome="current")], PAIRED)
+    assert other is not None and targets(other) == ["minipc"]
+    act = guards.narration_check(
+        "I updated minipc's agent.", [_status_span("minipc", outcome="current")], PAIRED
+    )
+    assert act is not None and targets(act) == ["minipc"]
+
+
+def test_a_specialist_claim_is_backed_by_update_agent_never_by_a_machines_row():
+    """The word coder names no paired machine: a successful update_agent backs
+    the claim (fix round 1, I2); an old confirmed row of a machine never does."""
+    reply = "I updated coder's agent settings."
+    rows = _old_rows_beside(None)
+    correction = guards.narration_check(reply, rows, PAIRED)
+    assert correction is not None and targets(correction) == [None]
+    assert guards.narration_check(reply, [*rows, tool_span("update_agent")], PAIRED) is None
+
+
+def test_this_turns_current_backs_a_state_that_names_no_machine():
+    """machine_update answering "current" THIS turn backs the state — "the
+    hub's agent is updated already" — by fix round 1's rule for the state
+    form, read from this turn's own update span. It never backs her act, and
+    an old confirmed row never backs a state that names no machine."""
+    state = "The hub's agent is updated already."
+    current = [_update_span("minipc", outcome="current", hub=True)]
+    assert guards.narration_check(state, current, PAIRED) is None
+    act = guards.narration_check("I updated the hub's agent.", current, PAIRED)
+    assert act is not None and targets(act) == [None]
+    rows = guards.narration_check(state, _old_rows_beside(None), PAIRED)
+    assert rows is not None and targets(rows) == [None]
+
+
+def test_the_sentence_for_a_claim_that_names_no_machine_names_the_update_tool():
+    """It names the registered update tool (test_state_guard pins
+    _UPDATE_TOOLS to MACHINE_UPDATE.name), so a rename turns this red."""
+    assert any(name in guards.UPDATE_UNNAMED_CORRECTION for name in guards._UPDATE_TOOLS)
+
+
 def test_the_update_correction_trips_no_guard_of_its_own():
     """What persists is the correction beside her prose, so a correction that
     tripped a guard would be corrected forever (every guard is clean over its
     own correction)."""
     texts = [
         UPDATE_SENT_CORRECTION,
+        UPDATE_UNNAMED_CORRECTION_TEXT,
         guards.narration_check(
             "I updated minipc's agent.", [_update_span("eval_pc", outcome="confirmed")], PAIRED
         ).text,

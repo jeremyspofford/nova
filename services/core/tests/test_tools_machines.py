@@ -1032,3 +1032,44 @@ async def test_an_unasked_status_keeps_an_agents_last_update_only_with_its_line(
         guards.narration_check("dell's agent has been updated.", turn.spans, AGENT_NAMES)
         is not None
     )
+
+
+async def test_an_old_row_the_status_shows_backs_only_a_claim_that_names_its_machine(
+    mount_peers, _plant, _updating_plant, monkeypatch
+):
+    """Task 23 fix round 2 (N1), on both tools' own facts: machine_update sent
+    the hub's build to minipc, the hub machine, and answered "sent"; then
+    machine_status showed the dell's and the laptop's last rows — confirmed
+    updates from weeks ago — and minipc's send. No row backs a claim that
+    names no machine; the dell's row still backs a claim that names it."""
+    reader = machines.plant
+    _updating_plant(_updating("sent", hub=True))
+    update_sink: list[dict] = []
+    await _call("machine_update", {"machine": "minipc"}, update_sink)
+    monkeypatch.setattr(machines, "plant", reader)  # machine_status reads the agents plant
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    dell = _view("dell", "windows", WINDOWS, hostname="DELL")
+    laptop = _view("laptop", "linux", LAPTOP, hostname="laptop")
+    minipc = _view("minipc", "linux", {**LAPTOP, "machine_uid": "e" * 64}, hostname="minipc")
+    for view, outcome in ((dell, "confirmed"), (laptop, "confirmed"), (minipc, "sent")):
+        view.update(last_update=_last(outcome))
+    _plant(agents=[dell, laptop, minipc])
+    status_sink: list[dict] = []
+    await _call("machine_status", {}, status_sink)
+    spans = [
+        SimpleNamespace(kind="tool", name=name, meta={"ok": True, "facts": sink})
+        for name, sink in (("machine_update", update_sink), ("machine_status", status_sink))
+    ]
+    assert any(guards.is_update_fact(f) and f["confirmed"] for f in status_sink)
+    names = ["dell", "laptop", "minipc"]
+    for reply in (
+        "Done — I updated the hub's agent.",
+        "I upgraded it to the hub's build.",
+        "I updated the agent on the mini PC.",
+        "I updated the agent on your behalf.",
+    ):
+        correction = guards.narration_check(reply, spans, names)
+        assert correction is not None and correction.claims[0].target is None, reply
+    named = guards.narration_check("I updated minipc's agent.", spans, names)
+    assert named is not None and named.claims[0].target == "minipc"
+    assert guards.narration_check("The dell's agent has been updated.", spans, names) is None
