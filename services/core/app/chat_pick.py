@@ -212,25 +212,11 @@ async def set_primary(app, model: str) -> Picked:
         chain = [link for link in stored if qualified(link) not in dropped]
         if carry:
             chain = [carry, *chain]
-        if chain != stored:
-            written = await _call(app, "PUT", "/admin/routes/chat", json={"chain": chain})
-            if written.status_code == 200:
-                try:
-                    answered = written.json().get("chain")
-                except (ValueError, AttributeError):
-                    answered = None
-                if isinstance(answered, list):
-                    chain = [link for link in answered if isinstance(link, str)]
-            else:
-                already = carry is not None and any(qualified(link) == carry for link in stored)
-                kept_out = (
-                    f"{current} was not kept as a fallback"
-                    if carry and not already
-                    else "the fallbacks are unchanged"
-                )
-                note = f"chat's fallbacks could not be saved — {_words(written)}; {kept_out}"
-                logger.warning("chat primary: %s", note)
-                chain = stored
+        # chat.model FIRST. A turn already under way reads the pick at every
+        # call (chat._round_model), and between these two writes it must find
+        # the new pick ahead of the chain as it was — never the old pick ahead
+        # of a chain already rewritten around it, which walks that one model
+        # alone. A pick that cannot be written leaves the chain as it was, too.
         if current != model:
             try:
                 await settings_store.write_setting(
@@ -244,4 +230,29 @@ async def set_primary(app, model: str) -> Picked:
             written_model = await _chat_model()
             if written_model != model:
                 raise PickFailed(502, f"chat.model reads {written_model!r} after writing {model!r}")
+        if chain != stored:
+            # The pick is made by now, so a chain that cannot be stored is a
+            # note on it — refused or unreachable alike — never a failed pick.
+            try:
+                written = await _call(app, "PUT", "/admin/routes/chat", json={"chain": chain})
+                refused = None if written.status_code == 200 else _words(written)
+            except PickFailed as exc:
+                written, refused = None, exc.detail
+            if refused is None:
+                try:
+                    answered = written.json().get("chain")
+                except (ValueError, AttributeError):
+                    answered = None
+                if isinstance(answered, list):
+                    chain = [link for link in answered if isinstance(link, str)]
+            else:
+                already = carry is not None and any(qualified(link) == carry for link in stored)
+                kept_out = (
+                    f"{current} was not kept as a fallback"
+                    if carry and not already
+                    else "the fallbacks are unchanged"
+                )
+                note = f"chat's fallbacks could not be saved — {refused}; {kept_out}"
+                logger.warning("chat primary: %s", note)
+                chain = stored
     return Picked(chat_model=model, chain=chain, note=note, previous=current)

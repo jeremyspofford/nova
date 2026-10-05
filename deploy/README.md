@@ -96,7 +96,8 @@ its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
   (`PUT /api/v1/routes/chat/primary`): the picked model becomes link 1, and the one it
   replaces becomes the first fallback. Remove a fallback in Routing when you no longer
   want it. While Jev Router picks chat's cloud model, a pick is refused until the switch
-  is off.
+  is off. A pick lands at a reply's next round, so a reply already under way finishes
+  on the new pick (a reply carrying a picture keeps the model that checked it).
 - **She can make the pick herself.** Ask her in chat ("use the Dell first, then
   OpenRouter"): her `set_chat_model` tool makes the same write and answers with chat's
   order as stored; `route_explain` says which model would answer right now.

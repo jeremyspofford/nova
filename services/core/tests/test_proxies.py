@@ -11,7 +11,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app import proxies, settings_store
+from app import chat_pick, proxies, settings_store
 from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
@@ -985,6 +985,67 @@ async def test_a_chain_that_cannot_be_stored_still_makes_the_pick_and_says_what_
     assert "does not name a registered provider" in body["note"]
     assert f"{DELL} was not kept as a fallback" in body["note"]
     assert gateway.puts == []
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+class WatchingRoutesGateway(RoutesGateway):
+    """Reads chat.model at the moment the chain is written."""
+
+    def __init__(self, chain, pool) -> None:
+        self.pool = pool
+        self.chat_model_at_put: list[str] = []
+        super().__init__(chain)
+
+    async def _put(self, request):
+        self.chat_model_at_put.append(await settings_store.read_value(self.pool, "chat.model"))
+        return await super()._put(request)
+
+
+async def test_a_pick_writes_chat_model_before_the_chain(owner_client, mount_peers, pool):
+    # A turn under way reads the pick at every call (chat._round_model).
+    # Between the two writes it must find the NEW pick ahead of the chain as
+    # it was; the other order hands it the old pick ahead of a chain already
+    # rewritten around it, which is that one model alone.
+    gateway = WatchingRoutesGateway([GEMINI], pool)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert gateway.chat_model_at_put == [GLM]
+    assert gateway.puts == [[DELL, GEMINI]]
+
+
+async def test_a_chain_write_that_never_answers_still_makes_the_pick_and_says_so(
+    owner_client, mount_peers, pool, monkeypatch
+):
+    # chat.model is written first, so by the time the chain write fails the
+    # pick is made — "the pick did not run" would be false. The answer says
+    # what was not kept, as for a refused chain.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+    original = chat_pick._call
+
+    async def chain_write_times_out(app, method, path, **kwargs):
+        if method == "PUT":
+            raise chat_pick.PickFailed(
+                502, f"the gateway timed out — {path} did not answer within 5s"
+            )
+        return await original(app, method, path, **kwargs)
+
+    monkeypatch.setattr(chat_pick, "_call", chain_write_times_out)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chat_model"] == GLM and body["chain"] == [GEMINI]
+    assert body["note"] == (
+        "chat's fallbacks could not be saved — the gateway timed out — /admin/routes/chat "
+        f"did not answer within 5s; {DELL} was not kept as a fallback"
+    )
     assert await settings_store.read_value(pool, "chat.model") == GLM
 
 
