@@ -29,6 +29,7 @@ from app import (
     tools,
     traces,
 )
+from app.evals import runner as eval_runner
 from app.identity import Person
 from app.main import app, lifespan
 from tests.conftest import TEST_DSN, requires_db
@@ -740,6 +741,96 @@ async def test_a_paused_row_never_fires(pool):
     after = await timers.get(pool, row["id"])
     assert after["paused_at"] is not None and after["next_fire_at"] == row["next_fire_at"]
     assert await pool.fetchval("SELECT count(*) FROM messages") == 0
+
+
+# -- S42b Task 24: a timer an eval person owns never fires -------------------------------------
+
+
+async def _scratch(pool) -> tuple[Person, uuid.UUID]:
+    """An eval case's scratch person, made by the runner's own writer, with a
+    conversation of its own — the person a replay's create_timer writes for."""
+    person = await eval_runner.scratch_person(pool)
+    conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", person.id
+    )
+    return person, conversation
+
+
+async def test_the_claim_never_takes_a_timer_an_eval_person_owns(pool):
+    """SAFETY (S42b Task 24): every timer a replay makes belongs to its case's
+    scratch person, and the claim never takes one — a reminder for one
+    device, a reminder for every connected device, a scheduled turn — however
+    long it has been due: while its case still runs, or for ever after a
+    teardown that never ran. The owner's reminder, due in the same tick,
+    fires: the line is drawn at the person, not at the tick."""
+    owner, owners_conversation = await _owner(pool)
+    scratch, conversation = await _scratch(pool)
+    eval_rows = [
+        await _reminder(pool, scratch, conversation, device="eval_laptop"),
+        await _reminder(pool, scratch, conversation, message="drink water"),
+        await _scheduled(pool, scratch, conversation),
+    ]
+    owners = await _reminder(pool, owner, owners_conversation)
+
+    fired = await scheduler.tick_once(app, pool, now=LATER)
+
+    assert [f["timer_id"] for f in await pool.fetch("SELECT timer_id FROM timer_firings")] == [
+        owners["id"]
+    ]
+    assert len(fired) == 1
+    for row in eval_rows:
+        after = await timers.get(pool, row["id"])
+        # Never claimed, so never advanced: still due, still nobody's firing.
+        assert after["next_fire_at"] == row["next_fire_at"] and after["paused_at"] is None
+    # Nothing landed in the scratch conversation — no reminder row, no turn.
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1", conversation
+        )
+        == 0
+    )
+    # And a later tick still takes none of them.
+    assert await scheduler.tick_once(app, pool, now=LATER + timedelta(days=30)) == []
+
+
+async def test_the_claim_skips_exactly_the_people_the_eval_sweep_deletes(pool):
+    """One definition of "an eval person": the claim skips the timers of
+    exactly the people runner._sweep_orphan_scratch_people deletes — a guest
+    whose name carries the scratch prefix — and of no one else: not a guest
+    without it, not an adult whose name happens to carry it, not the owner."""
+    owner, owners_conversation = await _owner(pool)
+    scratch, scratch_conversation = await _scratch(pool)
+    others = []
+    for name, role in (("visitor", "guest"), (f"{eval_runner.SCRATCH_PERSON_NAME}x", "adult")):
+        pid = await pool.fetchval(
+            "INSERT INTO people (name, role) VALUES ($1, $2) RETURNING id", name, role
+        )
+        conversation = await pool.fetchval(
+            "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", pid
+        )
+        others.append((Person(id=pid, name=name, role=role), conversation))
+    rows = {
+        person.id: await _reminder(pool, person, conversation)
+        for person, conversation in [
+            (owner, owners_conversation),
+            (scratch, scratch_conversation),
+            *others,
+        ]
+    }
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    fired_for = {
+        r["person_id"]
+        for r in await pool.fetch(
+            "SELECT t.person_id FROM timer_firings f JOIN timers t ON t.id = f.timer_id"
+        )
+    }
+    skipped = set(rows) - fired_for
+    assert skipped == {scratch.id}
+    swept = await eval_runner._sweep_orphan_scratch_people(pool)
+    assert swept == 1
+    assert {r["id"] for r in await pool.fetch("SELECT id FROM people")} == set(rows) - skipped
 
 
 async def test_five_consecutive_failures_pause_the_timer_with_the_last_reason(pool, monkeypatch):

@@ -15,8 +15,9 @@ What this module DECIDES, and nothing else:
     the one wall time a year the zone cannot name unambiguously, the DST
     fall-back hour — see _relative_spec), and the store never holds the
     duration (app/schedule.py's rule);
-  * a named `device` must be a PAIRED device now (devices.get_live_by_name) —
-    the confirmation names it, so something has to have checked it;
+  * a named `device` must be a PAIRED device now (machines.plant().
+    paired_machines — inside an eval replay, the case's declared devices
+    alone) — the confirmation names it, so something has to have checked it;
   * an ABSOLUTE `at` or a `repeat` names a wall clock, and a wall clock needs a
     zone: with `nova.timezone` still unset (no stored value — the default 'UTC'
     would silently make 07:00 mean 07:00 UTC, which is the wrong time for
@@ -44,7 +45,7 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 
-from app import conversations, db, devices, schedule, settings_store
+from app import conversations, db, machines, schedule, settings_store
 from app.identity import Person
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
@@ -238,20 +239,25 @@ def _repeat_spec(repeat: Any) -> dict:
         raise ToolFailure(str(exc)) from exc
 
 
-async def _paired_device_or_refuse(pool: asyncpg.Pool, name: Any) -> None:
-    """A named device must be a paired, unrevoked row NOW — otherwise the tool
-    would confirm "as a notification on 'dsek'" and nothing would check the
-    promise until the firing. Connected-ness is transient and is the firing's
+async def _paired_device_or_refuse(app, name: Any) -> None:
+    """A named device must be a paired machine NOW — otherwise the tool would
+    confirm "as a notification on 'dsek'" and nothing would check the promise
+    until the firing. Connected-ness is transient and is the firing's
     business; pairing is the fact that can be checked at creation. The
-    alternatives offered are the live rows, never a list someone maintains."""
+    alternatives offered are the paired machines as read now, never a list
+    someone maintains.
+
+    Read through the plant (machines.plant().paired_machines): the live,
+    unrevoked rows by name — or, inside an eval replay, the case's declared
+    devices alone (S42b Task 24, the replay-hermeticity ruling), so a scored
+    turn is never shown a real machine's name and no replay's row ever names
+    one. A replay's timer never fires anyway: the scheduler's claim never
+    takes a timer an eval person owns (scheduler.tick_once)."""
     if not isinstance(name, str) or not name.strip():
         raise ToolFailure("device is empty — name a paired device, or omit it to notify them all")
-    if await devices.get_live_by_name(pool, name) is not None:
+    names = [machine["name"] for machine in await machines.plant().paired_machines(app)]
+    if name in names:
         return
-    names = [
-        r["name"]
-        for r in await pool.fetch("SELECT name FROM devices WHERE revoked_at IS NULL ORDER BY name")
-    ]
     if not names:
         raise ToolFailure(
             f"no paired device named {name!r} — no device is paired at all; omit device "
@@ -328,7 +334,7 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             f"time) or repeat (a recurring schedule) — you gave {have}"
         )
     if device is not None:
-        await _paired_device_or_refuse(pool, device)
+        await _paired_device_or_refuse(ctx.app, device)
     agent = await _agent_or_refuse(pool, agent_name) if agent_name is not None else None
     zone, zone_set = await household_timezone(pool)
     now = await pool.fetchval("SELECT now()")
