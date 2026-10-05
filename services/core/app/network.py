@@ -169,7 +169,13 @@ def door_of(peer: str | None, forwarded: str | None) -> str | None:
     sidecar; None when it cannot be told. nginx's X-Real-IP is believed ONLY
     from web's fixed address: on a bridge a connection cannot be completed
     from a spoofed source, so any other sender's header counts for nothing
-    (P15)."""
+    (P15).
+
+    The door is not identity (S42b Task 22): anything that reaches the hub
+    machine's own loopback port comes in through "host" — a relay on the hub
+    too, such as the owner's tunnel or an ssh -L. So "host" says how a
+    socket came in, never that its agent runs on the hub machine, and every
+    line built on it says "came in through the hub machine's own door"."""
     if peer == _addr(WEB_ADDR_ENV):
         if forwarded == _addr(GATEWAY_ENV):
             return "host"

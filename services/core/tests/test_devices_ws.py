@@ -1921,8 +1921,9 @@ async def test_device_list_says_an_agent_inside_wsl_gives_way_to_the_windows_bui
 
 async def test_device_list_says_each_agents_build_and_folders_only_as_recorded(pool, monkeypatch):
     """Its build against the hub's (a hash has no order: "behind the hub's
-    build", never "older"), the hub's own machine only by the door it came
-    through, and the folders only as its agent reported them."""
+    build", never "older"), the door its agent came in through — said as the
+    door, never as the hub's own machine — and the folders only as its agent
+    reported them."""
     monkeypatch.setattr(machines.GatewayPlant, "hub_version", _hub_build("0f1e2d3c4b5a"))
     hub_id, hub_device = await _enroll(pool, name="minipc")
     conn, task, _ = await _auth_with(
@@ -1939,10 +1940,15 @@ async def test_device_list_says_each_agents_build_and_folders_only_as_recorded(p
     result, ok = await tools.dispatch("device_list", {}, _ctx(person))
     assert ok is True
     lines = {line.split(" (")[0][2:]: line for line in result.splitlines() if line.startswith("- ")}
+    # Pin moved (S42b Task 22, the door is not identity): a relay on the hub
+    # — the owner's tunnel, an ssh -L — comes in through the same loopback
+    # door, so the line states the door, never "the hub's own machine".
     assert (
-        "; the hub's own machine; agent 0f1e2d3c4b5a (the hub's build); folders: @desktop"
-        in (lines["minipc"])
+        "; its agent came in through the hub machine's own door; agent 0f1e2d3c4b5a (the hub's "
+        "build); folders: @desktop" in (lines["minipc"])
     )
+    assert "hub's own machine" not in result
+    assert "came in through" not in lines["laptop"]
     assert lines["laptop"].endswith(
         "— offline, last seen never; agent version unknown (none on record); "
         "hands: cannot: not connected (last seen never)"
@@ -2615,3 +2621,10 @@ async def test_a_device_list_line_that_runs_on_past_a_newline_is_not_confirmed_s
 
 def test_device_list_declares_how_its_lines_are_read():
     assert tools.REGISTRY["device_list"].device_line_shown is device_tools.device_line_shown
+
+
+def test_device_list_says_the_door_and_never_that_a_machine_is_the_hub():
+    """Its description, which she reads every turn, states the door too."""
+    description = tools.REGISTRY["device_list"].description
+    assert "came in through the hub machine's own door" in description
+    assert "hub's own machine" not in description

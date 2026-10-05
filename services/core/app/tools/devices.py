@@ -352,7 +352,10 @@ def _agent_line(agent: dict) -> str:
         f"last seen {agent['last_seen'] or 'never'}"
     )
     if agent["hub"]:
-        line += "; the hub's own machine"
+        # The door is not identity (the controller's ruling): a relay on the
+        # hub — the owner's tunnel, an ssh -L — comes in through the same
+        # loopback door, so this says the door, never "the hub's own machine".
+        line += "; its agent came in through the hub machine's own door"
     line += f"; {_build_words(agent)}"
     hands = agent["roles"]["hands"]
     if hands["state"] == "cannot":
@@ -612,11 +615,11 @@ TOOLS: tuple[Tool, ...] = (
         name="device_list",
         description=(
             "List the computers paired with Nova: the OS each runs, whether it is connected "
-            "now and when it was last seen, which one is the hub's own machine, its agent's "
-            "build against the hub's, the folders its agent reported, and what its agent "
-            "reported about how it runs, elevating and WSL — plus any revoked agent that "
-            "knocked in the last day, and whether it still is. Reads Nova's own records and "
-            "live connections."
+            "now and when it was last seen, whether its agent came in through the hub machine's "
+            "own door, its agent's build against the hub's, the folders its agent reported, and "
+            "what its agent reported about how it runs, elevating and WSL — plus any revoked "
+            "agent that knocked in the last day, and whether it still is. Reads Nova's own "
+            "records and live connections."
         ),
         parameters=_obj({}, []),
         executor=device_list,
