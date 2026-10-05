@@ -417,16 +417,39 @@ def test_both_card_readers_choose_through_the_one_helper():
 # -- S42a: the fixture plant overlays declared devices on the real agents ----
 
 
-async def test_a_fixture_plant_overlays_its_declared_devices_on_the_real_agents(monkeypatch):
+async def test_a_replays_agents_are_its_declared_devices_alone(monkeypatch):
+    """Pin moved (S42b Task 22, the replay-hermeticity ruling): a replay's
+    plant holds only the machines the case declared. It used to list the real
+    agents beside them — "real-pc", "eval_pc" — so she could see a real
+    machine the replay's own re-pair card then called unpaired. The real
+    agents are never even read now."""
+
     async def real_agents(self, app):
-        return [{"name": "real-pc"}, {"name": "eval_stale"}]
+        raise AssertionError("a replay read the real agents")
 
     monkeypatch.setattr(machines.GatewayPlant, "agents", real_agents)
     plant = machines.FixturePlant(
         {}, devices={"eval_pc": {"name": "eval_pc", "platform": "windows"}}
     )
     names = [a["name"] for a in await plant.agents(None)]
-    assert names == ["real-pc", "eval_pc"]  # a real eval_-named row is shadowed, never shown twice
+    assert names == ["eval_pc"]
+    assert await machines.FixturePlant({}).agents(None) == []
+
+
+async def test_a_replay_reports_no_knock_and_never_reads_the_real_ones(monkeypatch):
+    """device_list's knock section goes through the plant (hermeticity
+    ruling): a case can declare no revoked device, so a replay has none to
+    report — never the real table's."""
+    from app import devices
+
+    async def real_knocks(*_a, **_kw):
+        raise AssertionError("a replay read the real knocks")
+
+    monkeypatch.setattr(devices, "revoked_knocks", real_knocks)
+    plant = machines.FixturePlant(
+        {}, devices={"eval_pc": {"name": "eval_pc", "platform": "windows"}}
+    )
+    assert await plant.knocks(None) == []
 
 
 def test_a_fixture_device_must_carry_the_prefix():
@@ -475,10 +498,11 @@ async def test_the_real_plant_compares_each_agent_with_the_hubs_build(pool, monk
 
 @requires_db
 async def test_a_replay_names_one_hub_build_and_never_reads_the_real_one(pool, monkeypatch):
-    """F11: no build is read during an eval. Every agent a replay lists — the
-    real rows and the case's declared devices alike — is compared with the
-    fixture's hub build, the one FixturePlant.update_agent (Task 22) answers
-    too, so one replay never names two hub builds."""
+    """F11: no build is read during an eval. Every agent a replay lists is
+    compared with the fixture's hub build, the one FixturePlant.update_agent
+    (Task 22) answers too, so one replay never names two hub builds. Pin
+    moved (Task 22, the replay-hermeticity ruling): the real row paired here
+    is no longer listed beside the declared devices at all."""
     from app import agent_dist
 
     async def never_in_a_replay() -> str:
@@ -510,7 +534,6 @@ async def test_a_replay_names_one_hub_build_and_never_reads_the_real_one(pool, m
     builds = {view["name"]: view["build"] for view in await plant.agents(None)}
     fixture = machines.FIXTURE_HUB_VERSION
     assert builds == {
-        "real-pc": {"state": "behind", "hub_version": fixture},
         "eval_laptop": {"state": "behind", "hub_version": fixture},
         "eval_current": {"state": "current", "hub_version": fixture},
     }

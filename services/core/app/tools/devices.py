@@ -32,7 +32,6 @@ from __future__ import annotations
 import ntpath
 import posixpath
 import re
-from datetime import timedelta
 
 from app import db, device_facts, devices, devices_ws, envelopes, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
@@ -289,20 +288,21 @@ def _require_ok(result: dict, row) -> dict:
 
 
 async def device_list(args: dict, ctx: ToolContext) -> str:
-    """Nova's agents as the plant lists them (S42b P17 — an eval's declared
-    device too), each with what she needs to act on it without being told
-    (P29), then any revoked agent that knocked in the last day (P28). Every
-    agent listed leaves {device, connected} on the turn — the record every
-    device tool leaves, so what she says about its connection is backed —
-    and only once the whole listing is built: a call that fails after
-    reading the hub was shown no line, and must back no claim."""
-    pool = await db.get_pool()
+    """Nova's agents as the plant lists them (S42b P17 — in an eval replay,
+    its declared devices alone), each with what she needs to act on it
+    without being told (P29), then any revoked agent that knocked in the
+    last day (P28), read through the plant too (Task 22: a replay reports
+    none of the real table's). Every agent listed leaves {device, connected}
+    on the turn — the record every device tool leaves, so what she says
+    about its connection is backed — and only once the whole listing is
+    built: a call that fails after reading the hub was shown no line, and
+    must back no claim."""
     agents = await machines.plant().agents(ctx.app)
     lines: list[str] = []
     for agent in agents:
         lines.append(_agent_line(agent))
         lines.extend(f"    {line}" for line in agent["acting"])
-    knocks = await _knocks(pool)
+    knocks = await _knocks(ctx.app)
     out = (
         ["Paired devices:", *lines]
         if lines
@@ -351,10 +351,6 @@ def _agent_line(agent: dict) -> str:
     return line
 
 
-# P28: a revoked agent that is still running knocks at least every 30 s (its
-# reconnect ladder tops out there); within this of its last verified knock it
-# is "still knocking".
-_KNOCKING_WITHIN = timedelta(minutes=2)
 # How a Linux agent from before S42b was installed — the README's, said only
 # as a condition: a row with no service section may as well be an S42b
 # agent whose probe never landed (Task 21 fix round 1).
@@ -365,22 +361,15 @@ _BEFORE_S42B_LINUX = (
 )
 
 
-async def _knocks(pool) -> list[str]:
+async def _knocks(app) -> list[str]:
     """Each revoked agent that knocked in the last day (P28: a verified knock
-    stamps devices.last_refused_at). The knock record is the check that it
-    stopped — but no knock is only that: it stopped, or it cannot reach Nova
-    (an asleep machine knocks no more than a stopped agent)."""
-    # Both ages are taken on the database's clock, the one that stamped the
-    # knock — never compared with core's.
-    rows = await pool.fetch(
-        "SELECT name, platform, facts, revoked_at, last_refused_at, "
-        "last_refused_at > now() - $1::interval AS knocking FROM devices "
-        "WHERE revoked_at IS NOT NULL AND last_refused_at > now() - interval '24 hours' "
-        "ORDER BY last_refused_at DESC",
-        _KNOCKING_WITHIN,
-    )
+    stamps devices.last_refused_at), as the plant reports them
+    (devices.revoked_knocks; none in an eval replay). The knock record is the
+    check that it stopped — but no knock is only that: it stopped, or it
+    cannot reach Nova (an asleep machine knocks no more than a stopped
+    agent)."""
     out = []
-    for r in rows:
+    for r in await machines.plant().knocks(app):
         knocked = r["last_refused_at"].isoformat()
         state = (
             f"still knocking (last {knocked})"

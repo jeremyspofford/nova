@@ -32,7 +32,16 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app import devices, devices_ws, envelopes, governance, live_facts, machines, tools
+from app import (
+    device_facts,
+    devices,
+    devices_ws,
+    envelopes,
+    governance,
+    live_facts,
+    machines,
+    tools,
+)
 from app.identity import Person
 from app.tools import devices as device_tools
 from app.tools.base import ToolContext, ToolFailure
@@ -2005,6 +2014,43 @@ async def test_a_revoked_agent_that_reported_how_it_runs_is_said_as_it_reported_
     assert "; how it runs: the Run-key value HKCU\\" in line
     assert line.endswith("(as probed at 2026-09-28T17:40:00Z)")
     assert "README" not in line
+
+
+async def test_a_replays_device_list_shows_its_declared_machines_and_no_real_knock(pool):
+    """The replay-hermeticity ruling: inside a replay the plant holds only the
+    case's declared machines, and the knock section goes through it too — a
+    real connected agent and a real revoked agent knocking right now are
+    never shown, and leave no fact."""
+    _id, _device, conn, task = await _connect(pool, name="laptop")
+    gone_id, _ = await _enroll(pool, name="old-wsl")
+    await pool.execute(
+        "UPDATE devices SET revoked_at = now(), last_refused_at = now() WHERE id = $1", gone_id
+    )
+    person = await _person(pool)
+    real, _ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert "- laptop (" in real and "- old-wsl (revoked " in real  # the premise: both are real
+    declared = {
+        "eval_pc": device_facts.agent_view(
+            name="eval_pc",
+            platform="linux",
+            hostname="EVAL-PC",
+            connected=True,
+            last_seen=None,
+            facts=None,
+            facts_at=None,
+        )
+    }
+    token = machines.PLANT.set(machines.FixturePlant({}, devices=declared))
+    try:
+        sink: list[dict] = []
+        result, ok = await tools.dispatch("device_list", {}, _ctx(person, facts=sink))
+    finally:
+        machines.PLANT.reset(token)
+    assert ok is True
+    assert result.startswith("Paired devices:\n- eval_pc (linux) — connected")
+    assert "laptop" not in result and "old-wsl" not in result and "Revoked" not in result
+    assert sink == [{"device": "eval_pc", "connected": True}]
+    await _close(conn, task)
 
 
 async def test_a_device_list_that_fails_after_reading_the_hub_backs_no_claim(pool, monkeypatch):

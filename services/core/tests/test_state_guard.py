@@ -504,7 +504,12 @@ class _ConnectivityCallFinder(ast.NodeVisitor):
 _AGENTS_CALL_CONSUMERS: frozenset[tuple[str, str]] = frozenset(
     {
         ("tools/machines.py", "_agents"),
-        ("machines.py", "FixturePlant.agents"),
+        # S42b Task 22, a deliberate pin move: ("machines.py",
+        # "FixturePlant.agents") left this set. A replay's plant lists its
+        # declared devices ALONE (the replay-hermeticity ruling), so it no
+        # longer calls GatewayPlant.agents — there is no real row, and no
+        # connected_ids() read, behind a replay's listing at all.
+        #
         # S42b Task 21, a deliberate pin move: device_list no longer reads
         # connected_ids() (it left _ALLOWED_CONNECTIVITY_SITES, where it was a
         # REPORTER) — it reads the plant, and records {device, connected} for

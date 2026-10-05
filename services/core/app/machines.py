@@ -22,6 +22,13 @@ and nothing else in the process sees them (`FixturePlant`). A write through
 the plant is the serving switch, and what it returns is the gateway's READ
 BACK, never the value sent. `machine_json` is the one shape the Settings tile
 reads (web api.ts `Machine`).
+
+Nova's agents go through the plant too (S42a, S42b): their listing, the
+revoked ones that still knock, and "update it now". For those a replay is
+HERMETIC (the controller's replay-hermeticity ruling, S42b Task 22): it
+lists, reports knocks for and updates its declared devices alone, against
+its own hub build (FIXTURE_HUB_VERSION) — no real build, device, knock or
+update state is read during an eval.
 """
 
 from __future__ import annotations
@@ -145,8 +152,8 @@ class GatewayPlant:
         """Nova's agent on each paired machine (S42a): the live device rows,
         whether each is connected NOW (the hub's registry — never a stored
         flag), and what its facts say, as device_facts.agent_view. Core's own
-        records, so no gateway call; the name is the plant's so an eval can
-        overlay its declared devices the same way it overlays machines.
+        records, so no gateway call; the name is the plant's so an eval
+        replay can answer with its declared devices instead (FixturePlant).
 
         S42b: each device's door and latest update attempt ride along from
         `devices.rows_with_last_update` (the ONE place that lateral join is
@@ -182,6 +189,14 @@ class GatewayPlant:
         pool = await db.get_pool()
         rows = await devices.rows_with_last_update(pool, live_only=True)
         return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
+
+    async def knocks(self, app) -> list[dict]:
+        """Each revoked agent that knocked in the last day (P28), newest first
+        — devices.revoked_knocks, read through the plant so device_list's
+        knock section is a replay's own too (S42b Task 22, the
+        replay-hermeticity ruling: FixturePlant reports none)."""
+        pool = await db.get_pool()
+        return [dict(row) for row in await devices.revoked_knocks(pool)]
 
     async def update_agent(
         self,
@@ -370,9 +385,10 @@ def _fixture_state(spec: dict, serving: object) -> str:
 
 
 # A replay's hub build (S42b, ruling F11): no build is read during an eval.
-# Every agent a replay lists — the real rows and the case's declared devices
-# alike — is compared with this, and FixturePlant.update_agent (Task 22)
-# answers it, so one replay never names two hub builds.
+# Every agent a replay lists — its declared devices, the only ones it holds
+# (Task 22's hermeticity ruling) — is compared with this, and
+# FixturePlant.update_agent answers it, so one replay never names two hub
+# builds.
 FIXTURE_HUB_VERSION = "0f1e2d3c4b5a"
 # The outcomes a replay may declare for a device's machine_update (S42b Task
 # 22): every one the tool says in words. Not "cannot" — a cannot is a reason,
@@ -393,8 +409,12 @@ class FixturePlant(GatewayPlant):
 
     READS of anything else are the gateway's, delegated untouched — a case
     measures her real tools against the machines it declared, beside the real
-    ones. A WRITE to anything else is refused before any HTTP (ruling C8): a
-    live eval in which the model misreads the case and reaches for `hub` would
+    ones. Nova's AGENTS are the exception (S42b Task 22, the
+    replay-hermeticity ruling): the replay lists, reports knocks for and
+    updates its declared devices alone, and never reads a real one.
+
+    A WRITE to anything else is refused before any HTTP (ruling C8): a live
+    eval in which the model misreads the case and reaches for `hub` would
     otherwise switch off the owner's real engine, and every later case and his
     own chat would be answered by the cloud. The refusal says CANNOT, in words
     machine_configure relays; it is a fact about this replay, not a judgment.
@@ -479,23 +499,30 @@ class FixturePlant(GatewayPlant):
         return FIXTURE_HUB_VERSION
 
     async def agents(self, app) -> list[dict]:
-        """The real agents, then this case's declared devices (S42a) — a real
-        row that happens to carry the eval prefix is shadowed, never listed
-        twice. Nothing is written: a declared device exists for this replay
-        only, and the device TOOLS do not see it (no key exists to sign for).
+        """This case's declared devices ALONE (S42a; S42b Task 22, the
+        replay-hermeticity ruling) — never a real row, which is never even
+        read: a replay whose machine_status listed the owner's real machines
+        beside the declared ones showed her a machine its own re-pair card
+        and machine_update then called unpaired. Nothing is written: a
+        declared device exists for this replay only, and the device TOOLS do
+        not see it (no key exists to sign for).
 
-        S42b: every agent here is compared with the replay's hub build — the
-        real rows through GatewayPlant.agents, which asks `self.hub_version()`,
-        and each declared device's `build` recomputed from its own
-        agent_version, fresh on every listing."""
-        real = [view for view in await super().agents(app) if not self._mine(view["name"])]
+        Each declared device's `build` is recomputed from its own
+        agent_version against the replay's hub build, fresh on every
+        listing (F11)."""
         hub_version = await self.hub_version()
         declared = []
         for view in self._devices.values():
             out = copy.deepcopy(view)
             out["build"] = device_facts.build_state(out.get("agent_version"), hub_version)
             declared.append(out)
-        return real + declared
+        return declared
+
+    async def knocks(self, app) -> list[dict]:
+        """None (the replay-hermeticity ruling): a case declares no revoked
+        device — cases.FixtureDevice has no such field — so a replay has no
+        knock to report, and the real table's are never read."""
+        return []
 
     async def paired_machines(self, app) -> list[dict]:
         """This replay's declared devices ALONE — never a real row (S42b fix

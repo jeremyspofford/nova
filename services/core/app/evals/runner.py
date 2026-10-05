@@ -416,8 +416,10 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     ContextVar, so the turn (and every task it spawns, which copies the
     context) sees it, and nothing else in the process ever does.
 
-    S42a: a case's declared devices (agents) are overlaid on the plant's
-    agent listing the same way, for machine_status to read."""
+    S42a: a case's declared devices (agents) are the plant's agent listing,
+    for machine_status and device_list to read — S42b Task 22 (the
+    replay-hermeticity ruling): ALONE, never beside the real ones, and with
+    no real knock; machine_update acts only on them."""
     return machines.PLANT.set(
         machines.FixturePlant(
             {m.name: m.as_row() for m in case.machines},

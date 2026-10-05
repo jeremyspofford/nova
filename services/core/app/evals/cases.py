@@ -410,9 +410,11 @@ class FixtureDevice:
 
     Like FixtureMachine, never built: a device row is the owner's pairing —
     enrolling one would spend a pairing code, write a device.enrolled event and
-    take a name — so the runner overlays this declaration on the plant's agent
-    listing (machines.FixturePlant.agents) for this case alone. machine_status
-    and device_list (S42b Task 21) read it; the device tools that act on a
+    take a name — so the runner makes the case's declarations the plant's
+    agent listing (machines.FixturePlant.agents) for this case alone — the
+    only agents a replay holds (S42b Task 22, the replay-hermeticity ruling).
+    machine_status and device_list (S42b Task 21) read it, and machine_update
+    answers for it without sending anything; the device tools that act on a
     machine do not (a declared device is for her to READ — acting on one gets
     the ordinary "no paired device named …" refusal, since no key exists to
     sign for).

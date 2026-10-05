@@ -40,6 +40,7 @@ import hashlib
 import re
 import secrets
 import uuid
+from datetime import timedelta
 
 import asyncpg
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -510,6 +511,28 @@ def _last_update(row: asyncpg.Record | dict) -> dict | None:
         "at": row["u_at"].isoformat() if row["u_at"] else None,
         "reason": row["u_reason"],
     }
+
+
+# P28: a revoked agent that is still running knocks at least every 30 s (its
+# reconnect ladder tops out there); within this of its last verified knock it
+# is "still knocking".
+KNOCKING_WITHIN = timedelta(minutes=2)
+
+
+async def revoked_knocks(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    """Each revoked agent that knocked in the last day (P28: a verified knock
+    stamps devices.last_refused_at), newest first, with `knocking` — whether
+    its last knock is within KNOCKING_WITHIN. Both ages are taken on the
+    database's clock, the one that stamped the knock — never compared with
+    core's. machines.GatewayPlant.knocks is its reader (S42b Task 22: an eval
+    replay's plant reads none)."""
+    return await pool.fetch(
+        "SELECT name, platform, facts, revoked_at, last_refused_at, "
+        "last_refused_at > now() - $1::interval AS knocking FROM devices "
+        "WHERE revoked_at IS NOT NULL AND last_refused_at > now() - interval '24 hours' "
+        "ORDER BY last_refused_at DESC",
+        KNOCKING_WITHIN,
+    )
 
 
 async def list_devices(pool: asyncpg.Pool, *, hub_version: str | None = None) -> list[dict]:
