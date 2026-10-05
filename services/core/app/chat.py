@@ -4608,9 +4608,11 @@ async def _run_turn(
                 # OpenAI-compatible content parts: the text, then the images.
                 # Read from DISK at send time, because the upload may have
                 # been hours ago and the file is the fact.
-                parts = attachments.image_parts(pictures)
-                if parts:
-                    ask = [{"type": "text", "text": ask}, *parts]
+                # Not `parts`: that is the reply this turn accumulates, and
+                # the images bound to it were joined as the reply's text.
+                picture_parts = attachments.image_parts(pictures)
+                if picture_parts:
+                    ask = [{"type": "text", "text": ask}, *picture_parts]
         messages = base_messages(
             model,
             recalled,
