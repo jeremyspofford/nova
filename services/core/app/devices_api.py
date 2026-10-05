@@ -178,7 +178,10 @@ async def update_device(
 ) -> dict:
     """The tile's Update: send the hub's build now (decision 2's "update it
     now"). The answer says what happened — sent, or a cannot with its one
-    step — and never "updated": only the agent's reconnect says that."""
+    step — and never "updated": only the agent's reconnect says that.
+    `in_flight` is how many commands were running there when it was sent,
+    which the agent's restart ends "cancelled" (F15: a count — the hub keeps
+    futures, not capability names), so the tile can say so."""
     # Imported here: agent_updates imports devices_ws, which the REST surface
     # never depends on at load time (the revoke route's rule).
     from app import agent_updates
@@ -194,6 +197,7 @@ async def update_device(
         "from_version": o.from_version,
         "reason": o.reason,
         "needs_card": o.needs_card,
+        "in_flight": o.in_flight,
     }
 
 

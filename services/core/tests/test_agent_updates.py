@@ -1170,3 +1170,140 @@ async def test_end_open_attempt_records_only_the_reasons_the_halt_keys_on(pool):
             await agent_updates.end_open_attempt(conn, device_id, reason="the box was moved")
         for reason in agent_updates.ENDED_REASONS:
             assert await agent_updates.end_open_attempt(conn, device_id, reason=reason) == 0
+
+
+# -- S42b Task 22: her machine_update, through the real plant ---------------------
+
+
+def _her_ctx(sink: list[dict] | None = None):
+    from pathlib import Path
+
+    from app.tools.base import ToolContext
+
+    return ToolContext(app=None, person=None, workspace_root=Path("/tmp"), facts_sink=sink)
+
+
+async def _machine_update(name: str, sink: list[dict] | None = None) -> str:
+    from app import tools
+
+    return await tools.REGISTRY["machine_update"].executor({"machine": name}, _her_ctx(sink))
+
+
+async def test_machine_update_of_an_offline_machine_is_a_cannot_that_records_its_fact(pool):
+    """The tool's facts_sink reaches update_now (controller ruling): a
+    machine_update that finds the machine offline records the connectivity
+    fact it determined, then its own outcome — and raises the stated cannot."""
+    from app.tools.base import ToolFailure
+
+    await _enroll(pool, name="box")
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure, match=r"^cannot: box is not connected \(last seen never\)"):
+        await _machine_update("box", sink)
+    assert sink == [
+        {"device": "box", "connected": False},
+        {
+            "machine_update": "box",
+            "hub": False,
+            "outcome": "cannot",
+            "version": VERSION,
+            "confirmed": False,
+        },
+    ]
+
+
+async def test_machine_update_is_confirmed_only_by_the_agents_reconnect(pool):
+    """P8 through her tool: the agent's ok is a send; the tool waits, and says
+    confirmed only once the agent reconnected on the hub's build — what the
+    ledger holds, never what it meant to write."""
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD), door="host")
+    sink: list[dict] = []
+    run = asyncio.create_task(_machine_update("box", sink))
+    frame = await device.answer_command(conn, output="staged; restarting")
+    assert frame["envelope"]["capability"] == "daemon.update"
+    await asyncio.sleep(0.3)
+    assert not run.done(), "a reply is a claim: nothing is confirmed until the agent reconnects"
+    assert await _outcome_of(pool, device_id) == "sent"
+    await _close(conn, task)
+    conn2, task2 = await _reconnect(pool, device, _facts(VERSION))
+    said = await asyncio.wait_for(run, 6)
+    assert f"box's agent reconnected on the hub's build {VERSION} (it ran {OLD})" in said
+    assert sink[0] == {"device": "box", "connected": True}
+    assert sink[-1] == {
+        "machine_update": "box",
+        "hub": True,  # it came in through the hub machine's own door
+        "outcome": "confirmed",
+        "version": VERSION,
+        "confirmed": True,
+    }
+    await _close(conn2, task2)
+
+
+async def test_machine_update_says_sent_when_no_reconnect_came_within_its_wait(pool, monkeypatch):
+    monkeypatch.setattr(agent_updates, "WAIT_S", 0.2)
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    sink: list[dict] = []
+    run = asyncio.create_task(_machine_update("box", sink))
+    await device.answer_command(conn)
+    said = await asyncio.wait_for(run, 3)
+    assert said.startswith(f"Sent the hub's build {VERSION} to box (its agent ran {OLD}).")
+    assert "Not confirmed yet" in said and "is confirmed" not in said
+    assert sink[-1]["outcome"] == "sent" and sink[-1]["confirmed"] is False
+    assert await _outcome_of(pool, device_id) == "sent"
+    await _close(conn, task)
+
+
+async def test_machine_update_refuses_the_engines_name_naming_the_door_machine_as_such(pool):
+    """'hub' is the bundled engine's name (D8). The door is not identity — a
+    relay on the hub comes in through the same loopback door — so the
+    refusal names the machine whose agent came in that way, as that, and
+    sends nothing anywhere."""
+    from app.tools.base import ToolFailure
+
+    _a, _da, conn_a, task_a = await _online(pool, "minipc", _facts(OLD), door="host")
+    _b, _db, conn_b, task_b = await _online(pool, "laptop", _facts(OLD), door="tailnet")
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure) as exc:
+        await _machine_update("hub", sink)
+    said = str(exc.value)
+    assert said.startswith("cannot: 'hub' is the bundled engine's name")
+    assert "One paired machine's agent came in through the hub machine's own door: minipc." in said
+    assert "laptop" not in said and "is the hub machine" not in said
+    assert sink == []
+    assert _commands(conn_a) == [] and _commands(conn_b) == []
+    assert await pool.fetchval("SELECT count(*) FROM agent_updates") == 0
+    await _close(conn_a, task_a)
+    await _close(conn_b, task_b)
+
+
+async def test_machine_update_of_an_unpaired_name_lists_the_paired_ones(pool):
+    from app.tools.base import ToolFailure
+
+    await _enroll(pool, name="box")
+    await _enroll(pool, name="laptop")
+    with pytest.raises(ToolFailure) as exc:
+        await _machine_update("dell")
+    assert str(exc.value) == (
+        "cannot: no paired machine named 'dell' — the paired machines are: box, laptop"
+    )
+    assert await pool.fetchval("SELECT count(*) FROM agent_updates") == 0
+
+
+async def test_the_update_route_says_how_many_commands_the_restart_cancels(owner_client, pool):
+    """F15 for the tile: the route returns the count beside the outcome."""
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    pending = asyncio.create_task(
+        devices_ws.hub.command(
+            pool, device_id=device_id, name="box", capability="system.info", args={}, timeout=5
+        )
+    )
+    held = await asyncio.wait_for(conn.next_sent(), 2)  # never answered
+    assert held["envelope"]["capability"] == "system.info"
+    post = asyncio.create_task(owner_client.post(f"/api/v1/devices/{device_id}/update"))
+    await device.answer_command(conn)
+    resp = await asyncio.wait_for(post, 5)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "sent" and body["in_flight"] == 1
+    await _close(conn, task)
+    with pytest.raises(devices.DeviceRefused):
+        await pending

@@ -517,3 +517,83 @@ async def test_a_replay_names_one_hub_build_and_never_reads_the_real_one(pool, m
     assert {build["hub_version"] for build in builds.values()} == {await plant.hub_version()}
     # The declaration itself is untouched: each listing is computed fresh.
     assert plant._devices["eval_laptop"]["build"] == {"state": "unknown", "hub_version": None}
+
+
+# -- S42b Task 22: machine_update in a replay acts only on declared machines --
+
+
+async def test_a_replay_updates_only_a_declared_device_and_never_a_real_one():
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_laptop": {"name": "eval_laptop", "agent_version": "0a0a0a0a0a0a", "hub": False}
+        },
+        updates={"eval_laptop": "sent"},
+    )
+    out = await plant.update_agent(None, "eval_laptop", requested_by="nova")
+    assert out["outcome"] == "sent" and out["version"] == machines.FIXTURE_HUB_VERSION
+    assert out["from_version"] == "0a0a0a0a0a0a"
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await plant.update_agent(None, "dell", requested_by="nova")
+    # The replay's own listing (hermeticity ruling): a real machine's name is
+    # simply not a paired machine here, in the words a real hub uses.
+    assert str(exc.value) == (
+        "cannot: no paired machine named 'dell' — the paired machines are: eval_laptop"
+    )
+
+
+async def test_a_replay_answers_each_declared_outcome_and_sends_nothing(monkeypatch):
+    async def never(*_a, **_kw):
+        raise AssertionError("a replay reached the real update path")
+
+    from app import agent_updates
+
+    monkeypatch.setattr(agent_updates, "update_now", never)
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_a": {"name": "eval_a", "agent_version": None, "hub": True},
+            "eval_b": {"name": "eval_b", "agent_version": "0a0a0a0a0a0a"},
+        },
+        updates={"eval_a": "confirmed"},
+    )
+    a = await plant.update_agent(None, "eval_a", requested_by="nova")
+    b = await plant.update_agent(None, "eval_b", requested_by="nova")
+    assert (a["outcome"], a["hub"], a["from_version"]) == ("confirmed", True, None)
+    assert (b["outcome"], b["hub"]) == ("sent", False)  # "sent" when none is declared
+    assert a["in_flight"] == b["in_flight"] == 0
+
+
+async def test_a_replay_refuses_the_engines_name_naming_the_door_machines_it_declared():
+    """The door is not identity: 'hub' is the bundled engine's name, and the
+    refusal names each machine whose agent came in through the hub machine's
+    own door AS that — never as the hub machine."""
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_minipc": {"name": "eval_minipc", "hub": True},
+            "eval_laptop": {"name": "eval_laptop", "hub": False},
+        },
+    )
+    for asked in ("hub", " Hub "):
+        with pytest.raises(machines.UnknownMachine) as exc:
+            await plant.update_agent(None, asked, requested_by="nova")
+        said = str(exc.value)
+        assert said.startswith("cannot: ")
+        assert "is the bundled engine's name" in said
+        assert (
+            "One paired machine's agent came in through the hub machine's own door: eval_minipc."
+            in said
+        )
+        assert "eval_laptop" not in said
+
+
+def test_a_replay_declares_updates_only_for_its_devices_and_only_outcomes_it_can_say():
+    with pytest.raises(ValueError, match="eval_other"):
+        machines.FixturePlant(
+            {}, devices={"eval_a": {"name": "eval_a"}}, updates={"eval_other": "sent"}
+        )
+    with pytest.raises(ValueError, match="'cannot'"):
+        machines.FixturePlant(
+            {}, devices={"eval_a": {"name": "eval_a"}}, updates={"eval_a": "cannot"}
+        )

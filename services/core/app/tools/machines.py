@@ -21,6 +21,14 @@ routing chains. It reports the value the gateway READS BACK, never the value
 it sent (the models.py chat.model pattern), and a read-back that disagrees is
 a failure, stated, with nothing called changed. Neither is an approval of
 anything (owner ruling 2026-09-03).
+
+machine_update (S42b) sends the hub's agent build to a paired machine now —
+the owner's "update it now" — and says what the update ledger holds when it
+answers: sent until the agent's reconnect on the new build confirms it (P8),
+never "updated" on the strength of the send. Its span carries
+{"machine_update", "hub", "outcome", "version", "confirmed"} beside the
+connectivity fact the send determined. It waits on no one: nothing asks the
+owner, and a cannot is stated with the one step there is (P12).
 """
 
 from __future__ import annotations
@@ -199,7 +207,47 @@ _MACHINE_LINE = "- machine "
 _AGENT_LINE = "  agent "
 
 
+# The ledger's outcome tokens (agent_updates), as words on an agent's line.
+_OUTCOME_WORDS = {"rolled_back": "rolled back", "not_confirmed": "not confirmed"}
+
+
+def _last_update_words(last: dict) -> str:
+    """The agent's latest update attempt as the ledger holds it (S42b): the
+    build, what was decided and when — a `sent` one is not confirmed — and
+    the stored reason AS STORED: one line of at most
+    agent_updates.REASON_MAX characters, made so when it was written
+    (agent_updates._close), and never cut or cleaned again here."""
+    outcome = last["outcome"]
+    said = (
+        f"last update: {last['version']} {_OUTCOME_WORDS.get(outcome, outcome)} at "
+        f"{last['at'] or 'an unknown time'}"
+    )
+    if outcome == "sent":
+        said += ", not confirmed"
+    elif last.get("reason"):
+        said += f" ({last['reason']})"
+    return said
+
+
+def _build_words(agent: dict) -> str:
+    """Its agent's build against the hub's — a hash has no order, so "behind
+    the hub's build", never "older" (P2) — and unknown said as unknown."""
+    build = agent["build"]
+    if build["state"] == "current":
+        return "on the hub's build"
+    if build["state"] == "behind":
+        return f"behind the hub's build {build['hub_version']}"
+    if agent["agent_version"] is None:
+        return "agent version unknown (none on record)"
+    return "no hub build could be read to compare its agent's build with"
+
+
 def _describe_agent(agent: dict) -> str:
+    """ONE line per agent (device_line_shown reads it back whole): where it
+    runs, its connection and roles, then — S42b — the door it came in
+    through when that was the hub machine's own, its build against the
+    hub's, how it starts, its last update, and what she needs to act on it
+    (device_facts.acting_lines, the probe's time first), joined with "; "."""
     where = device_facts.place(agent)
     if agent["agent_version"]:
         where += f"; agent {agent['agent_version']}"
@@ -209,10 +257,23 @@ def _describe_agent(agent: dict) -> str:
         else f"offline (last seen {agent['last_seen'] or 'never'})"
     )
     roles = agent["roles"]
-    return (
+    extra = []
+    if agent["hub"]:
+        # The door is not identity (the controller's ruling): a relay on the
+        # hub — the owner's tunnel, an ssh -L — comes in through the same
+        # loopback door, so this says the door, never "the hub's own machine".
+        extra.append("came in through the hub machine's own door")
+    extra.append(_build_words(agent))
+    starts = agent["starts"]
+    extra.append(f"how it starts: {starts}" if starts.startswith("unknown") else f"starts {starts}")
+    if agent["last_update"]:
+        extra.append(_last_update_words(agent["last_update"]))
+    extra.extend(agent["acting"])
+    line = (
         f"{_AGENT_LINE}{agent['name']} ({where}): {state}; "
-        f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}."
+        f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}; " + "; ".join(extra)
     )
+    return line if line.endswith(".") else line + "."
 
 
 def _describe_agents(
@@ -319,6 +380,107 @@ async def machine_configure(args: dict, ctx: ToolContext) -> str:
     )
 
 
+# What machine_update says for each outcome the ledger can hold when the tool
+# answers (agent_updates.UpdateOutcome). A `cannot` is raised, never said
+# here. Each says only what the ledger shows: a send is never an update (P8),
+# and only `confirmed` — the agent's reconnect on the new build — says it is.
+_UPDATE_WORDS = {
+    "current": "{machine}'s agent already runs the hub's build {version} — nothing to send.",
+    "sent": (
+        "Sent the hub's build {version} to {machine} (its agent ran {from_version}). Not "
+        "confirmed yet: only {machine}'s agent reconnecting on {version} confirms the update, "
+        "and it has not yet — machine_status and device_list show when it has."
+    ),
+    "confirmed": (
+        "{machine}'s agent reconnected on the hub's build {version} (it ran {from_version}) — "
+        "the update is confirmed."
+    ),
+    "rolled_back": (
+        "{machine}'s agent did not come up on {version}, so its supervisor put {from_version} "
+        "back{reason}. The update is rolled back."
+    ),
+    "not_confirmed": (
+        "Sent the hub's build {version} to {machine}, and the update is not confirmed: {reason}."
+    ),
+    "refused": "{machine} did not take the hub's build {version}: {reason}.",
+}
+# A reason the ledger left empty, said per outcome — never "None".
+_NO_REASON = {
+    "rolled_back": "",
+    "not_confirmed": "nothing has confirmed it",
+    "refused": "no reason was given",
+}
+
+
+def _cancelled_words(outcome: str, count: int) -> str:
+    """F15: how many commands were running there when the update went out —
+    a count, since the hub keeps futures, not capability names (P25 as
+    amended). A restart ends a running command "cancelled"; whether one
+    finished first is not known here, so it is never said that it did not."""
+    if not count:
+        return ""
+    plural = count != 1
+    if outcome == "sent":
+        return (
+            f" {count} command{'s' if plural else ''} running there "
+            f'{"end" if plural else "ends"} "cancelled" unless '
+            f"{'they finish' if plural else 'it finishes'} before the agent restarts."
+        )
+    return (
+        f" {count} command{'s' if plural else ''} {'were' if plural else 'was'} running there "
+        'when it was sent, and a restart ends a running command "cancelled".'
+    )
+
+
+async def machine_update(args: dict, ctx: ToolContext) -> str:
+    """Her "update it now" (S42b decision 2): the plant sends the hub's build
+    and answers with what the ledger holds once the agent's reconnect
+    decided it or the wait ran out (P8). Its facts — {"machine_update",
+    "hub", "outcome", "version", "confirmed"} — go on the span for the
+    guards (Task 23's narration backing reads `confirmed`), beside the
+    connectivity fact update_now recorded on the same sink. A cannot is a
+    stated ToolFailure naming the owner's one step where there is one
+    (P12) — no card is sent from here."""
+    name = str(args.get("machine") or "").strip()
+    if not name:
+        raise ToolFailure(
+            "cannot: machine_update needs a machine's name — device_list and machine_status "
+            "list them"
+        )
+    try:
+        out = await machines.plant().update_agent(
+            ctx.app, name, requested_by="nova", facts_sink=ctx.facts_sink
+        )
+    except machines.UnknownMachine as exc:
+        raise ToolFailure(str(exc)) from exc
+    outcome = out["outcome"]
+    if ctx.facts_sink is not None:
+        ctx.facts_sink.append(
+            {
+                "machine_update": name,
+                "hub": bool(out.get("hub")),
+                "outcome": outcome,
+                "version": out["version"],
+                "confirmed": outcome == "confirmed",
+            }
+        )
+    if outcome == "cannot":
+        # P12: the one step is named in the reason; no card is sent from here.
+        raise ToolFailure(out["reason"] or "cannot: no reason was given")
+    reason = out["reason"]
+    if outcome == "rolled_back":
+        reason = f" — {reason}" if reason else ""
+    elif not reason:
+        reason = _NO_REASON.get(outcome, "")
+    said = _UPDATE_WORDS[outcome].format(
+        machine=name,
+        version=out["version"],
+        from_version=out["from_version"] or "a build not on record",
+        reason=reason,
+    )
+    return said + _cancelled_words(outcome, out.get("in_flight") or 0)
+
+
 MACHINE_STATUS = Tool(
     name="machine_status",
     description=(
@@ -384,4 +546,34 @@ MACHINE_CONFIGURE = Tool(
     executor=machine_configure,
 )
 
-TOOLS: tuple[Tool, ...] = (MACHINE_STATUS, MACHINE_CONFIGURE)
+MACHINE_UPDATE = Tool(
+    name="machine_update",
+    description=(
+        "Update Nova's agent on a paired machine to the hub's build now — the owner's \"update "
+        "it now\". Nova already keeps her agents on the hub's build by herself, one idle machine "
+        "at a time every 15 minutes, so this is for now. It sends the build and waits up to "
+        "about 2 minutes for the agent to reconnect on it. The result says current, sent (not "
+        "confirmed yet), confirmed (the agent reconnected on the new build), rolled back (the "
+        "new build did not come up, so its supervisor put the old one back), not confirmed, "
+        "not taken (with the reason), or cannot with the one step that can. An update is "
+        "confirmed ONLY by the agent's reconnect, never by the send. A command running there "
+        'ends "cancelled" when the agent restarts; the result counts them.'
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "machine": {
+                "type": "string",
+                "description": (
+                    "The paired machine, by the name device_list or machine_status lists for "
+                    "its agent — never 'hub', which names the bundled engine."
+                ),
+            },
+        },
+        "required": ["machine"],
+        "additionalProperties": False,
+    },
+    executor=machine_update,
+)
+
+TOOLS: tuple[Tool, ...] = (MACHINE_STATUS, MACHINE_CONFIGURE, MACHINE_UPDATE)

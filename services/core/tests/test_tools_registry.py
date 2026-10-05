@@ -126,6 +126,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # show_setup_qr (tools/setup.py), so FORTY-ONE -> FORTY-THREE: Nova's
     # address for another device, and the setup QR cards whose pairing code
     # never reaches her.
+    #
+    # Deliberate snapshot update (slice 42b, 2026-09-28): machine_update
+    # (tools/machines.py), so FORTY-THREE -> FORTY-FOUR. Nova keeps her agents
+    # on the hub's build, and the owner's "update it now". It sends; only the
+    # agent's reconnect confirms (P8), and nothing waits on the owner, which is
+    # why test_no_approvals stays green beside this. (The S37a lane also moves
+    # this set; whichever lands second renumbers.)
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -204,6 +211,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # QR cards (tools/setup.py). FORTY-ONE -> FORTY-THREE.
         "nova_address",
         "show_setup_qr",
+        # S42b (2026-09-28): "update it now" — sent until the agent's
+        # reconnect confirms it (P8). FORTY-THREE -> FORTY-FOUR.
+        "machine_update",
     }
 
 
@@ -598,5 +608,7 @@ def test_every_tool_that_writes_says_it_changes_something():
         "delegate_to_agent",
         "machine_configure",
         "show_setup_qr",
+        # S42b: it sends a build and restarts an agent.
+        "machine_update",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

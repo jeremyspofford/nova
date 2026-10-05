@@ -27,6 +27,7 @@ reads (web api.ts `Machine`).
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 from collections.abc import Collection
 from contextvars import ContextVar
@@ -35,7 +36,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app import agent_dist, db, device_facts, devices, devices_ws, peers
+from app import agent_dist, agent_updates, db, device_facts, devices, devices_ws, peers
 
 logger = logging.getLogger("core")
 
@@ -52,7 +53,9 @@ class PlantUnavailable(RuntimeError):
 
 
 class UnknownMachine(LookupError):
-    """No engine by that name (the gateway's 404, in its own words)."""
+    """No engine by that name (the gateway's 404, in its own words) — or, for
+    update_agent, no paired machine machine_update can send to, as a stated
+    cannot (S42b)."""
 
 
 def _error_of(response: httpx.Response) -> str:
@@ -180,6 +183,81 @@ class GatewayPlant:
         rows = await devices.rows_with_last_update(pool, live_only=True)
         return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
 
+    async def update_agent(
+        self,
+        app,
+        name: str,
+        *,
+        requested_by: str,
+        facts_sink: list[dict] | None = None,
+    ) -> dict:
+        """Send the hub's build to `name`'s agent now (S42b decision 2's
+        "update it now") and say what the ledger holds once it answers —
+        current, sent (confirmed only by its reconnect, P8, waited on up to
+        agent_updates.WAIT_S), confirmed, rolled back, not confirmed,
+        refused, or a stated cannot: agent_updates.UpdateOutcome as a dict.
+
+        `hub` says whether its agent came in through the hub machine's own
+        door (`last_transport`) — never that it IS the hub machine's: a relay
+        on the hub (a tunnel, an ssh -L) comes in through that door too.
+        `facts_sink` is the calling tool's: update_now records on it the
+        connectivity it determined, so an update that finds the machine
+        offline backs her saying so.
+
+        The bundled engine's reserved name (D8) and a name no live machine
+        has are UnknownMachine, said with what IS paired (_cannot_update),
+        before anything is sent or recorded."""
+        pool = await db.get_pool()
+        rows = await devices.rows_with_last_update(pool, live_only=True)
+        paired = [(row["name"], row["last_transport"] == "host") for row in rows]
+        row = next((r for r in rows if r["name"] == name), None)
+        if row is None or devices._reserved(name):
+            raise UnknownMachine(_cannot_update(name, paired))
+        outcome = await agent_updates.update_now(
+            pool,
+            name=name,
+            requested_by=requested_by,
+            # Read at call time, so the wait is the module's one number.
+            wait_s=agent_updates.WAIT_S,
+            facts_sink=facts_sink,
+        )
+        return {**dataclasses.asdict(outcome), "hub": row["last_transport"] == "host"}
+
+
+def _cannot_update(name: str, paired: list[tuple[str, bool]]) -> str:
+    """The stated cannot for a name machine_update has no agent to send to,
+    said with what IS paired so she can name the right one — `paired` is
+    (name, came in through the hub machine's own door) for each live
+    machine, in the order it is listed.
+
+    'hub' is the bundled engine's reserved name (D8), and no paired machine
+    carries it. The machine her "hub" may mean is named by the one fact core
+    has, its door, and said as exactly that: a relay on the hub (the owner's
+    tunnel, an ssh -L) comes in through the hub machine's own loopback door
+    too, so the door never says which machine IS the hub (the controller's
+    ruling, "the door is not identity")."""
+    if devices._reserved(name):
+        door = [machine for machine, hub in paired if hub]
+        if not door:
+            through = "No paired machine's agent came in through the hub machine's own door."
+        elif len(door) == 1:
+            through = (
+                f"One paired machine's agent came in through the hub machine's own door: {door[0]}."
+            )
+        else:
+            through = (
+                "These paired machines' agents came in through the hub machine's own door: "
+                f"{', '.join(door)}."
+            )
+        return (
+            f"cannot: {name.strip()!r} is the bundled engine's name (hub decision D8), and no "
+            f"paired machine carries it — machine_update takes a paired machine's own name. "
+            f"{through}"
+        )
+    names = ", ".join(machine for machine, _ in paired)
+    known = f"the paired machines are: {names}" if names else "no machine is paired"
+    return f"cannot: no paired machine named {name!r} — {known}"
+
 
 PLANT: ContextVar[GatewayPlant] = ContextVar("machines_plant", default=GatewayPlant())
 
@@ -296,6 +374,17 @@ def _fixture_state(spec: dict, serving: object) -> str:
 # alike — is compared with this, and FixturePlant.update_agent (Task 22)
 # answers it, so one replay never names two hub builds.
 FIXTURE_HUB_VERSION = "0f1e2d3c4b5a"
+# The outcomes a replay may declare for a device's machine_update (S42b Task
+# 22): every one the tool says in words. Not "cannot" — a cannot is a reason,
+# and a declaration carries none.
+FIXTURE_UPDATE_OUTCOMES: tuple[str, ...] = (
+    "current",
+    "sent",
+    "confirmed",
+    "rolled_back",
+    "not_confirmed",
+    "refused",
+)
 
 
 class FixturePlant(GatewayPlant):
@@ -316,7 +405,12 @@ class FixturePlant(GatewayPlant):
     measured. Why a write was refused — an eval never changes a real machine
     — goes to the log, where a person reads it."""
 
-    def __init__(self, fixtures: dict[str, dict], devices: dict[str, dict] | None = None) -> None:
+    def __init__(
+        self,
+        fixtures: dict[str, dict],
+        devices: dict[str, dict] | None = None,
+        updates: dict[str, str] | None = None,
+    ) -> None:
         # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
         # here rather than retyped. Imported in the call: app.agents imports
         # app.tools, which imports the tool module that imports this one.
@@ -330,6 +424,24 @@ class FixturePlant(GatewayPlant):
         if wrong:
             raise ValueError(
                 f"a fixture machine must be named {self._prefix}…, got {', '.join(wrong)}"
+            )
+        # What machine_update answers for each declared device (S42b Task
+        # 22) — "sent" for one that declares nothing. Refused at
+        # construction, like a name without the prefix: an outcome for a
+        # device the case did not declare, or one the tool has no words for.
+        self._updates = dict(updates or {})
+        stray = sorted(name for name in self._updates if name not in declared_devices)
+        if stray:
+            raise ValueError(f"an update is declared for no declared device: {', '.join(stray)}")
+        unsaid = sorted(
+            repr(outcome)
+            for outcome in self._updates.values()
+            if outcome not in FIXTURE_UPDATE_OUTCOMES
+        )
+        if unsaid:
+            raise ValueError(
+                f"a declared update must be one of {', '.join(FIXTURE_UPDATE_OUTCOMES)}, got "
+                f"{', '.join(unsaid)}"
             )
         self._specs = {name: copy.deepcopy(spec) for name, spec in fixtures.items()}
         self._views: dict[str, dict] = {}
@@ -394,6 +506,47 @@ class FixturePlant(GatewayPlant):
             {"id": None, "name": name, "platform": view["platform"]}
             for name, view in sorted(self._devices.items())
         ]
+
+    async def update_agent(
+        self,
+        app,
+        name: str,
+        *,
+        requested_by: str,
+        facts_sink: list[dict] | None = None,
+    ) -> dict:
+        """A declared device answers from this replay's declaration (S42b
+        Task 22) — its declared outcome, "sent" when it declares none, at
+        the replay's hub build — and nothing is sent anywhere: no agent, no
+        ledger row, no connection read, so nothing lands on facts_sink.
+
+        Every other name is answered as the replay's own listing says (the
+        replay-hermeticity ruling): the engine's reserved name, or no paired
+        machine by that name, in the words a real hub uses. A real machine is
+        never updated from inside a replay; why goes to the log, where a
+        person reads it — never to the tool, which a scored turn reads."""
+        paired = [(device, bool(view.get("hub"))) for device, view in self._devices.items()]
+        if name not in self._devices or devices._reserved(name):
+            if not devices._reserved(name):
+                logger.info(
+                    "eval replay: machine_update for %r answered as no paired machine — a "
+                    "replay never updates a real machine",
+                    name,
+                )
+            raise UnknownMachine(_cannot_update(name, paired))
+        view = self._devices[name]
+        return {
+            "machine": name,
+            "outcome": self._updates.get(name, "sent"),
+            "version": FIXTURE_HUB_VERSION,
+            "from_version": view.get("agent_version"),
+            "reason": None,
+            "attempt_id": None,
+            "at": None,
+            "needs_card": False,
+            "in_flight": 0,
+            "hub": bool(view.get("hub")),
+        }
 
     async def engine(self, app, name: str) -> dict:
         if not self._mine(name):

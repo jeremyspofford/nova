@@ -616,3 +616,245 @@ def test_a_line_that_runs_on_past_a_newline_is_not_confirmed_shown():
     listing = _listing(_view("pc-one", "windows", broken))
     assert "\nPro; agent 0.2.0): connected now" in listing
     assert not machines_tool.device_line_shown("pc-one", listing, len(listing))
+
+
+# -- S42b: machine_update, and the agent line --------------------------------
+
+
+def _updating(outcome: str, **extra) -> dict:
+    return {
+        "machine": "eval_laptop",
+        "outcome": outcome,
+        "version": "aaaaaaaaaaaa",
+        "from_version": "0a0a0a0a0a0a",
+        "reason": None,
+        "attempt_id": None,
+        "at": None,
+        "needs_card": False,
+        "in_flight": 0,
+        "hub": False,
+        **extra,
+    }
+
+
+class _UpdatingPlant:
+    """Answers machine_update with one outcome, and records what it was asked
+    — the facts sink included: the tool threads its facts_sink into
+    update_now, so an update that finds the machine offline records that
+    fact (the controller's ruling)."""
+
+    def __init__(self, answer: dict | Exception):
+        self.answer, self.calls = answer, []
+
+    async def update_agent(self, app, name, *, requested_by, facts_sink=None):
+        self.calls.append((name, requested_by, facts_sink))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return {**self.answer, "machine": name}
+
+
+@pytest.fixture
+def _updating_plant(monkeypatch):
+    def install(answer) -> _UpdatingPlant:
+        plant = _UpdatingPlant(answer)
+        monkeypatch.setattr(machines, "plant", lambda: plant)
+        return plant
+
+    return install
+
+
+async def test_machine_update_says_sent_not_confirmed_until_the_reconnect(_updating_plant):
+    """Review Focus 2: a send is not an update."""
+    plant = _updating_plant(_updating("sent", in_flight=1))
+    sink: list[dict] = []
+    said = await _call("machine_update", {"machine": "eval_laptop"}, sink)
+    assert plant.calls == [("eval_laptop", "nova", sink)]
+    assert (
+        "Sent the hub's build aaaaaaaaaaaa to eval_laptop" in said and "Not confirmed yet" in said
+    )
+    assert '1 command running there ends "cancelled"' in said
+    assert "is confirmed" not in said
+    assert sink == [
+        {
+            "machine_update": "eval_laptop",
+            "hub": False,
+            "outcome": "sent",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": False,
+        }
+    ]
+
+
+async def test_machine_update_says_confirmed_only_when_the_agent_reconnected(_updating_plant):
+    _updating_plant(_updating("confirmed"))
+    sink: list[dict] = []
+    said = await _call("machine_update", {"machine": "eval_laptop"}, sink)
+    assert "reconnected on the hub's build aaaaaaaaaaaa" in said and sink[0]["confirmed"] is True
+
+
+async def test_machine_update_says_a_rollback_and_what_still_runs(_updating_plant):
+    _updating_plant(_updating("rolled_back", reason="the new build did not connect within 2m0s"))
+    said = await _call("machine_update", {"machine": "eval_laptop"})
+    assert "put 0a0a0a0a0a0a back" in said and "did not connect within 2m0s" in said
+    assert "is confirmed" not in said
+
+
+async def test_machine_update_cannot_is_a_stated_failure_naming_the_one_step(_updating_plant):
+    """P12: she names the step; she never sends the card herself from here."""
+    reason = (
+        "cannot: eval_laptop's agent was started by hand, not by its service, so Nova cannot "
+        "restart it — close the window it runs in, then run the command on eval_laptop's setup "
+        "card there"
+    )
+    _updating_plant(_updating("cannot", reason=reason, needs_card=True, version=None))
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure) as exc:
+        await _call("machine_update", {"machine": "eval_laptop"}, sink)
+    assert str(exc.value) == reason
+    assert sink == [
+        {
+            "machine_update": "eval_laptop",
+            "hub": False,
+            "outcome": "cannot",
+            "version": None,
+            "confirmed": False,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "outcome,reason,words",
+    [
+        ("current", None, "eval_laptop's agent already runs the hub's build aaaaaaaaaaaa"),
+        (
+            "refused",
+            "the download step failed on eval_laptop (exit 6): could not resolve host",
+            "eval_laptop did not take the hub's build aaaaaaaaaaaa: the download step failed",
+        ),
+        ("refused", None, "did not take the hub's build aaaaaaaaaaaa: no reason was given"),
+        (
+            "not_confirmed",
+            "the machine was re-paired before the agent this was sent to reconnected",
+            "the update is not confirmed: the machine was re-paired",
+        ),
+        ("not_confirmed", None, "the update is not confirmed: nothing has confirmed it"),
+        ("rolled_back", None, "its supervisor put 0a0a0a0a0a0a back. The update is rolled back"),
+    ],
+)
+async def test_machine_update_says_each_outcome_as_the_ledger_holds_it(
+    _updating_plant, outcome, reason, words
+):
+    """Every outcome the ledger can hold is said as what it is — and only a
+    confirmed one says the update is confirmed, or records confirmed: true."""
+    _updating_plant(_updating(outcome, reason=reason))
+    sink: list[dict] = []
+    said = await _call("machine_update", {"machine": "eval_laptop"}, sink)
+    assert words in said
+    assert "is confirmed" not in said and "None" not in said
+    assert sink[0]["confirmed"] is False and sink[0]["outcome"] == outcome
+
+
+async def test_machine_update_counts_the_commands_its_restart_cancels(_updating_plant):
+    """F15: a count — the hub keeps futures, not capability names — said for
+    every outcome the update went out with commands running there."""
+    _updating_plant(_updating("sent", in_flight=2))
+    said = await _call("machine_update", {"machine": "eval_laptop"})
+    assert '2 commands running there end "cancelled"' in said
+    _updating_plant(_updating("confirmed", in_flight=1))
+    said = await _call("machine_update", {"machine": "eval_laptop"})
+    assert "1 command was running there when it was sent" in said
+    assert 'a restart ends a running command "cancelled"' in said
+    _updating_plant(_updating("confirmed"))
+    assert "cancelled" not in await _call("machine_update", {"machine": "eval_laptop"})
+
+
+async def test_machine_update_of_a_name_the_plant_does_not_have_is_its_stated_cannot(
+    _updating_plant,
+):
+    _updating_plant(machines.UnknownMachine("cannot: no paired machine named 'dell' — none"))
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure, match="cannot: no paired machine named 'dell'"):
+        await _call("machine_update", {"machine": "dell"}, sink)
+    assert sink == []  # nothing was determined, so nothing is recorded
+
+
+async def test_machine_update_needs_a_name_and_asks_nothing_without_one(_updating_plant):
+    plant = _updating_plant(_updating("sent"))
+    with pytest.raises(ToolFailure, match="cannot: machine_update needs a machine's name"):
+        await _call("machine_update", {"machine": "  "})
+    assert plant.calls == []
+
+
+def test_machine_update_changes_something_and_says_it_waits_on_the_reconnect():
+    tool = tools.REGISTRY["machine_update"]
+    assert tool.reads_only is False and tool.ephemeral is False
+    assert tool.parameters["required"] == ["machine"]
+    assert "confirmed ONLY by the agent's reconnect" in tool.description
+    assert "'hub'" in tool.parameters["properties"]["machine"]["description"]
+
+
+async def test_the_agent_line_says_its_build_how_it_starts_and_its_last_update(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    view = _view("PC-ONE", "windows", WINDOWS)
+    view.update(
+        hub=True,
+        build={"state": "behind", "hub_version": "aaaaaaaaaaaa"},
+        last_update={
+            "version": "aaaaaaaaaaaa",
+            "outcome": "sent",
+            "at": AT.isoformat(),
+            "reason": None,
+        },
+    )
+    _plant(agents=[view])
+    said = await _call("machine_status", {})
+    line = next(line for line in said.splitlines() if line.startswith("  agent PC-ONE ("))
+    # The door is not identity (controller ruling): a relay on the hub comes
+    # in through the same loopback door, so the line says the door, never
+    # that this IS the hub's own machine.
+    assert (
+        "; came in through the hub machine's own door; behind the hub's build aaaaaaaaaaaa; "
+        "starts by hand" in line
+    )
+    assert "hub's own machine" not in said
+    assert f"last update: aaaaaaaaaaaa sent at {AT.isoformat()}, not confirmed" in line
+    # The acting lines, joined onto the agent's ONE line (Task 16b fix round 1
+    # retired the brief's "predates S42b" wording).
+    assert line.endswith("how it runs: unknown — this agent has not reported it.")
+    assert machines_tool.device_line_shown("PC-ONE", said, len(said))
+
+
+async def test_the_agent_line_says_a_decided_update_in_words_with_its_stored_reason(
+    mount_peers, _plant
+):
+    """The stored reason is one line of at most 300 characters, made so when
+    it was written (agent_updates._close) — rendered as stored, never cut
+    again; and the ledger's tokens are said as words."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    reason = ("the new build did not connect within 2m0s; (exit 75) — " + "x" * 300)[:300]
+    view = _view("PC-ONE", "windows", WINDOWS)
+    view.update(
+        build={"state": "current", "hub_version": "aaaaaaaaaaaa"},
+        last_update={
+            "version": "aaaaaaaaaaaa",
+            "outcome": "rolled_back",
+            "at": AT.isoformat(),
+            "reason": reason,
+        },
+    )
+    _plant(agents=[view])
+    said = await _call("machine_status", {})
+    assert f"last update: aaaaaaaaaaaa rolled back at {AT.isoformat()} ({reason})" in said
+    assert "; on the hub's build;" in said
+    assert "came in through" not in said  # no door said for one that did not
+
+
+async def test_the_agent_line_says_an_unknown_build_and_start_as_unknown(mount_peers, _plant):
+    """Silence is not coverage: an agent with no facts states what is not on
+    record, never nothing."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("old-wsl", "linux", None)])
+    said = await _call("machine_status", {})
+    assert "agent version unknown (none on record)" in said
+    assert "how it starts: unknown — it has reported no facts" in said
+    assert "last update" not in said
