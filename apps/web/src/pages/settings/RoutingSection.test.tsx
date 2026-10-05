@@ -51,7 +51,7 @@ const EXPLAIN_CHAT: RouteExplain = {
   reason: 'fell back to link 2 (hub:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)',
 }
 
-type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents' | 'putSetting'
+type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents' | 'putSetting' | 'setChatPrimary'
 
 function renderSection(
   over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {},
@@ -76,6 +76,8 @@ function renderSection(
     listAgents: vi.fn(async () => AGENTS),
     // PUT /api/v1/settings answers with what core stored.
     putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
+    // The one pick write: what core stored — the pick, and chat's fallbacks.
+    setChatPrimary: vi.fn(async (model: string) => ({ chat_model: model, chain: ['openrouter:openai/gpt-x'] })),
     ...over,
   }
   render(<RoutingSection chatModel="openrouter:openai/gpt-x" api={api as never} onChatModelChanged={() => {}} {...props} />)
@@ -144,13 +146,70 @@ describe('RoutingSection', () => {
     await waitFor(() => expect(screen.getByTestId('route-chat')).toBeTruthy())
     const chat = screen.getByTestId('route-chat')
     expect(within(chat).getByTestId('route-chat-link-1').textContent).toContain('openrouter:openai/gpt-x')
-    expect(within(chat).getByTestId('route-chat-link-1').textContent).toContain('your current pick')
+    expect(within(chat).getByTestId('route-chat-link-1').textContent).toContain('primary')
     expect(within(chat).getByTestId('route-chat-link-1').querySelector('[data-verdict]')?.getAttribute('data-verdict')).toBe('walled')
     expect(within(chat).getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
     expect(within(chat).getByTestId('route-chat-would-serve').textContent).toContain('hub:qwen3:8b would answer — fell back to link 2')
     expect(api.explainRoute).toHaveBeenCalledWith('chat', 'openrouter:openai/gpt-x')
     expect(screen.getByTestId('route-scheduled').textContent).toContain('uses the chat chain')
     expect(screen.getByTestId('route-coding').textContent).toContain('no user yet')
+  })
+
+  it('lists chat\'s pick once, even when the stored chain repeats it behind itself', async () => {
+    // The live chain of 2026-10-05: link 1 and link 2 were both Gemini.
+    const repeated: Routes = {
+      ...ROUTES,
+      roles: ROUTES.roles.map(r => (r.role === 'chat' ? { ...r, chain: ['openrouter:openai/gpt-x', 'hub:qwen3:8b'] } : r)),
+    }
+    renderSection({ getRoutes: vi.fn(async () => repeated) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-1')).toBeTruthy())
+    const chat = screen.getByTestId('route-chat')
+    expect(within(chat).getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
+    expect(within(chat).queryByTestId('route-chat-link-3')).toBeNull()
+    const links = within(chat).getAllByTestId(/^route-chat-link-\d+$/)
+    expect(links.filter(l => l.textContent?.includes('openrouter:openai/gpt-x')).map(l => l.dataset.testid)).toEqual(['route-chat-link-1'])
+  })
+
+  it('Make primary on a fallback is the one pick write, and the page follows what core stored', async () => {
+    const onChatModelChanged = vi.fn()
+    const api = renderSection({}, { onChatModelChanged })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'make primary chat hub:qwen3:8b' }))
+
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('hub:qwen3:8b'))
+    await waitFor(() => expect(onChatModelChanged).toHaveBeenCalledWith('hub:qwen3:8b'))
+    expect(api.putRoute).not.toHaveBeenCalled()
+    expect(api.putSetting).not.toHaveBeenCalled()
+  })
+
+  it('a refused Make primary says why', async () => {
+    renderSection({ setChatPrimary: vi.fn(async () => { throw new Error('Jev Router is picking chat\'s cloud model') }) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'make primary chat hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('route-chat-primary-error').textContent).toContain('Jev Router'))
+  })
+
+  it('draws the chains while the model list is still being read', async () => {
+    // 2026-10-05: the chains drew nothing until the catalogue landed — ten
+    // seconds and more with a machine off — and read as "disappeared".
+    renderSection({ getCatalog: vi.fn(() => new Promise(() => {})) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-1')).toBeTruthy())
+    expect(screen.getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
+  })
+
+  it('a model list that cannot be read is said, and never hides a chain', async () => {
+    renderSection({ getCatalog: vi.fn(async () => { throw new Error('the gateway timed out') }) })
+    await waitFor(() => expect(screen.getByTestId('routing-catalog-error').textContent).toContain('the gateway timed out'))
+    expect(screen.getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a model list in the wrong shape costs the pickers, never the page', async () => {
+    // It took down all of Settings once the chains stopped waiting for it.
+    renderSection({ getCatalog: vi.fn(async () => ({ object: 'list', data: [] })) })
+    await waitFor(() => expect(screen.getByTestId('routing-catalog-error').textContent).toContain('did not carry a list'))
+    expect(screen.getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
   })
 
   it('renders the roles the server returns, in the server\'s order, with the built-ins\' own words', async () => {

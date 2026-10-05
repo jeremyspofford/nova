@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
-import { ArrowUp, Plus, RefreshCw, Trash2, Waypoints, X } from 'lucide-react'
+import { ArrowUp, Plus, RefreshCw, Star, Trash2, Waypoints, X } from 'lucide-react'
 import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
 import { InlineSave, storedFrom, type SaveMessage } from '../settings/shared'
 import {
@@ -12,6 +12,7 @@ import {
   listAgents as apiListAgents,
   putJevRouter as apiPutJevRouter,
   putRoute as apiPutRoute,
+  setChatPrimary as apiSetChatPrimary,
   putSetting as apiPutSetting,
   type AgentSummary,
   type BuiltinRole,
@@ -33,8 +34,10 @@ import { LIBRARY } from './modelsFormat'
  * provider is over its monthly cap or walled (it refused recently), or a
  * local model is not installed — with the reason — and the first runnable
  * link serves; a fallback is stated on the reply. For chat, link 1 is the
- * model picked in chat (chat.model); this page edits only the fallbacks
- * behind it, so the pick has one writer. Every verdict shown here is the
+ * pick (chat.model) and the chain holds the fallbacks: the card shows them as
+ * ONE order, each model once, and "Make primary" on a fallback is the same
+ * pick write the chat switcher and Models make (setChatPrimary — the model
+ * it replaces becomes the first fallback). Every verdict shown here is the
  * gateway's live answer to "what would serve right now?", never a guess.
  *
  * The roles are the gateway's list, in the gateway's order — never a list
@@ -57,6 +60,7 @@ export interface RoutingApi {
   deleteRoute: typeof apiDeleteRoute
   listAgents: typeof apiListAgents
   putSetting: typeof apiPutSetting
+  setChatPrimary: typeof apiSetChatPrimary
 }
 
 const DEFAULT_API: RoutingApi = {
@@ -69,6 +73,7 @@ const DEFAULT_API: RoutingApi = {
   deleteRoute: apiDeleteRoute,
   listAgents: apiListAgents,
   putSetting: apiPutSetting,
+  setChatPrimary: apiSetChatPrimary,
 }
 
 /** The two decision switches (decision-role spec §6, owner 2026-09-29): which
@@ -212,6 +217,9 @@ export function RoutingSection({
   const [agentsError, setAgentsError] = useState<string | null>(null)
   const [explains, setExplains] = useState<Record<string, RouteExplain | { error: string }>>({})
   const [error, setError] = useState<string | null>(null)
+  // The catalogue only fills the "add" pickers and names Jev Router's link —
+  // its failure is said beside them and never hides a chain.
+  const [catalogError, setCatalogError] = useState<string | null>(null)
   // The link that serves Jev Router, from the catalogue the page already read.
   const routerLink = catalog.find(r => r.kind === 'cloud' && r.model === JEV_ROUTER_MODEL)?.id ?? null
   // The switch's disabled-with-no-link reason: the base sentence, plus a
@@ -260,10 +268,30 @@ export function RoutingSection({
 
     const p: Promise<void> = (async (): Promise<void> => {
       setError(null)
+      // Read BESIDE the chains, never in front of them: the chains used to
+      // draw nothing until the catalogue landed — ten seconds and more with
+      // a machine off — which after a save read as "the lists of model
+      // assignments disappeared" (2026-10-05).
+      const catalogRead = api.getCatalog().then(
+        cat => {
+          if (seq !== loadSeq.current) return
+          // A body that is not the promised shape costs the pickers, never
+          // the page: `undefined.find` here unmounted all of Settings.
+          if (!Array.isArray(cat?.rows)) {
+            setCatalogError('the answer did not carry a list of models')
+            return
+          }
+          setCatalog(cat.rows)
+          setCatalogSources(Array.isArray(cat.sources) ? cat.sources : [])
+          setCatalogError(null)
+        },
+        (err: unknown) => {
+          if (seq === loadSeq.current) setCatalogError(reasonOf(err))
+        },
+      )
       try {
-        const [r, cat, agentsRead] = await Promise.all([
+        const [r, agentsRead] = await Promise.all([
           api.getRoutes(),
-          api.getCatalog(),
           // The agents list decides whether a role's Remove is offered, so its
           // failure is kept as a fact of its own, never folded into "no agents".
           api.listAgents().then(
@@ -273,8 +301,6 @@ export function RoutingSection({
         ])
         if (seq === loadSeq.current) {
           setRoutes(r)
-          setCatalog(cat.rows)
-          setCatalogSources(cat.sources)
           setAgents(agentsRead.list)
           setAgentsError(agentsRead.error)
           const entries = await Promise.all(
@@ -297,6 +323,7 @@ export function RoutingSection({
       } catch (err) {
         if (seq === loadSeq.current) setError(reasonOf(err))
       }
+      await catalogRead
       // `seq` is no longer the latest exactly when a newer load has started
       // since this one — before, between or after the two checkpoints above,
       // so this call may have written all of its reads, some, or none.
@@ -345,6 +372,12 @@ export function RoutingSection({
             {error}
           </div>
         )}
+        {catalogError && (
+          <p role="status" className="text-caption text-content-tertiary" data-testid="routing-catalog-error">
+            The model list could not be read, so there is nothing to add from — {catalogError}. The chains
+            below are still what each role walks.
+          </p>
+        )}
         <div className="flex justify-end">
           <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()}>
             Re-check
@@ -360,7 +393,11 @@ export function RoutingSection({
               role={entry.role}
               words={words}
               reserved={entry.reserved}
-              chain={entry.chain}
+              // Chat's pick is link 1 and is never listed again behind
+              // itself: the walk skips a repeat, so a stored repeat (the
+              // live chain of 2026-10-05: Gemini twice) is noise, and the
+              // next save drops it.
+              chain={entry.role === 'chat' ? entry.chain.filter(id => id !== chatModel) : entry.chain}
               chatModel={chatModel}
               catalog={catalog}
               protocol={entry.protocol ?? 'chat'}
@@ -389,6 +426,15 @@ export function RoutingSection({
                 await api.putRoute(entry.role, chain)
                 await load()
               }}
+              onMakePrimary={
+                entry.role === 'chat'
+                  ? async id => {
+                      const stored = await api.setChatPrimary(id)
+                      onChatModelChanged(stored.chat_model)
+                      await load(stored.chat_model)
+                    }
+                  : undefined
+              }
               onRemove={
                 words.orphan
                   ? async () => {
@@ -450,6 +496,7 @@ function RoleEditor({
   onDecisionSwitch,
   onRouter,
   onSave,
+  onMakePrimary,
   onRemove,
 }: {
   role: string
@@ -482,6 +529,9 @@ function RoleEditor({
    * on success; a refusal is thrown, in the gateway's own words. */
   onRouter: (on: boolean) => Promise<string | undefined>
   onSave: (chain: string[]) => Promise<void>
+  /** Chat only: make a fallback the pick (the one pick write); a refusal is
+   * thrown, in core's own words. */
+  onMakePrimary?: (id: string) => Promise<void>
   /** present only when the role is an orphan — the one thing to do with it */
   onRemove?: () => Promise<void>
 }) {
@@ -495,6 +545,8 @@ function RoleEditor({
   const [routerBusy, setRouterBusy] = useState(false)
   const [routerError, setRouterError] = useState<string | null>(null)
   const [routerNote, setRouterNote] = useState<string | null>(null)
+  const [promoting, setPromoting] = useState<string | null>(null)
+  const [promoteError, setPromoteError] = useState<string | null>(null)
   // The ONE reason the switch cannot be flipped right now: mid-flight, or
   // off with no link to turn it on with (turning off never needs one). The
   // toggle's `disabled` and the guard inside `flipRouter` both read this
@@ -549,6 +601,19 @@ function RoleEditor({
     .filter(r => (r.kind === 'local' || r.kind === 'cloud') && r.provider !== LIBRARY && !draft.includes(r.id) && r.id !== chatModel && isDecisionModel(r) === wantsDecisions)
     .map(r => ({ value: r.id, label: `${r.provider} · ${r.model}${r.installed === false ? ' (not installed)' : ''}` }))
 
+  const makePrimary = async (id: string) => {
+    if (!onMakePrimary || dirty) return
+    setPromoting(id)
+    setPromoteError(null)
+    try {
+      await onMakePrimary(id)
+    } catch (err) {
+      setPromoteError(reasonOf(err))
+    } finally {
+      setPromoting(null)
+    }
+  }
+
   const remove = async () => {
     if (!onRemove) return
     setRemoveError(null)
@@ -598,8 +663,9 @@ function RoleEditor({
           <li className="flex flex-wrap items-center gap-2" data-testid={`route-${role}-link-1`}>
             <span className="w-4 text-content-tertiary">1.</span>
             <span className="font-mono">{chatModel || '(no chat model set)'}</span>
-            <span className="text-content-tertiary">your current pick, set in chat or on Models</span>
+            <Badge size="sm" color="success">primary</Badge>
             <VerdictBadge verdict={verdictFor(chatModel)} />
+            <span className="text-content-tertiary">the pick — also set from the chat switcher and Models</span>
           </li>
         )}
         {draft.map((id, index) => {
@@ -611,6 +677,22 @@ function RoleEditor({
               <VerdictBadge verdict={verdictFor(id)} />
               {editable && (
                 <>
+                  {onMakePrimary && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<Star size={12} />}
+                      loading={promoting === id}
+                      // A pick writes the STORED chain; unsaved edits here
+                      // would be dropped by it, so it waits for them.
+                      disabled={dirty || promoting !== null}
+                      title={dirty ? 'save or reset the changes above first' : 'chat answers with this first; the current pick becomes the first fallback'}
+                      aria-label={`make primary ${role} ${id}`}
+                      onClick={() => void makePrimary(id)}
+                    >
+                      Make primary
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -724,6 +806,11 @@ function RoleEditor({
             </p>
           )}
         </div>
+      )}
+      {promoteError && (
+        <p role="alert" className="mt-2 text-caption text-danger" data-testid={`route-${role}-primary-error`}>
+          could not make it primary — {promoteError}
+        </p>
       )}
       {decisionSwitches && editable && <DecisionSwitches defs={decisionSwitches} onSwitch={onDecisionSwitch} />}
       {removeError && (

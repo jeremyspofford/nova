@@ -682,6 +682,14 @@ export interface Routes {
 export const getRoutes = () => apiGet<Routes>('/api/v1/routes')
 export const putRoute = (role: RouteRole, chain: string[]) =>
   apiSend<{ role: RouteRole; chain: string[] }>(`/api/v1/routes/${role}`, 'PUT', { chain })
+/** Make `model` the chat model — link 1 of chat — with the model it replaces
+ * kept as chat's FIRST fallback, in one write core makes (2026-10-05). The
+ * ONE path every "use this model" takes: the chat picker, Models and
+ * Settings. Each used to write chat.model alone, so a pick dropped the model
+ * it replaced from every chain without a word. The answer is what core
+ * stored: the chat model and chat's fallbacks. */
+export const setChatPrimary = (model: string) =>
+  apiSend<{ chat_model: string; chain: string[] }>('/api/v1/routes/chat/primary', 'PUT', { model })
 /** Switch Jev Router on or off for a role — an edit to its chain, which stays
  * the one source of truth. `link` is the provider:model that serves Jev
  * Router, read from the live catalogue; only switching on needs it. A 200
@@ -2050,7 +2058,30 @@ export interface ResolvedRef {
   note?: string
 }
 
-export const getCatalog = () => apiGet<Catalog>('/api/v1/models/catalog')
+// The read every caller that starts while one is in flight shares. The chat
+// page mounts two readers at once (the context ring and the model picker),
+// and each used to start its own gateway build of the whole catalogue.
+// Nothing outlives the answer: a read that starts after it landed is a new
+// read, so a re-read after a pull is never handed the list from before it.
+let catalogInFlight: Promise<Catalog> | null = null
+
+/** The model catalogue. `fresh` asks the gateway to dial every source again,
+ * a provider it remembers as unreachable included (the Models page's
+ * Refresh); `own` starts a read of its own rather than joining one in flight
+ * — a re-read after an action, which must postdate the action. */
+export function getCatalog(opts: { fresh?: boolean; own?: boolean } = {}): Promise<Catalog> {
+  if (opts.fresh) return apiGet<Catalog>('/api/v1/models/catalog?fresh=1')
+  if (opts.own) return apiGet<Catalog>('/api/v1/models/catalog')
+  if (catalogInFlight === null) {
+    const read = apiGet<Catalog>('/api/v1/models/catalog')
+    catalogInFlight = read
+    const done = () => {
+      if (catalogInFlight === read) catalogInFlight = null
+    }
+    read.then(done, done)
+  }
+  return catalogInFlight
+}
 
 export function searchHf(query: string, sort = 'downloads', cursor?: string, limit = 30) {
   const params = new URLSearchParams({ q: query, sort, limit: String(limit) })

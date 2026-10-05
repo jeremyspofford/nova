@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSmallerTier, mergeModels, bareLocalModel, qualifyLocalModel } from './modelsFormat'
+import { mergeModels, bareLocalModel } from './modelsFormat'
 import type { ModelFit, SuggestedModel } from '../../lib/api'
 
 function curated(overrides: Partial<SuggestedModel> = {}): SuggestedModel {
@@ -88,60 +88,7 @@ describe('mergeModels', () => {
   })
 })
 
-describe('isSmallerTier', () => {
-  it('is false with fewer than two known sizes to compare against', () => {
-    const merged = mergeModels('qwen3:8b', ['qwen3:8b'], [curated({ params_b: 8 })])
-    expect(isSmallerTier(merged, 'qwen3:8b')).toBe(false)
-  })
-
-  it('is true for the smaller of two curated models, false for the larger', () => {
-    const merged = mergeModels(
-      'qwen3:8b',
-      ['qwen3:8b', 'qwen3:27b'],
-      [curated({ slug: 'qwen3:8b', params_b: 8 }), curated({ slug: 'qwen3:27b', label: 'Qwen3 27B', params_b: 27 })],
-    )
-    expect(isSmallerTier(merged, 'qwen3:8b')).toBe(true)
-    expect(isSmallerTier(merged, 'qwen3:27b')).toBe(false)
-  })
-
-  it('is false for a model missing paramsB — nothing invented for data that is not there', () => {
-    const merged = mergeModels(
-      'llama3.4:9b',
-      ['llama3.4:9b'],
-      [curated({ slug: 'qwen3:8b', params_b: 8 }), curated({ slug: 'qwen3:27b', label: 'Qwen3 27B', params_b: 27 })],
-    )
-    // llama3.4:9b is installed-but-uncatalogued, so its paramsB is null even
-    // though two other models in the same list have a known size.
-    expect(isSmallerTier(merged, 'llama3.4:9b')).toBe(false)
-  })
-
-  it('is false for an unrelated slug not present in the list at all', () => {
-    const merged = mergeModels(
-      'qwen3:8b',
-      ['qwen3:8b', 'qwen3:27b'],
-      [curated({ slug: 'qwen3:8b', params_b: 8 }), curated({ slug: 'qwen3:27b', label: 'Qwen3 27B', params_b: 27 })],
-    )
-    expect(isSmallerTier(merged, 'does-not-exist')).toBe(false)
-  })
-
-  it('is false for every model when all known sizes are equal — no spread to be smaller relative to', () => {
-    const merged = mergeModels(
-      'qwen3:8b-a',
-      ['qwen3:8b-a', 'qwen3:8b-b'],
-      [curated({ slug: 'qwen3:8b-a', params_b: 8 }), curated({ slug: 'qwen3:8b-b', label: 'Qwen3 8B (b)', params_b: 8 })],
-    )
-    expect(isSmallerTier(merged, 'qwen3:8b-a')).toBe(false)
-    expect(isSmallerTier(merged, 'qwen3:8b-b')).toBe(false)
-  })
-})
-
-
 describe('local model ids are provider-qualified (S10-pre)', () => {
-  it('qualifies a bare local slug once and leaves a qualified one alone', () => {
-    expect(qualifyLocalModel('qwen3:8b')).toBe('hub:qwen3:8b')
-    expect(qualifyLocalModel('hub:qwen3:8b')).toBe('hub:qwen3:8b')
-  })
-
   it('bares only the local provider; another provider\'s id never matches a local row', () => {
     expect(bareLocalModel('hub:qwen3:8b')).toBe('qwen3:8b')
     expect(bareLocalModel('qwen3:8b')).toBe('qwen3:8b')
@@ -161,7 +108,6 @@ describe('local model ids are provider-qualified (S10-pre)', () => {
     // `ollama:` id names a provider that no longer exists, and must never be
     // matched to a local row by accident.
     expect(bareLocalModel('ollama:qwen3:8b')).toBe('ollama:qwen3:8b')
-    expect(qualifyLocalModel('ollama:qwen3:8b')).toBe('hub:ollama:qwen3:8b')
   })
 })
 

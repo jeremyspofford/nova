@@ -95,7 +95,7 @@ function renderSection(
     deleteProvider: ReturnType<typeof vi.fn>
     makeDefaultProvider: ReturnType<typeof vi.fn>
     getProviderModels: ReturnType<typeof vi.fn>
-    putSetting: ReturnType<typeof vi.fn>
+    setChatPrimary: ReturnType<typeof vi.fn>
   }> = {},
   chatModel = 'qwen3:8b',
 ) {
@@ -107,7 +107,8 @@ function renderSection(
     deleteProvider: vi.fn(async (name: string) => ({ deleted: name })),
     makeDefaultProvider: vi.fn(async (name: string) => provider({ name, is_default: true })),
     getProviderModels: vi.fn(async () => LISTING),
-    putSetting: vi.fn(async () => undefined),
+    // Echoes what core stores for a pick: the model, and chat's fallbacks.
+    setChatPrimary: vi.fn(async (model: string) => ({ chat_model: model, chain: [] })),
     ...api,
   }
   const onModelChanged = vi.fn()
@@ -265,7 +266,7 @@ describe('ProvidersSection', () => {
 
     fireEvent.click(within(row).getByRole('button', { name: /use anthropic\/claude-sonnet-5/i }))
     await waitFor(() =>
-      expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:anthropic/claude-sonnet-5'),
+      expect(api.setChatPrimary).toHaveBeenCalledWith('openrouter:anthropic/claude-sonnet-5'),
     )
     expect(onModelChanged).toHaveBeenCalledWith('openrouter:anthropic/claude-sonnet-5')
   })
@@ -297,13 +298,13 @@ describe('ProvidersSection', () => {
     expect(screen.queryByText(/models from/)).toBeNull()
     fireEvent.change(screen.getByLabelText('Model id for azure'), { target: { value: 'gpt-5-deploy' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use' }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'azure:gpt-5-deploy'))
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('azure:gpt-5-deploy'))
     expect(onModelChanged).toHaveBeenCalledWith('azure:gpt-5-deploy')
   })
 
   it('a failed switch states the reason and does not report a change', async () => {
     const { api, onModelChanged } = renderSection({
-      putSetting: vi.fn(async () => {
+      setChatPrimary: vi.fn(async () => {
         throw new Error('the server refused (500)')
       }),
     })
@@ -311,7 +312,7 @@ describe('ProvidersSection', () => {
     fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
     await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-openai/gpt-x')).getByRole('button', { name: /use/i }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalled())
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('500'))
     expect(onModelChanged).not.toHaveBeenCalled()
   })
@@ -354,7 +355,7 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
     fireEvent.click(screen.getByTestId('toggle-models-hub'))
     await waitFor(() => expect(screen.getByTestId('model-qwen3:14b')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-qwen3:14b')).getByRole('button', { name: /use/i }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'hub:qwen3:14b'))
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('hub:qwen3:14b'))
     expect(onModelChanged).toHaveBeenCalledWith('hub:qwen3:14b')
   })
 
@@ -377,6 +378,26 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
 
 
 describe('ProvidersSection — the owner can see the verdict and find the models', () => {
+  it('a proven key a later listing refused is not drawn as a pass', async () => {
+    // 2026-10-05: Anthropic read "Key verified" in green beside "the last
+    // listing was refused (401): API key is invalid".
+    renderSection({
+      getProviders: vi.fn(async () => [
+        HUB,
+        provider({
+          key_proven: true,
+          listing: 'unknown',
+          listing_note: 'the last listing was refused (401): API key is invalid.',
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
+    const el = screen.getByTestId('provider-status-openrouter')
+    expect(el.className).not.toContain('text-success')
+    expect(el.textContent).toContain('before the refused listing below')
+    expect(screen.getByTestId('provider-listing-warning-openrouter').textContent).toContain('API key is invalid')
+  })
+
   it('a proven key reads "Key verified <when> — <how>", green, from the structured verdict', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
@@ -441,7 +462,10 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     }
   })
 
-  it('a refused listing is shown as a warning beside a still-true verdict', async () => {
+  it('a refused listing is shown as a warning, and the earlier verdict keeps its date but not its green', async () => {
+    // Was: the verdict stayed green beside the refusal, as a fact of its
+    // date. On the page that read as "fine" next to "API key is invalid"
+    // (2026-10-05), so the pass colour now needs the listing to agree.
     renderSection({
       getProviders: vi.fn(async () => [
         provider({
@@ -453,7 +477,9 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     })
     await waitFor(() => expect(screen.getByTestId('provider-listing-warning-openrouter')).toBeTruthy())
     expect(screen.getByTestId('provider-listing-warning-openrouter').textContent).toContain('key revoked')
-    expect(screen.getByTestId('provider-status-openrouter').className).toContain('text-success')
+    const verdict = screen.getByTestId('provider-status-openrouter')
+    expect(verdict.className).not.toContain('text-success')
+    expect(verdict.textContent).toMatch(/^Key verified .* — before the refused listing below$/)
   })
 
   it('after a listing fetch the row re-reads its server state', async () => {
