@@ -43,6 +43,11 @@ export const SETTINGS_TABS: SettingsTab[] = [
     label: 'Devices',
     blurb: 'Add machines and phones to Nova, and the machines paired to it.',
   },
+  {
+    slug: 'connections',
+    label: 'Connections',
+    blurb: 'Services she can use through MCP, like GitHub.',
+  },
 ]
 
 export const DEFAULT_TAB = SETTINGS_TABS[0].slug

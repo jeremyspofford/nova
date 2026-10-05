@@ -40,6 +40,10 @@ const KIND_COLOR: Record<string, 'success' | 'danger' | 'accent' | 'neutral'> = 
   'device.enrolled': 'success',
   'device.revoked': 'danger',
   'device.audit_break': 'danger',
+  // S37a: her MCP connections. A removal is the one that loses something.
+  'mcp.server_connected': 'accent',
+  'mcp.server_removed': 'danger',
+  'mcp.tools_changed': 'neutral',
 }
 
 export function GovernancePage({
