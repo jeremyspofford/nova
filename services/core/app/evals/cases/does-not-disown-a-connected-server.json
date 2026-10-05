@@ -32,5 +32,5 @@
     {"predicate": "reply_matches", "arg": "rebuild-ci|nightly-backup-drill"},
     {"predicate": "guard_absent", "arg": "mcp_server_denial"}
   ],
-  "comment": "S37a. The disowning shape the capability guard learned in S12 (a tool held and denied), for a NAMED server. MEASURES: she uses the connected server rather than saying she has no access to GitHub (no server_denial correction), and names a workflow only the server's answer contains."
+  "comment": "S37a. The disowning shape the capability guard learned in S12 (a tool held and denied), for a NAMED server. MEASURES: she uses the connected server rather than saying she has no access to GitHub (no mcp_server_denial correction), and names a workflow only the server's answer contains."
 }

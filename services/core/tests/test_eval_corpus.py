@@ -549,22 +549,65 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
 # the S37a MCP cases' first draft sat in (F16).
 #
 # KNOWN_GUARD_NAMES_TODAY is every string `app/chat.py` or `app/beats.py`
-# files a "guard" span under, read off the source directly (there is no single
-# registry a guard name is declared in -- each call site is its own source of
-# truth, the same way `app/chat.py`'s own module docstring describes the
-# honesty guards): the literal and claim_kind-dispatched turn.span("guard", …)
-# sites in chat.py (responsiveness; deferral; the REWRITE-class pair
-# code_claim/address_claim; the APPEND-class pair served_claim/memory_claim;
-# bare_intent; the claim_kind-dispatched consent_claim, state_claim,
-# presented_listing; narration, delegation_claim, capability_claim,
-# stack_claim; the said-not-done pair written_call/device_completion), plus
-# beats.py's own three (observation, delivery_claim, novelty_claim, filed by
-# its `_guard` helper for her proactive digest turns). mcp_server_claim and
-# mcp_server_denial are Task 12's names (ruling F16) -- not yet filed by
-# anything, so the four MCP cases' guard_absent half is vacuously green until
-# Task 12 lands (the module docstring's v18 entry says so); they are listed
-# here explicitly so a FUTURE typo against THEM is still caught, rather than
-# silently joining the same vacuous-pass class this test exists to close.
+# ACTUALLY PASSES AS THE NAME ARGUMENT to `turn.span("guard", …)` -- read off
+# the source directly (there is no single registry a guard name is declared
+# in -- each call site is its own source of truth). The check that matters is
+# the span's NAME, never a word that merely appears near the call, and never
+# `meta["kind"]`: `guard_fired`/`guard_absent` filter spans by `s.name`
+# (predicates.py), so a value that only ever reaches `meta` can never make
+# either predicate true or false -- a case naming one is refused at CaseError
+# time by neither validator, and would sit in the exact vacuous-pass hole
+# this test exists to close (fix round 1, item 1: this list used to include
+# "bare_intent" on exactly that mistake -- see below).
+#
+# Each name below is cited with the call site that passes it as `name` or
+# `claim_kind` (never a `meta[...]` key, never a neighbouring comment word):
+#   * responsiveness             -- turn.span("guard", "responsiveness"), chat.py:3569 (literal)
+#   * deferral                   -- turn.span("guard", "deferral"), chat.py:3663 (literal);
+#                                    also _claim_redirect(claim_kind="deferral"), chat.py:5856 and
+#                                    :5941 -- the OFFER/COMPLETION and BARE-INTENT redirects both
+#                                    file under this same name, telling the shapes apart only via
+#                                    meta["kind"] ("offer" / "completion" / "bare_intent", chat.py
+#                                    :5833, :5938) -- `meta["kind"]` is NOT a span name (see above);
+#                                    there is no standalone "bare_intent" span, ever.
+#   * narration                  -- turn.span("guard", "narration"), chat.py:5173 (literal)
+#   * delegation_claim           -- turn.span("guard", "delegation_claim"), chat.py:5204 (literal)
+#   * capability_claim           -- turn.span("guard", "capability_claim"), chat.py:5294 (literal)
+#   * stack_claim                -- turn.span("guard", "stack_claim"), chat.py:5325 (literal)
+#   * state_claim                -- turn.span("guard", "state_claim"), chat.py:5407 (literal);
+#                                    also _claim_redirect(claim_kind="state_claim"), chat.py:5419
+#   * presented_listing          -- turn.span("guard", "presented_listing"), chat.py:5523, :5539
+#                                    (literal); also _claim_redirect(claim_kind=
+#                                    "presented_listing"), chat.py:5551
+#   * consent_claim              -- _claim_redirect(claim_kind="consent_claim"), chat.py:5239
+#   * code_claim                 -- the REWRITE-class dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:3860 (tuple) / :3880 (span)
+#   * address_claim              -- same REWRITE-class tuple, chat.py:3862 (tuple) / :3880 (span)
+#   * served_claim                -- the APPEND-class dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:3899 (tuple) / :3915 (span)
+#   * memory_claim                -- same APPEND-class tuple, chat.py:3900 (tuple) / :3915 (span)
+#   * written_call                -- the said-not-done dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:6059 (tuple) / :6077 (span)
+#   * device_completion            -- same said-not-done tuple, chat.py:6063 (tuple) / :6077 (span)
+#   * observation, delivery_claim, novelty_claim -- beats.py's own `_guard(turn, name, check, …)`
+#       helper, which itself does turn.span("guard", name) (beats.py:2030); her proactive digest
+#       turns, called with these three literal names at beats.py:2322-2329.
+#
+# `_file_claim_span`'s `("served_claim", …)`/`else` split and the top-of-file
+# `checks: tuple[...] = (("bare_intent", lambda: guards.bare_intent_check(...)), ...)`
+# re-check (chat.py ~4041) are NEITHER of these: the first dispatches on a name
+# the tuple already supplied (not a second source), and the second is a
+# regeneration RE-CHECK that returns a bare string for internal control flow
+# (which redirect to retry) and never calls turn.span itself at all -- reading
+# either in isolation is exactly how "bare_intent" looked like a span name
+# when it never filed one.
+#
+# mcp_server_claim and mcp_server_denial are Task 12's names (ruling F16) --
+# not yet filed by anything, so the four MCP cases' guard_absent half is
+# vacuously green until Task 12 lands (the module docstring's v18 entry says
+# so); they are listed here explicitly so a FUTURE typo against THEM is still
+# caught, rather than silently joining the same vacuous-pass class this test
+# exists to close.
 KNOWN_GUARD_NAMES_TODAY = frozenset(
     {
         # app/chat.py
@@ -574,7 +617,6 @@ KNOWN_GUARD_NAMES_TODAY = frozenset(
         "address_claim",
         "served_claim",
         "memory_claim",
-        "bare_intent",
         "consent_claim",
         "state_claim",
         "presented_listing",
