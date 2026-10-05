@@ -31,23 +31,33 @@ Task 12's guards read `mcp_server` off these, and the span's own
 roster's own failing() derivation, not a guard.
 
 THE 64 KIB CAP (rulings T7-A, T7-A2) applies to every word a server's own
-text puts in front of her, not only a successful result, and it is now
+text puts in front of her, not only a successful result, and it is
 STRUCTURAL rather than something each executor must remember at every
 return and raise: `_bounded` wraps all four executors below, in `TOOLS`,
 so the string `tools.dispatch` actually gets — the return, OR a
 `ToolFailure`'s reason — always passes through `_capped` on the way out,
-even one a future change adds without threading it through by hand. The
-per-site caps already in each executor (body + notes composed together,
-`exc.reason`, `refresh_note`) still exist and still matter: they bound the
-WORK early (a 20,000-entry notes list is collapsed before it is ever
-joined into one string), while `_bounded` is the guarantee that nothing can
-skip the cap, the way a rejected tool's reason once did — unbounded,
-because it never routed through any of those per-site calls at all.
-`result.notes` is bounded in COUNT before composing (`_notes_text`); a
-server-supplied TOOL NAME is clipped (`_clip_name`) everywhere one is
-listed; and `app.mcp.client._tool_problem` clips what IT embeds too (a
+even one a future change adds without threading it through by hand.
+
+`_capped` is called in exactly ONE place: inside `_bounded`, on the
+executor's finished return value or its `ToolFailure`'s finished reason
+(Task 7 carry). No executor below calls `_capped` itself any more — every
+server-text result (a label, the text, the notes; a sentence and a reason)
+is composed in FULL, uncapped, first, so `_bounded` always cuts an UNCUT
+string and its notice's count is the true number of hidden bytes. Capping
+a PART early and then adding more words around it — `mcp_call` used to cap
+`body` alone and then return `f"{label}:\n{body}"`, pushing the total back
+over the cap so `_bounded` cut it a SECOND time and reported a count
+relative to the already-cut intermediate string, never the server's real
+text — silently made the hard bound still hold while the NUMBER she was
+told was wrong. `result.notes` is still bounded in COUNT before composing
+(`_notes_text`), never by `_capped`: a 20,000-entry notes list is collapsed
+to `MAX_NOTES_LISTED` before it is ever joined into one string, so a
+response built of many small blocks never has to build the huge string
+just to cut it down afterward. A server-supplied TOOL NAME is likewise
+clipped by COUNT of characters (`_clip_name`), never bytes, everywhere one
+is listed; and `app.mcp.client._tool_problem` clips what IT embeds too (a
 `x-mcp-header` name, a `type` value) at its own source, so a hostile tool
-definition cannot inflate even the per-site numbers `_bounded` backs up.
+definition cannot inflate even those early, count-based bounds.
 
 `app.mcp.servers` is imported INSIDE the executors: it imports notices, then
 the checks, then agents, then this package — a cycle at import time that
@@ -330,7 +340,7 @@ async def mcp_tools(args: dict, ctx: ToolContext) -> str:
                 else "never"
             )
             note = (
-                f"\n(Could not read the list again — {_capped(exc.reason)}. "
+                f"\n(Could not read the list again — {exc.reason}. "
                 f"This is the list read at {when}.)"
             )
         except store.ServerError as exc:
@@ -397,11 +407,11 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
                 protocol=server.protocol,
                 reachable=exc.reachable,
             )
-            refresh_note = f" (its list could not be read again: {_capped(exc.reason)})"
+            refresh_note = f" (its list could not be read again: {exc.reason})"
         except store.ServerError as exc:
             # The row changed or was removed under this read (Task 5 carry,
             # ruling T5-E) — nothing was recorded, so nothing is stamped here.
-            refresh_note = f" (its list could not be read again: {_capped(exc.reason)})"
+            refresh_note = f" (its list could not be read again: {exc.reason})"
         tool = next((t for t in server.tools if t.get("name") == name), None)
     if tool is None:
         names = (
@@ -437,9 +447,11 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
             bytes=0,
         )
         # The cap applies here too (ruling T7-A): a JSON-RPC error IS server
-        # text (ClientError.reason), and nothing downstream of this raise —
-        # dispatch, the chat loop — bounds it.
-        raise ToolFailure(_capped(exc.reason)) from exc
+        # text (ClientError.reason). Composed whole and capped ONCE, by
+        # `_bounded` below (Task 7 carry, ruling on the cap) — never here,
+        # or a future word added in front of `exc.reason` would silently
+        # reintroduce the double-cut this carry removed everywhere else.
+        raise ToolFailure(exc.reason) from exc
     # T7-E: the server ANSWERED — isError is the tool's own answer, never a
     # failing server (Server.failing's docstring, servers.py) — so the row
     # is stamped ok here regardless of result.is_error, for the guards and
@@ -459,11 +471,16 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
     # every lone surrogate, at its own decode boundary (ruling T5-A, T7-C) —
     # `result.text` and `result.notes` are clean and encodable by
     # construction, so nothing here scrubs or re-encodes a second time.
-    # The 64 KiB cap (ruling T7-A) is applied to body + notes COMPOSED
-    # together, once, so neither the success return nor the isError failure
-    # can slip past it by capping only one half.
+    # The 64 KiB cap (ruling T7-A) covers the label, the text AND the notes
+    # together — composed here in FULL, uncapped, and capped exactly ONCE,
+    # by `_bounded` below (Task 7 carry): capping `body` alone here and then
+    # adding `label` around it used to push the total back over the cap, so
+    # `_bounded` cut it a SECOND time and wrote a notice counting bytes
+    # relative to the already-cut intermediate string rather than the
+    # server's real text — the hard bound held, but the NUMBER she was told
+    # was wrong.
     text = result.text if result.text else "(the server returned no text)"
-    body = _capped(f"{text}{_notes_text(result.notes)}")
+    body = f"{text}{_notes_text(result.notes)}"
     if result.is_error:
         # A server's isError is a failed call, in its own words.
         raise ToolFailure(f"{label} reported an error: {body}")

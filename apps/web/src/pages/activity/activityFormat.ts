@@ -95,6 +95,17 @@ const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 const WEEK = 7 * DAY
 
+/** "github · get_job_logs" for an mcp_call span — the server and the tool it
+ * ran, from the call's own arguments (S37a). Null for any other span, and for
+ * arguments clipped to a string. */
+export function mcpCallLabel(name: string | null, argsRedacted: unknown): string | null {
+  if (name !== 'mcp_call' || argsRedacted === null || typeof argsRedacted !== 'object' || Array.isArray(argsRedacted)) {
+    return null
+  }
+  const args = argsRedacted as Record<string, unknown>
+  return typeof args.server === 'string' && typeof args.tool === 'string' ? `${args.server} · ${args.tool}` : null
+}
+
 /** started_at as "how long ago", falling back to a calendar date once the
  * turn is old enough that "N days ago" stops being useful at a glance. */
 export function formatRelativeTime(iso: string, now: Date = new Date()): string {

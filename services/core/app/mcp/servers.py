@@ -44,6 +44,12 @@ BY_NOVA = "nova"
 # The roster names a server's tools when it has this many or fewer, and gives
 # a count otherwise: one 87-tool server must not flood a small model's prompt.
 ROSTER_NAMES_UP_TO = 12
+# The ledger's own cap on how many rejected tools a connect records (ruling
+# T10-A) — the same value as mcp_api.py's REJECTED_LISTED_UP_TO (the HTTP
+# response's cap) and app/tools/mcp.py's, independently defined in each
+# module that needs it (Task 9's own self-review already noted this
+# duplication; not refactored here either, for the same reason).
+REJECTED_LISTED_UP_TO = 20
 MAX_HEADERS = 20
 MAX_CREDENTIAL_CHARS = 4096
 # The whole connect — discovery or the handshake, then every page of tools —
@@ -589,6 +595,21 @@ async def connect(
             }
             if previous is not None:
                 meta["replaced"] = {"origin": previous.origin, "added_by": previous.added_by}
+            # Ruling T10-A: the ledger is the durable record of which tools a
+            # connect left out and why — the add form's own state is not
+            # (leaving the tab loses it). Only added when something WAS
+            # rejected, so an ordinary connect's meta is unchanged; capped
+            # the same way the route caps what it shows (`listed.rejected`'s
+            # entries are already clipped at the client's own source, ruling
+            # T7-A2 — this bounds only the COUNT kept here).
+            if listed.rejected:
+                meta["rejected"] = [
+                    {"name": rejected_name, "reason": why}
+                    for rejected_name, why in listed.rejected[:REJECTED_LISTED_UP_TO]
+                ]
+                rejected_more = len(listed.rejected) - REJECTED_LISTED_UP_TO
+                if rejected_more > 0:
+                    meta["rejected_more"] = rejected_more
             event_id = await governance.record_event(
                 conn, kind=governance.MCP_SERVER_CONNECTED, actor=actor, meta=meta
             )
@@ -834,3 +855,48 @@ async def no_such_server(pool, name: str) -> str:
     known = [s.name for s in await list_servers(pool)]
     listed = ", ".join(known) if known else "none is connected"
     return f"there is no connected MCP server named {name!r} — connected: {listed}"
+
+
+# ── the roster line in her prompt (S37a Task 8) ─────────────────────────────
+
+
+def roster_line_for(servers_: Sequence[Server]) -> str | None:
+    """The one line her prompt carries about the MCP servers she can use.
+
+    Each server by its connection name (and its title, clipped), its tool
+    NAMES when it has ROSTER_NAMES_UP_TO or fewer and a count otherwise, and —
+    when its last call failed — when and why. Never a tool's description:
+    that is third-party text she reads as an mcp_tools result. No network call
+    here. None when nothing is connected, so the prompt is byte-identical to a
+    stack without MCP."""
+    if not servers_:
+        return None
+    parts: list[str] = []
+    for server in servers_:
+        title = _clip(server.title, 40) if server.title else None
+        shown_title = title and title.lower() != server.name
+        label = f"{server.name} ({title})" if shown_title else server.name
+        names = [_clip(str(t.get("name")), 64) for t in server.tools]
+        if not names:
+            offered = "no tools listed"
+        elif len(names) <= ROSTER_NAMES_UP_TO:
+            offered = ", ".join(names)
+        else:
+            offered = (
+                f"{len(names)} tools — find one with mcp_tools(server={server.name!r}, query=…)"
+            )
+        clause = f"{label}: {offered}"
+        if server.failing and server.last_error_at is not None:
+            when = server.last_error_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
+            reason = _clip(server.last_error or "no reason recorded", 160)
+            clause += f" [its last call failed at {when} UTC: {reason}]"
+        parts.append(clause)
+    head = (
+        "MCP servers you are connected to. Run one of their tools with mcp_call(server, tool, "
+        "arguments); read a tool's inputs first with mcp_tools(server, query)"
+    )
+    return f"{head}: " + "; ".join(parts)
+
+
+async def roster_line(pool) -> str | None:
+    return roster_line_for(await list_servers(pool))

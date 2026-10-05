@@ -2094,3 +2094,70 @@ export const removeModel = (model: string) =>
 
 export const checkDrift = (model: string) =>
   apiSend<DriftResult>('/api/v1/models/catalog/drift', 'POST', { model })
+
+// ── MCP servers (S37a): Settings → Connections ──────────────────────────
+
+/** A connected MCP server as core shows it: never a token, a header value or a URL path. */
+export interface McpServer {
+  name: string
+  title: string | null
+  origin: string
+  protocol: string | null
+  added_by: 'owner' | 'nova'
+  has_token: boolean
+  header_names: string[]
+  tool_count: number
+  tools: { name: string; description: string }[]
+  tools_fetched_at: string | null
+  tools_changed_at: string | null
+  last_ok_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  failing: boolean
+  created_at: string | null
+}
+
+export interface McpPreset {
+  id: string
+  label: string
+  name: string
+  url: string
+  headers: Record<string, string>
+  token_hint: string
+}
+
+export interface McpAdded {
+  server: McpServer
+  replaced: { origin: string; added_by: string } | null
+  rejected: { name: string; reason: string }[]
+  /** Set only when the store left tools out of `rejected` beyond its own
+   * cap (REJECTED_LISTED_UP_TO, 20) — never present at 0. */
+  rejected_more?: number
+  notice: string | null
+}
+
+export async function listMcpServers(): Promise<McpServer[]> {
+  return (await apiGet<{ servers: McpServer[] }>('/api/v1/mcp/servers')).servers
+}
+
+export async function getMcpPresets(): Promise<McpPreset[]> {
+  return (await apiGet<{ presets: McpPreset[] }>('/api/v1/mcp/presets')).presets
+}
+
+export async function addMcpServer(body: {
+  name: string
+  url: string
+  token?: string
+  headers?: Record<string, string>
+}): Promise<McpAdded> {
+  return apiSend<McpAdded>('/api/v1/mcp/servers', 'POST', body)
+}
+
+export async function testMcpServer(name: string): Promise<McpServer> {
+  const body = await apiSend<{ server: McpServer }>(`/api/v1/mcp/servers/${encodeURIComponent(name)}/test`, 'POST')
+  return body.server
+}
+
+export async function removeMcpServer(name: string): Promise<void> {
+  await apiSend(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, 'DELETE')
+}

@@ -1,7 +1,7 @@
 {
   "id": "bare-intent-no-action",
   "suite": "agent_quality",
-  "suite_version": 17,
+  "suite_version": 18,
   "message": "show me my workspace directory structure",
   "contract": [
     {

@@ -12,6 +12,7 @@ import {
   formatMs,
   formatRelativeTime,
   isWorkspacePathTool,
+  mcpCallLabel,
   statusBadge,
   viewArgs,
   workspacePathFrom,
@@ -310,10 +311,15 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
     const workspacePath = isWorkspacePathTool(span.name)
       ? workspacePathFrom(span.meta.args_redacted)
       : null
+    // S37a: "github · get_job_logs" beside the bare tool name — which
+    // server an mcp_call span actually reached, not just that it called
+    // the one dispatcher tool every MCP server shares.
+    const mcpLabel = mcpCallLabel(span.name, span.meta.args_redacted)
     return (
       <div className="space-y-1.5 text-caption">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-content-primary">{span.name}</span>
+          {mcpLabel && <span className="font-mono text-micro text-content-secondary">{mcpLabel}</span>}
           {workspacePath && (
             <a
               href={`/files?path=${encodeURIComponent(workspacePath)}`}

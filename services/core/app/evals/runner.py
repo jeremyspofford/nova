@@ -168,6 +168,9 @@ from app import agents, chat, devices, machines, peers, settings_store, skills, 
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
+from app.mcp import client as mcp_client
+from app.mcp import fake as mcp_fake
+from app.mcp import servers as mcp_servers
 from app.tools import setup as setup_tools
 
 logger = logging.getLogger("core")
@@ -439,6 +442,50 @@ def _install_fixture_pairing() -> Token:
     back the token that removes it. A ContextVar, like the plant: the turn sees
     it, and nothing else in the process ever does."""
     return setup_tools.PAIRING.set(_fixture_mint)
+
+
+def _install_fixture_mcp(case: cases_mod.Case) -> tuple[Token, Token]:
+    """The case's declared MCP servers ARE her connections for this turn (S37a,
+    plan decision P11), and hand back the two tokens that remove them.
+
+    An overlay replaces the mcp_servers table for this task — installed for
+    EVERY case, empty when it declares none — so an eval turn never reaches a
+    server the owner connected, and whatever the turn connects or removes
+    changes the overlay alone. Each declared server's strict fake is planted
+    at its address (an unreachable one as a refused connection); `listed:
+    false` plants without listing (S38's engine). ContextVars, like the plant:
+    the turn sees them, and nothing else in the process ever does."""
+    now = datetime.now(UTC)
+    listed: dict[str, mcp_servers.Server] = {}
+    for declared in case.mcp_servers:
+        if not declared.listed:
+            continue
+        tools = declared.listed_tools()
+        listed[declared.name] = mcp_servers.Server(
+            name=declared.name,
+            url=declared.endpoint_url,
+            token=None,
+            headers={},
+            added_by=mcp_servers.BY_OWNER,
+            protocol=mcp_client.MODERN
+            if declared.era == "modern"
+            else f"legacy:{mcp_fake.LEGACY_VERSIONS[0]}",
+            title=declared.title,
+            tools=tools,
+            tools_hash=mcp_servers.tools_hash(tools),
+            tools_fetched_at=now,
+            tools_ttl_ms=60_000,
+        )
+    planted = {
+        declared.origin: (
+            mcp_fake.transport(mcp_fake.FakeServer(declared.fake_spec()))
+            if declared.reachable
+            else mcp_fake.Unreachable()
+        )
+        for declared in case.mcp_servers
+    }
+    overlay_token = mcp_servers.OVERLAY.set(mcp_servers.Overlay(listed))
+    return overlay_token, mcp_client.plant(planted)
 
 
 async def _create_fixture_agents(
@@ -1027,6 +1074,11 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # None only until it is installed: a world that failed to build before it
     # leaves nothing.
     pairing_token: Token | None = None
+    # The case's MCP overlay and plant (S37a) — every case runs with both
+    # installed (empty when it declares no servers), reset the same way,
+    # beside the plant and the pairing seam, in the finally below. None only
+    # until installed: a world that failed to build before it leaves nothing.
+    mcp_tokens: tuple[Token, Token] | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -1048,6 +1100,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             fixture_skills = await _build_fixture_skills(pool, case)
             plant_token = _install_fixture_plant(case)
             pairing_token = _install_fixture_pairing()
+            mcp_tokens = _install_fixture_mcp(case)
         except Exception as exc:
             logger.exception(
                 "eval run_case: the declared world for case %s could not be built", case.id
@@ -1195,6 +1248,12 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # fixture.
         if pairing_token is not None:
             setup_tools.PAIRING.reset(pairing_token)
+        # The MCP overlay and its fakes leave the same way (S37a): nothing after
+        # this point can reach a declared server, or miss the owner's.
+        if mcp_tokens is not None:
+            overlay_token, plant_token_mcp = mcp_tokens
+            mcp_client.unplant(plant_token_mcp)
+            mcp_servers.OVERLAY.reset(overlay_token)
 
         # The cleanup must not race the turn's queued ingest (/forget before
         # the journal is written leaves the journal behind). The settle above

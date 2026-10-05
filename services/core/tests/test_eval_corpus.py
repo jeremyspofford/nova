@@ -299,6 +299,18 @@ v17 (S42a, 2026-09-27):
     enrolled.
   * suite_version 16 -> 17 for all THIRTY cases; count pin 29 -> 30.
 
+v18 (S37a, 2026-09-30): four MCP cases —
+  reads-ci-from-the-connected-server, does-not-disown-a-connected-server,
+  no-server-claim-without-a-call, says-an-unreachable-server-is-unreachable
+  — the first to declare mcp_servers (an overlay on her connections for the
+  case alone; the owner's servers never answer an eval turn). Their
+  guard_absent args are mcp_server_claim and mcp_server_denial — Task 12's
+  names, not yet armed (no guard files under them until Task 12 lands), so
+  these four are VACUOUSLY green on the guard half until then; that is a
+  known, explicit state, not a typo — test_no_corpus_guard_name_is_a_typo
+  below is what makes sure it stays that way and never silently becomes one.
+  suite_version 17 -> 18 for all THIRTY-FOUR cases; count pin 30 -> 34.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -468,13 +480,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S47 (2026-09-25): the three setup QR cases. 26 -> 29.
     # S42a (2026-09-27): points-wsl-at-the-windows-agent, the first case to
     # declare a device (an agent). 29 -> 30.
-    assert len(ids) == 30
-    assert len(set(ids)) == 30  # no duplicate ids
+    # S37a (2026-09-30): the four MCP cases, the first to declare mcp_servers.
+    # 30 -> 34.
+    assert len(ids) == 34
+    assert len(set(ids)) == 34  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {17}
+    assert {c.suite_version for c in cases} == {18}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -492,8 +506,8 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
-#    case -- see the module docstring); the version assertion inside this
-#    test tracks the live value, 17, not "2".
+#    case; v18: the S37a MCP cases -- see the module docstring); the version
+#    assertion inside this test tracks the live value, 18, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -516,12 +530,126 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 17
+        assert case.suite_version == 18
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
             assert spec.predicate in cases_mod.KNOWN_PREDICATES
             assert spec.predicate in predicates.PREDICATES
+
+
+# -- F16: a guard_fired/guard_absent arg must name a REAL guard -------------
+#
+# guard_absent/guard_fired do not validate the name they are given (predicates
+# .guard_fired/.guard_absent just filter turn.spans for kind == "guard" and
+# name == arg) -- a typo ("server_claim" for the real "mcp_server_claim") would
+# never raise anywhere, and guard_absent over a name NOTHING ever files is
+# vacuously, permanently true: a case that cannot fail on that half, forever,
+# with no signal that it stopped measuring anything. This is exactly the trap
+# the S37a MCP cases' first draft sat in (F16).
+#
+# KNOWN_GUARD_NAMES_TODAY is every string `app/chat.py` or `app/beats.py`
+# ACTUALLY PASSES AS THE NAME ARGUMENT to `turn.span("guard", …)` -- read off
+# the source directly (there is no single registry a guard name is declared
+# in -- each call site is its own source of truth). The check that matters is
+# the span's NAME, never a word that merely appears near the call, and never
+# `meta["kind"]`: `guard_fired`/`guard_absent` filter spans by `s.name`
+# (predicates.py), so a value that only ever reaches `meta` can never make
+# either predicate true or false -- a case naming one is refused at CaseError
+# time by neither validator, and would sit in the exact vacuous-pass hole
+# this test exists to close (fix round 1, item 1: this list used to include
+# "bare_intent" on exactly that mistake -- see below).
+#
+# Each name below is cited with the call site that passes it as `name` or
+# `claim_kind` (never a `meta[...]` key, never a neighbouring comment word):
+#   * responsiveness             -- turn.span("guard", "responsiveness"), chat.py:3569 (literal)
+#   * deferral                   -- turn.span("guard", "deferral"), chat.py:3663 (literal);
+#                                    also _claim_redirect(claim_kind="deferral"), chat.py:5856 and
+#                                    :5941 -- the OFFER/COMPLETION and BARE-INTENT redirects both
+#                                    file under this same name, telling the shapes apart only via
+#                                    meta["kind"] ("offer" / "completion" / "bare_intent", chat.py
+#                                    :5833, :5938) -- `meta["kind"]` is NOT a span name (see above);
+#                                    there is no standalone "bare_intent" span, ever.
+#   * narration                  -- turn.span("guard", "narration"), chat.py:5173 (literal)
+#   * delegation_claim           -- turn.span("guard", "delegation_claim"), chat.py:5204 (literal)
+#   * capability_claim           -- turn.span("guard", "capability_claim"), chat.py:5294 (literal)
+#   * stack_claim                -- turn.span("guard", "stack_claim"), chat.py:5325 (literal)
+#   * state_claim                -- turn.span("guard", "state_claim"), chat.py:5407 (literal);
+#                                    also _claim_redirect(claim_kind="state_claim"), chat.py:5419
+#   * presented_listing          -- turn.span("guard", "presented_listing"), chat.py:5523, :5539
+#                                    (literal); also _claim_redirect(claim_kind=
+#                                    "presented_listing"), chat.py:5551
+#   * consent_claim              -- _claim_redirect(claim_kind="consent_claim"), chat.py:5239
+#   * code_claim                 -- the REWRITE-class dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:3860 (tuple) / :3880 (span)
+#   * address_claim              -- same REWRITE-class tuple, chat.py:3862 (tuple) / :3880 (span)
+#   * served_claim                -- the APPEND-class dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:3899 (tuple) / :3915 (span)
+#   * memory_claim                -- same APPEND-class tuple, chat.py:3900 (tuple) / :3915 (span)
+#   * written_call                -- the said-not-done dispatch tuple's own name, fed straight into
+#                                    turn.span("guard", name), chat.py:6059 (tuple) / :6077 (span)
+#   * device_completion            -- same said-not-done tuple, chat.py:6063 (tuple) / :6077 (span)
+#   * observation, delivery_claim, novelty_claim -- beats.py's own `_guard(turn, name, check, …)`
+#       helper, which itself does turn.span("guard", name) (beats.py:2030); her proactive digest
+#       turns, called with these three literal names at beats.py:2322-2329.
+#
+# `_file_claim_span`'s `("served_claim", …)`/`else` split and the top-of-file
+# `checks: tuple[...] = (("bare_intent", lambda: guards.bare_intent_check(...)), ...)`
+# re-check (chat.py ~4041) are NEITHER of these: the first dispatches on a name
+# the tuple already supplied (not a second source), and the second is a
+# regeneration RE-CHECK that returns a bare string for internal control flow
+# (which redirect to retry) and never calls turn.span itself at all -- reading
+# either in isolation is exactly how "bare_intent" looked like a span name
+# when it never filed one.
+#
+# mcp_server_claim and mcp_server_denial are Task 12's names (ruling F16) --
+# not yet filed by anything, so the four MCP cases' guard_absent half is
+# vacuously green until Task 12 lands (the module docstring's v18 entry says
+# so); they are listed here explicitly so a FUTURE typo against THEM is still
+# caught, rather than silently joining the same vacuous-pass class this test
+# exists to close.
+KNOWN_GUARD_NAMES_TODAY = frozenset(
+    {
+        # app/chat.py
+        "responsiveness",
+        "deferral",
+        "code_claim",
+        "address_claim",
+        "served_claim",
+        "memory_claim",
+        "consent_claim",
+        "state_claim",
+        "presented_listing",
+        "narration",
+        "delegation_claim",
+        "capability_claim",
+        "stack_claim",
+        "written_call",
+        "device_completion",
+        # app/beats.py (her proactive digest turns)
+        "observation",
+        "delivery_claim",
+        "novelty_claim",
+    }
+)
+# Task 12 adds these (S37a plan, ruling F16) -- named here so a typo against
+# THEM is still caught even before anything files them.
+GUARD_NAMES_TASK_12_ADDS = frozenset({"mcp_server_claim", "mcp_server_denial"})
+
+
+def test_no_corpus_guard_name_is_a_typo():
+    """Every guard_fired/guard_absent arg anywhere in the corpus must be a
+    guard name that is either real today or one Task 12 is known to add --
+    never a typo that would pass (guard_fired) or pass vacuously forever
+    (guard_absent) because nothing will ever file a span under it."""
+    known = KNOWN_GUARD_NAMES_TODAY | GUARD_NAMES_TASK_12_ADDS
+    for case in cases_mod.load_cases():
+        for spec in case.contract:
+            if spec.predicate in ("guard_fired", "guard_absent"):
+                assert spec.arg in known, (
+                    f"{case.id}: {spec.predicate}({spec.arg!r}) names no guard — "
+                    f"known: {', '.join(sorted(known))}"
+                )
 
 
 # -- 1. searches_for_latest: the Pixel deflection ---------------------------
