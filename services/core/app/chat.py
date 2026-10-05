@@ -1774,7 +1774,7 @@ def _address_without_secrets(value: str) -> str:
         parts = urlsplit(value)
     except ValueError:
         return value
-    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+    if parts.scheme.lower() not in ("http", "https"):
         return value
     user, at, host = parts.netloc.rpartition("@")
     out = f"{parts.scheme}://"

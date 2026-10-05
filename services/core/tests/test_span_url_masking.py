@@ -5,7 +5,7 @@ link read with fetch_url leaks the same way as one opened in her browser."""
 from __future__ import annotations
 
 from app import chat, tools
-from app.tools.base import Tool
+from tests.test_span_masking import _register_stand_in
 
 
 def test_a_url_argument_loses_its_query_fragment_and_user():
@@ -35,13 +35,25 @@ def test_what_is_not_an_http_address_is_left_alone():
         assert chat._span_arguments({"url": value}) == {"url": value}
 
 
+def test_a_hostless_address_still_loses_its_query_and_fragment():
+    """Fix round 1: `https:///reset?token=abc123` has an empty netloc — no
+    host at all — but it is still an http(s) value, so the rule still
+    applies to its query and fragment. An empty netloc gives no
+    `<masked:0 chars>@` prefix (there is no user info to mask)."""
+    assert chat._span_arguments({"url": "https:///reset?token=abc123"}) == {
+        "url": "https:///reset?<masked:12 chars>"
+    }
+    assert chat._span_arguments({"url": "https:///reset#done"}) == {
+        "url": "https:///reset#<masked:4 chars>"
+    }
+    assert chat._span_arguments({"url": "https:///reset?token=abc123#done"}) == {
+        "url": "https:///reset?<masked:12 chars>#<masked:4 chars>"
+    }
+
+
 def test_other_keys_are_untouched_and_credentials_still_masked():
     recorded = chat._span_arguments({"query": "a?b=c", "token": "secret-value", "url": None})
     assert recorded == {"query": "a?b=c", "token": "<masked:12 chars>", "url": None}
-
-
-async def _unused_executor(args: dict, ctx) -> str:
-    return "unused"
 
 
 def test_a_declared_origin_only_url_composes_with_the_new_masking(monkeypatch):
@@ -51,17 +63,7 @@ def test_a_declared_origin_only_url_composes_with_the_new_masking(monkeypatch):
     mask. An undeclared tool's `url` — fetch_url, her browser tools — never
     goes through `_origin_only`, so this branch is what strips it: the same
     address, scheme/host/path kept, user info and query masked."""
-    monkeypatch.setitem(
-        tools.REGISTRY,
-        "stand_in",
-        Tool(
-            name="stand_in",
-            description="d",
-            parameters={"type": "object", "properties": {}},
-            executor=_unused_executor,
-            traced_as_origin=("url",),
-        ),
-    )
+    _register_stand_in(monkeypatch)
     address = "https://u:p@h.invalid:8123/private_abc/mcp?k=1"
 
     declared = chat._span_arguments({"url": address}, "stand_in")
