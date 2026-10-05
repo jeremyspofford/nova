@@ -8,7 +8,6 @@ import {
   getRoutes as apiGetRoutes,
   getSettings as apiGetSettings,
   setChatPrimary as apiSetChatPrimary,
-  settingValue,
   type CatalogRow,
   type RouteExplain,
   type RouteVerdict,
@@ -144,9 +143,14 @@ export function ModelSelector({
   // one. A failed read costs what it would have shown, never the switcher.
   const readOrder = useCallback(async () => {
     const settings = await api.getSettings().catch(() => null)
-    const stored = settings ? String(settingValue(settings, 'chat.model', '')) : ''
-    const pick = stored || currentModel
-    if (stored && stored !== currentModel) {
+    // null: the read failed (or named no chat.model), and the parent's value
+    // stands. '' is a value core can store (the Jev Router switch writes it
+    // when the pick it replaced has no provider any more) — "no pick", never
+    // "unknown".
+    const def = settings?.find(s => s.key === 'chat.model')
+    const stored = def === undefined ? null : String(def.value ?? '')
+    const pick = stored ?? currentModel
+    if (stored !== null && stored !== currentModel) {
       // The parent follows; this read runs again for the new pick.
       onModelChanged(stored)
       return

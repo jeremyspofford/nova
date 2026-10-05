@@ -197,6 +197,22 @@ describe('ModelSelector', () => {
     await waitFor(() => expect(onModelChanged).toHaveBeenCalledWith(GEMINI))
   })
 
+  it('an empty stored pick is "no pick", not a cue to keep the stale one', async () => {
+    // The Jev Router switch stores '' when the pick it replaced has no
+    // provider any more.
+    const onModelChanged = vi.fn()
+    await renderSelector({ currentModel: DELL, onModelChanged, api: fakeApi({ stored: '' }) })
+    await waitFor(() => expect(onModelChanged).toHaveBeenCalledWith(''))
+  })
+
+  it('keeps the parent\'s pick when the settings cannot be read', async () => {
+    const onModelChanged = vi.fn()
+    const api = { ...fakeApi(), getSettings: vi.fn(async () => { throw new Error('core is restarting (502)') }) }
+    await renderSelector({ currentModel: DELL, onModelChanged, api })
+    await waitFor(() => expect(api.explainRoute).toHaveBeenCalledWith('chat', DELL))
+    expect(onModelChanged).not.toHaveBeenCalled()
+  })
+
   it('says what a pick did not keep, beside the switch', async () => {
     const api = fakeApi({ note: "chat's fallbacks could not be saved — link 'gone:x' does not name a registered provider" })
     await renderSelector({ currentModel: DELL, onModelChanged: vi.fn(), api })

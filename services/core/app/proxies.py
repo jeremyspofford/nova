@@ -231,12 +231,22 @@ async def _chat_model() -> str:
 CHAT_MODEL_PARAMS = frozenset({"chat_model", "chat_model_roles"})
 
 
-async def _chat_model_params() -> dict[str, str]:
-    """`?chat_model=` and the roles it is link 1 of, or nothing while it is empty."""
-    chat_model = await _chat_model()
+async def _chat_model_params(chat_model: str | None = None) -> dict[str, str]:
+    """`?chat_model=` and the roles it is link 1 of, or nothing while it is
+    empty. `chat_model` is a value the caller already read, so one handler
+    states the same chat.model it acts on."""
+    if chat_model is None:
+        chat_model = await _chat_model()
     if not chat_model:
         return {}
     return {"chat_model": chat_model, "chat_model_roles": ",".join(chat.CHAT_MODEL_ROLES)}
+
+
+# Every write that moves chat.model together with a chain — a pick, and the
+# Jev Router switch on a role whose turns send chat.model — runs one at a
+# time: each reads chat.model and the chain, then writes, and two of them
+# interleaving would each write from a read the other had already made stale.
+_PICK_LOCK = asyncio.Lock()
 
 
 @router.get("/routes")
@@ -365,6 +375,14 @@ async def put_jev_router(role: str, request: Request) -> Response:
     The owner gets the first answer, which names the chat model; if the OFF
     asked again fails, the answer's note says so."""
     await _refuse_an_agent_role_with_no_agent(role)
+    if role in chat.CHAT_MODEL_ROLES:
+        async with _PICK_LOCK:
+            return await _jev_router_switch(request, role)
+    return await _jev_router_switch(request, role)
+
+
+async def _jev_router_switch(request: Request, role: str) -> Response:
+    """put_jev_router's work, under the pick lock for a chat-model role."""
     path = f"/admin/routes/{role}/jev-router"
     answer = await _forward(request, "PUT", path, content=await _switch_body(request, role))
     if answer.status_code != 200 or role not in chat.CHAT_MODEL_ROLES:
@@ -391,10 +409,23 @@ async def put_jev_router(role: str, request: Request) -> Response:
     return Response(content=json.dumps(stated), status_code=200, media_type="application/json")
 
 
-# One pick at a time: the pick reads chat's chain, then writes it and
-# chat.model. Two picks interleaving would each write a chain built from a
-# read the other had already made stale.
-_PICK_LOCK = asyncio.Lock()
+async def _lists(request: Request, provider: str, model: str) -> bool:
+    """Does `provider`'s own listing name `model`? False on any failure to
+    read it — an unconfirmed model is never carried as a fallback."""
+    try:
+        answer = await _forward(
+            request,
+            "GET",
+            f"/admin/providers/{provider}/models",
+            content=b"",
+            drop=CHAT_MODEL_PARAMS,
+        )
+    except HTTPException:
+        return False
+    if answer.status_code != 200:
+        return False
+    models = (_json_object(answer.body) or {}).get("models")
+    return any(isinstance(m, dict) and m.get("id") == model for m in models or [])
 
 
 def _gateway_words(answer: Response) -> str:
@@ -438,12 +469,15 @@ async def put_chat_primary(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="name the model to pick: provider:model")
     model = model.strip()
     async with _PICK_LOCK:
+        # chat.model is read ONCE: the switch state below and the pick carried
+        # are judged against the same value.
+        current = await _chat_model()
         listed = await _forward(
             request,
             "GET",
             "/admin/routes",
             content=b"",
-            params=await _chat_model_params(),
+            params=await _chat_model_params(current),
             drop=CHAT_MODEL_PARAMS,
         )
         if listed.status_code != 200:
@@ -478,32 +512,47 @@ async def put_chat_primary(request: Request) -> Response:
         )
 
         def qualified(link: str) -> str:
-            """`link` as the gateway resolves it: a prefix naming a provider
-            stays; anything else is the default provider's model."""
+            """`link` as the gateway resolves it (providers.split_model_id): a
+            prefix naming a registered provider stays; anything else is the
+            default provider's model."""
             prefix, colon, _ = link.partition(":")
             if colon and prefix in names:
                 return link
             return f"{default}:{link}" if default else link
 
-        current = await _chat_model()
         stored = [link for link in chat_row.get("chain") or [] if isinstance(link, str)]
-        dropped = {qualified(model)}
+        note = None
         carry = None
         if current and qualified(current) != qualified(model):
-            carry = qualified(current)
-            dropped.add(carry)
+            prefix, colon, _ = current.partition(":")
+            if colon and prefix in names:
+                carry = current
+            elif default and await _lists(request, default, current):
+                # A bare id (onboarding writes `qwen3:8b`): the gateway reads it
+                # as the default provider's model and refuses it bare in a
+                # chain, so it is carried qualified — once that provider was
+                # seen to list it. A provider-qualified id whose provider is
+                # gone looks the same and is NOT made up into `hub:dell:…`.
+                carry = qualified(current)
+            else:
+                note = (
+                    f"{current} names no registered provider"
+                    + (f" and is not a model {default} lists" if default else "")
+                    + ", so it was not kept as a fallback"
+                )
+        dropped = {qualified(model)} | ({carry} if carry else set())
         chain = [link for link in stored if qualified(link) not in dropped]
         if carry:
             chain = [carry, *chain]
-        note = None
         if chain != stored:
             written = await _forward(
                 request, "PUT", "/admin/routes/chat", content=json.dumps({"chain": chain}).encode()
             )
             if written.status_code != 200:
+                already = carry is not None and any(qualified(link) == carry for link in stored)
                 kept_out = (
                     f"{current} was not kept as a fallback"
-                    if carry
+                    if carry and not already
                     else "the fallbacks are unchanged"
                 )
                 note = (

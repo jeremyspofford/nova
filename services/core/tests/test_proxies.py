@@ -794,13 +794,22 @@ class RoutesGateway:
       switch holding the chat-model slot is invisible without it;
     * PUT /admin/routes/chat refuses a link whose prefix names no registered
       provider, in routing._clean_chain's words — a bare id included;
-    * GET /admin/providers lists the registered names and the default.
+    * GET /admin/providers lists the registered names and the default (hub);
+    * GET /admin/providers/{name}/models lists what each one serves.
     """
 
-    def __init__(self, chain, *, router_when_stated=None, names=("hub", "dell", "openrouter")):
+    def __init__(
+        self,
+        chain,
+        *,
+        router_when_stated=None,
+        names=("hub", "dell", "openrouter"),
+        listings=None,
+    ):
         self.chain = list(chain)
         self.router_when_stated = router_when_stated
         self.names = names
+        self.listings = listings if listings is not None else {"hub": ["qwen3:8b"]}
         self.puts: list[list[str]] = []
         self.route_queries: list[dict] = []
         self.app = Starlette(
@@ -808,6 +817,7 @@ class RoutesGateway:
                 Route("/admin/routes", self._routes, methods=["GET"]),
                 Route("/admin/routes/chat", self._put, methods=["PUT"]),
                 Route("/admin/providers", self._providers, methods=["GET"]),
+                Route("/admin/providers/{name}/models", self._models, methods=["GET"]),
             ]
         )
 
@@ -836,6 +846,10 @@ class RoutesGateway:
         return JSONResponse(
             {"providers": [{"name": n, "is_default": n == "hub"} for n in self.names]}
         )
+
+    async def _models(self, request):
+        listed = self.listings.get(request.path_params["name"], [])
+        return JSONResponse({"source": "x", "models": [{"id": m} for m in listed]})
 
 
 async def test_a_pick_becomes_link_one_and_the_pick_it_replaces_the_first_fallback(
@@ -888,8 +902,19 @@ async def test_a_bare_pick_is_carried_as_the_default_providers_model(
 ):
     # Onboarding writes the curated slug bare (`qwen3:8b`): the gateway reads
     # it as the DEFAULT provider's model and refuses it bare in a chain, so it
-    # is carried qualified — and a qualified copy already in the chain is the
-    # same model, never a second link.
+    # is carried qualified — once that provider was seen to list it.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "qwen3:8b")
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GLM, "chain": ["hub:qwen3:8b", GEMINI]}
+    assert gateway.puts == [["hub:qwen3:8b", GEMINI]]
+
+
+async def test_a_bare_pick_already_a_fallback_is_one_link_not_two(owner_client, mount_peers):
     gateway = RoutesGateway(["hub:qwen3:8b", GEMINI])
     mount_peers(gateway=gateway)
     await _chat_model_is(owner_client, "qwen3:8b")
@@ -898,6 +923,47 @@ async def test_a_bare_pick_is_carried_as_the_default_providers_model(
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"chat_model": GLM, "chain": ["hub:qwen3:8b", GEMINI]}
+    assert gateway.puts == []
+
+
+async def test_a_pick_whose_provider_is_gone_is_not_made_up_into_a_link(
+    owner_client, mount_peers, pool
+):
+    # `gone:old-model` reads exactly like a bare id once `gone` is removed; the
+    # default provider does not list it, so it is not carried as
+    # `hub:gone:old-model` — and the note says it was not kept.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "gone:old-model")
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chat_model"] == GLM and body["chain"] == [GEMINI]
+    assert body["note"] == (
+        "gone:old-model names no registered provider and is not a model hub lists, "
+        "so it was not kept as a fallback"
+    )
+    assert gateway.puts == []
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_refused_chain_says_the_fallbacks_are_unchanged_when_the_old_pick_is_one(
+    owner_client, mount_peers, pool
+):
+    # The old pick is already a fallback; a refused PUT leaves the stored
+    # chain — which still lists it — so the note must not say it was dropped.
+    gateway = RoutesGateway([GEMINI, DELL, "gone:x"])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chain"] == [GEMINI, DELL, "gone:x"]
+    assert body["note"].endswith("; the fallbacks are unchanged")
     assert await settings_store.read_value(pool, "chat.model") == GLM
 
 

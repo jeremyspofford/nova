@@ -356,13 +356,11 @@ export function RoutingSection({
     void load()
   }, [load])
 
-  // Each role's chain as its editor gets it, the SAME array until the chains
-  // or chat's pick change: a fresh `.filter()` on every render reset chat's
-  // editor draft on every re-render — an explain landing, the catalogue
-  // landing, another role's save — and wiped an unsaved Up or Remove.
-  // Chat's pick is link 1 and is never listed again behind itself: the walk
-  // skips a repeat, so a stored repeat (the live chain of 2026-10-05: Gemini
-  // twice) is noise, and the next save drops it.
+  // Each role's chain as its editor gets it. Chat's pick is link 1 and is
+  // never listed again behind itself: the walk skips a repeat, so a stored
+  // repeat (the live chain of 2026-10-05: Gemini twice) is noise, and the
+  // next save drops it. (The editor resets its draft on the chain's
+  // CONTENTS, so a reload that changes nothing keeps an unsaved edit.)
   const chains = useMemo(
     () =>
       Object.fromEntries(
@@ -601,9 +599,15 @@ function RoleEditor({
   useEffect(() => {
     setRouterError(null)
   }, [router?.on, router?.kept])
+  // The draft follows the STORED chain only when its contents change — a
+  // save of this role, or a change made elsewhere. Every reload parses a new
+  // routes object, and keying on the array reset an unsaved Up or Remove
+  // whenever another role saved, a switch flipped or Re-check ran.
+  const chainKey = chain.join('\n')
   useEffect(() => {
     setDraft(chain)
-  }, [chain])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainKey])
   const dirty = JSON.stringify(draft) !== JSON.stringify(chain)
   // A reserved role has no user; an orphan's PUT is refused by core (no such
   // agent) — neither gets controls whose call cannot run.

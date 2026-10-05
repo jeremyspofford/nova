@@ -187,6 +187,24 @@ describe('RoutingSection', () => {
     expect(within(chat).getByRole('button', { name: /save/i })).toBeTruthy()
   })
 
+  it('an unsaved edit to chat\'s order survives another role being saved', async () => {
+    // The re-review's find: every reload parses a new routes object, and the
+    // draft reset on the ARRAY — another role's save wiped chat's edit. A
+    // fresh copy per read, as a real fetch parses one.
+    const api = renderSection({ getRoutes: vi.fn(async () => structuredClone(ROUTES)) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2')).toBeTruthy())
+    const chat = screen.getByTestId('route-chat')
+    fireEvent.click(within(chat).getByRole('button', { name: 'remove chat hub:qwen3:8b' }))
+    const scheduled = screen.getByTestId('route-scheduled')
+    fireEvent.change(within(scheduled).getByLabelText('add to scheduled'), { target: { value: 'hub:qwen3:8b' } })
+    fireEvent.click(within(scheduled).getByRole('button', { name: 'add scheduled' }))
+    fireEvent.click(within(scheduled).getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(api.getRoutes).toHaveBeenCalledTimes(2))
+
+    expect(within(chat).queryByTestId('route-chat-link-2')).toBeNull()
+    expect(within(chat).getByRole('button', { name: /save/i })).toBeTruthy()
+  })
+
   it('shows what a pick could not keep', async () => {
     renderSection({
       setChatPrimary: vi.fn(async (model: string) => ({
