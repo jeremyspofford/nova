@@ -44,6 +44,12 @@ BY_NOVA = "nova"
 # The roster names a server's tools when it has this many or fewer, and gives
 # a count otherwise: one 87-tool server must not flood a small model's prompt.
 ROSTER_NAMES_UP_TO = 12
+# The ledger's own cap on how many rejected tools a connect records (ruling
+# T10-A) — the same value as mcp_api.py's REJECTED_LISTED_UP_TO (the HTTP
+# response's cap) and app/tools/mcp.py's, independently defined in each
+# module that needs it (Task 9's own self-review already noted this
+# duplication; not refactored here either, for the same reason).
+REJECTED_LISTED_UP_TO = 20
 MAX_HEADERS = 20
 MAX_CREDENTIAL_CHARS = 4096
 # The whole connect — discovery or the handshake, then every page of tools —
@@ -589,6 +595,21 @@ async def connect(
             }
             if previous is not None:
                 meta["replaced"] = {"origin": previous.origin, "added_by": previous.added_by}
+            # Ruling T10-A: the ledger is the durable record of which tools a
+            # connect left out and why — the add form's own state is not
+            # (leaving the tab loses it). Only added when something WAS
+            # rejected, so an ordinary connect's meta is unchanged; capped
+            # the same way the route caps what it shows (`listed.rejected`'s
+            # entries are already clipped at the client's own source, ruling
+            # T7-A2 — this bounds only the COUNT kept here).
+            if listed.rejected:
+                meta["rejected"] = [
+                    {"name": rejected_name, "reason": why}
+                    for rejected_name, why in listed.rejected[:REJECTED_LISTED_UP_TO]
+                ]
+                rejected_more = len(listed.rejected) - REJECTED_LISTED_UP_TO
+                if rejected_more > 0:
+                    meta["rejected_more"] = rejected_more
             event_id = await governance.record_event(
                 conn, kind=governance.MCP_SERVER_CONNECTED, actor=actor, meta=meta
             )

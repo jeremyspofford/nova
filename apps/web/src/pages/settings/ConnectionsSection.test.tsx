@@ -152,6 +152,66 @@ describe('ConnectionsSection', () => {
     expect(await screen.findByText('bad_tool_1')).toBeTruthy()
     expect(screen.getByText('bad_tool_2')).toBeTruthy()
     expect(screen.getByText(/and 5 more/)).toBeTruthy()
+    // Fix round 1, item 1: the true total is the capped list PLUS what the
+    // cap left out (2 + 5 = 7) — never just the length of the capped list
+    // the page happens to be able to list by name.
+    expect(screen.getByText(/7 tools/)).toBeTruthy()
+    // Fix round 1, item 2 (ruling T10-A): the rejected tools are also a
+    // durable governance record, and the form says so.
+    expect(screen.getByText(/also recorded in Governance/)).toBeTruthy()
+  })
+
+  it('says nothing is connected yet when the list is empty', async () => {
+    // M1: every other fake in this file resolves non-empty — this is the
+    // one path none of them exercise.
+    render(<ConnectionsSection api={fakeApi({ listMcpServers: vi.fn(async () => []) })} />)
+    expect(await screen.findByText('Nothing is connected yet.')).toBeTruthy()
+  })
+
+  it('states the reason when the list could not be read', async () => {
+    // M1: nothing in this file's fakes ever rejects.
+    const api = fakeApi({
+      listMcpServers: vi.fn(async () => {
+        throw new Error('could not reach core')
+      }),
+    })
+    render(<ConnectionsSection api={api} />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('could not reach core')
+  })
+
+  it('removing the last server leaves the list empty and saying so', async () => {
+    // M2.
+    const api = fakeApi({
+      listMcpServers: vi.fn().mockResolvedValueOnce([server()]).mockResolvedValueOnce([]),
+    })
+    render(<ConnectionsSection api={api} />)
+    fireEvent.click(await screen.findByRole('button', { name: /remove github/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.removeMcpServer).toHaveBeenCalledWith('github'))
+    expect(await screen.findByText('Nothing is connected yet.')).toBeTruthy()
+  })
+
+  it('says when an add replaced the server that was there, and who had added it', async () => {
+    // M3: a replace is an outcome the owner must see where he acted, even
+    // when nothing was rejected (so the confirmation view would otherwise
+    // never appear at all — onDone() would have closed the form already).
+    const api = fakeApi({
+      addMcpServer: vi.fn(async () => ({
+        server: server(),
+        replaced: { origin: 'https://old.mcp.invalid', added_by: 'nova' },
+        rejected: [],
+        notice: null,
+      })),
+    })
+    render(<ConnectionsSection api={api} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect a server' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'github' } })
+    fireEvent.change(screen.getByLabelText('MCP endpoint URL'), { target: { value: 'https://x.invalid/mcp' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(
+      await screen.findByText('It replaced the github that Nova had added, at https://old.mcp.invalid.'),
+    ).toBeTruthy()
   })
 
   it('removes a server only after the confirm', async () => {

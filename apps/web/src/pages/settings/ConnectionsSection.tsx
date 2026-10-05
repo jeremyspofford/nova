@@ -290,7 +290,11 @@ function AddServerForm({
         headers: headersFromRows(headers),
       })
       setToken('')
-      if (created.rejected.length > 0) {
+      // Fix round 1, M3: a replace is an outcome the owner must see where he
+      // acted, even with nothing rejected — so the confirmation view is also
+      // what shows it, rather than closing straight back to a row that gives
+      // no sign anything but an ordinary add just happened.
+      if (created.rejected.length > 0 || created.replaced) {
         setAdded(created)
       } else {
         await onDone()
@@ -303,21 +307,43 @@ function AddServerForm({
   }
 
   if (added) {
-    const count = added.rejected.length
+    // Fix round 1, item 1: the true total is the capped list the server
+    // bothered to NAME plus however many more it bounded away — never just
+    // `added.rejected.length`, which is at most 20 regardless of how many
+    // were actually rejected and says so right next to a sentence giving a
+    // smaller number than the "and N more" line below it.
+    const count = added.rejected.length + (added.rejected_more ?? 0)
     return (
       <div className="space-y-3 rounded-md border border-line p-3" data-testid="connection-form">
         <p className="text-compact text-content-primary">
-          Connected {added.server.name}. {count} {count === 1 ? 'tool' : 'tools'} could not be used:
+          Connected {added.server.name}.
+          {added.rejected.length > 0 && ` ${count} ${count === 1 ? 'tool' : 'tools'} could not be used:`}
         </p>
-        <ul className="space-y-1 text-caption text-content-secondary" data-testid="rejected-tools">
-          {added.rejected.map(r => (
-            <li key={r.name}>
-              <span className="font-mono text-content-primary">{r.name}</span> — {r.reason}
-            </li>
-          ))}
-        </ul>
-        {typeof added.rejected_more === 'number' && added.rejected_more > 0 && (
-          <p className="text-caption text-content-tertiary">and {added.rejected_more} more</p>
+        {added.replaced && (
+          <p className="text-compact text-content-secondary">
+            It replaced the {added.server.name} that{' '}
+            {added.replaced.added_by === 'nova' ? 'Nova' : 'you'} had added, at {added.replaced.origin}.
+          </p>
+        )}
+        {added.rejected.length > 0 && (
+          <>
+            <ul className="space-y-1 text-caption text-content-secondary" data-testid="rejected-tools">
+              {added.rejected.map(r => (
+                <li key={r.name}>
+                  <span className="font-mono text-content-primary">{r.name}</span> — {r.reason}
+                </li>
+              ))}
+            </ul>
+            {typeof added.rejected_more === 'number' && added.rejected_more > 0 && (
+              <p className="text-caption text-content-tertiary">and {added.rejected_more} more</p>
+            )}
+            {/* Ruling T10-A: the local state in this form is not where this
+                lives — the governance ledger is, so leaving this tab (or
+                this never having been read) does not lose it. */}
+            <p className="text-caption text-content-tertiary">
+              These are also recorded in Governance.
+            </p>
+          </>
         )}
         <Button type="button" onClick={() => void onDone()}>
           Done

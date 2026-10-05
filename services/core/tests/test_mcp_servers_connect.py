@@ -176,6 +176,66 @@ async def test_the_owner_replacing_his_own_server_files_no_notice(pool):
     assert await pool.fetchval("SELECT count(*) FROM notices") == 0
 
 
+async def test_a_connect_that_rejects_tools_records_them_capped_in_the_ledger(pool):
+    """Fix round 1, item 2 (ruling T10-A): the add form's own state is not a
+    durable record — the governance ledger is. `mcp.server_connected`'s meta
+    gains `rejected` (at most REJECTED_LISTED_UP_TO, the same cap the route
+    shows) and `rejected_more` for the rest, the same shape and the same cap
+    test_mcp_api.py's `test_the_rejected_list_is_capped_at_20_with_a_count`
+    pins at the HTTP layer."""
+    bad = tuple(fake.FakeTool(name=f"bad-{i}", input_schema="nope") for i in range(25))
+    with planted(fake.FakeSpec(title="GitHub", tools=(LIST, *bad))):
+        done = await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+    assert len(done.rejected) == 25
+    [event] = await _events(pool, "mcp.server_connected")
+    assert len(event["meta"]["rejected"]) == 20
+    assert event["meta"]["rejected_more"] == 5
+    assert all(set(item) == {"name", "reason"} for item in event["meta"]["rejected"])
+    assert {item["name"] for item in event["meta"]["rejected"]} == {f"bad-{i}" for i in range(20)}
+
+
+async def test_a_connect_with_nothing_rejected_carries_no_rejected_key(pool):
+    """The keys are added ONLY when something was rejected — an ordinary
+    connect's meta is byte-identical to before this fix."""
+    with planted(fake.FakeSpec(tools=(LIST,))):
+        done = await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+    assert done.rejected == ()
+    [event] = await _events(pool, "mcp.server_connected")
+    assert "rejected" not in event["meta"] and "rejected_more" not in event["meta"]
+
+
+async def test_a_connect_with_rejections_files_the_same_notice_facts_as_one_without(pool):
+    """Ruling T10-A: `finding_for` selects its facts field by field (verified
+    against app/checks/mcp.py), so the new meta keys must change no notice's
+    facts or title shape. Same scenario as
+    test_nova_replacing_the_owners_server_files_a_notice, with the second
+    connect's server also offering a tool it rejects."""
+    bad = (fake.FakeTool(name="bad-0", input_schema="nope"),)
+    with (
+        planted(fake.FakeSpec(tools=(LIST,))),
+        planted(fake.FakeSpec(tools=(LIST, *bad)), origin=OTHER),
+    ):
+        await _owner_github(pool)
+        done = await servers.connect(
+            pool, name="github", url=OTHER + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    assert done.previous.origin == ORIGIN and "Inbox" in done.notice
+    [notice] = await pool.fetch("SELECT check_name, title, facts FROM notices")
+    assert notice["check_name"] == mcp_checks.CHANGES
+    assert ORIGIN in notice["title"] and OTHER in notice["title"]
+    # The facts are EXACTLY the same shape as the no-rejection scenario —
+    # {server, from, to} and nothing else; "rejected" never reaches it.
+    assert notice["facts"] == {"server": "github", "from": ORIGIN, "to": OTHER}
+    [event] = [e for e in await _events(pool, "mcp.server_connected") if e["meta"].get("replaced")]
+    assert event["meta"]["rejected"] == [
+        {"name": "bad-0", "reason": event["meta"]["rejected"][0]["reason"]}
+    ]
+
+
 async def test_nova_removing_the_owners_server_is_noticed_and_an_unknown_name_is_stated(pool):
     with planted(fake.FakeSpec(tools=(LIST,))):
         await _owner_github(pool)
