@@ -136,8 +136,15 @@ class Server:
 
     @property
     def failing(self) -> bool:
-        """Did its last call fail? Only when a failure is newer than the last
-        success: a server that failed once and has answered since is not."""
+        """Did the last call fail to REACH the server, or be answered by it
+        at all? Only when such a failure is newer than the last success: a
+        server that failed once and has answered since is not failing.
+
+        A tool's own `isError` is the TOOL's answer, never a failing server
+        (ruling T7-E) — the server was reached and it answered, in full;
+        `mcp_call` stamps `ok=True` for one on purpose, so this stays False
+        and the roster and the guards read server HEALTH here, never a
+        particular call's outcome."""
         if self.last_error_at is None:
             return False
         return self.last_ok_at is None or self.last_error_at > self.last_ok_at

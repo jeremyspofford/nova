@@ -283,7 +283,14 @@ async def list_tools(endpoint: Endpoint, *, refresh: bool = False) -> ToolList:
         for raw in result.get("tools") or []:
             why = _tool_problem(raw)
             if why is not None:
-                name = str(raw.get("name")) if isinstance(raw, dict) else "?"
+                # `name` here is the SAME unvalidated server value `_tool_problem`
+                # itself guards against — clipped before it reaches the ledger
+                # this module keeps (`rejected`) or the log (ruling T7-A2); `why`
+                # is already short by construction (`_tool_problem` clips what it
+                # embeds), clipped again here regardless, so this call site
+                # never depends on that remaining true.
+                name = _clipped_text(str(raw.get("name"))) if isinstance(raw, dict) else "?"
+                why = _clipped_text(why)
                 rejected.append((name, why))
                 logger.warning("mcp: %s: left out tool %r — %s", endpoint.name, name, why)
                 continue
@@ -794,16 +801,42 @@ def _scrub_text(text: str, candidates: Sequence[str]) -> str:
     return text
 
 
+def _has_lone_surrogate(text: str) -> bool:
+    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
+def _replace_lone_surrogates(text: str) -> str:
+    """`text`, with every lone (unpaired) UTF-16 surrogate code point
+    (U+D800-U+DFFF) replaced by U+FFFD (ruling T7-C).
+
+    `json.loads` accepts a bare `\\udXXX` escape — valid JSON text, but not
+    a valid Unicode scalar value — so a server that slices a response mid
+    surrogate-pair (a JS server cutting a string mid-emoji) hands this
+    client a `str` that CANNOT be encoded to UTF-8 at all. Nothing past the
+    decode boundary agreed to catch that: `CallResult.bytes` (`len(self.
+    text.encode("utf-8"))`), `mcp.py`'s own 64 KiB cap, a log line — any of
+    them raising `UnicodeEncodeError` turned a call that genuinely finished
+    into "failed unexpectedly", with no fact filed and the row stamped ok
+    (three different, false answers to the one call). Checked with a cheap
+    single pass first (`_has_lone_surrogate`) so the common case — no
+    surrogate anywhere — costs one scan and no rebuild."""
+    if not _has_lone_surrogate(text):
+        return text
+    return "".join("�" if 0xD800 <= ord(ch) <= 0xDFFF else ch for ch in text)
+
+
 def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
     """`value` — text, or anything just decoded from the server's own JSON —
     with every exact substring of `endpoint`'s own credentials (ruling T5-B)
-    replaced by `[redacted]`.
+    replaced by `[redacted]`, and every lone UTF-16 surrogate (ruling T7-C)
+    replaced by U+FFFD.
 
     Called where server text ENTERS the client (ruling T5-A: one source,
     the client's decode boundary), so every reason, result, progress line
     and tool list this module builds from a decoded VALUE afterwards is
     clean BY CONSTRUCTION — no caller downstream, in this module or in
-    Tasks 7/9, has to remember to scrub again.
+    Tasks 7/9, has to remember to scrub again, or to guard against a value
+    that cannot be encoded at all.
 
     That guarantee covers VALUES only, by design (below) — it does NOT
     cover a reason composed by joining a decoded structure's KEYS. There is
@@ -813,20 +846,28 @@ def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
     reason built this same way in the future must do the same — the
     alternative is a second general-purpose scrub for keys, which nothing
     today needs. The store's `servers._scrub` is a thin second pass over its
-    OWN composed text, built from `credential_candidates` above.
+    OWN composed text, built from `credential_candidates` above — it does
+    not need its own surrogate replacement, because every string it scrubs
+    was already cleaned here first.
 
     A dict or list is walked ITERATIVELY, with an explicit stack rather than
     a recursive call, so the cost is linear in the value's size regardless
-    of nesting depth. A string is scrubbed directly; anything else (a
-    number, a bool, None) passes through unchanged. Only VALUES are
-    scrubbed, never keys. Containers are mutated in place — each one is a
-    value this call just decoded from `json.loads` itself, so nothing else
-    holds a reference to it yet."""
+    of nesting depth. A string has both passes applied (surrogates first, so
+    a credential scrub never has to reason about an invalid code point);
+    anything else (a number, a bool, None) passes through unchanged. Only
+    VALUES are scrubbed, never keys. Containers are mutated in place — each
+    one is a value this call just decoded from `json.loads` itself, so
+    nothing else holds a reference to it yet.
+
+    The credential pass is skipped (not the surrogate pass) when there are
+    no candidates — a server with no token and no credential-shaped header
+    (ha-mcp: a secret PATH, no token, no header) still needs its text made
+    encodable, so this never early-returns on `not candidates` the way it
+    used to."""
     candidates = credential_candidates(endpoint.token, endpoint.headers)
-    if not candidates:
-        return value
     if isinstance(value, str):
-        return _scrub_text(value, candidates)
+        text = _replace_lone_surrogates(value)
+        return _scrub_text(text, candidates) if candidates else text
     if not isinstance(value, (dict, list)):
         return value
     stack: list[dict | list] = [value]
@@ -835,7 +876,8 @@ def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
         items = node.items() if isinstance(node, dict) else enumerate(node)
         for key, item in items:
             if isinstance(item, str):
-                node[key] = _scrub_text(item, candidates)
+                text = _replace_lone_surrogates(item)
+                node[key] = _scrub_text(text, candidates) if candidates else text
             elif isinstance(item, (dict, list)):
                 stack.append(item)
     return value
@@ -1092,6 +1134,29 @@ def _every_annotation(node: Any) -> Iterator[dict]:
             yield from _every_annotation(value)
 
 
+_EMBEDDED_VALUE_CHARS = 120
+
+
+def _clipped_text(text: str) -> str:
+    """`text`, already a plain string, bounded (ruling T7-A2) — for a value
+    used AS ITS OWN TEXT (a log line's `%s`, a `(name, why)` pair), never
+    through `!r}`. See `_clipped_repr` for the embed-as-repr counterpart."""
+    return text if len(text) <= _EMBEDDED_VALUE_CHARS else text[: _EMBEDDED_VALUE_CHARS - 1] + "…"
+
+
+def _clipped_repr(value: Any) -> str:
+    """A value a TOOL's OWN definition supplied, as `repr` would show it but
+    bounded (ruling T7-A2) — `_tool_problem`'s reasons embed whatever a
+    server's `x-mcp-header` or `type` says about itself, unvalidated and of
+    whatever length a hostile or buggy definition chooses; the one measured
+    case was a 300,000-char header name that made `mcp_connect`'s reply
+    300,283 chars. Every embed in this function goes through this, so a
+    reason this module builds can never carry an unbounded server value —
+    the caller's own cap is a second, structural guarantee on top, not a
+    substitute for clipping at the source."""
+    return _clipped_text(repr(value))
+
+
 def _tool_problem(raw: Any) -> str | None:
     """Why the spec says to leave this tool definition out, or None."""
     if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
@@ -1106,13 +1171,14 @@ def _tool_problem(raw: Any) -> str | None:
         if id(node) not in reachable:
             return "an x-mcp-header sits where only a chain of properties may reach it"
         if not isinstance(name, str) or not _TCHAR.fullmatch(name):
-            return f"x-mcp-header {name!r} is not a header-name token"
+            return f"x-mcp-header {_clipped_repr(name)} is not a header-name token"
         if name.lower() in seen:
-            return f"x-mcp-header {name!r} is used twice"
+            return f"x-mcp-header {_clipped_repr(name)} is used twice"
         seen.add(name.lower())
         if node.get("type") not in ("string", "integer", "boolean"):
             return (
-                f"x-mcp-header {name!r} is on a {node.get('type')!r} parameter; "
+                f"x-mcp-header {_clipped_repr(name)} is on a "
+                f"{_clipped_repr(node.get('type'))} parameter; "
                 "only string, integer and boolean may be mirrored"
             )
     return None

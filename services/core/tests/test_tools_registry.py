@@ -204,6 +204,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # QR cards (tools/setup.py). FORTY-ONE -> FORTY-THREE.
         "nova_address",
         "show_setup_qr",
+        # S37a (2026-09-30): her MCP client — connect, remove, look up, call.
+        # FORTY-THREE -> FORTY-SEVEN. The servers and their tools are rows;
+        # these four names are the whole of what the registry learns.
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_tools",
+        "mcp_call",
     }
 
 
@@ -573,6 +580,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # show_setup_qr, is deliberately NOT here — it mints a code and sends
         # a card.
         "nova_address",
+        # S37a: looking up a server's tools changes nothing outside Nova (it
+        # may refresh the stored copy of the list). Its three twins change
+        # things and are deliberately NOT here.
+        "mcp_tools",
     }
 
 
@@ -598,5 +609,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "delegate_to_agent",
         "machine_configure",
         "show_setup_qr",
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_call",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
