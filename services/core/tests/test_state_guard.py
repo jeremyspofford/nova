@@ -1109,6 +1109,19 @@ def test_the_update_claim_is_backed_by_the_registered_update_tool():
     assert machine_tools.MACHINE_UPDATE.name in tools.REGISTRY
 
 
+def test_a_specialists_update_is_read_from_the_registered_tool():
+    """Task 23 fix round 1 (I2): a successful update of one of her specialist
+    agents (coder) backs an agent claim that names no machine. The name is the
+    registered tool whose executor changes an agent's fields — a rename turns
+    this red."""
+    from app import tools
+    from app.tools import agents as agent_tools
+
+    (tool,) = [t for t in agent_tools.TOOLS if t.executor is agent_tools.update_agent]
+    assert guards._PERSONA_UPDATE_TOOLS == {tool.name}
+    assert tool.name in tools.REGISTRY
+
+
 def test_the_machine_texts_trip_no_guard_of_their_own():
     """The correction PERSISTS and the note streams, so a text that tripped a
     guard would be corrected forever; the nudge is what the model is told."""

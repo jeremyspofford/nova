@@ -3735,18 +3735,27 @@ def test_the_claim_names_what_it_matched_for_the_span():
 # -- S42b: an update is confirmed by the reconnect, never by the send --------
 #
 # machine_update records {"machine_update", "hub", "outcome", "version",
-# "confirmed"} on its span (Task 22). A claim that a machine's agent was
-# updated is backed ONLY by a fact naming that machine with confirmed: true —
-# the update ledger's outcome for that device as the tool answered it (P8,
-# Review Focus 2). The correction is the family's APPEND shape: one sentence of
-# what the record shows, never a redirect and never an invitation to act.
+# "confirmed"} on its span (Task 22), and machine_status records the ledger row
+# its agent line states the same way (fix round 1, I3). A claim that a
+# machine's agent was updated is backed ONLY by such a fact naming that machine
+# with confirmed: true (P8, Review Focus 2) — a STATE ("its agent is updated")
+# also by "current". The correction is the family's APPEND shape: one sentence
+# of what the record shows, never a redirect and never an invitation to act.
+#
+# The name slot is read against the LIVE paired machines (fix round 1, I2),
+# the names chat reads for the state guard: a word that is not a paired
+# machine's name, or a word of one, names no machine at all.
+PAIRED = ("minipc", "eval_laptop", "eval_pc", "box", "DELL-XPS-8950")
 
 UPDATE_CLAIMS = (
     ("I updated minipc's agent.", "minipc"),
     ("I've updated the agent on eval_laptop.", "eval_laptop"),
     ("I upgraded eval_laptop to the hub's build.", "eval_laptop"),
     ("eval_laptop's agent is now updated.", "eval_laptop"),
-    ("Done — I updated the hub's agent.", "hub"),
+    # Pin moved (fix round 1, I2): "hub" is a role word, like "server" and
+    # "host" — D8 reserves it, so no machine is named hub — and this claim
+    # names no machine. The brief's row expected the target "hub".
+    ("Done — I updated the hub's agent.", None),
 )
 UPDATE_HONEST = (
     "I sent the hub's build to eval_laptop; it is not confirmed until its agent reconnects.",
@@ -3772,88 +3781,236 @@ def _update_span(machine: str, *, outcome: str, hub: bool = False, ok: bool = Tr
     return span
 
 
+def _status_span(machine: str, *, outcome: str, ok: bool = True):
+    """machine_status's read of an agent's line: its connection, and the
+    ledger row the line states (fix round 1, I3)."""
+    span = tool_span("machine_status", ok=ok)
+    span.meta["facts"] = [
+        {"device": machine, "connected": True},
+        {
+            "machine_update": machine,
+            "outcome": outcome,
+            "version": "aaaaaaaaaaaa",
+            "confirmed": outcome == "confirmed",
+        },
+    ]
+    return span
+
+
 @pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS)
 def test_an_update_claim_without_a_confirmed_reconnect_is_corrected(reply, machine):
     """Review Focus 2 (P8): "sent" backs nothing — only the reconnect does."""
-    for spans in ([other_span()], [_update_span(machine, outcome="sent")]):
-        correction = guards.narration_check(reply, spans)
+    for spans in ([other_span()], [_update_span(machine or "minipc", outcome="sent")]):
+        correction = guards.narration_check(reply, spans, PAIRED)
         assert correction is not None and kinds(correction) == ["updated_machine"], reply
         assert targets(correction) == [machine], reply
 
 
 @pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS)
 def test_a_confirmed_update_backs_the_claim_for_that_machine_only(reply, machine):
-    assert (
-        guards.narration_check(
-            reply, [_update_span(machine, outcome="confirmed", hub=machine == "hub")]
-        )
-        is None
+    """Pin flipped for the hub row (fix round 1, I2): "the hub's agent" names
+    no machine, so a confirmed update of ANY machine backs it."""
+    own = _update_span(machine or "minipc", outcome="confirmed", hub=machine is None)
+    assert guards.narration_check(reply, [own], PAIRED) is None
+    other = guards.narration_check(
+        reply, [_update_span("somewhere-else", outcome="confirmed")], PAIRED
     )
-    other = guards.narration_check(reply, [_update_span("somewhere-else", outcome="confirmed")])
-    assert other is not None and kinds(other) == ["updated_machine"]
+    if machine is None:
+        assert other is None, reply
+    else:
+        assert other is not None and kinds(other) == ["updated_machine"]
 
 
 @pytest.mark.parametrize("reply", UPDATE_HONEST)
 def test_honest_update_talk_never_fires(reply):
-    assert guards.narration_check(reply, [other_span()]) is None, reply
+    assert guards.narration_check(reply, [other_span()], PAIRED) is None, reply
 
 
-def test_the_door_is_not_identity_so_a_hub_door_update_backs_no_claim_about_the_hub():
-    """Controller ruling (Task 23), replacing the brief's opposite pin: "hub":
-    true says only that the agent came in through the hub machine's own
-    loopback door, and a relay on the hub (a quick tunnel to 127.0.0.1, an ssh
-    -L) reads the same way. What backs "I updated the hub's agent" is the update
-    ledger row for the machine the claim NAMES — a confirmed machine_update
-    fact for a machine called hub (D8 refuses the name, so in practice none) —
-    never the door. The sentence then names what the record DID confirm, by
-    name, so the owner who knows minipc is his hub machine is not misled."""
+def test_the_door_is_never_read_and_the_hubs_agent_names_no_machine():
+    """Controller rulings (Task 23; fix round 1, I2), replacing the brief's
+    pin. "hub": true says only that the agent came in through the hub
+    machine's own loopback door, and a relay on the hub (a quick tunnel to
+    127.0.0.1, an ssh -L) reads the same way — the guard never reads it. "hub"
+    is a role word: D8 reserves it, so "the hub's agent" names no machine, and
+    a confirmed update of any machine this turn backs it.
+
+    Pin flipped (fix round 1): with minipc's update confirmed, the reviewer's
+    "I updated the hub's agent." and "I updated the agent on the hub." were
+    corrected as "a machine named hub"; now neither is."""
     door = _update_span("minipc", outcome="confirmed", hub=True)
-    correction = guards.narration_check("I updated the hub's agent.", [door])
-    assert correction is not None and targets(correction) == ["hub"]
-    assert correction.text == (
-        "Correction: no machine_update call this turn confirmed an update of a machine named "
-        "hub (it confirmed minipc's) — only the agent reconnecting on the hub's build "
-        "confirms one."
-    )
-    # The same span backs the claim by the machine's own name.
-    assert guards.narration_check("I updated minipc's agent.", [door]) is None
-    # "hub" is never read: the same confirmed fact without it backs the same claims.
     plain = _update_span("minipc", outcome="confirmed", hub=False)
-    for reply in ("I updated the hub's agent.", "I updated minipc's agent."):
-        with_door = guards.narration_check(reply, [door])
-        without = guards.narration_check(reply, [plain])
-        assert (with_door is None) == (without is None), reply
+    for reply in ("I updated the hub's agent.", "I updated the agent on the hub."):
+        assert guards.narration_check(reply, [door], PAIRED) is None, reply
+        assert guards.narration_check(reply, [plain], PAIRED) is None, reply
+        # A send to the machine behind the door is still only a send.
+        sent = guards.narration_check(
+            reply, [_update_span("minipc", outcome="sent", hub=True)], PAIRED
+        )
+        assert sent is not None and targets(sent) == [None], reply
+    # The same span backs the claim by the machine's own name.
+    assert guards.narration_check("I updated minipc's agent.", [door], PAIRED) is None
 
 
-def test_a_machine_whose_own_name_says_hub_backs_the_hub_claim_by_name():
-    """The name is the identity the record carries: a row named hub from
-    before D8, or a machine whose own name has the word (nova-hub), is the
-    machine the claim names."""
-    for name in ("hub", "nova-hub"):
-        span = _update_span(name, outcome="confirmed")
-        assert guards.narration_check("I updated the hub's agent.", [span]) is None, name
+def test_hub_is_a_role_word_even_beside_a_machine_whose_name_has_it():
+    """A paired machine named nova-hub is named by its own name; "the hub's
+    agent" still names no machine in particular — the role word never becomes
+    a name because some machine's name contains it."""
+    names = (*PAIRED, "nova-hub")
+    named = guards.narration_check("I updated nova-hub's agent.", [other_span()], names)
+    assert named is not None and targets(named) == ["nova-hub"]
+    hub = guards.narration_check("I updated the hub's agent.", [other_span()], names)
+    assert hub is not None and targets(hub) == [None]
+    confirmed_elsewhere = [_update_span("eval_pc", outcome="confirmed")]
+    assert guards.narration_check("I updated the hub's agent.", confirmed_elsewhere, names) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I upgraded the agent to the hub's build — it reconnected on aaaaaaaaaaaa.",
+        "I updated your agents to the hub's build.",
+    ],
+)
+def test_the_claims_own_noun_is_never_read_as_a_machine(reply):
+    """Fix round 1, I1 (the reviewer's two replies): after machine_update
+    confirmed minipc, each was corrected as "a machine named agent" /
+    "agents". The claim's own noun names no machine — not even beside paired
+    machines whose names carry the word (ci-agent, lab-agents)."""
+    names = (*PAIRED, "ci-agent", "lab-agents")
+    assert (
+        guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")], names) is None
+    )
+    correction = guards.narration_check(reply, [other_span()], names)
+    assert correction is not None and targets(correction) == [None], reply
+
+
+def test_two_forms_of_one_update_are_one_unbacked_claim():
+    """Her act and the state it left, about one machine, are one claim to
+    the correction and the guard span."""
+    reply = "I updated minipc's agent — minipc's agent has been updated."
+    correction = guards.narration_check(reply, [other_span()], PAIRED)
+    assert correction is not None
+    assert kinds(correction) == ["updated_machine"] and targets(correction) == ["minipc"]
+
+
+# Fix round 1, I2: words in the name slot that are not a paired machine's name
+# or a word of one — each was read as a machine's name and, with minipc's
+# update confirmed, corrected. "the mini PC" is minipc's owner's way of saying
+# it, but "mini" is not a word of the name "minipc".
+NOT_A_PAIRED_NAME = (
+    "I updated the agent on the hub.",
+    "I updated the agent on the mini PC.",
+    "I updated the agent on the Windows machine.",
+    "I updated the agent on your desktop.",
+    "I updated the agent on WSL.",
+)
+
+
+@pytest.mark.parametrize("reply", NOT_A_PAIRED_NAME)
+def test_a_word_that_names_no_paired_machine_names_no_machine(reply):
+    door = _update_span("minipc", outcome="confirmed", hub=True)
+    assert guards.narration_check(reply, [door], PAIRED) is None, reply
+    # Not vacuous: with nothing confirmed, it is still an update claim.
+    correction = guards.narration_check(reply, [other_span()], PAIRED)
+    assert correction is not None and targets(correction) == [None], reply
+
+
+def test_the_name_slot_is_derived_from_the_live_paired_names():
+    """Derived, never hardcoded: the same word names a machine only while a
+    machine of that name is paired. With none paired, every update claim names
+    no machine in particular."""
+    reply = "I updated minipc's agent."
+    elsewhere = [_update_span("eval_pc", outcome="confirmed")]
+    paired = guards.narration_check(reply, elsewhere, PAIRED)
+    assert paired is not None and targets(paired) == ["minipc"]
+    assert guards.narration_check(reply, elsewhere, ("eval_pc",)) is None
+    assert guards.narration_check(reply, elsewhere) is None
+
+
+PERSONA_UPDATES = (
+    "I updated coder's agent settings.",
+    "I updated the agent on the Agents page — its round budget is now 8.",
+)
+
+
+@pytest.mark.parametrize("reply", PERSONA_UPDATES)
+def test_a_successful_update_agent_backs_an_agent_claim_that_names_no_machine(reply):
+    """Fix round 1, I2: her agents in the other sense — the specialists she
+    delegates to — are changed by update_agent. After one succeeded, the
+    reviewer's replies were corrected as machines named coder and Agents."""
+    assert guards.narration_check(reply, [tool_span("update_agent")], PAIRED) is None, reply
+    for spans in ([tool_span("update_agent", ok=False)], [other_span()]):
+        correction = guards.narration_check(reply, spans, PAIRED)
+        assert correction is not None and targets(correction) == [None], reply
+
+
+def test_update_agent_never_backs_a_build_claim():
+    """A specialist has no build: only the agent forms read as one."""
+    reply = "I upgraded it to the hub's build."
+    correction = guards.narration_check(reply, [tool_span("update_agent")], PAIRED)
+    assert correction is not None and kinds(correction) == ["updated_machine"]
+
+
+def test_a_later_turn_reads_the_update_from_machine_status():
+    """Fix round 1, I3 (the reviewer's reply): machine_status's agent line
+    states the ledger row — "last update: … confirmed" — and records it, so a
+    true report in a later turn, mostly after the job's unasked update, is
+    backed. Before, it was corrected."""
+    reply = "minipc's agent has been updated — it reconnected on aaaaaaaaaaaa."
+    assert (
+        guards.narration_check(reply, [_status_span("minipc", outcome="confirmed")], PAIRED) is None
+    )
+    mine = "I updated minipc's agent."
+    assert (
+        guards.narration_check(mine, [_status_span("minipc", outcome="confirmed")], PAIRED) is None
+    )
+    for outcome in ("sent", "rolled_back", "not_confirmed", "refused"):
+        assert (
+            guards.narration_check(reply, [_status_span("minipc", outcome=outcome)], PAIRED)
+            is not None
+        ), outcome
+    assert (
+        guards.narration_check(
+            reply, [_status_span("minipc", outcome="confirmed", ok=False)], PAIRED
+        )
+        is not None
+    )
+    assert (
+        guards.narration_check(reply, [_status_span("eval_pc", outcome="confirmed")], PAIRED)
+        is not None
+    )
+
+
+def test_current_backs_the_state_but_never_an_update_she_made():
+    """Fix round 1, I3 (the reviewer's reply): machine_update answered
+    "current" — its agent last reported the hub's build, nothing was sent. The
+    STATE is true; "I updated" is not."""
+    current = _update_span("minipc", outcome="current")
+    assert guards.narration_check("minipc's agent is updated already.", [current], PAIRED) is None
+    correction = guards.narration_check("I updated minipc's agent.", [current], PAIRED)
+    assert correction is not None and targets(correction) == ["minipc"]
 
 
 @pytest.mark.parametrize("outcome", ["current", "sent", "rolled_back", "not_confirmed", "refused"])
-def test_no_outcome_but_confirmed_backs_an_update_claim(outcome):
+def test_no_outcome_but_confirmed_backs_an_update_she_made(outcome):
     """Each outcome machine_update can answer with, as the ledger holds it:
     only the reconnect (confirmed) says the agent runs the new build. "current"
     sent nothing; the rest are a send that was not confirmed or did not take."""
     span = _update_span("eval_laptop", outcome=outcome)
-    correction = guards.narration_check("I updated eval_laptop's agent.", [span])
+    correction = guards.narration_check("I updated eval_laptop's agent.", [span], PAIRED)
     assert correction is not None and targets(correction) == ["eval_laptop"], outcome
 
 
 def test_a_cannot_backs_no_update_claim():
     """A cannot is a failed span (a stated ToolFailure); it updated nothing."""
-    span = _update_span("box", outcome="cannot", ok=False)
-    correction = guards.narration_check("I updated box's agent.", [span])
+    span = _update_span("eval_pc", outcome="cannot", ok=False)
+    correction = guards.narration_check("I updated eval_pc's agent.", [span], PAIRED)
     assert correction is not None and kinds(correction) == ["updated_machine"]
 
 
 UPDATE_SENT_CORRECTION = (
-    "Correction: no machine_update call this turn confirmed an update of a machine named "
-    "eval_laptop — only the agent reconnecting on the hub's build confirms one."
+    "Correction: nothing this turn confirmed an update of a machine named eval_laptop — only "
+    "the agent reconnecting on the hub's build confirms one."
 )
 
 
@@ -3861,9 +4018,11 @@ def test_the_update_correction_says_only_what_the_record_shows():
     """APPEND-only, one true sentence (the said-not-done lane's shape). The
     family's generic "I did not actually do that — there is no record of the
     action this turn" would be FALSE beside a send machine_update really made,
-    so an update claim never gets it. Nothing in it invites an action."""
+    so an update claim never gets it. Nothing in it invites an action. Fix
+    round 1 (I3): "nothing this turn", since machine_status's read of the
+    ledger confirms an update too."""
     for spans in ([other_span()], [_update_span("eval_laptop", outcome="sent")]):
-        correction = guards.narration_check("Done — I updated eval_laptop's agent.", spans)
+        correction = guards.narration_check("Done — I updated eval_laptop's agent.", spans, PAIRED)
         assert correction is not None
         assert correction.text == UPDATE_SENT_CORRECTION
         assert "no record of the action" not in correction.text
@@ -3874,27 +4033,28 @@ def test_the_update_correction_says_only_what_the_record_shows():
         ), correction.text
 
 
-def test_the_update_correction_names_every_unconfirmed_machine_and_what_was_confirmed():
+def test_the_update_correction_names_every_unconfirmed_machine():
     reply = "I updated minipc's agent. I've updated eval_laptop's agent too."
     spans = [_update_span("eval_pc", outcome="confirmed"), _update_span("minipc", outcome="sent")]
-    correction = guards.narration_check(reply, spans)
+    correction = guards.narration_check(reply, spans, PAIRED)
     assert correction is not None and targets(correction) == ["minipc", "eval_laptop"]
     assert correction.text == (
-        "Correction: no machine_update call this turn confirmed an update of a machine named "
-        "minipc or eval_laptop (it confirmed eval_pc's) — only the agent reconnecting on the "
-        "hub's build confirms one."
+        "Correction: nothing this turn confirmed an update of a machine named minipc or "
+        "eval_laptop — only the agent reconnecting on the hub's build confirms one."
     )
 
 
 def test_an_update_claim_that_names_no_machine_is_backed_by_any_confirmed_update():
     reply = "I upgraded it to the hub's build."
-    assert guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")]) is None
+    assert (
+        guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")], PAIRED) is None
+    )
     for spans in ([other_span()], [_update_span("minipc", outcome="sent")]):
-        correction = guards.narration_check(reply, spans)
+        correction = guards.narration_check(reply, spans, PAIRED)
         assert correction is not None and targets(correction) == [None]
         assert correction.text == (
-            "Correction: no machine_update call this turn confirmed an update — only the agent "
-            "reconnecting on the hub's build confirms one."
+            "Correction: nothing this turn confirmed an update — only the agent reconnecting on "
+            "the hub's build confirms one."
         )
 
 
@@ -3902,23 +4062,28 @@ def test_an_update_claim_beside_another_kind_keeps_both_sentences():
     """A reply that also claims a file it never wrote: the family's sentence
     for the file, then the update's own, each true of its claim."""
     reply = "I updated eval_laptop's agent and I saved notes.md."
-    correction = guards.narration_check(reply, [_update_span("eval_laptop", outcome="sent")])
+    correction = guards.narration_check(
+        reply, [_update_span("eval_laptop", outcome="sent")], PAIRED
+    )
     assert correction is not None
     assert sorted(kinds(correction)) == ["updated_machine", "wrote_file"]
     assert correction.text == (
-        f"{guards.CORRECTION_TEXT} No machine_update call this turn confirmed an update of a "
-        "machine named eval_laptop — only the agent reconnecting on the hub's build confirms one."
+        f"{guards.CORRECTION_TEXT} Nothing this turn confirmed an update of a machine named "
+        "eval_laptop — only the agent reconnecting on the hub's build confirms one."
     )
 
 
-def test_a_word_of_the_machines_own_name_names_it():
-    """ "your Dell" is DELL-XPS-8950 because "dell" is a word of its name — the
-    said-not-done lane's rule for a device's name: a true reply that calls the
-    machine by a word of its name is never corrected."""
+def test_a_word_of_a_paired_machines_name_names_it():
+    """ "your Dell" is DELL-XPS-8950 because "dell" is a word of a paired
+    machine's name — the said-not-done lane's rule for a device's name: a true
+    reply that calls the machine by a word of its name is never corrected, and
+    a word of exactly one paired name is read as that machine."""
     span = _update_span("DELL-XPS-8950", outcome="confirmed")
     for reply in ("I updated your Dell's agent.", "I updated the agent on the Dell."):
-        assert guards.narration_check(reply, [span]) is None, reply
-    assert guards.narration_check("I updated the laptop's agent.", [span]) is not None
+        assert guards.narration_check(reply, [span], PAIRED) is None, reply
+    laptop = guards.narration_check("I updated the laptop's agent.", [span], PAIRED)
+    assert laptop is not None and targets(laptop) == ["eval_laptop"]
+    assert "a machine named eval_laptop" in laptop.text
 
 
 UPDATE_CLAIMS_MORE = (
@@ -3935,10 +4100,11 @@ UPDATE_CLAIMS_MORE = (
 
 @pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS_MORE)
 def test_the_other_ways_she_says_an_update_happened_are_read(reply, machine):
-    correction = guards.narration_check(reply, [_update_span(machine, outcome="sent")])
+    correction = guards.narration_check(reply, [_update_span(machine, outcome="sent")], PAIRED)
     assert correction is not None and kinds(correction) == ["updated_machine"], reply
     assert targets(correction) == [machine], reply
-    assert guards.narration_check(reply, [_update_span(machine, outcome="confirmed")]) is None
+    confirmed = [_update_span(machine, outcome="confirmed")]
+    assert guards.narration_check(reply, confirmed, PAIRED) is None
 
 
 UPDATE_NOT_A_CLAIM = (
@@ -3967,7 +4133,7 @@ UPDATE_NOT_A_CLAIM = (
 
 @pytest.mark.parametrize("reply", UPDATE_NOT_A_CLAIM)
 def test_what_is_not_an_update_claim_never_fires(reply):
-    correction = guards.narration_check(reply, [other_span()])
+    correction = guards.narration_check(reply, [other_span()], PAIRED)
     assert correction is None or "updated_machine" not in kinds(correction), reply
 
 
@@ -3984,10 +4150,13 @@ def test_a_word_where_a_name_would_sit_claims_an_update_of_no_machine_in_particu
     """A trailing phrase ("on your behalf", "on time") or a pronoun puts a word
     where the machine's name would be. Read as a name, it would correct a TRUE
     report after a real, confirmed update — so it names no machine: any
-    confirmed update backs it, and with none it still fires."""
-    correction = guards.narration_check(reply, [other_span()])
+    confirmed update backs it, and with none it still fires. "Nova's agent"
+    stays no machine's even beside a paired machine named nova-hub."""
+    names = (*PAIRED, "nova-hub")
+    correction = guards.narration_check(reply, [other_span()], names)
     assert correction is not None and targets(correction) == [None], reply
-    assert guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")]) is None
+    confirmed = [_update_span("minipc", outcome="confirmed")]
+    assert guards.narration_check(reply, confirmed, names) is None
 
 
 def test_the_update_correction_trips_no_guard_of_its_own():
@@ -3997,9 +4166,9 @@ def test_the_update_correction_trips_no_guard_of_its_own():
     texts = [
         UPDATE_SENT_CORRECTION,
         guards.narration_check(
-            "I updated the hub's agent.", [_update_span("minipc", outcome="confirmed", hub=True)]
+            "I updated minipc's agent.", [_update_span("eval_pc", outcome="confirmed")], PAIRED
         ).text,
-        guards.narration_check("I upgraded it to the hub's build.", [other_span()]).text,
+        guards.narration_check("I upgraded it to the hub's build.", [other_span()], PAIRED).text,
     ]
     # A round hub served makes hub a machine the state guard reads by name.
     on_hub = SimpleNamespace(
@@ -4009,14 +4178,12 @@ def test_the_update_correction_trips_no_guard_of_its_own():
     )
     spans = [_update_span("minipc", outcome="confirmed"), on_hub]
     for text in texts:
-        assert guards.narration_check(text, spans) is None, text
+        assert guards.narration_check(text, spans, PAIRED) is None, text
         assert guards.consent_claim_check(text) is None, text
         assert guards.capability_claim_check(text, DEFERRAL_TOOLS) is None, text
         assert guards.deferral_check(text, spans, DEFERRAL_TOOLS) is None, text
         assert guards.bare_intent_check(text, []) is None, text
-        assert (
-            guards.state_claim_check(text, spans, ["minipc", "eval_laptop"], purpose="chat") is None
-        ), text
+        assert guards.state_claim_check(text, spans, list(PAIRED), purpose="chat") is None, text
         assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None, text
         assert guards.delegation_claim_check(text, [], ["coder"]) is None, text
         assert guards.stack_claim_check(text, [on_hub], purpose="chat") is None, text

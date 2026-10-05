@@ -246,8 +246,9 @@ def _clip(text: str) -> str:
 
 
 def _shown_facts(tool_name: str, facts: list[dict], result: str | None) -> list[dict]:
-    """The facts a check keeps: all of them, except a device's connectivity
-    whose line she was never shown (S42a final review I2).
+    """The facts a check keeps: all of them, except an agent line's own —
+    its connectivity (S42a final review I2) and its last update (S42b Task 23
+    fix round 1, I3) — when she was never shown that line.
 
     `_clip` hands her the first MAX_RESULT_CHARS of a result, and a tool whose
     one result lists many devices records {"device", "connected"} for every one
@@ -281,9 +282,21 @@ def _shown_facts(tool_name: str, facts: list[dict], result: str | None) -> list[
     return [
         fact
         for fact in facts
-        if not guards.is_connectivity_fact(fact)
-        or (shown > 0 and line_shown(fact["device"], text, shown))
+        if (agent := _agent_of(fact)) is None or (shown > 0 and line_shown(agent, text, shown))
     ]
+
+
+def _agent_of(fact: object) -> str | None:
+    """The agent an agent line's fact is about — its connectivity
+    ({"device", "connected"}) or its last update ({"machine_update", …,
+    "confirmed"}, which the line states) — or None for any other fact. Read by
+    the guards' own shape tests, so what is withheld here and what backs a
+    claim there cannot drift apart."""
+    if guards.is_connectivity_fact(fact):
+        return fact["device"]
+    if guards.is_update_fact(fact):
+        return fact["machine_update"]
+    return None
 
 
 async def _check(call: LiveCall, ctx) -> tuple[str, bool]:

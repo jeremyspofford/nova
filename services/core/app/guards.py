@@ -76,6 +76,11 @@ _SETUP_QR_TOOLS = frozenset({"show_setup_qr"})
 # update claim (narration) and its recorded connectivity is a device check (the
 # state guard); test_state_guard pins it to MACHINE_UPDATE.name.
 _UPDATE_TOOLS = frozenset({"machine_update"})
+# S42b (Task 23 fix round 1, I2): the tool that changes one of her SPECIALIST
+# agents' fields (coder's round budget, its tools). "I updated coder's agent
+# settings" after it ran is about that agent, not a machine's; test_state_guard
+# pins it to the registered tool whose executor is tools.agents.update_agent.
+_PERSONA_UPDATE_TOOLS = frozenset({"update_agent"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -87,7 +92,8 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "removed_model": _REMOVE_TOOLS,
     "configured_machine": _CONFIGURE_TOOLS,
     "showed_setup_qr": _SETUP_QR_TOOLS,
-    "updated_machine": _UPDATE_TOOLS,
+    # "updated_machine" (S42b) is grounded by _update_backed, from more than
+    # one tool's facts: the update tool's, the machine reads', a specialist's.
 }
 
 
@@ -330,10 +336,10 @@ _NOT_A_MACHINE = frozenset(
 # S42b: a claim that a machine's agent now runs the new build — "I updated
 # minipc's agent", "I've updated the agent on eval_laptop", "I upgraded
 # eval_laptop to the hub's build", "eval_laptop's agent is now updated".
-# Backed ONLY by a machine_update fact naming that machine with confirmed: true
-# — the agent reconnected on the build — never by the send (P8, Review Focus
-# 2; see _update_confirmed). The build has to be the HUB's ("to the hub's
-# build"), so "I upgraded Firefox to the latest build" is not a claim.
+# Backed ONLY by an update fact naming that machine with confirmed: true — the
+# agent reconnected on the build — never by the send (P8, Review Focus 2; see
+# _update_backed). The build has to be the HUB's ("to the hub's build"), so "I
+# upgraded Firefox to the latest build" is not a claim.
 #
 # Linear (the #89 standard): a name token is entered only at its front and
 # taken whole (`(?<![\w.-])[\w.-]++`), so a run of name characters is never
@@ -351,11 +357,31 @@ _UPDATED_MACHINE = re.compile(
     r"(?:updated|upgraded)\b",
     re.I,
 )
+# The claim's three forms, each backed its own way (fix round 1), all reported
+# as kind "updated_machine" — the guard span's and the evals' word for it:
+#   * her act on an agent — "I updated minipc's agent", "the agent on minipc"
+#     (u1, u2): a confirmed update; naming no machine, also a successful
+#     update of one of her specialist agents (_PERSONA_UPDATE_TOOLS);
+#   * her act to the build — "I upgraded minipc to the hub's build" (u3): a
+#     confirmed update;
+#   * a STATE — "minipc's agent is updated" (u4): a confirmed update, or
+#     machine_update's "current" (its agent last reported the hub's build).
+_UPDATED_AGENT = "updated_machine"
+_UPDATED_TO_BUILD = "updated_machine/build"
+_AGENT_IS_UPDATED = "updated_machine/state"
+_UPDATED_FORMS = {"u1": _UPDATED_AGENT, "u2": _UPDATED_AGENT, "u3": _UPDATED_TO_BUILD}
+_UPDATE_KINDS = frozenset({_UPDATED_AGENT, _UPDATED_TO_BUILD, _AGENT_IS_UPDATED})
 _UPDATED_GROUPS = ("u1", "u2", "u3", "u4")
 # Words that sit where an updated machine's name would and name none: the
-# switch's set (_NOT_A_MACHINE), plus Nova and her agent's own name, and the
-# trailing nouns of "on schedule" / "on demand".
-_NOT_AN_UPDATED_MACHINE = _NOT_A_MACHINE | frozenset({"nova", "novad", "schedule", "demand"})
+# switch's set (_NOT_A_MACHINE), plus Nova and her agent's own name, the
+# trailing nouns of "on schedule" / "on demand", the claim's own noun ("I
+# upgraded the agent to the hub's build", "your agents" — fix round 1, I1), and
+# "hub": a role word like "server" and "host" — D8 reserves it, so no machine is
+# named hub, and "the hub's agent" names no machine (fix round 1, I2). Read
+# before the paired names (_paired_name), so no paired machine makes one a name.
+_NOT_AN_UPDATED_MACHINE = _NOT_A_MACHINE | frozenset(
+    {"nova", "novad", "schedule", "demand", "agent", "agents", "hub"}
+)
 # An update placed at an EARLIER time is a recap, not this turn's act: the
 # family's _PRIOR_TIME (earlier, yesterday, last time, … ago) plus the time
 # words a recap of an update uses — "this morning", "on Monday", "in our last
@@ -370,6 +396,32 @@ _UPDATE_RECAP = re.compile(
 # A machine's name, word by word ("DELL-XPS-8950" -> dell, xps, 8950): a reply
 # that calls a machine by a word of its own name names it (_names_machine).
 _NAME_WORD = re.compile(r"[a-z0-9]++")
+
+
+def _names_machine(said: str, name: str) -> bool:
+    """Does the name a reply used name this machine? Its own name, any case,
+    or one word of it ("your Dell" for DELL-XPS-8950) — the said-not-done
+    lane's rule for a device's name, so a true reply is never corrected for
+    calling a machine what its owner calls it."""
+    said, name = said.strip().lower(), name.strip().lower()
+    if not said or not name:
+        return False
+    return said == name or (len(said) >= 3 and said in _NAME_WORD.findall(name))
+
+
+def _paired_name(said: str, names: Sequence[str]) -> str | None:
+    """The paired machine a word in the claim's name slot names, read against
+    the LIVE paired names chat reads for the state guard — derived, never a
+    list kept here (fix round 1, I2). Its own name or a word of it: the one
+    machine's name when it names exactly one, the word as written when it
+    names several ("eval" for eval_laptop and eval_pc), and None when it names
+    none — "the mini PC" (the machine is minipc), "the Windows machine", "your
+    desktop", "WSL", "coder" name no machine at all."""
+    named = [name for name in names if _names_machine(said, name)]
+    if not named:
+        return None
+    return named[0] if len(named) == 1 else said
+
 
 # S47: a claim that a setup QR card is on the screen. Backed only by a
 # successful show_setup_qr span this turn — "here's a QR code" with no card
@@ -1028,11 +1080,12 @@ def _externally_attributed(clause: str) -> bool:
     )
 
 
-def _claims_in(clause: str) -> list[tuple[str, str, str]]:
+def _claims_in(clause: str, names: Sequence[str] = ()) -> list[tuple[str, str, str]]:
     """Every completed-action self-claim in one clause, each tied to a REAL
     target (a filename token or a URL). A bare noun never qualifies, an action
     attributed to someone else or another time never qualifies, and a filename
-    that is not the verb's own object never qualifies."""
+    that is not the verb's own object never qualifies. `names` are the paired
+    machines' — the only words an update claim's machine can be (S42b)."""
     claims: list[tuple[str, str, str]] = []
     if _externally_attributed(clause):
         return claims
@@ -1105,20 +1158,24 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             named = None
         claims.append(("configured_machine", named, cm.group(0)))
 
-    # an agent updated (S42b): the machine when one is named. A recap of an
-    # earlier time anywhere in the clause, or a hedge or condition BEFORE the
-    # claim ("if I updated…", "once…"), says nothing about this turn's act.
-    # Each cut is found once per clause and compared by position.
-    if _UPDATE_RECAP.search(clause) is None:
+    # an agent updated (S42b): the paired machine when one is named, and the
+    # claim's form (_UPDATED_FORMS). A recap of an earlier time anywhere in the
+    # clause, or a hedge or condition BEFORE the claim ("if I updated…",
+    # "once…"), says nothing about this turn's act. Each cut is found once per
+    # clause and compared by position — and only in a clause that makes one.
+    updated = list(_UPDATED_MACHINE.finditer(clause))
+    if updated and _UPDATE_RECAP.search(clause) is None:
         hedge = _STATE_HEDGE.search(clause)
-        for um in _UPDATED_MACHINE.finditer(clause):
+        for um in updated:
             if hedge is not None and hedge.start() < um.start():
                 continue
-            named = next((um.group(g) for g in _UPDATED_GROUPS if um.group(g)), None)
-            named = _strip_trailing_punct(named) if named else None
-            if named and (named.lower() in _NOT_AN_UPDATED_MACHINE or named.isdigit()):
-                named = None
-            claims.append(("updated_machine", named, um.group(0)))
+            group = next((g for g in _UPDATED_GROUPS if um.group(g)), "u4")
+            named = _strip_trailing_punct(um.group(group) or "")
+            if not named or named.lower() in _NOT_AN_UPDATED_MACHINE or named.isdigit():
+                target = None
+            else:
+                target = _paired_name(named, names)
+            claims.append((_UPDATED_FORMS.get(group, _AGENT_IS_UPDATED), target, um.group(0)))
 
     # showed a setup QR card (S47): no target; any successful card backs it.
     for qm in _SHOWED_SETUP_QR.finditer(clause):
@@ -1241,57 +1298,68 @@ def _argument_echoes(target: str, raw: str) -> bool:
     return t_bare.rsplit("/", 1)[-1].lower() in r_bare.lower()
 
 
-def _confirmed_updates(spans: Sequence[Any]) -> list[str | None]:
-    """The machines an update tool's span CONFIRMED this turn — each fact
-    machine_update recorded with confirmed: true (the agent reconnected on the
-    hub's build), named by its `machine_update` key (None when the fact names
-    none). Nothing else is read: never `hub`, which says only which door the
-    agent came in through, and never an outcome but confirmed."""
-    found: list[str | None] = []
+def is_update_fact(fact: object) -> bool:
+    """One recorded update fact, {"machine_update": <str>, "confirmed": <bool>,
+    …}: machine_update's answer, or the ledger row machine_status's agent line
+    states (S42b; fix round 1, I3). The one definition: _update_facts reads it,
+    and live_facts._shown_facts withholds it with an agent line she was not
+    shown, so what a live check keeps and what backs a claim cannot drift."""
+    return (
+        isinstance(fact, dict)
+        and isinstance(fact.get("machine_update"), str)
+        and isinstance(fact.get("confirmed"), bool)
+    )
+
+
+def _update_facts(spans: Sequence[Any], *, state: bool) -> list[str]:
+    """The machines this turn's record says took the update a claim needs.
+    Every update fact on a successful span of the update tool, or of a tool
+    that reads machines (_machine_read_tools, derived from the registry —
+    machine_status states each agent's last update from the ledger, fix round
+    1, I3), with confirmed: true: the agent reconnected on the hub's build.
+    For a STATE, also machine_update's "current": its agent last reported the
+    hub's build. Nothing else is read — never `hub`, which says only which
+    door an agent came in through."""
+    readers = _UPDATE_TOOLS | _machine_read_tools()
+    found: list[str] = []
     for span in spans:
-        if getattr(span, "name", None) not in _UPDATE_TOOLS:
+        if getattr(span, "name", None) not in readers:
             continue
         facts = (getattr(span, "meta", None) or {}).get("facts")
         for fact in facts if isinstance(facts, list) else ():
-            if isinstance(fact, dict) and fact.get("confirmed") is True:
-                name = fact.get("machine_update")
-                found.append(name.strip() if isinstance(name, str) and name.strip() else None)
+            if is_update_fact(fact) and (
+                fact["confirmed"] or (state and fact.get("outcome") == "current")
+            ):
+                found.append(fact["machine_update"].strip())
     return found
 
 
-def _names_machine(said: str, name: str) -> bool:
-    """Does the name a reply used name this machine? Its own name, any case,
-    or one word of it ("your Dell" for DELL-XPS-8950) — the said-not-done
-    lane's rule for a device's name, so a true reply is never corrected for
-    calling a machine what its owner calls it."""
-    said, name = said.strip().lower(), name.strip().lower()
-    if not said or not name:
-        return False
-    return said == name or (len(said) >= 3 and said in _NAME_WORD.findall(name))
-
-
-def _update_confirmed(target: str | None, successful: Sequence[Any]) -> bool:
-    """S42b: an update claim is backed by the update ledger's row for the
-    machine it NAMES, as machine_update answered it this turn — a confirmed
-    fact naming that machine (P8: only the reconnect confirms). A claim that
-    names no machine is backed by any confirmed update. "The hub's agent" is a
-    name like any other: a machine called hub (D8 refuses the name) or with the
-    word in its own name backs it; the door the agent came in through
-    (`"hub": true`) never does — a relay on the hub reads the same way."""
-    confirmed = _confirmed_updates(successful)
-    if not target:
-        return bool(confirmed)
-    return any(name is not None and _names_machine(target, name) for name in confirmed)
+def _update_backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
+    """S42b: what backs an update claim (its forms: _UPDATED_FORMS) is the
+    record of the machine it NAMES — an update fact naming it (_update_facts),
+    by its own name or a word of it. A claim that names no machine is backed
+    by any such fact, and an agent claim ("I updated coder's agent settings")
+    also by a successful update of one of her specialist agents
+    (_PERSONA_UPDATE_TOOLS; fix round 1, I2). The door an agent came in
+    through backs nothing: "the hub's agent" names no machine."""
+    machines = _update_facts(successful, state=kind == _AGENT_IS_UPDATED)
+    if target is None:
+        return bool(machines) or (
+            kind == _UPDATED_AGENT
+            and any(getattr(span, "name", None) in _PERSONA_UPDATE_TOOLS for span in successful)
+        )
+    return any(_names_machine(target, name) for name in machines)
 
 
 def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
+    if kind in _UPDATE_KINDS:
+        # Before the leniency for an unreadable target below, which would let
+        # any machine_update span — a send — back the claim; and read from
+        # more than the update tool (_update_backed).
+        return _update_backed(kind, target, successful)
     matching = [span for span in successful if span.name in _tools_for_kind(kind)]
     if not matching:
         return False
-    if kind == "updated_machine":
-        # Before the leniency for an unreadable target below, which would let
-        # any machine_update span — a send — back the claim.
-        return _update_confirmed(target, matching)
     span_targets = [_target_of(span) for span in matching]
     # A matching tool ran but its target is unreadable, or the claim named no
     # file: kind-level presence is enough — do not flag on what we cannot see.
@@ -1317,39 +1385,51 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     return any(needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets)
 
 
-def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
+def narration_check(
+    reply_text: str, spans: Sequence[Any], device_names: Sequence[str] = ()
+) -> Correction | None:
     """Contradict any completed-action claim no successful span backs.
 
     Returns a Correction naming the unbacked claim(s), or None when the reply
     is honest (or when the matcher cannot be sure — precision over recall).
     Pure: it reads only the text and the spans, never a model or the network.
+    `device_names` are the LIVE paired machines' (chat reads them for the
+    state guard): the only words an update claim's machine can be (S42b fix
+    round 1, I2). Without them, no update claim names a machine.
     """
     if not reply_text or not reply_text.strip():
         return None
+    names = tuple(dict.fromkeys(str(n).strip() for n in device_names if str(n).strip()))
     successful = _successful(spans)
     unbacked: list[UnbackedClaim] = []
     seen: set[tuple[str, str]] = set()
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue
-        for kind, target, phrase in _claims_in(clause):
+        for kind, target, phrase in _claims_in(clause, names):
             key = (kind, (target or "").lower())
             if key in seen:
                 continue
             seen.add(key)
-            if not _backed(kind, target, successful):
-                unbacked.append(UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80]))
+            if _backed(kind, target, successful):
+                continue
+            # The update claim's forms are one kind to everything that reads
+            # the correction — the guard span, the evals — and one entry each.
+            public = _UPDATED_AGENT if kind in _UPDATE_KINDS else kind
+            if any(c.kind == public and c.target == target for c in unbacked):
+                continue
+            unbacked.append(UnbackedClaim(kind=public, target=target, phrase=phrase.strip()[:80]))
     if not unbacked:
         return None
-    updates = [claim for claim in unbacked if claim.kind == "updated_machine"]
-    rest = [claim for claim in unbacked if claim.kind != "updated_machine"]
+    updates = [claim for claim in unbacked if claim.kind == _UPDATED_AGENT]
+    rest = [claim for claim in unbacked if claim.kind != _UPDATED_AGENT]
     base = None
     if rest:
         spend = all(claim.kind == "stated_spend" for claim in rest)
         base = SPEND_CORRECTION_TEXT if spend else CORRECTION_TEXT
     if not updates:
         return Correction(claims=tuple(unbacked), text=base or CORRECTION_TEXT)
-    said = _update_correction(updates, successful)
+    said = _update_correction(updates)
     if base is None:
         return Correction(claims=tuple(unbacked), text=f"Correction: {said}")
     return Correction(claims=tuple(unbacked), text=f"{base} {said[0].upper()}{said[1:]}")
@@ -1359,14 +1439,12 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
 # prose (narration's composition) — the said-not-done lane's shape: what the
 # record shows, never a redirect, never an invitation to act. The family's
 # "there is no record of the action this turn" would be FALSE beside a send
-# machine_update really made, so it is never used for an update. It says what
-# machine_update did NOT do — confirm an update of the machine named — and,
-# when it confirmed others, which, by name: "the hub's agent" after a confirmed
-# update of minipc reads "a machine named hub (it confirmed minipc's)", true
-# whether or not minipc is the hub machine (the door is not identity).
+# machine_update really made, so it is never used for an update. "Nothing this
+# turn" (fix round 1, I3): machine_status's read of the ledger confirms an
+# update as well as machine_update's own answer does.
 UPDATE_CORRECTION = (
-    "no machine_update call this turn confirmed {subject} — only the agent reconnecting on "
-    "the hub's build confirms one."
+    "nothing this turn confirmed {subject} — only the agent reconnecting on the hub's build "
+    "confirms one."
 )
 
 
@@ -1378,27 +1456,17 @@ def _once_each(names: Sequence[str]) -> list[str]:
     return list(seen.values())
 
 
-def _possessives(names: Sequence[str]) -> str:
-    """ "a's", "a's and b's", "a's, b's and c's"."""
-    owned = [f"{name}'s" for name in names]
-    if len(owned) <= 1:
-        return "".join(owned)
-    return f"{', '.join(owned[:-1])} and {owned[-1]}"
-
-
-def _update_correction(claims: Sequence[UnbackedClaim], successful: Sequence[Any]) -> str:
+def _update_correction(claims: Sequence[UnbackedClaim]) -> str:
     """The update sentence for these unbacked claims, without its lead. An
-    unbacked claim that names no machine means no update was confirmed at all,
-    so the sentence says exactly that; otherwise it names each machine, once,
-    and the machines the turn DID confirm."""
+    unbacked claim that names no machine means nothing this turn confirmed an
+    update at all, so the sentence says exactly that; otherwise it names each
+    paired machine, once."""
     named = [claim.target for claim in claims if claim.target]
     if len(named) < len(claims):
         return UPDATE_CORRECTION.format(subject="an update")
-    subject = f"an update of a machine named {' or '.join(_once_each(named))}"
-    confirmed = [name for name in _confirmed_updates(successful) if name]
-    if confirmed:
-        subject += f" (it confirmed {_possessives(_once_each(confirmed))})"
-    return UPDATE_CORRECTION.format(subject=subject)
+    return UPDATE_CORRECTION.format(
+        subject=f"an update of a machine named {' or '.join(_once_each(named))}"
+    )
 
 
 # -- the pending-approval claim guard --------------------------------------

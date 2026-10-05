@@ -519,3 +519,41 @@ async def test_a_listing_check_that_times_out_keeps_no_device_fact(monkeypatch):
     assert not check.ok
     assert _facts_of(turn, "listing_slow") == [{"machine": "hub", "answering": True}]
     assert ctx.facts_sink == [{"machine": "hub", "answering": True}]
+
+
+@pytest.mark.asyncio
+async def test_an_agents_last_update_is_withheld_with_its_line(monkeypatch):
+    """Task 23 fix round 1 (I3): a listing that states each agent's last update
+    records it beside the connection ({"machine_update", …, "confirmed"}). A
+    cut that does not show the agent's whole line withholds both — the update
+    is part of the line she was not shown — and keeps every other fact."""
+
+    async def _run(args, ctx):
+        ctx.facts_sink.append({"device": "dell", "connected": True})
+        ctx.facts_sink.append(
+            {
+                "machine_update": "dell",
+                "outcome": "confirmed",
+                "version": "a" * 12,
+                "confirmed": True,
+            }
+        )
+        ctx.facts_sink.append({"machine": "hub", "answering": True})
+        return "x" * 5_000
+
+    for shown, kept in ((False, []), (True, ["dell", "dell"])):
+        tool = tools.Tool(
+            name=f"listing_updates_{shown}",
+            description="lists agents and their last updates",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            executor=_run,
+            reads_only=True,
+            device_line_shown=lambda name, result, cut, shown=shown: shown,
+        )
+        _arm(monkeypatch, tool)
+        turn, ctx = _Turn(), _sink_ctx()
+        (check,) = await live_facts.run([_call(tool.name)], turn, ctx)
+        assert check.ok and "cut off" in check.result
+        facts = _facts_of(turn, tool.name)
+        assert [f.get("device") or f.get("machine_update") for f in facts[:-1]] == kept
+        assert facts[-1] == {"machine": "hub", "answering": True}

@@ -3613,7 +3613,9 @@ def _regen_rejected_by(
             "address_claim",
             lambda: guards.address_claim_check(corrected, user_message, origin, reason),
         ),
-        ("narration", lambda: guards.narration_check(corrected, turn.spans)),
+        # The paired names give an update claim its machine (S42b Task 23 fix
+        # round 1, I2) — the same live read the state guard below is judged by.
+        ("narration", lambda: guards.narration_check(corrected, turn.spans, device_names)),
         (
             "delegation_claim",
             lambda: guards.delegation_claim_check(
@@ -4674,7 +4676,9 @@ async def _run_turn(
         rewrite_claims = [claim for _, claim in rewrites]
 
         try:
-            correction = guards.narration_check(text, turn.spans)
+            # device_names (read above): the only words an update claim's
+            # machine can be — derived, never a list (S42b Task 23 fix round 1).
+            correction = guards.narration_check(text, turn.spans, device_names)
         except Exception:
             logger.exception("narration guard raised; shipping the reply uncorrected")
             correction = None
@@ -5528,6 +5532,19 @@ async def _run_turn(
             # replaced the prose, and its regeneration was vetted by both
             # rewrite guards.
             or (bool(rewrite_claims) and not prose_replaced)
+            # And an agent update claimed with nothing confirming it (S42b Task
+            # 23 fix round 1, I4): "I updated eval_laptop's agent" ingested
+            # beside its correction is how recall would hand a later turn an
+            # update that never took as a fact — the said-not-done lane keeps
+            # its device completions out of memory for the same reason. A
+            # confirmed update leaves no such claim, so that turn is knowledge;
+            # and a redirect that stood replaced the prose the claim was in
+            # (its regeneration was vetted by narration too).
+            or (
+                correction is not None
+                and not prose_replaced
+                and any(claim.kind == "updated_machine" for claim in correction.claims)
+            )
             or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what

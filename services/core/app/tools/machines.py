@@ -11,10 +11,12 @@ live connection registry, never a second network call. Its one argument is a
 name checked against BOTH lists, which is why the backend may run it unasked
 (live_facts.AUTO_RUN). Each machine it reports leaves a structured fact on
 the span — {"machine", "answering", "checked_now", "at"} — and each agent
-leaves {"device", "connected"}, the same shape a device tool leaves — so what
-she then says about either is checkable against a record rather than a
-sentence. Run unasked (live_facts), its result reaches her cut short, and an
-agent's fact is kept only when its line was shown (device_line_shown).
+leaves {"device", "connected"}, the same shape a device tool leaves, plus —
+when the ledger holds one — its last update in machine_update's shape
+{"machine_update", "outcome", "version", "confirmed"} (S42b) — so what she then
+says about either is checkable against a record rather than a sentence. Run
+unasked (live_facts), its result reaches her cut short, and an agent's facts
+are kept only when its line was shown (device_line_shown).
 
 machine_configure sets `serving`: whether that machine runs models for the
 routing chains. It reports the value the gateway READS BACK, never the value
@@ -302,8 +304,10 @@ def _describe_agents(
     says so either — a lone agent's listing reads exactly like any other
     one-agent machine's. Each listed agent leaves {"device", "connected"}
     on the span, the record a device tool leaves, so what she says about its
-    connection is backed (guards._checked_a_device) — on an unasked check,
-    only for an agent whose line she was shown (device_line_shown). Under
+    connection is backed (guards._checked_a_device), and the last update its
+    line states, so what she says about that is backed too (guards.
+    _update_facts; S42b Task 23 fix round 1) — on an unasked check, both only
+    for an agent whose line she was shown (device_line_shown). Under
     each agent's line, indented, what she needs to act on it
     (device_facts.acting_lines, the probe's time first) — as device_list
     writes it."""
@@ -334,14 +338,28 @@ def _describe_agents(
             lines.extend(f"{_ACTING_INDENT}{line}" for line in agent["acting"])
             if ctx.facts_sink is not None:
                 ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
+                last = agent["last_update"]
+                if last:
+                    # The ledger row its line states, in machine_update's own
+                    # shape (S42b Task 23 fix round 1, I3): a true report of a
+                    # confirmed update in a later turn — most follow the job's
+                    # unasked updates — is backed by what she read.
+                    ctx.facts_sink.append(
+                        {
+                            "machine_update": agent["name"],
+                            "outcome": last["outcome"],
+                            "version": last["version"],
+                            "confirmed": last["outcome"] == "confirmed",
+                        }
+                    )
     return lines
 
 
 def device_line_shown(name: str, result: str, shown: int) -> bool:
     """Did the first `shown` characters of machine_status's `result` hold agent
     `name`'s WHOLE line? machine_status's Tool.device_line_shown: a live check
-    keeps that agent's {"device", "connected"} fact only when this says yes
-    (live_facts._shown_facts; S42a final review I2).
+    keeps that agent's {"device", "connected"} fact, and its last-update fact,
+    only when this says yes (live_facts._shown_facts; S42a final review I2).
 
     Exact for the format _describe_agents writes, never the name found
     anywhere: the line begins, at a line start, with "  agent <name> (", and

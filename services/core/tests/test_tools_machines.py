@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -943,3 +944,91 @@ def test_the_descriptions_say_the_agent_lines_and_both_bounds_of_an_update():
     update = tools.REGISTRY["machine_update"].description
     assert "the agent has up to 2 minutes to download and stage it" in update
     assert "waits up to 2 minutes more for the agent to reconnect on it" in update
+
+
+# -- Task 23 fix round 1 (I3): the agent line's ledger row is a fact ------------
+#
+# The line states the agent's last update as the ledger holds it, and the span
+# now records that row beside the connection — {"machine_update", "outcome",
+# "version", "confirmed"}, the shape machine_update records — so a true report
+# in a later turn, after the job's unasked update, is backed by what she read
+# (guards: an update claim reads _UPDATE_TOOLS and the machine read tools).
+
+
+def _last(outcome: str) -> dict:
+    return {"version": "aaaaaaaaaaaa", "outcome": outcome, "at": AT.isoformat(), "reason": None}
+
+
+async def test_status_records_each_agents_last_update_as_the_ledger_holds_it(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    confirmed = _view("PC-ONE", "windows", WINDOWS)
+    confirmed.update(last_update=_last("confirmed"))
+    sent = _view("pc-wsl", "linux", WSL)
+    sent.update(last_update=_last("sent"))
+    never = _view("laptop", "linux", LAPTOP, hostname="laptop")
+    _plant(agents=[confirmed, sent, never])
+    sink: list[dict] = []
+    await _call("machine_status", {}, sink)
+    agent_facts = [fact for fact in sink if "device" in fact or "machine_update" in fact]
+    assert agent_facts == [
+        {"device": "PC-ONE", "connected": True},
+        {
+            "machine_update": "PC-ONE",
+            "outcome": "confirmed",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": True,
+        },
+        {"device": "pc-wsl", "connected": True},
+        {
+            "machine_update": "pc-wsl",
+            "outcome": "sent",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": False,
+        },
+        {"device": "laptop", "connected": True},
+    ]
+    # The reviewer's later-turn reply, backed by what she read — and only for
+    # the agent whose update the ledger confirmed.
+    span = SimpleNamespace(kind="tool", name="machine_status", meta={"ok": True, "facts": sink})
+    names = ["PC-ONE", "pc-wsl", "laptop"]
+    honest = "PC-ONE's agent has been updated — it reconnected on aaaaaaaaaaaa."
+    assert guards.narration_check(honest, [span], names) is None
+    assert guards.narration_check("pc-wsl's agent has been updated.", [span], names) is not None
+
+
+async def test_an_unasked_status_keeps_an_agents_last_update_only_with_its_line(
+    mount_peers, _plant, monkeypatch
+):
+    """live_facts withholds the ledger row with the line that states it: the
+    laptop's whole line is shown and the dell's is cut just after its head, so
+    the dell's confirmed update backs nothing she was not shown."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(tags=THREE_MODELS)]))
+    dell = _view("dell", "windows", WINDOWS, connected=False, hostname="DELL")
+    laptop = _view("laptop", "linux", LAPTOP, hostname="laptop")
+    for view in (dell, laptop):
+        view.update(last_update=_last("confirmed"))
+    _plant(agents=[laptop, dell])
+    full = (await _call("machine_status", {})).strip()
+    cut = full.index("  agent dell (") + len("  agent dell (Windows")
+    monkeypatch.setattr(live_facts, "MAX_RESULT_CHARS", cut)
+    check, turn, sink = await _unasked_status()
+    assert check.ok and "agent dell (" in check.result
+    (span,) = turn.spans
+    assert span.meta["facts"] == [
+        HUB_FACT,
+        {"device": "laptop", "connected": True},
+        {
+            "machine_update": "laptop",
+            "outcome": "confirmed",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": True,
+        },
+    ]
+    assert sink == span.meta["facts"]
+    assert (
+        guards.narration_check("laptop's agent has been updated.", turn.spans, AGENT_NAMES) is None
+    )
+    assert (
+        guards.narration_check("dell's agent has been updated.", turn.spans, AGENT_NAMES)
+        is not None
+    )
