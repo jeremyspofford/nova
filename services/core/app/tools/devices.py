@@ -123,8 +123,10 @@ _WINDOWS_SHARE = re.compile(r"^[\\/]{2}[^\\/?.][^\\/]*[\\/][^\\/]+")
 _WINDOWS_DEVICE = ("\\\\?\\", "\\\\.\\", "//?/", "//./")
 # A known folder (S42b P16): @<name>, then optionally one "/" or "\" and the
 # rest — the agent's own grammar (apps/novad internal/caps/fs.go resolvePath),
-# which resolves it ON the machine, as its OS names the folder.
-_FOLDER_TOKEN = re.compile(r"^@([a-z]+)(?:[\\/](.*))?$", re.S)
+# which resolves it ON the machine, as its OS names the folder. Matched with
+# fullmatch, never a `$` anchor, which also matches before a trailing
+# newline — "@desktop\n" names no folder (Task 21 fix round 1).
+_FOLDER_TOKEN = re.compile(r"@([a-z]+)(?:[\\/](.*))?", re.S)
 
 
 def _check_fs_path(
@@ -155,7 +157,7 @@ def _check_fs_path(
     would break the one-spelling rule. An unknown platform cannot be checked,
     and says so."""
     if isinstance(path, str) and path.startswith("@"):
-        m = _FOLDER_TOKEN.match(path)
+        m = _FOLDER_TOKEN.fullmatch(path)
         if m is None or m.group(1) not in device_facts.FOLDER_NAMES:
             known = ", ".join(f"@{n}" for n in device_facts.FOLDER_NAMES)
             raise ToolFailure(
@@ -353,11 +355,12 @@ def _agent_line(agent: dict) -> str:
 # reconnect ladder tops out there); within this of its last verified knock it
 # is "still knocking".
 _KNOCKING_WITHIN = timedelta(minutes=2)
-# How a Linux agent from before S42b was installed — the README's, said as
-# that, never as a fact of one that did not report how it runs.
+# How a Linux agent from before S42b was installed — the README's, said only
+# as a condition: a row with no service section may as well be an S42b
+# agent whose probe never landed (Task 21 fix round 1).
 _BEFORE_S42B_LINUX = (
-    "how it runs: not reported — an agent from before S42b on Linux runs as the README's "
-    "systemd user unit novad (binary ~/.local/bin/novad); inside WSL, one is reached through "
+    "how it runs: not reported — if it is an agent from before S42b, it runs as the README's "
+    "systemd user unit novad (binary ~/.local/bin/novad), and inside WSL it is reached through "
     "that PC's Windows agent with wsl.exe -d <distro> -- …, whose WSL facts say where it runs"
 )
 
@@ -396,12 +399,12 @@ async def _knocks(pool) -> list[str]:
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
-    """system.info, then what she needs to act on the machine (P29) — after
-    asking the agent to look again (facts.refresh), so the lines are its look
-    now. When no new look reached core — the refresh got no answer, the agent
-    could not take it, or its answer carried no new probe — the last line
-    says so, and that the lines are its last probe's: old facts are never
-    presented as a look just taken."""
+    """HER call: system.info, then what she needs to act on the machine (P29)
+    — after asking the agent to look again (facts.refresh), so the lines are
+    its look now. When no newer look is on record — the refresh got no
+    answer, the agent could not take it, or its answer left no newer probe —
+    a line before them says so, and that they are its last probe's: old facts
+    are never presented as a look just taken."""
     pool, row, _ = await _admit(args, ctx=ctx)
     before = _probed_at(row["facts"])
     missed = await _look_again(pool, row, ctx)
@@ -413,15 +416,45 @@ async def device_info(args: dict, ctx: ToolContext) -> str:
     # landed during it. The agent's own clock stamps probed_at, so it is
     # compared only with the agent's earlier stamp, never with core's clock;
     # and "newer" is all it can say — two probes begun in one second carry
-    # one stamp (RFC 3339 seconds), so the second is never called new.
+    # one stamp (RFC 3339 seconds), so the second is never called new. "On
+    # record", never "reached": core can refuse a frame that did arrive
+    # (FactsRejected, a DataError), and nothing here can tell which (Task 21
+    # fix round 1, I3).
     landed = after is not None and after != before
     if missed is None and not landed:
-        missed = "the agent answered the refresh, but no newer probe of it reached Nova"
+        missed = "the agent answered the refresh, but no newer probe of it is on record"
+    note = None if missed is None else f"({missed} — {_last_probe(facts, landed)})"
+    return await _info(pool, row, ctx, facts, platform, note)
+
+
+async def device_info_on_record(args: dict, ctx: ToolContext) -> str:
+    """device_info as an UNASKED check runs it (live_facts.UNASKED_READERS;
+    Task 21 fix round 1, I1): system.info, then the lines from the probe on
+    record, dated — never a refresh. The look again belongs to her call: on
+    Windows with WSL it takes up to 45 s, past the check's own 8 s bound, so
+    an unasked check would come back "NOT checked" while the cancelled
+    refresh still set the agent probing for nobody. Not a tool of its own —
+    nothing advertises it and she never calls it; device_info cannot tell an
+    unasked call from hers, so the backend's check chooses this instead."""
+    pool, row, _ = await _admit(args, ctx=ctx)
+    note = (
+        "(the agent was not asked to look again — an unasked check never makes it probe — "
+        f"{_last_probe(row['facts'], landed=False)})"
+    )
+    return await _info(pool, row, ctx, row["facts"], row["platform"], note)
+
+
+async def _info(pool, row, ctx: ToolContext, facts, platform: str, note: str | None) -> str:
+    """system.info's own answer, then — before the lines on how it runs, so
+    a result cut short never shows a line without what dates it (Task 21 fix
+    round 1, I2) — the note on how old they are, when there is one, then
+    the lines themselves, each probe's time first (device_facts.acting_lines)."""
     result = _require_ok(await _command(pool, row, "system.info", {}, ctx=ctx), row)
     detail = result.get("output") or "(the device returned no detail)"
-    lines = [f"{row['name']} system info:", detail, *device_facts.acting_lines(facts, platform)]
-    if missed is not None:
-        lines.append(f"({missed} — {_last_probe(facts, landed)})")
+    lines = [f"{row['name']} system info:", detail]
+    if note is not None:
+        lines.append(note)
+    lines.extend(device_facts.acting_lines(facts, platform))
     return "\n".join(lines)
 
 
@@ -451,16 +484,16 @@ def _probed_at(facts: dict | None) -> str | None:
 
 
 def _last_probe(facts: dict | None, landed: bool) -> str:
-    """What the lines on how it runs were read from, when the refresh did not
-    bring this call's look: the probe held before it (not now) — or, when a
+    """What the lines on how it runs were read from, when this call brought
+    no look of its own: the probe held before it (not now) — or, when a
     probe landed during the call all the same, that one, by its time."""
     when = _probed_at(facts)
     if landed:
-        return f"the lines above on how it runs are as probed at {when}"
+        return f"the lines below on how it runs are as probed at {when}"
     if when is not None:
-        return f"so the lines above on how it runs are as probed at {when}, not now"
+        return f"so the lines below on how it runs are as probed at {when}, not now"
     if isinstance(facts, dict) and any(key in facts for key in device_facts.PROBE_SECTIONS):
-        return "so the lines above on how it runs are from a probe at an unknown time, not now"
+        return "so the lines below on how it runs are from a probe at an unknown time, not now"
     return "and no probe of it is on record"
 
 

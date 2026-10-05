@@ -32,13 +32,14 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app import devices, devices_ws, envelopes, governance, machines, tools
+from app import devices, devices_ws, envelopes, governance, live_facts, machines, tools
 from app.identity import Person
 from app.tools import devices as device_tools
 from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
 from tests.test_device_facts import PROBED
+from tests.test_live_facts import _Turn
 
 pytestmark = requires_db
 
@@ -1879,7 +1880,10 @@ async def test_device_list_says_what_she_needs_to_act_on_a_windows_agent(pool):
         "sam's systemd user unit novad.service is active (enabled, Restart=always, main pid 412)"
         in result
     )
-    assert "\n    (probed 2026-09-28T17:40:00Z; device_info probes again" in result
+    # Pin moved (Task 21 fix round 1, I2): the probe's time is the block's
+    # FIRST line, before every line it dates.
+    dated = "\n    as probed at 2026-09-28T17:40:00Z (device_info probes again"
+    assert dated in result and result.index(dated) < result.index("\n    how it runs:")
     assert sink == [{"device": "dell", "connected": True}]
     await _close(conn, task)
 
@@ -1975,9 +1979,13 @@ async def test_device_list_says_a_revoked_agent_is_still_knocking_and_when_it_st
     old = next(line for line in lines if line.startswith("- old-wsl (revoked "))
     assert "still knocking (last " in old
     assert "the README's systemd user unit novad" in old and "wsl.exe -d <distro> --" in old
+    # Pin moved (Task 21 fix round 1, folded): a row with no service section
+    # may be an S42b agent whose probe never landed, so the README's install
+    # is said only as a condition, never as a fact of this agent.
     assert (
-        "how it runs: not reported" in old
-    )  # the README is how one was installed, not a fact of it
+        "how it runs: not reported — if it is an agent from before S42b, it runs as the "
+        "README's systemd user unit novad" in old
+    )
     older = next(line for line in lines if line.startswith("- older (revoked "))
     assert "no knock since " in older and "it stopped then, or can no longer reach Nova" in older
 
@@ -2064,7 +2072,12 @@ async def test_a_folder_the_agent_could_not_read_is_refused_in_its_own_words(poo
     await _close(conn, task)
 
 
-@pytest.mark.parametrize("path", ["@Desktop", "@pictures/a.png", "@", "@desk top"])
+@pytest.mark.parametrize(
+    "path",
+    # "@desktop\n" (Task 21 fix round 1): a `$` anchor also matches before a
+    # trailing newline, so the token is held to fullmatch.
+    ["@Desktop", "@pictures/a.png", "@", "@desk top", "@desktop\n", "@home\n/x"],
+)
 async def test_a_folder_token_that_names_no_known_folder_is_refused_before_the_wire(pool, path):
     _id, _device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
@@ -2136,15 +2149,16 @@ async def test_device_info_probes_again_and_says_how_the_agent_runs(pool):
     result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
     await asyncio.wait_for(ans, 2)
     assert ok is True
+    # Pin moved (Task 21 fix round 1, I2): the look landed, so nothing says
+    # otherwise — and its time comes first, before the lines it dates.
     assert result.startswith(
-        "dell system info:\nhost=PC-ONE; os=Windows 11 Pro\nhow it runs: the Run-key value "
+        "dell system info:\nhost=PC-ONE; os=Windows 11 Pro\n"
+        "as probed at 2026-09-28T17:40:00Z (device_info probes again — "
+        "on Windows with WSL this can take up to about 45 seconds)\n"
+        "how it runs: the Run-key value "
     )
     assert "WSL on it, reached through this agent's wsl.exe: Ubuntu-26.04 (default" in result
-    # The look landed, so nothing says otherwise: the last line is its time.
-    assert result.endswith(
-        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
-        "on Windows with WSL this can take up to about 45 seconds)"
-    )
+    assert "not now" not in result and "not asked" not in result
     await _close(conn, task)
 
 
@@ -2171,9 +2185,13 @@ async def test_device_info_says_the_agent_did_not_answer_the_refresh_and_what_th
     result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
     await asyncio.wait_for(ans, 3)
     assert ok is True and "how it runs: the Run-key value " in result
-    assert result.endswith(
-        "\n(the refresh got no answer: device 'dell' did not answer within 1s — so the lines "
-        "above on how it runs are as probed at 2026-09-28T17:40:00Z, not now)"
+    # Pin moved (Task 21 fix round 1, I2): the note comes BEFORE the lines it
+    # dates, right after system.info's own answer.
+    assert result.startswith(
+        "dell system info:\nhost=PC-ONE\n"
+        "(the refresh got no answer: device 'dell' did not answer within 1s — so the lines "
+        "below on how it runs are as probed at 2026-09-28T17:40:00Z, not now)\n"
+        "as probed at 2026-09-28T17:40:00Z ("
     )
     await _close(conn, task)
 
@@ -2203,11 +2221,12 @@ async def test_device_info_says_the_agent_could_not_look_again_in_its_own_words(
     result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
     await asyncio.wait_for(ans, 2)
     assert ok is True
+    # Pin moved (Task 21 fix round 1, I2): the note before the lines.
     assert result == (
         "laptop system info:\nhost=laptop\n"
-        "how it runs: unknown — this agent has not reported it\n"
         '(the agent could not look again: unknown capability "facts.refresh" — and no probe of '
-        "it is on record)"
+        "it is on record)\n"
+        "how it runs: unknown — this agent has not reported it"
     )
     await _close(conn, task)
 
@@ -2240,9 +2259,14 @@ async def test_device_info_never_calls_an_old_probe_fresh_when_no_new_one_landed
     result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
     await asyncio.wait_for(ans, 2)
     assert ok is True and "how it runs: the Run-key value " in result
-    assert result.endswith(
-        "\n(the agent answered the refresh, but no newer probe of it reached Nova — so the lines "
-        "above on how it runs are as probed at 2026-09-28T17:40:00Z, not now)"
+    # Pin moved (Task 21 fix round 1, I3): "is on record", never "reached" —
+    # core can refuse a probe frame that did arrive (FactsRejected, a
+    # DataError); and (I2) the note comes before the lines it dates.
+    assert result.startswith(
+        "dell system info:\nhost=PC-ONE\n"
+        "(the agent answered the refresh, but no newer probe of it is on record — so the lines "
+        "below on how it runs are as probed at 2026-09-28T17:40:00Z, not now)\n"
+        "as probed at 2026-09-28T17:40:00Z ("
     )
     await _close(conn, task)
 
@@ -2306,3 +2330,90 @@ def test_device_run_states_the_argv_contract_and_that_nothing_gets_a_terminal():
         tool = tools.REGISTRY[fs_tool]
         assert "@home, @desktop, @documents or @downloads" in tool.description
         assert "@desktop" in tool.parameters["properties"]["path"]["description"]
+
+
+# -- Task 21 fix round 1: what an unasked check runs, and how a cut result reads
+
+
+async def _probed_dell(pool):
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "probed_at")
+    return device_id, device, conn, task
+
+
+def _check_ctx(person) -> ToolContext:
+    return ToolContext(app=None, person=person, workspace_root=Path("/tmp"), facts_sink=[])
+
+
+async def test_an_unasked_device_info_check_never_makes_the_agent_probe(pool):
+    """I1 (controller ruling): the look again belongs to HER call. A note's
+    live check of device_info reads the probe on record, dated — it sends no
+    facts.refresh, so it finishes well inside the check's 8 s bound instead
+    of coming back NOT checked while the cancelled refresh set the agent
+    probing for nobody."""
+    _id, device, conn, task = await _probed_dell(pool)
+    person = await _person(pool)
+
+    async def answer():
+        info = await asyncio.wait_for(conn.next_sent(), 2)
+        assert info["envelope"]["capability"] == "system.info"
+        conn.feed(device.result(info["envelope"], output="host=PC-ONE"))
+
+    ans = asyncio.create_task(answer())
+    turn = _Turn()
+    started = time.monotonic()
+    (checked,) = await live_facts.run(
+        [live_facts.LiveCall("device_info", {"device": "dell"}, "hardware")],
+        turn,
+        _check_ctx(person),
+    )
+    took = time.monotonic() - started
+    await asyncio.wait_for(ans, 2)
+    assert checked.ok, checked.problem
+    assert took < 3, f"the unasked check took {took:.1f}s"
+    assert [f["envelope"]["capability"] for f in _command_frames(conn)] == ["system.info"]
+    assert checked.result.startswith(
+        "dell system info:\nhost=PC-ONE\n"
+        "(the agent was not asked to look again — an unasked check never makes it probe — so "
+        "the lines below on how it runs are as probed at 2026-09-28T17:40:00Z, not now)\n"
+        "as probed at 2026-09-28T17:40:00Z (device_info probes again"
+    )
+    (span,) = turn.spans
+    assert (span.name, span.meta["unasked"], span.meta["ok"]) == ("device_info", True, True)
+    await _close(conn, task)
+
+
+async def test_an_unasked_device_info_refusal_keeps_dispatchs_error_shape(pool):
+    """The reader runs in place of dispatch, and its refusal reads exactly as
+    dispatch states one — Error: <reason>, ok false — with the fact it
+    determined kept on the span."""
+    await _enroll(pool, name="dell", platform="windows")  # paired, never connected
+    person = await _person(pool)
+    turn = _Turn()
+    ctx = _check_ctx(person)
+    (checked,) = await live_facts.run(
+        [live_facts.LiveCall("device_info", {"device": "dell"}, "hardware")], turn, ctx
+    )
+    assert not checked.ok
+    assert checked.problem.startswith("Error: device 'dell' is not connected — its tile is stale")
+    assert ctx.facts_sink == [{"device": "dell", "connected": False}]
+
+
+async def test_a_cut_unasked_device_list_keeps_each_probes_time_before_its_lines(pool):
+    """I2 (controller ruling): an unasked check keeps 600 characters and calls
+    them the current answer. A probed Windows agent's block runs past that, so
+    the probe's time — said last, it was cut away from the lines it dates —
+    comes first, before every line of the block."""
+    _id, _device, conn, task = await _probed_dell(pool)
+    person = await _person(pool)
+    (checked,) = await live_facts.run(
+        [live_facts.LiveCall("device_list", {}, "machines")], _Turn(), _check_ctx(person)
+    )
+    assert checked.ok
+    assert checked.result.endswith(f"[…cut off at {live_facts.MAX_RESULT_CHARS} characters]")
+    dated = "as probed at 2026-09-28T17:40:00Z (device_info probes again"
+    assert dated in checked.result
+    assert checked.result.index(dated) < checked.result.index("how it runs:")
+    await _close(conn, task)

@@ -1022,7 +1022,7 @@ def _has_probed(facts: dict | None) -> bool:
     genuinely never having probed (predates S42b, has not connected since,
     or the probe frame has not landed, likeliest right after a fresh
     connect: auth REPLACES facts, and the probe frame follows separately,
-    up to ~45s later). Gates only the trailing "(probed ...)" line — the
+    up to ~45s later). Gates only the leading "as probed at …" line — the
     how-it-runs, elevation and WSL lines each render independently off
     their own section, never off this (Task 16b fix round 1, I1)."""
     if not isinstance(facts, dict):
@@ -1046,7 +1046,13 @@ def acting_lines(facts: dict | None, platform: str) -> list[str]:
     not landed yet can leave `service` absent while `elevation` or
     `wsl_distros` are present, or the reverse — so the elevation and WSL
     lines are never gated on `service`'s presence, only on their own
-    section's."""
+    section's.
+
+    When the agent has probed, the probe's time comes FIRST, before every
+    line it dates (Task 21 fix round 1, I2): an unasked check hands her a
+    result cut at 600 characters, and a time said last was cut away from the
+    lines above it — "how it runs: … pid 812" from a probe of any age, read
+    as current. Said first, any line she is shown has its time before it."""
     lines = [runs_line(facts)]
     lines.extend(line for line in (elevation_line(facts, platform), wsl_line(facts)) if line)
     if not _has_probed(facts):
@@ -1059,9 +1065,8 @@ def acting_lines(facts: dict | None, platform: str) -> list[str]:
         if platform == "windows"
         else ""
     )
-    when = facts.get("probed_at") or "at an unknown time"
-    lines.append(f"(probed {when}; device_info probes again{takes})")
-    return lines
+    when = facts.get("probed_at") or "an unknown time"
+    return [f"as probed at {when} (device_info probes again{takes})", *lines]
 
 
 # -- roles -----------------------------------------------------------------

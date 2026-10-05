@@ -551,10 +551,19 @@ def test_a_distro_whose_bus_could_not_be_reached_says_so_in_systemctls_words():
 
 def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     lines = df.acting_lines(_merged(), "windows")
+    # Pin moved (Task 21 fix round 1, I2): the probe's time comes FIRST,
+    # before the lines it dates — said last, a result cut at 600 characters
+    # (an unasked check) kept "how it runs: …" and lost its time. Every
+    # index below moved down by one, and the line reads "as probed at …".
+    # (Task 16b review, "probes take time": it notes the ~45s Windows bound.)
+    assert lines[0] == (
+        "as probed at 2026-09-28T17:40:00Z (device_info probes again — "
+        "on Windows with WSL this can take up to about 45 seconds)"
+    )
     # Pin moved (Task 16b fix round 2, M2): a Run-key value is not a service.
     # This pin held "service HKCU\..." only because _merged paired the Run-key
     # name with mode "foreground" — an agent never sends that pair.
-    assert lines[0] == (
+    assert lines[1] == (
         "how it runs: the Run-key value "
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent; "
         "binary C:\\Users\\sam\\AppData\\Local\\Programs\\Nova\\novad.exe; "
@@ -573,18 +582,13 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
     # Pin moved again (Task 16b fix round 2, M7): "admin work needs elevating
     # first, which a command cannot do for itself" still answered a question
     # nobody measured — and the sudo tail on the same line says it is open.
-    assert lines[1].startswith(
+    assert lines[2].startswith(
         "elevation: the agent runs without admin rights (its token is not elevated); "
         "the account it runs as is an administrator; whether admin work from Nova's "
         "commands would stop at a UAC prompt has not been measured yet; "
         "Windows sudo is on (inline)"
     )
-    # Pin moved deliberately (Task 16b review, "probes take time"): the
-    # final line now notes the ~45s Windows-with-WSL probe bound.
-    assert lines[2].startswith("WSL on it") and lines[3] == (
-        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
-        "on Windows with WSL this can take up to about 45 seconds)"
-    )
+    assert lines[3].startswith("WSL on it") and len(lines) == 4
     assert all("\n" not in line for line in lines)
 
 
@@ -791,9 +795,10 @@ def test_the_unit_sentence_notes_xdg_runtime_dir_for_a_command_nova_runs():
 
 
 def test_the_probed_again_line_notes_45_seconds_on_windows_never_elsewhere():
+    # Pin moved (Task 21 fix round 1, I2): the time line is the FIRST line now.
     lines = df.acting_lines(_merged(), "windows")
-    assert lines[-1] == (
-        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
+    assert lines[0] == (
+        "as probed at 2026-09-28T17:40:00Z (device_info probes again — "
         "on Windows with WSL this can take up to about 45 seconds)"
     )
     linux_frame = {
@@ -810,8 +815,8 @@ def test_the_probed_again_line_notes_45_seconds_on_windows_never_elsewhere():
         "probed_at": "2026-09-28T17:40:00Z",
     }
     linux_facts = {**df.validate_auth(WSL), **df.validate_frame(linux_frame)}
-    assert df.acting_lines(linux_facts, "linux")[-1] == (
-        "(probed 2026-09-28T17:40:00Z; device_info probes again)"
+    assert df.acting_lines(linux_facts, "linux")[0] == (
+        "as probed at 2026-09-28T17:40:00Z (device_info probes again)"
     )
 
 
@@ -885,7 +890,9 @@ def test_elevation_and_wsl_lines_render_even_when_service_has_not_landed():
     }
     facts = {**df.validate_auth(WINDOWS), **df.validate_frame(frame)}
     lines = df.acting_lines(facts, "windows")
-    assert lines[0] == "how it runs: unknown — this agent has not reported it"
+    # Pin moved (Task 21 fix round 1, I2): the probe's time line comes first.
+    assert lines[0].startswith("as probed at an unknown time (device_info probes again")
+    assert lines[1] == "how it runs: unknown — this agent has not reported it"
     assert any(line.startswith("elevation:") for line in lines)
     assert any(line.startswith("WSL:") for line in lines)
 
@@ -1648,7 +1655,7 @@ def test_a_probe_frame_replaces_every_probe_section_as_one_unit():
     assert "WSL: the list of distributions could not be read (WSL's list could not be read" in (
         "\n".join(lines)
     )
-    assert lines[-1].startswith("(probed 2026-09-29T08:00:00Z;")
+    assert lines[0].startswith("as probed at 2026-09-29T08:00:00Z (")
 
 
 def test_a_frame_without_probed_at_leaves_the_probe_and_its_reasons_alone():
@@ -1717,6 +1724,14 @@ def test_probe_sections_without_their_time_are_never_recorded():
 )
 def test_an_unreadable_entry_belongs_to_the_probe_by_the_section_it_names(item, owned):
     assert df.probe_owned({"item": item, "reason": "x"}) is owned
+
+
+def test_the_probes_time_comes_before_every_line_it_dates():
+    """Task 21 fix round 1, I2: whatever prefix of the lines a reader is
+    shown, a line from the probe never stands without the time before it."""
+    lines = df.acting_lines(_merged(), "windows")
+    assert lines[0].startswith("as probed at 2026-09-28T17:40:00Z")
+    assert [line.startswith("as probed at") for line in lines] == [True, False, False, False]
 
 
 def test_a_frame_lands_on_no_stored_facts_as_itself():
