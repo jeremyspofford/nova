@@ -97,6 +97,9 @@ its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
   replaces becomes the first fallback. Remove a fallback in Routing when you no longer
   want it. While Jev Router picks chat's cloud model, a pick is refused until the switch
   is off.
+- **She can make the pick herself.** Ask her in chat ("use the Dell first, then
+  OpenRouter"): her `set_chat_model` tool makes the same write and answers with chat's
+  order as stored; `route_explain` says which model would answer right now.
 - **The model list.** The Models page is the one list of models (install, compare,
   probe, remove). The catalogue remembers a provider that could not be reached at all
   for 60 seconds, so a machine that is off does not hold every page that reads the list;

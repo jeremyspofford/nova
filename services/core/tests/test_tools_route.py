@@ -144,7 +144,7 @@ def test_a_link_that_cannot_answer_its_role_is_said_in_words():
 
 
 def test_her_routing_tool_names_the_decisions_role():
-    (tool,) = route.TOOLS
+    (tool,) = [t for t in route.TOOLS if t.name == "route_explain"]
     assert "decisions" in tool.description
     assert "decisions" in tool.parameters["properties"]["role"]["description"]
 
@@ -295,3 +295,100 @@ async def test_switches_that_cannot_be_read_are_said_never_guessed(
         "explained — ConnectionError: the settings table is locked"
     )
     assert gateway.queries == []
+
+
+# -- set_chat_model: her own pick (2026-10-05) ------------------------------------
+# The owner asked her to change chat's order and she could not ("I can't edit
+# the settings page myself — I only get to read the routing outcome"); the
+# change was made for him by hand. Her tool is the same write every page makes.
+
+GEMINI = "openrouter:google/gemini-3.8-flash"
+DELL = "dell:qwen3:8b"
+
+
+async def _chat_model_is(pool, value: str) -> None:
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('chat.model', to_jsonb($1::text)) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        value,
+    )
+
+
+async def test_set_chat_model_puts_the_model_first_and_keeps_the_old_pick(
+    pool, mount_peers, tmp_path
+):
+    from tests.test_proxies import RoutesGateway
+
+    gateway = RoutesGateway([])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(pool, GEMINI)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    text = await route.set_chat_model({"model": DELL}, ctx)
+
+    assert (
+        text.splitlines()[0]
+        == f"Answer: chat now answers with {DELL} first — stored and read back."
+    )
+    assert f"Chat's order now: 1. {DELL}; 2. {GEMINI}." in text
+    assert f"{GEMINI}, the previous pick, is now the first fallback." in text
+    assert gateway.puts == [[GEMINI]]
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+async def test_set_chat_model_says_when_nothing_moved(pool, mount_peers, tmp_path):
+    from tests.test_proxies import RoutesGateway
+
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(pool, DELL)
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    text = await route.set_chat_model({"model": DELL}, ctx)
+
+    assert text.splitlines()[0] == f"Answer: {DELL} was already chat's first choice."
+    assert f"Chat's order now: 1. {DELL}; 2. {GEMINI}." in text
+    assert gateway.puts == []
+
+
+async def test_set_chat_model_states_a_refusal_in_the_gateways_words(pool, mount_peers, tmp_path):
+    from tests.test_proxies import GLM, RoutesGateway
+
+    gateway = RoutesGateway([GEMINI], router_when_stated={"on": True, "kept": GLM})
+    mount_peers(gateway=gateway)
+    await _chat_model_is(pool, "openrouter:typesafe/jev-router")
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    with pytest.raises(ToolFailure, match="Jev Router is picking chat's cloud model"):
+        await route.set_chat_model({"model": DELL}, ctx)
+    assert await settings_store.read_value(pool, "chat.model") == "openrouter:typesafe/jev-router"
+
+
+async def test_set_chat_model_names_what_it_could_not_keep(pool, mount_peers, tmp_path):
+    from tests.test_proxies import RoutesGateway
+
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(pool, "gone:old-model")
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+
+    text = await route.set_chat_model({"model": DELL}, ctx)
+
+    assert "Not kept: gone:old-model names no registered provider" in text
+    assert "the previous pick" not in text
+
+
+async def test_set_chat_model_needs_a_model(tmp_path):
+    ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
+    with pytest.raises(ToolFailure, match="name the model"):
+        await route.set_chat_model({"model": "  "}, ctx)
+
+
+def test_set_chat_model_is_registered_as_a_write_that_is_kept():
+    from app import tools
+
+    tool = tools.REGISTRY["set_chat_model"]
+    # It changes something, and the turn is ordinary knowledge: "use the Dell
+    # first" is a preference worth remembering, not a stale snapshot.
+    assert tool.reads_only is False and tool.ephemeral is False
+    assert tool.parameters["required"] == ["model"]
