@@ -1457,8 +1457,9 @@ def narration_check(
     is honest (or when the matcher cannot be sure — precision over recall).
     Pure: it reads only the text and the spans, never a model or the network.
     `device_names` are the LIVE paired machines' (chat reads them for the
-    state guard): the only words an update claim's machine can be (S42b fix
-    round 1, I2). Without them, no update claim names a machine.
+    state guard, through the plant — an eval replay's are its declared
+    devices, S42b Task 24): the only words an update claim's machine can be
+    (S42b fix round 1, I2). Without them, no update claim names a machine.
     """
     if not reply_text or not reply_text.strip():
         return None
@@ -3246,10 +3247,11 @@ def deferral_check(
 # StateClaim; nothing in this paragraph changed for devices.) Both halves are
 # mechanical:
 #
-#   * `device_names` is DERIVED at the call site from the live registry
-#     (devices.list_devices), never a list kept here — a household with no
-#     paired devices can have no such claim, so the guard never fires there, and
-#     pairing a machine arms it by itself.
+#   * `device_names` is DERIVED at the call site from the paired machines
+#     (chat._paired_device_names, through machines.plant(): the live registry,
+#     or an eval replay's declared devices alone — S42b Task 24), never a list
+#     kept here — a household with no paired devices can have no such claim,
+#     so the guard never fires there, and pairing a machine arms it by itself.
 #   * Backing is any span whose tool name starts with `device_` that either
 #     SUCCEEDED or RECORDED a connectivity fact. That prefix is the naming of
 #     every device tool in the registry (app/tools/devices.py), so a device tool

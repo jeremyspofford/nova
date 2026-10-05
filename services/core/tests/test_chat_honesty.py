@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from app import chat, guards
+from app import chat, guards, machines
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 
@@ -185,8 +185,10 @@ async def test_a_guard_that_raises_ships_the_reply_uncorrected(
 # same reason. An honest turn (the update confirmed) is ordinary knowledge.
 
 
-class _UpdatePlant:
-    """machine_update's plant answering one outcome: nothing is sent anywhere."""
+class _UpdatePlant(machines.GatewayPlant):
+    """machine_update's plant answering one outcome: nothing is sent anywhere.
+    Every other reader is the real plant's — the paired names the guards read
+    come through the plant too (S42b Task 24), from the live registry here."""
 
     def __init__(self, outcome: str) -> None:
         self.outcome = outcome

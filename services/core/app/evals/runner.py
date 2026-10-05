@@ -94,6 +94,21 @@ Three properties are enforced mechanically, not by intention:
     A re-pair card's `machine` is read through the plant, whose replay
     overlay answers with the case's declared devices alone, never a real one.
 
+    THE PAIRED NAMES AND THE TIMERS (S42b Task 24). The rest of what a turn
+    reads about paired machines goes through the plant too: the names the
+    state guard and an update claim are read against
+    (chat._paired_device_names) and the device a reminder names
+    (tools.timers create_timer) are a replay's declared devices, never the
+    real registry's. And a timer is the one thing a turn makes that acts
+    LATER, outside the replay's ContextVars: a reminder notifies a real
+    machine (or every connected one), a scheduled turn runs a whole real turn.
+    So no timer a replay sets ever fires — every one belongs to the case's
+    scratch person, and the scheduler's claim never takes a timer an eval
+    person owns (scheduler.tick_once reads SCRATCH_PERSON_ROLE and
+    SCRATCH_PERSON_NAME, below — the same definition the orphan sweep
+    deletes by). That holds while the case runs and after a teardown that
+    never ran; the rows go with the person.
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -186,6 +201,9 @@ EVAL_TURN_KIND = "eval"
 # runs) can never collide on it.
 SCRATCH_PERSON_NAME = "__eval_scratch__"
 SCRATCH_PERSON_ROLE = "guest"
+# These two ARE the definition of "an eval person": the orphan sweep below
+# deletes by them, and scheduler.tick_once never claims a timer such a person
+# owns (S42b Task 24) — so no timer a replay sets can fire on the real system.
 
 # Best-effort timeout for the memory /forget call _cleanup_scratch_person
 # makes — short, because a slow/unreachable memory service must never hang
@@ -419,11 +437,14 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     S42a: a case's declared devices (agents) are the plant's agent listing,
     for machine_status and device_list to read — S42b Task 22 (the
     replay-hermeticity ruling): ALONE, never beside the real ones, and with
-    no real knock; machine_update acts only on them."""
+    no real knock; machine_update acts only on them, and answers each with
+    the outcome its declaration names (cases.FixtureDevice.update — S42b
+    Task 24), sending nothing anywhere."""
     return machines.PLANT.set(
         machines.FixturePlant(
             {m.name: m.as_row() for m in case.machines},
             devices={d.name: d.as_view() for d in case.devices},
+            updates={d.name: d.update for d in case.devices if d.update},
         )
     )
 

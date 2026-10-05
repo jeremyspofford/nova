@@ -98,7 +98,8 @@ async def _stored(pool) -> str:
 
 async def _pair(pool, name: str = DEVICE) -> None:
     """A paired machine, straight into the registry — the guard's names come
-    from devices.list_devices, so this is the only fact it needs."""
+    from the live rows (chat._paired_device_names, through the real plant), so
+    this is the only fact it needs."""
     await pool.execute(
         "INSERT INTO devices (name, platform, hostname, pubkey) VALUES ($1, 'linux', 'dell', $2)",
         name,

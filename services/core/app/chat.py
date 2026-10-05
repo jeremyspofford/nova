@@ -103,10 +103,10 @@ from app import (
     attachments,
     conversations,
     db,
-    devices,
     guards,
     identity,
     live_facts,
+    machines,
     markup_calls,
     model_speed,
     network,
@@ -2154,8 +2154,12 @@ def _queue_ingest(
         span.meta["queued"] = True
 
 
-async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
-    """Every LIVE paired device's name, from the registry itself.
+async def _paired_device_names(app) -> list[str]:
+    """Every paired machine's name in this turn's world, read through the
+    plant (machines.plant().paired_machines): the registry's LIVE rows — or,
+    inside an eval replay, the case's declared devices alone (S42b Task 24,
+    the replay-hermeticity ruling: a replay's state guard and update claims
+    read the machines its own listing shows, never the owner's real ones).
 
     Revoked rows are excluded: a revoked machine is not paired, so a claim about
     it is not a claim about anything this household has. Returns [] on ANY
@@ -2164,11 +2168,7 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
     becomes a correction).
     """
     try:
-        return [
-            device["name"]
-            for device in await devices.list_devices(pool)
-            if not device.get("revoked_at")
-        ]
+        return [machine["name"] for machine in await machines.plant().paired_machines(app)]
     except Exception:
         logger.exception(
             "device registry read failed; the state-claim guard stays silent this turn"
@@ -4643,13 +4643,14 @@ async def _run_turn(
         # {correction} frame, in order, so the live screen shows the
         # contradiction. Only the durable text is composed, once, below.
 
-        # The paired-device names, read LIVE from the registry — the fact the
+        # The paired-device names, read LIVE through the plant — the registry,
+        # or an eval replay's declared devices (S42b Task 24) — the fact the
         # state-claim guard is derived from. Never a list kept in the guard: a
         # household with nothing paired can make no claim about "the device",
         # and pairing a machine arms the check by itself. FAIL-OPEN to no names,
         # which makes the guard silent — a registry read that blips must never
         # turn an honest reply into a false correction.
-        device_names = await _paired_device_names(pool)
+        device_names = await _paired_device_names(app)
         # And the agents' names (S12), the same way — the fact the
         # delegation-claim guard is derived from. Read once here and threaded
         # into every redirect's vetting, exactly like device_names. The

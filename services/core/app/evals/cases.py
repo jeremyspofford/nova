@@ -25,7 +25,8 @@ Fixture JSON (one file per case, under app/evals/cases/):
                   "instructions": "...", "tools": ["workspace_write_file"]}],
       "machines": [{"name": "eval_box", "serving": true}],   # optional; default []
       "devices": [{"name": "eval_pc", "platform": "windows",  # optional; default [] (S42a)
-                   "hostname": "EVAL-PC", "connected": true, "facts": {...}}],
+                   "hostname": "EVAL-PC", "connected": true, "facts": {...},
+                   "update": "sent"}],                  # optional (S42b): machine_update's answer
       "message": "what's the latest on the pixel camera?",
       "contract": [
         {"predicate": "tool_called", "arg": "web_search"},
@@ -54,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import agents, device_facts
+from app import agents, device_facts, machines
 
 # The predicate names a contract may use. Kept here (not imported from
 # predicates.py) so a fixture is validated at LOAD time against the known set,
@@ -420,13 +421,21 @@ class FixtureDevice:
     sign for).
 
     `facts` go through device_facts.validate_auth at load, so a case can never
-    describe an agent a real one could not."""
+    describe an agent a real one could not.
+
+    `update` (S42b Task 24) is what machine_update answers for this device in
+    the replay — machines.FixturePlant.update_agent, which sends nothing; the
+    plant answers "sent" for a device that declares none. It is one of the
+    plant's own outcomes (machines.FIXTURE_UPDATE_OUTCOMES), refused at LOAD
+    otherwise — never device_facts.UPDATE_OUTCOMES, the agent's own report of
+    an update, which is another set under a similar name."""
 
     name: str
     platform: str
     hostname: str
     connected: bool = True
     facts: dict | None = None
+    update: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name.startswith(FIXTURE_AGENT_PREFIX):
@@ -447,6 +456,11 @@ class FixtureDevice:
                     f"a case device's facts are not what an agent sends — {exc.reason}"
                 ) from exc
             object.__setattr__(self, "facts", clean)
+        if self.update is not None and self.update not in machines.FIXTURE_UPDATE_OUTCOMES:
+            raise CaseError(
+                f"a case device's update must be one of "
+                f"{', '.join(machines.FIXTURE_UPDATE_OUTCOMES)}, got {self.update!r}"
+            )
 
     def as_view(self) -> dict:
         """device_facts.agent_view, fresh on every call, stamped now."""
@@ -470,6 +484,8 @@ class FixtureDevice:
         }
         if self.facts is not None:
             out["facts"] = copy.deepcopy(self.facts)
+        if self.update is not None:
+            out["update"] = self.update
         return out
 
 
@@ -492,12 +508,16 @@ def device_from_dict(raw: object) -> FixtureDevice:
     facts = raw.get("facts")
     if facts is not None and not isinstance(facts, dict):
         raise CaseError(f"a case device's facts must be an object, got {facts!r}")
+    update = raw.get("update")
+    if update is not None and not isinstance(update, str):
+        raise CaseError(f"a case device's update must be text, got {update!r}")
     return FixtureDevice(
         name=_require(raw, "name", str),
         platform=_require(raw, "platform", str),
         hostname=_require(raw, "hostname", str),
         connected=connected,
         facts=facts,
+        update=update,
     )
 
 
