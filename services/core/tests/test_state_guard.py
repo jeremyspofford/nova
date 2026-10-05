@@ -422,13 +422,6 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "device was connected' note lands on the firing row for the Schedules "
         "page, never in text a model produced or a guard reads.",
     ),
-    ("tools/devices.py", "device_list"): (
-        _REPORTER,
-        "reads connected_ids() to render each paired device's status and "
-        "returns ok=True on success — the state guard already treats any "
-        "successful device_* span as backing (meta.ok is True), so this one "
-        "does not also need a fact recorded to be honest.",
-    ),
     ("machines.py", "GatewayPlant.agents"): (
         _READ_HERE_RECORDED_UP,
         "S42a, reclassified fix round 1 (Important 2): reads connected_ids() "
@@ -512,6 +505,11 @@ _AGENTS_CALL_CONSUMERS: frozenset[tuple[str, str]] = frozenset(
     {
         ("tools/machines.py", "_agents"),
         ("machines.py", "FixturePlant.agents"),
+        # S42b Task 21, a deliberate pin move: device_list no longer reads
+        # connected_ids() (it left _ALLOWED_CONNECTIVITY_SITES, where it was a
+        # REPORTER) — it reads the plant, and records {device, connected} for
+        # every agent it lists, the same record _describe_agents leaves.
+        ("tools/devices.py", "device_list"),
     }
 )
 

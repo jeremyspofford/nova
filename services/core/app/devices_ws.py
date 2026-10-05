@@ -88,7 +88,9 @@ NONCE_BYTES = 32
 #     heartbeat  {ts}                            -> devices.last_seen = now()
 #     result     {envelope_id, ok, output, exit_code, error}
 #     audit      {entries: [_ENTRY_KEYS...]}     (ingest_audit)
-#     facts      {net?, unreadable?}              (S42a; merged into facts)
+#     facts      {net?, unreadable?, folders?, service?, elevation?, wsl_distros?,
+#                probed_at?}                      (S42a/S42b; merged into facts,
+#                a probe as one unit — device_facts.merge_frame)
 
 # WebSocket close codes in the application-private 4000-4999 range. 4401 mirrors
 # HTTP 401 (the challenge did not authenticate); 4403 mirrors 403 (the row is
@@ -858,26 +860,45 @@ async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object, *, epoch: 
 
 
 async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict, *, epoch: int) -> None:
-    """MERGE a facts frame's sections into what the device said (jsonb ||), so
-    the auth facts survive a frame that carries only net/unreadable. A shape
-    device_facts refuses, or one postgres itself refuses (asyncpg.DataError —
-    the belt-and-suspenders half, beside device_facts already catching the
-    two known postgres-hostile shapes before the write), is logged and
-    dropped: never a reason to take the socket down. Merged only while the
-    row is still at `epoch`."""
+    """MERGE a facts frame's sections into what the device said
+    (device_facts.merge_frame), so the auth facts survive a frame that carries
+    only net/unreadable — and a probe lands as ONE unit: a frame carrying
+    probed_at replaces every probe section, and one without leaves them
+    alone (Task 21 ruling; a jsonb `||` here kept an older probe's WSL list
+    under a newer probe's time). Read and written in one transaction holding
+    the row, so no other write lands between them; only while the row is
+    still at `epoch`. A shape device_facts refuses, or one postgres itself
+    refuses (asyncpg.DataError — the belt-and-suspenders half, beside
+    device_facts already catching the two known postgres-hostile shapes
+    before the write), is logged and dropped: never a reason to take the
+    socket down."""
     try:
         sections = device_facts.validate_frame(frame)
     except device_facts.FactsRejected as exc:
         logger.warning("device %s: facts frame not recorded — %s", device_id, exc.reason)
         return
-    try:
-        await pool.execute(
-            "UPDATE devices SET facts = COALESCE(facts, '{}'::jsonb) || $2::jsonb, "
-            "facts_at = now() WHERE id = $1 AND audit_epoch = $3",
+    if "probed_at" not in sections and any(k in sections for k in device_facts.PROBE_SECTIONS):
+        logger.warning(
+            "device %s: probe sections without probed_at not recorded — no time says when "
+            "they were read",
             device_id,
-            sections,
-            epoch,
         )
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT facts FROM devices WHERE id = $1 AND audit_epoch = $2 FOR UPDATE",
+                device_id,
+                epoch,
+            )
+            if row is None:
+                return  # a re-pair moved the row past this socket's epoch
+            await conn.execute(
+                "UPDATE devices SET facts = $2::jsonb, facts_at = now() "
+                "WHERE id = $1 AND audit_epoch = $3",
+                device_id,
+                device_facts.merge_frame(row["facts"], sections),
+                epoch,
+            )
     except asyncpg.DataError as exc:
         logger.warning(
             "device %s: facts frame not recorded — postgres refused it: %s", device_id, exc

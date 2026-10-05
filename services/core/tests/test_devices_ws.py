@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -33,9 +34,11 @@ import pytest
 
 from app import devices, devices_ws, envelopes, governance, machines, tools
 from app.identity import Person
+from app.tools import devices as device_tools
 from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
+from tests.test_device_facts import PROBED
 
 pytestmark = requires_db
 
@@ -640,10 +643,18 @@ async def test_a_tool_for_a_revoked_device_is_refused_by_name(pool):
 
 
 async def test_a_device_reporting_failure_is_not_dressed_as_success(pool):
+    # Pin moved (Task 21): device_info asks for a fresh look (facts.refresh)
+    # before system.info, so the device's failure is system.info's answer —
+    # the second command. A refresh that fails is said in device_info's own
+    # last line, never dressed as a look (test_device_info_says_the_agent_
+    # could_not_look_again_in_its_own_words).
     device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
 
     async def answer():
+        refresh = await asyncio.wait_for(conn.next_sent(), 2)
+        assert refresh["envelope"]["capability"] == "facts.refresh"
+        conn.feed(device.result(refresh["envelope"], output="facts sent"))
         frame = await asyncio.wait_for(conn.next_sent(), 2)
         conn.feed(
             device.result(
@@ -734,21 +745,27 @@ async def test_a_successful_call_records_the_fact_exactly_once(pool):
     task = asyncio.create_task(
         tools.dispatch("device_info", {"device": "laptop"}, _ctx(person, facts=facts))
     )
-    frame = await asyncio.wait_for(conn.next_sent(), 2)
-    assert frame["type"] == "command"
-    envelope_id = frame["envelope"]["envelope_id"]
-    devices_ws.hub.resolve(
-        device_id,
-        envelope_id,
-        {
-            "type": "result",
-            "envelope_id": envelope_id,
-            "ok": True,
-            "output": "disk: 431 GiB free",
-            "exit_code": 0,
-            "error": None,
-        },
-    )
+    # Pin moved (Task 21): device_info sends two commands now — facts.refresh,
+    # then system.info — and still records its one determination once.
+    for capability, output in (
+        ("facts.refresh", "facts sent"),
+        ("system.info", "disk: 431 GiB free"),
+    ):
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["type"] == "command" and frame["envelope"]["capability"] == capability
+        envelope_id = frame["envelope"]["envelope_id"]
+        devices_ws.hub.resolve(
+            device_id,
+            envelope_id,
+            {
+                "type": "result",
+                "envelope_id": envelope_id,
+                "ok": True,
+                "output": output,
+                "exit_code": 0,
+                "error": None,
+            },
+        )
     result, ok = await asyncio.wait_for(task, 2)
 
     assert ok is True and "disk: 431 GiB free" in result
@@ -765,9 +782,12 @@ async def test_two_calls_in_one_turn_each_record_their_own_fact(pool):
     facts: list[dict] = []
 
     async def answer():
-        frame = await asyncio.wait_for(conn.next_sent(), 2)
-        assert frame["type"] == "command" and device.verify_command(core_pubkey, frame)
-        conn.feed(device.result(frame["envelope"], ok=True, output="ok", exit_code=0))
+        # Pin moved (Task 21): each device_info is two commands — the refresh,
+        # then system.info.
+        for _ in range(2):
+            frame = await asyncio.wait_for(conn.next_sent(), 2)
+            assert frame["type"] == "command" and device.verify_command(core_pubkey, frame)
+            conn.feed(device.result(frame["envelope"], ok=True, output="ok", exit_code=0))
 
     for _ in range(2):
         ans = asyncio.create_task(answer())
@@ -1362,15 +1382,20 @@ async def test_an_injected_data_error_never_takes_the_auth_socket_down(pool, mon
 
 
 async def test_an_injected_data_error_never_takes_a_connected_socket_down(pool, monkeypatch):
+    # Pin moved (Task 21, probe freshness): the frame's write is no longer a
+    # pool-level `facts || $2` UPDATE but a read-and-write in one transaction
+    # on a pooled CONNECTION (device_facts.merge_frame keeps a probe as one
+    # unit), so the injection targets that statement on the Connection class
+    # — which a pool's own execute calls too, so the heartbeat still lands.
     device_id, device, conn, task = await _connect(pool, name="pc")
-    real_execute = type(pool).execute
+    real_execute = asyncpg.connection.Connection.execute
 
     async def _boom(self, query, *args, **kwargs):
-        if "COALESCE(facts, '{}'::jsonb)" in query:
+        if "SET facts = $2::jsonb, facts_at = now()" in query:
             raise asyncpg.DataError("simulated: postgres refused this value")
         return await real_execute(self, query, *args, **kwargs)
 
-    monkeypatch.setattr(type(pool), "execute", _boom)
+    monkeypatch.setattr(asyncpg.connection.Connection, "execute", _boom)
     conn.feed({"type": "facts", "net": {"ifaces": []}, "unreadable": []})
     conn.feed({"type": "heartbeat", "ts": int(time.time())})
 
@@ -1818,3 +1843,425 @@ async def test_an_unverified_knock_for_a_revoked_id_gets_no_proof_and_records_no
         await pool.fetchval("SELECT last_refused_at FROM devices WHERE id = $1", device_id) is None
     )
     await asyncio.wait_for(task, 2)
+
+
+# -- S42b Task 21: device_list from the plant, the knocks, the facts she acts on
+
+
+async def _wait_for_facts_key(pool, device_id, key: str, value=None) -> None:
+    for _ in range(100):
+        facts = await pool.fetchval("SELECT facts FROM devices WHERE id = $1", device_id)
+        if facts and key in facts and (value is None or facts[key] == value):
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"the facts frame's {key!r} never landed")
+
+
+async def test_device_list_says_what_she_needs_to_act_on_a_windows_agent(pool):
+    """P29, Review Focus 14: the Windows agent's own look at itself and at WSL,
+    in device_list's words — the facts turn 01faf3b7 did not have. (The brief's
+    "how it runs: service HKCU…" predates Task 16b fix round 2, M2: a Run-key
+    value is never called a service.)"""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "wsl_distros")
+    person = await _person(pool)
+    sink: list[dict] = []
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person, facts=sink))
+    assert ok is True
+    assert "- dell (Windows 11 Pro 24H2 (build 26100)) — connected" in result
+    assert (
+        "\n    how it runs: the Run-key value "
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent" in result
+    )
+    assert (
+        "sam's systemd user unit novad.service is active (enabled, Restart=always, main pid 412)"
+        in result
+    )
+    assert "\n    (probed 2026-09-28T17:40:00Z; device_info probes again" in result
+    assert sink == [{"device": "dell", "connected": True}]
+    await _close(conn, task)
+
+
+async def test_device_list_says_an_agent_inside_wsl_gives_way_to_the_windows_build(pool):
+    device_id, device = await _enroll(pool, name="pc-wsl")
+    wsl = {
+        **AUTH_FACTS,
+        "os": {
+            "goos": "linux",
+            "arch": "amd64",
+            "version": "Ubuntu 26.04 LTS",
+            "wsl": {"distro": "Ubuntu-26.04"},
+        },
+    }
+    conn, task, _ = await _auth_with(pool, device_id, device, wsl)
+    person = await _person(pool)
+    result, _ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert (
+        "hands: cannot: this machine's Windows agent owns it — on Windows, Nova's agent is the "
+        "Windows build, which reaches WSL through wsl.exe" in result
+    )
+    await _close(conn, task)
+
+
+async def test_device_list_says_each_agents_build_and_folders_only_as_recorded(pool, monkeypatch):
+    """Its build against the hub's (a hash has no order: "behind the hub's
+    build", never "older"), the hub's own machine only by the door it came
+    through, and the folders only as its agent reported them."""
+    monkeypatch.setattr(machines.GatewayPlant, "hub_version", _hub_build("0f1e2d3c4b5a"))
+    hub_id, hub_device = await _enroll(pool, name="minipc")
+    conn, task, _ = await _auth_with(
+        pool,
+        hub_id,
+        hub_device,
+        {**AUTH_FACTS, "agent": {**AUTH_FACTS["agent"], "version": "0f1e2d3c4b5a"}},
+    )
+    await pool.execute("UPDATE devices SET last_transport = 'host' WHERE id = $1", hub_id)
+    conn.feed({"type": "facts", "folders": {"desktop": "C:\\Users\\sam\\OneDrive\\Desktop"}})
+    await _wait_for_facts_key(pool, hub_id, "folders")
+    await _enroll(pool, name="laptop")  # paired, never connected: no facts at all
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert ok is True
+    lines = {line.split(" (")[0][2:]: line for line in result.splitlines() if line.startswith("- ")}
+    assert (
+        "; the hub's own machine; agent 0f1e2d3c4b5a (the hub's build); folders: @desktop"
+        in (lines["minipc"])
+    )
+    assert lines["laptop"].endswith(
+        "— offline, last seen never; agent version unknown (none on record); "
+        "hands: cannot: not connected (last seen never)"
+    )
+    await pool.execute(
+        "UPDATE devices SET facts = jsonb_set(facts, '{agent,version}', '\"aaaaaaaaaaaa\"') "
+        "WHERE id = $1",
+        hub_id,
+    )
+    result, _ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert "agent aaaaaaaaaaaa (behind the hub's build 0f1e2d3c4b5a)" in result
+    assert re.search(r"\bolder\b", result) is None
+    await _close(conn, task)
+
+
+def _hub_build(version):
+    async def hub_version(self):
+        return version
+
+    return hub_version
+
+
+async def test_device_list_says_a_revoked_agent_is_still_knocking_and_when_it_stopped(pool):
+    """P28, Review Focus 10: the knock record is the check that it stopped —
+    and a knock that stopped is said as what is known: the agent stopped then,
+    or can no longer reach Nova (an asleep machine knocks no more than a
+    stopped agent does)."""
+    old_id, _ = await _enroll(pool, name="old-wsl")
+    gone_id, _ = await _enroll(pool, name="older")
+    await pool.execute(
+        "UPDATE devices SET revoked_at = now() - interval '1 hour', "
+        "last_refused_at = now() - interval '20 seconds' WHERE id = $1",
+        old_id,
+    )
+    await pool.execute(
+        "UPDATE devices SET revoked_at = now() - interval '2 hours', "
+        "last_refused_at = now() - interval '30 minutes' WHERE id = $1",
+        gone_id,
+    )
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert ok is True and "Revoked, but their agents knocked in the last day:" in result
+    lines = result.splitlines()
+    old = next(line for line in lines if line.startswith("- old-wsl (revoked "))
+    assert "still knocking (last " in old
+    assert "the README's systemd user unit novad" in old and "wsl.exe -d <distro> --" in old
+    assert (
+        "how it runs: not reported" in old
+    )  # the README is how one was installed, not a fact of it
+    older = next(line for line in lines if line.startswith("- older (revoked "))
+    assert "no knock since " in older and "it stopped then, or can no longer reach Nova" in older
+
+
+async def test_a_revoked_agent_that_reported_how_it_runs_is_said_as_it_reported_it(pool):
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "probed_at")
+    await _close(conn, task)
+    await pool.execute(
+        "UPDATE devices SET revoked_at = now(), last_refused_at = now() WHERE id = $1", device_id
+    )
+    person = await _person(pool)
+    result, _ok = await tools.dispatch("device_list", {}, _ctx(person))
+    (line,) = [line for line in result.splitlines() if line.startswith("- dell (revoked ")]
+    assert "; how it runs: the Run-key value HKCU\\" in line
+    assert line.endswith("(as probed at 2026-09-28T17:40:00Z)")
+    assert "README" not in line
+
+
+async def test_device_list_with_nothing_paired_says_so_and_hands_no_step(pool):
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert ok is True
+    assert result == "No device is paired with Nova (show_setup_qr's add_machine card pairs one)."
+
+
+async def test_a_folder_token_for_an_agent_that_reports_no_folders_is_a_stated_cannot(pool):
+    """Review Focus 8: an S42a agent reports no folders, so @desktop cannot be sent."""
+    _id, _device, conn, task = await _connect(pool, name="laptop")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": "@desktop"}, _ctx(person)
+    )
+    assert ok is False and "cannot: laptop's agent did not report its desktop folder" in result
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+async def test_a_folder_the_agent_could_not_read_is_refused_in_its_own_words(pool):
+    device_id, device = await _enroll(pool, name="minipc")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(
+        {
+            "type": "facts",
+            "net": {"ifaces": []},
+            "unreadable": [
+                {"item": "folders.desktop", "reason": "this machine names no desktop folder"}
+            ],
+        }
+    )
+    await _wait_for_facts_key(pool, device_id, "unreadable")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_read_file", {"device": "minipc", "path": "@desktop/todo.txt"}, _ctx(person)
+    )
+    assert ok is False
+    assert (
+        "cannot: minipc's agent did not report its desktop folder (it said: this machine names "
+        "no desktop folder)" in result
+    )
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("path", ["@Desktop", "@pictures/a.png", "@", "@desk top"])
+async def test_a_folder_token_that_names_no_known_folder_is_refused_before_the_wire(pool, path):
+    _id, _device, conn, task = await _connect(pool, name="laptop")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": path}, _ctx(person)
+    )
+    assert ok is False
+    assert "a folder is one of @home, @desktop, @documents, @downloads" in result
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+async def test_a_folder_token_reaches_the_agent_unresolved_when_it_reported_the_folder(pool):
+    """P16: resolved ON the machine, as its OS names it."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed({"type": "facts", "folders": {"desktop": "C:\\Users\\sam\\OneDrive\\Desktop"}})
+    await _wait_for_facts_key(pool, device_id, "folders")
+    person = await _person(pool)
+    ans = asyncio.create_task(
+        device.answer_command(conn, output="entries in C:\\Users\\sam\\OneDrive\\Desktop\\notes")
+    )
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "dell", "path": "@desktop/notes"}, _ctx(person)
+    )
+    frame = await asyncio.wait_for(ans, 2)
+    assert ok is True and frame["envelope"]["args"] == {"path": "@desktop/notes"}
+    await _close(conn, task)
+
+
+async def test_device_info_probes_again_and_says_how_the_agent_runs(pool):
+    """P29, Review Focus 14: device_info asks for a fresh look first — its
+    facts frame lands before its result — so the lines are the agent's look now."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    person = await _person(pool)
+
+    async def answer():
+        refresh = await asyncio.wait_for(conn.next_sent(), 2)
+        assert refresh["envelope"]["capability"] == "facts.refresh"
+        conn.feed(PROBED)
+        conn.feed(device.result(refresh["envelope"]))
+        info = await asyncio.wait_for(conn.next_sent(), 2)
+        assert info["envelope"]["capability"] == "system.info"
+        conn.feed(device.result(info["envelope"], output="host=PC-ONE; os=Windows 11 Pro"))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
+    await asyncio.wait_for(ans, 2)
+    assert ok is True
+    assert result.startswith(
+        "dell system info:\nhost=PC-ONE; os=Windows 11 Pro\nhow it runs: the Run-key value "
+    )
+    assert "WSL on it, reached through this agent's wsl.exe: Ubuntu-26.04 (default" in result
+    # The look landed, so nothing says otherwise: the last line is its time.
+    assert result.endswith(
+        "(probed 2026-09-28T17:40:00Z; device_info probes again — "
+        "on Windows with WSL this can take up to about 45 seconds)"
+    )
+    await _close(conn, task)
+
+
+async def test_device_info_says_the_agent_did_not_answer_the_refresh_and_what_the_lines_are(
+    pool, monkeypatch
+):
+    """Controller ruling: a refresh with no answer is said as a fact, and the
+    lines are said to be the last probe's — never presented as a look now."""
+    monkeypatch.setattr(device_tools, "REFRESH_TIMEOUT_SECONDS", 1)
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "probed_at")
+    person = await _person(pool)
+
+    async def answer():
+        refresh = await asyncio.wait_for(conn.next_sent(), 2)
+        assert refresh["envelope"]["capability"] == "facts.refresh"  # and never answered
+        info = await asyncio.wait_for(conn.next_sent(), 3)
+        assert info["envelope"]["capability"] == "system.info"
+        conn.feed(device.result(info["envelope"], output="host=PC-ONE"))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
+    await asyncio.wait_for(ans, 3)
+    assert ok is True and "how it runs: the Run-key value " in result
+    assert result.endswith(
+        "\n(the refresh got no answer: device 'dell' did not answer within 1s — so the lines "
+        "above on how it runs are as probed at 2026-09-28T17:40:00Z, not now)"
+    )
+    await _close(conn, task)
+
+
+async def test_device_info_says_the_agent_could_not_look_again_in_its_own_words(pool):
+    """An agent that cannot take the refresh (one from before facts.refresh
+    answers `unknown capability`) is said in its words — and system.info
+    still answers."""
+    device_id, device = await _enroll(pool, name="laptop")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    person = await _person(pool)
+
+    async def answer():
+        refresh = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(
+            device.result(
+                refresh["envelope"],
+                ok=False,
+                exit_code=None,
+                error='unknown capability "facts.refresh"',
+            )
+        )
+        info = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(device.result(info["envelope"], output="host=laptop"))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
+    await asyncio.wait_for(ans, 2)
+    assert ok is True
+    assert result == (
+        "laptop system info:\nhost=laptop\n"
+        "how it runs: unknown — this agent has not reported it\n"
+        '(the agent could not look again: unknown capability "facts.refresh" — and no probe of '
+        "it is on record)"
+    )
+    await _close(conn, task)
+
+
+async def test_device_info_never_calls_an_old_probe_fresh_when_no_new_one_landed(pool):
+    """The agent answers the refresh, but no new probe reaches core (its
+    findings did not fit the frame, or an agent from before S42b probes
+    nothing): the lines are the last probe's, and the result says so."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "probed_at")
+    person = await _person(pool)
+    too_big = "the probe's findings would make the frame 17000 bytes, over the 16384-byte cap"
+
+    async def answer():
+        refresh = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(
+            {
+                "type": "facts",
+                "net": {"ifaces": []},
+                "unreadable": [{"item": "probe", "reason": too_big}],
+            }
+        )
+        conn.feed(device.result(refresh["envelope"], output="facts sent"))
+        info = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(device.result(info["envelope"], output="host=PC-ONE"))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch("device_info", {"device": "dell"}, _ctx(person))
+    await asyncio.wait_for(ans, 2)
+    assert ok is True and "how it runs: the Run-key value " in result
+    assert result.endswith(
+        "\n(the agent answered the refresh, but no new probe of it reached Nova — so the lines "
+        "above on how it runs are as probed at 2026-09-28T17:40:00Z, not now)"
+    )
+    await _close(conn, task)
+
+
+async def test_a_later_probe_that_omits_a_section_removes_it_never_keeps_the_older_one(pool):
+    """The probe-freshness ruling through the socket: the second probe could
+    not read WSL's list, so the first probe's distributions must not show
+    under the second probe's time."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(PROBED)
+    await _wait_for_facts_key(pool, device_id, "wsl_distros")
+    later = {
+        "type": "facts",
+        "net": {"ifaces": []},
+        "unreadable": [{"item": "wsl_distros", "reason": "WSL's list could not be read: denied"}],
+        "service": PROBED["service"],
+        "elevation": PROBED["elevation"],
+        "probed_at": "2026-09-29T08:00:00Z",
+    }
+    conn.feed(later)
+    await _wait_for_facts_key(pool, device_id, "probed_at", "2026-09-29T08:00:00Z")
+    facts = (await _facts_of(pool, device_id))["facts"]
+    assert "wsl_distros" not in facts and facts["machine_uid"] == "c" * 64
+    person = await _person(pool)
+    result, _ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert "Ubuntu-26.04" not in result
+    assert (
+        "WSL: the list of distributions could not be read (WSL's list could not be read" in result
+    )
+    await _close(conn, task)
+
+
+async def test_a_frame_without_probed_at_leaves_the_probe_and_its_reasons_alone(pool):
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    reason = {"item": "wsl_distros", "reason": "a key under Lxss could not be opened: denied"}
+    conn.feed({**PROBED, "unreadable": [reason]})
+    await _wait_for_facts_key(pool, device_id, "probed_at")
+    probe = {k: v for k, v in (await _facts_of(pool, device_id))["facts"].items()}
+    conn.feed({"type": "facts", "net": {"ifaces": []}, "unreadable": []})
+    await _wait_for_facts_key(pool, device_id, "net")
+    facts = (await _facts_of(pool, device_id))["facts"]
+    for key in ("service", "elevation", "wsl_distros", "probed_at"):
+        assert facts[key] == probe[key]
+    assert facts["unreadable"] == [reason]
+    await _close(conn, task)
+
+
+def test_device_run_states_the_argv_contract_and_that_nothing_gets_a_terminal():
+    """P29/P30: how a command runs is stated where she reads the tool — and
+    only what is known: Task 1's Dell readings (whether wsl.exe hands what
+    follows -- to the distro's shell; whether a prompt fails at once on
+    Windows) are not in yet, so neither is said as fact."""
+    description = tools.REGISTRY["device_run"].description
+    assert "no shell" in description and "$(…)" in description and '["sh", "-c"' in description
+    assert "no terminal and empty input" in description and "fails at once" in description
+    assert '"--exec"' in description
+    assert "has not been measured yet" in description
+    for fs_tool in ("device_list_files", "device_read_file", "device_write_file"):
+        tool = tools.REGISTRY[fs_tool]
+        assert "@home, @desktop, @documents or @downloads" in tool.description
+        assert "@desktop" in tool.parameters["properties"]["path"]["description"]

@@ -33,13 +33,21 @@ import ntpath
 import posixpath
 import re
 
-from app import db, device_facts, devices, devices_ws, envelopes
+from app import db, device_facts, devices, devices_ws, envelopes, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
 # the plan) because a command with no answer must become a STATED failure, not
 # a hang — "accepted by transport" is never "received".
 COMMAND_TIMEOUT_SECONDS = 120
+
+# How long device_info waits for the agent's fresh look (facts.refresh). The
+# agent bounds a whole probe at 45 s (P29; apps/novad client.ProbeBudget),
+# then writes its facts frame — a write it bounds at 10 s (PingTimeout),
+# possibly behind one other facts write bounded the same — and only then
+# answers. Past this the refresh is said to have had no answer, and the lines
+# are said to be the last probe's; it is never waited on to the command bound.
+REFRESH_TIMEOUT_SECONDS = 70
 
 # device_read_file's cap. Enforced ON THE DEVICE (T3) — stated here so the model
 # knows the boundary before it asks, not after a truncation it cannot see.
@@ -112,9 +120,19 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _WINDOWS_SHARE = re.compile(r"^[\\/]{2}[^\\/?.][^\\/]*[\\/][^\\/]+")
 _WINDOWS_DEVICE = ("\\\\?\\", "\\\\.\\", "//?/", "//./")
+# A known folder (S42b P16): @<name>, then optionally one "/" or "\" and the
+# rest — the agent's own grammar (apps/novad internal/caps/fs.go resolvePath),
+# which resolves it ON the machine, as its OS names the folder.
+_FOLDER_TOKEN = re.compile(r"^@([a-z]+)(?:[\\/](.*))?$", re.S)
 
 
-def _check_fs_path(path: object, platform: str) -> str:
+def _check_fs_path(
+    path: object,
+    platform: str,
+    folders: tuple[str, ...] = (),
+    name: str = "this device",
+    unread: dict[str, str] | None = None,
+) -> str:
     """The requested path must be absolute ON THE DEVICE'S OS; it is returned
     normalized. Lexical on purpose: the path names a file on the REMOTE
     machine, so it cannot be resolved here. A relative path would resolve
@@ -122,12 +140,38 @@ def _check_fs_path(path: object, platform: str) -> str:
     is refused as malformed. `..` and `.` collapse under the OS's own normpath
     so the daemon receives one spelling.
 
+    Or it names a known folder, @desktop/notes.txt (P16): passed through
+    UNRESOLVED when the device's agent reported that folder (`folders`,
+    device_facts.folders_of) — the machine resolves it as its OS names it,
+    never core — and otherwise a stated cannot, in the agent's own words
+    when it said why it could not read the folder (`unread`,
+    device_facts.folders_unread).
+
     linux/darwin: posix, a leading "/". windows: a drive or a share, checked
     EXPLICITLY — Python 3.12's ntpath.isabs also accepts a rooted path with
     no drive ("\\foo"), which names no file — then ntpath.normpath. Device
     paths (\\\\?\\, \\\\.\\) are refused: ntpath leaves them unnormalized, which
     would break the one-spelling rule. An unknown platform cannot be checked,
     and says so."""
+    if isinstance(path, str) and path.startswith("@"):
+        m = _FOLDER_TOKEN.match(path)
+        if m is None or m.group(1) not in device_facts.FOLDER_NAMES:
+            known = ", ".join(f"@{n}" for n in device_facts.FOLDER_NAMES)
+            raise ToolFailure(f"path {path!r}: a folder is one of {known}, then an optional /rest")
+        folder = m.group(1)
+        if folder not in folders:
+            said = (unread or {}).get(folder)
+            why = (
+                f"it said: {said or 'no reason given'}"
+                if said is not None
+                else "an agent from before S42b reports none"
+            )
+            raise ToolFailure(
+                f"cannot: {name}'s agent did not report its {folder} folder ({why}) — give an "
+                "absolute path instead"
+            )
+        # Resolved on the machine (S42b P16): its OS names the folder, not core.
+        return path
     if not isinstance(path, str):
         raise ToolFailure(f"path {path!r} must be text")
     if platform in ("linux", "darwin"):
@@ -167,12 +211,28 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
     pool = await db.get_pool()
     row = await _resolve(pool, args["device"])
     _require_connected(row, ctx)
-    path = _check_fs_path(args["path"], row["platform"]) if fs_path else None
+    path = (
+        _check_fs_path(
+            args["path"],
+            row["platform"],
+            device_facts.folders_of(row["facts"]),
+            row["name"],
+            device_facts.folders_unread(row["facts"]),
+        )
+        if fs_path
+        else None
+    )
     return pool, row, path
 
 
 async def _command(
-    pool, row, capability: str, args: dict, *, ctx: ToolContext | None = None
+    pool,
+    row,
+    capability: str,
+    args: dict,
+    *,
+    ctx: ToolContext | None = None,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
 ) -> dict:
     """Send one command through the hub, restating a DeviceRefused as the
     ToolFailure the model reads. Only a `result` frame gets here as a return.
@@ -201,7 +261,7 @@ async def _command(
             name=row["name"],
             capability=capability,
             args=args,
-            timeout=COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout,
             facts_sink=ctx.facts_sink if ctx is not None else None,
         )
     except devices.DeviceRefused as exc:
@@ -222,26 +282,176 @@ def _require_ok(result: dict, row) -> dict:
 
 
 async def device_list(args: dict, ctx: ToolContext) -> str:
+    """Nova's agents as the plant lists them (S42b P17 — an eval's declared
+    device too), each with what she needs to act on it without being told
+    (P29), then any revoked agent that knocked in the last day (P28). Every
+    agent listed leaves {device, connected} on the turn — the record every
+    device tool leaves, so what she says about its connection is backed —
+    and only once the whole listing is built: a call that fails after
+    reading the hub was shown no line, and must back no claim."""
     pool = await db.get_pool()
-    connected = devices_ws.hub.connected_ids()
-    rows = await devices.list_devices(pool)
-    live = [d for d in rows if d["revoked_at"] is None]
-    if not live:
-        return "No devices are paired. Pair one in Settings → Devices."
-    lines = []
-    for d in live:
-        status = "connected" if d["id"] in connected else "offline"
-        last = d["last_seen"] or "never"
-        where = device_facts.place(d)
-        lines.append(f"- {d['name']} ({where}) — {status}, last seen {last}")
-    return "Paired devices:\n" + "\n".join(lines)
+    agents = await machines.plant().agents(ctx.app)
+    lines: list[str] = []
+    for agent in agents:
+        lines.append(_agent_line(agent))
+        lines.extend(f"    {line}" for line in agent["acting"])
+    knocks = await _knocks(pool)
+    out = (
+        ["Paired devices:", *lines]
+        if lines
+        else ["No device is paired with Nova (show_setup_qr's add_machine card pairs one)."]
+    )
+    if knocks:
+        out += ["Revoked, but their agents knocked in the last day:", *knocks]
+    if ctx.facts_sink is not None:
+        for agent in agents:
+            ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
+    return "\n".join(out)
+
+
+def _build_words(agent: dict) -> str:
+    """Its agent's build against the hub's — a hash has no order, so "behind
+    the hub's build", never "older" (P2) — and unknown said as unknown."""
+    version, build = agent["agent_version"], agent["build"]
+    if version is None:
+        return "agent version unknown (none on record)"
+    if build["state"] == "current":
+        return f"agent {version} (the hub's build)"
+    if build["state"] == "behind":
+        return f"agent {version} (behind the hub's build {build['hub_version']})"
+    return f"agent {version} (no hub build could be read to compare it with)"
+
+
+def _agent_line(agent: dict) -> str:
+    status = "connected" if agent["connected"] else "offline"
+    line = (
+        f"- {agent['name']} ({device_facts.place(agent)}) — {status}, "
+        f"last seen {agent['last_seen'] or 'never'}"
+    )
+    if agent["hub"]:
+        line += "; the hub's own machine"
+    line += f"; {_build_words(agent)}"
+    hands = agent["roles"]["hands"]
+    if hands["state"] == "cannot":
+        line += f"; hands: {hands['reason']}"
+        if agent["wsl"] is not None:
+            line += (
+                " — on Windows, Nova's agent is the Windows build, which reaches WSL through "
+                "wsl.exe"
+            )
+    if agent["folders"]:
+        line += "; folders: " + ", ".join(f"@{name}" for name in agent["folders"])
+    return line
+
+
+# P28: a revoked agent that is still running knocks at least every 30 s (its
+# reconnect ladder tops out there); within this of its last verified knock it
+# is "still knocking".
+_KNOCKING_WITHIN = "2 minutes"
+# How a Linux agent from before S42b was installed — the README's, said as
+# that, never as a fact of one that did not report how it runs.
+_BEFORE_S42B_LINUX = (
+    "how it runs: not reported — an agent from before S42b on Linux runs as the README's "
+    "systemd user unit novad (binary ~/.local/bin/novad); inside WSL, one is reached through "
+    "that PC's Windows agent with wsl.exe -d <distro> -- …, whose WSL facts say where it runs"
+)
+
+
+async def _knocks(pool) -> list[str]:
+    """Each revoked agent that knocked in the last day (P28: a verified knock
+    stamps devices.last_refused_at). The knock record is the check that it
+    stopped — but no knock is only that: it stopped, or it cannot reach Nova
+    (an asleep machine knocks no more than a stopped agent)."""
+    rows = await pool.fetch(
+        "SELECT name, platform, facts, revoked_at, last_refused_at, "
+        f"last_refused_at > now() - interval '{_KNOCKING_WITHIN}' AS knocking FROM devices "
+        "WHERE revoked_at IS NOT NULL AND last_refused_at > now() - interval '24 hours' "
+        "ORDER BY last_refused_at DESC"
+    )
+    out = []
+    for r in rows:
+        knocked = r["last_refused_at"].isoformat()
+        state = (
+            f"still knocking (last {knocked})"
+            if r["knocking"]
+            else f"no knock since {knocked}: it stopped then, or can no longer reach Nova"
+        )
+        line = f"- {r['name']} (revoked {r['revoked_at'].isoformat()}): {state}"
+        facts = r["facts"] if isinstance(r["facts"], dict) else None
+        if facts is not None and isinstance(facts.get("service"), dict):
+            when = facts.get("probed_at") or "an unknown time"
+            line += f"; {device_facts.runs_line(facts)} (as probed at {when})"
+        elif r["platform"] == "linux":
+            line += f"; {_BEFORE_S42B_LINUX}"
+        out.append(line)
+    return out
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
+    """system.info, then what she needs to act on the machine (P29) — after
+    asking the agent to look again (facts.refresh), so the lines are its look
+    now. When no new look reached core — the refresh got no answer, the agent
+    could not take it, or its answer carried no new probe — the last line
+    says so, and that the lines are its last probe's: old facts are never
+    presented as a look just taken."""
     pool, row, _ = await _admit(args, ctx=ctx)
+    before = _probed_at(row["facts"])
+    missed = await _look_again(pool, row, ctx)
+    now = await devices.get(pool, row["id"])
+    facts = now["facts"] if now is not None else None
+    platform = now["platform"] if now is not None else row["platform"]
+    after = _probed_at(facts)
+    # A probe whose time differs from the one held when this call began
+    # landed during it. The agent's own clock stamps probed_at, so it is
+    # compared only with the agent's earlier stamp, never with core's clock.
+    landed = after is not None and after != before
+    if missed is None and not landed:
+        missed = "the agent answered the refresh, but no new probe of it reached Nova"
     result = _require_ok(await _command(pool, row, "system.info", {}, ctx=ctx), row)
     detail = result.get("output") or "(the device returned no detail)"
-    return f"{row['name']} system info:\n{detail}"
+    lines = [f"{row['name']} system info:", detail, *device_facts.acting_lines(facts, platform)]
+    if missed is not None:
+        lines.append(f"({missed} — {_last_probe(facts, landed)})")
+    return "\n".join(lines)
+
+
+async def _look_again(pool, row, ctx: ToolContext) -> str | None:
+    """Ask the agent for a fresh look (facts.refresh). Its probe frame is on
+    the wire before its result (apps/novad caps/table.go factsRefresh) and
+    core handles a socket's frames in order, so the look has landed by the
+    time this returns. None when the agent answered ok; otherwise what
+    happened, in words. A refresh that was never SENT (NotSent — no socket,
+    or a revoke) is that refusal, raised: system.info would meet it too."""
+    try:
+        result = await _command(
+            pool, row, "facts.refresh", {}, ctx=ctx, timeout=REFRESH_TIMEOUT_SECONDS
+        )
+    except ToolFailure as exc:
+        if isinstance(exc.__cause__, devices_ws.NotSent):
+            raise
+        return f"the refresh got no answer: {exc}"
+    if not result.get("ok"):
+        return f"the agent could not look again: {result.get('error') or 'no reason given'}"
+    return None
+
+
+def _probed_at(facts: dict | None) -> str | None:
+    when = facts.get("probed_at") if isinstance(facts, dict) else None
+    return when if isinstance(when, str) and when else None
+
+
+def _last_probe(facts: dict | None, landed: bool) -> str:
+    """What the lines on how it runs were read from, when the refresh did not
+    bring this call's look: the probe held before it (not now) — or, when a
+    probe landed during the call all the same, that one, by its time."""
+    when = _probed_at(facts)
+    if landed:
+        return f"the lines above on how it runs are as probed at {when}"
+    if when is not None:
+        return f"so the lines above on how it runs are as probed at {when}, not now"
+    if isinstance(facts, dict) and any(key in facts for key in device_facts.PROBE_SECTIONS):
+        return "so the lines above on how it runs are from a probe at an unknown time, not now"
+    return "and no probe of it is on record"
 
 
 async def device_list_files(args: dict, ctx: ToolContext) -> str:
@@ -317,12 +527,25 @@ def _obj(properties: dict, required: list[str]) -> dict:
     }
 
 
+# A known folder in a fs tool's words (P16) — one sentence, so the three tools
+# say it alike.
+_FOLDERS_SENTENCE = (
+    "Or name a known folder — @home, @desktop, @documents or @downloads, optionally followed "
+    "by /the/rest — which the machine resolves as its own OS names it (on Windows, the "
+    "Desktop OneDrive may have moved)."
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_list",
         description=(
-            "List the computers paired with Nova (name, the OS it runs, whether they are "
-            "connected right now, and when each was last seen). Reads Nova's own records."
+            "List the computers paired with Nova: the OS each runs, whether it is connected "
+            "now and when it was last seen, which one is the hub's own machine, its agent's "
+            "build against the hub's, the folders its agent reported, and what its agent "
+            "reported about how it runs, elevating and WSL — plus any revoked agent that "
+            "knocked in the last day, and whether it still is. Reads Nova's own records and "
+            "live connections."
         ),
         parameters=_obj({}, []),
         executor=device_list,
@@ -336,8 +559,13 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_info",
         description=(
-            "Report a paired device's OS, disk, memory and uptime, and its home folder "
-            "(on Windows also its Desktop folder, which OneDrive may move)."
+            "Report a paired device's OS, disk, memory and uptime and its home folder (on "
+            "Windows also its Desktop folder, which OneDrive may move), and what Nova needs to "
+            "act on it without being told: how its agent runs (the service, binary, config, "
+            "process and account), what the agent read about elevating there, and on Windows "
+            "the WSL distributions beside it and what runs in them. It asks the agent to look "
+            "again first — on Windows with WSL that can take up to about 45 seconds — and says "
+            "when what it shows was read."
         ),
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_info,
@@ -349,7 +577,7 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "List the contents of a directory on a paired device. Give an absolute path "
             "in the device's own OS: /home/… on Linux and macOS; C:\\Users\\… or a share "
-            "such as \\\\wsl.localhost\\<distro>\\… on Windows."
+            f"such as \\\\wsl.localhost\\<distro>\\… on Windows. {_FOLDERS_SENTENCE}"
         ),
         parameters=_obj(
             {
@@ -357,7 +585,8 @@ TOOLS: tuple[Tool, ...] = (
                 "path": {
                     "type": "string",
                     "description": (
-                        "Absolute directory path on the device. (in the device's own OS)"
+                        "Absolute directory path in the device's own OS, or a known folder "
+                        "such as @desktop."
                     ),
                 },
             },
@@ -373,7 +602,7 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "Read a text file on a paired device. Give an absolute path in the device's "
             "own OS: /home/… on Linux and macOS; C:\\Users\\… or a share such as "
-            "\\\\wsl.localhost\\<distro>\\… on Windows. "
+            f"\\\\wsl.localhost\\<distro>\\… on Windows. {_FOLDERS_SENTENCE} "
             f"Files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
         ),
         parameters=_obj(
@@ -381,7 +610,10 @@ TOOLS: tuple[Tool, ...] = (
                 "device": _DEVICE_ARG,
                 "path": {
                     "type": "string",
-                    "description": "Absolute file path on the device. (in the device's own OS)",
+                    "description": (
+                        "Absolute file path in the device's own OS, or a known folder such as "
+                        "@desktop/notes.txt."
+                    ),
                 },
             },
             ["device", "path"],
@@ -414,11 +646,25 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="device_run",
+        # The argv contract (P29/P30), stated where she reads the tool — and
+        # only what is known: Task 1's Dell readings (does wsl.exe hand what
+        # follows -- to the distro's shell; does a prompt fail at once on
+        # Windows) are not in, so neither is said as fact (the Task 10c
+        # ruling: "no terminal and empty input" would overstate Windows).
         description=(
             "Run a command on a paired device. Give the command as argv — a list of strings, "
-            'the program first (e.g. ["ls", "-la", "/tmp"]) — never a shell string.'
-            ' On Windows a built-in command runs through cmd: ["cmd", "/c", "dir", "C:\\\\Users"]; '
-            'WSL is reached through wsl.exe: ["wsl.exe", "-d", "<distro>", "--", "uname", "-a"].'
+            'the program first (e.g. ["ls", "-la", "/tmp"]) — never a shell string. Nova\'s '
+            "agent runs it with no shell: $(…), pipes, &&, globs and redirects reach the "
+            "program exactly as written. To use them, run a shell yourself: "
+            '["sh", "-c", "…"] on Linux and macOS, ["powershell", "-NoProfile", "-Command", '
+            '"…"] on Windows. On Windows a built-in command runs through cmd: '
+            '["cmd", "/c", "dir", "C:\\\\Users"]; WSL is reached through wsl.exe, and '
+            '["wsl.exe", "-d", "<distro>", "--exec", "uname", "-a"] runs a program there with '
+            "no shell (whether wsl.exe hands what follows -- to the distro's shell has not been "
+            "measured yet). On Linux and macOS a command runs with no terminal and empty "
+            "input: anything that asks for input (a sudo password, a yes/no question) gets no "
+            "answer and fails at once with its own message. On Windows, whether a command "
+            "that asks for input fails at once has not been measured yet."
         ),
         parameters=_obj(
             {
@@ -440,7 +686,7 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "Write a text file on a paired device. Give an absolute path in the device's "
             "own OS: /home/… on Linux and macOS; C:\\Users\\… or a share such as "
-            "\\\\wsl.localhost\\<distro>\\… on Windows. "
+            f"\\\\wsl.localhost\\<distro>\\… on Windows. {_FOLDERS_SENTENCE} "
             f"Content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
         ),
         parameters=_obj(
@@ -448,7 +694,10 @@ TOOLS: tuple[Tool, ...] = (
                 "device": _DEVICE_ARG,
                 "path": {
                     "type": "string",
-                    "description": "Absolute file path on the device. (in the device's own OS)",
+                    "description": (
+                        "Absolute file path in the device's own OS, or a known folder such as "
+                        "@desktop/notes.txt."
+                    ),
                 },
                 "content": {
                     "type": "string",

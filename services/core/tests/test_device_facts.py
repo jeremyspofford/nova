@@ -1599,3 +1599,125 @@ def test_an_active_units_zero_main_pid_is_never_said_as_not_running():
     line = df.wsl_line(_merged(_with_distros(dict(_UBUNTU, novad_unit=unit))))
     assert "novad.service is active (enabled, Restart=always) — " in line
     assert "not running" not in line
+
+
+# -- Task 21: a probe is recorded as one unit, keyed on its time ---------------
+#
+# Controller ruling (probe freshness): core used to merge every facts frame
+# into the row with jsonb `||`, so a later probe that omitted a section (WSL's
+# list unreadable, say) kept the OLDER probe's section — a stale list under a
+# newer probed_at. A frame that carries probed_at now replaces every probe
+# section as one unit — service, elevation, wsl_distros, probed_at and the
+# probe's own unreadable entries — and a frame without one leaves them alone.
+
+OLDER_PROBE = {
+    **PROBED,
+    "unreadable": [
+        {
+            "item": "wsl_distros",
+            "reason": "a key under Lxss could not be opened: Access is denied.",
+        },
+        {"item": "folders.desktop", "reason": "this machine names no desktop folder"},
+    ],
+}
+NEWER_PROBE = {
+    "type": "facts",
+    "net": {"ifaces": []},
+    "unreadable": [
+        {"item": "wsl_distros", "reason": "WSL's list could not be read: the key is missing"},
+    ],
+    "service": {**PROBED["service"], "pid": 900},
+    "probed_at": "2026-09-29T08:00:00Z",
+}
+
+
+def _stored_older() -> dict:
+    return df.merge_frame(df.validate_auth(WINDOWS_RUN_KEY), df.validate_frame(OLDER_PROBE))
+
+
+def test_a_probe_frame_replaces_every_probe_section_as_one_unit():
+    merged = df.merge_frame(_stored_older(), df.validate_frame(NEWER_PROBE))
+    assert merged["probed_at"] == "2026-09-29T08:00:00Z" and merged["service"]["pid"] == 900
+    # Omitted by the newer probe: removed, never kept from the older one.
+    assert "wsl_distros" not in merged and "elevation" not in merged
+    # The older probe's own reasons went with it; the newer frame's list is whole.
+    assert merged["unreadable"] == NEWER_PROBE["unreadable"]
+    assert merged["agent"] == df.validate_auth(WINDOWS_RUN_KEY)["agent"]  # not a probe section
+    lines = df.acting_lines(merged, "windows")
+    assert not any("Ubuntu-26.04" in line for line in lines)
+    assert "WSL: the list of distributions could not be read (WSL's list could not be read" in (
+        "\n".join(lines)
+    )
+    assert lines[-1].startswith("(probed 2026-09-29T08:00:00Z;")
+
+
+def test_a_frame_without_probed_at_leaves_the_probe_and_its_reasons_alone():
+    stored = _stored_older()
+    net_only = {
+        "type": "facts",
+        "net": {"ifaces": [{"name": "eth0", "mac": "", "ipv4_cidr": ["192.0.2.7/24"], "up": True}]},
+        "unreadable": [{"item": "net.ifaces.eth1", "reason": "its addresses could not be read"}],
+    }
+    merged = df.merge_frame(stored, df.validate_frame(net_only))
+    for key in df.PROBE_KEYS:
+        assert merged[key] == stored[key]
+    assert merged["net"]["ifaces"][0]["ipv4_cidr"] == ["192.0.2.7/24"]
+    # The frame's own entries are the new frame's; the probe's own entry stays
+    # with its probe, so its WSL line still says what it could not read.
+    assert merged["unreadable"] == [
+        {"item": "net.ifaces.eth1", "reason": "its addresses could not be read"},
+        {
+            "item": "wsl_distros",
+            "reason": "a key under Lxss could not be opened: Access is denied.",
+        },
+    ]
+    assert "part of WSL's list could not be read: a key under Lxss" in df.wsl_line(merged)
+
+
+def test_a_probe_frame_with_no_unreadable_list_drops_only_the_older_probes_entries():
+    newer = {k: v for k, v in NEWER_PROBE.items() if k not in ("net", "unreadable")}
+    merged = df.merge_frame(_stored_older(), df.validate_frame(newer))
+    assert merged["unreadable"] == [
+        {"item": "folders.desktop", "reason": "this machine names no desktop folder"}
+    ]
+
+
+def test_probe_sections_without_their_time_are_never_recorded():
+    """A frame with no probed_at leaves the probe alone — even a section of
+    one it carries: placed under the older probe's time, it would be a fresh
+    reading labelled with a stale one (or the reverse). The Go agent always
+    sends them together (Probed.ApplyTo); only a malformed agent does not."""
+    stored = _stored_older()
+    timeless = {
+        "type": "facts",
+        "service": {**PROBED["service"], "pid": 1},
+        "unreadable": [{"item": "service.binary", "reason": "path contains a control character"}],
+    }
+    merged = df.merge_frame(stored, df.validate_frame(timeless))
+    for key in df.PROBE_KEYS:
+        assert merged[key] == stored[key]
+    assert merged["unreadable"] == [
+        {"item": "wsl_distros", "reason": "a key under Lxss could not be opened: Access is denied."}
+    ]
+
+
+@pytest.mark.parametrize(
+    "item,owned",
+    [
+        ("service.binary", True),
+        ("elevation", True),
+        ("wsl_distros", True),
+        ("wsl_distros.Ubuntu-26.04.root", True),
+        ("folders.desktop", False),
+        ("net.ifaces", False),
+        ("probe", False),
+        ("hostname", False),
+        ("services", False),
+    ],
+)
+def test_an_unreadable_entry_belongs_to_the_probe_by_the_section_it_names(item, owned):
+    assert df.probe_owned({"item": item, "reason": "x"}) is owned
+
+
+def test_a_frame_lands_on_no_stored_facts_as_itself():
+    assert df.merge_frame(None, df.validate_frame(NEWER_PROBE)) == df.validate_frame(NEWER_PROBE)

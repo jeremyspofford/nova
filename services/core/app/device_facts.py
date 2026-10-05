@@ -53,6 +53,10 @@ FRAME_SECTIONS: tuple[str, ...] = (
     "wsl_distros",
     "probed_at",
 )
+# The sections ONE run of the probes carries (S42b P29), and with its time the
+# keys that run is recorded under — always as one unit (merge_frame).
+PROBE_SECTIONS: tuple[str, ...] = ("service", "elevation", "wsl_distros")
+PROBE_KEYS: tuple[str, ...] = (*PROBE_SECTIONS, "probed_at")
 # S42b P16: the folders a fs path may name as @<name>, as the agent's OS names them.
 FOLDER_NAMES: tuple[str, ...] = ("home", "desktop", "documents", "downloads")
 # S42b P8: what an agent's supervisor records about its last update.
@@ -533,6 +537,48 @@ def validate_frame(raw: object) -> dict:
     return out
 
 
+def probe_owned(entry: object) -> bool:
+    """Whether an unreadable entry is one a probe filed about its own
+    sections ("service.binary", "elevation", "wsl_distros.<name>.root"):
+    the item's head names a probe section. Everything else ("folders.…",
+    "net.…", the auth-frame items, "probe" itself — the frame saying a
+    probe's findings did not fit) is the frame's own."""
+    item = entry.get("item") if isinstance(entry, dict) else None
+    return isinstance(item, str) and item.split(".", 1)[0] in PROBE_SECTIONS
+
+
+def merge_frame(stored: dict | None, sections: dict) -> dict:
+    """What devices.facts holds once a facts frame's sections (validate_frame)
+    land on what the device said before. A section the frame does not carry
+    is kept, so the auth facts survive a frame of net/unreadable alone.
+
+    A PROBE is one unit, keyed on its time (Task 21 ruling, probe
+    freshness): a frame that carries probed_at replaces every probe section —
+    service, elevation, wsl_distros, probed_at and the probe's own
+    unreadable entries (probe_owned) — and a section that probe omits is
+    removed, never kept from an older probe: a merged older WSL list would
+    read as fresh under the newer time. A frame without probed_at leaves the
+    probe alone, its reasons included — and a probe section such a frame
+    carries is not recorded, since no time says when it was read."""
+    old = dict(stored) if isinstance(stored, dict) else {}
+    new = dict(sections)
+    held = old.get("unreadable")
+    held = held if isinstance(held, list) else None
+    if "probed_at" in new:
+        for key in PROBE_KEYS:
+            old.pop(key, None)
+        if "unreadable" not in new and held is not None:
+            old["unreadable"] = [u for u in held if not probe_owned(u)]
+    else:
+        for key in PROBE_SECTIONS:
+            new.pop(key, None)
+        if "unreadable" in new:
+            new["unreadable"] = [u for u in new["unreadable"] if not probe_owned(u)] + [
+                u for u in held or [] if probe_owned(u)
+            ]
+    return {**old, **new}
+
+
 # -- readers ---------------------------------------------------------------
 
 
@@ -612,6 +658,15 @@ def folders_of(facts: dict | None) -> tuple[str, ...]:
     admitted only for these."""
     folders = facts.get("folders") if isinstance(facts, dict) else None
     return tuple(name for name in FOLDER_NAMES if isinstance(folders, dict) and folders.get(name))
+
+
+def folders_unread(facts: dict | None) -> dict[str, str]:
+    """Why the agent could not report each known folder it filed under
+    "folders.<name>" (Task 7: a folder its OS does not name, or a path too
+    long to send whole), in its own words, sanitized — "" when it gave none.
+    A folder it said nothing about is absent."""
+    why = _reasons_by_item(facts)
+    return {name: why[f"folders.{name}"] for name in FOLDER_NAMES if f"folders.{name}" in why}
 
 
 # -- what she needs to act (S42b P29) ----------------------------------------
