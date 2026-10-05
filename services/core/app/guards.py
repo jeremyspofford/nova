@@ -365,6 +365,19 @@ _FILENAME_RE = (
     r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
 )
 _FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
+# Where a filename found INSIDE text can start: the front of a [\w./-] run,
+# past any leading "./", "../" or "-" (which \b skipped too) — never at a later
+# dot, dash or slash inside the run. \b allowed every one, and from each the
+# greedy run walked to the token's end and back, so a long dotted or dashed
+# token was quadratic: narration_check took 684 ms at 3,000 characters of "a."
+# (S42b Task 23's measurement), on core's one event loop. Any end a later start
+# can reach, the front reaches too, so the leftmost match is exactly what it
+# was. The filename is group 1; the leading punctuation is not part of it. The
+# pre-fix patterns are the oracle in tests/test_guard_regex_timing.py.
+# `_FILENAME` itself stays for .match/.fullmatch on one token, which are
+# anchored and so linear.
+_FILE_RUN_FRONT = r"(?<![\w./-])[./-]*+"
+_FILENAME_IN = re.compile(_FILE_RUN_FRONT + r"(" + _FILENAME_RE + r")\b", re.I)
 _URL = re.compile(r"https?://[^\s)>\]]+", re.I)
 # Sentence punctuation the URL/whitespace regex glues onto the end of a token.
 # A URL captured mid-sentence ("…/data." or "…/data,") must be trimmed to its
@@ -384,7 +397,7 @@ def _strip_trailing_punct(text: str) -> str:
 # contains/lists/shows are deliberately NOT enough. An in-chat draft that names
 # no file token is never a claim either.
 _CONTENT_CLAIM = re.compile(
-    r"\b(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
+    _FILE_RUN_FRONT + r"(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
     r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
     re.I,
 )
@@ -396,7 +409,10 @@ _CONTENT_CLAIM = re.compile(
 # "overwritten" was dropped precisely because "overwrite" is not a recognised
 # active verb, so the two branches cannot disagree about what counts.
 _PASSIVE_CLAIM = re.compile(
-    r"\b(" + _FILENAME_RE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    _FILE_RUN_FRONT
+    + r"("
+    + _FILENAME_RE
+    + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
     r"(?P<verb>created|written|saved|updated|appended|added"
     r"|read|opened|reviewed|checked|examined"
     r"|deleted|removed|erased)\b",
@@ -1037,11 +1053,12 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             kind = "deleted_file"
         else:
             kind = "wrote_file"
-        claims.append((kind, pm.group(1), pm.group(0)))
+        # The phrase runs from the filename, not from any "./" before it.
+        claims.append((kind, pm.group(1), clause[pm.start(1) : pm.end()]))
 
     # content DUMP: "<file> contains the following / says:", filename-as-subject.
     for cm in _CONTENT_CLAIM.finditer(clause):
-        claims.append(("file_contents", cm.group(1), cm.group(0)))
+        claims.append(("file_contents", cm.group(1), clause[cm.start(1) : cm.end()]))
 
     # a spend figure with no ledger read behind it (target: the clause).
     sm = _STATED_SPEND.search(clause)
@@ -5830,9 +5847,9 @@ def _covers(target: str, record: str) -> bool:
 def _same_file(target: str, path: str) -> bool:
     """A write names the claimed file: its filename when she named one
     ("report-final.txt"), else the words she named it by ("the notes")."""
-    named = _FILENAME.search(target)
+    named = _FILENAME_IN.search(target)
     if named is not None:
-        wanted = named.group(0).lower().replace("\\", "/")
+        wanted = named.group(1).lower().replace("\\", "/")
         held = path.lower().replace("\\", "/")
         return held == wanted or held.endswith("/" + wanted.rsplit("/", 1)[-1])
     return _covers(target, path)
@@ -5885,7 +5902,7 @@ def _run_performs(words: list[str], action: str, target: str, device: str | None
         return False
     if program in _MACHINE_PROGRAMS:
         return _covers(target, device or "")
-    if action == "write" and _FILENAME.search(target) is not None:
+    if action == "write" and _FILENAME_IN.search(target) is not None:
         return any(_same_file(target, word) for word in words[1:])
     return _covers(target, named)
 
