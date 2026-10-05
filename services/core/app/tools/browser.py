@@ -8,22 +8,24 @@ dialog the page opened, a file it downloaded — and files a `browser` fact per
 page it saw, so the guards and Activity read facts, never prose.
 
 An address is never shown or recorded with its user info, query or fragment:
-a reset or sign-in link carries its token there (ruling G6). The same scrub
-also runs over the engine's own free-text error (a navigation failure names
-the address it tried) and a dialog's own message, since a page chooses both.
-What she types is never echoed back. The engine's own code section, which
-holds both, never leaves app/browser/page.py.
+a reset or sign-in link carries its token there (ruling G6). `app.addresses`
+(ruling G16) holds the one parse this and `chat._address_without_secrets`
+both need, and its `scrub` reduces an address found inside free text the SAME
+way — the engine's own error (a navigation failure names the address it
+tried), a dialog's message, and the accessible name the engine's own code
+says it acted on are all a PAGE's words, never ours, and every one of them
+passes through it before it reaches a result or a fact.
 
-A call the transport itself could not make (the engine unreachable, a broken
-exchange) raises `engine.EngineError`, whose structured `reachable` this
-module reads directly — never parsed out of its prose (ruling G31) — both to
-compose the one sentence every tool gives when the engine is not answering,
-and to file what was determined about reachability as a fact of its own.
-
-Every file copy a tool brings in from the engine's own volume runs OUTSIDE
-`engine.session()`'s lock (ruling G10): a slow or large copy must not hold
-every other browser call hostage, and a download can finish between two
-calls, so each tool checks every answer it receives for one (a Task 2 carry).
+While a dialog is open the engine refuses every other call and echoes the
+SAME modal state on that refusal — `_dialog_block` is the one check, run on
+every answer before its `error` is shown raw, that gives HER the dialog
+instead of the engine's own tool names (fix round 1, I2). A ref she sends
+`browser_act` is reduced to the engine's own shape first, or refused before
+anything is sent — the pinned engine runs anything else as a Playwright
+selector, not a refusal (I3). A download the engine reported is brought into
+the workspace, and its fact filed, before any of these checks — so a call
+that then fails still says so (I4); every file copy runs OUTSIDE
+`engine.session()`'s lock (G10).
 """
 
 from __future__ import annotations
@@ -32,8 +34,9 @@ import asyncio
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
+from app import addresses
 from app.browser import engine, files, reader
-from app.browser.page import EngineAnswer
+from app.browser.page import Dialog, EngineAnswer
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 ACTIONS = ("click", "type", "select", "press", "accept", "dismiss")
@@ -44,31 +47,24 @@ _NEEDS_VALUE = {
     "press": "a key name such as Enter, Tab or ArrowDown",
 }
 _ANSWER_A_DIALOG = 'answer it with browser_act(action="accept") or browser_act(action="dismiss")'
-_URL_SCHEMES = ("https://", "http://")
-# Characters that end a URL found inside free text — the engine's own prose
-# (a navigation error) or a page's (a dialog message) might quote or bracket
-# one. Not exhaustive of every character a URL may never legally contain;
-# just the ones a sentence around it would plausibly use to set it off.
-_URL_STOP_CHARS = "\"'()[]<>"
+# A dialog's own message, as the engine passes it through: whole, up to the
+# 4 MiB an answer may carry. Clipped (fix round 1, m8) before it ever enters
+# a result — her own working text, never a second copy of the page.
+_DIALOG_MESSAGE_MAX_CHARS = 2_000
 
 
 def address(url: str | None) -> str | None:
-    """An address as a fact holds it: scheme, host and path — no user info,
-    query or fragment."""
-    if not url:
-        return None
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url.split("?", 1)[0].split("#", 1)[0]
-    if not parts.scheme or not parts.netloc:
-        return url.split("?", 1)[0].split("#", 1)[0]
-    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+    """An address as a fact holds it: scheme, host and path — no user,
+    query or fragment. A call to `app.addresses.shown` (ruling G16, fix
+    round 1 m7) — the one parse an address needs, shared with
+    `chat._address_without_secrets`'s trace-masked rendering of the same
+    value."""
+    return addresses.shown(url)
 
 
 def _shown(url: str | None) -> str:
-    """An address as she reads it: the fact's form, with a mark where a query
-    or fragment was left out."""
+    """An address as she reads it: the fact's form, with a mark where a
+    query or fragment was left out."""
     if not url:
         return "the page"
     kept = address(url) or url
@@ -76,38 +72,70 @@ def _shown(url: str | None) -> str:
     return f"{kept}?…" if hidden else kept
 
 
-def _scrub(text: str) -> str:
-    """`text`, with every http(s) URL inside it reduced to its address (ruling
-    G6): no query, fragment or user info. The engine's own prose can carry
-    the page a call was trying to reach (a navigation error names it), and a
-    page's own dialog message can carry whatever it wants — a reset or
-    sign-in link carries its token in the query either way.
+def _dialog_message(dialog: Dialog) -> str:
+    """A dialog's message, clipped (fix round 1 m8) then scrubbed (m1) — a
+    page chooses this text and the engine passes it through whole, and
+    clipping first means a scrub, linear or not, is never asked to read all
+    4 MiB a page could put here."""
+    text = dialog.message
+    if len(text) > _DIALOG_MESSAGE_MAX_CHARS:
+        cut = _DIALOG_MESSAGE_MAX_CHARS
+        text = f"{text[:cut]}… [cut off at {cut:,} characters]"
+    return addresses.scrub(text)
 
-    One pass, str methods only: each URL is found by its scheme and runs to
-    the next character that cannot be part of one (whitespace, or a quote or
-    bracket a sentence would use to set it off). `i` only ever moves forward,
-    so the total work across every loop is bounded by `len(text)` once, the
-    same as a single scan — not by how many URLs it finds."""
-    if "://" not in text:
-        return text
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    while True:
-        at = -1
-        for scheme in _URL_SCHEMES:
-            found = text.find(scheme, i)
-            if found != -1 and (at == -1 or found < at):
-                at = found
-        if at == -1:
-            out.append(text[i:])
-            return "".join(out)
-        out.append(text[i:at])
-        end = at
-        while end < n and not text[end].isspace() and text[end] not in _URL_STOP_CHARS:
-            end += 1
-        out.append(address(text[at:end]) or text[at:end])
-        i = end
+
+def _how_to_answer(dialog: Dialog) -> str:
+    """How `browser_act` answers `dialog` (fix round 1 m4): a file chooser
+    has no accept — attempting it is refused by the engine itself, which
+    `_dialog_block` already turns into this same sentence — so only dismiss
+    is ever offered for one."""
+    if "file" in dialog.kind.lower():
+        return 'dismiss it with browser_act(action="dismiss")'
+    return _ANSWER_A_DIALOG
+
+
+def _a(word: str) -> str:
+    return f"an {word}" if word[:1].lower() in "aeiou" else f"a {word}"
+
+
+def _dialog_lines(answer: EngineAnswer) -> list[str]:
+    """A dialog that opened as part of an otherwise SUCCESSFUL answer —
+    never the blocking case, which `_dialog_block` raises before this is
+    ever reached."""
+    lines = []
+    for dialog in answer.dialogs:
+        said = f': "{_dialog_message(dialog)}"' if dialog.message else ""
+        lines.append(f"The page opened {_a(dialog.kind)} dialog{said} — {_how_to_answer(dialog)}.")
+    return lines
+
+
+def _blocked_by_dialog_message(dialog: Dialog) -> str:
+    said = f' ("{_dialog_message(dialog)}")' if dialog.message else ""
+    return f"{_a(dialog.kind)} dialog is open on the page{said} — {_how_to_answer(dialog)} first"
+
+
+def _dialog_block(answer: EngineAnswer, notes: list[str]) -> None:
+    """Raise HER words for an open dialog — never the engine's own ('Tool
+    "browser_navigate" does not handle the modal state.', which names a
+    tool she does not have) — when `answer` is a REFUSAL the dialog caused
+    (fix round 1, I2). The engine refuses every other call while a dialog
+    is open and echoes the SAME modal state on that refusal, so every one
+    of her five tools checks this, on every answer, before `error` is ever
+    shown raw. Not fired on a successful answer that merely reports a new
+    dialog opening (`_dialog_lines` handles that one)."""
+    if not (answer.error and answer.dialogs):
+        return
+    raise _fail(_blocked_by_dialog_message(answer.dialogs[0]), notes)
+
+
+def _fail(message: str, notes: list[str]) -> ToolFailure:
+    """A stated refusal that still carries whatever this call already
+    determined (fix round 1, I4): a download the engine reported is
+    brought into the workspace, and removed from the engine's own volume,
+    before any of the checks below ever run — so a call that THEN fails
+    for an unrelated reason still says so. The engine reports a finished
+    download once; dropping `notes` here would mean she is never told."""
+    return ToolFailure("\n".join([message, *notes]))
 
 
 def _fact(ctx: ToolContext, fact: dict) -> None:
@@ -122,14 +150,14 @@ def _page_fact(ctx: ToolContext, answer: EngineAnswer) -> None:
             {
                 "browser": "page",
                 "url": address(answer.url),
-                "title": answer.title,
+                "title": addresses.scrub(answer.title) if answer.title else None,
                 "status": answer.status,
             },
         )
 
 
 def _where(answer: EngineAnswer, fallback: str | None = None) -> str:
-    title = f' — "{answer.title}"' if answer.title else ""
+    title = f' — "{addresses.scrub(answer.title)}"' if answer.title else ""
     return f"{_shown(answer.url or fallback)}{title}"
 
 
@@ -141,16 +169,52 @@ def _size(count: int) -> str:
     return f"{count / (1024 * 1024):.1f} MB"
 
 
-def _a(word: str) -> str:
-    return f"an {word}" if word[:1].lower() in "aeiou" else f"a {word}"
+def _read_and_outline(snapshot: str, part_chars: int = reader.DEFAULT_PART_CHARS):
+    """`reader.read` and `reader.outline`, together in the ONE `to_thread`
+    call `browser_open` makes (fix round 1, m6): calling `outline` back on
+    the event loop after the `await` cost 262 ms on a 4 MiB, 128k-node page
+    (measured), on top of `read`'s own cost."""
+    read = reader.read(snapshot, part_chars)
+    return read, reader.outline(read)
 
 
-def _dialog_lines(answer: EngineAnswer) -> list[str]:
-    lines = []
-    for dialog in answer.dialogs:
-        said = f': "{_scrub(dialog.message)}"' if dialog.message else ""
-        lines.append(f"The page opened {_a(dialog.kind)} dialog{said} — {_ANSWER_A_DIALOG}.")
-    return lines
+def _read_and_search(snapshot: str, part_chars: int, query: str):
+    """`reader.read` and, when there is a query, `reader.search` too — in
+    the ONE `to_thread` call `browser_read` makes (fix round 1, m6): calling
+    `search` back on the event loop after the `await` cost 73 ms on a 4 MiB
+    page (measured), on top of `read`'s own cost."""
+    read = reader.read(snapshot, part_chars)
+    return (read, reader.search(read, query)) if query else (read, None)
+
+
+def _canonical_ref(ref: str) -> str | None:
+    """`ref` reduced to the engine's own ref shape, `(f<digits>)?e<digits>`
+    — stripping ONE pair of surrounding brackets first, the form
+    `browser_read` itself prints (`[e12]`) — or None when it is not one
+    (fix round 1, I3). The pinned engine treats anything else as a
+    Playwright SELECTOR and acts on whatever it matches: `ref="button"` or
+    `"#pay"` would act on the first match of that CSS selector, and the
+    bracketed form `browser_read` prints would run as an attribute selector
+    instead of naming the element it refers to. Str methods only, one pass."""
+    if ref.startswith("[") and ref.endswith("]"):
+        ref = ref[1:-1]
+    i, n = 0, len(ref)
+    if i < n and ref[i] == "f":
+        j = i + 1
+        while j < n and ref[j].isdigit():
+            j += 1
+        if j == i + 1:  # "f" with no digits after it
+            return None
+        i = j
+    if i >= n or ref[i] != "e":
+        return None
+    i += 1
+    start = i
+    while i < n and ref[i].isdigit():
+        i += 1
+    if i == start or i != n:  # no digits, or something trails them
+        return None
+    return ref
 
 
 async def _bring_downloads(ctx: ToolContext, answer: EngineAnswer) -> list[str]:
@@ -190,22 +254,20 @@ async def _call(tool: str, arguments: dict, ctx: ToolContext) -> EngineAnswer:
     call the transport could not make raises, as a stated ToolFailure.
 
     `exc.reachable` (ruling G31) is read directly, never parsed out of
-    `exc.reason`'s prose: it is filed as a fact of its own (whatever a tool
-    could determine about the engine settles something, win or lose), and it
-    alone decides whether she is told the engine is not answering at all —
-    the one sentence every one of her five tools gives for that, verbatim —
-    or given the engine's own, more specific words."""
+    `exc.reason`'s prose, and filed as a fact of its own (whatever a tool
+    could determine about the engine settles something, win or lose).
+    `exc.reason` itself is shown exactly as the client determined it, with
+    no claim of this module's own added on top (fix round 1, m3 — the
+    first version said "is not answering at {origin} — {reason}" even when
+    `reason` already named that SAME origin, doubling it, and even when the
+    client's own words said something narrower than "not answering" —
+    nothing was SENT, say, rather than sent and unanswered)."""
     try:
         return await engine.call(tool, arguments)
     except engine.EngineError as exc:
         if exc.reachable is not None:
             _fact(ctx, {"browser": "engine", "reachable": exc.reachable})
-        if exc.reachable:
-            raise ToolFailure(_scrub(exc.reason)) from exc
-        origin = engine.endpoint().origin
-        raise ToolFailure(
-            f"the browser engine is not answering at {origin} — {_scrub(exc.reason)}"
-        ) from exc
+        raise ToolFailure(addresses.scrub(exc.reason)) from exc
 
 
 # ── browser_open ────────────────────────────────────────────────────────────
@@ -213,7 +275,14 @@ async def _call(tool: str, arguments: dict, ctx: ToolContext) -> EngineAnswer:
 
 async def browser_open(args: dict, ctx: ToolContext) -> str:
     url = args["url"].strip()
-    if urlsplit(url).scheme.lower() not in ("http", "https"):
+    try:
+        scheme = urlsplit(url).scheme.lower()
+    except ValueError as exc:
+        # fix round 1, m11: urlsplit raises on some malformed strings (an
+        # unterminated IPv6 host) — a stated refusal, never a crash dispatch
+        # has to catch and log as a bug she did not cause.
+        raise ToolFailure(f"{url!r} does not parse as a web address: {exc}") from exc
+    if scheme not in ("http", "https"):
         raise ToolFailure(f"the browser opens http and https addresses only, not {_shown(url)}")
     snap: EngineAnswer | None = None
     async with engine.session():
@@ -234,25 +303,41 @@ async def browser_open(args: dict, ctx: ToolContext) -> str:
     notes = await _bring_downloads(ctx, opened)
     if snap is not None:
         notes += await _bring_downloads(ctx, snap)
+    _dialog_block(opened, notes)
     if opened.error:
-        raise ToolFailure(f"{_shown(url)} did not open: {_scrub(opened.error)}")
-    _page_fact(ctx, opened)
+        raise _fail(f"{_shown(url)} did not open: {addresses.scrub(opened.error)}", notes)
     if opened.status is not None and opened.status >= 400:
-        status = f"{opened.status} {opened.status_text}".rstrip()
-        raise ToolFailure(
+        _page_fact(ctx, opened)
+        status = f"{opened.status} {addresses.scrub(opened.status_text)}".rstrip()
+        raise _fail(
             f"{_shown(opened.url or url)} answered {status} — the browser now shows the "
-            "site's error page; browser_read can read it"
+            "site's error page; browser_read can read it",
+            notes,
         )
     if opened.dialogs:
+        _page_fact(ctx, opened)
         return "\n".join([f"Opened {_where(opened, url)}.", *_dialog_lines(opened), *notes])
     assert snap is not None  # the condition above is exactly when it was fetched
+    _dialog_block(snap, notes)
     if snap.error:
-        raise ToolFailure(
-            f"{_shown(opened.url or url)} opened, and could not be read: {_scrub(snap.error)}"
+        _page_fact(ctx, opened)
+        raise _fail(
+            f"{_shown(opened.url or url)} opened, and could not be read: "
+            f"{addresses.scrub(snap.error)}",
+            notes,
         )
-    read = await asyncio.to_thread(reader.read, snap.snapshot or "")
-    outline = reader.outline(read)
-    lines = [f"Opened {_where(snap if snap.url else opened, url)}."]
+    if snap.snapshot is None:
+        # fix round 1, m10: no "### Snapshot" at all is not the same fact as
+        # an empty one (a genuinely blank page) — say so, never guess.
+        _page_fact(ctx, opened)
+        raise _fail("the engine returned no snapshot of the page", notes)
+    # fix round 1, m9: back the shown address with the SAME answer it comes
+    # from — a client-side redirect between navigate and snapshot means
+    # `snap`'s own URL/title, not `opened`'s, is what she is about to read.
+    source = snap if snap.url else opened
+    _page_fact(ctx, source)
+    read, outline = await asyncio.to_thread(_read_and_outline, snap.snapshot)
+    lines = [f"Opened {_where(source, url)}."]
     if outline.headings:
         more = f" (and {outline.more_headings} more)" if outline.more_headings else ""
         lines.append("Headings: " + "; ".join(outline.headings) + more + ".")
@@ -275,41 +360,43 @@ async def browser_read(args: dict, ctx: ToolContext) -> str:
     async with engine.session():
         snap = await _call("browser_snapshot", {}, ctx)
     notes = await _bring_downloads(ctx, snap)  # G10 + the Task 2 carry: outside the lock
-    if snap.dialogs:
-        dialog = snap.dialogs[0]
-        said = f' ("{_scrub(dialog.message)}")' if dialog.message else ""
-        raise ToolFailure(
-            f"{_a(dialog.kind)} dialog is open on the page{said} — {_ANSWER_A_DIALOG} first"
-        )
+    _dialog_block(snap, notes)
     if snap.error:
-        raise ToolFailure(f"the page could not be read: {_scrub(snap.error)}")
+        raise _fail(f"the page could not be read: {addresses.scrub(snap.error)}", notes)
+    if snap.snapshot is None:
+        raise _fail("the engine returned no snapshot of the page", notes)  # fix round 1, m10
     _page_fact(ctx, snap)
-    read = await asyncio.to_thread(reader.read, snap.snapshot or "", part_chars)
+    query = (args.get("query") or "").strip()
+    read, searched = await asyncio.to_thread(_read_and_search, snap.snapshot, part_chars, query)
     count = len(read.parts)
     head = f"{_where(snap)}"
-    query = (args.get("query") or "").strip()
     if query:
-        matches, total = reader.search(read, query)
+        matches, total = searched
         if not matches:
             parts = f"{count} part{'s' if count != 1 else ''}"
-            return "\n".join([head, f"No line holds every word of {query!r} ({parts}).", *notes])
+            return "\n".join([head, *notes, f"No line holds every word of {query!r} ({parts})."])
         held = "1 line holds" if total == 1 else f"{total:,} lines hold"
-        lines = [f"{head} · {held} every word of {query!r}:"]
+        # fix round 1, m12: the tool's own lines (the header, any notes) come
+        # before every search snippet, so a page cannot forge one by its
+        # position alone.
+        lines = [f"{head} · {held} every word of {query!r}:", *notes]
         for match in matches:
             under = f" under {match.heading!r}" if match.heading else ""
             lines.append(f"- part {match.part}{under}: {match.text}")
         if total > len(matches):
             lines.append(f"…and {total - len(matches)} more; use more words, or read a part.")
-        lines.extend(notes)
         return "\n".join(lines)
     wanted = int(args.get("part") or 1)
     if wanted > count:
-        raise ToolFailure(
-            f"the page has {count} part{'s' if count != 1 else ''}; there is no part {wanted}"
+        raise _fail(
+            f"the page has {count} part{'s' if count != 1 else ''}; there is no part {wanted}",
+            notes,
         )
     body = read.parts[wanted - 1] or "(The page has no text.)"
-    lines = [f"{head} · part {wanted} of {count}", "", body]
-    lines.extend(notes)
+    # fix round 1, m12: her own lines before the page's, with a marker line
+    # naming exactly where the page's own text starts — a page cannot print
+    # a line further up that reads as if it were one of these.
+    lines = [head, *notes, f"Page text (part {wanted} of {count}):", "", body]
     return "\n".join(lines)
 
 
@@ -334,7 +421,12 @@ def _engine_call(action: str, ref: str, value: str | None, submit: bool) -> tupl
 
 
 def _did(action: str, answer: EngineAnswer, ref: str, value: str | None) -> str:
-    target = answer.acted_on or (f"[{ref}]" if ref else "the page")
+    # fix round 1, m1: `acted_on` is the PAGE's own accessible name for
+    # whatever the engine's code targeted — a link named with its own
+    # token-bearing URL is a page's words, exactly like a dialog message.
+    target = (
+        addresses.scrub(answer.acted_on) if answer.acted_on else (f"[{ref}]" if ref else "the page")
+    )
     if action == "click":
         return f"Clicked {target}"
     if action == "type":
@@ -352,12 +444,25 @@ async def browser_act(args: dict, ctx: ToolContext) -> str:
     action = (args.get("action") or "").strip().lower()
     if action not in ACTIONS:
         raise ToolFailure(f"action must be one of {', '.join(ACTIONS)} — re-issue the call")
-    ref = (args.get("ref") or "").strip()
+    # Not stripped (fix round 1, I3): " e12" or "e12 " must be refused, not
+    # silently cleaned up into a ref that would then be sent as one.
+    ref = args.get("ref") or ""
     value = args.get("value")
-    if action in _NEEDS_REF and not ref:
-        raise ToolFailure(
-            f"{action} needs the ref of an element, like e12, from browser_read — re-issue the call"
-        )
+    if action in _NEEDS_REF:
+        if not ref:
+            raise ToolFailure(
+                f"{action} needs the ref of an element, like e12, from browser_read — "
+                "re-issue the call"
+            )
+        canonical = _canonical_ref(ref)
+        if canonical is None:
+            # fix round 1, I3: refused before anything is sent — the pinned
+            # engine would otherwise run this as a Playwright selector.
+            raise ToolFailure(
+                f"{ref!r} is not shaped like a ref — a ref looks like e12 or f1e3, exactly as "
+                "browser_read lists elements — re-issue the call with one of those"
+            )
+        ref = canonical
     if action in _NEEDS_VALUE and not (isinstance(value, str) and value):
         raise ToolFailure(f"{action} needs a value: {_NEEDS_VALUE[action]} — re-issue the call")
     tool, arguments = _engine_call(action, ref, value, bool(args.get("submit")))
@@ -372,13 +477,15 @@ async def browser_act(args: dict, ctx: ToolContext) -> str:
             # files cancels it (the engine's documented cancel; unmeasured).
             answer = await _call("browser_file_upload", {}, ctx)
     notes = await _bring_downloads(ctx, answer)  # G10: outside the lock just released
+    _dialog_block(answer, notes)
     if answer.error:
         if "not found in the current page snapshot" in answer.error:
-            raise ToolFailure(
+            raise _fail(
                 f"{ref or 'that element'} is no longer on the page — refs change when the page "
-                "does; read the page again (browser_read) and use a new ref"
+                "does; read the page again (browser_read) and use a new ref",
+                notes,
             )
-        raise ToolFailure(f"the engine refused: {_scrub(answer.error)}")
+        raise _fail(f"the engine refused: {addresses.scrub(answer.error)}", notes)
     _page_fact(ctx, answer)
     lines = [f"{_did(action, answer, ref, value)}."]
     if answer.url:
@@ -397,8 +504,9 @@ async def browser_back(args: dict, ctx: ToolContext) -> str:
     async with engine.session():
         answer = await _call("browser_navigate_back", {}, ctx)
     notes = await _bring_downloads(ctx, answer)  # G10 + the Task 2 carry: outside the lock
+    _dialog_block(answer, notes)
     if answer.error:
-        raise ToolFailure(f"could not go back: {_scrub(answer.error)}")
+        raise _fail(f"could not go back: {addresses.scrub(answer.error)}", notes)
     _page_fact(ctx, answer)
     if not answer.url:
         return "\n".join(["Went back; the engine reported no page.", *notes])
@@ -412,10 +520,11 @@ async def browser_screenshot(args: dict, ctx: ToolContext) -> str:
     async with engine.session():
         answer = await _call("browser_take_screenshot", {"type": "png", "scale": "css"}, ctx)
     notes = await _bring_downloads(ctx, answer)  # G10 + the Task 2 carry: outside the lock
+    _dialog_block(answer, notes)
     if answer.error:
-        raise ToolFailure(f"no screenshot was taken: {_scrub(answer.error)}")
+        raise _fail(f"no screenshot was taken: {addresses.scrub(answer.error)}", notes)
     if not answer.files:
-        raise ToolFailure("the engine took no screenshot file it could name")
+        raise _fail("the engine took no screenshot file it could name", notes)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     try:
         brought = await asyncio.to_thread(
@@ -427,7 +536,9 @@ async def browser_screenshot(args: dict, ctx: ToolContext) -> str:
             name=f"{stamp}.png",
         )
     except files.HandoffError as exc:
-        raise ToolFailure(f"a screenshot was taken and did not reach the workspace: {exc}") from exc
+        raise _fail(
+            f"a screenshot was taken and did not reach the workspace: {exc}", notes
+        ) from exc
     _fact(ctx, {"browser": "screenshot", "path": brought.path, "bytes": brought.bytes})
     line = (
         f"Saved a screenshot of the page to {brought.path} ({_size(brought.bytes)}). The image "
@@ -435,8 +546,7 @@ async def browser_screenshot(args: dict, ctx: ToolContext) -> str:
     )
     if brought.left_in_engine:  # Task 3 carry
         line += f" The engine's copy could not be removed: {brought.left_in_engine}."
-    lines = [line, *notes]
-    return "\n".join(lines)
+    return "\n".join([line, *notes])
 
 
 # ── the registry's entries ──────────────────────────────────────────────────

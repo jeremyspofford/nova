@@ -4,13 +4,18 @@ answering with its own captured words (tests/browser_engine.py)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
+import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app import tools
-from app.browser import engine, files
+from app import addresses, chat, tools, traces
+from app.browser import engine, files, reader
+from app.browser import page as page_module
 from app.mcp import client, fake
 from app.tools import browser
 from app.tools.base import ToolContext, ToolFailure
@@ -91,14 +96,22 @@ async def test_a_page_that_does_not_load_says_why(world):
 
 async def test_read_gives_a_part_of_the_page_it_names(world):
     ctx, _, _, facts = world
+    # m5: the rendered-text expectations come from the reader over the same
+    # capture, never hand-written.
+    expected = reader.read(page_module.parse(answer_text("snapshot-long")).snapshot or "")
     with fake_engine(engine_tool("browser_snapshot", "snapshot-long")):
         first = await browser.browser_read({}, ctx)
         second = await browser.browser_read({"part": 2}, ctx)
         with pytest.raises(ToolFailure, match="has 2 parts; there is no part 3"):
             await browser.browser_read({"part": 3}, ctx)
-    assert first.splitlines()[0] == 'http://site:8000/long.html — "A long page" · part 1 of 2'
-    assert first.splitlines()[2] == "# A long page"
-    assert second.splitlines()[2].startswith("Paragraph 219 of the long page")
+    # m12: her own lines (the header) come before the page's; a marker line
+    # names where the page's own text begins.
+    assert first.splitlines()[0] == 'http://site:8000/long.html — "A long page"'
+    assert first.splitlines()[1] == "Page text (part 1 of 2):"
+    assert first.splitlines()[2] == ""
+    assert first.splitlines()[3] == expected.parts[0].splitlines()[0]
+    assert second.splitlines()[1] == "Page text (part 2 of 2):"
+    assert second.splitlines()[3] == expected.parts[1].splitlines()[0]
     assert facts[0] == {
         "browser": "page",
         "url": "http://site:8000/long.html",
@@ -294,7 +307,14 @@ async def test_back_names_the_page_it_landed_on(world):
         )
 
 
-async def test_every_tool_says_the_engine_is_not_answering(world):
+async def test_every_tool_states_the_clients_own_reason_with_no_added_claim(world):
+    """Fix round 1, m3: the first version composed "is not answering at
+    {origin} — {reason}" even though `reason` (the CLIENT's own words) already
+    names that same origin — doubling it — and even when "not answering" is a
+    narrower, wrong claim than what the client actually determined (here: it
+    never sent anything at all). `_call` now shows `exc.reason` exactly,
+    scrubbed, with nothing of its own added, and it is the SAME sentence for
+    all five tools, since they all hit the same unreachable transport."""
     ctx = world[0]
     handle = client.plant({ORIGIN: fake.Unreachable()})
     try:
@@ -307,9 +327,10 @@ async def test_every_tool_says_the_engine_is_not_answering(world):
         ]:
             result, ok = await tools.dispatch(name, args, ctx)
             assert not ok, name
-            assert result.startswith(
-                "Error: the browser engine is not answering at http://browser:8931"
+            assert result == (
+                "Error: could not reach browser at http://browser:8931 — ConnectError"
             ), (name, result)
+            assert result.count("http://browser:8931") == 1, (name, result)
     finally:
         client.unplant(handle)
 
@@ -434,7 +455,8 @@ async def test_a_download_finishing_after_an_act_is_brought_in_on_the_next_read(
         clicked = await browser.browser_act({"action": "click", "ref": "f3e4"}, ctx)
         read = await browser.browser_read({}, ctx)
     assert "Downloaded" not in clicked
-    assert read.splitlines()[-1] == "Downloaded downloads/late.zip (9 bytes)."
+    # m12: the download note is one of HER lines, before the page text.
+    assert read.splitlines()[1] == "Downloaded downloads/late.zip (9 bytes)."
     assert (workspace / "downloads" / "late.zip").read_bytes() == b"zip bytes"
     assert {"browser": "download", "path": "downloads/late.zip", "bytes": 9} in facts
 
@@ -538,3 +560,367 @@ async def test_a_slow_copy_in_browser_open_never_holds_the_engine_lock(world, mo
             release.set()
         await task
     assert {"browser": "download", "path": "downloads/slow.zip", "bytes": 10} in facts
+
+
+# ── fix round 1, I1: the free-text scrub is linear ──────────────────────────
+
+
+def test_addresses_scrub_stays_linear_on_a_4mib_url_dense_text():
+    """A text built ENTIRELY of one scheme's URLs used to make the search
+    for the OTHER, absent scheme rescan the whole remaining string on every
+    one of them (quadratic — 3.5-4.6s measured at just 288 KB). Measured on
+    this tree after the fix: ~0.7-0.8s at ~4.5 MB, http-only or https-only —
+    budgeted at 5x that for a slower machine, still far below the 3.5s the
+    OLD code took at 288 KB alone."""
+    for unit in ("http://a ", "https://a "):
+        text = unit * 500_000  # ~4.5-5 MB, the size an answer may carry
+        started = time.perf_counter()
+        addresses.scrub(text)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 4.0, (unit, elapsed)
+
+
+async def test_a_huge_dialog_message_no_longer_stalls_the_event_loop(world):
+    """The end-to-end shape (fix round 1, p2): a page's alert() full of
+    URLs, through browser_act's real path. Clipped (m8) well before the
+    scrub ever sees 288 KB of it, and linear (I1) either way."""
+    ctx = world[0]
+    message = "http://a " * 32_000  # 288 KB, the size that cost 3.5-4.6s before
+    click = fake.FakeTool(
+        "browser_click",
+        results=(
+            {
+                "text": (
+                    "### Page\n- Page URL: http://site:8000/index.html\n"
+                    f'### Modal state\n- ["alert" dialog with message "{message}"]: '
+                    "can be handled by browser_handle_dialog"
+                ),
+                "is_error": False,
+            },
+        ),
+    )
+    with fake_engine(click):
+        started = time.perf_counter()
+        result = await browser.browser_act({"action": "click", "ref": "e1"}, ctx)
+        elapsed = time.perf_counter() - started
+    assert elapsed < 1.0, elapsed
+    assert len(result) < 2_500, len(result)
+
+
+# ── fix round 1, I2: every tool names an open dialog, never the engine's ───
+
+
+def _dialog_refusal(engine_tool_name: str) -> fake.FakeTool:
+    """Capture 14's refusal shape, with the tool name swapped (as the engine
+    itself names whichever tool it just refused)."""
+    captured = answer_text("snapshot-during-dialog").replace("browser_snapshot", engine_tool_name)
+    return fake.FakeTool(engine_tool_name, results=({"text": captured, "is_error": True},))
+
+
+@pytest.mark.parametrize(
+    "mine,engine_tool_name,args",
+    [
+        ("browser_open", "browser_navigate", {"url": INDEX}),
+        ("browser_read", "browser_snapshot", {}),
+        ("browser_act", "browser_click", {"action": "click", "ref": "e3"}),
+        ("browser_act", "browser_type", {"action": "type", "ref": "e3", "value": "x"}),
+        ("browser_back", "browser_navigate_back", {}),
+        ("browser_screenshot", "browser_take_screenshot", {}),
+    ],
+)
+async def test_every_tool_names_an_open_dialog_instead_of_the_engines_refusal(
+    world, mine, engine_tool_name, args
+):
+    ctx = world[0]
+    with fake_engine(_dialog_refusal(engine_tool_name)):
+        with pytest.raises(ToolFailure) as caught:
+            await getattr(browser, mine)(args, ctx)
+    said = str(caught.value)
+    assert 'action="accept"' in said or 'action="dismiss"' in said, (mine, said)
+    assert "does not handle the modal state" not in said, (mine, said)
+    assert engine_tool_name not in said, (mine, said)
+
+
+# ── fix round 1, I3: a ref is a ref, or it is refused before anything sends ─
+
+
+@pytest.mark.parametrize("raw,expected_target", [("[e12]", "e12"), ("f1e3", "f1e3"), ("e9", "e9")])
+async def test_a_ref_reaches_the_engine_in_its_canonical_form(world, raw, expected_target):
+    ctx = world[0]
+    with fake_engine(engine_tool("browser_click", "click-link")) as server:
+        await browser.browser_act({"action": "click", "ref": raw}, ctx)
+    assert _called(server) == [("browser_click", {"target": expected_target})]
+
+
+@pytest.mark.parametrize(
+    "bad_ref",
+    ["button", "#pay", "text=Delete account", "e12 ", " e12", "f12", "e", "ee1", "f1e", "[e12"],
+)
+async def test_a_ref_not_shaped_like_one_is_refused_before_anything_is_sent(world, bad_ref):
+    ctx = world[0]
+    with fake_engine(engine_tool("browser_click", "click-link")) as server:
+        with pytest.raises(ToolFailure, match="not shaped like a ref"):
+            await browser.browser_act({"action": "click", "ref": bad_ref}, ctx)
+        assert _called(server) == []
+
+
+# ── fix round 1, I4: a download already brought in is always said ──────────
+
+
+async def test_an_out_of_range_part_still_says_the_download_it_already_brought_in(world):
+    """p5's shape: the download is brought in, filed and removed from the
+    engine's volume BEFORE the out-of-range check raises — so the failure
+    must still say so; the engine reports a finished download once."""
+    ctx, output, workspace, facts = world
+    (output / "late.zip").write_bytes(b"zip bytes")
+    snap_late = fake.FakeTool(
+        "browser_snapshot",
+        results=(
+            {"text": answer_text("snapshot-long") + _LATE_DOWNLOAD_EVENTS, "is_error": False},
+        ),
+    )
+    with fake_engine(snap_late):
+        with pytest.raises(ToolFailure) as caught:
+            await browser.browser_read({"part": 9}, ctx)
+    said = str(caught.value)
+    assert "late.zip" in said
+    assert "there is no part 9" in said
+    assert (workspace / "downloads" / "late.zip").read_bytes() == b"zip bytes"
+    assert not (output / "late.zip").exists()
+    assert {"browser": "download", "path": "downloads/late.zip", "bytes": 9} in facts
+
+
+async def test_an_out_of_range_part_still_says_a_failed_handoff(world):
+    ctx = world[0]
+    # No file written at all: the engine reported late.zip, and it is not there.
+    snap_late = fake.FakeTool(
+        "browser_snapshot",
+        results=(
+            {"text": answer_text("snapshot-long") + _LATE_DOWNLOAD_EVENTS, "is_error": False},
+        ),
+    )
+    with fake_engine(snap_late):
+        with pytest.raises(ToolFailure) as caught:
+            await browser.browser_read({"part": 9}, ctx)
+    said = str(caught.value)
+    assert "did not reach the workspace" in said
+    assert "there is no part 9" in said
+
+
+async def test_a_download_on_a_failed_open_is_still_said(world):
+    ctx, output, workspace, facts = world
+    (output / "late.zip").write_bytes(b"zip bytes")
+    nav404_text = answer_text("navigate-404").replace(
+        "### Events\n", '### Events\n- Downloaded file late.zip to "/output/late.zip"\n'
+    )
+    nav404 = fake.FakeTool("browser_navigate", results=({"text": nav404_text, "is_error": False},))
+    with fake_engine(nav404):
+        with pytest.raises(ToolFailure) as caught:
+            await browser.browser_open({"url": "http://site:8000/missing.html"}, ctx)
+    said = str(caught.value)
+    assert "late.zip" in said
+    assert "answered 404" in said
+    assert (workspace / "downloads" / "late.zip").read_bytes() == b"zip bytes"
+
+
+async def test_a_download_on_a_nameless_screenshot_is_still_said(world):
+    ctx, output, workspace, facts = world
+    (output / "late.zip").write_bytes(b"zip bytes")
+    shot_text = "### Page\n- Page URL: http://site:8000/index.html" + _LATE_DOWNLOAD_EVENTS
+    shot = fake.FakeTool(
+        "browser_take_screenshot", results=({"text": shot_text, "is_error": False},)
+    )
+    with fake_engine(shot):
+        with pytest.raises(ToolFailure) as caught:
+            await browser.browser_screenshot({}, ctx)
+    said = str(caught.value)
+    assert "late.zip" in said
+    assert "no screenshot file it could name" in said
+
+
+# ── fix round 1, m1 + m2: acted_on is scrubbed, span and all ────────────────
+
+
+async def test_a_links_own_token_url_name_never_reaches_the_result_or_the_span(world):
+    """p6's second case: `acted_on` — what the engine's own code says it
+    targeted — is the PAGE's accessible name for the element, exactly like a
+    dialog's message. End to end through chat._run_tool (the S37a pattern,
+    test_mcp_tools.py's test_no_token_bytes_reach_turn_spans): no abc123 in
+    the result, the span meta, or the recorded facts."""
+    ctx, _, _, facts = world
+    secret = "https://x.invalid/reset?token=abc123"
+    click = fake.FakeTool(
+        "browser_click",
+        results=(
+            {
+                "text": (
+                    "### Ran Playwright code\n```js\n"
+                    f"await page.getByRole('link', {{ name: '{secret}' }}).click();\n```\n"
+                    "### Page\n- Page URL: https://x.invalid/reset?token=abc123\n"
+                    "- Page Title: Reset your password"
+                ),
+                "is_error": False,
+            },
+        ),
+    )
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1", name="browser_act", arguments=json.dumps({"action": "click", "ref": "e40"})
+    )
+    with fake_engine(click):
+        result, ok = await chat._run_tool(turn, ctx, call)
+    written = json.dumps([span.meta for span in turn.spans], default=str) + result
+    assert ok, result
+    assert "abc123" not in written, written
+    assert "abc123" not in repr(facts)
+
+
+# ── fix round 1, m3 is covered by the renamed test above ("not answering") ──
+# ── fix round 1, m4: a file chooser can only be dismissed ───────────────────
+
+
+async def test_a_file_chooser_can_only_be_dismissed(world):
+    ctx = world[0]
+    click_opens = (
+        "### Page\n- Page URL: http://site:8000/upload.html\n- Page Title: Upload\n"
+        "### Modal state\n- [File chooser]: can be handled by browser_file_upload"
+    )
+    refused = (
+        '### Error\nError: Tool "browser_handle_dialog" does not handle the modal state.\n'
+        "### Modal state\n- [File chooser]: can be handled by browser_file_upload"
+    )
+    upload_ok = "### Page\n- Page URL: http://site:8000/upload.html\n- Page Title: Upload"
+    click = fake.FakeTool("browser_click", results=({"text": click_opens, "is_error": False},))
+    with fake_engine(click):
+        opened = await browser.browser_act({"action": "click", "ref": "e5"}, ctx)
+    assert 'dismiss it with browser_act(action="dismiss")' in opened
+    assert "accept" not in opened.lower()
+
+    handle = fake.FakeTool("browser_handle_dialog", results=({"text": refused, "is_error": True},))
+    upload = fake.FakeTool("browser_file_upload", results=({"text": upload_ok, "is_error": False},))
+    with fake_engine(handle, upload) as server:
+        with pytest.raises(ToolFailure, match=r'dismiss it with browser_act\(action="dismiss"\)'):
+            await browser.browser_act({"action": "accept"}, ctx)
+        assert _called(server) == [("browser_handle_dialog", {"accept": True})]
+
+    with fake_engine(handle, upload) as server:
+        result = await browser.browser_act({"action": "dismiss"}, ctx)
+        assert result.splitlines() == [
+            "Dismissed the dialog.",
+            'The page is now http://site:8000/upload.html — "Upload".',
+        ]
+        assert _called(server) == [
+            ("browser_handle_dialog", {"accept": False}),
+            ("browser_file_upload", {}),
+        ]
+
+
+# ── fix round 1, m6: outline and search run off the event loop ─────────────
+
+
+async def test_outline_runs_off_the_event_loop_thread(world, monkeypatch):
+    ctx = world[0]
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+    real_outline = reader.outline
+
+    def spy(page):
+        seen.append(threading.current_thread())
+        return real_outline(page)
+
+    monkeypatch.setattr(reader, "outline", spy)
+    with fake_engine(
+        engine_tool("browser_navigate", "navigate-index"),
+        engine_tool("browser_snapshot", "snapshot-index"),
+    ):
+        await browser.browser_open({"url": INDEX}, ctx)
+    assert seen and seen[0] is not main_thread
+
+
+async def test_search_runs_off_the_event_loop_thread(world, monkeypatch):
+    ctx = world[0]
+    main_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+    real_search = reader.search
+
+    def spy(page, query):
+        seen.append(threading.current_thread())
+        return real_search(page, query)
+
+    monkeypatch.setattr(reader, "search", spy)
+    with fake_engine(engine_tool("browser_snapshot", "snapshot-long")):
+        await browser.browser_read({"query": "paragraph"}, ctx)
+    assert seen and seen[0] is not main_thread
+
+
+# ── fix round 1, m9: the page fact backs the address she is shown ──────────
+
+
+async def test_the_page_fact_matches_the_address_she_is_shown_after_a_redirect(world):
+    ctx, _, _, facts = world
+    navigate = engine_tool("browser_navigate", "navigate-index")
+    redirected_snapshot = fake.FakeTool(
+        "browser_snapshot",
+        results=(
+            {
+                "text": (
+                    "### Page\n- Page URL: http://site:8000/redirected.html\n"
+                    "- Page Title: Redirected\n"
+                    '### Snapshot\n```yaml\n- generic [ref=e1]: "hi"\n```'
+                ),
+                "is_error": False,
+            },
+        ),
+    )
+    with fake_engine(navigate, redirected_snapshot):
+        result = await browser.browser_open({"url": INDEX}, ctx)
+    assert "http://site:8000/redirected.html" in result
+    assert "http://site:8000/index.html" not in result
+    assert facts[-1] == {
+        "browser": "page",
+        "url": "http://site:8000/redirected.html",
+        "title": "Redirected",
+        "status": None,
+    }
+
+
+# ── fix round 1, m10: a missing snapshot is a stated failure ───────────────
+
+
+_NO_SNAPSHOT = fake.FakeTool(
+    "browser_snapshot",
+    results=(
+        {
+            "text": "### Page\n- Page URL: http://site:8000/index.html\n- Page Title: X",
+            "is_error": False,
+        },
+    ),
+)
+
+
+async def test_read_states_a_missing_snapshot_not_an_empty_page(world):
+    ctx = world[0]
+    with fake_engine(_NO_SNAPSHOT):
+        with pytest.raises(ToolFailure, match="returned no snapshot"):
+            await browser.browser_read({}, ctx)
+
+
+async def test_open_also_states_a_missing_snapshot(world):
+    ctx = world[0]
+    with fake_engine(engine_tool("browser_navigate", "navigate-index"), _NO_SNAPSHOT):
+        with pytest.raises(ToolFailure, match="returned no snapshot"):
+            await browser.browser_open({"url": INDEX}, ctx)
+
+
+# ── fix round 1, m11: an unparseable URL is a stated refusal ───────────────
+
+
+async def test_an_unparseable_url_is_a_stated_refusal_not_a_crash(world):
+    ctx = world[0]
+    bad = "http://[::1/reset?token=abc123"
+    with pytest.raises(ToolFailure, match="does not parse as a web address"):
+        await browser.browser_open({"url": bad}, ctx)
+    result, ok = await tools.dispatch("browser_open", {"url": bad}, ctx)
+    assert not ok
+    assert "failed unexpectedly" not in result
+    assert "does not parse as a web address" in result

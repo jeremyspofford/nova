@@ -90,7 +90,6 @@ from collections.abc import AsyncIterator, Callable, Collection, Iterable, Seque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 import asyncpg
 import httpx
@@ -99,6 +98,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import (
+    addresses,
     agents,
     attachments,
     conversations,
@@ -1769,23 +1769,13 @@ def _masked(value: object) -> str:
 def _address_without_secrets(value: str) -> str:
     """An address as the trace may hold it (S38): no user:password@, and the
     query and fragment masked — a reset or sign-in link carries its token
-    there. Anything that is not an http(s) address is returned as it was."""
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return value
-    if parts.scheme.lower() not in ("http", "https"):
-        return value
-    user, at, host = parts.netloc.rpartition("@")
-    out = f"{parts.scheme}://"
-    if at:
-        out += f"<masked:{len(user)} chars>@"
-    out += host + parts.path
-    if parts.query:
-        out += f"?<masked:{len(parts.query)} chars>"
-    if parts.fragment:
-        out += f"#<masked:{len(parts.fragment)} chars>"
-    return out
+    there. Anything that is not an http(s) address is returned as it was.
+
+    A call to `app.addresses.masked` (ruling G16, fix round 1 m7): the one
+    parse of an address lives there now, shared with `app.tools.browser`'s
+    `address`, so the two renderings a reset link's token needs to stay out
+    of can never quietly drift apart again."""
+    return addresses.masked(value)
 
 
 def _redact(value: object, *, in_headers: bool = False) -> object:
