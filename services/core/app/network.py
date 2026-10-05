@@ -174,8 +174,9 @@ def door_of(peer: str | None, forwarded: str | None) -> str | None:
     The door is not identity (S42b Task 22): anything that reaches the hub
     machine's own loopback port comes in through "host" — a relay on the hub
     too, such as the owner's tunnel or an ssh -L. So "host" says how a
-    socket came in, never that its agent runs on the hub machine, and every
-    line built on it says "came in through the hub machine's own door"."""
+    socket came in, never that its agent runs on the hub machine: the agent
+    lines of machine_status and device_list, and machine_update's refusal of
+    "hub", say it as "came in through the hub machine's own door"."""
     if peer == _addr(WEB_ADDR_ENV):
         if forwarded == _addr(GATEWAY_ENV):
             return "host"

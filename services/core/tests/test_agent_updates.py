@@ -1307,3 +1307,21 @@ async def test_the_update_route_says_how_many_commands_the_restart_cancels(owner
     await _close(conn, task)
     with pytest.raises(devices.DeviceRefused):
         await pending
+
+
+async def test_machine_update_never_sends_to_a_row_named_hub_before_d8(pool):
+    """A row named 'hub' before D8 reserved the name (none live today) is
+    still not what her "hub" names: the reserved name is refused before any
+    row is chosen, so nothing is sent to it and nothing is recorded."""
+    from app.tools.base import ToolFailure
+
+    device_id, _device, conn, task = await _online(pool, "pc", _facts(OLD))
+    await pool.execute("UPDATE devices SET name = 'hub' WHERE id = $1", device_id)
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure) as exc:
+        await _machine_update("hub", sink)
+    assert str(exc.value).startswith("cannot: 'hub' is the bundled engine's name")
+    assert "No paired machine's agent came in through the hub machine's own door." in str(exc.value)
+    assert sink == [] and _commands(conn) == []
+    assert await pool.fetchval("SELECT count(*) FROM agent_updates") == 0
+    await _close(conn, task)
