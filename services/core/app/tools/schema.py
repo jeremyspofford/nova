@@ -11,8 +11,10 @@ Everything here returns a stated reason (or None); nothing raises, because
 the caller's whole job is to turn "what was wrong" into text the model can
 act on.
 """
+
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # JSON's types, in JSON's words — the model is being told what its own
@@ -48,6 +50,8 @@ def _matches(value: Any, expected: str) -> bool:
         return type(value) is list
     if expected == "object":
         return type(value) is dict
+    if expected == "null":
+        return value is None
     # An unknown type keyword is a bug in a tool's own schema, not in the
     # model's call — accept the value rather than blaming the caller.
     return True
@@ -132,4 +136,57 @@ def _range_failure(name: str, value: Any, spec: dict) -> str | None:
     maximum = spec.get("maximum")
     if maximum is not None and value > maximum:
         return f"argument {name!r} must be at most {maximum}, got {value}"
+    return None
+
+
+_SIMPLE_TYPES = frozenset({"string", "integer", "number", "boolean", "array", "object", "null"})
+
+
+def validate_foreign(schema: Any, arguments: Any) -> str | None:
+    """A LENIENT check of arguments against a schema core did not write — an
+    MCP server's inputSchema (S37a, plan decision P6).
+
+    It refuses only what it can be sure of: a missing required argument, a
+    top-level value of the wrong simple type, a value outside a declared enum,
+    and an unknown argument when the schema says additionalProperties: false.
+    Everything else JSON Schema can say (nested shapes, anyOf, $ref, formats)
+    is the server's to judge, and a refusal it sends back is stated to her in
+    its own words. `validate` above is for core's own tools and refuses every
+    unknown key: applied to a stranger's schema it would refuse calls the
+    server accepts."""
+    if type(arguments) is not dict:
+        return f"the arguments must be a JSON object, got {json_type_name(arguments)}"
+    if not isinstance(schema, dict):
+        return None
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    known = ", ".join(sorted(properties)) or "none"
+    for name in schema.get("required") or []:
+        if isinstance(name, str) and name not in arguments:
+            return f"missing required argument {name!r} — this tool takes: {known}"
+    if schema.get("additionalProperties") is False:
+        for name in arguments:
+            if name not in properties:
+                return f"unknown argument {name!r} — this tool takes: {known}"
+    for name, value in arguments.items():
+        spec = properties.get(name)
+        if not isinstance(spec, dict):
+            continue
+        declared = spec.get("type")
+        allowed = (
+            [declared]
+            if isinstance(declared, str)
+            else declared
+            if isinstance(declared, list)
+            else []
+        )
+        simple = [t for t in allowed if isinstance(t, str) and t in _SIMPLE_TYPES]
+        if simple and len(simple) == len(allowed) and not any(_matches(value, t) for t in simple):
+            return (
+                f"argument {name!r} must be {_article(simple[0])} {' or '.join(simple)}, "
+                f"got {json_type_name(value)}"
+            )
+        enum = spec.get("enum")
+        if isinstance(enum, list) and enum and value not in enum:
+            choices = ", ".join(json.dumps(v) for v in enum[:20])
+            return f"argument {name!r} must be one of {choices}, got {json.dumps(value)}"
     return None

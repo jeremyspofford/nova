@@ -140,6 +140,9 @@ NOT_AUTO_RUN = {
     # front of her that nobody in this turn asked for — and it would leave a
     # load_skill span, which the ledger counts as a use she chose to make.
     "load_skill": "a procedure is not a fact a note can be checked against",
+    # S37a: what a third party offers is its answer to give, and the server is
+    # whoever someone connected; the backend never calls a stranger unasked.
+    "mcp_tools": "the server is a third party someone connected; nothing runs against it unasked",
 }
 
 
