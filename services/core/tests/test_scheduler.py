@@ -29,6 +29,7 @@ from app import (
     tools,
     traces,
 )
+from app.browser import agent as browser_agent
 from app.identity import Person
 from app.main import app, lifespan
 from tests.conftest import TEST_DSN, requires_db
@@ -878,6 +879,14 @@ async def test_lifespan_sweeps_seeds_and_runs_the_scheduler_cancelled_before_the
         return await original_tick(app_, pool_, now=now)
 
     monkeypatch.setattr(scheduler, "tick_once", counting_tick)
+    # S38: this test has a real owner but no WORKSPACE_ROOT override, so the
+    # real seed would hit the unwritable default workspace root and log an
+    # ERROR lifespan swallows — noise this test is not about. Settled, like
+    # ensure_beats above it is not.
+    async def already_settled(pool_, app_):
+        return True
+
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
     seen_at_drain: dict = {}
     original_drain = chat.drain_background
 
@@ -937,7 +946,13 @@ async def test_run_forever_logs_a_failing_tick_and_keeps_going(monkeypatch, capl
     async def already_seeded(pool_):
         return True
 
+    # S38: pool is None here, which ensure_browser_agent cannot read an
+    # owner from — settled beside beats, for the same reason.
+    async def already_settled(pool_, app_):
+        return True
+
     monkeypatch.setattr(beats, "ensure_beats", already_seeded)
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
     monkeypatch.setattr(scheduler, "tick_once", failing_then_fine)
     with caplog.at_level(logging.ERROR, logger="core"):
         task = asyncio.create_task(scheduler.run_forever(app, None, interval_s=0.01))
@@ -1000,7 +1015,14 @@ async def test_the_ticker_stops_asking_once_the_beats_are_rows(pool, monkeypatch
         asked["n"] += 1
         return await real(pool_)
 
+    # S38: an owner exists here too, so the real seed would run every one of
+    # the many ticks below and log an ERROR each time — settled beside
+    # beats, so this test's own count stays about beats alone.
+    async def already_settled(pool_, app_):
+        return True
+
     monkeypatch.setattr(beats, "ensure_beats", counting)
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
     task = asyncio.create_task(scheduler.run_forever(app, pool, interval_s=0.01))
     try:
         for _ in range(500):

@@ -42,6 +42,7 @@ from app import (
     traces,
     workspace_api,
 )
+from app.browser import agent as browser_agent
 from app.evals import runner as eval_runner
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
@@ -98,6 +99,13 @@ async def lifespan(app: FastAPI):
     # scheduler.run_forever keeps asking on its own ticks until it takes, so a
     # brand new box gets its beats without waiting for a restart.
     await beats.ensure_beats(pool)
+    # Her browsing agent (S38), made once an owner exists — the beats' shape:
+    # it may decline on a fresh install, and the scheduler's loop asks again. A
+    # failure here is logged and retried there; it never stops core starting.
+    try:
+        await browser_agent.ensure_browser_agent(pool, app)
+    except Exception:
+        logger.exception("the browser agent could not be made; the scheduler's loop tries again")
     # The scheduler loop is its OWN task, never one of chat._BACKGROUND: a
     # forever task in that set would hang drain_background(). It is cancelled
     # and awaited FIRST at shutdown, so no new firing starts while the detached

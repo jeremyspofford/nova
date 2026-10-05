@@ -60,6 +60,7 @@ from app import (
     tools,
     traces,
 )
+from app.browser import agent as browser_agent
 from app.identity import Person
 
 logger = logging.getLogger("core")
@@ -675,6 +676,7 @@ async def run_forever(app, pool: asyncpg.Pool, interval_s: float = 60) -> None:
     stops asking.
     """
     beats_seeded = False
+    browser_agent_settled = False
     while True:
         try:
             if not beats_seeded:
@@ -684,6 +686,14 @@ async def run_forever(app, pool: asyncpg.Pool, interval_s: float = 60) -> None:
                     beats_seeded = await beats.ensure_beats(pool)
                 except Exception:
                     logger.exception("the beats could not be seeded; the next tick tries again")
+            if not browser_agent_settled:
+                # S38, the same shape: her browsing agent waits for an owner.
+                try:
+                    browser_agent_settled = await browser_agent.ensure_browser_agent(pool, app)
+                except Exception:
+                    logger.exception(
+                        "the browser agent could not be made; the next tick tries again"
+                    )
             await tick_once(app, pool)
         except Exception:
             logger.exception("scheduler tick failed; the next tick runs in %ss", interval_s)
