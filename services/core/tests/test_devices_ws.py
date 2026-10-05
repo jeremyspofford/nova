@@ -2241,7 +2241,7 @@ async def test_device_info_never_calls_an_old_probe_fresh_when_no_new_one_landed
     await asyncio.wait_for(ans, 2)
     assert ok is True and "how it runs: the Run-key value " in result
     assert result.endswith(
-        "\n(the agent answered the refresh, but no new probe of it reached Nova — so the lines "
+        "\n(the agent answered the refresh, but no newer probe of it reached Nova — so the lines "
         "above on how it runs are as probed at 2026-09-28T17:40:00Z, not now)"
     )
     await _close(conn, task)

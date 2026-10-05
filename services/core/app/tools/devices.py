@@ -411,10 +411,12 @@ async def device_info(args: dict, ctx: ToolContext) -> str:
     after = _probed_at(facts)
     # A probe whose time differs from the one held when this call began
     # landed during it. The agent's own clock stamps probed_at, so it is
-    # compared only with the agent's earlier stamp, never with core's clock.
+    # compared only with the agent's earlier stamp, never with core's clock;
+    # and "newer" is all it can say — two probes begun in one second carry
+    # one stamp (RFC 3339 seconds), so the second is never called new.
     landed = after is not None and after != before
     if missed is None and not landed:
-        missed = "the agent answered the refresh, but no new probe of it reached Nova"
+        missed = "the agent answered the refresh, but no newer probe of it reached Nova"
     result = _require_ok(await _command(pool, row, "system.info", {}, ctx=ctx), row)
     detail = result.get("output") or "(the device returned no detail)"
     lines = [f"{row['name']} system info:", detail, *device_facts.acting_lines(facts, platform)]
