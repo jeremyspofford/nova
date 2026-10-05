@@ -143,6 +143,12 @@ NOT_AUTO_RUN = {
     # S37a: what a third party offers is its answer to give, and the server is
     # whoever someone connected; the backend never calls a stranger unasked.
     "mcp_tools": "the server is a third party someone connected; nothing runs against it unasked",
+    # S38: her browser. Each reads a page someone chose, on one browser every
+    # turn shares, so a note could steer it and running it unasked would move
+    # the page under whoever is using it.
+    "browser_open": "the note would choose the address; nothing checks it against this system",
+    "browser_read": "it reads whatever page the shared browser is on, which no note can name",
+    "browser_back": "it moves the shared browser, whose history no note can name",
 }
 
 
