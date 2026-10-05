@@ -12,7 +12,7 @@
   "roots": {
     "data": "ignored",
     "deploy": "tracked",
-    "deploy/agent-dist": "unknown",
+    "deploy/agent-dist": "tracked",
     "deploy/postgres-init": "tracked",
     "deploy/tailscale": "tracked",
     "searxng": "tracked"
@@ -20,6 +20,7 @@
   "paths": {
     "deploy/backup/__pycache__": "ignored",
     "deploy/backup/.pytest_cache": "ignored",
+    "deploy/backup/.ruff_cache": "ignored",
     "deploy/backup/tests/__pycache__": "ignored",
     "deploy/backup/.venv": "ignored",
     "deploy/agent_version.sh": "tracked",

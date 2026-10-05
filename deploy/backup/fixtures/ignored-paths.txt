@@ -2,6 +2,7 @@
 .superpowers/sdd/plan/
 apps/web/node_modules/
 deploy/backup/.pytest_cache/
+deploy/backup/.ruff_cache/
 deploy/backup/.venv/
 deploy/backup/__pycache__/
 deploy/backup/tests/__pycache__/
