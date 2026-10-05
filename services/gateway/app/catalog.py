@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -278,12 +279,16 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
         facts["max_output_tokens"] = fact(model["max_output_tokens"], "declared", SOURCE_LISTING)
     pricing = model.get("pricing")
     if isinstance(pricing, dict):
-        if isinstance(pricing.get("prompt"), int | float):
-            facts["price_prompt"] = fact(float(pricing["prompt"]), "declared", SOURCE_LISTING)
-        if isinstance(pricing.get("completion"), int | float):
-            facts["price_completion"] = fact(
-                float(pricing["completion"]), "declared", SOURCE_LISTING
-            )
+        # A negative number is not a price: OpenRouter lists -1 on its router
+        # rows (auto, Jev Router, …) for "varies per request". Stated as a
+        # price it read "$-1,000,000 per 1M", sorted those rows as the
+        # cheapest and widened the Models table past a laptop's screen
+        # (2026-10-05). Absent is the honest fact — and what spend already
+        # does (openai_chat._is_price).
+        for key, fact_key in (("prompt", "price_prompt"), ("completion", "price_completion")):
+            value = pricing.get(key)
+            if isinstance(value, int | float) and math.isfinite(value) and value >= 0:
+                facts[fact_key] = fact(float(value), "declared", SOURCE_LISTING)
     if model.get("hugging_face_id"):
         facts["hugging_face_id"] = fact(model["hugging_face_id"], "declared", SOURCE_LISTING)
     if model.get("expiration_date"):

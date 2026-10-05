@@ -700,9 +700,13 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
     { key: 'name', header: 'Model', sortable: true, className: 'align-top min-w-[14rem]', render: nameCell },
     { key: 'size_bytes', header: 'Size', sortable: true, className: 'align-top whitespace-nowrap', render: sizeCell },
     { key: 'context_length', header: 'Context', sortable: true, className: 'align-top whitespace-nowrap', render: contextCell },
-    { key: 'price_prompt', header: 'Price', sortable: true, className: 'align-top whitespace-nowrap', render: priceCell },
+    // Price may wrap ("$0.15 / $0.50" over "per 1M"): one long figure set
+    // the column's width for every row.
+    { key: 'price_prompt', header: 'Price', sortable: true, className: 'align-top min-w-[6rem]', render: priceCell },
     { key: 'capabilities', header: 'Strengths', className: 'align-top hidden lg:table-cell', render: strengthsCell },
-    { key: 'intelligence', header: 'Benchmarks', sortable: true, className: 'align-top hidden xl:table-cell', render: benchCell },
+    // From 1400 px: measured live, at 1280 px the table ran 139 px past its
+    // box with Benchmarks drawn. The Benchmarks button charts them at any width.
+    { key: 'intelligence', header: 'Benchmarks', sortable: true, className: 'align-top hidden min-[1400px]:table-cell', render: benchCell },
     { key: 'actions', header: '', className: 'align-top', render: actionsCell },
   ]
 

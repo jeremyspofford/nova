@@ -454,8 +454,11 @@ function NoticeCard({
       data-testid={`notice-row-${notice.id}`}
       className="rounded-lg border border-border glass-card dark:border-white/[0.08] px-4 py-3"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      {/* A phone stacks the actions under the title: side by side, the
+          buttons kept their width and the title was squeezed to one
+          character a line (2026-10-05). */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+        <div className="min-w-0 sm:flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {notice.urgent && (
               <span data-testid="urgent-badge" title="the check itself declares this urgent — nothing she wrote can promote a finding">
@@ -491,7 +494,7 @@ function NoticeCard({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0">
           {/* S25.2.4. Disabled rather than hidden when there is no room: the
               reason is a fact about the world — nothing has carried this to
               him yet — and hiding it would leave him wondering why this card
@@ -612,7 +615,10 @@ function NoticeCard({
             <li
               key={i}
               className={clsx(
-                'font-mono text-micro',
+                // A delivery's own words can hold a long unbroken token (a
+                // device's error output); it wraps rather than pushing the
+                // page sideways on a phone.
+                'font-mono text-micro [overflow-wrap:anywhere]',
                 line.verdict === 'ok' && 'text-success',
                 line.verdict === 'failed' && 'text-danger',
                 line.verdict === 'stated' && 'text-content-tertiary',
