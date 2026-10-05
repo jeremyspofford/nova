@@ -5,7 +5,10 @@ each envelope-backed tool establishes before it sends is a matter of FACT,
 never of permission (owner ruling 2026-09-03: v4 makes no authorization
 decisions). In order (`_admit`):
 
-  1. paired (identity) — resolve the device by name (get_live_by_name). A
+  1. paired (identity) — resolve the device by name, through the plant
+     (machines.plant().paired_device: the live registry; in an eval replay,
+     its declared machines, none of which a command can reach — so no
+     command reaches a real agent during an eval, Task 22 fix round 1). A
      revoked or unknown name is a stated ToolFailure naming the live devices,
      never a silent no-op. Core signs only for a key it bound at pairing.
   2. reachable (transport) — the device's socket is live in the hub. An
@@ -76,22 +79,21 @@ _DEVICE_ARG = {
 # -- the per-device layer ----------------------------------------------------
 
 
-async def _resolve(pool, name: object):
+async def _resolve(app, name: object):
     """The live row for a device named `name`, or a ToolFailure that names it.
-    A revoked device has no live row, so it is refused here by absence."""
+    A revoked device has no live row, so it is refused here by absence.
+
+    Resolved through the plant (Task 22 fix round 1, 6): in an eval replay
+    the plant holds the declared machines alone and resolves NO row — a real
+    machine's name is not a paired device there, a declared one has no agent
+    a command could reach — so the real registry is never read and nothing
+    is ever sent to a real agent from inside a replay."""
     if not isinstance(name, str):
         raise ToolFailure("the 'device' argument must be the device's name")
-    row = await devices.get_live_by_name(pool, name)
-    if row is None:
-        live = sorted(
-            d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
-        )
-        known = f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
-        raise ToolFailure(
-            f"no paired device named {name!r} — {known}; check the name in Settings → "
-            "Devices (a revoked device is gone until it is paired again)"
-        )
-    return row
+    try:
+        return await machines.plant().paired_device(app, name)
+    except machines.UnknownMachine as exc:
+        raise ToolFailure(str(exc)) from exc
 
 
 def _require_connected(row, ctx: ToolContext | None = None) -> None:
@@ -220,8 +222,10 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
     to DECIDE anything. An unknown/revoked name refuses at `_resolve`, before
     connectivity is looked at, so it records nothing — it determined nothing.
     """
+    # Resolved first, through the plant: a replay refuses here, before the
+    # pool, the registry or the hub is touched.
+    row = await _resolve(ctx.app if ctx is not None else None, args["device"])
     pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
     _require_connected(row, ctx)
     path = (
         _check_fs_path(

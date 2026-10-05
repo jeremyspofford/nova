@@ -1175,12 +1175,14 @@ async def test_end_open_attempt_records_only_the_reasons_the_halt_keys_on(pool):
 # -- S42b Task 22: her machine_update, through the real plant ---------------------
 
 
-def _her_ctx(sink: list[dict] | None = None):
+def _her_ctx(sink: list[dict] | None = None, progress=None):
     from pathlib import Path
 
     from app.tools.base import ToolContext
 
-    return ToolContext(app=None, person=None, workspace_root=Path("/tmp"), facts_sink=sink)
+    return ToolContext(
+        app=None, person=None, workspace_root=Path("/tmp"), facts_sink=sink, progress=progress
+    )
 
 
 async def _machine_update(name: str, sink: list[dict] | None = None) -> str:
@@ -1325,3 +1327,98 @@ async def test_machine_update_never_sends_to_a_row_named_hub_before_d8(pool):
     assert sink == [] and _commands(conn) == []
     assert await pool.fetchval("SELECT count(*) FROM agent_updates") == 0
     await _close(conn, task)
+
+
+# -- Task 22 fix round 1 (1): she sees the wait, and a Stop lands during it --------
+
+
+async def test_update_now_says_it_waits_once_the_send_is_answered_and_says_it_again(
+    pool, monkeypatch
+):
+    """The call can run minutes: the send (the agent downloads and stages the
+    build) and then the wait for its reconnect. Once the send is answered the
+    wait is said — and said again every few seconds, which is where a Stop
+    rides back out (chat._report_progress)."""
+    monkeypatch.setattr(agent_updates, "PROGRESS_EVERY_S", 0.05)
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    said: list = []
+    run = asyncio.create_task(
+        agent_updates.update_now(
+            pool, name="box", requested_by="nova", wait_s=0.6, progress=said.append
+        )
+    )
+    await device.answer_command(conn)
+    assert (await asyncio.wait_for(run, 3)).outcome == "sent"
+    frame = (
+        f"sent the hub's build {VERSION} to box; waiting up to 0.6 s for its agent to "
+        "reconnect on it"
+    )
+    assert len(said) >= 2 and set(said) == {frame}
+    await _close(conn, task)
+
+
+async def test_an_update_decided_at_once_never_says_it_waits(pool):
+    """The agent answered no: the attempt is decided, nothing is waited on,
+    and no "waiting" line is said."""
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    said: list = []
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", progress=said.append)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error="cannot: not supervised")
+    assert (await asyncio.wait_for(run, 3)).outcome == "refused"
+    assert said == []
+    await _close(conn, task)
+
+
+async def test_a_stop_lands_during_the_wait_and_leaves_the_attempt_sent(pool, monkeypatch):
+    """Her machine_update, through dispatch, with the progress chat binds: the
+    second "waiting" line meets a Stop. The Stop ends the call — and the
+    attempt stays `sent`, for the agent's reconnect or expire_stale to decide
+    (P8): a Stop is never a decision about the update."""
+    from app import tools
+    from app.tools.base import TurnStopped
+
+    monkeypatch.setattr(agent_updates, "PROGRESS_EVERY_S", 0.05)
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    said: list = []
+
+    def progress(detail):
+        said.append(detail)
+        if len(said) == 2:
+            raise TurnStopped("the owner pressed Stop", where="while running machine_update")
+
+    run = asyncio.create_task(
+        tools.dispatch("machine_update", {"machine": "box"}, _her_ctx([], progress))
+    )
+    await device.answer_command(conn)
+    with pytest.raises(TurnStopped):
+        await asyncio.wait_for(run, 5)
+    frame = (
+        f"sent the hub's build {VERSION} to box; waiting up to 2 min for its agent to "
+        "reconnect on it"
+    )
+    assert said == [frame, frame]
+    assert await _outcome_of(pool, device_id) == "sent"
+    await _close(conn, task)
+
+
+async def test_the_wait_is_never_said_for_an_attempt_the_ledger_already_decided(pool):
+    """The reconnect can decide the attempt before the wait reads it (a fast
+    agent): _await answers what the ledger holds, and says no "waiting" line
+    for an update that is no longer waited on."""
+    device_id, _device = await _enroll(pool, name="box")
+    attempt_id = await pool.fetchval(
+        "INSERT INTO agent_updates (device_id, from_version, version, sha256, path, "
+        "requested_by, outcome, outcome_at) VALUES ($1, $2, $3, $4, 'capability', 'nova', "
+        "'confirmed', now()) RETURNING id",
+        device_id,
+        OLD,
+        VERSION,
+        "e" * 64,
+    )
+    said: list = []
+    outcome = await agent_updates._await(
+        pool, attempt_id, "box", {"version": VERSION, "from_version": OLD}, 5, 0, said.append
+    )
+    assert outcome.outcome == "confirmed" and said == []

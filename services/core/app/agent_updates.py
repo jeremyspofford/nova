@@ -42,6 +42,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -55,6 +56,11 @@ CONFIRM_WITHIN_S = 600
 IDLE_S = 300
 WAIT_S = 120
 COMMAND_TIMEOUT_S = 120
+# While update_now waits for the reconnect (Task 22 fix round 1): how often
+# the "waiting" line is said again. Each saying is where a Stop can land — the
+# progress callback chat binds raises TurnStopped (chat._report_progress) — so
+# the wait is never a stretch nobody can interrupt.
+PROGRESS_EVERY_S = 5.0
 UNKNOWN_CAPABILITY = 'unknown capability "daemon.update"'
 # P10, as ruled: the outcomes that mean the BUILD may not run. Only these halt
 # the job for every machine. `refused` means the MACHINE could not take it (an
@@ -400,6 +406,7 @@ async def update_now(
     requested_by: str,
     wait_s: float = WAIT_S,
     facts_sink: list[dict] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> UpdateOutcome:
     """Send the hub's build to `name` now and wait up to wait_s for its
     reconnect to decide the attempt. A command already running there ends
@@ -407,7 +414,11 @@ async def update_now(
     a count — the hub keeps futures, not capability names).
 
     `facts_sink`, when a tool threads one through, receives the
-    {device, connected} fact this call determined."""
+    {device, connected} fact this call determined. `progress`, when a tool
+    threads one through (Task 22 fix round 1), hears the wait said once the
+    send is answered and again every PROGRESS_EVERY_S (_await); whatever it
+    raises — a Stop — ends the call with the attempt still `sent`, for the
+    reconnect or expire_stale to decide."""
     await expire_stale(pool)
     row = await devices.get_live_by_name(pool, name)
     if row is None:
@@ -478,9 +489,9 @@ async def update_now(
         # Sent, and no answer: it may have staged and left before its reply
         # got out. Only its reconnect can say, so the attempt stays open.
         logger.info("update of %s: no answer (%s); waiting for its reconnect", name, exc.reason)
-        return await _await(pool, attempt_id, name, kw, wait_s, in_flight)
+        return await _await(pool, attempt_id, name, kw, wait_s, in_flight, progress)
     if result.get("ok"):
-        return await _await(pool, attempt_id, name, kw, wait_s, in_flight)
+        return await _await(pool, attempt_id, name, kw, wait_s, in_flight, progress)
     error = _one_line(str(result.get("error") or "") or "it answered no and gave no reason")
     if UNKNOWN_CAPABILITY not in error:
         await _close(pool, attempt_id, "refused", error, epoch=epoch)
@@ -510,16 +521,36 @@ async def update_now(
     except _BootstrapRefused as exc:
         await _close(pool, attempt_id, "refused", exc.reason, epoch=epoch)
         return await _await(pool, attempt_id, name, kw, 0, 0)
-    return await _await(pool, attempt_id, name, kw, wait_s, in_flight)
+    return await _await(pool, attempt_id, name, kw, wait_s, in_flight, progress)
+
+
+def _span(seconds: float) -> str:
+    """A wait in words: "2 min", "90 s"."""
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds / 60:g} min"
+    return f"{seconds:g} s"
 
 
 async def _await(
-    pool, attempt_id, name: str, kw: dict, wait_s: float, in_flight: int
+    pool,
+    attempt_id,
+    name: str,
+    kw: dict,
+    wait_s: float,
+    in_flight: int,
+    progress: Callable[[str], None] | None = None,
 ) -> UpdateOutcome:
     """The attempt as it is recorded, once it is decided or wait_s has
-    passed — what the caller is told is what the ledger holds."""
+    passed — what the caller is told is what the ledger holds.
+
+    While it waits, the wait is said (Task 22 fix round 1): at once — the
+    send was answered, or went out unanswered — and again every
+    PROGRESS_EVERY_S, each saying a point a Stop can land. Nothing is said
+    for an attempt already decided or a call that does not wait (wait_s 0:
+    the tile, the job), and nothing a Stop raises touches the ledger."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_s
+    said_at: float | None = None
     while True:
         row = await pool.fetchrow(
             "SELECT outcome, outcome_at, reason FROM agent_updates WHERE id = $1", attempt_id
@@ -535,6 +566,12 @@ async def _await(
                 at=row["outcome_at"],
                 in_flight=in_flight,
                 **kw,
+            )
+        if progress is not None and (said_at is None or loop.time() - said_at >= PROGRESS_EVERY_S):
+            said_at = loop.time()
+            progress(
+                f"sent the hub's build {kw['version']} to {name}; waiting up to "
+                f"{_span(wait_s)} for its agent to reconnect on it"
             )
         await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
 

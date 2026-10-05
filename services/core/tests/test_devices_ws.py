@@ -2628,3 +2628,99 @@ def test_device_list_says_the_door_and_never_that_a_machine_is_the_hub():
     description = tools.REGISTRY["device_list"].description
     assert "came in through the hub machine's own door" in description
     assert "hub's own machine" not in description
+
+
+# -- Task 22 fix round 1 (6): no command reaches a real agent during an eval ----
+#
+# Replay hermeticity covers the ACTING tools too. The device tools used to
+# resolve a name against the real registry inside a replay, so a model that
+# named a real machine in an eval acted on it. Now every device tool resolves
+# through the plant, which in a replay holds the declared machines alone.
+
+_ACTING_CALLS = [
+    ("device_run", {"argv": ["ls"]}),
+    ("device_info", {}),
+    ("device_launch_app", {"app": "notepad"}),
+    ("device_list_files", {"path": "/tmp"}),
+    ("device_read_file", {"path": "/tmp/notes.txt"}),
+    ("device_write_file", {"path": "/tmp/notes.txt", "content": "hi"}),
+    ("device_list_apps", {}),
+    ("device_notify", {"message": "hi"}),
+]
+
+
+def _declared_replay() -> machines.FixturePlant:
+    return machines.FixturePlant(
+        {}, devices={"eval_pc": _listed("eval_pc", "linux", None, connected=True)}
+    )
+
+
+@pytest.mark.parametrize("tool,args", _ACTING_CALLS, ids=[name for name, _ in _ACTING_CALLS])
+async def test_no_device_tool_reads_the_real_registry_or_reaches_the_hub_in_a_replay(
+    monkeypatch, tool, args
+):
+    def touched(what):
+        def _raise(*_a, **_kw):
+            raise AssertionError(f"a replay touched {what}")
+
+        return _raise
+
+    for name in ("get_live_by_name", "list_devices", "get", "get_live"):
+        monkeypatch.setattr(devices, name, touched(f"the real registry ({name})"))
+    monkeypatch.setattr(devices_ws.Hub, "command", touched("hub.command"))
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", touched("hub.is_connected"))
+    token = machines.PLANT.set(_declared_replay())
+    try:
+        sink: list[dict] = []
+        real, real_ok = await tools.dispatch(
+            tool, {"device": "dell", **args}, _ctx(None, facts=sink)
+        )
+        declared, declared_ok = await tools.dispatch(
+            tool, {"device": "eval_pc", **args}, _ctx(None, facts=sink)
+        )
+    finally:
+        machines.PLANT.reset(token)
+    # A real machine's name is not a paired machine in the replay's world.
+    assert real_ok is False
+    assert real.startswith(
+        "Error: cannot: no paired device named 'dell' — the paired devices are: eval_pc"
+    ), real
+    # A declared machine has no agent a command could reach.
+    assert declared_ok is False
+    assert declared.startswith("Error: cannot: no command can be sent to eval_pc's agent"), declared
+    for said in (real, declared):
+        assert "touched" not in said and "unexpectedly" not in said
+    assert sink == []  # nothing was read, so nothing is recorded
+
+
+async def test_a_replay_never_sends_a_command_to_a_real_connected_agent(pool):
+    """End to end against a real, connected agent named in a replay: refused
+    in the replay's own words, and no command frame reaches its socket — not
+    from her call, and not from a note's unasked check."""
+    _id, device, conn, task = await _connect(pool, name="dell")
+    person = await _person(pool)
+    token = machines.PLANT.set(_declared_replay())
+    try:
+        result, ok = await tools.dispatch(
+            "device_run", {"device": "dell", "argv": ["ls"]}, _ctx(person)
+        )
+        (checked,) = await live_facts.run(
+            [live_facts.LiveCall("device_info", {"device": "dell"}, "the dell")],
+            _Turn(),
+            _ctx(person, facts=[]),
+        )
+    finally:
+        machines.PLANT.reset(token)
+    assert ok is False and "cannot: no paired device named 'dell'" in result
+    assert not checked.ok and "cannot: no paired device named 'dell'" in checked.problem
+    assert _command_frames(conn) == []
+    # Outside the replay the same call reaches it, so the pin is not vacuous.
+    run = asyncio.create_task(
+        tools.dispatch("device_run", {"device": "dell", "argv": ["ls"]}, _ctx(person))
+    )
+    frame = await asyncio.wait_for(conn.next_sent(), 2)
+    assert frame["type"] == "command" and frame["envelope"]["capability"] == "shell.exec"
+    conn.feed(device.result(frame["envelope"], ok=True, output="notes.txt", exit_code=0))
+    result, ok = await asyncio.wait_for(run, 2)
+    assert ok is True and result.startswith("dell ran ['ls']")
+    await _close(conn, task)

@@ -206,11 +206,13 @@ def _role(name: str, role: dict) -> str:
     )
 
 
-# How each line of the agents section begins, below its header: a machine, then
-# one line per agent on it. device_line_shown reads a listing back by these
-# two, so both the writer and the reader take them from here.
+# How each line of the agents section begins, below its header: a machine, one
+# line per agent on it, and — under each agent's line — what she needs to act
+# on it (Task 22 fix round 1). device_line_shown reads a listing back by these,
+# so both the writer and the reader take them from here.
 _MACHINE_LINE = "- machine "
 _AGENT_LINE = "  agent "
+_ACTING_INDENT = "    "
 
 
 # The ledger's outcome tokens (agent_updates), as words on an agent's line.
@@ -222,12 +224,19 @@ def _last_update_words(last: dict) -> str:
     build, what was decided and when — a `sent` one is not confirmed — and
     the stored reason AS STORED: one line of at most
     agent_updates.REASON_MAX characters, made so when it was written
-    (agent_updates._close), and never cut or cleaned again here."""
+    (agent_updates._close), and never cut or cleaned again here.
+
+    A `refused` attempt is a machine that could not take the build — its
+    agent said no, or a bootstrap step failed — said in machine_update's
+    words, "cannot take it", never as the ledger's token (fix round 1)."""
     outcome = last["outcome"]
-    said = (
-        f"last update: {last['version']} {_OUTCOME_WORDS.get(outcome, outcome)} at "
-        f"{last['at'] or 'an unknown time'}"
-    )
+    at = last["at"] or "an unknown time"
+    if outcome == "refused":
+        return (
+            f"last update: {last['version']} at {at} — cannot take it: "
+            f"{last.get('reason') or 'no reason was given'}"
+        )
+    said = f"last update: {last['version']} {_OUTCOME_WORDS.get(outcome, outcome)} at {at}"
     if outcome == "sent":
         said += ", not confirmed"
     elif last.get("reason"):
@@ -252,8 +261,11 @@ def _describe_agent(agent: dict) -> str:
     """ONE line per agent (device_line_shown reads it back whole): where it
     runs, its connection and roles, then — S42b — the door it came in
     through when that was the hub machine's own, its build against the
-    hub's, how it starts, its last update, and what she needs to act on it
-    (device_facts.acting_lines, the probe's time first), joined with "; "."""
+    hub's, how it starts and its last update, joined with "; ". What she
+    needs to act on it goes on the lines under it (_describe_agents), never
+    on this one: joined on, a probed agent's line ran ~1,690 characters, so a
+    clip that showed its connection still cut the line and the check kept no
+    fact of it (Task 22 fix round 1)."""
     where = device_facts.place(agent)
     if agent["agent_version"]:
         where += f"; agent {agent['agent_version']}"
@@ -274,7 +286,6 @@ def _describe_agent(agent: dict) -> str:
     extra.append(f"how it starts: {starts}" if starts.startswith("unknown") else f"starts {starts}")
     if agent["last_update"]:
         extra.append(_last_update_words(agent["last_update"]))
-    extra.extend(agent["acting"])
     line = (
         f"{_AGENT_LINE}{agent['name']} ({where}): {state}; "
         f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}; " + "; ".join(extra)
@@ -292,7 +303,10 @@ def _describe_agents(
     one-agent machine's. Each listed agent leaves {"device", "connected"}
     on the span, the record a device tool leaves, so what she says about its
     connection is backed (guards._checked_a_device) — on an unasked check,
-    only for an agent whose line she was shown (device_line_shown)."""
+    only for an agent whose line she was shown (device_line_shown). Under
+    each agent's line, indented, what she needs to act on it
+    (device_facts.acting_lines, the probe's time first) — as device_list
+    writes it."""
     if error is not None:
         return [f"Nova's agents could not be read — {error}."]
     if not agents:
@@ -317,6 +331,7 @@ def _describe_agents(
             lines.append(f"{_MACHINE_LINE}{host}:")
         for agent in members:
             lines.append(_describe_agent(agent))
+            lines.extend(f"{_ACTING_INDENT}{line}" for line in agent["acting"])
             if ctx.facts_sink is not None:
                 ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
     return lines
@@ -330,17 +345,20 @@ def device_line_shown(name: str, result: str, shown: int) -> bool:
 
     Exact for the format _describe_agents writes, never the name found
     anywhere: the line begins, at a line start, with "  agent <name> (", and
-    ends at the newline before the agents section's next line (another agent,
-    or a "- machine" line) or at the end of the result — the agents section is
-    the result's last. It fails closed, answering False, when there is no such
-    line; when a line runs on past a newline this format never writes (text an
-    agent reported can carry one); and when ANY line that could be this
-    agent's ends past `shown` — "dell"'s head also begins the line of an agent
-    named "dell (old)", and a line that cannot be told apart from another is
-    not confirmed shown. The scan is the one device_list's reader uses too
-    (tools.base.listing_line_shown, S42b Task 22).
+    ends at the newline before the agents section's next line (a line under
+    it, another agent, or a "- machine" line) or at the end of the result —
+    the agents section is the result's last. It fails closed, answering
+    False, when there is no such line; when a line runs on past a newline
+    this format never writes (text an agent reported can carry one); and
+    when ANY line that could be this agent's ends past `shown` — "dell"'s
+    head also begins the line of an agent named "dell (old)", and a line
+    that cannot be told apart from another is not confirmed shown. The scan
+    is the one device_list's reader uses too (tools.base.listing_line_shown,
+    S42b Task 22).
     """
-    return listing_line_shown(f"{_AGENT_LINE}{name} (", result, shown, (_AGENT_LINE, _MACHINE_LINE))
+    return listing_line_shown(
+        f"{_AGENT_LINE}{name} (", result, shown, (_AGENT_LINE, _MACHINE_LINE, _ACTING_INDENT)
+    )
 
 
 async def machine_configure(args: dict, ctx: ToolContext) -> str:
@@ -378,7 +396,9 @@ async def machine_configure(args: dict, ctx: ToolContext) -> str:
 # here. Each says only what the ledger shows: a send is never an update (P8),
 # and only `confirmed` — the agent's reconnect on the new build — says it is.
 _UPDATE_WORDS = {
-    "current": "{machine}'s agent already runs the hub's build {version} — nothing to send.",
+    # From the agent's STORED facts, read before any connection was checked —
+    # what it last reported, never "already runs" (fix round 1).
+    "current": "{machine}'s agent last reported the hub's build {version} — nothing was sent.",
     "sent": (
         "Sent the hub's build {version} to {machine} (its agent ran {from_version}). Not "
         "confirmed yet: only {machine}'s agent reconnecting on {version} confirms the update, "
@@ -395,7 +415,9 @@ _UPDATE_WORDS = {
     "not_confirmed": (
         "Sent the hub's build {version} to {machine}, and the update is not confirmed: {reason}."
     ),
-    "refused": "{machine} did not take the hub's build {version}: {reason}.",
+    # A machine that could not take the build — its agent said no, or a
+    # bootstrap step failed: the words the update job and the check use.
+    "refused": "{machine} cannot take the hub's build {version}: {reason}.",
 }
 # A reason the ledger left empty, said per outcome — never "None".
 _NO_REASON = {
@@ -441,8 +463,12 @@ async def machine_update(args: dict, ctx: ToolContext) -> str:
             "list them"
         )
     try:
+        # Her facts_sink and progress ride down to update_now: the facts it
+        # determines land on her span, and the wait is said on her activity
+        # line, where a Stop can land (fix round 1) — the attempt then stays
+        # `sent` for the reconnect or expire_stale to decide.
         out = await machines.plant().update_agent(
-            ctx.app, name, requested_by="nova", facts_sink=ctx.facts_sink
+            ctx.app, name, requested_by="nova", facts_sink=ctx.facts_sink, progress=ctx.progress
         )
     except machines.UnknownMachine as exc:
         raise ToolFailure(str(exc)) from exc
@@ -482,7 +508,10 @@ MACHINE_STATUS = Tool(
         "models, what it computes on and in which runtime, and which models it has "
         f"installed. {_ID_RULE}. Also Nova's agent on each paired machine, grouped by "
         "machine: the OS it runs (and whether it runs inside WSL), whether it is connected "
-        "now, and what it can do there, with the reason. Use it before saying where a model "
+        "now, and what it can do there, with the reason; whether its agent came in through the "
+        "hub machine's own door, its agent's build against the hub's, how it starts and its "
+        "last update — and, on the lines under it, what Nova needs to act on it (how it runs, "
+        "elevating, WSL). Use it before saying where a model "
         "runs, whether a machine is up, what is installed on it, or which agent can act on "
         "a machine. Reads only."
     ),
@@ -544,13 +573,15 @@ MACHINE_UPDATE = Tool(
     description=(
         "Update Nova's agent on a paired machine to the hub's build now — the owner's \"update "
         "it now\". Nova already keeps her agents on the hub's build by herself, one idle machine "
-        "at a time every 15 minutes, so this is for now. It sends the build and waits up to "
-        "about 2 minutes for the agent to reconnect on it. The result says current, sent (not "
-        "confirmed yet), confirmed (the agent reconnected on the new build), rolled back (the "
-        "new build did not come up, so its supervisor put the old one back), not confirmed, "
-        "not taken (with the reason), or cannot with the one step that can. An update is "
-        "confirmed ONLY by the agent's reconnect, never by the send. A command running there "
-        'ends "cancelled" when the agent restarts; the result counts them.'
+        "at a time every 15 minutes, so this is for now. It sends the build — the agent has up "
+        "to 2 minutes to download and stage it — then waits up to 2 minutes more for the agent "
+        "to reconnect on it, saying so while it waits. The result says current (its agent last "
+        "reported the hub's build), sent (not confirmed yet), confirmed (the agent reconnected "
+        "on the new build), rolled back (the new build did not come up, so its supervisor put "
+        "the old one back), not confirmed, cannot take it (with the reason), or cannot with the "
+        "one step that can. An update is confirmed ONLY by the agent's reconnect, never by the "
+        'send. A command running there ends "cancelled" when the agent restarts; the result '
+        "counts them."
     ),
     parameters={
         "type": "object",

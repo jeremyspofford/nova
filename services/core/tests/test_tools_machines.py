@@ -646,7 +646,7 @@ class _UpdatingPlant:
     def __init__(self, answer: dict | Exception):
         self.answer, self.calls = answer, []
 
-    async def update_agent(self, app, name, *, requested_by, facts_sink=None):
+    async def update_agent(self, app, name, *, requested_by, facts_sink=None, progress=None):
         self.calls.append((name, requested_by, facts_sink))
         if isinstance(self.answer, Exception):
             raise self.answer
@@ -728,13 +728,17 @@ async def test_machine_update_cannot_is_a_stated_failure_naming_the_one_step(_up
 @pytest.mark.parametrize(
     "outcome,reason,words",
     [
-        ("current", None, "eval_laptop's agent already runs the hub's build aaaaaaaaaaaa"),
+        # Pins moved (fix round 1, folded (3) and (4)): "current" is what the
+        # agent last REPORTED, read before any connection was checked — never
+        # "already runs"; a machine that could not take the build "cannot take"
+        # it, the words the update job and the check use.
+        ("current", None, "eval_laptop's agent last reported the hub's build aaaaaaaaaaaa"),
         (
             "refused",
             "the download step failed on eval_laptop (exit 6): could not resolve host",
-            "eval_laptop did not take the hub's build aaaaaaaaaaaa: the download step failed",
+            "eval_laptop cannot take the hub's build aaaaaaaaaaaa: the download step failed",
         ),
-        ("refused", None, "did not take the hub's build aaaaaaaaaaaa: no reason was given"),
+        ("refused", None, "cannot take the hub's build aaaaaaaaaaaa: no reason was given"),
         (
             "not_confirmed",
             "the machine was re-paired before the agent this was sent to reconnected",
@@ -811,7 +815,9 @@ async def test_the_agent_line_says_its_build_how_it_starts_and_its_last_update(m
     )
     _plant(agents=[view])
     said = await _call("machine_status", {})
-    line = next(line for line in said.splitlines() if line.startswith("  agent PC-ONE ("))
+    lines = said.splitlines()
+    at = next(i for i, line in enumerate(lines) if line.startswith("  agent PC-ONE ("))
+    line = lines[at]
     # The door is not identity (controller ruling): a relay on the hub comes
     # in through the same loopback door, so the line says the door, never
     # that this IS the hub's own machine.
@@ -820,10 +826,12 @@ async def test_the_agent_line_says_its_build_how_it_starts_and_its_last_update(m
         "starts by hand" in line
     )
     assert "hub's own machine" not in said
-    assert f"last update: aaaaaaaaaaaa sent at {AT.isoformat()}, not confirmed" in line
-    # The acting lines, joined onto the agent's ONE line (Task 16b fix round 1
-    # retired the brief's "predates S42b" wording).
-    assert line.endswith("how it runs: unknown — this agent has not reported it.")
+    assert line.endswith(f"last update: aaaaaaaaaaaa sent at {AT.isoformat()}, not confirmed.")
+    # Pin moved (fix round 1, folded (2)): what she needs to act on it is
+    # written UNDER the agent's line, indented as device_list writes it — a
+    # clip that keeps the line that states the connection keeps its fact
+    # (Task 16b fix round 1 retired the brief's "predates S42b" wording).
+    assert lines[at + 1] == "    how it runs: unknown — this agent has not reported it"
     assert machines_tool.device_line_shown("PC-ONE", said, len(said))
 
 
@@ -861,3 +869,77 @@ async def test_the_agent_line_says_an_unknown_build_and_start_as_unknown(mount_p
     assert "agent version unknown (none on record)" in said
     assert "how it starts: unknown — it has reported no facts" in said
     assert "last update" not in said
+
+
+# -- Task 22 fix round 1 (folded) ----------------------------------------------
+
+
+async def test_an_unasked_status_of_a_probed_agent_keeps_its_fact_at_the_clip(mount_peers, _plant):
+    """Folded (2): with what she needs to act on it joined onto its line, a
+    probed Windows agent's line ran ~1,690 characters while "connected now"
+    ended at character 78 — the 600-character clip showed her the
+    connection, and the check kept no fact of it. Written as indented lines
+    under the agent's line, the line that states the connection is whole
+    inside the clip, and its fact is kept."""
+    from tests.test_device_facts import PROBED
+
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    probed = {**device_facts.validate_auth(WINDOWS), **device_facts.validate_frame(PROBED)}
+    _plant(agents=[_view("PC-ONE", "windows", probed)])
+    turn, sink = _Turn(), []
+    ctx = tools.context_for(core_app, _owner(), facts_sink=sink)
+    call = live_facts.LiveCall(tool="machine_status", args={"machine": "PC-ONE"}, note="the PC")
+    (check,) = await live_facts.run([call], turn, ctx)
+    assert check.ok
+    assert check.result.endswith(f"[…cut off at {live_facts.MAX_RESULT_CHARS} characters]")
+    assert (
+        "\n  agent PC-ONE (Windows 11 Pro 24H2 (build 26100); agent 0.2.0): connected now; "
+        in check.result
+    )
+    (span,) = turn.spans
+    assert span.meta["facts"] == [{"device": "PC-ONE", "connected": True}]
+    assert sink == span.meta["facts"]
+
+
+async def test_the_agent_line_says_a_machine_that_could_not_take_a_build_never_refused(
+    mount_peers, _plant
+):
+    """Folded (4): the ledger's `refused` is a machine that could not take the
+    build — the agent said no, or a bootstrap step failed — said in
+    machine_update's words, never as the token."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    reason = "the download step failed on PC-ONE (exit 6): could not resolve host"
+    view = _view("PC-ONE", "windows", WINDOWS)
+    view.update(
+        last_update={
+            "version": "aaaaaaaaaaaa",
+            "outcome": "refused",
+            "at": AT.isoformat(),
+            "reason": reason,
+        }
+    )
+    _plant(agents=[view])
+    said = await _call("machine_status", {})
+    assert f"last update: aaaaaaaaaaaa at {AT.isoformat()} — cannot take it: {reason}" in said
+    assert "refused" not in said
+
+
+async def test_current_is_said_as_what_the_agent_last_reported(_updating_plant):
+    """Folded (3): `current` comes from the agent's stored facts, read before
+    any connection was checked — it is what its agent last reported."""
+    _updating_plant(_updating("current"))
+    said = await _call("machine_update", {"machine": "eval_laptop"})
+    assert said == (
+        "eval_laptop's agent last reported the hub's build aaaaaaaaaaaa — nothing was sent."
+    )
+
+
+def test_the_descriptions_say_the_agent_lines_and_both_bounds_of_an_update():
+    """Folded (1) and (5): machine_status says what an agent's lines now
+    carry; machine_update says the send's own bound beside the wait's."""
+    status = tools.REGISTRY["machine_status"].description
+    for words in ("its agent's build against the hub's", "how it starts", "its last update"):
+        assert words in status, words
+    update = tools.REGISTRY["machine_update"].description
+    assert "the agent has up to 2 minutes to download and stage it" in update
+    assert "waits up to 2 minutes more for the agent to reconnect on it" in update

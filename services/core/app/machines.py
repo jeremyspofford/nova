@@ -36,7 +36,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -190,6 +190,21 @@ class GatewayPlant:
         rows = await devices.rows_with_last_update(pool, live_only=True)
         return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
 
+    async def paired_device(self, app, name: str):
+        """The live device row a device tool acts on, by the name she gave
+        (Task 22 fix round 1, 6) — read through the plant so that a replay
+        answers instead: no real row is resolved, and so no command reaches
+        a real agent, during an eval. A name no live row has is
+        UnknownMachine, said with the live names (_no_paired_device)."""
+        pool = await db.get_pool()
+        row = await devices.get_live_by_name(pool, name)
+        if row is None:
+            live = sorted(
+                d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
+            )
+            raise UnknownMachine(_no_paired_device(name, live))
+        return row
+
     async def knocks(self, app) -> list[dict]:
         """Each revoked agent that knocked in the last day (P28), newest first
         — devices.revoked_knocks, read through the plant so device_list's
@@ -205,6 +220,7 @@ class GatewayPlant:
         *,
         requested_by: str,
         facts_sink: list[dict] | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> dict:
         """Send the hub's build to `name`'s agent now (S42b decision 2's
         "update it now") and say what the ledger holds once it answers —
@@ -216,8 +232,12 @@ class GatewayPlant:
         door (`last_transport`) — never that it IS the hub machine's: a relay
         on the hub (a tunnel, an ssh -L) comes in through that door too.
         `facts_sink` is the calling tool's: update_now records on it the
-        connectivity it determined, so an update that finds the machine
-        offline backs her saying so.
+        connectivity it determined. The state guard reads that fact once Task
+        23 counts a failed machine_update span — until then it counts a
+        failed span's facts only for device_* tools, so an offline cannot's
+        fact is recorded but backs nothing yet (Task 22 fix round 1, I1).
+        `progress` is the calling tool's too: update_now says the wait on it,
+        and a Stop it raises ends the call with the attempt still `sent`.
 
         The bundled engine's reserved name (D8) and a name no live machine
         has are UnknownMachine, said with what IS paired (_cannot_update),
@@ -235,8 +255,20 @@ class GatewayPlant:
             # Read at call time, so the wait is the module's one number.
             wait_s=agent_updates.WAIT_S,
             facts_sink=facts_sink,
+            progress=progress,
         )
         return {**dataclasses.asdict(outcome), "hub": row["last_transport"] == "host"}
+
+
+def _no_paired_device(name: str, live: list[str]) -> str:
+    """The device tools' cannot for a name no live device has — the words a
+    real hub and a replay both say, each with its own listing, so a scored
+    turn reads nothing it could tell a replay by."""
+    known = f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
+    return (
+        f"cannot: no paired device named {name!r} — {known}; check the name in Settings → "
+        "Devices (a revoked device is gone until it is paired again)"
+    )
 
 
 def _cannot_update(name: str, paired: list[tuple[str, bool]]) -> str:
@@ -534,6 +566,25 @@ class FixturePlant(GatewayPlant):
             for name, view in sorted(self._devices.items())
         ]
 
+    async def paired_device(self, app, name: str):
+        """Never a row (Task 22 fix round 1, 6): a replay acts on no machine.
+        A declared device has no agent a command could reach — it was never
+        paired, so no key of its is on record — and any other name is not a
+        paired device in the replay's world, said with the declared listing.
+        Neither the real registry nor the hub is touched; why a real name was
+        refused goes to the log, never to the tool."""
+        if name in self._devices:
+            raise UnknownMachine(
+                f"cannot: no command can be sent to {name}'s agent — no pairing key of its is "
+                "on record"
+            )
+        logger.info(
+            "eval replay: a device tool for %r answered as no paired device — a replay never "
+            "acts on a real machine",
+            name,
+        )
+        raise UnknownMachine(_no_paired_device(name, sorted(self._devices)))
+
     async def update_agent(
         self,
         app,
@@ -541,11 +592,13 @@ class FixturePlant(GatewayPlant):
         *,
         requested_by: str,
         facts_sink: list[dict] | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> dict:
         """A declared device answers from this replay's declaration (S42b
         Task 22) — its declared outcome, "sent" when it declares none, at
         the replay's hub build — and nothing is sent anywhere: no agent, no
-        ledger row, no connection read, so nothing lands on facts_sink.
+        ledger row, no connection read, so nothing lands on facts_sink, and
+        nothing is waited on, so nothing is said on `progress`.
 
         Every other name is answered as the replay's own listing says (the
         replay-hermeticity ruling): the engine's reserved name, or no paired
