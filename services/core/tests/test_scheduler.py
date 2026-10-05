@@ -982,7 +982,16 @@ async def test_the_ticker_seeds_the_beats_after_registration_without_a_restart(p
         ticks.set()
         return await original_tick(app_, pool_, now=now)
 
+    # S38 fix round 1: an owner appears mid-test, so the real seed would run
+    # once it does — on some runs it logs an ERROR before this test's own
+    # cancellation wins the race against it (CancelledError escapes our
+    # `except Exception`; measured 4 of 9 unloaded standalone runs). Settled
+    # beside tick_once, for the same reason as the other three.
+    async def already_settled(pool_, app_):
+        return True
+
     monkeypatch.setattr(scheduler, "tick_once", counting_tick)
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
     task = asyncio.create_task(scheduler.run_forever(app, pool, interval_s=0.01))
     try:
         await asyncio.wait_for(ticks.wait(), 5)

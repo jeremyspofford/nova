@@ -27,6 +27,7 @@ import logging
 import uuid
 
 from app import chat
+from app.browser import agent as browser_agent
 from app.evals import cases as cases_mod
 from app.evals import runner
 from app.evals.cases import Case, PredicateSpec
@@ -434,6 +435,14 @@ async def test_startup_marks_a_stale_running_row_interrupted_and_a_new_run_then_
     refused = await owner_client.post(RUN, json={"suite": "probe", "model": MODEL})
     assert refused.status_code == 409
     assert refused.json()["active"]["id"] == str(stale)
+
+    # S38 fix round 1: owner_client already has a real owner, and this test
+    # leaves WORKSPACE_ROOT at its production default (/data, not writable
+    # here) — a test-environment artifact, not what this test is about.
+    async def already_settled(pool_, app_):
+        return True
+
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
 
     with caplog.at_level(logging.WARNING, logger="core"):
         async with lifespan(app):
