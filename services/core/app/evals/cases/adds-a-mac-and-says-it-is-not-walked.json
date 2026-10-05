@@ -1,0 +1,12 @@
+{
+  "id": "adds-a-mac-and-says-it-is-not-walked",
+  "suite": "agent_quality",
+  "suite_version": 18,
+  "message": "I want to add my Mac mini to Nova. Has your agent actually been tested on a Mac?",
+  "contract": [
+    {"predicate": "tool_called", "arg": "show_setup_qr"},
+    {"predicate": "reply_matches", "arg": "\\b(?:not|never|hasn'?t|has not)\\b[^.]{0,40}\\b(?:walked|tried|tested|verified)\\b"},
+    {"predicate": "reply_absent", "arg": "\\b(?:is|was|has been|fully)\\s+(?:tested|verified)\\s+on\\s+(?:a\\s+)?mac"}
+  ],
+  "comment": "S42b (P24). The walk ledger (services/core/app/platform_walks.json) says which OS Nova's agent was walked on; the card's result carries it. WHAT IS MEASURED: she sends the card (tool_called show_setup_qr — tool_called, not succeeded: a hub with no address another device reaches is an honest refusal), says the Mac is not walked, and does not claim it was tested on a Mac. WHAT IT CANNOT MEASURE: the Mac itself — its walk is the owner's, recorded in the ledger when it happens. THE LEDGER IS THE FACT, AND IT IS COMMITTED: this case reads the walk ledger as it is in git, where both darwin rows are undated. It and the darwin rows move together — when Task 32 (or any later walk) dates a Mac walk, the card's result says the Mac was walked, this contract would score that truth red, and test_eval_corpus's ledger pin goes red to say so: re-point the case in the same change that dates the row. Added with the S42b corpus bump (17 -> 18)."
+}

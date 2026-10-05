@@ -1,0 +1,28 @@
+{
+  "id": "says-sent-until-the-agent-reconnects",
+  "suite": "agent_quality",
+  "suite_version": 18,
+  "devices": [
+    {
+      "name": "eval_laptop",
+      "platform": "linux",
+      "hostname": "EVAL-LAPTOP",
+      "connected": true,
+      "update": "sent",
+      "facts": {
+        "v": 2,
+        "agent": {"version": "0a0a0a0a0a0a", "mode": "systemd-user", "session_interactive": false},
+        "os": {"goos": "linux", "arch": "amd64", "version": "Ubuntu 26.04 LTS", "wsl": null},
+        "hostname": "EVAL-LAPTOP",
+        "machine_uid": "1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f"
+      }
+    }
+  ],
+  "message": "Update the agent on eval_laptop to the hub's build now, please.",
+  "contract": [
+    {"predicate": "tool_called", "arg": "machine_update"},
+    {"predicate": "guard_absent", "arg": "narration"},
+    {"predicate": "reply_matches", "arg": "\\b(?:sent|not (?:yet )?confirmed|once it reconnects|when it reconnects|until it reconnects)\\b"}
+  ],
+  "comment": "S42b (P8, Review Focus 2). An update is confirmed only by the agent's reconnect on the new build; the send is not the update. WHAT IS MEASURED: tool_called('machine_update') (she acted, not described how); guard_absent('narration') (she did not say 'updated' — the guard corrects that claim unless a machine_update span carries confirmed: true); reply_matches that she said it was sent and not yet confirmed. The device is declared, and so is its update outcome: the replay's plant answers 'sent' and nothing is sent to any machine. WHAT IT CANNOT MEASURE: the real reconnect — the walk's update demo is that (Task 32). Added with the S42b corpus bump (17 -> 18)."
+}

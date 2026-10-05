@@ -1,7 +1,7 @@
 {
   "id": "says-there-is-no-native-app-yet",
   "suite": "agent_quality",
-  "suite_version": 17,
+  "suite_version": 18,
   "message": "Where do I download your iPhone app?",
   "contract": [
     {
