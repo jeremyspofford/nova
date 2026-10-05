@@ -8,7 +8,7 @@
 - Her honesty checks **read those facts instead of her words**. An honest "I read config.yaml on the Dell" is no longer corrected; "all 40 tests passed" is corrected when the test run exited 1; "I can't search the web" or "I can't run commands on your computer" is corrected.
 - **Tokens and passwords in her commands never reach the trace** — they show as `<masked:40>`.
 - Evals can **script what a machine answers**, so the two directions (exit 0 stands, exit 1 is corrected) are measured on every run.
-- It is the **first slice of the self-coding lane** ([`../nova-codes.md`](../nova-codes.md)). It starts after S42b and the provider-balances slice land. Sixteen decisions below (P1–P16) need your review; say "all recommended" or name the ones to change.
+- It is the **first slice of the self-coding lane** ([`../nova-codes.md`](../nova-codes.md)). It starts after S42b and the provider-balances slice land. **Owner, 2026-10-05: P1–P16 "all recommended"; built subagent-driven.**
 
 ---
 
@@ -61,7 +61,7 @@ Every task's requirements include these.
 
 ## Decisions this plan makes where the spec is silent
 
-These go to the owner for review; each is visible in the code that implements it.
+**Approved by the owner 2026-10-05 ("all recommended").** Each is visible in the code that implements it.
 
 | # | Where the spec is silent | This plan decides |
 |---|---|---|
@@ -100,7 +100,7 @@ The inputs most likely to bite a person, none of which the spec names. Each has 
 - `device_run` gains `cwd`, `env` and `timeout_s` (already S30's); the env masking walk (P16) is repeated there with `env {GH_TOKEN: …}`.
 
 **For the owner, found while drafting (pre-existing, not changed here):**
-- The deferral guard reads "Can you …?" as an instruction. An honest "Yes, I can …" to "Can you search the web for me?" or "Can you run commands on my computer?" is redirected as an offer. Is a capability question a request she should act on, or a question? That is your call. Task 15's case replies avoid the wording, and their comments name it.
+- The deferral guard reads "Can you …?" as an instruction, so an honest "Yes, I can …" to "Can you search the web for me?" is redirected as an offer. **Owner, 2026-10-05: "Do it" — a "Can you …?" request is something she does; the guard's behavior stands.** Task 15's case replies avoid the wording, and their comments name it.
 - "I wrote hello.txt to your desktop" with nothing run gets two sentences, one from narration and one from device_completion. P5's one-correction rule covers run and edit claims only.
 
 **Out of this slice, recorded:** the served-model and memory-outage guards are still not read over the two vetted regenerations (Task 16; the existing gate keeps both redirects off a reply either one fired on); `agents.run_facts`' "Calls that failed" list and `guards._a_delegation_ran` still count a call that never reached a tool (both err toward saying less); after a failed `device_info`, a bare "I can't run commands on your laptop" is still corrected (Task 6; the correction is true of the ability, and a per-device reading would let the denial stand); S42b's `_UPDATE_TOOLS` and `_PERSONA_UPDATE_TOOLS` stay hand-kept (P6); the state guard's device backing stays turn-wide (S42b ruling); a `deployed` claim kind waits for S33's deploy facts; `job` and `probe` facts are S30's. The quadratic `_FILENAME`/`_CONTENT_CLAIM`/`_PASSIVE_CLAIM` fix is a separate PR to `main` (hub:4); if it has not merged by Task 0, Task 5 takes it.
