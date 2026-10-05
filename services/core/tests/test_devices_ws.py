@@ -1999,6 +1999,25 @@ async def test_a_revoked_agent_that_reported_how_it_runs_is_said_as_it_reported_
     assert "README" not in line
 
 
+async def test_a_device_list_that_fails_after_reading_the_hub_backs_no_claim(pool, monkeypatch):
+    """Its {device, connected} records are left only once the whole listing
+    is built: a call that fails after reading the hub was shown no line, and
+    an ok=False span carrying them would still back "the laptop is online"
+    (guards._checked_a_device reads a determined fact on a failed device span)."""
+    device_id, _device = await _enroll(pool, name="laptop")
+    devices_ws.hub.register(device_id, FakeWSConn())
+
+    async def _broken(pool):
+        raise RuntimeError("the knock record could not be read")
+
+    monkeypatch.setattr(device_tools, "_knocks", _broken)
+    person = await _person(pool)
+    sink: list[dict] = []
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person, facts=sink))
+    assert ok is False and "the knock record could not be read" in result
+    assert sink == []
+
+
 async def test_device_list_with_nothing_paired_says_so_and_hands_no_step(pool):
     person = await _person(pool)
     result, ok = await tools.dispatch("device_list", {}, _ctx(person))
@@ -2014,6 +2033,7 @@ async def test_a_folder_token_for_an_agent_that_reports_no_folders_is_a_stated_c
         "device_list_files", {"device": "laptop", "path": "@desktop"}, _ctx(person)
     )
     assert ok is False and "cannot: laptop's agent did not report its desktop folder" in result
+    assert "(it has reported no folders — an agent from before S42b reports none)" in result
     assert _command_frames(conn) == []
     await _close(conn, task)
 
@@ -2052,7 +2072,28 @@ async def test_a_folder_token_that_names_no_known_folder_is_refused_before_the_w
         "device_list_files", {"device": "laptop", "path": path}, _ctx(person)
     )
     assert ok is False
-    assert "a folder is one of @home, @desktop, @documents, @downloads" in result
+    assert f"cannot: path {path!r} names no known folder — a folder is one of @home, " in result
+    assert "@desktop, @documents, @downloads, then an optional /rest" in result
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+async def test_a_folder_the_agent_left_out_without_a_reason_is_said_as_that(pool):
+    """It reported other folders and filed nothing about this one: said as
+    exactly that, never as an agent that reports no folders at all."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed({"type": "facts", "folders": {"desktop": "C:\\Users\\sam\\Desktop"}})
+    await _wait_for_facts_key(pool, device_id, "folders")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "dell", "path": "@downloads"}, _ctx(person)
+    )
+    assert ok is False
+    assert result == (
+        "Error: cannot: dell's agent did not report its downloads folder (it reported others, "
+        "and filed no reason for this one) — give an absolute path instead"
+    )
     assert _command_frames(conn) == []
     await _close(conn, task)
 

@@ -412,9 +412,10 @@ class FixtureDevice:
     enrolling one would spend a pairing code, write a device.enrolled event and
     take a name — so the runner overlays this declaration on the plant's agent
     listing (machines.FixturePlant.agents) for this case alone. machine_status
-    reads it; the device TOOLS do not (a declared device is for her to READ —
-    acting on one gets the ordinary "no paired device named …" refusal, since
-    no key exists to sign for).
+    and device_list (S42b Task 21) read it; the device tools that act on a
+    machine do not (a declared device is for her to READ — acting on one gets
+    the ordinary "no paired device named …" refusal, since no key exists to
+    sign for).
 
     `facts` go through device_facts.validate_auth at load, so a case can never
     describe an agent a real one could not."""

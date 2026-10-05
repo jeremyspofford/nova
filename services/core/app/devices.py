@@ -243,10 +243,14 @@ async def mint_pairing_code(
             )
         if _reserved(row["name"]):
             # A row named before D8 reserved the name: a re-pair keeps the
-            # row's name, so it would keep reading as the bundled engine.
+            # row's name, so it would keep reading as the bundled engine. The
+            # refusal states the facts, never a step handed on (Task 21 ruling
+            # on D8: she has no rename tool — that capability is carried to
+            # the doing lane — so the text says what is true, not what to do).
             raise DeviceRefused(
-                f"{row['name']!r} cannot be re-paired under that name — it is the bundled "
-                "engine's name (hub decision D8); rename the machine first, then re-pair it",
+                f"{row['name']!r} cannot be re-paired under that name — a re-pair keeps the "
+                "machine's name, and that is the bundled engine's name (hub decision D8); it "
+                "can be re-paired once it is renamed",
                 status_code=409,
             )
     elif name is not None:

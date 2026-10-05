@@ -300,6 +300,10 @@ async def test_a_row_already_called_hub_cannot_be_repaired_until_it_is_renamed(p
     assert caught.value.status_code == 409
     assert "cannot" in caught.value.reason and "bundled engine" in caught.value.reason
     assert "rename" in caught.value.reason
+    # Task 21 ruling on D8: the way out is stated as a fact, never handed on
+    # as a step ("rename the machine first, then re-pair it" was one).
+    assert caught.value.reason.endswith("it can be re-paired once it is renamed")
+    assert "first, then" not in caught.value.reason
     bound = "SELECT count(*) FROM pairing_codes WHERE device_id = $1"
     assert await pool.fetchval(bound, device_id) == 0
     await devices.rename(pool, device_id=device_id, name="minipc")

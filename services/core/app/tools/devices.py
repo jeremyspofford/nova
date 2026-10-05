@@ -32,6 +32,7 @@ from __future__ import annotations
 import ntpath
 import posixpath
 import re
+from datetime import timedelta
 
 from app import db, device_facts, devices, devices_ws, envelopes, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
@@ -157,15 +158,19 @@ def _check_fs_path(
         m = _FOLDER_TOKEN.match(path)
         if m is None or m.group(1) not in device_facts.FOLDER_NAMES:
             known = ", ".join(f"@{n}" for n in device_facts.FOLDER_NAMES)
-            raise ToolFailure(f"path {path!r}: a folder is one of {known}, then an optional /rest")
+            raise ToolFailure(
+                f"cannot: path {path!r} names no known folder — a folder is one of {known}, "
+                "then an optional /rest"
+            )
         folder = m.group(1)
         if folder not in folders:
             said = (unread or {}).get(folder)
-            why = (
-                f"it said: {said or 'no reason given'}"
-                if said is not None
-                else "an agent from before S42b reports none"
-            )
+            if said is not None:
+                why = f"it said: {said or 'no reason given'}"
+            elif folders:
+                why = "it reported others, and filed no reason for this one"
+            else:
+                why = "it has reported no folders — an agent from before S42b reports none"
             raise ToolFailure(
                 f"cannot: {name}'s agent did not report its {folder} folder ({why}) — give an "
                 "absolute path instead"
@@ -347,7 +352,7 @@ def _agent_line(agent: dict) -> str:
 # P28: a revoked agent that is still running knocks at least every 30 s (its
 # reconnect ladder tops out there); within this of its last verified knock it
 # is "still knocking".
-_KNOCKING_WITHIN = "2 minutes"
+_KNOCKING_WITHIN = timedelta(minutes=2)
 # How a Linux agent from before S42b was installed — the README's, said as
 # that, never as a fact of one that did not report how it runs.
 _BEFORE_S42B_LINUX = (
@@ -362,11 +367,14 @@ async def _knocks(pool) -> list[str]:
     stamps devices.last_refused_at). The knock record is the check that it
     stopped — but no knock is only that: it stopped, or it cannot reach Nova
     (an asleep machine knocks no more than a stopped agent)."""
+    # Both ages are taken on the database's clock, the one that stamped the
+    # knock — never compared with core's.
     rows = await pool.fetch(
         "SELECT name, platform, facts, revoked_at, last_refused_at, "
-        f"last_refused_at > now() - interval '{_KNOCKING_WITHIN}' AS knocking FROM devices "
+        "last_refused_at > now() - $1::interval AS knocking FROM devices "
         "WHERE revoked_at IS NOT NULL AND last_refused_at > now() - interval '24 hours' "
-        "ORDER BY last_refused_at DESC"
+        "ORDER BY last_refused_at DESC",
+        _KNOCKING_WITHIN,
     )
     out = []
     for r in rows:
