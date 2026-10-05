@@ -123,21 +123,14 @@ export async function settingsMap(page: Page): Promise<Record<string, unknown>> 
 }
 
 /**
- * Settings -> Models' per-model card, scoped by slug.
- *
- * ModelCard (apps/web/src/pages/settings/ModelsSection.tsx) carries
- * `data-testid={`model-card-${slug}`}` on its root for exactly this reason.
- * The previous approach — find the slug's text node, walk up to the
- * nearest `.rounded-lg` ancestor — broke for the CURRENT model: its slug
- * also renders in the "Current chat model" line above the list
- * (`current-chat-model`), whose nearest `.rounded-lg` ancestor is the
- * Section card wrapper, not this model's own card. That gave the locator
- * two matches and threw a strict-mode violation on every walk, since
- * scenario 1 always sets the current model via NOVA_E2E_MODEL. A
- * testid keyed by slug is unambiguous regardless of what else on the page
- * happens to render the same text.
+ * One model on the Models page — its table row, or its card on a phone —
+ * found by the id it prints (`hub:qwen3:8b`, `library:qwen3:4b`). The id is
+ * the row's own text, so the locator is exact whatever else on the page
+ * names the same model. (Settings -> Models carried its own model cards
+ * until 2026-10-05; the Models page is the one list now.)
  */
-export const modelCard = (page: Page, slug: string) => page.getByTestId(`model-card-${slug}`)
+export const modelRow = (page: Page, id: string) =>
+  page.locator('tr, li', { has: page.getByText(id, { exact: true }) })
 
 /**
  * Send a message and wait for the turn to settle.

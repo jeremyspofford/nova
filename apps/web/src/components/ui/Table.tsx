@@ -7,6 +7,9 @@ export interface TableColumn<T> {
   header: string
   sortable?: boolean
   width?: string
+  /** Classes on the column's header AND its cells — e.g. `hidden lg:table-cell`
+   * to drop a column below a width, or `whitespace-nowrap`. */
+  className?: string
   render?: (row: T) => ReactNode
 }
 
@@ -50,6 +53,7 @@ export function Table<T extends Record<string, unknown>>({
                   'px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider',
                   'sticky top-0 bg-surface-elevated',
                   col.sortable && 'cursor-pointer select-none hover:text-content-secondary',
+                  col.className,
                 )}
                 style={col.width ? { width: col.width } : undefined}
                 onClick={col.sortable ? () => handleSort(col.key) : undefined}
@@ -90,7 +94,7 @@ export function Table<T extends Record<string, unknown>>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
                 {columns.map((col) => (
-                  <td key={col.key} className="px-4 py-3 text-content-primary">
+                  <td key={col.key} className={clsx('px-4 py-3 text-content-primary', col.className)}>
                     {col.render
                       ? col.render(row)
                       : (row[col.key] as ReactNode)}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BarChart3, Boxes, Check, Columns3, Download, Gauge, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { BarChart3, Boxes, Check, Columns3, Download, Gauge, Info, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import {
   Badge,
@@ -21,6 +21,7 @@ import {
 import {
   getCatalog as apiGetCatalog,
   getHfRepo as apiGetHfRepo,
+  getRoutes as apiGetRoutes,
   getSettings as apiGetSettings,
   checkDrift as apiCheckDrift,
   removeModel as apiRemoveModel,
@@ -29,6 +30,7 @@ import {
   putSetting as apiPutSetting,
   resolveModel as apiResolveModel,
   searchHf as apiSearchHf,
+  setChatPrimary as apiSetChatPrimary,
   settingValue,
   type Catalog,
   type CatalogAction,
@@ -43,6 +45,7 @@ import { applyPullLine, formatBytes, initialPullState, settlePull, type PullStat
 import { Link } from 'react-router-dom'
 import { formatRelativeTime } from '../activity/activityFormat'
 import { useChatStore } from '../../stores/chat-store'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import {
   BENCHMARK_INDICES,
   CAPABILITY_KEYS,
@@ -95,6 +98,8 @@ interface ModelsApi {
   pullModel: typeof apiPullModel
   putSetting: typeof apiPutSetting
   getSettings: typeof apiGetSettings
+  setChatPrimary: typeof apiSetChatPrimary
+  getRoutes: typeof apiGetRoutes
 }
 
 const DEFAULT_API: ModelsApi = {
@@ -108,10 +113,15 @@ const DEFAULT_API: ModelsApi = {
   pullModel: apiPullModel,
   putSetting: apiPutSetting,
   getSettings: apiGetSettings,
+  setChatPrimary: apiSetChatPrimary,
+  getRoutes: apiGetRoutes,
 }
 
 const COMPARE_MAX = 5
 const BENCH_MAX = 12
+/** Rows drawn before "show all": the Cloud tab lists ~480, and drawing every
+ * one with its chips and buttons made the page slow to open and to scroll. */
+const ROWS_SHOWN = 100
 const SHORT_INDEX: Record<string, string> = { intelligence: 'Int', coding: 'Cod', agentic: 'Agt' }
 
 /** The rows on screen that carry any index, best intelligence first, capped
@@ -168,9 +178,16 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof apiGetCatalog>> | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [settingModel, setSettingModel] = useState<string>('')
+  // Chat's fallbacks as the gateway holds them — so a row says where it sits
+  // in what chat walks, not only whether it is the pick. null: not read.
+  const [chatFallbacks, setChatFallbacks] = useState<string[] | null>(null)
+  const [showAll, setShowAll] = useState(false)
+  const isMobile = useIsMobile()
   const [facets, setFacets] = useState<Facets>({ ...EMPTY_FACETS, tab: 'installed' })
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // What a pick did not keep (core's note), said beside the list.
+  const [actionNote, setActionNote] = useState<string | null>(null)
   const [details, setDetails] = useState<CatalogRow | null>(null)
   const [switching, setSwitching] = useState<string | null>(null)
   const [probing, setProbing] = useState<string | null>(null)
@@ -211,12 +228,20 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   // before the settings have loaded.
   const chatModel = settingModel || chatState.model || ''
 
-  const load = useCallback(async (): Promise<Catalog | null> => {
+  // `fresh`: Refresh, which dials every source again; `own`: a re-read
+  // after an action, which must not join a read that began before it.
+  const load = useCallback(async (opts: { fresh?: boolean; own?: boolean } = {}): Promise<Catalog | null> => {
     setLoadError(null)
     try {
-      const [cat, settings] = await Promise.all([api.getCatalog(), api.getSettings()])
+      const [cat, settings, routes] = await Promise.all([
+        api.getCatalog(opts),
+        api.getSettings(),
+        // The chain only labels rows; a failed read costs the labels, never the page.
+        api.getRoutes().catch(() => null),
+      ])
       setCatalog(cat)
       setSettingModel(settingValue(settings, 'chat.model', ''))
+      setChatFallbacks(routes?.roles.find(r => r.role === 'chat')?.chain ?? null)
       return cat
     } catch (err) {
       setLoadError(reasonOf(err))
@@ -274,19 +299,31 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
 
   const { rows: visible, hidden } = useMemo(() => applyFacets(allRows, facets), [allRows, facets])
   const sorted = useMemo(() => (sort ? sortRows(visible, sort.key, sort.dir) : visible), [visible, sort])
+  const shown = showAll ? sorted : sorted.slice(0, ROWS_SHOWN)
+  // A new tab or filter starts at the top of its own list again.
+  useEffect(() => setShowAll(false), [facets])
+  const emptyMessage =
+    allRows.length === 0
+      ? 'nothing reachable — no local models installed and no provider answered'
+      : 'no models match the current filters'
 
   const counts = useMemo(() => {
     const by = (tab: CatalogTab) => applyFacets(allRows, { ...EMPTY_FACETS, tab }).rows.length
     return { installed: by('installed'), available: by('available'), cloud: by('cloud'), all: allRows.length }
   }, [allRows])
 
+  // The one write every "use this model" makes (setChatPrimary): the row
+  // becomes chat's primary and the model it replaces its first fallback.
   const use = async (row: CatalogRow) => {
     setSwitching(row.id)
     setActionError(null)
+    setActionNote(null)
     try {
-      await api.putSetting('chat.model', row.id)
-      setModel(row.id)
-      setSettingModel(row.id)
+      const stored = await api.setChatPrimary(row.id)
+      setModel(stored.chat_model)
+      setSettingModel(stored.chat_model)
+      setChatFallbacks(stored.chain)
+      setActionNote(stored.note ?? null)
     } catch (err) {
       setActionError(`could not switch to ${row.id} — ${reasonOf(err)}`)
     } finally {
@@ -312,7 +349,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       if (result.verified !== true) throw new Error(`the gateway did not verify the removal of ${row.id}`)
       setRemoving(null)
       // Installed is what the re-read catalogue says, never the 200.
-      await load()
+      await load({ own: true })
     } catch (err) {
       setActionError(`could not remove ${row.id} — ${reasonOf(err)}`)
       setRemoving(null)
@@ -343,7 +380,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           ? `${result.latency_ms ?? '?'} ms${result.vram_mb !== null ? ` · ${(result.vram_mb / 1024).toFixed(1)} GB` : ''}`
           : `probe failed — ${result.error ?? 'no reason given'}`,
       }))
-      await load()
+      await load({ own: true })
     } catch (err) {
       setActionError(`could not probe ${row.id} — ${reasonOf(err)}`)
     } finally {
@@ -386,7 +423,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       // ollama said success; installed is what the CATALOGUE says after the
       // pull, so the panel says "checking" until the re-read lists it.
       publish({ ...state, status: 'ollama reported success — checking the catalogue…' })
-      const fresh = await load()
+      const fresh = await load({ own: true })
       if (controller.signal.aborted) return
       if (fresh === null) {
         publish({ ...state, error: `ollama reported success but the catalogue could not be re-read — ${target} is not confirmed installed` })
@@ -428,268 +465,245 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
     }
   }
 
-  const columns: TableColumn<CatalogRow>[] = [
-    {
-      key: 'compare',
-      header: '',
-      width: '2rem',
-      render: row => (
-        <Checkbox
-          checked={compareIds.includes(row.id)}
-          onChange={on => toggleCompare(row, on)}
-          aria-label={`compare ${row.id}`}
-          disabled={!compareIds.includes(row.id) && compareIds.length >= COMPARE_MAX}
-        />
-      ),
-    },
-    {
-      key: 'name',
-      header: 'Model',
-      sortable: true,
-      render: row => (
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-medium text-content-primary">{row.label}</span>
-            {isCurrent(row, chatModel) && (
-              <Badge size="sm" color="success">
-                current
-              </Badge>
-            )}
-            {row.installed === true && (
-              <Badge size="sm" color="accent">
-                installed
-              </Badge>
-            )}
-            <Badge size="sm" color="neutral">
-              {row.sources[0]?.key ?? row.provider}
+  // Where a row sits in what chat walks: the pick, or a fallback behind it.
+  const chainSpot = (row: CatalogRow): 'primary' | 'fallback' | null => {
+    if (isCurrent(row, chatModel)) return 'primary'
+    return chatFallbacks?.includes(row.id) ? 'fallback' : null
+  }
+
+  // One renderer per fact, shared by the table and the phone's cards, so the
+  // two layouts can never say different things about a row.
+  const nameCell = (row: CatalogRow) => {
+    const spot = chainSpot(row)
+    return (
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-content-primary">{row.label}</span>
+          {spot === 'primary' && (
+            <Badge size="sm" color="success">
+              <span title="chat answers with this model first">primary</span>
             </Badge>
-          </div>
-          <div className="font-mono text-caption text-content-tertiary break-all">{row.id}</div>
+          )}
+          {spot === 'fallback' && (
+            <Badge size="sm" color="info">
+              <span title="chat falls back to this model when the ones before it cannot answer">fallback</span>
+            </Badge>
+          )}
+          {row.installed === true && (
+            <Badge size="sm" color="accent">
+              installed
+            </Badge>
+          )}
+          <Badge size="sm" color="neutral">
+            {row.sources[0]?.key ?? row.provider}
+          </Badge>
         </div>
-      ),
-    },
-    {
-      key: 'size_bytes',
-      header: 'Size',
-      sortable: true,
-      render: row => {
-        const size = row.facts.size_bytes
-        const params = row.facts.params_b?.value
-        if (size && typeof size.value === 'number') {
-          if (size.basis === 'inferred') {
-            // An estimate at the default quant, drawn as one: dashed, ≈, the
-            // arithmetic in the title. Never the stated size.
-            return (
-              <span className="border-b border-dashed border-warning text-warning" title={size.note ?? 'inferred'} data-basis="inferred">
-                ≈ {formatBytes(size.value)}
-              </span>
-            )
-          }
-          return formatBytes(size.value)
-        }
-        if (typeof params === 'number') return `${formatParams(params)} params`
-        return row.kind === 'hub' ? 'pick a quant' : <span className="text-content-tertiary">not stated</span>
-      },
-    },
-    {
-      key: 'context_length',
-      header: 'Context',
-      sortable: true,
-      render: row => {
-        const ctx = row.facts.context_length?.value
-        return typeof ctx === 'number' ? formatContext({ context_length: ctx }) : <span className="text-content-tertiary">not stated</span>
-      },
-    },
-    {
-      key: 'price_prompt',
-      header: 'Price',
-      sortable: true,
-      render: row => {
-        const p = row.facts.price_prompt?.value
-        const c = row.facts.price_completion?.value
-        const text = formatPrice({
-          pricing: {
-            prompt: typeof p === 'number' ? p : undefined,
-            completion: typeof c === 'number' ? c : undefined,
-          },
-        })
-        return text ?? <span className="text-content-tertiary">{row.kind === 'cloud' ? 'not stated' : '—'}</span>
-      },
-    },
-    {
-      key: 'capabilities',
-      header: 'Capabilities',
-      render: row => {
-        const chips = capabilityChips(row)
-        if (chips.length === 0) return <span className="text-content-tertiary">not stated</span>
-        return (
-          <div className="flex flex-wrap gap-1">
-            {chips.map(chip => (
-              <span
-                key={chip.key}
-                title={`${chip.basis}${chip.note ? ` — ${chip.note}` : ''}`}
-                data-basis={chip.basis}
-                className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
-                  !chip.value
-                    ? 'border border-line text-content-tertiary line-through'
-                    : chip.basis === 'inferred'
-                      ? 'border border-dashed border-warning text-warning'
-                      : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
-                }`}
-              >
-                {chip.label}
-              </span>
-            ))}
-          </div>
+        <div className="font-mono text-caption text-content-tertiary break-all">{row.id}</div>
+        {probeNote[row.id] && <div className="text-caption text-content-tertiary">{probeNote[row.id]}</div>}
+        <DriftNote drift={drift[row.id]} onUpdate={() => startPull(row.model)} rowId={row.id} />
+      </div>
+    )
+  }
+
+  const sizeCell = (row: CatalogRow) => {
+    const size = row.facts.size_bytes
+    const params = row.facts.params_b?.value
+    let text: ReactNode
+    if (size && typeof size.value === 'number') {
+      text =
+        size.basis === 'inferred' ? (
+          // An estimate at the default quant, drawn as one: dashed, ≈, the
+          // arithmetic in the title. Never the stated size.
+          <span className="border-b border-dashed border-warning text-warning" title={size.note ?? 'inferred'} data-basis="inferred">
+            ≈ {formatBytes(size.value)}
+          </span>
+        ) : (
+          formatBytes(size.value)
         )
+    } else if (typeof params === 'number') {
+      text = `${formatParams(params)} params`
+    } else {
+      text = row.kind === 'hub' ? 'pick a quant' : <span className="text-content-tertiary">not stated</span>
+    }
+    return (
+      <div className="space-y-1">
+        <div>{text}</div>
+        {row.kind === 'local' && <ModelFitNotice fit={row.fit ?? null} />}
+      </div>
+    )
+  }
+
+  const contextCell = (row: CatalogRow) => {
+    const ctx = row.facts.context_length?.value
+    return typeof ctx === 'number' ? formatContext({ context_length: ctx }) : <span className="text-content-tertiary">not stated</span>
+  }
+
+  const priceCell = (row: CatalogRow) => {
+    const p = row.facts.price_prompt?.value
+    const c = row.facts.price_completion?.value
+    const text = formatPrice({
+      pricing: {
+        prompt: typeof p === 'number' ? p : undefined,
+        completion: typeof c === 'number' ? c : undefined,
       },
-    },
-    {
-      key: 'intelligence',
-      header: 'Benchmarks',
-      sortable: true,
-      render: row => {
-        const scores = BENCHMARK_INDICES.map(i => ({ ...i, score: benchmarkScore(row, i.key) }))
-        if (scores.every(s => s.score === null)) return <span className="text-content-tertiary">—</span>
-        return (
-          <div className="w-28 space-y-0.5" data-testid={`bench-cell-${row.id}`}>
-            {scores.map(s => (
-              <div key={s.key} className="flex items-center gap-1 text-micro" title={s.score ? `${s.label} ${Math.round(s.score.value)} — ${s.score.basis} · ${s.score.source}${s.score.note ? ` — ${s.score.note}` : ''}` : `${s.label}: no data`}>
-                <span className="w-7 text-content-tertiary">{SHORT_INDEX[s.key]}</span>
-                <div className="h-1.5 flex-1 rounded-full bg-neutral-200/60 dark:bg-neutral-700/60">
-                  {s.score && <div className="h-1.5 rounded-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, s.score.value))}%` }} />}
-                </div>
-                <span className="w-6 text-right tabular-nums text-content-primary">{s.score ? Math.round(s.score.value) : '—'}</span>
-              </div>
-            ))}
+    })
+    return text ?? <span className="text-content-tertiary">{row.kind === 'cloud' ? 'not stated' : '—'}</span>
+  }
+
+  // What the model can do (declared capabilities) and what it is said to be
+  // good at (suitability) — one column, so the table fits a laptop screen.
+  const strengthsCell = (row: CatalogRow) => {
+    const chips = capabilityChips(row)
+    const entries = Object.entries(row.suitability)
+    if (chips.length === 0 && entries.length === 0) return <span className="text-content-tertiary">not stated</span>
+    return (
+      <div className="flex flex-wrap gap-1">
+        {chips.map(chip => (
+          <span
+            key={`cap-${chip.key}`}
+            title={`${chip.basis}${chip.note ? ` — ${chip.note}` : ''}`}
+            data-basis={chip.basis}
+            className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
+              !chip.value
+                ? 'border border-line text-content-tertiary line-through'
+                : chip.basis === 'inferred'
+                  ? 'border border-dashed border-warning text-warning'
+                  : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
+            }`}
+          >
+            {chip.label}
+          </span>
+        ))}
+        {entries.map(([key, fact]) => (
+          <span
+            key={`suit-${key}`}
+            title={`${fact.basis} — ${fact.source}${fact.note ? ` — ${fact.note}` : ''}`}
+            data-basis={fact.basis}
+            className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
+              fact.basis === 'inferred'
+                ? 'border border-dashed border-warning text-warning'
+                : fact.basis === 'measured'
+                  ? 'bg-info-dim text-blue-700 dark:text-blue-400'
+                  : 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300'
+            }`}
+          >
+            {fact.basis === 'measured' ? (
+              <Link to="/quality" className="underline decoration-dotted" title="measured by the quality suite — open the runs">
+                {tagLabel(key.split(':')[0], fact)}
+              </Link>
+            ) : (
+              tagLabel(key.split(':')[0], fact)
+            )}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  const benchCell = (row: CatalogRow) => {
+    const scores = BENCHMARK_INDICES.map(i => ({ ...i, score: benchmarkScore(row, i.key) }))
+    if (scores.every(s => s.score === null)) return <span className="text-content-tertiary">—</span>
+    return (
+      <div className="w-28 space-y-0.5" data-testid={`bench-cell-${row.id}`}>
+        {scores.map(s => (
+          <div key={s.key} className="flex items-center gap-1 text-micro" title={s.score ? `${s.label} ${Math.round(s.score.value)} — ${s.score.basis} · ${s.score.source}${s.score.note ? ` — ${s.score.note}` : ''}` : `${s.label}: no data`}>
+            <span className="w-7 text-content-tertiary">{SHORT_INDEX[s.key]}</span>
+            <div className="h-1.5 flex-1 rounded-full bg-neutral-200/60 dark:bg-neutral-700/60">
+              {s.score && <div className="h-1.5 rounded-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, s.score.value))}%` }} />}
+            </div>
+            <span className="w-6 text-right tabular-nums text-content-primary">{s.score ? Math.round(s.score.value) : '—'}</span>
           </div>
-        )
-      },
-    },
-    {
-      key: 'coding',
-      header: 'Suitability',
-      sortable: true,
-      render: row => {
-        const entries = Object.entries(row.suitability)
-        if (entries.length === 0) return <span className="text-content-tertiary">not stated</span>
-        return (
-          <div className="flex flex-wrap gap-1">
-            {entries.map(([key, fact]) => (
-              <span
-                key={key}
-                title={`${fact.basis} — ${fact.source}${fact.note ? ` — ${fact.note}` : ''}`}
-                data-basis={fact.basis}
-                className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
-                  fact.basis === 'inferred'
-                    ? 'border border-dashed border-warning text-warning'
-                    : fact.basis === 'measured'
-                      ? 'bg-info-dim text-blue-700 dark:text-blue-400'
-                      : 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300'
-                }`}
-              >
-                {fact.basis === 'measured' ? (
-                  <Link to="/quality" className="underline decoration-dotted" title="measured by the quality suite — open the runs">
-                    {tagLabel(key.split(':')[0], fact)}
-                  </Link>
-                ) : (
-                  tagLabel(key.split(':')[0], fact)
-                )}
-              </span>
-            ))}
-          </div>
-        )
-      },
-    },
-    {
-      key: 'fit',
-      header: 'Fit',
-      render: row => (row.kind === 'local' ? <ModelFitNotice fit={row.fit ?? null} /> : null),
-    },
-    {
-      key: 'actions',
-      header: '',
-      render: row => (
-        <div className="flex flex-wrap items-center gap-1 justify-end">
-          {actionsOf(row).includes('use') && !isCurrent(row, chatModel) && (
-            <Button size="sm" loading={switching === row.id} onClick={() => void use(row)} aria-label={`use ${row.id}`}>
-              Use
-            </Button>
-          )}
-          {actionsOf(row).includes('pull') && row.kind === 'hub' && (
-            <Popover
-              trigger={
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={<Download size={12} />}
-                  onClick={() => void loadQuants(row)}
-                  aria-label={`pull ${row.id}`}
-                >
-                  Pull
-                </Button>
-              }
-            >
-              <QuantMenu options={quantOptions[row.id]} onPick={tag => startPull(`${row.model}:${tag}`)} />
-            </Popover>
-          )}
-          {actionsOf(row).includes('pull') && row.kind !== 'hub' && (
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<Download size={12} />}
-              onClick={() => startPull(row.model)}
-              aria-label={`pull ${row.id}`}
-            >
+        ))}
+      </div>
+    )
+  }
+
+  // The one action a row is for (Use or Pull) in words; the rest as icons
+  // with their names in aria-label and title, so the column stays narrow.
+  const actionsCell = (row: CatalogRow) => (
+    <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
+      {actionsOf(row).includes('use') && !isCurrent(row, chatModel) && (
+        <Button
+          size="sm"
+          loading={switching === row.id}
+          onClick={() => void use(row)}
+          aria-label={`use ${row.id}`}
+          title="chat answers with this model first; the current one becomes its first fallback"
+        >
+          Use
+        </Button>
+      )}
+      {actionsOf(row).includes('pull') && row.kind === 'hub' && (
+        <Popover
+          align="end"
+          trigger={
+            <Button size="sm" variant="secondary" icon={<Download size={12} />} onClick={() => void loadQuants(row)} aria-label={`pull ${row.id}`}>
               Pull
             </Button>
-          )}
-          {actionsOf(row).includes('probe') && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Gauge size={12} />}
-              loading={probing === row.id}
-              onClick={() => void probe(row)}
-              aria-label={`probe ${row.id}`}
-              title="run a 1-token completion and record how much VRAM the model really takes"
-            >
-              Probe
-            </Button>
-          )}
-          {actionsOf(row).includes('check_update') && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<RefreshCw size={12} />}
-              loading={drift[row.id] === 'checking'}
-              onClick={() => void checkUpdate(row)}
-              aria-label={`check updates ${row.id}`}
-              title="compare the installed weights with what the source ships now — never pulls"
-            >
-              Check for updates
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" onClick={() => setDetails(row)} aria-label={`details ${row.id}`}>
-            Details
-          </Button>
-          {actionsOf(row).includes('remove') && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Trash2 size={12} />}
-              onClick={() => setRemoving(row)}
-              aria-label={`remove ${row.id}`}
-              title="delete this model from the local ollama (verified against its own list)"
-            >
-              Remove
-            </Button>
-          )}
-          {probeNote[row.id] && <span className="text-caption text-content-tertiary">{probeNote[row.id]}</span>}
-          <DriftNote drift={drift[row.id]} onUpdate={() => startPull(row.model)} rowId={row.id} />
-        </div>
-      ),
-    },
+          }
+        >
+          <QuantMenu options={quantOptions[row.id]} onPick={tag => startPull(`${row.model}:${tag}`)} />
+        </Popover>
+      )}
+      {actionsOf(row).includes('pull') && row.kind !== 'hub' && (
+        <Button size="sm" variant="secondary" icon={<Download size={12} />} onClick={() => startPull(row.model)} aria-label={`pull ${row.id}`}>
+          Pull
+        </Button>
+      )}
+      {actionsOf(row).includes('probe') && (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Gauge size={13} />}
+          loading={probing === row.id}
+          onClick={() => void probe(row)}
+          aria-label={`probe ${row.id}`}
+          title="Probe: run a 1-token completion and record how much VRAM the model really takes"
+        />
+      )}
+      {actionsOf(row).includes('check_update') && (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<RefreshCw size={13} />}
+          loading={drift[row.id] === 'checking'}
+          onClick={() => void checkUpdate(row)}
+          aria-label={`check updates ${row.id}`}
+          title="Check for updates: compare the installed weights with what the source ships now — never pulls"
+        />
+      )}
+      <Button size="sm" variant="ghost" icon={<Info size={13} />} onClick={() => setDetails(row)} aria-label={`details ${row.id}`} title="Details" />
+      {actionsOf(row).includes('remove') && (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Trash2 size={13} />}
+          onClick={() => setRemoving(row)}
+          aria-label={`remove ${row.id}`}
+          title="Remove: delete this model from the machine's ollama (verified against its own list)"
+        />
+      )}
+    </div>
+  )
+
+  const compareBox = (row: CatalogRow) => (
+    <Checkbox
+      checked={compareIds.includes(row.id)}
+      onChange={on => toggleCompare(row, on)}
+      aria-label={`compare ${row.id}`}
+      disabled={!compareIds.includes(row.id) && compareIds.length >= COMPARE_MAX}
+    />
+  )
+
+  const columns: TableColumn<CatalogRow>[] = [
+    { key: 'compare', header: '', width: '2rem', className: 'align-top', render: compareBox },
+    { key: 'name', header: 'Model', sortable: true, className: 'align-top min-w-[14rem]', render: nameCell },
+    { key: 'size_bytes', header: 'Size', sortable: true, className: 'align-top whitespace-nowrap', render: sizeCell },
+    { key: 'context_length', header: 'Context', sortable: true, className: 'align-top whitespace-nowrap', render: contextCell },
+    { key: 'price_prompt', header: 'Price', sortable: true, className: 'align-top whitespace-nowrap', render: priceCell },
+    { key: 'capabilities', header: 'Strengths', className: 'align-top hidden lg:table-cell', render: strengthsCell },
+    { key: 'intelligence', header: 'Benchmarks', sortable: true, className: 'align-top hidden xl:table-cell', render: benchCell },
+    { key: 'actions', header: '', className: 'align-top', render: actionsCell },
   ]
 
   const hiddenNotes = [
@@ -727,7 +741,13 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
             >
               Benchmarks
             </Button>
-            <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()}>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RefreshCw size={12} />}
+              onClick={() => void load({ fresh: true })}
+              title="read every source again, a machine that did not answer included"
+            >
               Refresh
             </Button>
           </>
@@ -744,12 +764,20 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           {actionError}
         </div>
       )}
+      {actionNote && (
+        <p role="status" className="text-caption text-warning" data-testid="pick-note">
+          {actionNote}
+        </p>
+      )}
 
       {catalog && (
         <div className="flex flex-wrap gap-1.5" data-testid="catalog-sources">
           {catalog.sources.map(s => (
             <Badge key={s.key} size="sm" color={s.ok === false ? 'warning' : 'neutral'}>
-              <span title={s.note ?? ''}>
+              {/* One line, cut with an ellipsis: a long refusal used to wrap
+                  inside the fixed-height pill and print over its neighbour.
+                  The whole of it is the title. */}
+              <span className="block max-w-[18rem] truncate sm:max-w-[28rem]" title={s.note ?? ''}>
                 {s.key}
                 {typeof s.rows === 'number' ? ` · ${s.rows}` : ''}
                 {s.fetched_at ? ` · ${formatRelativeTime(s.fetched_at)}` : ''}
@@ -777,55 +805,57 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
         onChange={id => setFacets(f => ({ ...f, tab: id as CatalogTab }))}
       />
 
-      <div className="flex flex-wrap items-end gap-2" data-testid="facets">
-        <div className="min-w-[14rem] flex-1">
-          <SearchInput value={facets.text} onChange={text => setFacets(f => ({ ...f, text }))} placeholder="filter by id, label, family" />
+      <div className="space-y-2" data-testid="facets">
+        <SearchInput value={facets.text} onChange={text => setFacets(f => ({ ...f, text }))} placeholder="filter by id, label, family" />
+        {/* A grid: each control is a full-width block, so in a wrapping row
+            every one took a whole line — seven rows above the table. */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+          <Select
+            label="Capability"
+            value={facets.capability ?? ''}
+            onChange={e => setFacets(f => ({ ...f, capability: (e.target.value || null) as CapabilityKey | null }))}
+            items={[{ value: '', label: 'any' }, ...CAPABILITY_KEYS.map(k => ({ value: k, label: k }))]}
+          />
+          <Select
+            label="Suitability"
+            value={facets.suitability ?? ''}
+            onChange={e => setFacets(f => ({ ...f, suitability: e.target.value || null }))}
+            items={[{ value: '', label: 'any' }, ...SUITABILITY_KEYS.map(k => ({ value: k, label: k.replace('_', ' ') }))]}
+          />
+          <Input
+            label="Size ≤ GB"
+            type="number"
+            min={0}
+            value={facets.maxSizeGb ?? ''}
+            onChange={e => setFacets(f => ({ ...f, maxSizeGb: e.target.value === '' ? null : Number(e.target.value) }))}
+          />
+          <Input
+            label="Params ≤ B"
+            type="number"
+            min={0}
+            value={facets.maxParamsB ?? ''}
+            onChange={e => setFacets(f => ({ ...f, maxParamsB: e.target.value === '' ? null : Number(e.target.value) }))}
+          />
+          <Input
+            label="Context ≥ K"
+            type="number"
+            min={0}
+            value={facets.minContextK ?? ''}
+            onChange={e => setFacets(f => ({ ...f, minContextK: e.target.value === '' ? null : Number(e.target.value) }))}
+          />
+          <Input
+            label="$ ≤ per 1M in"
+            type="number"
+            min={0}
+            step="0.1"
+            value={facets.maxPricePerM ?? ''}
+            onChange={e => setFacets(f => ({ ...f, maxPricePerM: e.target.value === '' ? null : Number(e.target.value) }))}
+          />
         </div>
-        <Select
-          label="Capability"
-          value={facets.capability ?? ''}
-          onChange={e => setFacets(f => ({ ...f, capability: (e.target.value || null) as CapabilityKey | null }))}
-          items={[{ value: '', label: 'any' }, ...CAPABILITY_KEYS.map(k => ({ value: k, label: k }))]}
-        />
-        <Select
-          label="Suitability"
-          value={facets.suitability ?? ''}
-          onChange={e => setFacets(f => ({ ...f, suitability: e.target.value || null }))}
-          items={[{ value: '', label: 'any' }, ...SUITABILITY_KEYS.map(k => ({ value: k, label: k.replace('_', ' ') }))]}
-        />
         <Checkbox
           label="include inferred (?)"
           checked={facets.includeInferred}
           onChange={checked => setFacets(f => ({ ...f, includeInferred: checked }))}
-        />
-        <Input
-          label="Size ≤ GB"
-          type="number"
-          min={0}
-          value={facets.maxSizeGb ?? ''}
-          onChange={e => setFacets(f => ({ ...f, maxSizeGb: e.target.value === '' ? null : Number(e.target.value) }))}
-        />
-        <Input
-          label="Params ≤ B"
-          type="number"
-          min={0}
-          value={facets.maxParamsB ?? ''}
-          onChange={e => setFacets(f => ({ ...f, maxParamsB: e.target.value === '' ? null : Number(e.target.value) }))}
-        />
-        <Input
-          label="Context ≥ K"
-          type="number"
-          min={0}
-          value={facets.minContextK ?? ''}
-          onChange={e => setFacets(f => ({ ...f, minContextK: e.target.value === '' ? null : Number(e.target.value) }))}
-        />
-        <Input
-          label="Price ≤ $/1M prompt"
-          type="number"
-          min={0}
-          step="0.1"
-          value={facets.maxPricePerM ?? ''}
-          onChange={e => setFacets(f => ({ ...f, maxPricePerM: e.target.value === '' ? null : Number(e.target.value) }))}
         />
       </div>
       {hiddenNotes.length > 0 && (
@@ -930,17 +960,45 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
 
       {catalog === null && !loadError ? (
         <Skeleton lines={6} />
+      ) : isMobile ? (
+        // A phone gets one card per model: nine columns in 360 px was a
+        // table you had to scroll sideways to read a single row of.
+        shown.length === 0 ? (
+          <p className="rounded-lg border border-border px-4 py-8 text-center text-compact text-content-tertiary">{emptyMessage}</p>
+        ) : (
+          <ul className="space-y-2" data-testid="model-cards">
+            {shown.map(row => (
+              <li key={row.id} className="space-y-2 rounded-lg border border-border px-3 py-3 dark:border-white/[0.08]">
+                <div className="flex items-start gap-2">
+                  {compareBox(row)}
+                  <div className="min-w-0 flex-1">{nameCell(row)}</div>
+                </div>
+                <div className="flex flex-wrap items-start gap-x-4 gap-y-1 text-caption text-content-secondary">
+                  <div>{sizeCell(row)}</div>
+                  <div>{contextCell(row)}</div>
+                  <div>{priceCell(row)}</div>
+                </div>
+                {strengthsCell(row)}
+                {BENCHMARK_INDICES.some(i => benchmarkScore(row, i.key) !== null) && benchCell(row)}
+                {actionsCell(row)}
+              </li>
+            ))}
+          </ul>
+        )
       ) : (
         <Table<CatalogRow>
           columns={columns}
-          data={sorted as unknown as CatalogRow[]}
+          data={shown as unknown as CatalogRow[]}
           onSort={(key, dir) => setSort({ key: key as SortKey, dir })}
-          emptyMessage={
-            allRows.length === 0
-              ? 'nothing reachable — no local models installed and no provider answered'
-              : 'no models match the current filters'
-          }
+          emptyMessage={emptyMessage}
         />
+      )}
+      {sorted.length > shown.length && (
+        <div className="flex justify-center">
+          <Button size="sm" variant="secondary" onClick={() => setShowAll(true)}>
+            Show all {sorted.length} — {shown.length} shown
+          </Button>
+        </div>
       )}
 
       <Sheet open={details !== null} onClose={() => setDetails(null)} title={details?.label ?? ''} width="half">

@@ -2977,7 +2977,8 @@ async def _gateway_round(
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
-                        detail = (await response.aread()).decode(errors="replace")[:400]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         raise GatewayFailure(
                             f"the gateway refused the request ({response.status_code}): {detail}"
                         )
@@ -3336,7 +3337,8 @@ async def _collect_completion(
                     _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
-                        detail = (await response.aread()).decode(errors="replace")[:200]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         span.meta["gateway_status"] = response.status_code
                         raise GatewayFailure(
                             f"the gateway refused ({response.status_code}): {detail}"

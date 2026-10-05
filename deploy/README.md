@@ -85,6 +85,23 @@ Nothing here links a specific engine to a specific agent by that identity
 yet — that join is S44's. A machine with no models still shows up, through
 its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
 
+## Which model answers chat
+
+- **One order.** Chat walks the pick (`chat.model`, link 1) and then chat's chain of
+  fallbacks. Settings → Models → Routing shows them as one list, each model once; the
+  chat switcher shows the same list, and names the model answering right now when the
+  pick cannot (`qwen3:8b → gemini-3.8-flash`).
+- **A pick never drops a model.** "Use" on Models, a model picked in chat, "Use" under a
+  provider and "Make primary" in Routing all make the same write
+  (`PUT /api/v1/routes/chat/primary`): the picked model becomes link 1, and the one it
+  replaces becomes the first fallback. Remove a fallback in Routing when you no longer
+  want it. While Jev Router picks chat's cloud model, a pick is refused until the switch
+  is off.
+- **The model list.** The Models page is the one list of models (install, compare,
+  probe, remove). The catalogue remembers a provider that could not be reached at all
+  for 60 seconds, so a machine that is off does not hold every page that reads the list;
+  the Models page's Refresh (`/admin/catalog?fresh=1`) dials every source again.
+
 ## Decision models (Jev and Kev)
 
 Since the decision role (`docs/plans/rebuild/decision-role/spec.md`), before Nova

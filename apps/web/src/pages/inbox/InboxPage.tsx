@@ -464,7 +464,11 @@ function NoticeCard({
                 </Badge>
               </span>
             )}
-            <span className="text-content-primary font-medium">{notice.title}</span>
+            {/* A title can carry a URL or a key with no space in it (a
+                provider's refusal names its billing page); `anywhere` lets
+                it wrap instead of pushing the whole page sideways on a phone
+                (2026-10-05: 327 px past the edge). */}
+            <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">{notice.title}</span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
             <span className="font-mono" title="the check that found it">
@@ -571,7 +575,7 @@ function NoticeCard({
       {facts.length > 0 && (
         <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-micro text-content-tertiary" data-testid="notice-facts">
           {facts.map(fact => (
-            <li key={fact.key} title={fact.title}>
+            <li key={fact.key} title={fact.title} className="min-w-0 [overflow-wrap:anywhere]">
               {fact.key}:{' '}
               {fact.href === undefined ? (
                 <span className="text-content-secondary">{fact.value}</span>

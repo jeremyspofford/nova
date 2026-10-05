@@ -302,6 +302,35 @@ async def test_a_gateway_5xx_is_stated_with_its_status(owner_client, pool, mount
 # -- the empty stream (the measured shape) --------------------------------------
 
 
+async def test_a_refusal_naming_every_link_is_kept_to_its_last_link(
+    owner_client, pool, mount_peers
+):
+    # 2026-09-30: the gateway's 503 named all three links' verdicts, the old
+    # 400-character cut ended at "openrouter refus", and the next message
+    # asked exactly what had been cut — OpenRouter's 402, out of credits.
+    words = (
+        "no model in the 'chat' chain can serve right now — "
+        + "; ".join(
+            f"dell:qwen3:{n}b: dell:qwen3:{n}b refused (502): could not reach dell at "
+            "http://100.122.40.93:11435/v1 — ConnectTimeout — walled for another 30 min"
+            for n in (8, 27)
+        )
+        + "; openrouter:qwen/qwen3.8-27b: openrouter refused (402): This request requires "
+        "more credits, or fewer max_tokens"
+    )
+    assert len(words) > 400
+    mount_peers(gateway=FakeGateway(status=503, refusal_body={"error": words}), memory=FakeMemory())
+    await _set_model(owner_client)
+
+    await _say(owner_client)
+
+    (statement,) = await _assistant_rows(pool)
+    assert "the gateway refused the request (503)" in statement
+    assert "requires more credits, or fewer max_tokens" in statement
+    # The gateway's own words, not its JSON wrapping.
+    assert '{"error"' not in statement
+
+
 async def test_an_empty_stream_is_a_stated_round_failure_with_its_counted_facts(
     owner_client, pool, mount_peers
 ):

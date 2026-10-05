@@ -24,12 +24,6 @@ export const ACCURACY_DISCLAIMER =
   "heads-up, not a measurement — real per-model accuracy numbers are coming with " +
   'the evals surface.'
 
-/** Appended to ACCURACY_DISCLAIMER in Settings when the currently-selected
- * model is on the smaller end of the catalog (see modelsFormat.isSmallerTier)
- * — still no number, just naming what's already true of the current pick. */
-export const ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER =
-  "The model in use right now is on the smaller end of what's offered here."
-
 /** The inline picker's compact caption — one line, no paragraph, discoverable
  * when the dropdown is open rather than cluttering the always-visible trigger. */
 export const ACCURACY_DISCLAIMER_SHORT =

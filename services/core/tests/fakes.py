@@ -261,6 +261,9 @@ class FakeGateway:
     reasoning: tuple[str, ...] = ()
     reasoning_field: str = "reasoning"
     admin_status: int = 200
+    # The body a non-200 completion answers with (None: an OpenAI-shaped
+    # "backend refused"). The real gateway's own 503 is {"error": "<words>"}.
+    refusal_body: dict | None = None
     # The model catalogue (S10a): when set, /admin/catalog answers this body
     # and /admin/catalog/hf this page (with hf_status); when None they fall
     # back to the admin echo above, as the proxy tests expect.
@@ -412,7 +415,10 @@ class FakeGateway:
         if not _bearer_ok(request, GATEWAY_TOKEN):
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
         if self.status != 200:
-            return JSONResponse({"error": {"message": "backend refused"}}, status_code=self.status)
+            return JSONResponse(
+                self.refusal_body or {"error": {"message": "backend refused"}},
+                status_code=self.status,
+            )
 
         async def stream():
             for thought in self.reasoning:
