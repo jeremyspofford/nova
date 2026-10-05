@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
+import httpx
 
 from app import governance
 from app.mcp import client
@@ -356,17 +357,35 @@ def _validated(
 ) -> tuple[str, str, str | None, dict[str, str]]:
     """Everything that can be refused before a byte is sent.
 
-    Ruling T5-D: NO refusal here echoes any part of the address except the
-    scheme — not the netloc, not a raw port, not the path. Userinfo is
+    Ruling T5-D (and its fix-round-2 tightening, ruling D): NO refusal here
+    echoes any part of the address — the SCHEME included, since a
+    scheme-less paste puts a credential where the scheme goes
+    (`Ghp0123456789abcdefABCDEF:x@gh.mcp.invalid/mcp` used to be refused
+    with the GitHub-shaped token quoted as "the scheme"). Userinfo is
     refused FIRST, before the scheme is even read, so a URL that is both the
-    wrong scheme and carries userinfo (`ftp://user:pw@host/mcp`) is never
-    echoed via the scheme refusal's old wording. `urlsplit` itself raises
-    `ValueError` for some malformed netlocs (an unbalanced `[`, a bracketed
-    value that is not an IP literal) and httpx raises its own `InvalidURL`
-    for a few shapes `urlsplit` accepts but silently cleans (a control
-    character embedded in the URL is STRIPPED by `urlsplit`, so checking the
-    parsed result would miss it — this checks the raw string first); every
-    one of those becomes the same stated, address-free refusal."""
+    wrong scheme and carries userinfo is never echoed via the scheme
+    refusal either. `urlsplit` itself raises `ValueError` for some
+    malformed netlocs (an unbalanced `[`, a bracketed value that is not an
+    IP literal, or one invalid under NFKC normalization — ruling F, whose
+    OWN exception text can quote a password) and httpx raises its own
+    `InvalidURL` for a few shapes `urlsplit` accepts but silently cleans (a
+    control character embedded in the URL is STRIPPED by `urlsplit`, so
+    checking the parsed result would miss it — this checks the raw string
+    first); every one of those becomes the same stated, address-free
+    refusal — raised only after its own `except` has fully exited (ruling
+    F): `from None` alone clears `__cause__`, never `__context__`, which
+    Python sets to whatever is "currently being handled" at the `raise`
+    itself regardless.
+
+    Ruling E: a host that is syntactically fine to `urlsplit` can still be
+    one httpx/idna refuse once something actually tries to USE it — an
+    invalid punycode A-label (`xn--.invalid`) raises `idna.IDNAError` only
+    when `.host` is read, not at `httpx.URL(url)` construction, and a
+    bidi-invalid or otherwise malformed Unicode host raises `httpx.
+    InvalidURL`; both do this from deep inside the real connection path, so
+    `connect`'s `except TimeoutError`/`except ClientError` never catches
+    them and they used to reach the probe raw. Built and checked here,
+    before any network attempt."""
     name = str(name or "").strip()
     if not NAME_RE.match(name):
         raise ServerError(
@@ -376,19 +395,22 @@ def _validated(
     url = str(url or "").strip()
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
         raise ServerError("that is not a usable http or https address")
+    parts = None
     try:
         parts = urlsplit(url)
     except ValueError:
-        raise ServerError("that is not a usable http or https address") from None
+        pass
+    if parts is None:
+        raise ServerError("that is not a usable http or https address")
     # Userinfo first (ruling T5-D), before the scheme is named in any way.
     if parts.username is not None or parts.password is not None:
         raise ServerError(
             "that address may not carry a username or password; use the token field instead"
         )
     if parts.scheme not in ("http", "https"):
-        raise ServerError(
-            f"that is not an http or https address — the scheme was {parts.scheme or 'empty'!r}"
-        )
+        # Ruling D: not even the scheme word is echoed — it can itself be a
+        # credential a scheme-less paste pushed into that position.
+        raise ServerError("that is not an http or https address")
     try:
         port = parts.port
     except ValueError:
@@ -410,6 +432,17 @@ def _validated(
     if port is not None:
         netloc = f"{netloc}:{port}"
     url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    # Ruling E: build the URL the client will actually send and let it fail
+    # the same way THAT would — httpx/idna re-validate and re-encode the
+    # host lazily, on ACCESS, never at `httpx.URL(url)` construction alone,
+    # so this must read `.host` to find out.
+    usable = True
+    try:
+        _ = httpx.URL(url).host
+    except (httpx.InvalidURL, ValueError):
+        usable = False
+    if not usable:
+        raise ServerError("that is not a usable http or https address")
     token = str(token).strip() if token is not None else None
     token = token or None
     if token is not None and (
@@ -746,7 +779,23 @@ async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
     close that into a cycle: `import app.main` (uvicorn's entry point)
     would crash with a partially initialized `app.beats`, while every test
     stayed green because conftest imports `app.chat` first. `governance`
-    carries no such import and stays at the top of the module."""
+    carries no such import and stays at the top of the module.
+
+    Muted is decided from the CONDITION's own mute (ruling A, fix round 2)
+    — `notices.muted_keys`, the exact set `notices.py`'s own `_SILENCED`
+    (and so the Inbox) reads — checked BEFORE `is_new`, never from the
+    fresh row's `state` column. F17 keys a finding on (kind, server), never
+    on the event, so EVERY later change to the same server is a reading of
+    the SAME condition: once the owner mutes one reading of it, a later one
+    is `is_new` (a fresh fingerprint — different facts) just as often as it
+    folds, and in BOTH cases the row's own `state` can disagree with the
+    mute. `record`'s INSERT already consults `notice_mutes` to decide a
+    fresh row's `state` (so `is_new` rows are usually already right) — but
+    `set_muted` stamps `state='muted'` on the ONE row it was called with,
+    never on a sibling that shares the same finding_key, so a FOLD onto
+    that unmuted sibling reads `state='raised'` even though the Inbox
+    already has nothing to show for either one. Reading `muted_keys`
+    directly is the one source both paths actually need."""
     from app import notices
     from app.checks import mcp as mcp_checks
 
@@ -754,7 +803,8 @@ async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
     if finding is None:
         return None
     try:
-        row, is_new = await notices.record(
+        muted = finding.key in await notices.muted_keys(pool, mcp_checks.CHANGES)
+        _row, is_new = await notices.record(
             pool, finding, check_name=mcp_checks.CHANGES, turn_id=None, firing_id=None
         )
     except Exception as exc:
@@ -763,10 +813,10 @@ async def _notice(pool, event_id: Any, kind: str, meta: dict) -> str | None:
             f"The notice for the owner could not be filed ({type(exc).__name__}); the change is "
             "in the governance ledger."
         )
+    if muted:
+        return "The owner has muted notices like this; the change is in the governance ledger."
     if is_new:
         return "A notice about this is in the owner's Inbox."
-    if row.state == notices.MUTED:
-        return "The owner has muted notices like this one; the change is in the governance ledger."
     return "This was added to a notice already in the owner's Inbox."
 
 

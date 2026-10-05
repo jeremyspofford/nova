@@ -671,7 +671,14 @@ async def _send_call(endpoint, params, headers, *, timeout_s, progress) -> dict:
                 reachable=True,
             )
         if result.get("inputRequests"):
-            asked = ", ".join(sorted(str(k) for k in result["inputRequests"]))
+            # `scrub_credentials`'s dict/list walk only ever touches VALUES
+            # (by design — see its docstring); `inputRequests`'s own KEYS are
+            # what land in this reason, so a server that echoed the token
+            # back AS a key sails through unless scrubbed here explicitly
+            # (ruling G, fix round 2).
+            asked = scrub_credentials(
+                ", ".join(sorted(str(k) for k in result["inputRequests"])), endpoint
+            )
             raise ClientError(
                 f"{endpoint.name} asked for input this client cannot give ({asked}); "
                 "Nova declares no elicitation, sampling or roots",
@@ -728,6 +735,28 @@ def _check_credentials(endpoint: Endpoint) -> None:
 # Minor 2: both a bare credential missed and a short value over-redacted).
 _MIN_CREDENTIAL_CHARS = 8
 
+# A header's NAME must say so before its VALUE is ever a scrub candidate
+# (ruling T5-B-REVISED). Round 1 treated every extra header's value as a
+# candidate regardless of name, which rewrote PROTOCOL strings the client
+# itself reads: a legacy server's `X-Api-Version: 2025-11-25` failed to
+# connect ("unsupported protocol version '[redacted]'"), a modern one's
+# `X-Mode: complete` failed ("resultType '[redacted]'"), and a non-secret
+# `X-Org: acme-corporation` vanished from a tool result. Spec §5's own words
+# for which header NAMES carry a credential, for trace masking — ONE
+# predicate: S37a Task 6's trace masking uses this SAME function for header
+# names, so there is only one place that decides it.
+_CREDENTIAL_HEADER_WORDS = ("token", "secret", "password", "auth", "cookie", "key")
+
+
+def is_credential_header(name: str) -> bool:
+    """Whether a header's NAME says its value is a credential (ruling
+    T5-B-REVISED, spec §5). Case-insensitive substring match against
+    `_CREDENTIAL_HEADER_WORDS` — `X-Api-Key`, `Authorization`,
+    `X-Session-Cookie` all match; `X-Api-Version`, `X-Mode`, `X-Org` do
+    not, however long or credential-shaped their VALUE happens to look."""
+    lowered = name.lower()
+    return any(word in lowered for word in _CREDENTIAL_HEADER_WORDS)
+
 
 def credential_candidates(token: str | None, headers: Mapping[str, str]) -> tuple[str, ...]:
     """Every exact substring a server could echo back of THIS credential set,
@@ -735,16 +764,18 @@ def credential_candidates(token: str | None, headers: Mapping[str, str]) -> tupl
     the store's own `servers._scrub` both work from, so a candidate is never
     computed two different ways.
 
-    Candidates (ruling T5-B): the token, every extra header value, and — for
-    a candidate shaped `<one word> <rest>` (a scheme word then a space:
-    `Bearer abc…`, `Token abc…`, `Basic dXNl…`) — also `<rest>` on its own,
-    because a server may echo the credential ALONE, without the scheme word
-    in front of it. Only a candidate of `_MIN_CREDENTIAL_CHARS` or more
+    Candidates (ruling T5-B, revised by T5-B-REVISED): the token ALWAYS, and
+    a header's value only when `is_credential_header` says its NAME is one —
+    and, for a candidate shaped `<one word> <rest>` (a scheme word then a
+    space: `Bearer abc…`, `Token abc…`, `Basic dXNl…`), also `<rest>` on its
+    own, because a server may echo the credential ALONE, without the scheme
+    word in front of it. Only a candidate of `_MIN_CREDENTIAL_CHARS` or more
     counts. Sorted longest first, so replacing one candidate never leaves a
     shorter one's match sitting inside what a longer candidate already
     covered."""
     found: set[str] = set()
-    for value in (token, *headers.values()):
+    values = [token, *(v for name, v in headers.items() if is_credential_header(name))]
+    for value in values:
         if not value:
             continue
         found.add(value)
@@ -770,10 +801,19 @@ def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
 
     Called where server text ENTERS the client (ruling T5-A: one source,
     the client's decode boundary), so every reason, result, progress line
-    and tool list this module builds afterwards is clean BY CONSTRUCTION —
-    no caller downstream, in this module or in Tasks 7/9, has to remember
-    to scrub again. The store's `servers._scrub` is a thin second pass over
-    its OWN composed text, built from `credential_candidates` above.
+    and tool list this module builds from a decoded VALUE afterwards is
+    clean BY CONSTRUCTION — no caller downstream, in this module or in
+    Tasks 7/9, has to remember to scrub again.
+
+    That guarantee covers VALUES only, by design (below) — it does NOT
+    cover a reason composed by joining a decoded structure's KEYS. There is
+    exactly one such place, `_send_call`'s `inputRequests` reason (ruling G):
+    it scrubs itself explicitly, right there, because a server that echoes
+    the token back as a key would otherwise sail through unscrubbed. A
+    reason built this same way in the future must do the same — the
+    alternative is a second general-purpose scrub for keys, which nothing
+    today needs. The store's `servers._scrub` is a thin second pass over its
+    OWN composed text, built from `credential_candidates` above.
 
     A dict or list is walked ITERATIVELY, with an explicit stack rather than
     a recursive call, so the cost is linear in the value's size regardless
@@ -885,10 +925,14 @@ async def _post(
         and ("result" in parsed or "error" in parsed)
     ):
         return status, response_headers, scrub_credentials(parsed, endpoint), ""
-    # Scrubbed BEFORE the 200-character clip (ruling T5-A): an echo of this
-    # endpoint's own credentials straddling the cut would otherwise leave an
-    # unscrubbed prefix in the excerpt (review Minor 1).
-    excerpt = scrub_credentials(" ".join(text.split()), endpoint)
+    # Scrubbed BEFORE the 200-character clip (ruling T5-A, review Minor 1):
+    # an echo straddling the cut would otherwise leave an unscrubbed prefix.
+    # And scrubbed BEFORE whitespace is collapsed (ruling C, fix round 2):
+    # collapsing first turns a credential with two internal spaces into a
+    # DIFFERENT string than the one in `credential_candidates`, so the exact
+    # substring match misses it entirely — collapsing is purely cosmetic
+    # and must never run on text the scrub still needs to see raw.
+    excerpt = " ".join(scrub_credentials(text, endpoint).split())
     return status, response_headers, None, excerpt[:200]
 
 

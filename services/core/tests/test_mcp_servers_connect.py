@@ -771,6 +771,152 @@ async def test_notice_honesty_is_new_folded_live_and_folded_muted(pool):
             pool, name="github", url=OTHER + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
         )
     assert folded_muted.notice == (
-        "The owner has muted notices like this one; the change is in the governance ledger."
+        "The owner has muted notices like this; the change is in the governance ledger."
     )
     assert await pool.fetchval("SELECT count(*) FROM notices") == 1
+
+
+# ── fix round 2: ruling A, notice honesty decides from the CONDITION's mute ──
+
+
+async def test_a_notice_born_muted_says_so_even_though_it_is_new(pool):
+    """Re-review Important A, reproduction 1: F17 keys a finding on (kind,
+    server), never on the event, so muting "Nova re-pointed github A->B"
+    silences every LATER re-point too — including one with different
+    facts (A->C), which `record` inserts as a brand NEW row (a different
+    fingerprint) that is itself born muted. `is_new` alone said "a notice
+    about this is in the owner's Inbox", which was false: the Inbox page
+    is empty for both."""
+    with planted(fake.FakeSpec(tools=(LIST,))), planted(fake.FakeSpec(tools=(LIST,)), origin=OTHER):
+        await _owner_github(pool)
+        first = await servers.connect(
+            pool, name="github", url=OTHER + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    assert first.notice == "A notice about this is in the owner's Inbox."
+    [row] = await pool.fetch("SELECT id FROM notices")
+    await notices.set_muted(pool, row["id"], True)
+    third = "http://third.mcp.invalid"
+    with planted(fake.FakeSpec(tools=(LIST,))), planted(fake.FakeSpec(tools=(LIST,)), origin=third):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        second = await servers.connect(
+            pool, name="github", url=third + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    assert second.notice == (
+        "The owner has muted notices like this; the change is in the governance ledger."
+    )
+    assert await pool.fetchval("SELECT count(*) FROM notices") == 2
+    assert [n.title for n in await notices.recent(pool)] == []
+
+
+async def test_a_fold_onto_the_unmuted_twin_of_a_muted_condition_says_muted(pool):
+    """Re-review Important A, reproduction 2: TWO live rows share one
+    finding_key (A->B, A->C — different facts, different fingerprints).
+    The owner mutes the A->B row; `set_muted` stamps ONLY that row's
+    `state`, never its unmuted twin's. A fold onto the A->C row (the SAME
+    A->C transition happening again) leaves that row's own `state` at
+    'raised' — but the Inbox page is empty for both, because the mute is
+    on the shared CONDITION, not the row."""
+    with planted(fake.FakeSpec(tools=(LIST,))), planted(fake.FakeSpec(tools=(LIST,)), origin=OTHER):
+        await _owner_github(pool)
+        await servers.connect(
+            pool, name="github", url=OTHER + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    third = "http://third.mcp.invalid"
+    with planted(fake.FakeSpec(tools=(LIST,))), planted(fake.FakeSpec(tools=(LIST,)), origin=third):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        await servers.connect(
+            pool, name="github", url=third + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    rows = {r["title"]: r["id"] for r in await pool.fetch("SELECT id, title FROM notices")}
+    b_notice_id = next(v for t, v in rows.items() if OTHER in t)
+    await notices.set_muted(pool, b_notice_id, True)
+    assert [n.title for n in await notices.recent(pool)] == []
+    with planted(fake.FakeSpec(tools=(LIST,))), planted(fake.FakeSpec(tools=(LIST,)), origin=third):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        again = await servers.connect(
+            pool, name="github", url=third + "/mcp", added_by=servers.BY_NOVA, actor="jeremy"
+        )
+    assert again.notice == (
+        "The owner has muted notices like this; the change is in the governance ledger."
+    )
+    c_row = await pool.fetchrow(
+        "SELECT state, repeats FROM notices WHERE title LIKE $1", f"%{third}%"
+    )
+    assert c_row["state"] == "raised" and c_row["repeats"] == 2
+    assert [n.title for n in await notices.recent(pool)] == []
+
+
+# ── fix round 2: ruling D, no echo of even the scheme ────────────────────────
+
+
+async def test_a_credential_shaped_scheme_is_refused_without_being_echoed(pool):
+    """Re-review Important D: a scheme-less paste puts a credential where
+    the scheme goes — a GitHub PAT, a GitLab `glpat-…`, a Slack `xoxb-…`
+    all look exactly like this. The refusal names only that it is not an
+    http/https address, nothing of what was actually typed."""
+    credential = "Ghp0123456789abcdefABCDEF"
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(
+            pool,
+            name="github",
+            url=f"{credential}:x@gh.mcp.invalid/mcp",
+            added_by=servers.BY_OWNER,
+            actor="jeremy",
+        )
+    assert caught.value.reason == "that is not an http or https address"
+    assert credential.lower() not in caught.value.reason.lower()
+
+
+# ── fix round 2: ruling E, an IDNA-invalid host is a stated refusal ─────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://xn--.invalid/mcp",  # idna.IDNAError: malformed A-label, on .host access
+        "http://☃‍.invalid/mcp",  # httpx.InvalidURL: invalid IDNA hostname
+    ],
+)
+async def test_an_idna_invalid_host_is_refused_before_the_probe(pool, url):
+    """Re-review Important E: syntactically fine to `urlsplit`, but httpx
+    and idna re-validate and re-encode the host LAZILY — on `.host` access
+    or deep in the real connection path, never at `httpx.URL(url)`
+    construction — so these reached a raw, uncaught exception from inside
+    `client.probe` at 4c88ff32. Nothing is planted at this origin: if this
+    reached the probe, it would raise a transport-level error, not the
+    stated ServerError asserted here."""
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(
+            pool, name="github", url=url, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+    assert caught.value.reason == "that is not a usable http or https address"
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+# ── fix round 2: ruling F, the sixth refusal clears its own chain too ───────
+
+
+async def test_an_nfkc_invalid_netloc_leaks_no_password_via_cause_or_context(pool):
+    """Re-review Important F: `urlsplit` itself raises ValueError for a
+    netloc invalid under NFKC normalization, and that ValueError's OWN
+    message quotes the whole netloc — password included. `from None`
+    alone clears `__cause__`; this one still raised INSIDE its own
+    `except`, so `__context__` was the password-bearing ValueError
+    regardless."""
+    password = "pa＃ss"
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(
+            pool,
+            name="github",
+            url=f"http://user:{password}@gh.mcp.invalid/mcp",
+            added_by=servers.BY_OWNER,
+            actor="jeremy",
+        )
+    assert caught.value.reason == "that is not a usable http or https address"
+    assert caught.value.__cause__ is None and caught.value.__context__ is None

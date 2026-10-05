@@ -863,3 +863,155 @@ async def test_an_sse_progress_notification_scrubs_the_servers_own_credential():
         client.unplant(handle)
     assert result.text == "done"
     assert seen and token not in seen[0] and "[redacted]" in seen[0]
+
+
+# -- fix round 2: ruling T5-B-REVISED, B, C, G ---------------------------------
+
+
+def test_is_credential_header_matches_spec_5_words_only():
+    for name in (
+        "X-Api-Key",
+        "Authorization",
+        "X-Session-Cookie",
+        "X-Auth-Token",
+        "x-secret",
+        "X-Password",
+    ):
+        assert client.is_credential_header(name), name
+    for name in ("X-Api-Version", "X-Mode", "X-Org", "Content-Type", "X-MCP-Toolsets"):
+        assert not client.is_credential_header(name), name
+
+
+async def test_a_legacy_servers_protocol_version_is_not_mangled_by_a_same_valued_header():
+    """Ruling T5-B-REVISED: round 1 treated every extra header's VALUE as a
+    scrub candidate regardless of its name. A caller's own `X-Api-Version:
+    2025-11-25` then matched the SERVER'S legitimate `protocolVersion`
+    field — the same string, since that is what the legacy handshake
+    offers and the fake echoes back — and scrubbed it to `[redacted]`,
+    which is not in `KNOWN_LEGACY` and failed the whole handshake."""
+    handle = client.plant({ORIGIN: fake.transport(fake.FakeServer(fake.FakeSpec(era="legacy")))})
+    try:
+        found = await client.probe(
+            client.Endpoint(name="srv", url=URL, headers={"X-Api-Version": "2025-11-25"})
+        )
+    finally:
+        client.unplant(handle)
+    assert found.protocol == "legacy:2025-11-25"
+
+
+async def test_a_modern_servers_resulttype_is_not_mangled_by_a_same_valued_header():
+    """Same shape, the modern era: `X-Mode: complete` used to scrub every
+    `"complete"` out of a decoded answer, including `resultType`, and
+    `_send_call` raised 'resultType [redacted]', which this client does not
+    know."""
+    handle = client.plant({ORIGIN: fake.transport(fake.FakeServer(fake.FakeSpec(tools=(ECHO,))))})
+    try:
+        result = await client.call(
+            client.Endpoint(name="srv", url=URL, headers={"X-Mode": "complete"}),
+            "echo",
+            {"text": "hi"},
+        )
+    finally:
+        client.unplant(handle)
+    assert result.text == "hello"
+
+
+async def test_a_non_secret_header_value_survives_in_a_tool_result():
+    async def respond(sent):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={
+                "jsonrpc": "2.0",
+                "id": sent.get("id"),
+                "result": {
+                    "resultType": "complete",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "org: acme-corporation"}],
+                },
+            },
+        )
+
+    transport = _Scripted("tools/call", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        result = await client.call(
+            client.Endpoint(name="srv", url=URL, headers={"X-Org": "acme-corporation"}), "echo", {}
+        )
+    finally:
+        client.unplant(handle)
+    assert result.text == "org: acme-corporation"
+
+
+async def test_an_api_key_echo_and_a_bare_token_after_a_word_are_both_still_scrubbed():
+    """The credential-NAMED side of ruling T5-B-REVISED: an `X-Api-Key`
+    value and an `Authorization: Token <rest>` value given as an EXTRA
+    header (no `token=`) are still candidates — including `<rest>` alone,
+    the ruling's own existing rule, unaffected by the header-name change."""
+
+    async def respond(sent):
+        return httpx.Response(
+            401,
+            text="bad X-Api-Key: hdr-secret-value; also rejected s3cr3t-value-123",
+            headers={"content-type": "text/plain"},
+        )
+
+    transport = _Scripted("server/discover", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(
+                client.Endpoint(
+                    name="srv",
+                    url=URL,
+                    headers={
+                        "X-Api-Key": "hdr-secret-value",
+                        "Authorization": "Token s3cr3t-value-123",
+                    },
+                )
+            )
+    finally:
+        client.unplant(handle)
+    assert "hdr-secret-value" not in caught.value.reason
+    assert "s3cr3t-value-123" not in caught.value.reason
+
+
+async def test_a_credential_with_two_internal_spaces_is_scrubbed_whole_not_half():
+    """Ruling C: the excerpt used to be whitespace-collapsed BEFORE the
+    scrub, so a credential with two internal spaces no longer matched the
+    exact-substring candidate after collapsing — leaking its first half."""
+
+    async def respond(sent):
+        return httpx.Response(
+            401, text="refused key-part-one  key-part-two", headers={"content-type": "text/plain"}
+        )
+
+    transport = _Scripted("server/discover", respond)
+    handle = client.plant({ORIGIN: transport})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.probe(
+                client.Endpoint(
+                    name="srv", url=URL, headers={"X-Secret-Key": "key-part-one  key-part-two"}
+                )
+            )
+    finally:
+        client.unplant(handle)
+    assert "key-part-one" not in caught.value.reason
+    assert "[redacted]" in caught.value.reason
+
+
+async def test_inputrequests_echoing_the_token_as_a_key_is_scrubbed():
+    """Ruling G: `scrub_credentials`'s dict/list walk only ever touches
+    VALUES; `inputRequests`'s own KEYS land straight in this reason unless
+    it scrubs itself explicitly."""
+    token = "ghp_SECRETTOKEN1234"
+    tool = fake.FakeTool("echo", results=({"input_requests": {token: "needed"}},))
+    handle = client.plant({ORIGIN: fake.transport(fake.FakeServer(fake.FakeSpec(tools=(tool,))))})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.call(client.Endpoint(name="srv", url=URL, token=token), "echo", {})
+    finally:
+        client.unplant(handle)
+    assert token not in caught.value.reason
+    assert "[redacted]" in caught.value.reason
