@@ -34,7 +34,8 @@ from app.adapters import (
     ollama,
     openai_chat,
 )
-from app.adapters.base import DECISIONS
+from app.adapters.base import CONNECT_PHASE_ERRORS, DECISIONS
+from app.cache import TTLCache
 from app.catalog_row import (  # noqa: F401 — the shared shape
     BASES,
     LIBRARY,
@@ -176,7 +177,13 @@ def local_row(
     row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx, size_bytes=fit_ctx["sizes"].get(name))
     # check_update: an installed model can be compared against its source
     # (POST /admin/catalog/drift) — the page derives the button from this.
-    row["actions"] = ["use", "probe", "check_update", "remove"]
+    # An embedding model completes nothing, so it is never offered as the
+    # chat model (2026-10-05: nomic-embed-text carried a Use button). Unread
+    # capabilities — a show that failed — are no denial.
+    embeds_only = caps.get("embedding", {}).get("value") and not caps.get("completion", {}).get(
+        "value"
+    )
+    row["actions"] = ([] if embeds_only else ["use"]) + ["probe", "check_update", "remove"]
     return row
 
 
@@ -389,6 +396,21 @@ async def _remember_models(
 
 SHOW_DEADLINE_S = 15.0
 
+#: How long the catalogue remembers a provider nobody could reach (its
+#: connect phase failed) before dialing it again. Every page that reads the
+#: catalogue — Models, the chat picker, Settings, the vision picker — used to
+#: wait out the whole connect timeout on a machine that is off, on every read
+#: (2026-10-05: 10 s a read with the Dell asleep). A provider that ANSWERED,
+#: even with a refusal, is not remembered: it was fast, and a new key fixes it
+#: at once. `?fresh=1` (the Models page's Refresh) always dials.
+UNREACHABLE_TTL_S = 60.0
+UNREACHABLE = TTLCache(UNREACHABLE_TTL_S, max_entries=64)
+
+
+def clear() -> None:
+    """Forget every remembered outage (the tests' clean slate)."""
+    UNREACHABLE.clear()
+
 
 def _show_timed_out(names: list[str]) -> dict[str, dict]:
     note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s"
@@ -418,6 +440,7 @@ async def build(
     fit_context: Callable,
     listing_for: Callable,
     latest_probes: Callable,
+    fresh: bool = False,
 ) -> dict:
     """The whole catalogue. `fit_context(app, pool, engine_row)`,
     `listing_for(app, pool, row)` and `latest_probes(pool, names, *,
@@ -485,11 +508,21 @@ async def build(
     async def one(provider_row: dict) -> tuple[dict, list[dict]]:
         name = provider_row["name"]
         failed = {"key": name, "ok": False, "rows": 0, "fetched_at": fetched_at}
+        # Keyed by the address too: a provider moved to a new URL is a new
+        # dial, never the old address's outage.
+        outage_key = (name, providers.base_url_of(provider_row))
+        remembered = None if fresh else UNREACHABLE.get(outage_key)
+        if remembered is not None:
+            note, tried_at = remembered
+            # The words of the real attempt, stamped with when it was made.
+            return {**failed, "note": note, "fetched_at": tried_at, "cached": True}, []
         try:
             listing = await listing_for(app, pool, provider_row)
         except ListingUnavailable as exc:
             return {**failed, "note": str(exc)}, []
         except ProviderRefused as exc:
+            if isinstance(exc.__cause__, CONNECT_PHASE_ERRORS):
+                UNREACHABLE.put(outage_key, exc.detail, fetched_at)
             return {**failed, "note": exc.detail}, []
         except Exception as exc:  # a bug or a DB error: NAMED, never an anonymous "provider"
             logger.exception("catalogue: provider %s raised", name)
