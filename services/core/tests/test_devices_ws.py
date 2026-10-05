@@ -27,6 +27,7 @@ import json
 import re
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncpg
@@ -2463,3 +2464,154 @@ async def test_a_cut_unasked_device_list_keeps_each_probes_time_before_its_lines
     assert dated in checked.result
     assert checked.result.index(dated) < checked.result.index("how it runs:")
     await _close(conn, task)
+
+
+# -- S42b Task 22: an unasked device_list backs only the agent lines she was shown
+#
+# Carried from Task 21's re-review — S42a's I2 class, reopened when Task 21
+# made device_list long: an unasked check hands her the first 600 characters,
+# but device_list records {"device", "connected"} for EVERY agent it lists, and
+# the state guard reads any such fact as "she looked". device_list now declares
+# how to read which agent lines a cut result still shows (Tool.device_line_shown),
+# as machine_status does, so live_facts._shown_facts keeps only those agents'
+# facts.
+
+
+class _ListedPlant(machines.GatewayPlant):
+    """Agents and knocks from lists, no database."""
+
+    def __init__(self, agents, knocks=()) -> None:
+        self._agents, self._knocks = list(agents), list(knocks)
+
+    async def agents(self, app):
+        return [dict(agent) for agent in self._agents]
+
+    async def knocks(self, app):
+        return [dict(knock) for knock in self._knocks]
+
+
+def _listed(name: str, platform: str, facts: dict | None, *, connected: bool = True) -> dict:
+    return device_facts.agent_view(
+        name=name,
+        platform=platform,
+        hostname=name.upper(),
+        connected=connected,
+        last_seen=None,
+        facts=facts,
+        facts_at=None,
+    )
+
+
+def _three_agents() -> list[dict]:
+    """alpha's block is long (a probed Windows agent: its probe time, how it
+    runs, elevation, WSL), so the agents after it start well past 600."""
+    probed = {
+        **device_facts.validate_auth(AUTH_FACTS),
+        **device_facts.validate_frame(PROBED),
+    }
+    return [
+        _listed("alpha", "windows", probed),
+        _listed("bravo", "windows", None, connected=False),
+        _listed("charlie", "linux", None),
+    ]
+
+
+async def _device_list_with(plant, *, unasked: bool):
+    """device_list on `plant`: her call's whole result, or a note's unasked
+    check of it — (result, the check's span facts, the turn's sink)."""
+    token = machines.PLANT.set(plant)
+    try:
+        if not unasked:
+            result, ok = await tools.dispatch("device_list", {}, _ctx(None))
+            assert ok is True
+            return result, None, None
+        turn, sink = _Turn(), []
+        (check,) = await live_facts.run(
+            [live_facts.LiveCall("device_list", {}, "devices")], turn, _ctx(None, facts=sink)
+        )
+        (span,) = turn.spans
+        return check.result, span.meta.get("facts"), sink
+    finally:
+        machines.PLANT.reset(token)
+
+
+async def test_an_unasked_device_list_clipped_at_600_backs_only_the_lines_she_was_shown():
+    plant = _ListedPlant(_three_agents())
+    full, _facts, _sink = await _device_list_with(plant, unasked=False)
+    cut = live_facts.MAX_RESULT_CHARS
+    # The premise, measured: alpha's whole line is inside the cut (its block
+    # is cut further down), bravo's and charlie's lines start past it.
+    assert full.index("\n", full.index("\n- alpha (") + 1) <= cut < full.index("\n- bravo (")
+    result, facts, sink = await _device_list_with(plant, unasked=True)
+    assert result.endswith(f"[…cut off at {cut} characters]")
+    assert "- alpha (" in result and "bravo" not in result and "charlie" not in result
+    assert facts == [{"device": "alpha", "connected": True}]
+    assert sink == facts
+    # Shown whole, nothing is withheld.
+    whole = _ListedPlant(_three_agents()[1:])
+    _result, facts, _sink = await _device_list_with(whole, unasked=True)
+    assert facts == [
+        {"device": "bravo", "connected": False},
+        {"device": "charlie", "connected": True},
+    ]
+
+
+async def test_an_agent_whose_line_is_cut_mid_way_backs_nothing(monkeypatch):
+    """bravo's head is in what she read, its connection is not: "- bravo
+    (win" — its fact is withheld, alpha's kept."""
+    plant = _ListedPlant(_three_agents())
+    full, _facts, _sink = await _device_list_with(plant, unasked=False)
+    cut = full.index("\n- bravo (") + len("\n- bravo (win")
+    monkeypatch.setattr(live_facts, "MAX_RESULT_CHARS", cut)
+    result, facts, _sink = await _device_list_with(plant, unasked=True)
+    assert "- bravo (win" in result and "offline" not in result.split("- bravo (")[1]
+    assert facts == [{"device": "alpha", "connected": True}]
+
+
+async def test_every_line_device_list_writes_is_read_back_whole():
+    """device_line_shown reads the format device_list writes; if they drift,
+    every cut check drops its agents' facts without a word (it fails closed),
+    so they are pinned together: each agent's whole line is found, shown up
+    to its last character, and not shown one character short."""
+    full = (await _device_list_with(_ListedPlant(_three_agents()), unasked=False))[0]
+    for name in ("alpha", "bravo", "charlie"):
+        start = full.index(f"\n- {name} (") + 1
+        end = full.find("\n", start)
+        end = len(full) if end == -1 else end
+        assert device_tools.device_line_shown(name, full, len(full)), name
+        assert device_tools.device_line_shown(name, full, end), name
+        assert not device_tools.device_line_shown(name, full, end - 1), name
+    assert not device_tools.device_line_shown("delta", full, len(full))  # not listed
+
+
+async def test_a_knock_line_of_the_same_name_must_be_shown_whole_too():
+    """A revoked agent named like a live one writes "- dell (revoked …)": one
+    more line that could be the live dell's, so the live one is confirmed only
+    when that line is shown whole as well (fail closed)."""
+    knock = {
+        "name": "dell",
+        "platform": "linux",
+        "facts": None,
+        "revoked_at": datetime(2026, 10, 1, tzinfo=UTC),
+        "last_refused_at": datetime(2026, 10, 5, tzinfo=UTC),
+        "knocking": True,
+    }
+    plant = _ListedPlant([_listed("dell", "linux", None)], knocks=[knock])
+    full = (await _device_list_with(plant, unasked=False))[0]
+    live_end = full.index("\n", full.index("\n- dell (linux)") + 1)
+    assert "\n- dell (revoked " in full
+    assert device_tools.device_line_shown("dell", full, len(full))
+    assert not device_tools.device_line_shown("dell", full, live_end)
+
+
+async def test_a_device_list_line_that_runs_on_past_a_newline_is_not_confirmed_shown():
+    broken = {**AUTH_FACTS, "os": {**AUTH_FACTS["os"], "version": "Windows 11\nPro"}}
+    agent = _listed("pc-one", "windows", None)
+    agent["os"] = device_facts.os_label(broken)
+    full = (await _device_list_with(_ListedPlant([agent]), unasked=False))[0]
+    assert "\nPro) — connected" in full
+    assert not device_tools.device_line_shown("pc-one", full, len(full))
+
+
+def test_device_list_declares_how_its_lines_are_read():
+    assert tools.REGISTRY["device_list"].device_line_shown is device_tools.device_line_shown

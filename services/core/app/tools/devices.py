@@ -34,7 +34,13 @@ import posixpath
 import re
 
 from app import db, device_facts, devices, devices_ws, envelopes, machines
-from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
+from app.tools.base import (
+    RESULT_KIND_LISTING,
+    Tool,
+    ToolContext,
+    ToolFailure,
+    listing_line_shown,
+)
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
 # the plan) because a command with no answer must become a STATED failure, not
@@ -287,6 +293,15 @@ def _require_ok(result: dict, row) -> dict:
 # -- the executors -----------------------------------------------------------
 
 
+# How each line of device_list's listing begins: a device (an agent, or a
+# revoked one that knocked), the lines under an agent (what she needs to act
+# on it), and the knock section's header. device_line_shown reads a listing
+# back by these, so both the writer and the reader take them from here.
+_DEVICE_LINE = "- "
+_ACTING_INDENT = "    "
+_KNOCKS_HEADER = "Revoked, but their agents knocked in the last day:"
+
+
 async def device_list(args: dict, ctx: ToolContext) -> str:
     """Nova's agents as the plant lists them (S42b P17 — in an eval replay,
     its declared devices alone), each with what she needs to act on it
@@ -296,12 +311,13 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
     on the turn — the record every device tool leaves, so what she says
     about its connection is backed — and only once the whole listing is
     built: a call that fails after reading the hub was shown no line, and
-    must back no claim."""
+    must back no claim. Run unasked, a listing clipped short keeps only the
+    facts of agents whose lines it kept (device_line_shown)."""
     agents = await machines.plant().agents(ctx.app)
     lines: list[str] = []
     for agent in agents:
         lines.append(_agent_line(agent))
-        lines.extend(f"    {line}" for line in agent["acting"])
+        lines.extend(f"{_ACTING_INDENT}{line}" for line in agent["acting"])
     knocks = await _knocks(ctx.app)
     out = (
         ["Paired devices:", *lines]
@@ -309,7 +325,7 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
         else ["No device is paired with Nova (show_setup_qr's add_machine card pairs one)."]
     )
     if knocks:
-        out += ["Revoked, but their agents knocked in the last day:", *knocks]
+        out += [_KNOCKS_HEADER, *knocks]
     if ctx.facts_sink is not None:
         for agent in agents:
             ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
@@ -332,7 +348,7 @@ def _build_words(agent: dict) -> str:
 def _agent_line(agent: dict) -> str:
     status = "connected" if agent["connected"] else "offline"
     line = (
-        f"- {agent['name']} ({device_facts.place(agent)}) — {status}, "
+        f"{_DEVICE_LINE}{agent['name']} ({device_facts.place(agent)}) — {status}, "
         f"last seen {agent['last_seen'] or 'never'}"
     )
     if agent["hub"]:
@@ -376,7 +392,7 @@ async def _knocks(app) -> list[str]:
             if r["knocking"]
             else f"no knock since {knocked}: it stopped then, or can no longer reach Nova"
         )
-        line = f"- {r['name']} (revoked {r['revoked_at'].isoformat()}): {state}"
+        line = f"{_DEVICE_LINE}{r['name']} (revoked {r['revoked_at'].isoformat()}): {state}"
         facts = r["facts"] if isinstance(r["facts"], dict) else None
         if facts is not None and isinstance(facts.get("service"), dict):
             when = facts.get("probed_at") or "an unknown time"
@@ -385,6 +401,29 @@ async def _knocks(app) -> list[str]:
             line += f"; {_BEFORE_S42B_LINUX}"
         out.append(line)
     return out
+
+
+def device_line_shown(name: str, result: str, shown: int) -> bool:
+    """Did the first `shown` characters of device_list's `result` hold agent
+    `name`'s WHOLE line — "- <name> (<place>) — connected|offline, …", the
+    line that states its connection? device_list's Tool.device_line_shown:
+    an unasked check keeps that agent's {"device", "connected"} fact only
+    when this says yes (live_facts._shown_facts) — S42a's I2 class, carried
+    from Task 21's re-review once device_list grew past the 600 characters
+    a check hands her. The lines under it (how it runs, elevation, WSL)
+    state no connection, so a cut among them costs its fact nothing.
+
+    The scan machine_status's reader uses (tools.base.listing_line_shown),
+    so it fails closed the same ways: no such line, a line that runs on past
+    a newline this format never writes, or ANY line with that head ending
+    past `shown` — and a revoked agent's knock line with the same name
+    ("- <name> (revoked …)") is one more such line."""
+    return listing_line_shown(
+        f"{_DEVICE_LINE}{name} (",
+        result,
+        shown,
+        (_DEVICE_LINE, _ACTING_INDENT, _KNOCKS_HEADER),
+    )
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
@@ -587,6 +626,10 @@ TOOLS: tuple[Tool, ...] = (
         # a directory, installed apps): their result IS a listing, and the
         # presented-listing guard reads that declaration rather than a name.
         result_kind=RESULT_KIND_LISTING,
+        # One result, one line per agent, each leaving a connectivity fact: a
+        # live check keeps an agent's fact only when its line was shown (S42b
+        # Task 22, the S42a I2 class carried from Task 21's re-review).
+        device_line_shown=device_line_shown,
     ),
     Tool(
         name="device_info",

@@ -37,7 +37,13 @@ import logging
 from datetime import UTC, datetime
 
 from app import device_facts, machines
-from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
+from app.tools.base import (
+    RESULT_KIND_LISTING,
+    Tool,
+    ToolContext,
+    ToolFailure,
+    listing_line_shown,
+)
 
 logger = logging.getLogger("core")
 
@@ -331,23 +337,10 @@ def device_line_shown(name: str, result: str, shown: int) -> bool:
     agent reported can carry one); and when ANY line that could be this
     agent's ends past `shown` — "dell"'s head also begins the line of an agent
     named "dell (old)", and a line that cannot be told apart from another is
-    not confirmed shown.
+    not confirmed shown. The scan is the one device_list's reader uses too
+    (tools.base.listing_line_shown, S42b Task 22).
     """
-    head = f"{_AGENT_LINE}{name} ("
-    found = False
-    start = result.find(head)
-    while start != -1:
-        if start == 0 or result[start - 1] == "\n":
-            end = result.find("\n", start + len(head))
-            if end == -1:
-                end = len(result)
-            elif not result.startswith((_AGENT_LINE, _MACHINE_LINE), end + 1):
-                return False
-            if end > shown:
-                return False
-            found = True
-        start = result.find(head, start + 1)
-    return found
+    return listing_line_shown(f"{_AGENT_LINE}{name} (", result, shown, (_AGENT_LINE, _MACHINE_LINE))
 
 
 async def machine_configure(args: dict, ctx: ToolContext) -> str:
