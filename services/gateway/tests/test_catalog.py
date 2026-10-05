@@ -276,6 +276,32 @@ async def test_provider_rows_carry_declared_capabilities_and_third_party_benchma
     assert {s["key"]: s["rows"] for s in body["sources"]}["openrouter"] == 1
 
 
+async def test_a_router_rows_minus_one_is_no_price(client, local, mount_backend):
+    # OpenRouter lists -1 on router rows for "varies per request"; stated as a
+    # price it read "$-1,000,000 per 1M" and sorted them as the cheapest.
+    # 0 (a free model) is a price and stays.
+    fake, created = await _add_provider(
+        client,
+        mount_backend,
+        "or2",
+        models_body={
+            "object": "list",
+            "data": [
+                {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}},
+                {"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}},
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    rows = _rows_by_id((await client.get("/admin/catalog")).json())
+
+    auto = rows["or2:openrouter/auto"]["facts"]
+    assert "price_prompt" not in auto and "price_completion" not in auto
+    free = rows["or2:free/model"]["facts"]
+    assert free["price_prompt"]["value"] == 0.0 and free["price_completion"]["value"] == 0.0
+
+
 async def test_a_refusing_provider_is_a_stated_source_not_a_broken_page(
     client, local, mount_backend
 ):
