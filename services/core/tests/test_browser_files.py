@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import logging
 import os
 import time
 from pathlib import Path
@@ -547,16 +548,22 @@ def test_a_failing_lstat_is_a_stated_handoff_error(dirs, monkeypatch):
 
 def test_safe_name_is_linear_on_a_hostile_name():
     # M2's fixed-point strip().lstrip(".") loop re-walked the whole,
-    # uncapped name every round: 1.5 s at 256 KB, quadratic beyond.
-    # Measured on this machine (best of 3, 2026-10-05): the alternating
-    # ". " shape took 0.039 s at 4,000,000 chars, and the dots-then-
-    # "a.txt" shape took 0.026 s -- budget set past 10x the slower one.
+    # uncapped name every round: 1.5 s at 256 KB, quadratic beyond. The
+    # fix round 2 comment here claimed 0.039 s / 0.026 s against a 0.4 s
+    # budget -- never a real measurement under this suite: a later
+    # re-review measured 0.28-0.34 s in-process and 0.57 s under pytest on
+    # this N150, a ~1.2-1.5x margin against 0.4 s, a flake waiting to
+    # redden every lane's full suite (S38 Task 3 carry). Measured here
+    # instead (best of 3, under pytest, this N150, 2026-10-05): the
+    # alternating ". " shape took 0.286 s at 4,000,000 chars, the
+    # dots-then-"a.txt" shape 0.268 s. Budget set to 2.0 s, >=5x the
+    # slower of the two measured here.
     hostile = [(". " * 2_000_000, "download"), ("." * 4_000_000 + "a.txt", "a.txt")]
     for name, expected in hostile:
         start = time.perf_counter()
         result = files.safe_name(name)
         elapsed = time.perf_counter() - start
-        assert elapsed < 0.4, f"{elapsed:.3f}s for {len(name)} chars"
+        assert elapsed < 2.0, f"{elapsed:.3f}s for {len(name)} chars"
         assert result == expected
 
 
@@ -631,3 +638,55 @@ def test_the_re_reviewers_exact_halving_write_degenerates_to_a_stated_zero(dirs,
     assert (output / "big.bin").exists()
     downloads = workspace / "downloads"
     assert not downloads.exists() or list(downloads.iterdir()) == []
+
+
+# ── S38 Task 3 carry: the timing pin's real budget (above), the whitespace
+# set pinned to Python, a stuck temp file never failing a published copy ──
+
+
+def test_the_space_codepoints_are_exactly_pythons_isspace_set():
+    # _SPACE_CODEPOINTS is a hardcoded tuple (so safe_name's leading-run
+    # strip stays one C-level str.lstrip() call, and the source file never
+    # holds a literal non-ASCII or exotic-whitespace character) that MUST
+    # equal str.isspace()'s own set. Nothing re-derives it at import time,
+    # so a future Python whose isspace() set moves would go unnoticed
+    # without this pin.
+    assert set(map(chr, files._SPACE_CODEPOINTS)) == {
+        chr(i) for i in range(0x110000) if chr(i).isspace()
+    }
+
+
+def test_a_stuck_temp_file_after_a_successful_link_is_logged_not_a_failed_bring_in(
+    dirs, monkeypatch, caplog
+):
+    # Carry: _publish links the checked temp file to its final name, then
+    # unlinks the now-useless temp file. The old code raised HandoffError
+    # when THAT unlink failed -- but os.link already landed her verified
+    # copy under its real, final name by then, so this reported a
+    # SUCCESSFUL bring-in as a failure (the same shape M4 fixed one step
+    # later, for the engine's own copy). A stuck temp file is logged, never
+    # thrown, and bring_in still returns Brought.
+    output, workspace = dirs
+    _put(output, "r.txt", b"abc")
+    real_unlink = os.unlink
+
+    def stuck_unlink(path, *a, **kw):
+        if str(path).endswith(".part"):
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        return real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", stuck_unlink)
+    with caplog.at_level(logging.WARNING, logger="core"):
+        brought = files.bring_in(
+            "/output/r.txt", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert brought.path == "downloads/r.txt"
+    assert brought.bytes == 3
+    assert brought.left_in_engine is None, "the SOURCE was removed; only the temp file stuck"
+    assert (workspace / "downloads" / "r.txt").read_bytes() == b"abc"
+    assert not (output / "r.txt").exists()
+    assert any(
+        "could not remove" in record.getMessage()
+        and "Device or resource busy" in record.getMessage()
+        for record in caplog.records
+    ), [r.getMessage() for r in caplog.records]

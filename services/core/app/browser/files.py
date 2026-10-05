@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import stat
 import tempfile
@@ -33,6 +34,8 @@ from pathlib import Path
 from app.browser.page import ENGINE_OUTPUT
 from app.tools.base import ToolFailure
 from app.tools.workspace import _resolve_within
+
+logger = logging.getLogger("core")
 
 OUTPUT_DIR_ENV = "BROWSER_OUTPUT_DIR"
 DEFAULT_OUTPUT_DIR = "/data/browser-output"
@@ -210,8 +213,14 @@ def _publish(tmp_name: str, destination_dir: Path, wanted: str) -> Path:
     for a dangling symlink, while os.link still finds that name taken, so a
     pre-check and a link can disagree and loop on the same name forever.
     FileExistsError — whatever the name was actually holding — means taken,
-    try the next, bounded at 999 candidates; the tmp file is unlinked only
-    once a link has actually landed."""
+    try the next, bounded at 999 candidates.
+
+    Once os.link lands the candidate, her copy IS published under its real,
+    final name — a failed unlink of the now-useless temp file is not a
+    failed bring-in (the same shape M4 fixed one step later, for the
+    engine's own copy): it is logged and left for a retry or a future
+    cleanup, never raised, so a stuck temp file can never turn a successful
+    copy into a reported failure."""
     stem, dot, ext = wanted.rpartition(".")
     if not dot or not stem:
         stem, ext = wanted, ""
@@ -228,10 +237,11 @@ def _publish(tmp_name: str, destination_dir: Path, wanted: str) -> Path:
         try:
             os.unlink(tmp_name)
         except OSError as exc:
-            raise HandoffError(
-                f"published {wanted!r} but could not remove its temporary file: "
-                f"{exc.strerror or exc}"
-            ) from exc
+            logger.warning(
+                "could not remove temporary file %s: %s",
+                Path(tmp_name).name,
+                exc.strerror or exc,
+            )
         return candidate
     raise HandoffError(f"{destination_dir.name}/ already holds 999 files named like {wanted!r}")
 
