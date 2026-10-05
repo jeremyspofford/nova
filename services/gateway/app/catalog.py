@@ -527,6 +527,9 @@ async def build(
         except Exception as exc:  # a bug or a DB error: NAMED, never an anonymous "provider"
             logger.exception("catalogue: provider %s raised", name)
             return {**failed, "note": f"the listing raised — {adapters.reason(exc)}"}, []
+        # It answered: whatever outage was remembered is over, for every read
+        # after this one too — not only for the fresh read that found out.
+        UNREACHABLE.discard(outage_key)
         source = {"key": name, "ok": True, "rows": len(listing.models)}
         source["fetched_at"] = listing.fetched_at
         if listing.note:

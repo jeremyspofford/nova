@@ -359,6 +359,27 @@ async def test_a_remembered_outage_expires(
     assert len(dead.requests) == 2
 
 
+async def test_a_machine_that_answers_again_is_not_served_from_the_old_outage(
+    client, local, mount_backend, mount_transport
+):
+    # Refresh finds the Dell back; the next ordinary read (a re-read after a
+    # probe, the chat picker) must not hand back the outage it remembered.
+    fake, created = await _add_provider(
+        client, mount_backend, "dell", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    mount_transport("http://dell.test", FailingTransport(httpx.ConnectTimeout))
+    await client.get("/admin/catalog")
+    mount_backend("http://dell.test", fake.app)
+    await client.get("/admin/catalog?fresh=1")
+
+    body = (await client.get("/admin/catalog")).json()
+
+    source = {s["key"]: s for s in body["sources"]}["dell"]
+    assert source["ok"] is True and "cached" not in source
+    assert any(r["provider"] == "dell" for r in body["rows"])
+
+
 async def test_a_refusal_is_not_remembered_as_an_outage(client, local, mount_backend):
     # A provider that ANSWERED (a 401) is fast and may be fixed at any moment
     # (a new key): only a machine nobody could reach is remembered.

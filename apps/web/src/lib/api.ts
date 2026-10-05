@@ -687,9 +687,10 @@ export const putRoute = (role: RouteRole, chain: string[]) =>
  * ONE path every "use this model" takes: the chat picker, Models and
  * Settings. Each used to write chat.model alone, so a pick dropped the model
  * it replaced from every chain without a word. The answer is what core
- * stored: the chat model and chat's fallbacks. */
+ * stored: the chat model and chat's fallbacks, and a `note` when something
+ * was not kept (a chain the gateway would not store — the pick still made). */
 export const setChatPrimary = (model: string) =>
-  apiSend<{ chat_model: string; chain: string[] }>('/api/v1/routes/chat/primary', 'PUT', { model })
+  apiSend<{ chat_model: string; chain: string[]; note?: string }>('/api/v1/routes/chat/primary', 'PUT', { model })
 /** Switch Jev Router on or off for a role — an edit to its chain, which stays
  * the one source of truth. `link` is the provider:model that serves Jev
  * Router, read from the live catalogue; only switching on needs it. A 200

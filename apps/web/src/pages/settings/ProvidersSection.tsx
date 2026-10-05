@@ -597,6 +597,8 @@ function ProviderRow({
     try {
       const stored = await api.setChatPrimary(qualified)
       onModelChanged(stored.chat_model)
+      // What the pick did not keep, said where it was made.
+      if (stored.note) setSwitchError(stored.note)
     } catch (err) {
       setSwitchError(reasonOf(err))
     } finally {

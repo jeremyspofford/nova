@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Star, Trash2, Waypoints, X } from 'lucide-react'
 import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
@@ -218,8 +218,11 @@ export function RoutingSection({
   const [explains, setExplains] = useState<Record<string, RouteExplain | { error: string }>>({})
   const [error, setError] = useState<string | null>(null)
   // The catalogue only fills the "add" pickers and names Jev Router's link —
-  // its failure is said beside them and never hides a chain.
+  // its failure is said beside them and never hides a chain. Read separately
+  // from the chains, so "not read yet" is a state of its own: until it lands,
+  // nothing here may say a provider is gone or lists no router.
   const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [catalogRead, setCatalogRead] = useState(false)
   // The link that serves Jev Router, from the catalogue the page already read.
   const routerLink = catalog.find(r => r.kind === 'cloud' && r.model === JEV_ROUTER_MODEL)?.id ?? null
   // The switch's disabled-with-no-link reason: the base sentence, plus a
@@ -227,11 +230,14 @@ export function RoutingSection({
   // the sources themselves, since a source this page has not read is not the
   // same fact as one that came back empty.
   const failedSources = catalogSources.filter(s => s.ok === false)
-  const routerUnavailableReason =
-    `no provider lists ${JEV_ROUTER_MODEL} right now (OpenRouter serves it)` +
-    (failedSources.length > 0
-      ? ` — these model lists could not be read: ${failedSources.map(s => `${s.key} (${s.note ?? 'failed'})`).join(', ')}`
-      : '')
+  const routerUnavailableReason = !catalogRead
+    ? catalogError
+      ? `the model list could not be read, so it is not known which provider serves ${JEV_ROUTER_MODEL} — ${catalogError}`
+      : 'the model list is still being read'
+    : `no provider lists ${JEV_ROUTER_MODEL} right now (OpenRouter serves it)` +
+      (failedSources.length > 0
+        ? ` — these model lists could not be read: ${failedSources.map(s => `${s.key} (${s.note ?? 'failed'})`).join(', ')}`
+        : '')
   // Which providers are still registered, for the "in place of X" promise: a
   // kept link's provider (the part before its first colon) that is no
   // longer among these will never come back.
@@ -284,6 +290,7 @@ export function RoutingSection({
           setCatalog(cat.rows)
           setCatalogSources(Array.isArray(cat.sources) ? cat.sources : [])
           setCatalogError(null)
+          setCatalogRead(true)
         },
         (err: unknown) => {
           if (seq === loadSeq.current) setCatalogError(reasonOf(err))
@@ -349,6 +356,21 @@ export function RoutingSection({
     void load()
   }, [load])
 
+  // Each role's chain as its editor gets it, the SAME array until the chains
+  // or chat's pick change: a fresh `.filter()` on every render reset chat's
+  // editor draft on every re-render — an explain landing, the catalogue
+  // landing, another role's save — and wiped an unsaved Up or Remove.
+  // Chat's pick is link 1 and is never listed again behind itself: the walk
+  // skips a repeat, so a stored repeat (the live chain of 2026-10-05: Gemini
+  // twice) is noise, and the next save drops it.
+  const chains = useMemo(
+    () =>
+      Object.fromEntries(
+        (routes?.roles ?? []).map(r => [r.role, r.role === 'chat' ? r.chain.filter(id => id !== chatModel) : r.chain]),
+      ),
+    [routes, chatModel],
+  )
+
   // One decision switch: written through the settings API, shown as core
   // stored it, and then the page re-reads — the decisions walk follows the
   // switches (core states them to the gateway), so its explanation moves too.
@@ -393,11 +415,7 @@ export function RoutingSection({
               role={entry.role}
               words={words}
               reserved={entry.reserved}
-              // Chat's pick is link 1 and is never listed again behind
-              // itself: the walk skips a repeat, so a stored repeat (the
-              // live chain of 2026-10-05: Gemini twice) is noise, and the
-              // next save drops it.
-              chain={entry.role === 'chat' ? entry.chain.filter(id => id !== chatModel) : entry.chain}
+              chain={chains[entry.role] ?? entry.chain}
               chatModel={chatModel}
               catalog={catalog}
               protocol={entry.protocol ?? 'chat'}
@@ -407,7 +425,7 @@ export function RoutingSection({
               router={entry.router ?? null}
               routerLink={routerLink}
               routerUnavailableReason={routerUnavailableReason}
-              catalogProviders={catalogProviders}
+              catalogProviders={catalogRead ? catalogProviders : null}
               // Beside the chain whose calls are typed questions — the
               // decisions role's, read off its protocol like the picker is.
               decisionSwitches={entry.protocol === 'systemone' ? decisionSwitches : null}
@@ -432,6 +450,7 @@ export function RoutingSection({
                       const stored = await api.setChatPrimary(id)
                       onChatModelChanged(stored.chat_model)
                       await load(stored.chat_model)
+                      return stored.note
                     }
                   : undefined
               }
@@ -518,8 +537,9 @@ function RoleEditor({
   routerUnavailableReason: string
   /** Provider keys the catalogue's sources still list — never assumed just
    * because a row happens to be offered. A kept link whose provider has
-   * fallen out of this set will not come back off a switch off. */
-  catalogProviders: Set<string>
+   * fallen out of this set will not come back off a switch off. null while
+   * the catalogue has not been read: nothing is known to be gone. */
+  catalogProviders: Set<string> | null
   /** The decision switches' defs, drawn beside this chain — null on every
    * role but the decisions role, and when core does not list them. */
   decisionSwitches: SettingDef[] | null
@@ -530,8 +550,9 @@ function RoleEditor({
   onRouter: (on: boolean) => Promise<string | undefined>
   onSave: (chain: string[]) => Promise<void>
   /** Chat only: make a fallback the pick (the one pick write); a refusal is
-   * thrown, in core's own words. */
-  onMakePrimary?: (id: string) => Promise<void>
+   * thrown, in core's own words. Resolves to core's note when something was
+   * not kept (a chain the gateway would not store). */
+  onMakePrimary?: (id: string) => Promise<string | undefined>
   /** present only when the role is an orphan — the one thing to do with it */
   onRemove?: () => Promise<void>
 }) {
@@ -547,6 +568,7 @@ function RoleEditor({
   const [routerNote, setRouterNote] = useState<string | null>(null)
   const [promoting, setPromoting] = useState<string | null>(null)
   const [promoteError, setPromoteError] = useState<string | null>(null)
+  const [promoteNote, setPromoteNote] = useState<string | null>(null)
   // The ONE reason the switch cannot be flipped right now: mid-flight, or
   // off with no link to turn it on with (turning off never needs one). The
   // toggle's `disabled` and the guard inside `flipRouter` both read this
@@ -605,8 +627,9 @@ function RoleEditor({
     if (!onMakePrimary || dirty) return
     setPromoting(id)
     setPromoteError(null)
+    setPromoteNote(null)
     try {
-      await onMakePrimary(id)
+      setPromoteNote((await onMakePrimary(id)) ?? null)
     } catch (err) {
       setPromoteError(reasonOf(err))
     } finally {
@@ -780,9 +803,11 @@ function RoleEditor({
           )}
           {router.on && router.kept && (
             <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-kept`}>
-              {catalogProviders.has(router.kept.split(':')[0])
-                ? `in place of ${router.kept}, which comes back when you switch it off`
-                : `in place of ${router.kept} — its provider is gone, so switching off will not put it back`}
+              {catalogProviders === null
+                ? `in place of ${router.kept}`
+                : catalogProviders.has(router.kept.split(':')[0])
+                  ? `in place of ${router.kept}, which comes back when you switch it off`
+                  : `in place of ${router.kept} — its provider is gone, so switching off will not put it back`}
             </p>
           )}
           {router.on && router.kept === '' && (
@@ -810,6 +835,11 @@ function RoleEditor({
       {promoteError && (
         <p role="alert" className="mt-2 text-caption text-danger" data-testid={`route-${role}-primary-error`}>
           could not make it primary — {promoteError}
+        </p>
+      )}
+      {promoteNote && (
+        <p role="status" className="mt-2 text-caption text-warning" data-testid={`route-${role}-primary-note`}>
+          {promoteNote}
         </p>
       )}
       {decisionSwitches && editable && <DecisionSwitches defs={decisionSwitches} onSwitch={onDecisionSwitch} />}

@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, onTestFinished, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './SettingsPage'
@@ -150,6 +150,23 @@ function renderApp(tab = 'models') {
 
 describe('one pick, seen everywhere (Fix A, and 2026-10-05)', () => {
   it('Make primary in Routing moves the chat badge too, with no message sent', async () => {
+    // The server's chat.model moves with the pick, as the real one does: the
+    // switcher reads the STORED pick and follows it.
+    let stored = 'qwen3:8b'
+    const settingsBefore = vi.mocked(getSettings).getMockImplementation()
+    const pickBefore = vi.mocked(setChatPrimary).getMockImplementation()
+    onTestFinished(() => {
+      vi.mocked(getSettings).mockImplementation(settingsBefore!)
+      vi.mocked(setChatPrimary).mockImplementation(pickBefore!)
+    })
+    vi.mocked(getSettings).mockImplementation(async () => [
+      { key: 'chat.model', type: 'str', default: '', description: '', value: stored },
+      { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'nova' },
+    ])
+    vi.mocked(setChatPrimary).mockImplementation(async (model: string) => {
+      stored = model
+      return { chat_model: model, chain: ['qwen3:8b'] }
+    })
     vi.mocked(getRoutes).mockImplementation(async () => ({
       roles: [{ role: 'chat', chain: ['hub:qwen3:14b'], reserved: false, builtin: true, protocol: 'chat' as const }],
       walls: [],

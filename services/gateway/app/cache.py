@@ -12,6 +12,7 @@ ollama digest: the content cannot go stale under its own digest, and a
 re-pull simply produces a new key. Bounded because a cache keyed by free
 text (a search string) would otherwise grow for the life of the process.
 """
+
 from __future__ import annotations
 
 import time
@@ -76,6 +77,11 @@ class TTLCache:
         while len(self._entries) > self.max_entries:
             self._entries.popitem(last=False)
         return fetched_at
+
+    def discard(self, key: Hashable) -> None:
+        """Forget `key` now — a fact the caller just learned stopped being
+        true (an outage that answered) must not wait out its expiry."""
+        self._entries.pop(key, None)
 
     def clear(self) -> None:
         self._entries.clear()

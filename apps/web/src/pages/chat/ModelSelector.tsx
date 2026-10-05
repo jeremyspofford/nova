@@ -6,7 +6,9 @@ import {
   explainRoute as apiExplainRoute,
   getCatalog as apiGetCatalog,
   getRoutes as apiGetRoutes,
+  getSettings as apiGetSettings,
   setChatPrimary as apiSetChatPrimary,
+  settingValue,
   type CatalogRow,
   type RouteExplain,
   type RouteVerdict,
@@ -33,6 +35,7 @@ import { LOCAL_PROVIDER, bareLocalModel } from '../settings/modelsFormat'
 export interface ModelSelectorApi {
   getCatalog: typeof apiGetCatalog
   getRoutes: typeof apiGetRoutes
+  getSettings: typeof apiGetSettings
   explainRoute: typeof apiExplainRoute
   setChatPrimary: typeof apiSetChatPrimary
 }
@@ -40,6 +43,7 @@ export interface ModelSelectorApi {
 const DEFAULT_API: ModelSelectorApi = {
   getCatalog: apiGetCatalog,
   getRoutes: apiGetRoutes,
+  getSettings: apiGetSettings,
   explainRoute: apiExplainRoute,
   setChatPrimary: apiSetChatPrimary,
 }
@@ -122,6 +126,7 @@ export function ModelSelector({
   const [open, setOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pickNote, setPickNote] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   useEffect(() => {
@@ -131,19 +136,29 @@ export function ModelSelector({
     }
   }, [])
 
-  // What chat walks and what would answer right now: two small reads, made
-  // on mount, whenever the pick changes, when the window comes back into
-  // focus (a pick made on another device) and when the menu opens. A failed
-  // read costs the order and the walk, never the switcher.
+  // What chat walks and what would answer right now: small reads, made on
+  // mount, whenever the pick changes, when the window comes back into focus
+  // and when the menu opens. The pick itself is read too — the parent's
+  // value is a cache that moves only when a turn starts or a pick is made in
+  // THIS browser, so a pick made on the phone left the laptop naming the old
+  // one. A failed read costs what it would have shown, never the switcher.
   const readOrder = useCallback(async () => {
+    const settings = await api.getSettings().catch(() => null)
+    const stored = settings ? String(settingValue(settings, 'chat.model', '')) : ''
+    const pick = stored || currentModel
+    if (stored && stored !== currentModel) {
+      // The parent follows; this read runs again for the new pick.
+      onModelChanged(stored)
+      return
+    }
     const [routes, explained] = await Promise.all([
       api.getRoutes().catch(() => null),
-      api.explainRoute('chat', currentModel || undefined).catch(() => null),
+      api.explainRoute('chat', pick || undefined).catch(() => null),
     ])
     if (!alive.current) return
     setFallbacks(routes?.roles.find(r => r.role === 'chat')?.chain ?? null)
     setWalk(explained)
-  }, [api, currentModel])
+  }, [api, currentModel, onModelChanged])
 
   useEffect(() => {
     void readOrder()
@@ -194,11 +209,13 @@ export function ModelSelector({
     setOpen(false)
     if (id === currentModel) return
     setError(null)
+    setPickNote(null)
     setSwitching(true)
     try {
       const stored = await api.setChatPrimary(id)
       // Reflected only now core stored it — never optimistically.
       setFallbacks(stored.chain)
+      setPickNote(stored.note ?? null)
       onModelChanged(stored.chat_model)
     } catch (err) {
       setError(reasonOf(err))
@@ -372,6 +389,11 @@ export function ModelSelector({
       {error && (
         <p role="alert" className="mt-1 text-micro text-danger">
           Could not switch model: {error}
+        </p>
+      )}
+      {pickNote && (
+        <p role="status" className="mt-1 text-micro text-warning" data-testid="chat-model-note">
+          {pickNote}
         </p>
       )}
     </div>

@@ -186,6 +186,8 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const [facets, setFacets] = useState<Facets>({ ...EMPTY_FACETS, tab: 'installed' })
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // What a pick did not keep (core's note), said beside the list.
+  const [actionNote, setActionNote] = useState<string | null>(null)
   const [details, setDetails] = useState<CatalogRow | null>(null)
   const [switching, setSwitching] = useState<string | null>(null)
   const [probing, setProbing] = useState<string | null>(null)
@@ -315,11 +317,13 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const use = async (row: CatalogRow) => {
     setSwitching(row.id)
     setActionError(null)
+    setActionNote(null)
     try {
       const stored = await api.setChatPrimary(row.id)
       setModel(stored.chat_model)
       setSettingModel(stored.chat_model)
       setChatFallbacks(stored.chain)
+      setActionNote(stored.note ?? null)
     } catch (err) {
       setActionError(`could not switch to ${row.id} — ${reasonOf(err)}`)
     } finally {
@@ -759,6 +763,11 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
         <div role="alert" className={bannerClass}>
           {actionError}
         </div>
+      )}
+      {actionNote && (
+        <p role="status" className="text-caption text-warning" data-testid="pick-note">
+          {actionNote}
+        </p>
       )}
 
       {catalog && (

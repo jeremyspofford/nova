@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ModelSelector, cloudGroups, localChoices, pickIsSmaller, shortModelName } from './ModelSelector'
-import type { CatalogRow, RouteExplain } from '../../lib/api'
+import type { CatalogRow, RouteExplain, SettingDef } from '../../lib/api'
 
 /**
  * The chat's model switcher. Load-bearing behaviours (2026-10-05): it shows
@@ -51,14 +51,24 @@ function walk(servedBy: string, link: number, verdicts: { id: string; verdict: s
   }
 }
 
-function fakeApi(over: { fallbacks?: string[]; explained?: RouteExplain; pickFails?: boolean } = {}) {
+function fakeApi(
+  over: { fallbacks?: string[]; explained?: RouteExplain; pickFails?: boolean; stored?: string; note?: string } = {},
+) {
   return {
+    // What core stored as chat.model; none unless a test says (the parent's
+    // value then stands).
+    getSettings: vi.fn(
+      async (): Promise<SettingDef[]> =>
+        over.stored === undefined
+          ? []
+          : [{ key: 'chat.model', type: 'str', default: '', description: '', value: over.stored } as SettingDef],
+    ),
     getCatalog: vi.fn(async () => ({ fetched_at: 't', sources: [], rows: ROWS })),
     getRoutes: vi.fn(async () => ({ roles: [{ role: 'chat', chain: over.fallbacks ?? [GEMINI], reserved: false }], walls: [] })),
     explainRoute: vi.fn(async () => over.explained ?? walk(DELL, 1, [{ id: DELL, verdict: 'runnable' }, { id: GEMINI, verdict: 'runnable' }])),
     setChatPrimary: vi.fn(async (model: string) => {
       if (over.pickFails) throw new Error('the gateway refused the chain (400)')
-      return { chat_model: model, chain: [DELL, GEMINI].filter(id => id !== model) }
+      return { chat_model: model, chain: [DELL, GEMINI].filter(id => id !== model), ...(over.note ? { note: over.note } : {}) }
     }),
   }
 }
@@ -177,6 +187,23 @@ describe('ModelSelector', () => {
     await openMenu()
     expect(screen.getByTestId('chat-model-serving').textContent).toContain(GEMINI)
     expect(screen.getByTestId(`chat-model-option-${DELL}`).textContent).toContain('unreachable')
+  })
+
+  it('follows a pick stored elsewhere instead of naming its own stale one', async () => {
+    // A pick made on the phone left the laptop's switcher on the old model:
+    // its value is a cache that moves only when this browser starts a turn.
+    const onModelChanged = vi.fn()
+    await renderSelector({ currentModel: DELL, onModelChanged, api: fakeApi({ stored: GEMINI }) })
+    await waitFor(() => expect(onModelChanged).toHaveBeenCalledWith(GEMINI))
+  })
+
+  it('says what a pick did not keep, beside the switch', async () => {
+    const api = fakeApi({ note: "chat's fallbacks could not be saved — link 'gone:x' does not name a registered provider" })
+    await renderSelector({ currentModel: DELL, onModelChanged: vi.fn(), api })
+    await openMenu()
+    await waitFor(() => expect(screen.getByTestId('chat-model-option-cerebras:llama')).toBeDefined())
+    fireEvent.click(screen.getByTestId('chat-model-option-cerebras:llama'))
+    await waitFor(() => expect(screen.getByTestId('chat-model-note').textContent).toContain('could not be saved'))
   })
 
   it('names no fallback while the pick itself would answer', async () => {

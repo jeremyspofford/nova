@@ -170,6 +170,36 @@ describe('RoutingSection', () => {
     expect(links.filter(l => l.textContent?.includes('openrouter:openai/gpt-x')).map(l => l.dataset.testid)).toEqual(['route-chat-link-1'])
   })
 
+  it('an unsaved edit to chat\'s order survives the page re-rendering under it', async () => {
+    // The review's find: chat's chain was filtered afresh on every render,
+    // which reset the editor's draft whenever anything else landed.
+    let landCatalog: (value: unknown) => void = () => {}
+    renderSection({ getCatalog: vi.fn(() => new Promise(resolve => { landCatalog = resolve })) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2')).toBeTruthy())
+    const chat = screen.getByTestId('route-chat')
+    fireEvent.click(within(chat).getByRole('button', { name: 'remove chat hub:qwen3:8b' }))
+    expect(within(chat).queryByTestId('route-chat-link-2')).toBeNull()
+
+    landCatalog({ fetched_at: 't', sources: [], rows: [row('cerebras:llama', 'cloud')] })
+
+    await waitFor(() => expect(within(chat).getByRole('option', { name: /cerebras/ })).toBeTruthy())
+    expect(within(chat).queryByTestId('route-chat-link-2')).toBeNull()
+    expect(within(chat).getByRole('button', { name: /save/i })).toBeTruthy()
+  })
+
+  it('shows what a pick could not keep', async () => {
+    renderSection({
+      setChatPrimary: vi.fn(async (model: string) => ({
+        chat_model: model,
+        chain: ['gone:x'],
+        note: "chat's fallbacks could not be saved — link 'gone:x' does not name a registered provider",
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'make primary chat hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('route-chat-primary-note').textContent).toContain('could not be saved'))
+  })
+
   it('Make primary on a fallback is the one pick write, and the page follows what core stored', async () => {
     const onChatModelChanged = vi.fn()
     const api = renderSection({}, { onChatModelChanged })
@@ -446,6 +476,16 @@ describe('RoutingSection', () => {
     expect(screen.getByTestId('route-scheduled-router-kept').textContent).toBe(
       'in place of openrouter:openai/gpt-x — its provider is gone, so switching off will not put it back',
     )
+  })
+
+  it('says nothing is gone, and no router is missing, while the model list is still being read', async () => {
+    // The chains draw before the catalogue now; until it lands nothing is
+    // known to be gone, so nothing may say so.
+    const on: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'scheduled' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: 'openrouter:openai/gpt-x' } } : r)) }
+    renderSection({ getRoutes: vi.fn(async () => on), getCatalog: vi.fn(() => new Promise(() => {})) })
+    await waitFor(() => expect(screen.getByTestId('route-scheduled-router-kept')).toBeTruthy())
+    expect(screen.getByTestId('route-scheduled-router-kept').textContent).toBe('in place of openrouter:openai/gpt-x')
+    expect(screen.getByTestId('route-chat-router-unavailable').textContent).toBe('the model list is still being read')
   })
 
   it('offers no switch where it does not apply', async () => {
