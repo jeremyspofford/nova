@@ -90,6 +90,7 @@ from collections.abc import AsyncIterator, Callable, Collection, Iterable, Seque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import asyncpg
 import httpx
@@ -1765,6 +1766,28 @@ def _masked(value: object) -> str:
     return f"<masked:{len(text)} chars>"
 
 
+def _address_without_secrets(value: str) -> str:
+    """An address as the trace may hold it (S38): no user:password@, and the
+    query and fragment masked — a reset or sign-in link carries its token
+    there. Anything that is not an http(s) address is returned as it was."""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return value
+    user, at, host = parts.netloc.rpartition("@")
+    out = f"{parts.scheme}://"
+    if at:
+        out += f"<masked:{len(user)} chars>@"
+    out += host + parts.path
+    if parts.query:
+        out += f"?<masked:{len(parts.query)} chars>"
+    if parts.fragment:
+        out += f"#<masked:{len(parts.fragment)} chars>"
+    return out
+
+
 def _redact(value: object, *, in_headers: bool = False) -> object:
     """Trace-sized arguments: the same shape, long strings cut to a head, and
     credentials masked (S37a, plan decision P14).
@@ -1787,6 +1810,10 @@ def _redact(value: object, *, in_headers: bool = False) -> object:
                 and _credential_key(key, header=in_headers)
             ):
                 out[key] = _masked(item)
+            elif isinstance(key, str) and key.strip().lower() == "url" and isinstance(item, str):
+                # S38: an address keeps its host and path; its query, fragment
+                # and user info are masked (a reset link's token lives there).
+                out[key] = _clip(_address_without_secrets(item), SPAN_ARG_HEAD_CHARS)
             else:
                 out[key] = _redact(
                     item, in_headers=isinstance(key, str) and key.strip().lower() == "headers"
