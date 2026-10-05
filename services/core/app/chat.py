@@ -120,6 +120,7 @@ from app import (
 )
 from app.identity import Person
 from app.mcp import client as mcp_client
+from app.mcp import servers as mcp_servers
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 logger = logging.getLogger("core")
@@ -1135,7 +1136,10 @@ NOTES_HEADER = (
 
 
 def volatile_system_prompt(
-    recall: Recalled, roster: str | None = None, skills_roster: str | None = None
+    recall: Recalled,
+    roster: str | None = None,
+    skills_roster: str | None = None,
+    mcp_roster: str | None = None,
 ) -> str | None:
     """The half that changes every turn — omitted entirely when there is nothing in it.
 
@@ -1149,6 +1153,10 @@ def volatile_system_prompt(
     observable. None when no skill is active — a draft is not a procedure she
     has been given — and then the prompt is byte-identical to before skills
     existed.
+
+    `mcp_roster` (S37a) is her line about the MCP servers she is connected
+    to — names and tool names, never their descriptions; None when none is
+    connected.
     """
     parts: list[str] = []
     if recall.notes:
@@ -1194,6 +1202,8 @@ def volatile_system_prompt(
         parts.append(roster)
     if skills_roster:
         parts.append(skills_roster)
+    if mcp_roster:
+        parts.append(mcp_roster)
     if not parts:
         return None
     parts.append(f"Current time: {datetime.now(UTC).isoformat()}")
@@ -1209,6 +1219,7 @@ def base_messages(
     roster: str | None = None,
     skills_roster: str | None = None,
     hint: str | None = None,
+    mcp_roster: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
@@ -1220,7 +1231,8 @@ def base_messages(
     (decision-role spec §2) is the decision role's one line: its own system
     message immediately before his message — the position measured at 3/3 —
     so the cached prefix (the system prompts and the history) is the same
-    bytes with or without it."""
+    bytes with or without it. `mcp_roster` (S37a) is her line about the MCP
+    servers she can use."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -1228,7 +1240,7 @@ def base_messages(
             model, persona.tool_names, agent_block=persona.instructions_block
         )
     messages = [{"role": "system", "content": stable}]
-    volatile = volatile_system_prompt(recall, roster, skills_roster)
+    volatile = volatile_system_prompt(recall, roster, skills_roster, mcp_roster)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
@@ -4572,6 +4584,17 @@ async def _run_turn(
             except Exception as exc:
                 with turn.span("skills_roster") as span:
                     span.meta["error"] = peers.reason(exc)
+        # S37a: the MCP servers she can use, by name with their tools — for any
+        # persona given mcp_call (Nova holds every tool; an agent only if it was
+        # given it, plan decision P13). Read from the table, or an eval case's
+        # overlay, every turn; fail-open and never quiet, like the rosters above.
+        mcp_roster = None
+        if "mcp_call" in persona.tool_names:
+            try:
+                mcp_roster = await mcp_servers.roster_line(pool)
+            except Exception as exc:
+                with turn.span("mcp_roster") as span:
+                    span.meta["error"] = peers.reason(exc)
         recalled = await _recall(app, turn, person, message, shared=persona.shared_person_id)
         if persona.agent is None:
             # The bare call, exactly as before: the whole registry.
@@ -4740,6 +4763,7 @@ async def _run_turn(
             roster=roster,
             skills_roster=skills_roster,
             hint=hint,
+            mcp_roster=mcp_roster,
         )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.

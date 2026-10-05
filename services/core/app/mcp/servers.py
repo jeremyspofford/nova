@@ -834,3 +834,48 @@ async def no_such_server(pool, name: str) -> str:
     known = [s.name for s in await list_servers(pool)]
     listed = ", ".join(known) if known else "none is connected"
     return f"there is no connected MCP server named {name!r} — connected: {listed}"
+
+
+# ── the roster line in her prompt (S37a Task 8) ─────────────────────────────
+
+
+def roster_line_for(servers_: Sequence[Server]) -> str | None:
+    """The one line her prompt carries about the MCP servers she can use.
+
+    Each server by its connection name (and its title, clipped), its tool
+    NAMES when it has ROSTER_NAMES_UP_TO or fewer and a count otherwise, and —
+    when its last call failed — when and why. Never a tool's description:
+    that is third-party text she reads as an mcp_tools result. No network call
+    here. None when nothing is connected, so the prompt is byte-identical to a
+    stack without MCP."""
+    if not servers_:
+        return None
+    parts: list[str] = []
+    for server in servers_:
+        title = _clip(server.title, 40) if server.title else None
+        shown_title = title and title.lower() != server.name
+        label = f"{server.name} ({title})" if shown_title else server.name
+        names = [_clip(str(t.get("name")), 64) for t in server.tools]
+        if not names:
+            offered = "no tools listed"
+        elif len(names) <= ROSTER_NAMES_UP_TO:
+            offered = ", ".join(names)
+        else:
+            offered = (
+                f"{len(names)} tools — find one with mcp_tools(server={server.name!r}, query=…)"
+            )
+        clause = f"{label}: {offered}"
+        if server.failing and server.last_error_at is not None:
+            when = server.last_error_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
+            reason = _clip(server.last_error or "no reason recorded", 160)
+            clause += f" [its last call failed at {when} UTC: {reason}]"
+        parts.append(clause)
+    head = (
+        "MCP servers you are connected to. Run one of their tools with mcp_call(server, tool, "
+        "arguments); read a tool's inputs first with mcp_tools(server, query)"
+    )
+    return f"{head}: " + "; ".join(parts)
+
+
+async def roster_line(pool) -> str | None:
+    return roster_line_for(await list_servers(pool))

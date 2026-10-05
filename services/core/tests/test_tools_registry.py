@@ -394,6 +394,28 @@ def test_the_tools_package_imports_on_its_own():
     assert proc.stdout.strip() == str(len(tools.REGISTRY))
 
 
+def test_the_app_imports_cold_too():
+    """Ruling F1 (S37a Task 8): `app.main` is uvicorn's own entry point, and
+    every test here reaches it only after conftest has already imported
+    `app.chat` first — so a module-level import cycle through
+    `app.mcp.servers` (which imports notices, then the checks, then agents,
+    then `app.tools`, which imports `app.mcp.servers` back inside its own
+    executors — `app/tools/mcp.py`'s module docstring) would crash THIS
+    import while every other test in the suite stayed green. Import it cold,
+    in its own subprocess, exactly as the sibling test above does for
+    `app.tools` alone."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 # -- S12: an agent's subset, an agent's folder (2026-09-08) ----------------
 #
 # Both are SCOPE handed in at the two places a turn already touches the
