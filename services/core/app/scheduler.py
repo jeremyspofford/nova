@@ -60,7 +60,7 @@ from app import (
     tools,
     traces,
 )
-from app.evals import runner as eval_runner
+from app.evals import scratch
 from app.identity import Person
 
 logger = logging.getLogger("core")
@@ -126,9 +126,10 @@ async def tick_once(app, pool: asyncpg.Pool, *, now: datetime | None = None) -> 
     a real machine, a notification to every connected one, or a whole turn
     against the real plant. The claim below is the only way from a row to a
     firing (fire_now runs this tick), so the line holds for every firing.
-    "An eval person" is the runner's own definition — a guest whose name
-    starts with its scratch prefix, exactly the rows its orphan sweep
-    deletes — read from there, never restated."""
+    "An eval person" is app/evals/scratch.py's one definition — a guest whose
+    name starts with the scratch prefix, the same SQL the runner's orphan
+    sweep deletes by — read from there, never restated. A leaf module, so
+    the scheduler does not load the eval harness to read it."""
     claimed: list[tuple[asyncpg.Record, uuid.UUID, datetime]] = []
     async with pool.acquire() as conn, conn.transaction():
         if now is None:
@@ -136,12 +137,10 @@ async def tick_once(app, pool: asyncpg.Pool, *, now: datetime | None = None) -> 
         rows = await conn.fetch(
             "SELECT * FROM timers WHERE paused_at IS NULL AND next_fire_at IS NOT NULL "
             "AND next_fire_at <= $1 AND NOT EXISTS (SELECT 1 FROM people p "
-            "WHERE p.id = timers.person_id AND p.role = $3 AND starts_with(p.name, $4)) "
+            f"WHERE p.id = timers.person_id AND {scratch.is_scratch_person('p')}) "
             "ORDER BY next_fire_at LIMIT $2 FOR UPDATE SKIP LOCKED",
             now,
             CLAIM_LIMIT,
-            eval_runner.SCRATCH_PERSON_ROLE,
-            eval_runner.SCRATCH_PERSON_NAME,
         )
         for row in rows:
             try:

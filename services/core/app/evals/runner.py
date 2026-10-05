@@ -104,10 +104,10 @@ Three properties are enforced mechanically, not by intention:
     machine (or every connected one), a scheduled turn runs a whole real turn.
     So no timer a replay sets ever fires — every one belongs to the case's
     scratch person, and the scheduler's claim never takes a timer an eval
-    person owns (scheduler.tick_once reads SCRATCH_PERSON_ROLE and
-    SCRATCH_PERSON_NAME, below — the same definition the orphan sweep
-    deletes by). That holds while the case runs and after a teardown that
-    never ran; the rows go with the person.
+    person owns (scheduler.tick_once and the orphan sweep below both read
+    app/evals/scratch.py's one definition of such a person). That holds
+    while the case runs and after a teardown that never ran; the rows go
+    with the person.
 
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
@@ -181,7 +181,8 @@ import httpx
 
 from app import agent_dist, agents, chat, devices, machines, peers, settings_store, skills, traces
 from app.evals import cases as cases_mod
-from app.evals import predicates
+from app.evals import predicates, scratch
+from app.evals.scratch import SCRATCH_PERSON_NAME, SCRATCH_PERSON_ROLE
 from app.identity import Person
 from app.tools import setup as setup_tools
 
@@ -198,12 +199,10 @@ EVAL_TURN_KIND = "eval"
 # isolation boundary. role 'guest' keeps it off the one-owner unique index and
 # out of any owner-scoped query. The name carries no meaning beyond
 # uniqueness: SCRATCH_PERSON_NAME plus a fresh uuid4 hex, so two cases (or two
-# runs) can never collide on it.
-SCRATCH_PERSON_NAME = "__eval_scratch__"
-SCRATCH_PERSON_ROLE = "guest"
-# These two ARE the definition of "an eval person": the orphan sweep below
-# deletes by them, and scheduler.tick_once never claims a timer such a person
-# owns (S42b Task 24) — so no timer a replay sets can fire on the real system.
+# runs) can never collide on it. Both values, and the SQL that recognises such
+# a person, are app/evals/scratch.py's — the one definition the orphan sweep
+# below deletes by and scheduler.tick_once never claims a timer for (S42b
+# Task 24), so no timer a replay sets can fire on the real system.
 
 # Best-effort timeout for the memory /forget call _cleanup_scratch_person
 # makes — short, because a slow/unreachable memory service must never hang
@@ -390,9 +389,7 @@ async def _sweep_orphan_scratch_people(pool: asyncpg.Pool) -> int:
     exact name matches too). starts_with(), never LIKE, so the name's own
     literal underscores are never read back as SQL wildcards."""
     rows = await pool.fetch(
-        "DELETE FROM people WHERE role = $1 AND starts_with(name, $2) RETURNING id",
-        SCRATCH_PERSON_ROLE,
-        SCRATCH_PERSON_NAME,
+        f"DELETE FROM people WHERE {scratch.is_scratch_person('people')} RETURNING id"
     )
     if rows:
         logger.info("evals: swept %d orphaned scratch person row(s)", len(rows))

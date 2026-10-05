@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,6 +32,7 @@ from app import (
     traces,
 )
 from app.evals import runner as eval_runner
+from app.evals import scratch
 from app.identity import Person
 from app.main import app, lifespan
 from tests.conftest import TEST_DSN, requires_db
@@ -764,11 +767,11 @@ async def test_the_claim_never_takes_a_timer_an_eval_person_owns(pool):
     teardown that never ran. The owner's reminder, due in the same tick,
     fires: the line is drawn at the person, not at the tick."""
     owner, owners_conversation = await _owner(pool)
-    scratch, conversation = await _scratch(pool)
+    eval_person, conversation = await _scratch(pool)
     eval_rows = [
-        await _reminder(pool, scratch, conversation, device="eval_laptop"),
-        await _reminder(pool, scratch, conversation, message="drink water"),
-        await _scheduled(pool, scratch, conversation),
+        await _reminder(pool, eval_person, conversation, device="eval_laptop"),
+        await _reminder(pool, eval_person, conversation, message="drink water"),
+        await _scheduled(pool, eval_person, conversation),
     ]
     owners = await _reminder(pool, owner, owners_conversation)
 
@@ -794,14 +797,21 @@ async def test_the_claim_never_takes_a_timer_an_eval_person_owns(pool):
 
 
 async def test_the_claim_skips_exactly_the_people_the_eval_sweep_deletes(pool):
-    """One definition of "an eval person": the claim skips the timers of
-    exactly the people runner._sweep_orphan_scratch_people deletes — a guest
-    whose name carries the scratch prefix — and of no one else: not a guest
-    without it, not an adult whose name happens to carry it, not the owner."""
+    """One definition of "an eval person", in one place (app/evals/scratch.py):
+    the claim skips the timers of exactly the people the runner's orphan sweep
+    deletes — a guest whose name STARTS with the scratch prefix — and of no
+    one else: not a guest without it, not an adult whose name carries it, not
+    a guest whose name only matches it read as a LIKE pattern (the prefix's
+    underscores are not wildcards), not the owner."""
     owner, owners_conversation = await _owner(pool)
-    scratch, scratch_conversation = await _scratch(pool)
+    eval_person, eval_conversation = await _scratch(pool)
     others = []
-    for name, role in (("visitor", "guest"), (f"{eval_runner.SCRATCH_PERSON_NAME}x", "adult")):
+    for name, role in (
+        ("visitor", "guest"),
+        (f"{scratch.SCRATCH_PERSON_NAME}x", "adult"),
+        # LIKE '__eval_scratch__%' would match this: each _ is any one character
+        ("xxevalxscratchxxguest", "guest"),
+    ):
         pid = await pool.fetchval(
             "INSERT INTO people (name, role) VALUES ($1, $2) RETURNING id", name, role
         )
@@ -813,7 +823,7 @@ async def test_the_claim_skips_exactly_the_people_the_eval_sweep_deletes(pool):
         person.id: await _reminder(pool, person, conversation)
         for person, conversation in [
             (owner, owners_conversation),
-            (scratch, scratch_conversation),
+            (eval_person, eval_conversation),
             *others,
         ]
     }
@@ -827,10 +837,42 @@ async def test_the_claim_skips_exactly_the_people_the_eval_sweep_deletes(pool):
         )
     }
     skipped = set(rows) - fired_for
-    assert skipped == {scratch.id}
+    assert skipped == {eval_person.id}
+    assert await pool.fetchval(
+        f"SELECT array_agg(id) FROM people p WHERE {scratch.is_scratch_person('p')}"
+    ) == [eval_person.id]
     swept = await eval_runner._sweep_orphan_scratch_people(pool)
     assert swept == 1
     assert {r["id"] for r in await pool.fetch("SELECT id FROM people")} == set(rows) - skipped
+
+
+def test_the_scratch_definition_is_a_leaf_that_loads_nothing_else():
+    """app/evals/scratch.py imports nothing from app, so the scheduler reads
+    who an eval person is without loading the eval harness — measured in a
+    fresh interpreter, not read off the source."""
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, app.evals.scratch; "
+            "print(sorted(m for m in sys.modules if m == 'app' or m.startswith('app.')))",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert loaded.stdout.split() == ["['app',", "'app.evals',", "'app.evals.scratch']"]
+
+
+def test_the_scratch_fragment_holds_its_values_as_safe_literals():
+    """is_scratch_person writes the two values into SQL as literals, which is
+    safe only while neither holds a quote or a backslash."""
+    for value in (scratch.SCRATCH_PERSON_NAME, scratch.SCRATCH_PERSON_ROLE):
+        assert value and not set(value) & {"'", '"', "\\"}
+    assert scratch.is_scratch_person("p") == (
+        "(p.role = 'guest' AND starts_with(p.name, '__eval_scratch__'))"
+    )
 
 
 async def test_five_consecutive_failures_pause_the_timer_with_the_last_reason(pool, monkeypatch):
