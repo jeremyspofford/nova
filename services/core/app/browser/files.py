@@ -39,6 +39,20 @@ DEFAULT_OUTPUT_DIR = "/data/browser-output"
 MAX_BRING_BYTES = 1024 * 1024 * 1024  # 1 GiB
 MAX_NAME_BYTES = 200
 
+# Every code point str.isspace() recognises (checked once over the full
+# range, 2026-10-05) -- hardcoded by number, not scanned at import and
+# never a literal non-ASCII character in this source file, so safe_name's
+# leading-run strip is one C-level str.lstrip() call, never a per-character
+# Python loop: that loop was linear but slow enough (0.6 s at 4 MB) to miss
+# the "well under 0.5 s" budget on its own.
+_SPACE_CODEPOINTS = (
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x85, 0xA0,
+    0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+    0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+)  # fmt: skip
+_SPACE_CHARS = "".join(map(chr, _SPACE_CODEPOINTS))
+_LSTRIP_CHARS = "." + _SPACE_CHARS
+
 
 class HandoffError(Exception):
     """A stated reason a reported file was not brought in."""
@@ -82,16 +96,17 @@ def safe_name(name: str, fallback: str = "download") -> str:
     """One file name a page cannot use to reach anywhere: the last path
     segment, no control characters, no leading dots, at most
     MAX_NAME_BYTES of UTF-8 (an extension of up to 16 characters kept).
-    Stripping whitespace and leading dots is repeated to a fixed point — a
-    single pass left " . . " as the bare, dangerous name "." — and
-    `fallback` is what is left when nothing meaningful survives that."""
+    The leading run of dots and whitespace is dropped in ONE C-level
+    str.lstrip() call — a fixed-point strip().lstrip(".") loop re-walked
+    the same untrusted, uncapped name on every round, quadratic on a long
+    alternating name — then trailing whitespace is stripped once;
+    `fallback` is what is left when nothing meaningful survives that
+    (empty, ".", ".." or dots and spaces only — " . . " is as dangerous a
+    name as the page's own)."""
     base = name.replace("\\", "/").rsplit("/", 1)[-1]
     base = "".join(ch for ch in base if ch.isprintable() and ch not in '<>:"|?*')
-    previous = None
-    while base != previous:
-        previous = base
-        base = base.strip().lstrip(".")
-    if not base:
+    base = base.lstrip(_LSTRIP_CHARS).rstrip()
+    if not base or base in (".", ".."):
         return fallback
     if len(base.encode("utf-8", "surrogatepass")) > MAX_NAME_BYTES:
         stem, dot, ext = base.rpartition(".")
@@ -175,6 +190,20 @@ def _checked_open(source: Path, lstat_info: os.stat_result) -> int:
     return fd
 
 
+def _write_all(fd: int, chunk: bytes) -> None:
+    """Write the whole `chunk`, retrying a short write: write(2) may write
+    fewer bytes than asked without that being an error, and the raw-fd
+    loop here never checked os.write's return value at all. A return of 0
+    for a non-empty write is never retried into a spin — it is a stated
+    HandoffError, the one outcome write(2) does not define as progress."""
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written == 0:
+            raise HandoffError("a write of 0 bytes landed; nothing more could be written")
+        view = view[written:]
+
+
 def _publish(tmp_name: str, destination_dir: Path, wanted: str) -> Path:
     """Link the checked temp file to a free name by trying candidates with
     os.link directly, never a Path.exists() pre-check: exists() is False
@@ -217,12 +246,48 @@ def bring_in(
 ) -> Brought:
     """Copy the reported file into `<workspace_root>/<folder>/`, check it,
     remove the source, and say where it is. Raises HandoffError with the
-    reason when any step cannot be done or checked."""
+    reason when any step cannot be done or checked — structurally (G30):
+    every named step below states its own reason, but the whole body also
+    runs under one outer `except OSError`, so a step added later, or one
+    that raises a kind of OSError nobody wrote a message for yet, can
+    never let a raw one out. That outer handler never touches the
+    engine's copy — it does not know how far `_bring_in` got, so removing
+    anything here could delete a file a step already decided to keep."""
+    try:
+        return _bring_in(
+            engine_path,
+            output_dir=output_dir,
+            workspace_root=workspace_root,
+            folder=folder,
+            name=name,
+        )
+    except HandoffError:
+        raise
+    except OSError as exc:
+        raise HandoffError(f"could not bring in {engine_path}: {exc.strerror or exc}") from None
+
+
+def _bring_in(
+    engine_path: str,
+    *,
+    output_dir: Path,
+    workspace_root: Path,
+    folder: str,
+    name: str | None = None,
+) -> Brought:
+    """`bring_in`'s own body, under its outer structural `except OSError`
+    (G30). Raises HandoffError for every named step; an OSError from
+    anything else is still this function's to let escape — the wrapper
+    around it is what turns that into a HandoffError too."""
     source = source_of(engine_path, output_dir)
     try:
         info = os.lstat(source)
     except FileNotFoundError:
         raise HandoffError(f"the engine reported {engine_path}, and it is not there") from None
+    except OSError as exc:
+        raise HandoffError(
+            f"could not check {source.name} in the engine's folder: {exc.strerror or exc}"
+        ) from exc
     if stat.S_ISDIR(info.st_mode):
         raise HandoffError(
             f"the engine reported {engine_path}, which is a directory, not a file; "
@@ -257,11 +322,20 @@ def bring_in(
     source_fd = _checked_open(source, info)
     try:
         wanted = safe_name(name or source.name)
-        workspace_root = workspace_root.resolve()
+        try:
+            workspace_root = workspace_root.resolve()
+        except OSError as exc:
+            raise HandoffError(
+                f"could not read the workspace folder: {exc.strerror or exc}"
+            ) from exc
         try:
             destination_dir = _resolve_within(workspace_root, folder)
         except ToolFailure as exc:
             raise HandoffError(str(exc)) from None
+        except OSError as exc:
+            raise HandoffError(
+                f"could not read {folder}/ in the workspace: {exc.strerror or exc}"
+            ) from exc
         try:
             destination_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -283,7 +357,7 @@ def bring_in(
                     chunk = os.read(source_fd, min(1024 * 1024, info.st_size - copied))
                     if not chunk:
                         break
-                    os.write(tmp_fd, chunk)
+                    _write_all(tmp_fd, chunk)
                     digest.update(chunk)
                     copied += len(chunk)
                 extra = os.read(source_fd, 1)  # must be EOF — a growing file is refused

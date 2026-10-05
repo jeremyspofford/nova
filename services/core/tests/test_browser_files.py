@@ -496,3 +496,138 @@ def test_publish_tries_the_next_name_when_the_first_is_taken_mid_publish(dirs, m
     assert (workspace / "downloads" / "report (2).txt").read_bytes() == b"the page's"
     assert not any(p.name.endswith(".part") for p in (workspace / "downloads").iterdir())
     assert not (output / "report.txt").exists()
+
+
+# ── fix round 2: G30 structural OSError wrap, linear safe_name, whole writes ──
+
+
+def test_a_failing_workspace_root_resolve_is_a_stated_handoff_error(dirs, monkeypatch):
+    # G30/A: workspace_root.resolve() (M3) sat outside every try/except --
+    # a PermissionError from it escaped bring_in raw.
+    output, workspace = dirs
+    _put(output, "r.txt", b"abc")
+    real_resolve = Path.resolve
+
+    def failing_resolve(self, *a, **kw):
+        if self == workspace:
+            raise PermissionError(13, "Permission denied")
+        return real_resolve(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "resolve", failing_resolve)
+    with pytest.raises(files.HandoffError, match="could not read the workspace folder"):
+        files.bring_in(
+            "/output/r.txt", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert (output / "r.txt").exists()
+    assert not (workspace / "downloads").exists()
+
+
+def test_a_failing_lstat_is_a_stated_handoff_error(dirs, monkeypatch):
+    # G30/A: os.lstat(source) caught only FileNotFoundError -- a
+    # PermissionError or ELOOP escaped raw (a pre-existing gap, same
+    # class, fixed alongside the new one).
+    output, workspace = dirs
+    src = output / "r.txt"
+    src.write_bytes(b"abc")
+    real_lstat = os.lstat
+
+    def failing_lstat(path, *a, **kw):
+        if Path(path) == src:
+            raise PermissionError(13, "Permission denied")
+        return real_lstat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "lstat", failing_lstat)
+    with pytest.raises(files.HandoffError, match="could not check"):
+        files.bring_in(
+            "/output/r.txt", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert src.exists()
+    assert not (workspace / "downloads").exists()
+
+
+def test_safe_name_is_linear_on_a_hostile_name():
+    # M2's fixed-point strip().lstrip(".") loop re-walked the whole,
+    # uncapped name every round: 1.5 s at 256 KB, quadratic beyond.
+    # Measured on this machine (best of 3, 2026-10-05): the alternating
+    # ". " shape took 0.039 s at 4,000,000 chars, and the dots-then-
+    # "a.txt" shape took 0.026 s -- budget set past 10x the slower one.
+    hostile = [(". " * 2_000_000, "download"), ("." * 4_000_000 + "a.txt", "a.txt")]
+    for name, expected in hostile:
+        start = time.perf_counter()
+        result = files.safe_name(name)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.4, f"{elapsed:.3f}s for {len(name)} chars"
+        assert result == expected
+
+
+def test_a_short_write_is_retried_until_the_whole_chunk_lands(dirs, monkeypatch):
+    # C: write(2) may write fewer bytes than asked without that being an
+    # error -- the raw-fd loop never checked os.write's return value, so a
+    # short write silently dropped bytes, later caught only as a
+    # mismatched hash/size rather than handled. Realistic: never writes 0
+    # for a non-empty request, which real write(2) essentially never does
+    # either (see the dedicated zero-return test below).
+    output, workspace = dirs
+    data = os.urandom(2 * 1024 * 1024 + 7)
+    _put(output, "big.bin", data)
+    real_write = os.write
+
+    def half_write(fd, buf):
+        n = max(1, len(buf) // 2)
+        return real_write(fd, bytes(buf)[:n])
+
+    monkeypatch.setattr(os, "write", half_write)
+    brought = files.bring_in(
+        "/output/big.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+    )
+    landed = workspace / brought.path
+    assert landed.read_bytes() == data
+    assert not (output / "big.bin").exists()
+
+
+def test_a_zero_byte_write_is_a_stated_error_not_a_spin(dirs, monkeypatch):
+    # C: os.write returning 0 for a non-empty request is the one write(2)
+    # outcome that is never progress -- retrying it would be a spin, so
+    # it is refused immediately instead.
+    output, workspace = dirs
+    _put(output, "r.txt", b"abc")
+
+    def zero_write(fd, buf):
+        return 0
+
+    monkeypatch.setattr(os, "write", zero_write)
+    with pytest.raises(files.HandoffError, match="a write of 0 bytes"):
+        files.bring_in(
+            "/output/r.txt", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert not any(p.name.endswith(".part") for p in (workspace / "downloads").iterdir())
+    assert (output / "r.txt").exists()
+
+
+def test_the_re_reviewers_exact_halving_write_degenerates_to_a_stated_zero(dirs, monkeypatch):
+    # Documents a finding, not just a test: the re-reviewer's own probe
+    # (scratchpad/t3rr1/probe_shortwrite.py) halves unconditionally
+    # (buf[:len(buf)//2], no floor at 1). ANY positive integer, repeatedly
+    # floor-halved, reaches exactly 1, and half of 1 is 0 -- so this
+    # EXACT mechanism always ends in a 0-byte write for ANY chunk size,
+    # regardless of the file's total size. The probe's own code already
+    # treats a HandoffError as "fails safe" (a distinct branch from a RAW
+    # exception) rather than requiring success, which is what this is: a
+    # stated refusal, not a crash, and the engine's copy is kept either
+    # way.
+    output, workspace = dirs
+    data = b"x" * (2 * 1024 * 1024 + 3)  # the probe's own shape
+    _put(output, "big.bin", data)
+    real_write = os.write
+
+    def halving_write(fd, buf):
+        return real_write(fd, bytes(buf)[: len(buf) // 2])
+
+    monkeypatch.setattr(os, "write", halving_write)
+    with pytest.raises(files.HandoffError, match="a write of 0 bytes"):
+        files.bring_in(
+            "/output/big.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert (output / "big.bin").exists()
+    downloads = workspace / "downloads"
+    assert not downloads.exists() or list(downloads.iterdir()) == []
