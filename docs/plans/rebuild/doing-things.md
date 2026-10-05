@@ -6,6 +6,12 @@ and after is built.** S37a, the MCP client, started 2026-09-30 in its own
 lane. The owner answered three questions on 2026-09-30 (below). The
 questions still open are at the end, each with a default.
 
+**2026-10-05: self-coding moved forward and widened.** See
+[`nova-codes.md`](nova-codes.md). It amends this doc and wins where the two
+differ: the new order, outside coders with Nova driving (S32b widened), work
+she starts herself (S34b), reacting to monitoring and CI (S37c widened), other
+repos (S32c), and `CLAUDE.md` becoming `AGENTS.md`.
+
 How it was produced, so it can be distrusted in the right places. The
 2026-09-18 design came from a read-only understand pass (eight readers over
 `services/`, `apps/novad`, `deploy/`, `tests/e2e`, the v3 plan docs and the
@@ -618,12 +624,16 @@ anything that needs admin rights is Q17.
 
 ## Order
 
-S42b (hub:primary, in progress) → S29 → S30 → S30b → S37d → the install
-walk → S34 (with the `coding` role's modes, Q5) → S37c → S39 → S32 → S32b →
-S33 → S35. **S37a (MCP) and S38 (her browser), then S38b, run in parallel
-now** (owner, 2026-09-30: "both in parallel").
+**Superseded 2026-10-05** by [`nova-codes.md`](nova-codes.md): S42b → the
+provider-balances slice → S29 → S30 → S32 → S32b → S33 → S34 (with the
+`coding` role's modes, Q5) → S35 → S34b → S37c → S32c → S30b → S37d → the
+install walk → S39. **S37a (MCP) and S38 (her browser), then S38b, run in
+parallel now** (owner, 2026-09-30: "both in parallel").
 S36 and S37b after S34, unscheduled. Then the paused hub slices (S46a,
 S46b, S43a, S43b, S44, S48, S49, and S42c per Q15), then S26, then S27.
+
+The 2026-09-30 order, for the record: S42b → S29 → S30 → S30b → S37d → the
+install walk → S34 → S37c → S39 → S32 → S32b → S33 → S35.
 
 ## The first change she lands herself
 
