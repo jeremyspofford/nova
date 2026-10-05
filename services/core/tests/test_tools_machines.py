@@ -692,7 +692,10 @@ async def test_machine_update_says_confirmed_only_when_the_agent_reconnected(_up
     assert "reconnected on the hub's build aaaaaaaaaaaa" in said and sink[0]["confirmed"] is True
 
 
-async def test_machine_update_says_a_rollback_and_what_still_runs(_updating_plant):
+async def test_machine_update_says_a_rollback_with_its_reason(_updating_plant):
+    """The brief's "...and what still runs": nothing verifies which build runs
+    after a rollback, so the words say what the supervisor put back and why,
+    and leave the build it runs now to machine_status."""
     _updating_plant(_updating("rolled_back", reason="the new build did not connect within 2m0s"))
     said = await _call("machine_update", {"machine": "eval_laptop"})
     assert "put 0a0a0a0a0a0a back" in said and "did not connect within 2m0s" in said
