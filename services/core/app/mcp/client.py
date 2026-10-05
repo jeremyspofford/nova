@@ -283,7 +283,14 @@ async def list_tools(endpoint: Endpoint, *, refresh: bool = False) -> ToolList:
         for raw in result.get("tools") or []:
             why = _tool_problem(raw)
             if why is not None:
-                name = str(raw.get("name")) if isinstance(raw, dict) else "?"
+                # `name` here is the SAME unvalidated server value `_tool_problem`
+                # itself guards against — clipped before it reaches the ledger
+                # this module keeps (`rejected`) or the log (ruling T7-A2); `why`
+                # is already short by construction (`_tool_problem` clips what it
+                # embeds), clipped again here regardless, so this call site
+                # never depends on that remaining true.
+                name = _clipped_text(str(raw.get("name"))) if isinstance(raw, dict) else "?"
+                why = _clipped_text(why)
                 rejected.append((name, why))
                 logger.warning("mcp: %s: left out tool %r — %s", endpoint.name, name, why)
                 continue
@@ -1127,6 +1134,29 @@ def _every_annotation(node: Any) -> Iterator[dict]:
             yield from _every_annotation(value)
 
 
+_EMBEDDED_VALUE_CHARS = 120
+
+
+def _clipped_text(text: str) -> str:
+    """`text`, already a plain string, bounded (ruling T7-A2) — for a value
+    used AS ITS OWN TEXT (a log line's `%s`, a `(name, why)` pair), never
+    through `!r}`. See `_clipped_repr` for the embed-as-repr counterpart."""
+    return text if len(text) <= _EMBEDDED_VALUE_CHARS else text[: _EMBEDDED_VALUE_CHARS - 1] + "…"
+
+
+def _clipped_repr(value: Any) -> str:
+    """A value a TOOL's OWN definition supplied, as `repr` would show it but
+    bounded (ruling T7-A2) — `_tool_problem`'s reasons embed whatever a
+    server's `x-mcp-header` or `type` says about itself, unvalidated and of
+    whatever length a hostile or buggy definition chooses; the one measured
+    case was a 300,000-char header name that made `mcp_connect`'s reply
+    300,283 chars. Every embed in this function goes through this, so a
+    reason this module builds can never carry an unbounded server value —
+    the caller's own cap is a second, structural guarantee on top, not a
+    substitute for clipping at the source."""
+    return _clipped_text(repr(value))
+
+
 def _tool_problem(raw: Any) -> str | None:
     """Why the spec says to leave this tool definition out, or None."""
     if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
@@ -1141,13 +1171,14 @@ def _tool_problem(raw: Any) -> str | None:
         if id(node) not in reachable:
             return "an x-mcp-header sits where only a chain of properties may reach it"
         if not isinstance(name, str) or not _TCHAR.fullmatch(name):
-            return f"x-mcp-header {name!r} is not a header-name token"
+            return f"x-mcp-header {_clipped_repr(name)} is not a header-name token"
         if name.lower() in seen:
-            return f"x-mcp-header {name!r} is used twice"
+            return f"x-mcp-header {_clipped_repr(name)} is used twice"
         seen.add(name.lower())
         if node.get("type") not in ("string", "integer", "boolean"):
             return (
-                f"x-mcp-header {name!r} is on a {node.get('type')!r} parameter; "
+                f"x-mcp-header {_clipped_repr(name)} is on a "
+                f"{_clipped_repr(node.get('type'))} parameter; "
                 "only string, integer and boolean may be mirrored"
             )
     return None

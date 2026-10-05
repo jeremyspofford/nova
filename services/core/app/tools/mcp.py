@@ -30,18 +30,24 @@ Task 12's guards read `mcp_server` off these, and the span's own
 `reached_executor` flag — never `reachable`, which is for Activity and the
 roster's own failing() derivation, not a guard.
 
-THE 64 KIB CAP (ruling T7-A) applies to every word a server's own text puts
-in front of her, not only a successful result: `_capped` is the one place
-that enforces the byte bound, and every return and every ToolFailure built
-even partly from server text — a call's result (body + notes, success or
-`isError`), a ClientError's reason, a refresh failure folded into
-`refresh_note` — is composed THROUGH it, never around it. `result.notes` is
-also bounded in COUNT before it is ever joined into a string
-(`_notes_text`), so a response built of many small non-object content
-blocks cannot inflate a multi-megabyte string just to cut it down
-afterward; a server-supplied TOOL NAME is clipped (`_clip_name`) everywhere
-one is listed, so a single absurd name cannot crowd out the rest of a
-listing or a refusal's own "re-issue the call" instruction.
+THE 64 KIB CAP (rulings T7-A, T7-A2) applies to every word a server's own
+text puts in front of her, not only a successful result, and it is now
+STRUCTURAL rather than something each executor must remember at every
+return and raise: `_bounded` wraps all four executors below, in `TOOLS`,
+so the string `tools.dispatch` actually gets — the return, OR a
+`ToolFailure`'s reason — always passes through `_capped` on the way out,
+even one a future change adds without threading it through by hand. The
+per-site caps already in each executor (body + notes composed together,
+`exc.reason`, `refresh_note`) still exist and still matter: they bound the
+WORK early (a 20,000-entry notes list is collapsed before it is ever
+joined into one string), while `_bounded` is the guarantee that nothing can
+skip the cap, the way a rejected tool's reason once did — unbounded,
+because it never routed through any of those per-site calls at all.
+`result.notes` is bounded in COUNT before composing (`_notes_text`); a
+server-supplied TOOL NAME is clipped (`_clip_name`) everywhere one is
+listed; and `app.mcp.client._tool_problem` clips what IT embeds too (a
+`x-mcp-header` name, a `type` value) at its own source, so a hostile tool
+definition cannot inflate even the per-site numbers `_bounded` backs up.
 
 `app.mcp.servers` is imported INSIDE the executors: it imports notices, then
 the checks, then agents, then this package — a cycle at import time that
@@ -50,8 +56,9 @@ test_the_tools_package_imports_on_its_own would catch.
 
 from __future__ import annotations
 
+import functools
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -60,6 +67,10 @@ from app.mcp import client
 from app.tools import schema
 from app.tools.base import Tool, ToolContext, ToolFailure
 
+# The byte bound `_capped` enforces — BYTES, not characters (a multi-byte
+# UTF-8 character costs more than one), and the WHOLE of what `_capped`
+# returns, cut notice included (ruling B): the notice's own bytes count
+# against this, never on top of it.
 RESULT_CAP_BYTES = 64 * 1024
 TOOLS_RESULT_CAP_CHARS = 24_000
 DESCRIPTION_CHARS = 300
@@ -75,6 +86,11 @@ NAME_CHARS = 120
 # built of many small non-object content blocks never has to build a
 # multi-megabyte string just to cut it down with `_capped` afterward.
 MAX_NOTES_LISTED = 20
+# How many of a connect's REJECTED tools mcp_connect names before collapsing
+# the rest to a count (ruling T7-A2) — the same shape as MAX_NOTES_LISTED,
+# for the same reason: bounded in COUNT before `_bounded`'s own byte cap
+# ever has to lean on a blunt end-of-string cut to stay small.
+REJECTED_LISTED_UP_TO = 20
 
 
 def _store():
@@ -107,19 +123,67 @@ def _schema_text(input_schema: Any) -> str:
     return text if len(text) <= SCHEMA_CHARS else text[:SCHEMA_CHARS] + "…"
 
 
+def _cut_notice(cut_bytes: int) -> str:
+    return (
+        f"\n[cut at 64 KiB: {cut_bytes} more bytes were not shown — "
+        "ask the tool for less, for example fewer lines or one page]"
+    )
+
+
 def _capped(text: str) -> str:
-    """The one place the 64 KiB cap is enforced (ruling T7-A). Every string
-    built even partly from server text passes through this before it ever
-    becomes a return value or a ToolFailure's reason — never only the
-    "normal" result path, or a composed string can slip past uncapped."""
+    """The one place the 64 KiB cap is enforced (rulings T7-A, T7-A2, B).
+    Every string built even partly from server text passes through this
+    before it ever becomes a return value or a ToolFailure's reason — never
+    only the "normal" result path, or a composed string can slip past
+    uncapped (the structural guarantee is `_bounded`, below, which wraps
+    every executor so even a path that forgets to call this directly still
+    cannot skip it).
+
+    Ruling B: the cut notice's OWN bytes count toward the cap — `kept`
+    shrinks to make room for it, so `len(result.encode()) <= RESULT_CAP_
+    BYTES` always, not `RESULT_CAP_BYTES` plus however long the notice
+    happens to be (it used to run 118 bytes over). The notice's length
+    depends on the decimal digit count of how many bytes were cut, which
+    depends on how much is kept, which depends on the notice's length — a
+    small fixpoint, found by at most a handful of iterations (the digit
+    count of `cut` can only grow a few times as `kept` shrinks to make room
+    for an ever-so-slightly longer notice, and never shrinks back)."""
     raw = text.encode("utf-8")
     if len(raw) <= RESULT_CAP_BYTES:
         return text
-    kept = raw[:RESULT_CAP_BYTES].decode("utf-8", errors="ignore")
-    return (
-        f"{kept}\n[cut at 64 KiB: {len(raw) - RESULT_CAP_BYTES} more bytes were not shown — "
-        "ask the tool for less, for example fewer lines or one page]"
-    )
+    kept_bytes = RESULT_CAP_BYTES
+    for _ in range(20):  # converges in 1-2 passes in practice; this is a hard backstop
+        room = RESULT_CAP_BYTES - len(_cut_notice(len(raw) - kept_bytes).encode("utf-8"))
+        room = max(room, 0)
+        if room == kept_bytes:
+            break
+        kept_bytes = room
+    kept = raw[:kept_bytes].decode("utf-8", errors="ignore")
+    return kept + _cut_notice(len(raw) - kept_bytes)
+
+
+def _bounded(
+    executor: Callable[[dict, ToolContext], Awaitable[str]],
+) -> Callable[[dict, ToolContext], Awaitable[str]]:
+    """Wrap an executor so NEITHER its return value NOR a `ToolFailure` it
+    raises can skip the 64 KiB cap (ruling T7-A2) — the structural half of
+    the cap. The per-site caps each executor already applies at its own
+    call sites bound the WORK early (a 20,000-entry notes list never
+    becomes one giant string just to be cut down); this is the guarantee
+    that a future return or raise added to any of the four — or one this
+    round already missed, the way a rejected tool's reason skipped every
+    per-site cap by never routing through one — cannot reintroduce an
+    unbounded reply. Applied once, where `TOOLS` is built, to all four."""
+
+    @functools.wraps(executor)
+    async def wrapped(args: dict, ctx: ToolContext) -> str:
+        try:
+            result = await executor(args, ctx)
+        except ToolFailure as exc:
+            raise ToolFailure(_capped(str(exc))) from exc
+        return _capped(result)
+
+    return wrapped
 
 
 def _clip_name(name: Any) -> str:
@@ -200,7 +264,11 @@ async def mcp_connect(args: dict, ctx: ToolContext) -> str:
             f"mcp_tools(server={server.name!r}, query=…)."
         )
     if done.rejected:
-        dropped = "; ".join(f"{_clip_name(name)}: {why}" for name, why in done.rejected[:5])
+        shown = done.rejected[:REJECTED_LISTED_UP_TO]
+        dropped = "; ".join(f"{_clip_name(name)}: {why}" for name, why in shown)
+        more = len(done.rejected) - len(shown)
+        if more > 0:
+            dropped += f"; and {more} more"
         lines.append(
             f"{len(done.rejected)} of its tools were left out because their definitions break "
             f"the protocol ({dropped})."
@@ -435,7 +503,7 @@ TOOLS: tuple[Tool, ...] = (
             },
             ["name", "url"],
         ),
-        executor=mcp_connect,
+        executor=_bounded(mcp_connect),
         # The URL is a connection address, and its own PATH can be the secret
         # (ha-mcp authenticates by one, with no token or header beside it to
         # catch by) — so only its origin may ever reach the trace (S37a,
@@ -450,7 +518,7 @@ TOOLS: tuple[Tool, ...] = (
             "no longer be run."
         ),
         parameters=_obj({"name": {"type": "string"}}, ["name"]),
-        executor=mcp_disconnect,
+        executor=_bounded(mcp_disconnect),
     ),
     Tool(
         name="mcp_tools",
@@ -466,7 +534,7 @@ TOOLS: tuple[Tool, ...] = (
             },
             ["server"],
         ),
-        executor=mcp_tools,
+        executor=_bounded(mcp_tools),
         # A live reading of what a server offers now; it may refresh the STORED
         # copy of that list — a record of what the server says, never a change
         # to anything outside Nova — and is never run unasked (plan P10, P25).
@@ -489,7 +557,7 @@ TOOLS: tuple[Tool, ...] = (
             },
             ["server", "tool"],
         ),
-        executor=mcp_call,
+        executor=_bounded(mcp_call),
         # What a third party answers is a point-in-time reading ("CI is red")
         # that goes stale, so a turn that ran one is not ingested into
         # long-term memory — the device_notify declaration: ephemeral, and

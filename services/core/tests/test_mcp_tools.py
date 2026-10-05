@@ -16,10 +16,48 @@ from app import chat, tools, traces
 from app.identity import Person
 from app.main import app
 from app.mcp import client, fake, servers
+from app.tools import mcp as mcp_module
 from app.tools import schema
-from tests.conftest import requires_db
+from app.tools.base import ToolFailure
+from tests.conftest import TEST_DSN, requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 from tests.test_chat_card import frames, set_chat_model, text, whole_call
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _wipe_mcp_tables_once_the_file_is_done():
+    """Fix round 2, ruling C: `pool` truncates fresh at the START of every
+    test, so nothing in THIS module ever reads another test's leftovers —
+    but nothing truncates again once the LAST test in the module finishes,
+    and several tests here write real rows (`servers.connect`, or a real
+    chat turn through `owner_client`) that a `pool`-fixture-only cleanup
+    never reaches. Left alone, whichever test happens to be collected last
+    decides what `mcp_servers`, `governance_events` and `notices` hold for
+    whoever reads this scratch database next — an order-dependent flake.
+    Plain (sync) on purpose: its teardown opens its OWN short-lived
+    connection via `asyncio.run`, never the function-scoped `pool` fixture
+    (torn down per test, and not a dependency a module-scoped fixture may
+    take), so it has nothing to do with whatever event loop the tests
+    themselves ran on."""
+    yield
+    if not TEST_DSN:
+        return
+    import asyncio
+
+    import asyncpg
+
+    async def _wipe() -> None:
+        conn = await asyncpg.connect(TEST_DSN)
+        try:
+            await conn.execute(
+                "TRUNCATE mcp_servers, governance_events, notices, notice_mutes "
+                "RESTART IDENTITY CASCADE"
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_wipe())
+
 
 URL = "http://gh.mcp.invalid/mcp"
 ORIGIN = "http://gh.mcp.invalid"
@@ -308,7 +346,9 @@ async def test_a_long_result_is_cut_at_64_kib_with_a_note(pool):
             "mcp_call", {"server": "github", "tool": "get_job_logs"}, _ctx()
         )
     assert ok and "[cut at 64 KiB:" in result
-    assert len(result.encode()) < 66 * 1024
+    # Ruling B: the cut notice's own bytes count toward the cap, so the
+    # WHOLE result — notice included — is at or under it, never over.
+    assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES
 
 
 @requires_db
@@ -439,7 +479,10 @@ async def test_a_huge_server_error_message_is_capped(pool):
             "mcp_call", {"server": "github", "tool": "big_err"}, _ctx()
         )
     assert not ok
-    assert len(result.encode()) < 66 * 1024
+    # Ruling A/T7-A2: dispatch adds its own fixed "Error: " prefix on top of
+    # whatever the (now-structurally-capped) ToolFailure reason carries —
+    # the only overhead outside this module's own guarantee.
+    assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES + len(tools.ERROR_PREFIX)
     assert "[cut at 64 KiB:" in result
 
 
@@ -470,7 +513,7 @@ async def test_many_non_object_notes_are_bounded_before_being_composed(pool):
     finally:
         client.unplant(handle)
     assert ok
-    assert len(result.encode()) < 66 * 1024
+    assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES
     assert "more notes)" in result
 
 
@@ -503,11 +546,17 @@ async def test_mcp_connect_clips_a_long_tool_name_in_its_own_reply(pool):
 
 @requires_db
 async def test_mcp_connect_clips_a_long_tool_name_in_its_rejected_list_too(pool):
+    """Clipped twice over now (fix round 2, ruling T7-A2): `client.
+    _tool_problem`'s own caller clips the name at the source before it
+    ever reaches `rejected`, and `mcp.py`'s `_clip_name` clips again — so
+    the exact boundary is an internal detail of two cooperating defences,
+    never pinned tighter than "the full name never appears, a clipped
+    prefix does"."""
     long_name = "y" * 500
     broken = fake.FakeTool(long_name, "d", input_schema="not an object")
     with planted(fake.FakeSpec(tools=(broken,))):
         result, ok = await tools.dispatch("mcp_connect", {"name": "github", "url": URL}, _ctx())
-    assert ok and long_name not in result and ("y" * 120 + "…") in result
+    assert ok and long_name not in result and ("y" * 100) in result
     assert "its inputSchema is not an object" in result
 
 
@@ -786,3 +835,111 @@ async def test_mcp_connect_replacing_a_server_names_only_the_origin_never_the_pa
     assert ok
     assert f"It replaced the github that the owner had added, at {old_origin}." in result
     assert "secret_path" not in result
+
+
+# -- fix round 2: ruling T7-A2, the cap is structural -----------------------------------------
+
+
+@requires_db
+async def test_mcp_connects_reply_is_capped_even_for_a_rejected_tools_huge_header_value(
+    pool, caplog
+):
+    """The re-reviewer's own probe: `client._tool_problem` used to embed a
+    server's `x-mcp-header` value verbatim, with no length bound — a
+    300,000-char value made mcp_connect's reply 300,283 chars, 234,747
+    bytes over the cap. Fixed at the source (`_tool_problem` clips what it
+    embeds) AND structurally (`_bounded` wraps every executor): either one
+    alone would have caught this; both apply. Ruling D rides here too: the
+    log line must carry the clipped value, never the raw one."""
+    huge_header_name = "A" * 300_000
+    broken = fake.FakeTool(
+        "weird_tool",
+        "d",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "h": {"type": "object", "x-mcp-header": huge_header_name, "properties": {}}
+            },
+        },
+    )
+    with caplog.at_level("WARNING"):
+        with planted(fake.FakeSpec(tools=(broken,))):
+            result, ok = await tools.dispatch("mcp_connect", {"name": "github", "url": URL}, _ctx())
+    assert ok, result
+    assert huge_header_name not in result
+    assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES
+    # Ruling D: the warning carries the CLIPPED value, never the raw one.
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("left out tool" in w for w in warnings)
+    assert all(huge_header_name not in w for w in warnings)
+
+
+@requires_db
+async def test_mcp_connect_lists_at_most_20_rejected_tools_and_counts_the_rest(pool):
+    broken = tuple(
+        fake.FakeTool(f"broken_{i}", "d", input_schema="not an object") for i in range(50)
+    )
+    with planted(fake.FakeSpec(tools=broken)):
+        result, ok = await tools.dispatch("mcp_connect", {"name": "github", "url": URL}, _ctx())
+    assert ok, result
+    assert "50 of its tools were left out" in result
+    for i in range(20):
+        assert f"broken_{i}:" in result
+    for i in range(20, 50):
+        assert f"broken_{i}:" not in result
+    assert "and 30 more" in result
+
+
+async def test_the_structural_wrapper_caps_both_a_return_and_a_toolfailure_reason():
+    """`_bounded` in isolation, independent of any specific executor's own
+    logic — the PUREST proof of the structural guarantee: whatever an
+    executor does, neither path can produce more than RESULT_CAP_BYTES."""
+
+    async def huge_return(args: dict, ctx) -> str:
+        return "R" * 200_000
+
+    async def huge_failure(args: dict, ctx) -> str:
+        raise ToolFailure("E" * 200_000)
+
+    wrapped_return = mcp_module._bounded(huge_return)
+    wrapped_failure = mcp_module._bounded(huge_failure)
+
+    result = await wrapped_return({}, _ctx())
+    assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES
+
+    with pytest.raises(ToolFailure) as caught:
+        await wrapped_failure({}, _ctx())
+    assert len(str(caught.value).encode()) <= mcp_module.RESULT_CAP_BYTES
+
+
+@pytest.mark.parametrize("name", ["mcp_connect", "mcp_disconnect", "mcp_tools", "mcp_call"])
+def test_every_registered_mcp_executor_is_wrapped_by_the_structural_cap(name):
+    """Not just that `_bounded` WORKS (the isolated test above) — that all
+    FOUR registry entries actually USE it, so a fifth tool added later (or
+    one of these four quietly un-wrapped by a future edit) reddens here
+    instead of silently reopening the gap a rejected tool's reason fell
+    through."""
+    bare = {
+        "mcp_connect": mcp_module.mcp_connect,
+        "mcp_disconnect": mcp_module.mcp_disconnect,
+        "mcp_tools": mcp_module.mcp_tools,
+        "mcp_call": mcp_module.mcp_call,
+    }[name]
+    assert tools.REGISTRY[name].executor is not bare
+    assert tools.REGISTRY[name].executor.__wrapped__ is bare
+
+
+# -- fix round 2: ruling B, _capped keeps its own promise --------------------------------------
+
+
+def test_capped_keeps_its_own_promise_the_whole_result_fits():
+    """The cut notice's own bytes used to be appended AFTER the slice, so a
+    capped result ran 118 bytes over the cap. `_capped`'s OWN output, on
+    its own — not through any executor or wrapper — must fit."""
+    result = mcp_module._capped("E" * 200_000)
+    assert len(result.encode("utf-8")) <= mcp_module.RESULT_CAP_BYTES
+    assert "[cut at 64 KiB:" in result
+
+
+def test_capped_leaves_short_text_alone():
+    assert mcp_module._capped("hello") == "hello"
