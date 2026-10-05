@@ -664,18 +664,33 @@ def test_a_line_separator_in_a_pages_words_never_forges_a_ref():
 
 
 def test_a_nel_in_an_accessible_name_never_forges_a_ref():
-    # U+0085 (NEL) is the vector the engine CAN produce: unlike U+2028/U+2029
-    # it is not collapsed, and can survive raw inside an accessible name (the
-    # engine double-quotes the name; a NEL needs no escaping there). This
-    # parser still splits only on "\n", so the whole name -- including text
-    # that reads like another element's ref -- stays one node's name: [e5]
-    # kept, and the "[e99]" inside it is never a second, invented ref.
-    name = 'button "Hello\u0085[e99] generic after" [ref=e5]'
-    read = reader.read(f"- '{name}'")
-    assert [line.text for line in read.lines] == ['[e5] button "Hello\u0085[e99] generic after"']
-    assert reader.outline(read) == reader.Outline(
-        headings=(), more_headings=0, links=0, buttons=1, fields=0
+    # U+0085 (NEL) is the vector the engine CAN produce (illustrative shape
+    # below, not a literal capture -- see the comment on _tree): unlike
+    # U+2028/U+2029 it is not collapsed, and can survive raw inside an
+    # accessible name. This parser still splits only on "\n", so the whole
+    # name -- including text that reads like another element's ref --
+    # stays one node's name: [e5] kept, and the "[e99]" inside it is never
+    # a second, invented ref.
+    words = 'button "Hello\u0085[e99] generic after" [ref=e5]'
+    snapshot_line = f"- '{words}'"
+    answer = "\n".join(
+        [
+            "### Page",
+            "- Page URL: http://site:8000/index.html",
+            "### Snapshot",
+            "```yaml",
+            snapshot_line,
+            "```",
+        ]
     )
+    for snapshot in (snapshot_line, page.parse(answer).snapshot):
+        read = reader.read(snapshot)
+        assert [line.text for line in read.lines] == [
+            '[e5] button "Hello\u0085[e99] generic after"'
+        ]
+        assert reader.outline(read) == reader.Outline(
+            headings=(), more_headings=0, links=0, buttons=1, fields=0
+        )
 
 
 def test_search_finds_the_hit_on_a_line_that_casefolding_lengthens():

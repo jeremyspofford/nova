@@ -268,7 +268,8 @@ def _tree(snapshot: str) -> list[_Node]:
     # measured -- but U+0085 (NEL) survives raw inside an accessible name,
     # and splitting on it there would read the name's own tail as a new
     # node, with a ref it never had (`Hello<U+0085>  - button "Sign in"
-    # [ref=e99]`, measured).
+    # [ref=e99]`, illustrative -- the engine escapes inner quotes and
+    # collapses whitespace, so that exact literal is not engine output).
     roots: list[_Node] = []
     stack: list[tuple[int, _Node]] = []
     for raw in snapshot.split("\n"):
