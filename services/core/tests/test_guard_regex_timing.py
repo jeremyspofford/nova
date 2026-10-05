@@ -314,12 +314,22 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
           `_DEFERRAL_TOOLS` AND lists `_SET_REMINDER` a second time, so all
           9 classes appear, one of them twice: 1+2+2+2+2+1+2+2+2+1).
       = 59. Update this deliberately, in the same commit as whatever changes
-    guards.py's container shapes, and say in the commit body why it moved."""
+    guards.py's container shapes, and say in the commit body why it moved.
+
+    S42b (Task 23, the update guards) moved all three, deliberately:
+       4  new BARE module Patterns, reached by both walks — `_UPDATED_MACHINE`
+          and `_UPDATE_RECAP` (narration's update claim), `_NAME_WORD` (a word
+          of a machine's name) and `_CAP_UPDATE_AGENTS` (the capability row):
+          162 -> 166, 221 -> 225.
+       1  `_CAPABILITY_TOOLS` grew a 23rd `(Pattern, str)` pair — the same
+          `_CAP_UPDATE_AGENTS` under a second id, reached by the live walk
+          only (inserted before the S42a device_run row, which stays [-1]):
+          225 -> 226, and the difference 59 -> 60."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 162, len(old)
-    assert len(new) == 221, len(new)
-    assert len(new) - len(old) == 59
+    assert len(old) == 166, len(old)
+    assert len(new) == 226, len(new)
+    assert len(new) - len(old) == 60
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -433,3 +443,75 @@ def test_the_sweep_reaches_the_in_use_and_line_patterns():
         "_machine_patterns[1]",
     ):
         assert name in swept, name
+
+
+# S42b (Task 23): the update guards' patterns, on the shapes that ENTER them —
+# "I updated" and a possessive agent before padding, "update the agents" before
+# padding — and on the one shape the restart class needs: a long run of name
+# characters ("a.a.a…"), which an unanchored `\b[\w.-]+'s` re-enters at every
+# word boundary inside it. The brief's first form of the possessive branch was
+# exactly that: 0.28 ms at 200 characters, 14.7 ms at 1,500 and 238 ms at
+# 6,000 (measured), so 1,500 alone could not tell it from a linear one and the
+# third width is here. The run is NOT among the global sweep's inputs:
+# _FILENAME, _CONTENT_CLAIM and _PASSIVE_CLAIM are quadratic on it too (about
+# 90 ms at 1,500 — pre-existing, reported by Task 23), and turning them red is
+# not this change.
+UPDATE_PATTERNS = ("_UPDATED_MACHINE", "_UPDATE_RECAP", "_NAME_WORD", "_CAP_UPDATE_AGENTS")
+
+
+def _update_shapes(n: int) -> dict[str, str]:
+    pad = " " * n
+    return {
+        "update_claim_then_spaces": "I updated" + pad + "x",
+        "update_name_then_spaces": "I updated eval_laptop" + pad + "x",
+        "update_onto_then_spaces": "I upgraded eval_laptop to the" + pad + "x",
+        "possessive_agent_then_spaces": "eval_laptop's agent is" + pad + "x",
+        "dotted_name_run": "a." * (n // 2) + "!",
+        "dashed_name_run": "a-" * (n // 2) + "!",
+        "name_run_then_possessive": "a." * (n // 2) + "'s agent is" + pad + "x",
+        "many_update_claims": "I updated a's agent. " * (n // 21) + "x",
+        "update_agents_then_spaces": "update the agents" + pad + "x",
+        "update_agents_on_then_spaces": "update the agents on your" + pad + "machines x",
+        "many_update_verbs": "update " * (n // 7) + "agents x",
+    }
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+@pytest.mark.parametrize("pattern_name", UPDATE_PATTERNS)
+def test_the_update_patterns_walk_the_shapes_that_enter_them_in_milliseconds(pattern_name, width):
+    pattern = getattr(guards, pattern_name)
+    for label, text in _update_shapes(width).items():
+        for method in (pattern.search, pattern.match, pattern.fullmatch):
+            took = _best_of(lambda method=method, text=text: method(text), runs=2)
+            assert took < BUDGET_S, (
+                f"{pattern_name}.{method.__name__}({label}, {width}): {took * 1000:.1f} ms"
+            )
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+def test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds(width):
+    """Through the guards themselves: narration (the update claim) and the
+    capability guard (the update row), on every shape that is not the name
+    run — the run is _FILENAME's, above."""
+    from app import tools
+
+    available = tools.tool_names()
+    for label, text in _update_shapes(width).items():
+        if "name_run" in label:
+            continue
+        for check in (
+            lambda text=text: guards.narration_check(text, []),
+            lambda text=text: guards.capability_claim_check("I can't " + text, available),
+        ):
+            took = _best_of(check)
+            assert took < BUDGET_S, f"{label} ({width}): {took * 1000:.1f} ms"
+
+
+def test_the_global_sweep_reaches_the_update_patterns():
+    """They are module constants, so the derived sweep times them on every
+    padding input too — and the capability row under its table id as well."""
+    swept = _every_pattern()
+    for name in UPDATE_PATTERNS:
+        assert name in swept, name
+    assert any(p is guards._CAP_UPDATE_AGENTS for p in swept.values())
+    assert sum(p is guards._CAP_UPDATE_AGENTS for p in swept.values()) == 2

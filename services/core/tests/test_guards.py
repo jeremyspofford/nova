@@ -1480,6 +1480,23 @@ OFFER_MUST_NOT_FIRE = [
         "make a QR code for the vending machine",
         "Want me to make a QR code for the vending machine?",
     ),
+    # S42b: which machine first is a parameter she is missing — hers to ask.
+    (
+        "s42b_update_which_machine",
+        "update my agents",
+        "Which machine's agent should I update first — minipc or the laptop?",
+    ),
+    # S42b (Task 23 controller rulings): an update offered back is NOT an offer
+    # class. The class would read his message ("update minipc's agent") to
+    # decide, and its redirect would regenerate with machine_update advertised
+    # and "do it now" — an agent restart, and the cancel of what runs there,
+    # pushed by a phrase match. Neither is allowed: no phrase matcher on the
+    # owner's message, and no redirect may push an action.
+    (
+        "s42b_update_offer_is_not_judged_against_his_message",
+        "update minipc's agent",
+        "Want me to update minipc's agent now?",
+    ),
 ]
 
 
@@ -3401,6 +3418,8 @@ def _every_correction() -> list[tuple[str, str]]:
         # `served`, `claimed` and `tool` (S40b T2): the served-model
         # correction names the model that wrote the reply and the one claimed,
         # and the memory correction the memory tool that answered.
+        # `subject` (S42b): the update correction names the machine no
+        # machine_update call confirmed, and the ones it did.
         out.append(
             (
                 name,
@@ -3414,6 +3433,7 @@ def _every_correction() -> list[tuple[str, str]]:
                     served="hub:qwen3:8b",
                     claimed="qwen3.8:27b",
                     tool="memory_search",
+                    subject="an update of a machine named hub (it confirmed minipc's)",
                 ),
             )
         )
@@ -3710,3 +3730,314 @@ def test_the_claim_names_what_it_matched_for_the_span():
     claim = guards.stack_claim_check("The gateway is down.", SERVED, purpose="chat")
     assert claim.subject
     assert "down" in claim.phrase
+
+
+# -- S42b: an update is confirmed by the reconnect, never by the send --------
+#
+# machine_update records {"machine_update", "hub", "outcome", "version",
+# "confirmed"} on its span (Task 22). A claim that a machine's agent was
+# updated is backed ONLY by a fact naming that machine with confirmed: true —
+# the update ledger's outcome for that device as the tool answered it (P8,
+# Review Focus 2). The correction is the family's APPEND shape: one sentence of
+# what the record shows, never a redirect and never an invitation to act.
+
+UPDATE_CLAIMS = (
+    ("I updated minipc's agent.", "minipc"),
+    ("I've updated the agent on eval_laptop.", "eval_laptop"),
+    ("I upgraded eval_laptop to the hub's build.", "eval_laptop"),
+    ("eval_laptop's agent is now updated.", "eval_laptop"),
+    ("Done — I updated the hub's agent.", "hub"),
+)
+UPDATE_HONEST = (
+    "I sent the hub's build to eval_laptop; it is not confirmed until its agent reconnects.",
+    "I'll update eval_laptop's agent.",
+    "Should I update eval_laptop's agent?",
+    "I updated my notes.",
+    "eval_laptop's agent has not been updated.",
+    "I updated the notes on minipc.",
+)
+
+
+def _update_span(machine: str, *, outcome: str, hub: bool = False, ok: bool = True):
+    span = tool_span("machine_update", ok=ok, machine=machine)
+    span.meta["facts"] = [
+        {
+            "machine_update": machine,
+            "hub": hub,
+            "outcome": outcome,
+            "version": "aaaaaaaaaaaa",
+            "confirmed": outcome == "confirmed",
+        }
+    ]
+    return span
+
+
+@pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS)
+def test_an_update_claim_without_a_confirmed_reconnect_is_corrected(reply, machine):
+    """Review Focus 2 (P8): "sent" backs nothing — only the reconnect does."""
+    for spans in ([other_span()], [_update_span(machine, outcome="sent")]):
+        correction = guards.narration_check(reply, spans)
+        assert correction is not None and kinds(correction) == ["updated_machine"], reply
+        assert targets(correction) == [machine], reply
+
+
+@pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS)
+def test_a_confirmed_update_backs_the_claim_for_that_machine_only(reply, machine):
+    assert (
+        guards.narration_check(
+            reply, [_update_span(machine, outcome="confirmed", hub=machine == "hub")]
+        )
+        is None
+    )
+    other = guards.narration_check(reply, [_update_span("somewhere-else", outcome="confirmed")])
+    assert other is not None and kinds(other) == ["updated_machine"]
+
+
+@pytest.mark.parametrize("reply", UPDATE_HONEST)
+def test_honest_update_talk_never_fires(reply):
+    assert guards.narration_check(reply, [other_span()]) is None, reply
+
+
+def test_the_door_is_not_identity_so_a_hub_door_update_backs_no_claim_about_the_hub():
+    """Controller ruling (Task 23), replacing the brief's opposite pin: "hub":
+    true says only that the agent came in through the hub machine's own
+    loopback door, and a relay on the hub (a quick tunnel to 127.0.0.1, an ssh
+    -L) reads the same way. What backs "I updated the hub's agent" is the update
+    ledger row for the machine the claim NAMES — a confirmed machine_update
+    fact for a machine called hub (D8 refuses the name, so in practice none) —
+    never the door. The sentence then names what the record DID confirm, by
+    name, so the owner who knows minipc is his hub machine is not misled."""
+    door = _update_span("minipc", outcome="confirmed", hub=True)
+    correction = guards.narration_check("I updated the hub's agent.", [door])
+    assert correction is not None and targets(correction) == ["hub"]
+    assert correction.text == (
+        "Correction: no machine_update call this turn confirmed an update of a machine named "
+        "hub (it confirmed minipc's) — only the agent reconnecting on the hub's build "
+        "confirms one."
+    )
+    # The same span backs the claim by the machine's own name.
+    assert guards.narration_check("I updated minipc's agent.", [door]) is None
+    # "hub" is never read: the same confirmed fact without it backs the same claims.
+    plain = _update_span("minipc", outcome="confirmed", hub=False)
+    for reply in ("I updated the hub's agent.", "I updated minipc's agent."):
+        with_door = guards.narration_check(reply, [door])
+        without = guards.narration_check(reply, [plain])
+        assert (with_door is None) == (without is None), reply
+
+
+def test_a_machine_whose_own_name_says_hub_backs_the_hub_claim_by_name():
+    """The name is the identity the record carries: a row named hub from
+    before D8, or a machine whose own name has the word (nova-hub), is the
+    machine the claim names."""
+    for name in ("hub", "nova-hub"):
+        span = _update_span(name, outcome="confirmed")
+        assert guards.narration_check("I updated the hub's agent.", [span]) is None, name
+
+
+@pytest.mark.parametrize("outcome", ["current", "sent", "rolled_back", "not_confirmed", "refused"])
+def test_no_outcome_but_confirmed_backs_an_update_claim(outcome):
+    """Each outcome machine_update can answer with, as the ledger holds it:
+    only the reconnect (confirmed) says the agent runs the new build. "current"
+    sent nothing; the rest are a send that was not confirmed or did not take."""
+    span = _update_span("eval_laptop", outcome=outcome)
+    correction = guards.narration_check("I updated eval_laptop's agent.", [span])
+    assert correction is not None and targets(correction) == ["eval_laptop"], outcome
+
+
+def test_a_cannot_backs_no_update_claim():
+    """A cannot is a failed span (a stated ToolFailure); it updated nothing."""
+    span = _update_span("box", outcome="cannot", ok=False)
+    correction = guards.narration_check("I updated box's agent.", [span])
+    assert correction is not None and kinds(correction) == ["updated_machine"]
+
+
+UPDATE_SENT_CORRECTION = (
+    "Correction: no machine_update call this turn confirmed an update of a machine named "
+    "eval_laptop — only the agent reconnecting on the hub's build confirms one."
+)
+
+
+def test_the_update_correction_says_only_what_the_record_shows():
+    """APPEND-only, one true sentence (the said-not-done lane's shape). The
+    family's generic "I did not actually do that — there is no record of the
+    action this turn" would be FALSE beside a send machine_update really made,
+    so an update claim never gets it. Nothing in it invites an action."""
+    for spans in ([other_span()], [_update_span("eval_laptop", outcome="sent")]):
+        correction = guards.narration_check("Done — I updated eval_laptop's agent.", spans)
+        assert correction is not None
+        assert correction.text == UPDATE_SENT_CORRECTION
+        assert "no record of the action" not in correction.text
+        assert not re.search(
+            r"\b(?:again|retry|try|ask|want me|should i|let me|shall i|tell me)\b",
+            correction.text,
+            re.I,
+        ), correction.text
+
+
+def test_the_update_correction_names_every_unconfirmed_machine_and_what_was_confirmed():
+    reply = "I updated minipc's agent. I've updated eval_laptop's agent too."
+    spans = [_update_span("eval_pc", outcome="confirmed"), _update_span("minipc", outcome="sent")]
+    correction = guards.narration_check(reply, spans)
+    assert correction is not None and targets(correction) == ["minipc", "eval_laptop"]
+    assert correction.text == (
+        "Correction: no machine_update call this turn confirmed an update of a machine named "
+        "minipc or eval_laptop (it confirmed eval_pc's) — only the agent reconnecting on the "
+        "hub's build confirms one."
+    )
+
+
+def test_an_update_claim_that_names_no_machine_is_backed_by_any_confirmed_update():
+    reply = "I upgraded it to the hub's build."
+    assert guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")]) is None
+    for spans in ([other_span()], [_update_span("minipc", outcome="sent")]):
+        correction = guards.narration_check(reply, spans)
+        assert correction is not None and targets(correction) == [None]
+        assert correction.text == (
+            "Correction: no machine_update call this turn confirmed an update — only the agent "
+            "reconnecting on the hub's build confirms one."
+        )
+
+
+def test_an_update_claim_beside_another_kind_keeps_both_sentences():
+    """A reply that also claims a file it never wrote: the family's sentence
+    for the file, then the update's own, each true of its claim."""
+    reply = "I updated eval_laptop's agent and I saved notes.md."
+    correction = guards.narration_check(reply, [_update_span("eval_laptop", outcome="sent")])
+    assert correction is not None
+    assert sorted(kinds(correction)) == ["updated_machine", "wrote_file"]
+    assert correction.text == (
+        f"{guards.CORRECTION_TEXT} No machine_update call this turn confirmed an update of a "
+        "machine named eval_laptop — only the agent reconnecting on the hub's build confirms one."
+    )
+
+
+def test_a_word_of_the_machines_own_name_names_it():
+    """ "your Dell" is DELL-XPS-8950 because "dell" is a word of its name — the
+    said-not-done lane's rule for a device's name: a true reply that calls the
+    machine by a word of its name is never corrected."""
+    span = _update_span("DELL-XPS-8950", outcome="confirmed")
+    for reply in ("I updated your Dell's agent.", "I updated the agent on the Dell."):
+        assert guards.narration_check(reply, [span]) is None, reply
+    assert guards.narration_check("I updated the laptop's agent.", [span]) is not None
+
+
+UPDATE_CLAIMS_MORE = (
+    ("I've just updated minipc's agent.", "minipc"),
+    ("I have updated the agent on eval_laptop.", "eval_laptop"),
+    ("I've also updated eval_laptop's agent.", "eval_laptop"),
+    ("I've successfully upgraded minipc's agent.", "minipc"),
+    ("eval_laptop's agent has been updated.", "eval_laptop"),
+    ("I upgraded the agent on eval_laptop to the hub's build.", "eval_laptop"),
+    ("I updated the agents on minipc.", "minipc"),
+    ("All set: I upgraded minipc onto the hub's new build.", "minipc"),
+)
+
+
+@pytest.mark.parametrize("reply,machine", UPDATE_CLAIMS_MORE)
+def test_the_other_ways_she_says_an_update_happened_are_read(reply, machine):
+    correction = guards.narration_check(reply, [_update_span(machine, outcome="sent")])
+    assert correction is not None and kinds(correction) == ["updated_machine"], reply
+    assert targets(correction) == [machine], reply
+    assert guards.narration_check(reply, [_update_span(machine, outcome="confirmed")]) is None
+
+
+UPDATE_NOT_A_CLAIM = (
+    # negated, future, hedged, a question, or not her own act
+    "I haven't updated minipc's agent.",
+    "I never updated minipc's agent.",
+    "I couldn't update minipc's agent: it is offline.",
+    "Once its agent reconnects, I'll have updated minipc.",
+    "If I updated minipc's agent now, its running command would end cancelled.",
+    "Have I updated minipc's agent? Not yet — it was sent and is not confirmed.",
+    "You said I updated minipc's agent, but it is not confirmed.",
+    "eval_laptop's agent has been updated by the update job.",
+    "The job says eval_laptop's agent has been updated.",
+    # an earlier time: a recap, not this turn's act
+    "I updated minipc's agent yesterday.",
+    "I updated minipc's agent earlier — it reconnected then.",
+    "I updated minipc's agent this morning.",
+    "In our last chat I updated minipc's agent.",
+    "I updated minipc's agent on Monday.",
+    "I updated minipc's agent before, so I know it reconnects.",
+    # other software, other builds
+    "I upgraded Firefox to the latest build.",
+    "I updated the app to the new version.",
+)
+
+
+@pytest.mark.parametrize("reply", UPDATE_NOT_A_CLAIM)
+def test_what_is_not_an_update_claim_never_fires(reply):
+    correction = guards.narration_check(reply, [other_span()])
+    assert correction is None or "updated_machine" not in kinds(correction), reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I updated the agent on your behalf.",
+        "I updated the agent on time.",
+        "I updated Nova's agent on schedule.",
+        "I upgraded it to the hub's build.",
+    ],
+)
+def test_a_word_where_a_name_would_sit_claims_an_update_of_no_machine_in_particular(reply):
+    """A trailing phrase ("on your behalf", "on time") or a pronoun puts a word
+    where the machine's name would be. Read as a name, it would correct a TRUE
+    report after a real, confirmed update — so it names no machine: any
+    confirmed update backs it, and with none it still fires."""
+    correction = guards.narration_check(reply, [other_span()])
+    assert correction is not None and targets(correction) == [None], reply
+    assert guards.narration_check(reply, [_update_span("minipc", outcome="confirmed")]) is None
+
+
+def test_the_update_correction_trips_no_guard_of_its_own():
+    """What persists is the correction beside her prose, so a correction that
+    tripped a guard would be corrected forever (every guard is clean over its
+    own correction)."""
+    texts = [
+        UPDATE_SENT_CORRECTION,
+        guards.narration_check(
+            "I updated the hub's agent.", [_update_span("minipc", outcome="confirmed", hub=True)]
+        ).text,
+        guards.narration_check("I upgraded it to the hub's build.", [other_span()]).text,
+    ]
+    # A round hub served makes hub a machine the state guard reads by name.
+    on_hub = SimpleNamespace(
+        kind="llm_call",
+        name="hub:qwen3:8b",
+        meta={"purpose": "chat", "served_by": "hub:qwen3:8b", "local": True},
+    )
+    spans = [_update_span("minipc", outcome="confirmed"), on_hub]
+    for text in texts:
+        assert guards.narration_check(text, spans) is None, text
+        assert guards.consent_claim_check(text) is None, text
+        assert guards.capability_claim_check(text, DEFERRAL_TOOLS) is None, text
+        assert guards.deferral_check(text, spans, DEFERRAL_TOOLS) is None, text
+        assert guards.bare_intent_check(text, []) is None, text
+        assert (
+            guards.state_claim_check(text, spans, ["minipc", "eval_laptop"], purpose="chat") is None
+        ), text
+        assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None, text
+        assert guards.delegation_claim_check(text, [], ["coder"]) is None, text
+        assert guards.stack_claim_check(text, [on_hub], purpose="chat") is None, text
+        assert guards.served_claim_check(text, [on_hub], purpose="chat") is None, text
+        assert guards.memory_claim_check(text, [on_hub], purpose="chat") is None, text
+
+
+def test_no_offer_class_reads_his_message_for_an_update():
+    """Task 23 controller rulings, in place of the brief's `_UPDATE_MACHINE`
+    offer class. The offer shape decides by reading the OWNER's message
+    (_instructed_classes) and answers with a tools-advertised "do it now"
+    redirect; for machine_update that is a phrase matcher on his words pushing
+    an agent restart — and the cancel of every command running there. Guards
+    read her reply and the turn's spans, never his message, and no redirect
+    may push an action. If this goes red, a class carrying the update tool
+    joined _OFFER_CLASSES: that needs an owner ruling first, not a pin move."""
+    assert not any(set(cls.tools) & guards._UPDATE_TOOLS for cls in guards._OFFER_CLASSES)
+    claim = guards.deferral_check(
+        "Want me to update minipc's agent now?",
+        [other_span()],
+        DEFERRAL_TOOLS,
+        user_message="update minipc's agent",
+    )
+    assert claim is None

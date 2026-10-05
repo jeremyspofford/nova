@@ -1102,6 +1102,13 @@ def test_the_machine_tool_names_are_the_registry_names():
     assert machine_tools.MACHINE_CONFIGURE.name in tools.REGISTRY
 
 
+def test_the_update_claim_is_backed_by_the_registered_update_tool():
+    from app import tools
+
+    assert guards._UPDATE_TOOLS == {machine_tools.MACHINE_UPDATE.name}
+    assert machine_tools.MACHINE_UPDATE.name in tools.REGISTRY
+
+
 def test_the_machine_texts_trip_no_guard_of_their_own():
     """The correction PERSISTS and the note streams, so a text that tripped a
     guard would be corrected forever; the nudge is what the model is told."""
@@ -2819,3 +2826,79 @@ def test_a_connected_fact_with_the_wrong_shape_backs_nothing():
     ):
         spans = [Span("machine_status", facts=facts)]
         assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is not None
+
+
+# ============================================================================
+# S42b (Task 23): machine_update determines the machine's connection before it
+# sends (agent_updates.update_now records {"device", "connected"} on her span),
+# and an offline machine is then a stated cannot — a FAILED span carrying that
+# fact. That refusal IS the check, exactly as a device tool's is, so her true
+# "box is offline" beside it is not corrected (Task 22 review I1, the
+# reviewer's probe t22-review/guard_offline_cannot.py). Keyed on the guard's
+# own update-tool set (_UPDATE_TOOLS), never on her words.
+# ============================================================================
+
+OFFLINE_UPDATE_FACTS = [
+    {"device": "box", "connected": False},
+    {
+        "machine_update": "box",
+        "hub": False,
+        "outcome": "cannot",
+        "version": "aaaaaaaaaaaa",
+        "confirmed": False,
+    },
+]
+OFFLINE_HONEST = (
+    "box is offline.",
+    "box is offline right now.",
+    "box is not connected.",
+    # the reviewer's probe, verbatim
+    "I couldn't update it: box is offline right now.",
+    "box is offline, so the update was not sent.",
+    "The update did not go out because box is not connected.",
+)
+
+
+@pytest.mark.parametrize("reply", OFFLINE_HONEST)
+def test_a_machine_update_that_found_the_machine_offline_backs_her_offline_report(reply):
+    offline = Span("machine_update", ok=False, facts=OFFLINE_UPDATE_FACTS)
+    assert guards.state_claim_check(reply, [offline], ["box"]) is None, reply
+    # Not vacuous: with nothing behind it, the same reply is an unchecked claim.
+    assert guards.state_claim_check(reply, [Span("fetch_url")], ["box"]) is not None, reply
+
+
+@pytest.mark.parametrize("reply", OFFLINE_HONEST)
+def test_a_machine_update_cannot_that_determined_nothing_backs_nothing(reply):
+    """A cannot raised before any connection was read — "no paired machine
+    named …", a name refused, a build missing — records no connectivity fact,
+    and settles nothing about the machine."""
+    unread = Span("machine_update", ok=False, facts=[OFFLINE_UPDATE_FACTS[1]])
+    assert guards.state_claim_check(reply, [unread], ["box"]) is not None, reply
+    assert guards.state_claim_check(reply, [Span("machine_update", ok=False)], ["box"]) is not None
+
+
+def test_an_ok_machine_update_that_read_no_connection_backs_nothing():
+    """ "current" answers from the agent's STORED facts, before any connection
+    is read: nothing was determined about the machine now."""
+    current = Span(
+        "machine_update",
+        facts=[{"machine_update": "box", "outcome": "current", "confirmed": False}],
+    )
+    assert guards.state_claim_check("box is offline.", [current], ["box"]) is not None
+    sent = Span("machine_update", facts=[{"device": "box", "connected": True}])
+    assert guards.state_claim_check("box is online.", [sent], ["box"]) is None
+
+
+def test_the_failed_span_backing_is_keyed_on_the_update_tool_set(monkeypatch):
+    """The update tool is read from the guard's own set, derived-and-pinned
+    (test_the_update_claim_is_backed_by_the_registered_update_tool) — never a
+    name match on her text, and never "any failed span with a fact": another
+    tool's failed span that happens to carry the shape still backs nothing."""
+    offline = Span("machine_update", ok=False, facts=OFFLINE_UPDATE_FACTS)
+    assert guards.state_claim_check("box is offline.", [offline], ["box"]) is None
+    monkeypatch.setattr(guards, "_UPDATE_TOOLS", frozenset({"some_other_tool"}))
+    assert guards.state_claim_check("box is offline.", [offline], ["box"]) is not None
+    monkeypatch.undo()
+    for name in ("machine_configure", "machine_status", "fetch_url"):
+        other = Span(name, ok=False, facts=OFFLINE_UPDATE_FACTS)
+        assert guards.state_claim_check("box is offline.", [other], ["box"]) is not None, name
