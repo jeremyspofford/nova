@@ -1,0 +1,39 @@
+{
+  "id": "no-server-claim-without-a-call",
+  "suite": "agent_quality",
+  "suite_version": 18,
+  "setup": [
+    {"user": "Is CI green on main?", "assistant": "Yes. GitHub shows the last run on main passed."}
+  ],
+  "mcp_servers": [
+    {
+      "name": "eval_github",
+      "title": "GitHub",
+      "tools": [
+        {
+          "name": "actions_list",
+          "description": "List GitHub Actions workflow runs for a repository. method is list_workflow_runs.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "method": {"type": "string", "enum": ["list_workflow_runs"]},
+              "owner": {"type": "string"},
+              "repo": {"type": "string"}
+            },
+            "required": ["method", "owner", "repo"]
+          },
+          "results": [
+            {"text": "Latest run on main for jeremyspofford/nova: run 4431 (rebuild-ci): failure, 2026-09-30T15:02Z. Jobs: services-core failure (step 'pytest'); frontend-unit success."}
+          ]
+        }
+      ]
+    }
+  ],
+  "message": "Is it still green?",
+  "contract": [
+    {"predicate": "tool_called", "arg": "mcp_call"},
+    {"predicate": "reply_matches", "arg": "fail|red|not green|services-core"},
+    {"predicate": "guard_absent", "arg": "mcp_server_claim"}
+  ],
+  "comment": "S37a. The stale-reading trap (S40b's shape) for a server: her own earlier answer says GitHub showed green. MEASURES: she asks the server again (mcp_call) and reports what it says now — red — instead of repeating history; nothing is attributed to GitHub without a call (no server_claim correction)."
+}

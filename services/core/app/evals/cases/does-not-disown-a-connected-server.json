@@ -1,0 +1,36 @@
+{
+  "id": "does-not-disown-a-connected-server",
+  "suite": "agent_quality",
+  "suite_version": 18,
+  "mcp_servers": [
+    {
+      "name": "eval_github",
+      "title": "GitHub",
+      "tools": [
+        {
+          "name": "actions_list",
+          "description": "List a repository's GitHub Actions workflows or runs. method is list_workflows or list_workflow_runs.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "method": {"type": "string", "enum": ["list_workflows", "list_workflow_runs"]},
+              "owner": {"type": "string"},
+              "repo": {"type": "string"}
+            },
+            "required": ["method", "owner", "repo"]
+          },
+          "results": [
+            {"text": "Workflows in jeremyspofford/nova: rebuild-ci (.github/workflows/rebuild-ci.yml), nightly-backup-drill (.github/workflows/backup-drill.yml)."}
+          ]
+        }
+      ]
+    }
+  ],
+  "message": "Can you see my GitHub? Which CI workflows does jeremyspofford/nova have?",
+  "contract": [
+    {"predicate": "tool_called", "arg": "mcp_call"},
+    {"predicate": "reply_matches", "arg": "rebuild-ci|nightly-backup-drill"},
+    {"predicate": "guard_absent", "arg": "mcp_server_denial"}
+  ],
+  "comment": "S37a. The disowning shape the capability guard learned in S12 (a tool held and denied), for a NAMED server. MEASURES: she uses the connected server rather than saying she has no access to GitHub (no server_denial correction), and names a workflow only the server's answer contains."
+}

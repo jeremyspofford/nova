@@ -299,6 +299,18 @@ v17 (S42a, 2026-09-27):
     enrolled.
   * suite_version 16 -> 17 for all THIRTY cases; count pin 29 -> 30.
 
+v18 (S37a, 2026-09-30): four MCP cases —
+  reads-ci-from-the-connected-server, does-not-disown-a-connected-server,
+  no-server-claim-without-a-call, says-an-unreachable-server-is-unreachable
+  — the first to declare mcp_servers (an overlay on her connections for the
+  case alone; the owner's servers never answer an eval turn). Their
+  guard_absent args are mcp_server_claim and mcp_server_denial — Task 12's
+  names, not yet armed (no guard files under them until Task 12 lands), so
+  these four are VACUOUSLY green on the guard half until then; that is a
+  known, explicit state, not a typo — test_no_corpus_guard_name_is_a_typo
+  below is what makes sure it stays that way and never silently becomes one.
+  suite_version 17 -> 18 for all THIRTY-FOUR cases; count pin 30 -> 34.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -468,13 +480,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S47 (2026-09-25): the three setup QR cases. 26 -> 29.
     # S42a (2026-09-27): points-wsl-at-the-windows-agent, the first case to
     # declare a device (an agent). 29 -> 30.
-    assert len(ids) == 30
-    assert len(set(ids)) == 30  # no duplicate ids
+    # S37a (2026-09-30): the four MCP cases, the first to declare mcp_servers.
+    # 30 -> 34.
+    assert len(ids) == 34
+    assert len(set(ids)) == 34  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {17}
+    assert {c.suite_version for c in cases} == {18}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -492,8 +506,8 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
-#    case -- see the module docstring); the version assertion inside this
-#    test tracks the live value, 17, not "2".
+#    case; v18: the S37a MCP cases -- see the module docstring); the version
+#    assertion inside this test tracks the live value, 18, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -516,12 +530,84 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 17
+        assert case.suite_version == 18
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
             assert spec.predicate in cases_mod.KNOWN_PREDICATES
             assert spec.predicate in predicates.PREDICATES
+
+
+# -- F16: a guard_fired/guard_absent arg must name a REAL guard -------------
+#
+# guard_absent/guard_fired do not validate the name they are given (predicates
+# .guard_fired/.guard_absent just filter turn.spans for kind == "guard" and
+# name == arg) -- a typo ("server_claim" for the real "mcp_server_claim") would
+# never raise anywhere, and guard_absent over a name NOTHING ever files is
+# vacuously, permanently true: a case that cannot fail on that half, forever,
+# with no signal that it stopped measuring anything. This is exactly the trap
+# the S37a MCP cases' first draft sat in (F16).
+#
+# KNOWN_GUARD_NAMES_TODAY is every string `app/chat.py` or `app/beats.py`
+# files a "guard" span under, read off the source directly (there is no single
+# registry a guard name is declared in -- each call site is its own source of
+# truth, the same way `app/chat.py`'s own module docstring describes the
+# honesty guards): the literal and claim_kind-dispatched turn.span("guard", …)
+# sites in chat.py (responsiveness; deferral; the REWRITE-class pair
+# code_claim/address_claim; the APPEND-class pair served_claim/memory_claim;
+# bare_intent; the claim_kind-dispatched consent_claim, state_claim,
+# presented_listing; narration, delegation_claim, capability_claim,
+# stack_claim; the said-not-done pair written_call/device_completion), plus
+# beats.py's own three (observation, delivery_claim, novelty_claim, filed by
+# its `_guard` helper for her proactive digest turns). mcp_server_claim and
+# mcp_server_denial are Task 12's names (ruling F16) -- not yet filed by
+# anything, so the four MCP cases' guard_absent half is vacuously green until
+# Task 12 lands (the module docstring's v18 entry says so); they are listed
+# here explicitly so a FUTURE typo against THEM is still caught, rather than
+# silently joining the same vacuous-pass class this test exists to close.
+KNOWN_GUARD_NAMES_TODAY = frozenset(
+    {
+        # app/chat.py
+        "responsiveness",
+        "deferral",
+        "code_claim",
+        "address_claim",
+        "served_claim",
+        "memory_claim",
+        "bare_intent",
+        "consent_claim",
+        "state_claim",
+        "presented_listing",
+        "narration",
+        "delegation_claim",
+        "capability_claim",
+        "stack_claim",
+        "written_call",
+        "device_completion",
+        # app/beats.py (her proactive digest turns)
+        "observation",
+        "delivery_claim",
+        "novelty_claim",
+    }
+)
+# Task 12 adds these (S37a plan, ruling F16) -- named here so a typo against
+# THEM is still caught even before anything files them.
+GUARD_NAMES_TASK_12_ADDS = frozenset({"mcp_server_claim", "mcp_server_denial"})
+
+
+def test_no_corpus_guard_name_is_a_typo():
+    """Every guard_fired/guard_absent arg anywhere in the corpus must be a
+    guard name that is either real today or one Task 12 is known to add --
+    never a typo that would pass (guard_fired) or pass vacuously forever
+    (guard_absent) because nothing will ever file a span under it."""
+    known = KNOWN_GUARD_NAMES_TODAY | GUARD_NAMES_TASK_12_ADDS
+    for case in cases_mod.load_cases():
+        for spec in case.contract:
+            if spec.predicate in ("guard_fired", "guard_absent"):
+                assert spec.arg in known, (
+                    f"{case.id}: {spec.predicate}({spec.arg!r}) names no guard — "
+                    f"known: {', '.join(sorted(known))}"
+                )
 
 
 # -- 1. searches_for_latest: the Pixel deflection ---------------------------

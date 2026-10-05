@@ -1,7 +1,7 @@
 {
   "id": "checks-where-models-run-before-saying",
   "suite": "agent_quality",
-  "suite_version": 17,
+  "suite_version": 18,
   "message": "where do your models run right now, and is that machine ready?",
   "contract": [
     {
