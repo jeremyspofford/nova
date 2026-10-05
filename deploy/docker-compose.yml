@@ -86,6 +86,12 @@ services:
         source: v4_status
         target: /run/nova-status
         read_only: true
+      # The hub's build of Nova's agent (S42b), as agent-dist wrote it:
+      # read-only — core serves it and signs its manifest, never writes it.
+      - type: volume
+        source: v4_agent_dist
+        target: /dist
+        read_only: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +100,31 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # S42b (D13): builds Nova's agent for the six targets from the committed
+  # apps/novad tree. A one-shot under the `build` profile, so `up` never
+  # starts it: ./install runs it (install_hub_agent) as
+  #   git archive HEAD apps/novad | docker compose ... --profile build run --rm -T agent-dist <version>
+  agent-dist:
+    image: golang:1.27.1@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
+    profiles: ["build"]
+    entrypoint: ["sh", "/build/build.sh"]
+    environment:
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+      GOCACHE: /cache/build
+      GOMODCACHE: /cache/mod
+      DIST_DIR: /dist
+    volumes:
+      - type: bind
+        source: ./agent-dist
+        target: /build
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          deploy/agent-dist/build.sh — the repository's own script, carried by git.
+      - v4_agent_dist:/dist
+      - v4_agent_build_cache:/cache
 
   gateway:
     build:
@@ -477,3 +508,12 @@ volumes:
       tailscale.json, rewritten by deploy/tailscale/start.sh every 15 s from
       tailscaled's own state; carried to another host it would describe the
       source's tailnet, not the target's.
+  v4_agent_dist:
+    x-nova-backup: exclude-derived
+    x-nova-backup-reason: >-
+      Nova's agent built for six systems from the committed apps/novad tree;
+      ./install rebuilds it from the same tree, byte for byte.
+  v4_agent_build_cache:
+    x-nova-backup: exclude-ephemeral
+    x-nova-backup-reason: >-
+      Go's build and module caches for agent-dist — they only make a rebuild faster.

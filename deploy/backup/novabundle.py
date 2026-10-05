@@ -144,6 +144,12 @@ SEGMENT_POLICY = {
         "disposition": "exclude-ephemeral",
         "reason": "installed packages, rebuilt from the lockfile.",
     },
+    "uv.lock": {
+        "disposition": "exclude-ephemeral",
+        "reason": "a uv dependency lock .gitignore declines to track (deploy/backup's "
+        "own, unlike the services' own uv.lock files, which are tracked); "
+        "regenerated from pyproject.toml.",
+    },
     ".ruff_cache": {"disposition": "exclude-ephemeral", "reason": "a linter cache."},
     ".pytest_cache": {"disposition": "exclude-ephemeral", "reason": "a test-runner cache."},
     ".mypy_cache": {"disposition": "exclude-ephemeral", "reason": "a type-checker cache."},

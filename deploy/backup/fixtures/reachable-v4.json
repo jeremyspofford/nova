@@ -8,6 +8,7 @@
     "deploy/backup/__pycache__": {"exists": true, "ok": true, "detail": ""},
     "deploy/backup/.pytest_cache": {"exists": true, "ok": true, "detail": ""},
     "deploy/backup/tests/__pycache__": {"exists": true, "ok": true, "detail": ""},
-    "deploy/backup/.venv": {"exists": true, "ok": true, "detail": ""}
+    "deploy/backup/.venv": {"exists": true, "ok": true, "detail": ""},
+    "deploy/backup/uv.lock": {"exists": true, "ok": true, "detail": ""}
   }
 }
