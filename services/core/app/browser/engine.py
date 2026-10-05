@@ -22,6 +22,7 @@ import dataclasses
 import os
 import weakref
 from collections.abc import AsyncIterator, Mapping
+from contextvars import ContextVar
 from typing import Any
 
 from app.browser import page
@@ -38,14 +39,31 @@ _LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
 
+# Whether the current task is inside session() (fix round 1, item 2): a
+# ContextVar, not a flag on the lock itself, because what call() must refuse
+# is being called WITHOUT the contract, not being called while the lock
+# happens to be free. A per-task copy, so two sessions on two gathered tasks
+# never see each other's.
+_IN_SESSION: ContextVar[bool] = ContextVar("browser_engine_in_session", default=False)
+
 
 class EngineError(Exception):
     """The engine could not be asked — not answering, not an MCP server, or
-    the exchange broke. `reason` is a sentence for her."""
+    the exchange broke. `reason` is a sentence for her, passed through
+    exactly as whatever established it stated — this module composes no
+    claim of its own about what happened (fix round 1, G31: `reachable=True`
+    means only that the engine HAD the request, which is not the same as it
+    answering usefully, and saying both at once can contradict itself).
+    `reachable` is a structured fact for a caller to read directly, never
+    parsed out of `reason`'s prose: True the engine had the request (its own
+    refusal, a broken stream, a malformed answer); False it never did
+    (unreachable, a credential this client refused to send); None when the
+    failure was decided before any call was attempted."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, reachable: bool | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.reachable = reachable
 
 
 def endpoint() -> client.Endpoint:
@@ -60,7 +78,11 @@ async def session() -> AsyncIterator[None]:
     if lock is None:
         lock = _LOCKS[loop] = asyncio.Lock()
     async with lock:
-        yield
+        token = _IN_SESSION.set(True)
+        try:
+            yield
+        finally:
+            _IN_SESSION.reset(token)
 
 
 async def call(
@@ -69,18 +91,21 @@ async def call(
     """One engine tool call, read. A call the engine ANSWERED always comes
     back as an EngineAnswer — its own refusal (a stale ref, an open dialog, a
     page that did not load) is the answer's `error`. Only a call that could
-    not be made raises EngineError. Callers hold session()."""
+    not be made raises EngineError. Callers hold session() — checked
+    mechanically (fix round 1, item 2): a RuntimeError, never an EngineError,
+    because a caller that forgot the `async with` is a bug in that caller's
+    code, not a fact about the browser to show her."""
+    if not _IN_SESSION.get():
+        raise RuntimeError(
+            "app.browser.engine.call() was called outside engine.session() — "
+            "a tool's whole sequence of calls must run inside one `async with "
+            "engine.session():` block, never split"
+        )
     target = endpoint()
     try:
         result = await client.call(target, tool, arguments, timeout_s=timeout_s)
     except client.ClientError as exc:
-        if exc.reachable:
-            raise EngineError(
-                f"the browser engine at {target.origin} answered, but not usefully: {exc.reason}"
-            ) from exc
-        raise EngineError(
-            f"the browser engine is not answering at {target.origin} — {exc.reason}"
-        ) from exc
+        raise EngineError(exc.reason, reachable=exc.reachable) from exc
     answer = page.parse(result.text)
     if result.is_error and answer.error is None:
         lines = (result.text or "").strip().splitlines()
