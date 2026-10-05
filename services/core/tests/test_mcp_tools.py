@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -515,6 +516,96 @@ async def test_many_non_object_notes_are_bounded_before_being_composed(pool):
     assert ok
     assert len(result.encode()) <= mcp_module.RESULT_CAP_BYTES
     assert "more notes)" in result
+
+
+# -- Task 7 carry: the cut notice's own count is the real number of hidden bytes -----------
+
+
+_CUT_RE = re.compile(r"\[cut at 64 KiB: (\d+) more bytes were not shown")
+
+
+def _stated_cut(result: str) -> int:
+    """The notice's own claim: how many bytes it says were hidden."""
+    m = _CUT_RE.search(result)
+    assert m, f"no cut notice in: {result[:200]}…"
+    return int(m.group(1))
+
+
+def _real_hidden(full_uncapped: str, result: str, *, prefix: str = "") -> int:
+    """How many bytes of `full_uncapped` — composed exactly as the production
+    code would, with NO cap applied — are truly absent from `result`: the
+    notice sliced off (never counted as "kept" text), and `prefix`
+    (`tools.dispatch`'s own "Error: ", added OUTSIDE this module's cap)
+    sliced off the front first."""
+    assert result.startswith(prefix)
+    kept = result[len(prefix) :].split("\n[cut at 64 KiB:")[0]
+    return len(full_uncapped.encode()) - len(kept.encode())
+
+
+@requires_db
+async def test_a_long_results_cut_notice_counts_the_real_hidden_bytes(pool):
+    """Before the fix, `mcp_call` capped `body` (text + notes) on its own,
+    then returned f"{label}:\\n{body}" — pushing the whole thing back over
+    64 KiB, so `_bounded`'s structural cap cut it a SECOND time and wrote a
+    notice counting bytes relative to the already-cut intermediate string,
+    not the server's real text. The hard bound always held; the NUMBER she
+    was told was wrong (measured at this commit: stated 134, really ~6,168)."""
+    async with github(pool):
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "get_job_logs"}, _ctx()
+        )
+    assert ok
+    full = f"github · get_job_logs:\n{'x' * (70 * 1024)}"
+    assert _stated_cut(result) == _real_hidden(full, result)
+
+
+@requires_db
+async def test_an_is_error_results_cut_notice_counts_the_real_hidden_bytes(pool):
+    """The same shape on the isError path: `f"{label} reported an error:
+    {body}"` re-cuts an already-capped `body` a second time. `dispatch` adds
+    its own fixed "Error: " prefix OUTSIDE this module's cap — stripped here
+    before counting what the cap itself kept."""
+    boom = fake.FakeTool("big_err_tool", results=({"text": "e" * (70 * 1024), "is_error": True},))
+    with planted(fake.FakeSpec(tools=(boom,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "big_err_tool"}, _ctx()
+        )
+    assert not ok
+    full = f"github · big_err_tool reported an error: {'e' * (70 * 1024)}"
+    assert _stated_cut(result) == _real_hidden(full, result, prefix=tools.ERROR_PREFIX)
+
+
+@requires_db
+async def test_a_tool_failure_reasons_cut_notice_counts_the_real_hidden_bytes(pool, monkeypatch):
+    """The same shape again at a `ToolFailure` built from a REASON, never a
+    body: `mcp_call`'s miss branch used to cap `exc.reason` alone into
+    `refresh_note`, then embed it in the bigger "has no tool named" message
+    — which `_bounded` then re-cut. `refresh_tools` itself re-scrubs any
+    real `ClientError` it raises to 500 chars first (defence in depth), so
+    this reaches the shape through a monkeypatch — the same technique Task
+    7's own M4 tests use for a condition the real client never produces."""
+
+    async def huge_refresh_failure(pool, server, *, actor, probe=False):
+        raise client.ClientError("E" * (70 * 1024), reachable=True)
+
+    monkeypatch.setattr(servers, "refresh_tools", huge_refresh_failure)
+    real_tool = fake.FakeTool("real_tool", results=({"text": "ok"},))
+    with planted(fake.FakeSpec(tools=(real_tool,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "missing_tool_xyz"}, _ctx()
+        )
+    assert not ok
+    full = (
+        "github has no tool named 'missing_tool_xyz' — it has: real_tool "
+        f"(its list could not be read again: {'E' * (70 * 1024)}) — re-issue the call"
+    )
+    assert _stated_cut(result) == _real_hidden(full, result, prefix=tools.ERROR_PREFIX)
 
 
 @requires_db
