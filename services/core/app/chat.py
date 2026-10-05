@@ -119,6 +119,7 @@ from app import (
     vision,
 )
 from app.identity import Person
+from app.mcp import client as mcp_client
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 logger = logging.getLogger("core")
@@ -1710,16 +1711,87 @@ def _clip(text: str, limit: int) -> str:
     return f"{text[:limit]}… (+{len(text) - limit} more chars, {len(text)} total)"
 
 
-def _redact(value: object) -> object:
-    """Trace-sized arguments: the same shape, long strings cut to a head.
+# Argument keys whose VALUE is a credential (S37a, plan decision P14). Masked
+# before anything is bounded or stored: mcp_connect's token, a device command's
+# env GH_TOKEN, a header's API key must never reach turn_spans or Activity.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "api_key",
+        "apikey",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "private_key",
+    }
+)
+_CREDENTIAL_SUFFIXES = (
+    "_token",
+    "-token",
+    "_secret",
+    "-secret",
+    "_password",
+    "_api_key",
+    "-api-key",
+)
 
-    Nothing is filtered by name — none of S2's tools take a credential —
-    so "redacted" here means "not the whole payload": a 256 KB file body
-    must not be copied into the turn's trace, and the Activity page needs
-    something a person can read at a glance.
+
+def _credential_key(key: str, *, header: bool) -> bool:
+    """A credential-shaped argument KEY (S37a, plan decision P14). Outside a
+    `headers` object this tuple decides it alone, so a top-level `key`
+    argument (`"key": "digest"`) is NOT a credential. Inside one, the
+    header's NAME is the only clue (`X-Api-Key`, `X-Hass-Key`,
+    `Authorization`), so it is checked against `app.mcp.client.
+    is_credential_header` instead — the ONE predicate the client's own
+    reason scrub already uses (ruling T5-B-REVISED), so the scrub and this
+    mask can never disagree about a header name. This supersedes keeping a
+    second `_CREDENTIAL_HEADER_WORDS` tuple here (ruling F8's instruction,
+    before the carry)."""
+    lowered = key.strip().lower()
+    if lowered in _CREDENTIAL_KEYS or lowered.endswith(_CREDENTIAL_SUFFIXES):
+        return True
+    return header and mcp_client.is_credential_header(lowered)
+
+
+def _masked(value: object) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return f"<masked:{len(text)} chars>"
+
+
+def _redact(value: object, *, in_headers: bool = False) -> object:
+    """Trace-sized arguments: the same shape, long strings cut to a head, and
+    credentials masked (S37a, plan decision P14).
+
+    A 256 KB file body must not be copied into the turn's trace, and the
+    Activity page needs something a person can read at a glance — so strings
+    are cut to a head. And a value under a credential-shaped key (`token`,
+    `password`, `api_key`, anything ending `_token` or `_secret`, and inside
+    a `headers` object any header whose NAME is `is_credential_header`)
+    becomes `<masked:N chars>` BEFORE `_bounded`, so no credential byte
+    reaches turn_spans. By key, not by the shape of a value: a token typed
+    into a command's text is not caught here (a carry for doing-things S29).
     """
     if isinstance(value, dict):
-        return {key: _redact(item) for key, item in value.items()}
+        out: dict = {}
+        for key, item in value.items():
+            if (
+                isinstance(key, str)
+                and item is not None
+                and _credential_key(key, header=in_headers)
+            ):
+                out[key] = _masked(item)
+            else:
+                out[key] = _redact(
+                    item, in_headers=isinstance(key, str) and key.strip().lower() == "headers"
+                )
+        return out
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, str):
@@ -1727,8 +1799,58 @@ def _redact(value: object) -> object:
     return value
 
 
-def _span_arguments(raw: object) -> object:
-    """What the model actually sent, recorded whether or not it parsed."""
+def _origin_or_masked(value: str) -> str:
+    """A URL argument a tool declared via `Tool.traced_as_origin` reaches the
+    trace as its ORIGIN only (S37a, ruling X2-REVISED) — `ha-mcp`
+    authenticates by a secret PATH, so that path must never exist, even
+    momentarily, in a string this module clips or stores.
+    `app.mcp.client._normalize_origin` is the one derivation (ruling R2-3,
+    never a second copy); a value it cannot read an http(s) host out of is
+    masked whole, same as a credential.
+
+    Every EXISTING caller of `_normalize_origin` only ever sees a URL this
+    slice's own connect path already validated. This caller has no such
+    guarantee — the model's own argument, unvalidated, possibly mistyped —
+    and `urlsplit(...).port`/`.hostname` raise ValueError on a bad port or an
+    unterminated IPv6 bracket. That is still "not a URL this module can read
+    a host out of", so it is masked whole, never left to crash the span."""
+    try:
+        origin = mcp_client._normalize_origin(value)
+    except ValueError:
+        return _masked(value)
+    scheme, _sep, rest = origin.partition("://")
+    if scheme in ("http", "https") and rest:
+        return origin
+    return _masked(value)
+
+
+def _origin_only(parsed: object, tool_name: str | None) -> object:
+    """Reduce every argument `tool_name` declared (`Tool.traced_as_origin`)
+    to its URL's origin before anything else — including `_redact`'s own
+    per-string clip — ever sees it (S37a, ruling X2-REVISED). No tool name, an
+    unknown one, or a tool that declared nothing changes nothing here, and
+    `_redact` still runs on the result exactly as before."""
+    if tool_name is None or not isinstance(parsed, dict):
+        return parsed
+    tool = tools.REGISTRY.get(tool_name)
+    if tool is None or not tool.traced_as_origin:
+        return parsed
+    out = dict(parsed)
+    for key in tool.traced_as_origin:
+        value = out.get(key)
+        if isinstance(value, str):
+            out[key] = _origin_or_masked(value)
+    return out
+
+
+def _span_arguments(raw: object, tool_name: str | None = None) -> object:
+    """What the model actually sent, recorded whether or not it parsed.
+
+    `tool_name`, when the registry holds it, lets a tool reduce one of its
+    OWN arguments to a URL's origin before redaction (ruling X2-REVISED) —
+    what `mcp_connect` (Task 7) needs, since ha-mcp's secret is the path
+    itself, not a neighbouring token or header.
+    """
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
@@ -1741,7 +1863,7 @@ def _span_arguments(raw: object) -> object:
             parsed = raw
     else:
         parsed = raw
-    return _bounded(_redact(parsed))
+    return _bounded(_redact(_origin_only(parsed, tool_name)))
 
 
 def _bounded(redacted: object) -> object:
@@ -2549,7 +2671,7 @@ async def _run_tool(
     """
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
             # read off the wire. It still goes through schema validation — the
@@ -2613,7 +2735,7 @@ async def _run_script_step(
     a run of eight calls should move the bubble, not sit silent.
     """
     with turn.span("tool", name) as span:
-        span.meta["args_redacted"] = _span_arguments(args)
+        span.meta["args_redacted"] = _span_arguments(args, name)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
@@ -2780,7 +2902,7 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         if fact not in reason:
             reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
         span.meta["ok"] = False
         span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
         span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
@@ -2827,7 +2949,7 @@ def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[s
     with the subset-scoped sentence. Returns that stated result."""
     reason = unknown_tool_refusal(call.name, subset)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
         span.meta["ok"] = False
         span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
         span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]

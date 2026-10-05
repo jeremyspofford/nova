@@ -68,6 +68,10 @@ _TABLES = (
     # S17: skill_uses references skills AND turns, so it drops ahead of both.
     "skill_uses",
     "skills",
+    # S37a: mcp_servers references nothing (added_by is a word, not a person),
+    # so its place is free; it must be here, or the second run of the suite
+    # collides on its CREATE TABLE (conftest re-runs every migration).
+    "mcp_servers",
     "turn_spans",
     "turns",
     "messages",

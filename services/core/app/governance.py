@@ -39,6 +39,13 @@ DEVICE_AUDIT_BREAK = "device.audit_break"
 AGENT_CREATED = "agent.created"
 AGENT_UPDATED = "agent.updated"
 AGENT_DELETED = "agent.deleted"
+# MCP servers (S37a): a server connected (with what it replaced, when it
+# replaced one), removed (by whom, and who had added it), and a server's tool
+# list changing. Written by app/mcp/servers.py in the same transaction as the
+# row. No meta ever carries a token, a header value or a URL path.
+MCP_SERVER_CONNECTED = "mcp.server_connected"
+MCP_SERVER_REMOVED = "mcp.server_removed"
+MCP_TOOLS_CHANGED = "mcp.tools_changed"
 
 
 async def record_event(
@@ -48,13 +55,15 @@ async def record_event(
     actor: str | None = None,
     subject_ref: uuid.UUID | None = None,
     meta: dict[str, Any] | None = None,
-) -> None:
+) -> uuid.UUID:
     """Append one event on `conn` — the caller's transaction, so the event and
     the mutation it records share a fate. `conn` is a connection already inside
-    a transaction; this never opens one of its own."""
-    await conn.execute(
+    a transaction; this never opens one of its own. Returns the event's id, so
+    a record that points back at it (an MCP change's notice, S37a) can name
+    the row it came from."""
+    return await conn.fetchval(
         "INSERT INTO governance_events (kind, actor, subject_ref, meta) "
-        "VALUES ($1, $2, $3, $4::jsonb)",
+        "VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
         kind,
         actor,
         subject_ref,

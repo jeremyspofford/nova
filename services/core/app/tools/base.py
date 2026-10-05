@@ -208,3 +208,18 @@ class Tool:
     # was cut. A fact about the OUTPUT, never a permission: read after the
     # call, and never by dispatch (test_no_approvals).
     device_line_shown: Callable[[str, str, int], bool] | None = None
+    # The names of this tool's OWN top-level arguments whose value is a URL
+    # that must reach the trace as its ORIGIN only, never the whole address
+    # (S37a, ruling X2-REVISED). `ha-mcp` authenticates by a secret PATH, with
+    # no token and no header alongside it, so "a url next to a credential" is
+    # not a rule that can catch it — only the tool declaring the argument
+    # knows it is such a URL. `chat._span_arguments` reads this (never
+    # dispatch) to reduce each declared argument to `scheme://host:port` —
+    # via the client's one origin function, `app.mcp.client._normalize_origin`
+    # — before anything is clipped or stored, and masks the value whole when
+    # it is not an http(s) URL with a host.
+    #
+    # A fact about the ARGUMENTS, never a permission: nothing refuses a call
+    # over it, and dispatch does not read it (test_no_approvals' pin that
+    # dispatch is lookup, parse, validate, executor and nothing else).
+    traced_as_origin: tuple[str, ...] = ()
