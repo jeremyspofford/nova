@@ -10,12 +10,16 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
 from app import chat, tools, traces
 from app.identity import Person
 from app.main import app
 from app.mcp import client, fake, servers
 from app.tools import schema
 from tests.conftest import requires_db
+from tests.fakes import FakeMemory, ScriptedGateway
+from tests.test_chat_card import frames, set_chat_model, text, whole_call
 
 URL = "http://gh.mcp.invalid/mcp"
 ORIGIN = "http://gh.mcp.invalid"
@@ -186,8 +190,19 @@ async def test_mcp_call_runs_a_tool_and_files_a_fact(pool):
     async with github(pool):
         result, ok = await tools.dispatch("mcp_call", args, _ctx(facts))
     assert ok and result == "github · actions_list:\nrun 7 on main: failure"
-    assert facts[-1]["mcp_server"] == "github" and facts[-1]["tool"] == "actions_list"
-    assert facts[-1]["reachable"] is True and facts[-1]["is_error"] is False
+    # M4: the exact 7-key shape, every key, every value — not just a sample
+    # of the keys a looser check could miss a regression in.
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": "actions_list",
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": True,
+            "is_error": False,
+            "bytes": len(b"run 7 on main: failure"),
+        }
+    ]
     assert (await servers.get(pool, "github")).last_ok_at is not None
 
 
@@ -229,6 +244,9 @@ async def test_a_tool_error_is_a_failed_call_in_the_servers_words(pool):
     async with github(pool):
         result, ok = await tools.dispatch("mcp_call", {"server": "github", "tool": "rerun"}, _ctx())
     assert not ok and "github · rerun reported an error: no such run" in result
+    # Ruling T7-E: the server ANSWERED — a tool's own isError is its answer,
+    # never a failing server. The row is not marked failing for it.
+    assert (await servers.get(pool, "github")).failing is False
 
 
 @requires_db
@@ -309,3 +327,462 @@ async def test_mcp_disconnect_says_who_had_added_it(pool):
         result, ok = await tools.dispatch("mcp_disconnect", {"name": "github"}, _ctx())
     assert ok and "which the owner had added" in result and "Inbox" in result
     assert await servers.list_servers(pool) == []
+
+
+# -- fix round 1: T7-B, validate_foreign never raises and refuses only what it can be sure of ----
+
+
+@pytest.mark.parametrize(
+    ("label", "sch", "args"),
+    [
+        ("required: true (a draft-03 habit)", {"type": "object", "required": True}, {}),
+        ("required: 5", {"type": "object", "required": 5}, {}),
+        (
+            "required as a bare string",
+            {"type": "object", "properties": {"repo": {"type": "string"}}, "required": "repo"},
+            {"repo": "nova"},
+        ),
+        (
+            "patternProperties + additionalProperties: false",
+            {
+                "type": "object",
+                "patternProperties": {"^x-": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            {"x-trace": "1"},
+        ),
+        (
+            "integer given 1.0 (valid from JSON Schema draft 6 on)",
+            {"type": "object", "properties": {"n": {"type": "integer"}}},
+            {"n": 1.0},
+        ),
+    ],
+)
+def test_validate_foreign_never_raises_on_a_shape_the_client_already_admits(label, sch, args):
+    """Ruling T7-B: every one of these schemas passes the client's own
+    `_tool_problem` (so a real server's definition IS accepted and stored),
+    and a draft-03 `required`, a bare-string `required`, `patternProperties`
+    and a whole-number float used to make `validate_foreign` refuse a call
+    the server would have accepted — or, for the first two, raise a
+    TypeError the model would have seen as "mcp_call failed unexpectedly"."""
+    assert client._tool_problem({"name": "t", "inputSchema": sch}) is None, label
+    assert schema.validate_foreign(sch, args) is None, label
+
+
+def test_validate_foreign_still_refuses_a_bool_as_an_integer():
+    """The float-tolerance (T7-B) must not widen into accepting a bool —
+    `type(True) is float` is False, so `_foreign_type_matches` never even
+    reaches `.is_integer()` for one; this is the regression that would
+    silently pass if the check were done by `isinstance` instead."""
+    sch = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    assert "must be an integer" in schema.validate_foreign(sch, {"n": True})
+
+
+def test_validate_foreign_never_raises_on_a_schema_shaped_in_a_way_it_cannot_read():
+    """The structural half of ruling T7-B: ANY exception reading the schema
+    — not only the four probed shapes above — means "not sure", never a
+    crash. `required` holding a list of non-hashable, non-string junk is a
+    shape no specific branch above anticipates."""
+    sch = {"type": "object", "required": [{"not": "a string"}], "properties": {}}
+    assert schema.validate_foreign(sch, {}) is None
+
+
+# -- fix round 1: T7-C, a lone UTF-16 surrogate never fails a finished call -----------------
+
+
+@requires_db
+async def test_a_lone_surrogate_in_a_tools_text_never_fails_a_finished_call(pool):
+    """Ruling T7-C: a JS server that slices a response mid-emoji hands back
+    a string `json.loads` accepts but UTF-8 cannot encode. Before the fix
+    this raised UnicodeEncodeError deep inside `mcp_call` — reported to her
+    as "failed unexpectedly", no fact filed, and the row stamped ok anyway
+    (three different answers to the one call). It must read as what it is:
+    a finished, successful call, with U+FFFD standing in for the broken
+    half of the pair."""
+    half_emoji = fake.FakeTool("half_emoji", results=({"text": "log tail: build ok \ud83d"},))
+    facts: list = []
+    with planted(fake.FakeSpec(tools=(half_emoji,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "half_emoji"}, _ctx(facts)
+        )
+    assert ok, result
+    assert result == "github · half_emoji:\nlog tail: build ok �"
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": "half_emoji",
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": True,
+            "is_error": False,
+            "bytes": len("log tail: build ok �".encode()),
+        }
+    ]
+    row = await servers.get(pool, "github")
+    assert row.last_ok_at is not None and row.failing is False
+
+
+# -- fix round 1: T7-A, the 64 KiB cap covers everything a server sends ---------------------
+
+
+@requires_db
+async def test_a_huge_server_error_message_is_capped(pool):
+    big = fake.FakeTool("big_err", results=({"error": {"code": -32603, "message": "E" * 200_000}},))
+    with planted(fake.FakeSpec(tools=(big,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "big_err"}, _ctx()
+        )
+    assert not ok
+    assert len(result.encode()) < 66 * 1024
+    assert "[cut at 64 KiB:" in result
+
+
+@requires_db
+async def test_many_non_object_notes_are_bounded_before_being_composed(pool):
+    """A response built of one text block and 20,000 non-object content
+    entries used to produce a 1.38M-character result (about 140 MB at the
+    client's own 4 MiB bound) — the notes were joined BEFORE the cap ever
+    saw them. Bounding the COUNT first means this never even has to lean on
+    the byte cap to stay small."""
+
+    class ManyBlocks(fake.FakeServer):
+        def _call(self, rid, params, *, modern):
+            result = {
+                "content": [{"type": "text", "text": "ok"}] + [0] * 20_000,
+                "isError": False,
+                "resultType": "complete",
+            }
+            return self._answer(rid, result)
+
+    spec = fake.FakeSpec(tools=(fake.FakeTool("many"),))
+    handle = client.plant({ORIGIN: fake.transport(ManyBlocks(spec))})
+    try:
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch("mcp_call", {"server": "github", "tool": "many"}, _ctx())
+    finally:
+        client.unplant(handle)
+    assert ok
+    assert len(result.encode()) < 66 * 1024
+    assert "more notes)" in result
+
+
+@requires_db
+async def test_a_long_tool_name_is_clipped_in_mcp_tools_and_the_no_such_tool_refusal(pool):
+    long_name = "x" * 500
+    weird = fake.FakeTool(long_name, "d")
+    with planted(fake.FakeSpec(tools=(weird,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        listed, ok1 = await tools.dispatch("mcp_tools", {"server": "github"}, _ctx())
+        refused, ok2 = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "nope"}, _ctx()
+        )
+    assert ok1 and long_name not in listed and ("x" * 120 + "…") in listed
+    assert not ok2 and long_name not in refused and ("x" * 120 + "…") in refused
+    # The instructional suffix must survive the clip, not just the cap.
+    assert refused.endswith("re-issue the call")
+
+
+@requires_db
+async def test_mcp_connect_clips_a_long_tool_name_in_its_own_reply(pool):
+    long_name = "x" * 500
+    weird = fake.FakeTool(long_name, "d")
+    with planted(fake.FakeSpec(tools=(weird,))):
+        result, ok = await tools.dispatch("mcp_connect", {"name": "github", "url": URL}, _ctx())
+    assert ok and long_name not in result and ("x" * 120 + "…") in result
+
+
+@requires_db
+async def test_mcp_connect_clips_a_long_tool_name_in_its_rejected_list_too(pool):
+    long_name = "y" * 500
+    broken = fake.FakeTool(long_name, "d", input_schema="not an object")
+    with planted(fake.FakeSpec(tools=(broken,))):
+        result, ok = await tools.dispatch("mcp_connect", {"name": "github", "url": URL}, _ctx())
+    assert ok and long_name not in result and ("y" * 120 + "…") in result
+    assert "its inputSchema is not an object" in result
+
+
+# -- fix round 1: M1, mcp_call's refresh-on-a-miss stamps like mcp_tools's does -------------
+
+
+@requires_db
+async def test_mcp_calls_refresh_on_a_missing_tool_files_the_refresh_fact_on_success(pool):
+    facts: list = []
+    async with github(pool):
+        result, ok = await tools.dispatch(
+            "mcp_call", {"server": "github", "tool": "nope"}, _ctx(facts)
+        )
+    assert not ok and "github has no tool named 'nope'" in result
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": None,
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": True,
+        }
+    ]
+
+
+@requires_db
+async def test_mcp_calls_refresh_on_a_missing_tool_stamps_failing_when_unreachable(pool):
+    facts: list = []
+    async with github(pool):
+        handle = client.plant({ORIGIN: fake.Unreachable()})
+        try:
+            result, ok = await tools.dispatch(
+                "mcp_call", {"server": "github", "tool": "nope"}, _ctx(facts)
+            )
+        finally:
+            client.unplant(handle)
+    assert not ok
+    assert "has no tool named 'nope'" in result and "its list could not be read again" in result
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": None,
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": False,
+        }
+    ]
+    assert (await servers.get(pool, "github")).failing is True
+
+
+# -- fix round 1: M2, the X2-REVISED pin through the real scripted chat loop ----------------
+
+
+@requires_db
+async def test_mcp_connect_through_the_real_chat_loop_leaves_no_secret_in_turn_spans(
+    owner_client, pool, mount_peers
+):
+    """M2: the stored-row pin (test_mcp_connects_token_and_path_never_reach_the_stored_spans
+    above) drives chat._run_tool directly. This drives the actual scripted
+    model + /api/v1/chat/stream route — ScriptedGateway calls mcp_connect
+    exactly as a real backend's tool_calls would — and reads turn_spans by
+    the turn id the route itself reports, never the in-memory span."""
+    origin = "https://ha.mcp.invalid"
+    token = "ghp_scripted_turn_leak_000"
+    header_value = "hdr-scripted-turn-leak-000"
+    handle = client.plant({origin: fake.transport(fake.FakeServer(fake.FakeSpec(tools=(RUNS,))))})
+    try:
+        gateway = ScriptedGateway(
+            rounds=(
+                (
+                    whole_call(
+                        "call_1",
+                        "mcp_connect",
+                        {
+                            "name": "ha",
+                            "url": f"{origin}/private_abc123/mcp",
+                            "token": token,
+                            "headers": {"X-Api-Key": header_value},
+                        },
+                    ),
+                ),
+                (text("Connected to Home Assistant."),),
+            )
+        )
+        mount_peers(gateway=gateway, memory=FakeMemory())
+        await set_chat_model(owner_client)
+        resp = await owner_client.post("/api/v1/chat/stream", json={"message": "connect ha"})
+        assert resp.status_code == 200, resp.text
+        sent = frames(resp.text)
+    finally:
+        client.unplant(handle)
+    turn_id = sent[0]["meta"]["turn_id"]
+    rows = await pool.fetch("SELECT meta FROM turn_spans WHERE turn_id = $1", turn_id)
+    assert rows
+    written = json.dumps([row["meta"] for row in rows], default=str) + json.dumps(sent, default=str)
+    for secret in (token, header_value, "private_abc123"):
+        assert secret not in written
+
+
+# -- fix round 1: M3, a 401 that echoes credentials never reaches mcp_call's words ----------
+
+
+@pytest.mark.parametrize("rpc_shaped", [False, True])
+@requires_db
+async def test_a_401_that_echoes_credentials_never_reaches_mcp_calls_failure_text(pool, rpc_shaped):
+    """The Task 5 carry's own named scenario: a 401 body that echoes the
+    credentials back (both shapes measured in the wild — a plain `{"error":
+    …}` object and a JSON-RPC error envelope) must not reach `mcp_call`'s
+    failure text or the row's `last_error`."""
+    token = "ghp_401_echo_leak_0000000"
+    header_value = "hdr-401-echo-leak-0000000"
+
+    class Echo401(fake.FakeServer):
+        def _call(self, rid, params, *, modern):
+            said = f"token {token} and X-Api-Key {header_value} are not valid here"
+            if rpc_shaped:
+                body = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32001, "message": said}}
+            else:
+                body = {"error": said}
+            return 401, {"content-type": "application/json"}, json.dumps(body).encode()
+
+    spec = fake.FakeSpec(tools=(fake.FakeTool("whoami"),))
+    handle = client.plant({ORIGIN: fake.transport(Echo401(spec))})
+    try:
+        await servers.connect(
+            pool,
+            name="echo",
+            url=URL,
+            token=token,
+            headers={"X-Api-Key": header_value},
+            added_by=servers.BY_OWNER,
+            actor="jeremy",
+        )
+        result, ok = await tools.dispatch("mcp_call", {"server": "echo", "tool": "whoami"}, _ctx())
+    finally:
+        client.unplant(handle)
+    row = await servers.get(pool, "echo")
+    assert not ok
+    assert token not in result and header_value not in result
+    assert token not in (row.last_error or "") and header_value not in (row.last_error or "")
+
+
+# -- fix round 1: M4, pinning the shapes that were already right -----------------------------
+
+
+@requires_db
+async def test_mcp_connects_own_refusal_fact_has_three_keys_for_a_bad_name(pool):
+    facts: list = []
+    result, ok = await tools.dispatch("mcp_connect", {"name": "Bad Name", "url": URL}, _ctx(facts))
+    assert not ok
+    assert facts == [{"mcp_server": "Bad Name", "tool": None, "reachable": None}]
+
+
+@requires_db
+async def test_mcp_connects_own_refusal_fact_has_three_keys_for_an_unreachable_server(pool):
+    facts: list = []
+    handle = client.plant({ORIGIN: fake.Unreachable()})
+    try:
+        result, ok = await tools.dispatch(
+            "mcp_connect", {"name": "github", "url": URL}, _ctx(facts)
+        )
+    finally:
+        client.unplant(handle)
+    assert not ok
+    assert facts == [{"mcp_server": "github", "tool": None, "reachable": False}]
+
+
+@requires_db
+async def test_mcp_tools_refreshes_a_stale_list_and_files_the_five_key_fact(pool):
+    facts: list = []
+    with planted(fake.FakeSpec(ttl_ms=0, tools=(RUNS,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        result, ok = await tools.dispatch("mcp_tools", {"server": "github"}, _ctx(facts))
+    assert ok and "actions_list" in result
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": None,
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": True,
+        }
+    ]
+
+
+@requires_db
+async def test_mcp_tools_refresh_failure_stamps_failing_and_notes_the_stale_list(pool):
+    facts: list = []
+    with planted(fake.FakeSpec(ttl_ms=0, tools=(RUNS,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+        handle = client.plant({ORIGIN: fake.Unreachable()})
+        try:
+            result, ok = await tools.dispatch("mcp_tools", {"server": "github"}, _ctx(facts))
+        finally:
+            client.unplant(handle)
+    assert ok  # the stale list is still shown, with a note it could not be refreshed
+    assert "Could not read the list again" in result
+    assert facts == [
+        {
+            "mcp_server": "github",
+            "tool": None,
+            "origin": ORIGIN,
+            "protocol": "2026-07-28",
+            "reachable": False,
+        }
+    ]
+    assert (await servers.get(pool, "github")).failing is True
+
+
+@requires_db
+async def test_mcp_tools_maps_a_refresh_servererror_to_a_stated_failure(pool, monkeypatch):
+    """Task 5 carry: `refresh_tools` may raise `ServerError` when the row
+    changed under it. Simulated by monkeypatching the store's own function
+    (a genuine race is not reproducible deterministically through the tool
+    layer alone) — `mcp_tools` must map it to a stated ToolFailure, never a
+    crash, and record nothing (the row was never actually read from)."""
+    with planted(fake.FakeSpec(ttl_ms=0, tools=(RUNS,))):
+        await servers.connect(
+            pool, name="github", url=URL, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+
+        async def changed(pool, server, *, actor):
+            raise servers.ServerError(
+                f"{server.name} changed while its tools were being read; nothing was recorded"
+            )
+
+        monkeypatch.setattr(servers, "refresh_tools", changed)
+        result, ok = await tools.dispatch("mcp_tools", {"server": "github"}, _ctx())
+    assert not ok and "changed while its tools were being read" in result
+
+
+@requires_db
+async def test_mcp_call_folds_a_refresh_servererror_into_the_no_tool_refusal(pool, monkeypatch):
+    async with github(pool):
+
+        async def changed(pool, server, *, actor):
+            raise servers.ServerError(
+                f"{server.name} changed while its tools were being read; nothing was recorded"
+            )
+
+        monkeypatch.setattr(servers, "refresh_tools", changed)
+        result, ok = await tools.dispatch("mcp_call", {"server": "github", "tool": "nope"}, _ctx())
+    assert not ok
+    assert "has no tool named 'nope'" in result
+    assert "changed while its tools were being read" in result
+
+
+@requires_db
+async def test_mcp_connect_replacing_a_server_names_only_the_origin_never_the_path(pool):
+    old_origin = "http://old.mcp.invalid"
+    new_origin = "http://new.mcp.invalid"
+    old_handle = client.plant(
+        {old_origin: fake.transport(fake.FakeServer(fake.FakeSpec(tools=(fake.FakeTool("a"),))))}
+    )
+    new_handle = client.plant(
+        {new_origin: fake.transport(fake.FakeServer(fake.FakeSpec(tools=(fake.FakeTool("b"),))))}
+    )
+    try:
+        await servers.connect(
+            pool,
+            name="github",
+            url=f"{old_origin}/secret_path/mcp",
+            added_by=servers.BY_OWNER,
+            actor="jeremy",
+        )
+        result, ok = await tools.dispatch(
+            "mcp_connect", {"name": "github", "url": f"{new_origin}/mcp"}, _ctx()
+        )
+    finally:
+        client.unplant(new_handle)
+        client.unplant(old_handle)
+    assert ok
+    assert f"It replaced the github that the owner had added, at {old_origin}." in result
+    assert "secret_path" not in result

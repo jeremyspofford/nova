@@ -142,28 +142,38 @@ def _range_failure(name: str, value: Any, spec: dict) -> str | None:
 _SIMPLE_TYPES = frozenset({"string", "integer", "number", "boolean", "array", "object", "null"})
 
 
-def validate_foreign(schema: Any, arguments: Any) -> str | None:
-    """A LENIENT check of arguments against a schema core did not write — an
-    MCP server's inputSchema (S37a, plan decision P6).
+def _foreign_type_matches(value: Any, expected: str) -> bool:
+    """Like `_matches`, except a float with no fractional part is accepted
+    as an `"integer"` (ruling T7-B): JSON Schema draft 6 onward (and the
+    2020-12 vocabulary any current MCP server writes to) defines `integer`
+    as "a number with a zero fractional part", so `1.0` is one — `_matches`
+    itself stays strict (`type(value) is int`) for core's OWN tools, whose
+    schemas this project writes and controls. `bool` is still never an
+    integer: `value.is_integer()` is never reached for one, because
+    `type(True) is float` is False."""
+    if expected == "integer" and type(value) is float and value.is_integer():
+        return True
+    return _matches(value, expected)
 
-    It refuses only what it can be sure of: a missing required argument, a
-    top-level value of the wrong simple type, a value outside a declared enum,
-    and an unknown argument when the schema says additionalProperties: false.
-    Everything else JSON Schema can say (nested shapes, anyOf, $ref, formats)
-    is the server's to judge, and a refusal it sends back is stated to her in
-    its own words. `validate` above is for core's own tools and refuses every
-    unknown key: applied to a stranger's schema it would refuse calls the
-    server accepts."""
-    if type(arguments) is not dict:
-        return f"the arguments must be a JSON object, got {json_type_name(arguments)}"
-    if not isinstance(schema, dict):
-        return None
+
+def _validate_foreign(schema: dict, arguments: dict) -> str | None:
     properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     known = ", ".join(sorted(properties)) or "none"
-    for name in schema.get("required") or []:
-        if isinstance(name, str) and name not in arguments:
-            return f"missing required argument {name!r} — this tool takes: {known}"
-    if schema.get("additionalProperties") is False:
+    required = schema.get("required")
+    if isinstance(required, list):
+        for name in required:
+            if isinstance(name, str) and name not in arguments:
+                return f"missing required argument {name!r} — this tool takes: {known}"
+    # The unknown-argument refusal is skipped when the schema admits keys
+    # this reading cannot enumerate — `patternProperties` or `propertyNames`
+    # name a WIDER set than `properties` alone, so "not in properties" is not
+    # "unknown" (ruling T7-B: `additionalProperties: false` together with
+    # `patternProperties` still allows every key a pattern matches).
+    if (
+        schema.get("additionalProperties") is False
+        and "patternProperties" not in schema
+        and "propertyNames" not in schema
+    ):
         for name in arguments:
             if name not in properties:
                 return f"unknown argument {name!r} — this tool takes: {known}"
@@ -180,7 +190,11 @@ def validate_foreign(schema: Any, arguments: Any) -> str | None:
             else []
         )
         simple = [t for t in allowed if isinstance(t, str) and t in _SIMPLE_TYPES]
-        if simple and len(simple) == len(allowed) and not any(_matches(value, t) for t in simple):
+        if (
+            simple
+            and len(simple) == len(allowed)
+            and not any(_foreign_type_matches(value, t) for t in simple)
+        ):
             return (
                 f"argument {name!r} must be {_article(simple[0])} {' or '.join(simple)}, "
                 f"got {json_type_name(value)}"
@@ -190,3 +204,35 @@ def validate_foreign(schema: Any, arguments: Any) -> str | None:
             choices = ", ".join(json.dumps(v) for v in enum[:20])
             return f"argument {name!r} must be one of {choices}, got {json.dumps(value)}"
     return None
+
+
+def validate_foreign(schema: Any, arguments: Any) -> str | None:
+    """A LENIENT check of arguments against a schema core did not write — an
+    MCP server's inputSchema (S37a, plan decision P6).
+
+    It refuses only what it can be sure of: a missing required argument (when
+    `required` is the list of strings JSON Schema defines — a draft-03 habit
+    like `"required": true`, or any other shape, names nothing this reading
+    can be sure is missing), a top-level value of the wrong simple type (a
+    whole-number float counts as an `"integer"`), a value outside a declared
+    enum, and an unknown argument when the schema says
+    `additionalProperties: false` AND does not ALSO admit keys by
+    `patternProperties` or `propertyNames`. Everything else JSON Schema can
+    say (nested shapes, anyOf, $ref, formats) is the server's to judge, and a
+    refusal it sends back is stated to her in its own words. `validate` above
+    is for core's own tools and refuses every unknown key: applied to a
+    stranger's schema it would refuse calls the server accepts.
+
+    NEVER RAISES (ruling T7-B, structural): a schema shaped in a way this
+    reading cannot make sense of is not grounds to refuse a call, or to let
+    an exception reach `mcp_call` as "failed unexpectedly" — it is read as
+    "not sure", exactly like a schema this function cannot recognise at all,
+    and the call reaches the server, which judges its own input."""
+    if type(arguments) is not dict:
+        return f"the arguments must be a JSON object, got {json_type_name(arguments)}"
+    if not isinstance(schema, dict):
+        return None
+    try:
+        return _validate_foreign(schema, arguments)
+    except Exception:
+        return None

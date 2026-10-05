@@ -13,9 +13,12 @@ instead of a sentence (plan decision P8). The shape differs by what the
 call actually did (ruling F15 corrects this module's first draft, which
 claimed one shape for all of it):
 
-  * a connect, or a refresh (mcp_tools's own staleness check) that reached
-    the server, whether or not it then succeeded: 5 keys — `mcp_server`,
-    `tool` (always None here), `origin`, `protocol`, `reachable`.
+  * a connect, or a refresh — mcp_tools's own staleness check, AND
+    mcp_call's refresh-on-a-miss when the tool it was asked for is not in
+    the cached list (ruling T7-A/M1: the second of these used to file
+    nothing at all) — that reached the server, whether or not it then
+    succeeded: 5 keys — `mcp_server`, `tool` (always None here), `origin`,
+    `protocol`, `reachable`.
   * a tool call (mcp_call), ok or not: 7 keys — the same five plus
     `is_error` and `bytes` (None and 0 on a ClientError, since nothing
     came back to measure).
@@ -26,6 +29,19 @@ claimed one shape for all of it):
 Task 12's guards read `mcp_server` off these, and the span's own
 `reached_executor` flag — never `reachable`, which is for Activity and the
 roster's own failing() derivation, not a guard.
+
+THE 64 KIB CAP (ruling T7-A) applies to every word a server's own text puts
+in front of her, not only a successful result: `_capped` is the one place
+that enforces the byte bound, and every return and every ToolFailure built
+even partly from server text — a call's result (body + notes, success or
+`isError`), a ClientError's reason, a refresh failure folded into
+`refresh_note` — is composed THROUGH it, never around it. `result.notes` is
+also bounded in COUNT before it is ever joined into a string
+(`_notes_text`), so a response built of many small non-object content
+blocks cannot inflate a multi-megabyte string just to cut it down
+afterward; a server-supplied TOOL NAME is clipped (`_clip_name`) everywhere
+one is listed, so a single absurd name cannot crowd out the rest of a
+listing or a refusal's own "re-issue the call" instruction.
 
 `app.mcp.servers` is imported INSIDE the executors: it imports notices, then
 the checks, then agents, then this package — a cycle at import time that
@@ -49,6 +65,16 @@ TOOLS_RESULT_CAP_CHARS = 24_000
 DESCRIPTION_CHARS = 300
 SCHEMA_CHARS = 2_000
 NAMES_IN_A_REFUSAL = 40
+# A server-supplied TOOL NAME, wherever one is listed (ruling T7-A): clipped
+# before it ever joins a comma-separated list or a refusal, so one absurd
+# name cannot crowd out the rest of a listing or the "re-issue the call"
+# instruction a blunt end-of-string cap would otherwise cut off.
+NAME_CHARS = 120
+# How many of a call's own NOTES are composed into text before the rest are
+# collapsed to a count (ruling T7-A): bounded in COUNT first, so a response
+# built of many small non-object content blocks never has to build a
+# multi-megabyte string just to cut it down with `_capped` afterward.
+MAX_NOTES_LISTED = 20
 
 
 def _store():
@@ -82,6 +108,10 @@ def _schema_text(input_schema: Any) -> str:
 
 
 def _capped(text: str) -> str:
+    """The one place the 64 KiB cap is enforced (ruling T7-A). Every string
+    built even partly from server text passes through this before it ever
+    becomes a return value or a ToolFailure's reason — never only the
+    "normal" result path, or a composed string can slip past uncapped."""
     raw = text.encode("utf-8")
     if len(raw) <= RESULT_CAP_BYTES:
         return text
@@ -90,6 +120,26 @@ def _capped(text: str) -> str:
         f"{kept}\n[cut at 64 KiB: {len(raw) - RESULT_CAP_BYTES} more bytes were not shown — "
         "ask the tool for less, for example fewer lines or one page]"
     )
+
+
+def _clip_name(name: Any) -> str:
+    """A server-supplied tool NAME, clipped to `NAME_CHARS` (ruling T7-A) —
+    applied at every place one is listed, before it joins any other text."""
+    text = str(name)
+    return text if len(text) <= NAME_CHARS else text[:NAME_CHARS] + "…"
+
+
+def _notes_text(notes: tuple[str, ...]) -> str:
+    """The call's own notes, bounded in COUNT before they are ever composed
+    into one string (ruling T7-A) — at most `MAX_NOTES_LISTED`, then a
+    stated count of the rest, so a response built of many small notes never
+    has to build the whole of them just to cut the result down afterward."""
+    shown = notes[:MAX_NOTES_LISTED]
+    text = "".join(f"\n({note})" for note in shown)
+    rest = len(notes) - len(shown)
+    if rest > 0:
+        text += f"\n({rest} more note{'s' if rest != 1 else ''})"
+    return text
 
 
 async def _server(pool, name: str):
@@ -141,7 +191,7 @@ async def mcp_connect(args: dict, ctx: ToolContext) -> str:
             f"It replaced the {server.name} that {_who(done.previous.added_by)} had added, "
             f"at {done.previous.origin}."
         )
-    names = [str(t.get("name")) for t in server.tools]
+    names = [_clip_name(t.get("name")) for t in server.tools]
     if len(names) <= store.ROSTER_NAMES_UP_TO:
         lines.append("Its tools: " + (", ".join(names) if names else "none listed") + ".")
     else:
@@ -150,7 +200,7 @@ async def mcp_connect(args: dict, ctx: ToolContext) -> str:
             f"mcp_tools(server={server.name!r}, query=…)."
         )
     if done.rejected:
-        dropped = "; ".join(f"{name}: {why}" for name, why in done.rejected[:5])
+        dropped = "; ".join(f"{_clip_name(name)}: {why}" for name, why in done.rejected[:5])
         lines.append(
             f"{len(done.rejected)} of its tools were left out because their definitions break "
             f"the protocol ({dropped})."
@@ -212,7 +262,7 @@ async def mcp_tools(args: dict, ctx: ToolContext) -> str:
                 else "never"
             )
             note = (
-                f"\n(Could not read the list again — {exc.reason}. "
+                f"\n(Could not read the list again — {_capped(exc.reason)}. "
                 f"This is the list read at {when}.)"
             )
         except store.ServerError as exc:
@@ -232,7 +282,8 @@ async def mcp_tools(args: dict, ctx: ToolContext) -> str:
     used = len(head)
     for index, tool in enumerate(chosen):
         entry = (
-            f"- {tool.get('name')}: {str(tool.get('description') or '')[:DESCRIPTION_CHARS]}\n"
+            f"- {_clip_name(tool.get('name'))}: "
+            f"{str(tool.get('description') or '')[:DESCRIPTION_CHARS]}\n"
             f"  inputs: {_schema_text(tool.get('inputSchema'))}"
         )
         if used + len(entry) > TOOLS_RESULT_CAP_CHARS:
@@ -254,13 +305,41 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
     tool = next((t for t in server.tools if t.get("name") == name), None)
     refresh_note = ""
     if tool is None:
+        # The same shape as mcp_tools's own staleness-triggered refresh
+        # (ruling M1): a miss files the 5-key refresh fact and, on a
+        # ClientError, stamps the row failing — a miss against an
+        # unreachable server used to file nothing and leave `failing` False.
         try:
             server = await store.refresh_tools(pool, server, actor=_actor(ctx))
-        except (client.ClientError, store.ServerError) as exc:
-            refresh_note = f" (its list could not be read again: {exc.reason})"
+            _fact(
+                ctx,
+                mcp_server=server.name,
+                tool=None,
+                origin=server.origin,
+                protocol=server.protocol,
+                reachable=True,
+            )
+        except client.ClientError as exc:
+            await store.record_call(pool, server, ok=False, reason=exc.reason)
+            _fact(
+                ctx,
+                mcp_server=server.name,
+                tool=None,
+                origin=server.origin,
+                protocol=server.protocol,
+                reachable=exc.reachable,
+            )
+            refresh_note = f" (its list could not be read again: {_capped(exc.reason)})"
+        except store.ServerError as exc:
+            # The row changed or was removed under this read (Task 5 carry,
+            # ruling T5-E) — nothing was recorded, so nothing is stamped here.
+            refresh_note = f" (its list could not be read again: {_capped(exc.reason)})"
         tool = next((t for t in server.tools if t.get("name") == name), None)
     if tool is None:
-        names = ", ".join(str(t.get("name")) for t in server.tools[:NAMES_IN_A_REFUSAL]) or "none"
+        names = (
+            ", ".join(_clip_name(t.get("name")) for t in server.tools[:NAMES_IN_A_REFUSAL])
+            or "none"
+        )
         raise ToolFailure(
             f"{server.name} has no tool named {name!r} — it has: {names}{refresh_note} — "
             "re-issue the call"
@@ -289,7 +368,14 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
             is_error=None,
             bytes=0,
         )
-        raise ToolFailure(exc.reason) from exc
+        # The cap applies here too (ruling T7-A): a JSON-RPC error IS server
+        # text (ClientError.reason), and nothing downstream of this raise —
+        # dispatch, the chat loop — bounds it.
+        raise ToolFailure(_capped(exc.reason)) from exc
+    # T7-E: the server ANSWERED — isError is the tool's own answer, never a
+    # failing server (Server.failing's docstring, servers.py) — so the row
+    # is stamped ok here regardless of result.is_error, for the guards and
+    # the roster to read server health honestly.
     await store.record_call(pool, server, ok=True)
     _fact(
         ctx,
@@ -301,15 +387,19 @@ async def mcp_call(args: dict, ctx: ToolContext) -> str:
         is_error=result.is_error,
         bytes=result.bytes,
     )
-    # The client already scrubbed every decoded server string at its own
-    # decode boundary (ruling T5-A) — `result.text` and `result.notes` are
-    # clean by construction, so nothing here scrubs a second time.
-    body = _capped(result.text) if result.text else "(the server returned no text)"
-    notes = "".join(f"\n({note})" for note in result.notes)
+    # The client already scrubbed every decoded server string, and replaced
+    # every lone surrogate, at its own decode boundary (ruling T5-A, T7-C) —
+    # `result.text` and `result.notes` are clean and encodable by
+    # construction, so nothing here scrubs or re-encodes a second time.
+    # The 64 KiB cap (ruling T7-A) is applied to body + notes COMPOSED
+    # together, once, so neither the success return nor the isError failure
+    # can slip past it by capping only one half.
+    text = result.text if result.text else "(the server returned no text)"
+    body = _capped(f"{text}{_notes_text(result.notes)}")
     if result.is_error:
         # A server's isError is a failed call, in its own words.
-        raise ToolFailure(f"{label} reported an error: {body}{notes}")
-    return f"{label}:\n{body}{notes}"
+        raise ToolFailure(f"{label} reported an error: {body}")
+    return f"{label}:\n{body}"
 
 
 def _obj(properties: dict, required: list[str]) -> dict:

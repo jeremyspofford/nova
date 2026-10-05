@@ -794,16 +794,42 @@ def _scrub_text(text: str, candidates: Sequence[str]) -> str:
     return text
 
 
+def _has_lone_surrogate(text: str) -> bool:
+    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
+def _replace_lone_surrogates(text: str) -> str:
+    """`text`, with every lone (unpaired) UTF-16 surrogate code point
+    (U+D800-U+DFFF) replaced by U+FFFD (ruling T7-C).
+
+    `json.loads` accepts a bare `\\udXXX` escape — valid JSON text, but not
+    a valid Unicode scalar value — so a server that slices a response mid
+    surrogate-pair (a JS server cutting a string mid-emoji) hands this
+    client a `str` that CANNOT be encoded to UTF-8 at all. Nothing past the
+    decode boundary agreed to catch that: `CallResult.bytes` (`len(self.
+    text.encode("utf-8"))`), `mcp.py`'s own 64 KiB cap, a log line — any of
+    them raising `UnicodeEncodeError` turned a call that genuinely finished
+    into "failed unexpectedly", with no fact filed and the row stamped ok
+    (three different, false answers to the one call). Checked with a cheap
+    single pass first (`_has_lone_surrogate`) so the common case — no
+    surrogate anywhere — costs one scan and no rebuild."""
+    if not _has_lone_surrogate(text):
+        return text
+    return "".join("�" if 0xD800 <= ord(ch) <= 0xDFFF else ch for ch in text)
+
+
 def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
     """`value` — text, or anything just decoded from the server's own JSON —
     with every exact substring of `endpoint`'s own credentials (ruling T5-B)
-    replaced by `[redacted]`.
+    replaced by `[redacted]`, and every lone UTF-16 surrogate (ruling T7-C)
+    replaced by U+FFFD.
 
     Called where server text ENTERS the client (ruling T5-A: one source,
     the client's decode boundary), so every reason, result, progress line
     and tool list this module builds from a decoded VALUE afterwards is
     clean BY CONSTRUCTION — no caller downstream, in this module or in
-    Tasks 7/9, has to remember to scrub again.
+    Tasks 7/9, has to remember to scrub again, or to guard against a value
+    that cannot be encoded at all.
 
     That guarantee covers VALUES only, by design (below) — it does NOT
     cover a reason composed by joining a decoded structure's KEYS. There is
@@ -813,20 +839,28 @@ def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
     reason built this same way in the future must do the same — the
     alternative is a second general-purpose scrub for keys, which nothing
     today needs. The store's `servers._scrub` is a thin second pass over its
-    OWN composed text, built from `credential_candidates` above.
+    OWN composed text, built from `credential_candidates` above — it does
+    not need its own surrogate replacement, because every string it scrubs
+    was already cleaned here first.
 
     A dict or list is walked ITERATIVELY, with an explicit stack rather than
     a recursive call, so the cost is linear in the value's size regardless
-    of nesting depth. A string is scrubbed directly; anything else (a
-    number, a bool, None) passes through unchanged. Only VALUES are
-    scrubbed, never keys. Containers are mutated in place — each one is a
-    value this call just decoded from `json.loads` itself, so nothing else
-    holds a reference to it yet."""
+    of nesting depth. A string has both passes applied (surrogates first, so
+    a credential scrub never has to reason about an invalid code point);
+    anything else (a number, a bool, None) passes through unchanged. Only
+    VALUES are scrubbed, never keys. Containers are mutated in place — each
+    one is a value this call just decoded from `json.loads` itself, so
+    nothing else holds a reference to it yet.
+
+    The credential pass is skipped (not the surrogate pass) when there are
+    no candidates — a server with no token and no credential-shaped header
+    (ha-mcp: a secret PATH, no token, no header) still needs its text made
+    encodable, so this never early-returns on `not candidates` the way it
+    used to."""
     candidates = credential_candidates(endpoint.token, endpoint.headers)
-    if not candidates:
-        return value
     if isinstance(value, str):
-        return _scrub_text(value, candidates)
+        text = _replace_lone_surrogates(value)
+        return _scrub_text(text, candidates) if candidates else text
     if not isinstance(value, (dict, list)):
         return value
     stack: list[dict | list] = [value]
@@ -835,7 +869,8 @@ def scrub_credentials(value: Any, endpoint: Endpoint) -> Any:
         items = node.items() if isinstance(node, dict) else enumerate(node)
         for key, item in items:
             if isinstance(item, str):
-                node[key] = _scrub_text(item, candidates)
+                text = _replace_lone_surrogates(item)
+                node[key] = _scrub_text(text, candidates) if candidates else text
             elif isinstance(item, (dict, list)):
                 stack.append(item)
     return value
