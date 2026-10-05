@@ -362,11 +362,17 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     `_DEVICE_TIMED_OUT` (R3: the device's own answer that its command timed
     out, told apart from the hub's no-answer), `_INVITATION` and
     `_REASON_CLAUSE_END` (R2: a quoted failure reason never invites a retry):
-    197 -> 200, 258 -> 261."""
+    197 -> 200, 258 -> 261.
+
+    The linear-filenames fix (2026-10-05, hub:1's carry from S42b Task 23)
+    moved them again, deliberately, and not the difference: 1 new BARE module
+    Pattern, reached by both walks — `_FILENAME_IN`, a filename found inside
+    text, entered only at the front of its token (`_CONTENT_CLAIM` and
+    `_PASSIVE_CLAIM` changed shape, not count): 200 -> 201, 261 -> 262."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 200, len(old)
-    assert len(new) == 261, len(new)
+    assert len(old) == 201, len(old)
+    assert len(new) == 262, len(new)
     assert len(new) - len(old) == 61
 
 
@@ -1005,3 +1011,123 @@ def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
         _assert_linear(
             f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
         )
+
+
+# ---------------------------------------------------------------------------
+# A filename is entered once per token (hub:1's carry from S42b Task 23).
+#
+# `_CONTENT_CLAIM` and `_PASSIVE_CLAIM` began with `\b[\w./-]*`. Inside a long
+# dotted, dashed or slashed token every dot is a `\b`, and from each one the
+# greedy run walked to the token's end and back: narration_check took 171 ms
+# at 1,500 characters and 684 ms at 3,000 of "a." (S42b's measurement), on
+# core's one event loop. A filename found inside text now starts only at the
+# FRONT of a [\w./-] run. Any end a later start can reach, the front reaches
+# too, so the leftmost match is the one it always was; the pre-fix patterns
+# are kept here as the oracle.
+
+_FILENAME_RE_BEFORE = (
+    r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
+)
+_FILENAME_BEFORE = re.compile(r"\b" + _FILENAME_RE_BEFORE + r"\b", re.I)
+_CONTENT_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:now\s+|currently\s+)?"
+    r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
+    re.I,
+)
+_PASSIVE_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    r"(?P<verb>created|written|saved|updated|appended|added"
+    r"|read|opened|reviewed|checked|examined"
+    r"|deleted|removed|erased)\b",
+    re.I,
+)
+
+FILENAME_ORACLE_INPUTS = [
+    "",
+    "notes.md was read",
+    "./notes.md was read and ../a/b.md has been updated",
+    "-notes.md is saved, notes.md-old was read",
+    "report.md. was read",
+    "a.md.txt contains the following: x",
+    "x.md5 was read; .md was read",
+    "abc.def.md says: hi",
+    "C:\\Users\\eval\\config.yaml was read",
+    "README.MD HAS BEEN UPDATED",
+    "summary.html contains: <p>",
+    "a.b.c.d.e.f.g.yml has now been written",
+    "dir/sub-dir/file_name.toml is checked",
+    "v1.2.3 was read and 1.2.3.md was read",
+    "notes.md\twas read",
+    "notes.md   currently says 'x'",
+    "...notes.md was read",
+    "a/./b/../c.json was opened",
+    "x" * 40 + ".md was read",
+    ("a." * 40) + "md was read",
+    ("a-" * 40) + "x.md is read",
+]
+
+
+def _claim_triples_before(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    return [(m.group(1), m.group(0), m.groupdict().get("verb")) for m in pattern.finditer(text)]
+
+
+def _claim_triples_now(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    # The phrase as _claims_in records it: from the filename to the match end.
+    return [
+        (m.group(1), text[m.start(1) : m.end()], m.groupdict().get("verb"))
+        for m in pattern.finditer(text)
+    ]
+
+
+def _random_filename_texts(count: int = 3_000) -> list[str]:
+    """Seeded, so a failure is reproducible: runs of dots, dashes, slashes,
+    words, extensions and the claim verbs, glued in every order."""
+    import random
+
+    rng = random.Random(29)
+    alphabet = [
+        "a", "b", "Z9", "_", ".", "-", "/", " ", "\t", "md", "txt", "yaml", "yml",
+        "htm", "html", "md5", "x.md", "./", "../", "Report", "notes", ":", "'",
+        " was read", " has been updated", " is saved", " contains the following",
+        " says:", " now reads \"", " were deleted",
+    ]  # fmt: skip
+    return ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 24))) for _ in range(count)]
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM"])
+def test_the_claim_patterns_match_exactly_as_before(name):
+    before = {"_CONTENT_CLAIM": _CONTENT_CLAIM_BEFORE, "_PASSIVE_CLAIM": _PASSIVE_CLAIM_BEFORE}[
+        name
+    ]
+    now = getattr(guards, name)
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        assert _claim_triples_now(now, text) == _claim_triples_before(before, text), text
+
+
+def test_a_filename_is_found_inside_text_exactly_as_before():
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        before = _FILENAME_BEFORE.search(text)
+        now = guards._FILENAME_IN.search(text)
+        assert (now.group(1) if now else None) == (before.group(0) if before else None), text
+
+
+FILENAME_RUNS = [
+    ("dotted", _repeat("a.")),
+    ("dashed", _repeat("a-")),
+    ("slashed", _repeat("a/")),
+    ("dotted_words", _repeat("ab.cd.")),
+    ("a_claim_then_a_dotted_run", lambda n: "I ran " + _repeat("a.")(n)),
+    ("dotted_runs_with_a_verb_each", _repeat("a.a.a.a.a.a.a.a was read ")),
+]
+
+
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_narration_reads_a_long_dotted_or_dashed_token_in_linear_time(label, build):
+    _assert_linear(f"narration {label}", lambda text: guards.narration_check(text, []), build)
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM", "_FILENAME_IN"])
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_the_filename_patterns_enter_a_run_once(name, label, build):
+    pattern = getattr(guards, name)
+    _assert_linear(f"{name} {label}", lambda text: list(pattern.finditer(text)), build)
