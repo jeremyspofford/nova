@@ -27,6 +27,7 @@ from app import (
     evals_api,
     governance_api,
     machines_api,
+    mcp_api,
     models_catalog,
     network_api,
     notices_api,
@@ -145,6 +146,7 @@ app.include_router(agents_api.router)
 app.include_router(notices_api.router)
 app.include_router(skills_api.router)
 app.include_router(attachments_api.router)
+app.include_router(mcp_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)
