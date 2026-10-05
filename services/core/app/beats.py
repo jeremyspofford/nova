@@ -320,6 +320,13 @@ async def beat_conversation(pool: asyncpg.Pool) -> uuid.UUID:
         return await _conversation(conn, owner)
 
 
+def no_runner_reason(name: object) -> str:
+    """The words a firing refuses with when this core has no runner for the
+    beat — and the words ensure_beats matches to lift that pause once a core
+    that has the runner starts. Spelled once so the two cannot drift."""
+    return f"no beat named {name!r} — the beats are {', '.join(BEATS)}"
+
+
 async def ensure_beats(pool: asyncpg.Pool) -> bool:
     """Seed the two beat rows if they are missing; return whether they exist.
     Idempotent, and safe to call from two processes at once.
@@ -405,6 +412,26 @@ async def ensure_beats(pool: asyncpg.Pool) -> bool:
         )
     for name in seeded:
         logger.info("seeded beat %r (%s)", name, schedule.describe(specs[name], zone, None))
+    # A beat paused by its own refusal because the core running then had no
+    # runner for it is a fact about old code, not the operator's pause: the
+    # distil beat sat paused from 2026-09-11 ("no beat named 'distil' — the
+    # beats are watch, digest") under every core since, which has the runner.
+    # Only that pause is lifted; his own, or a failure ceiling's, stays.
+    from app import timers  # call-time: timers reaches back into this module
+
+    for name in BEATS:
+        if name not in _RUNNERS:
+            continue
+        row = await pool.fetchrow(
+            "SELECT id, paused_reason FROM timers WHERE kind = $1 AND payload->>'handler' = $2 "
+            "AND paused_at IS NOT NULL",
+            BEAT_KIND,
+            name,
+        )
+        if row is None or not (row["paused_reason"] or "").startswith(f"no beat named {name!r}"):
+            continue
+        await timers.resume(pool, row["id"])
+        logger.info("resumed beat %r: it was paused for a runner this core has", name)
     return True
 
 
@@ -631,7 +658,7 @@ async def run_beat(app, pool: asyncpg.Pool, row: asyncpg.Record, firing_id, turn
     name = payload["handler"] if "handler" in payload else None
     runner = _RUNNERS.get(name) if isinstance(name, str) else None
     if runner is None:
-        reason = f"no beat named {name!r} — the beats are {', '.join(BEATS)}"
+        reason = no_runner_reason(name)
         return scheduler.Outcome(scheduler.FIRING_REFUSED, reason, {}, pause_reason=reason)
     with turn.span("beat", name) as span:
         try:
