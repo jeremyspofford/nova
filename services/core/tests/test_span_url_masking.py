@@ -4,7 +4,7 @@ link read with fetch_url leaks the same way as one opened in her browser."""
 
 from __future__ import annotations
 
-from app import chat, tools
+from app import addresses, chat, tools
 from tests.test_span_masking import _register_stand_in
 
 
@@ -31,8 +31,48 @@ def test_the_rule_applies_to_every_tool_not_only_the_browser():
 
 
 def test_what_is_not_an_http_address_is_left_alone():
-    for value in ("not a url", "ftp://host/file?x=1", "http://[bad", ""):
+    # Fix round 2 (ruling G34): "http://[bad" MOVED out of this set — it
+    # LOOKS like an http(s) address and so is masked whole now (below),
+    # never handed back raw just because `urlsplit` could not parse it.
+    for value in ("not a url", "ftp://host/file?x=1", ""):
         assert chat._span_arguments({"url": value}) == {"url": value}
+
+
+def test_an_unparseable_value_shaped_like_http_is_masked_whole():
+    """Ruling G34 (fix round 2, B): `urlsplit` raising on a value — an
+    unterminated IPv6 host, say — used to make `_address_without_secrets`/
+    `addresses.masked` hand it back RAW, on the technicality that there
+    were no `.query`/`.fragment` parts to replace. A value shaped like an
+    http(s) address that still cannot be parsed is masked WHOLE instead;
+    `test_what_is_not_an_http_address_is_left_alone` keeps the three cases
+    that do not even look like one."""
+    assert chat._span_arguments({"url": "http://[bad"}) == {"url": "<masked:11 chars>"}
+    secret = "http://[::1/reset?token=abc123"
+    recorded = chat._span_arguments({"url": secret})
+    assert recorded == {"url": f"<masked:{len(secret)} chars>"}
+    assert "abc123" not in str(recorded)
+    # Case-insensitive, and https too — the same rule either way.
+    assert chat._span_arguments({"url": "HTTPS://[bad"}) == {"url": "<masked:12 chars>"}
+
+
+def test_an_unparseable_value_not_shaped_like_http_is_still_left_alone():
+    """The other half of G34: masking is about an ADDRESS. A value that
+    does not even look like one is not a value this function reveals, so
+    an unparseable one of those stays exactly as it was — never masked on
+    the grounds that it merely failed to parse."""
+    assert chat._span_arguments({"url": "ftp://[bad"}) == {"url": "ftp://[bad"}
+    assert chat._span_arguments({"url": "[bad either way"}) == {"url": "[bad either way"}
+
+
+def test_addresses_shown_drops_user_info_too_on_an_unparseable_value():
+    """Fix round 2, B's other half: `addresses.shown` (her tools' and
+    page facts' rendering) already dropped the query on a value `urlsplit`
+    itself cannot read (m11's own case); it must drop user info the same
+    way, by the same str-methods fallback, since there is no `.netloc` to
+    read it from the normal way."""
+    assert addresses.shown("http://[::1/reset?token=abc123") == "http://[::1/reset"
+    assert addresses.shown("http://user:pass@[::1/reset?token=abc123") == "http://[::1/reset"
+    assert addresses.shown("http://user:pass@[::1/reset#frag") == "http://[::1/reset"
 
 
 def test_a_hostless_address_still_loses_its_query_and_fragment():

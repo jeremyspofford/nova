@@ -281,7 +281,15 @@ async def browser_open(args: dict, ctx: ToolContext) -> str:
         # fix round 1, m11: urlsplit raises on some malformed strings (an
         # unterminated IPv6 host) — a stated refusal, never a crash dispatch
         # has to catch and log as a bug she did not cause.
-        raise ToolFailure(f"{url!r} does not parse as a web address: {exc}") from exc
+        #
+        # fix round 2, A: `url` itself is never echoed here — `_shown` (str
+        # methods, never raising even on a value `urlsplit` itself could
+        # not read) is what reached the model, the result and the span
+        # before this fix; `{url!r}` reached all three unmasked.
+        # `str(exc)` is kept: checked directly (urlsplit's ValueError on
+        # every malformed shape this module can construct says only
+        # "Invalid IPv6 URL", never a word of the value itself).
+        raise ToolFailure(f"{_shown(url)} does not parse as a web address: {exc}") from exc
     if scheme not in ("http", "https"):
         raise ToolFailure(f"the browser opens http and https addresses only, not {_shown(url)}")
     snap: EngineAnswer | None = None

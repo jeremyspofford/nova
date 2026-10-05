@@ -46,19 +46,34 @@ def _split(value: str) -> SplitResult | None:
         return None
 
 
+def _looks_like_http(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith("http://") or lowered.startswith("https://")
+
+
 def shown(value: str | None) -> str | None:
     """An address as her tools show it, and as a page fact holds it: scheme,
     host and path — no user info, query or fragment. `None` in, `None`
     out; a value that is not a parseable http(s) address with a host still
-    loses anything after its first `?` or `#` (str methods, never raising —
-    this is the fallback `browser.py` relied on before this module existed,
-    kept so every one of its tests stays green unchanged)."""
+    loses anything after its first `?` or `#`, AND whatever sits before the
+    last `@` up to the next `/` after the scheme (fix round 2, B — the user
+    info a malformed netloc can still carry; `urlsplit` raising is exactly
+    what makes it malformed, so there is no `.netloc` to read it from the
+    normal way). Str methods only, never raising — this is the fallback
+    `browser.py` relied on before this module existed, kept so every one of
+    its tests stays green unchanged."""
     if not value:
         return None
     parts = _split(value)
-    if parts is None or not parts.scheme or not parts.netloc:
-        return value.split("?", 1)[0].split("#", 1)[0]
-    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+    if parts is not None and parts.scheme and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+    cut = value.split("?", 1)[0].split("#", 1)[0]
+    scheme, sep, rest = cut.partition("://")
+    if not sep:
+        return cut
+    slash = rest.find("/")
+    authority, tail = (rest, "") if slash == -1 else (rest[:slash], rest[slash:])
+    return f"{scheme}://{authority.rpartition('@')[2]}{tail}"
 
 
 def masked(value: str) -> str:
@@ -68,9 +83,22 @@ def masked(value: str) -> str:
     `https:///reset?token=…` — is still masked (S38 Task 6's fix round 1:
     the plan's own `or not parts.netloc` guard let exactly that unmasked
     once); anything that is not http(s) at all is returned exactly as it
-    was."""
+    was.
+
+    Ruling G34 (fix round 2, B): a value `urlsplit` cannot read AT ALL —
+    raising, rather than parsing into parts this function could then mask —
+    used to come back here RAW, unmasked, the moment it merely LOOKED like
+    an http(s) address (`http://[::1/reset?token=…`, an unterminated IPv6
+    host): there is no `.query` to replace when there are no `.parts`. The
+    only values this function ever reveals are http(s) ones, so one shaped
+    like one that still cannot be parsed is masked WHOLE instead — never
+    handed back on the technicality that it could not be reduced to parts.
+    Anything that does not even look like an http(s) address is still
+    returned exactly as it was: masking could only be about an address."""
     parts = _split(value)
-    if parts is None or parts.scheme.lower() not in ("http", "https"):
+    if parts is None:
+        return f"<masked:{len(value)} chars>" if _looks_like_http(value) else value
+    if parts.scheme.lower() not in ("http", "https"):
         return value
     user, at, host = parts.netloc.rpartition("@")
     out = f"{parts.scheme}://"

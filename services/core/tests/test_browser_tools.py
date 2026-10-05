@@ -924,3 +924,32 @@ async def test_an_unparseable_url_is_a_stated_refusal_not_a_crash(world):
     assert not ok
     assert "failed unexpectedly" not in result
     assert "does not parse as a web address" in result
+
+
+# ── fix round 2, A: the unparseable-URL refusal never echoes the raw url ───
+
+
+async def test_an_unparseable_urls_token_never_reaches_the_failure(world):
+    ctx = world[0]
+    with pytest.raises(ToolFailure) as caught:
+        await browser.browser_open({"url": "http://[::1/reset?token=abc123"}, ctx)
+    assert "abc123" not in str(caught.value)
+
+
+async def test_an_unparseable_urls_token_never_reaches_the_result_or_the_span(world):
+    """Fix round 2, A: `{url!r}` in the refusal's message put the raw url —
+    token and all — into the tool result AND, through `chat._span_arguments`
+    re-reading that same raw `url` argument (ruling G34, B), into the
+    stored span's `args_redacted`, `result_head` and `error` too. All four
+    checked end to end through `chat._run_tool`, the real path a span is
+    written on (the S37a pattern, test_mcp_tools.py's
+    test_no_token_bytes_reach_turn_spans)."""
+    ctx = world[0]
+    secret = "http://[::1/reset?token=abc123"
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(id="c1", name="browser_open", arguments=json.dumps({"url": secret}))
+    result, ok = await chat._run_tool(turn, ctx, call)
+    assert not ok
+    assert "abc123" not in result, result
+    meta = json.dumps([span.meta for span in turn.spans], default=str)
+    assert "abc123" not in meta, meta
