@@ -390,6 +390,77 @@ async def put_jev_router(role: str, request: Request) -> Response:
     return Response(content=json.dumps(stated), status_code=200, media_type="application/json")
 
 
+@router.put("/routes/chat/primary")
+async def put_chat_primary(request: Request) -> Response:
+    """{model} becomes the chat model — link 1 of every chain chat.model
+    leads — and the model it replaces becomes chat's FIRST fallback.
+
+    The one write path for a pick: the chat picker, Models and Settings each
+    wrote chat.model alone, so a pick replaced link 1 and the model it
+    replaced was in no chain at all (2026-10-05: one pick in chat dropped the
+    Dell's model, and nothing anywhere showed it). A model that is already a
+    fallback leaves the fallbacks, so no chain names one model twice.
+
+    The chain is written first: a chain the gateway refuses changes nothing,
+    and its refusal comes back verbatim. chat.model is written after, and a
+    write that fails is a 502 in words — the chain then holds the old pick as
+    a fallback, which the walk tolerates. While Jev Router picks chat's cloud
+    model the switch owns that link, so a pick cannot run until it is off."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    model = body.get("model") if isinstance(body, dict) else None
+    if not isinstance(model, str) or not model.strip():
+        raise HTTPException(status_code=400, detail="name the model to pick: provider:model")
+    model = model.strip()
+    listed = await _forward(request, "GET", "/admin/routes", content=b"")
+    if listed.status_code != 200:
+        return listed
+    roles = (_json_object(listed.body) or {}).get("roles")
+    chat_row = next(
+        (r for r in roles or [] if isinstance(r, dict) and r.get("role") == "chat"), None
+    )
+    if chat_row is None:
+        raise HTTPException(status_code=502, detail="the gateway listed no chat route")
+    if (chat_row.get("router") or {}).get("on") is True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Jev Router is picking chat's cloud model — switch it off in Settings → "
+                "Models → Routing to pick one yourself"
+            ),
+        )
+    current = await _chat_model()
+    stored = [link for link in chat_row.get("chain") or [] if isinstance(link, str)]
+    chain = [link for link in stored if link not in (model, current)]
+    if current and current != model:
+        chain = [current, *chain]
+    if chain != stored:
+        written = await _forward(
+            request, "PUT", "/admin/routes/chat", content=json.dumps({"chain": chain}).encode()
+        )
+        if written.status_code != 200:
+            return written
+    if current != model:
+        try:
+            await settings_store.write_setting(
+                settings_store.SettingWrite(key="chat.model", value=model)
+            )
+        except Exception as exc:  # noqa: BLE001 - the reason is the answer
+            reason = peers.reason(exc)
+            logger.warning("chat primary: chat.model could not be written — %s", reason)
+            raise HTTPException(
+                status_code=502,
+                detail=f"the chain is saved, but chat.model could not be written — {reason}",
+            ) from exc
+    return Response(
+        content=json.dumps({"chat_model": model, "chain": chain}),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
 @router.delete("/routes/{role}")
 async def delete_route(role: str, request: Request) -> Response:
     """Drop a role's chain row (S12-2). The gateway refuses a built-in and

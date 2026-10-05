@@ -772,3 +772,102 @@ async def test_explain_never_forwards_a_browsers_decision_kinds(owner_client, mo
 
     await owner_client.get(f"/api/v1/routes/explain?role=chat&{planted}")
     assert gateway.queries[-1] == b"role=chat&keep=a+b"
+
+
+# One write path for "chat answers with this model" (2026-10-05). The chat
+# picker, Models and Settings each wrote chat.model alone, so a pick replaced
+# link 1 and the model it replaced was in no chain at all: one pick in chat
+# dropped the Dell's model, and nothing anywhere showed it was gone.
+GEMINI = "openrouter:google/gemini-3.8-flash"
+GLM = "openrouter:z-ai/glm-5.3-flash"
+DELL = "dell:qwen3:8b"
+
+
+def _routes_body(chain: list[str], *, router_on: bool = False) -> dict:
+    return {
+        "roles": [{"role": "chat", "chain": chain, "router": {"on": router_on, "kept": None}}],
+        "walls": [],
+    }
+
+
+async def test_a_pick_becomes_link_one_and_the_pick_it_replaces_the_first_fallback(
+    owner_client, mount_peers, pool
+):
+    gateway = FakeGateway(admin_body=_routes_body([GEMINI]))
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GLM, "chain": [DELL, GEMINI]}
+    assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": [DELL, GEMINI]})
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_fallback_picked_leaves_the_fallbacks_and_is_never_listed_twice(
+    owner_client, mount_peers, pool
+):
+    gateway = FakeGateway(admin_body=_routes_body([GEMINI, DELL]))
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, GEMINI)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": DELL})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": DELL, "chain": [GEMINI]}
+    assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": [GEMINI]})
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+async def test_picking_the_current_pick_only_takes_its_repeat_out_of_the_fallbacks(
+    owner_client, mount_peers, pool
+):
+    # The live state that day: link 1 and link 2 both Gemini.
+    gateway = FakeGateway(admin_body=_routes_body([GEMINI]))
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, GEMINI)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GEMINI})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GEMINI, "chain": []}
+    assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": []})
+
+
+async def test_a_chain_the_gateway_refuses_changes_nothing(owner_client, mount_peers, pool):
+    gateway = FakeGateway(admin_body=_routes_body([GEMINI]))
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+    gateway.admin_status = 400
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 400
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+async def test_a_pick_cannot_run_while_jev_router_picks_chats_cloud_model(
+    owner_client, mount_peers, pool
+):
+    gateway = FakeGateway(admin_body=_routes_body([GEMINI], router_on=True))
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 409
+    assert "Jev Router" in resp.json()["error"]
+    assert all(path != "/admin/routes/chat" for path, _ in gateway.seen)
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+@pytest.mark.parametrize("body", [{}, {"model": ""}, {"model": "  "}, {"model": 3}, ["x"]])
+async def test_a_pick_names_a_model(owner_client, mount_peers, body):
+    gateway = FakeGateway(admin_body=_routes_body([]))
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json=body)
+
+    assert resp.status_code == 400
+    assert gateway.seen == []
