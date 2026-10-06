@@ -26,6 +26,8 @@ Fixture JSON (one file per case, under app/evals/cases/):
       "machines": [{"name": "eval_box", "serving": true}],   # optional; default []
       "devices": [{"name": "eval_pc", "platform": "windows",  # optional; default [] (S42a)
                    "hostname": "EVAL-PC", "connected": true, "facts": {...}}],
+      "mcp_servers": [{"name": "eval_github",  # optional; default [] (S37a)
+                       "title": "GitHub", "tools": [...]}],
       "message": "what's the latest on the pixel camera?",
       "contract": [
         {"predicate": "tool_called", "arg": "web_search"},
@@ -39,7 +41,10 @@ both are torn down with the rest of the scratch state. `machines` (S40) is the
 one declaration that is never built: they are the gateway's rows, so the
 runner answers for them from the declaration instead (see FixtureMachine).
 `devices` (S42a) is the same kind of declaration: an agent the plant answers
-for (see FixtureDevice).
+for (see FixtureDevice). `mcp_servers` (S37a) is the same kind again, one
+layer over: a case's declared servers overlay her connections for that case
+alone, and the owner's real servers never answer an eval turn (see
+FixtureMcpServer).
 
 `suite_version` is pinned on every case so a score is only ever compared across
 runs of the SAME version (comparability rail): change a suite's cases, bump its
@@ -50,11 +55,15 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app import agents, device_facts
+from app.mcp import client as mcp_client
+from app.mcp import fake as mcp_fake
+from app.mcp import servers as mcp_servers
 
 # The predicate names a contract may use. Kept here (not imported from
 # predicates.py) so a fixture is validated at LOAD time against the known set,
@@ -499,6 +508,145 @@ def device_from_dict(raw: object) -> FixtureDevice:
 
 
 @dataclass(frozen=True)
+class FixtureMcpTool:
+    """One tool of a declared MCP server, and its canned answers in order (the
+    last repeats) — app/mcp/fake.py's FakeTool, declared in a case."""
+
+    name: str
+    description: str = ""
+    input_schema: dict = field(default_factory=lambda: {"type": "object", "properties": {}})
+    results: tuple[dict, ...] = ({"text": "ok"},)
+
+    def as_json(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": copy.deepcopy(self.input_schema),
+            "results": [copy.deepcopy(r) for r in self.results],
+        }
+
+
+@dataclass(frozen=True)
+class FixtureMcpServer:
+    """An MCP server a case's turn can use (S37a). Never a row: the runner
+    overlays the case's declared servers on her connections for this case
+    alone (servers.OVERLAY) and plants each one's strict fake at its address
+    (client.plant), so the owner's real servers never answer an eval turn and
+    nothing a turn connects reaches the table (plan decision P11).
+
+    `listed: false` plants the fake WITHOUT making it one of her connections —
+    how S38 declares its fake Playwright engine at http://browser:8931/mcp,
+    which core calls itself."""
+
+    name: str
+    title: str = "a declared MCP server"
+    era: str = "modern"
+    respond: str = "json"
+    reachable: bool = True
+    listed: bool = True
+    url: str | None = None
+    tools: tuple[FixtureMcpTool, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.name.startswith(FIXTURE_AGENT_PREFIX) or not mcp_servers.NAME_RE.match(
+            self.name
+        ):
+            raise CaseError(
+                f"a case's MCP server name must start with {FIXTURE_AGENT_PREFIX!r} and be a valid "
+                f"server name (2-32 of a-z, 0-9, - and _), got {self.name!r}"
+            )
+        if self.era not in ("modern", "legacy"):
+            raise CaseError(f"a case's MCP server era must be modern or legacy, got {self.era!r}")
+        if self.respond not in ("json", "sse"):
+            raise CaseError(f"a case's MCP server must respond json or sse, got {self.respond!r}")
+        if self.url is not None and urlsplit(self.url).scheme not in ("http", "https"):
+            raise CaseError(f"a case's MCP server url must be http or https, got {self.url!r}")
+
+    @property
+    def endpoint_url(self) -> str:
+        return self.url or f"http://{self.name.replace('_', '-')}.mcp.invalid/mcp"
+
+    @property
+    def origin(self) -> str:
+        # One source (controller ruling F13, same rule as servers.Server.origin):
+        # the client's own Endpoint, never a second derivation here.
+        return mcp_client.Endpoint(name=self.name, url=self.endpoint_url).origin
+
+    def fake_spec(self) -> mcp_fake.FakeSpec:
+        return mcp_fake.FakeSpec(
+            title=self.title,
+            era=self.era,
+            respond=self.respond,
+            tools=tuple(
+                mcp_fake.FakeTool(t.name, t.description, t.input_schema, t.results)
+                for t in self.tools
+            ),
+        )
+
+    def listed_tools(self) -> tuple[dict, ...]:
+        return tuple(
+            {
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": t.input_schema,
+                "annotations": {},
+            }
+            for t in self.tools
+        )
+
+    def as_json(self) -> dict:
+        return {
+            "name": self.name,
+            "title": self.title,
+            "era": self.era,
+            "respond": self.respond,
+            "reachable": self.reachable,
+            "listed": self.listed,
+            "url": self.url,
+            "tools": [t.as_json() for t in self.tools],
+        }
+
+
+def mcp_server_from_dict(raw: object) -> FixtureMcpServer:
+    if not isinstance(raw, dict):
+        raise CaseError(f"a case's MCP server must be an object, got {type(raw).__name__}")
+    tools_raw = raw.get("tools", [])
+    if not isinstance(tools_raw, list):
+        raise CaseError("a case's MCP server tools must be a list")
+    tools: list[FixtureMcpTool] = []
+    for entry in tools_raw:
+        if not isinstance(entry, dict):
+            raise CaseError("a case's MCP tool must be an object")
+        results = entry.get("results", [{"text": "ok"}])
+        if (
+            not isinstance(results, list)
+            or not results
+            or not all(isinstance(r, dict) for r in results)
+        ):
+            raise CaseError(
+                f"MCP tool {entry.get('name')!r}: results must be a non-empty list of objects"
+            )
+        tools.append(
+            FixtureMcpTool(
+                name=_require(entry, "name", str),
+                description=entry.get("description", ""),
+                input_schema=entry.get("inputSchema", {"type": "object", "properties": {}}),
+                results=tuple(results),
+            )
+        )
+    return FixtureMcpServer(
+        name=_require(raw, "name", str),
+        title=raw.get("title", "a declared MCP server"),
+        era=raw.get("era", "modern"),
+        respond=raw.get("respond", "json"),
+        reachable=bool(raw.get("reachable", True)),
+        listed=bool(raw.get("listed", True)),
+        url=raw.get("url"),
+        tools=tuple(tools),
+    )
+
+
+@dataclass(frozen=True)
 class Case:
     """One eval case. `contract` passes iff EVERY predicate passes (subset match
     against the trace, never equality against a recorded reply)."""
@@ -520,6 +668,9 @@ class Case:
     machines: tuple[FixtureMachine, ...] = ()
     # S42a: the agents the plant must answer for (see FixtureDevice).
     devices: tuple[FixtureDevice, ...] = ()
+    # S37a: the MCP servers her turn can use — an overlay on her connections for
+    # this case alone (see FixtureMcpServer).
+    mcp_servers: tuple[FixtureMcpServer, ...] = ()
 
     def as_json(self) -> dict:
         return {
@@ -532,6 +683,7 @@ class Case:
             "skills": [s.as_json() for s in self.skills],
             "machines": [m.as_json() for m in self.machines],
             "devices": [d.as_json() for d in self.devices],
+            "mcp_servers": [s.as_json() for s in self.mcp_servers],
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -613,6 +765,12 @@ def case_from_dict(raw: dict) -> Case:
         if device.name in seen_devices:
             raise CaseError(f"a case declares the device {device.name!r} more than once")
         seen_devices.add(device.name)
+    mcp_raw = raw.get("mcp_servers", [])
+    if not isinstance(mcp_raw, list):
+        raise CaseError(f"a case's mcp_servers must be a list, got {type(mcp_raw).__name__}")
+    fixture_mcp = tuple(mcp_server_from_dict(entry) for entry in mcp_raw)
+    if len({s.name for s in fixture_mcp}) != len(fixture_mcp):
+        raise CaseError("a case declares the same MCP server more than once")
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
@@ -624,6 +782,7 @@ def case_from_dict(raw: dict) -> Case:
         skills=fixture_skills,
         machines=fixture_machines,
         devices=fixture_devices,
+        mcp_servers=fixture_mcp,
     )
 
 

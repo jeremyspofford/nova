@@ -228,6 +228,10 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     # anchor over a paired name and its words.
     found["_written_call_pattern"] = guards._written_call_pattern(tuple(tools.tool_names()))
     found["_device_anchor"] = guards._device_anchor(("DELL-XPS-8950",))
+    # The MCP server pair (S37a Task 12, 2026-10-05): the builder over a
+    # one-word and a two-word server, as chat._mcp_server_refs derives them.
+    for i, pattern in enumerate(guards._server_patterns(("github", "home assistant"))):
+        found[f"_server_patterns[{i}]"] = pattern
     return found
 
 
@@ -281,10 +285,12 @@ def test_the_sweep_now_reaches_the_new_capability_pattern():
     16's brief said it (`_CAPABILITY_TOOLS` is a tuple of `(Pattern, str)`
     pairs, never a tuple where every element is directly a Pattern). This is
     the reachability proof for the S42a `device_run` entry specifically --
-    the fossil sweep above must NOT see it; the real one must."""
+    the fossil sweep above must NOT see it; the real one must. Selected by
+    its tool's name, never by position (ruling F11, S37a Task 12): the last
+    row moves the day a later slice appends one, as S37a's MCP rows did."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    my_pattern = guards._CAPABILITY_TOOLS[-1][0]
+    [my_pattern] = [pattern for pattern, tool in guards._CAPABILITY_TOOLS if tool == "device_run"]
     assert not any(p is my_pattern for p in old.values()), (
         "the fossil (pre-amendment) sweep should not reach the new capability pattern"
     )
@@ -368,12 +374,25 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     moved them again, deliberately, and not the difference: 1 new BARE module
     Pattern, reached by both walks — `_FILENAME_IN`, a filename found inside
     text, entered only at the front of its token (`_CONTENT_CLAIM` and
-    `_PASSIVE_CLAIM` changed shape, not count): 200 -> 201, 261 -> 262."""
+    `_PASSIVE_CLAIM` changed shape, not count): 200 -> 201, 261 -> 262.
+
+    S37a Task 12 (2026-10-05) moved all three, deliberately: 201 -> 203,
+    262 -> 270, the difference 61 -> 67.
+       2  new BARE module Patterns, reached by both walks: the MCP server
+          guards' `_SERVER_PRESENT_STATE` and `_SERVER_EARLIER`.
+       4  the per-server builder in the live walk only (the fossil is not
+          evolved): `_server_patterns[0..3]`.
+       2  `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, the mcp_connect and
+          mcp_call rows, reached through the container in the live walk only.
+    Ruling X1's own linear rewrite of capability_claim_check added three more
+    bare patterns (`_IN_MY_TOOLSET`, `_STRETCH_END`, `_SCOPE_AT_TAIL_START`);
+    merging main (2026-10-06) kept #97's rewrite of the same function
+    instead, which adds none, so those three are gone."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 201, len(old)
-    assert len(new) == 262, len(new)
-    assert len(new) - len(old) == 61
+    assert len(old) == 203, len(old)
+    assert len(new) == 270, len(new)
+    assert len(new) - len(old) == 67
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -449,6 +468,18 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # walking to the verb that makes the gerund its subject.
         "gerund_then_spaces": "Running" + pad + "this",
         "demonstrative_then_spaces": "Running this" + pad + "formats",
+        # S37a Task 12: the MCP server legs — a server's name walking to its
+        # verb, a possessive, an attribution, her read verb and an access verb
+        # walking to the name — and the capability guard's impersonal lead,
+        # toolset words and two-word scope word, each walking its padding.
+        "server_then_spaces": "github" + pad + "shows",
+        "possessive_server_then_spaces": "github's" + pad + "run",
+        "according_then_spaces": "according to" + pad + "github",
+        "read_verb_then_spaces": "I checked" + pad + "github",
+        "access_then_spaces": "access" + pad + "home assistant",
+        "there_is_then_spaces": "there is" + pad + "no",
+        "in_my_then_spaces": "in my" + pad + "toolbox",
+        "any_then_spaces": "any" + pad + "place",
     }
 
 
@@ -896,6 +927,124 @@ def test_the_pair_reads_50_kb_against_thirty_recorded_spans_in_linear_time(label
     )
 
 
+# The MCP server pair (S37a Task 12, ruling F7; spec §6 asks for 50 KB): both
+# are read at the end of the turn beside the said-not-done pair, so both are
+# held to its pins — over two connected servers and thirty spans recorded as
+# chat records them, none of which backs either server, so every clause of
+# every shape is read to the end. The MCP shapes name a server the list does
+# not hold (GitLab) wherever a hit would end the read early.
+_TWO_SERVERS = [
+    guards.McpServerRef(name="github", words=("github",)),
+    guards.McpServerRef(name="home-assistant", words=("home assistant", "home-assistant")),
+]
+
+
+def _mcp_recorded(server: str) -> object:
+    """An answered mcp_call as chat records one, with the fact the tool files."""
+    span = _recorded(
+        "mcp_call", {"server": server, "tool": "list_issues", "arguments": {"q": "x" * 200}}
+    )
+    span.meta["reached_executor"] = True
+    span.meta["facts"] = [
+        {
+            "mcp_server": server,
+            "tool": "list_issues",
+            "origin": f"http://{server}.mcp.invalid",
+            "protocol": "2025-11-25",
+            "reachable": True,
+            "is_error": False,
+            "bytes": 120,
+        }
+    ]
+    return span
+
+
+_THIRTY_MCP = [
+    *(_mcp_recorded("jira") for _ in range(15)),
+    *(
+        _recorded("fetch_url", {"url": f"https://example.invalid/page/{i}?q=" + "x" * 200})
+        for i in range(15)
+    ),
+]
+MCP_FIFTY_KB = [
+    ("denials of another server", _repeat("I can't access GitLab and ")),
+    ("denial sentences", _repeat("I can't access GitLab. ")),
+    ("curly denial sentences", _repeat("I can’t access GitLab. ")),
+    ("trailing denials", _repeat("GitLab isn't available to me and ")),
+    ("present-state denials", _repeat("I can't reach GitHub right now. ")),
+    ("reads of another server", _repeat("I checked GitLab and ")),
+    ("attributions to another server", _repeat("According to GitLab, GitLab shows it and ")),
+    ("possessives without a verb", _repeat("GitHub's run and Home Assistant's lights and ")),
+    ("questions", _repeat("Should I check GitHub? ")),
+    ("recaps", _repeat("Earlier I checked GitHub and ")),
+    ("padded lead", lambda n: "I can't" + " " * n + "GitLab"),
+    ("padded name", lambda n: "GitHub" + " " * n + "x"),
+    ("padded possessive", lambda n: "GitHub's" + " " * n + "x"),
+    ("padded read", lambda n: "I checked" + " " * n + "x"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build",
+    [*FIFTY_KB, *MCP_FIFTY_KB],
+    ids=[c[0] for c in (*FIFTY_KB, *MCP_FIFTY_KB)],
+)
+def test_the_mcp_server_guards_read_50_kb_against_thirty_spans_in_linear_time(label, build):
+    _assert_linear(
+        f"server_denial {label}",
+        lambda r: guards.server_denial_check(r, _THIRTY_MCP, _TWO_SERVERS),
+        build,
+    )
+    _assert_linear(
+        f"server_claim {label}",
+        lambda r: guards.server_claim_check(r, _THIRTY_MCP, _TWO_SERVERS),
+        build,
+    )
+
+
+def _servers(n: int) -> list:
+    """`n` connected servers, none of them named in the reply below."""
+    return [
+        guards.McpServerRef(name=f"srv{i}", words=(f"server number {i}", f"srv{i}"))
+        for i in range(n)
+    ]
+
+
+# A denial lead and an attribution in every sentence, naming a server the list
+# does not hold: each clause asks every server, and none of them answers.
+_FIVE_KB_OF_UNHELD_NAMES = _repeat("I can't access GitLab. GitLab shows it. ")(5_000)
+
+
+@pytest.mark.parametrize(
+    "check", [guards.server_denial_check, guards.server_claim_check], ids=lambda c: c.__name__
+)
+def test_two_hundred_servers_are_read_in_linear_time(check):
+    """(fix round 1, M3) The review's cliff: each clause looked each server's
+    patterns up behind an lru_cache of 128, so past 128 servers every lookup
+    evicted the next one and rebuilt it — 34 s for a 5 KB reply at 140. Each
+    server's patterns are fetched once per reply now, before the clauses: 50 ->
+    200 servers is linear, and 200 read 5 KB under the cap."""
+    _assert_linear(
+        f"{check.__name__} servers",
+        lambda servers: check(_FIVE_KB_OF_UNHELD_NAMES, _THIRTY_MCP, servers),
+        _servers,
+        small=50,
+        large=200,
+        cap_s=BIG_INPUT_CAP_S,
+    )
+
+
+def test_the_mcp_timing_record_backs_neither_server():
+    """The pins above read every clause only while nothing in the record backs
+    a server or ends the read: the two guards still answer a real claim."""
+    assert guards.server_denial_check("I can't access GitHub.", _THIRTY_MCP, _TWO_SERVERS)
+    assert guards.server_claim_check("GitHub shows it.", _THIRTY_MCP, _TWO_SERVERS)
+    for _label, build in MCP_FIFTY_KB:
+        reply = build(2_000)
+        assert guards.server_denial_check(reply, _THIRTY_MCP, _TWO_SERVERS) is None, _label
+        assert guards.server_claim_check(reply, _THIRTY_MCP, _TWO_SERVERS) is None, _label
+
+
 # (final review, I-2) ONE clause with no terminator, its claims dropped one by
 # one — the reviewer's eight shapes (scratchpad snd-final/probe_timing_final.py).
 # Seven read every claim as far as the quotation test and drop it there or
@@ -940,6 +1089,188 @@ def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
         small=50_000,
         large=200_000,
     )
+
+
+# -- the capability guard reads 50 KB in linear time (S37a Task 12, ruling X1) --
+#
+# capability_claim_check asked, for EVERY capability phrase in a clause that
+# held a denial, where that phrase's own denial ended and whether a scope word
+# sat in its tail: two searches to the end of the clause, a copy of the tail
+# and a third search over it — per phrase, and whether or not a denial governed
+# the phrase at all. Measured on this N150 before the fix (2026-10-05): 4,500
+# phrases before a lead took 16.8 s at 50 KB, a trailing denial before them
+# 13.0 s, a lead before scoped phrases 3.8 s — x15 to x17 for 4x the input.
+# The impersonal lead ("there is no … in my toolbox") re-read the rest of its
+# stretch from every "there is no": 1.3 s at 50 KB, x16. A clause is now read
+# once for each; the verdicts must not move, so the pre-fix body is kept below
+# as the oracle, as _sentences' is.
+#
+# Merging main (2026-10-06): main's #97 rewrote the same function the same
+# day (hub:1's lane) and the merge kept #97's code, so these shapes now pin
+# #97's reading of a clause, and the oracle below is the pre-fix body with
+# #97's three differences stated in it — see its docstring.
+CAPABILITY_FIFTY_KB = [
+    ("phrases then a lead", lambda n: _repeat("read files ")(n - 9) + " I can't."),
+    (
+        "a trailing denial then phrases",
+        lambda n: "Reading files isn't in my toolset " + _repeat("write files ")(n - 34),
+    ),
+    ("a lead then scoped phrases", lambda n: "I can't " + _repeat("write files outside ")(n - 8)),
+    (
+        "a lead, phrases, a scope word at the end",
+        lambda n: (
+            "I can't " + _repeat("browse the web and read files ")(n - 26) + " outside my folder"
+        ),
+    ),
+    ("scoped denials", _repeat("I can't read files outside my folder and ")),
+    (
+        "scoped trailing denials",
+        _repeat("writing files outside my folder isn't in my toolset and "),
+    ),
+    ("impersonal denials with no toolset", _repeat("there is no x and ")),
+    (
+        "impersonal denials, the toolset at the end",
+        lambda n: _repeat("there is no delete operation and ")(n - 15) + " in my toolbox.",
+    ),
+    ("mcp phrases then a lead", lambda n: _repeat("connect to MCP servers ")(n - 9) + " I can't."),
+    ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", CAPABILITY_FIFTY_KB, ids=[c[0] for c in CAPABILITY_FIFTY_KB]
+)
+def test_the_capability_guard_reads_the_x1_shapes_in_linear_time(label, build):
+    _assert_linear(
+        f"capability_claim {label}",
+        lambda r: guards.capability_claim_check(r, _NAMES),
+        build,
+    )
+
+
+def _denial_tail_before_the_fix(clause: str, phrase_end: int) -> str:
+    end = len(clause)
+    for pattern in (guards._DENIAL_LEAD, guards._TRAILING_DENIAL):
+        nxt = pattern.search(clause, phrase_end)
+        if nxt is not None:
+            end = min(end, nxt.start())
+    return clause[phrase_end:end]
+
+
+def _scoped_as_97_reads_it(clause: str, phrase_end: int) -> bool:
+    """A scope word STARTS in the denial's tail and matches in the clause
+    itself (#97's `_DenialMarks`), where the pre-fix body searched a copy of
+    the tail. Reading the clause, not a copy, differs in two places: a scope
+    word that runs past the tail's end into the next denial counts (silences
+    — #97's stated difference, the miss direction; none in the merge's
+    fuzz), and a scope word GLUED to the phrase's
+    last letter ("fetch URLsbesides") does not, because `\\b` now reads the
+    letter before it where the copy's own start was a boundary (fires — 35
+    of the merge's 324,852 fuzzed pairs, every one a glued word; S37a's X1
+    matched the copy there and the merge kept #97's reading)."""
+    tail = _denial_tail_before_the_fix(clause, phrase_end)
+    found = guards._SCOPE_QUALIFIER.search(clause, phrase_end)
+    return found is not None and found.start() < phrase_end + len(tail)
+
+
+def _capability_claim_check_before_the_fix(reply_text: str, available_tools) -> object:
+    """capability_claim_check's body before X1 and #97, verbatim but for the
+    helpers above and the impersonal lead, which is #97's bounded pattern
+    (its lookahead reads at most 160 characters — #97's other stated
+    difference): the oracle the linear one must agree with on every reply."""
+    if not reply_text or not reply_text.strip():
+        return None
+    registered = frozenset(available_tools)
+    denied: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for clause, is_question in guards._clauses(reply_text):
+        if is_question:
+            continue
+        lead = guards._DENIAL_LEAD.search(clause) or guards._ABSENT_FROM_TOOLSET.search(clause)
+        trailing = guards._TRAILING_DENIAL.search(clause)
+        if lead is None and trailing is None:
+            continue
+        for pattern, tool in guards._CAPABILITY_TOOLS:
+            if tool not in registered or tool in seen:
+                continue
+            for m in pattern.finditer(clause):
+                after_lead = lead is not None and m.start() >= lead.end()
+                before_trailing = trailing is not None and m.end() <= trailing.start()
+                scoped = _scoped_as_97_reads_it(clause, m.end())
+                if (after_lead or before_trailing) and not scoped:
+                    seen.add(tool)
+                    denied.append((m.group(0).strip(), tool))
+                    break
+    if not denied:
+        return None
+    tools_named = [tool for _phrase, tool in denied]
+    claims = tuple(
+        guards.UnbackedClaim(kind="capability_denied", target=tool, phrase=phrase[:80])
+        for phrase, tool in denied
+    )
+    return guards.Correction(claims=claims, text=guards._capability_correction_text(tools_named))
+
+
+# Fragments the oracle's replies are drawn from: every lead and trailing form,
+# a phrase for each capability row, the scope words, the toolset words, and
+# filler — joined by spaces, punctuation, clause splitters and, now and then,
+# nothing at all, so a phrase can end inside a word ("webelsewhere").
+_CAPABILITY_PIECES = (
+    *("I can't", "I cannot", "I can not", "I cant", "I'm unable to", "I am not able to"),
+    *("I don't have the ability to", "I lack the ability to", "I don't have access to"),
+    *("my capabilities don't include", "there is no", "there are no", "I", "I can"),
+    *("read files", "access your files", "browse the web", "web browsing", "web", "websites"),
+    *("access the internet", "real-time data", "fetch URLs", "write a file", "save files"),
+    *("delete files", "no delete operation", "list files", "list the directory"),
+    *("save it to memory", "search my memory", "remember things", "download models"),
+    *("search for models", "remove a model", "check for updates", "update models"),
+    *("set reminders", "remind you", "schedule tasks", "delegate to an agent"),
+    *("hand off work", "create an agent", "list your agents", "delete an agent"),
+    *("see where the models run", "switch off chat models on a machine"),
+    *("make setup QR codes", "pair your laptop", "put myself on your phone"),
+    *("access Windows machines", "control Macs", "connect to MCP servers", "use MCP tools"),
+    *("outside", "outside my folder", "beyond", "elsewhere", "externally", "anywhere else"),
+    *("any place but", "other than", "except", "besides", "apart from", "from the web"),
+    *("on the internet", "for someone", "of another", "not in my", "not in this"),
+    *("is not in my toolset", "isn't something I can do", "isn't available to me"),
+    *("is not one of my tools", "are not among my abilities", "'s not a tool I have"),
+    *("is not part of my capabilities", "in my toolbox", "in my tools", "right now"),
+    *("until", "because", "yet", "currently", "for you", "the", "files", "that"),
+    *("report.md", "x", "it", "please", "you", "isn't", "can't", "agents/coder/"),
+)
+_CAPABILITY_JOINS = (" ", " ", " ", " ", "", ", ", "; ", ". ", "? ", "\n", " but ", " — ")
+
+
+def _capability_replies() -> list[str]:
+    import random
+
+    from tests.test_capability_guard import MUST_FIRE, MUST_NOT_FIRE
+
+    replies = [case[1] for case in (*MUST_FIRE, *MUST_NOT_FIRE)]
+    replies += [build(2_000) for _label, build in (*CAPABILITY_FIFTY_KB, *FIFTY_KB)]
+    rng = random.Random(20261005)
+    for _ in range(3_000):
+        reply = rng.choice(_CAPABILITY_PIECES)
+        for _ in range(rng.randint(0, 11)):
+            reply += rng.choice(_CAPABILITY_JOINS) + rng.choice(_CAPABILITY_PIECES)
+        replies.append(reply)
+    return replies
+
+
+def test_the_capability_guard_judges_every_reply_as_its_oracle_does():
+    """A speed fix: every verdict stays what the oracle body says —
+    the guard's own corpus, the timing shapes, and 3,000 seeded replies drawn
+    from every form the guard reads, against the whole registry, a registry
+    without fetch_url, and none."""
+    toolsets = (_NAMES, [name for name in _NAMES if name != "fetch_url"], [])
+    fired = 0
+    for reply in _capability_replies():
+        for toolset in toolsets:
+            expected = _capability_claim_check_before_the_fix(reply, toolset)
+            assert guards.capability_claim_check(reply, toolset) == expected, reply
+            fired += expected is not None
+    # The oracle compares verdicts that exist: hundreds fire and most do not.
+    assert 500 < fired < 3 * len(_capability_replies()) // 2, fired
 
 
 # -- _sentences() is linear (said-not-done fix round 1, M2) --------------------

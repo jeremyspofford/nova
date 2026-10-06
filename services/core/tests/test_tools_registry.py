@@ -215,6 +215,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # QR cards (tools/setup.py). FORTY-ONE -> FORTY-THREE.
         "nova_address",
         "show_setup_qr",
+        # S37a (2026-09-30): her MCP client — connect, remove, look up, call.
+        # FORTY-THREE -> FORTY-SEVEN. The servers and their tools are rows;
+        # these four names are the whole of what the registry learns.
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_tools",
+        "mcp_call",
     }
 
 
@@ -396,6 +403,28 @@ def test_the_tools_package_imports_on_its_own():
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(len(tools.REGISTRY))
+
+
+def test_the_app_imports_cold_too():
+    """Ruling F1 (S37a Task 8): `app.main` is uvicorn's own entry point, and
+    every test here reaches it only after conftest has already imported
+    `app.chat` first — so a module-level import cycle through
+    `app.mcp.servers` (which imports notices, then the checks, then agents,
+    then `app.tools`, which imports `app.mcp.servers` back inside its own
+    executors — `app/tools/mcp.py`'s module docstring) would crash THIS
+    import while every other test in the suite stayed green. Import it cold,
+    in its own subprocess, exactly as the sibling test above does for
+    `app.tools` alone."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 # -- S12: an agent's subset, an agent's folder (2026-09-08) ----------------
@@ -584,6 +613,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # show_setup_qr, is deliberately NOT here — it mints a code and sends
         # a card.
         "nova_address",
+        # S37a: looking up a server's tools changes nothing outside Nova (it
+        # may refresh the stored copy of the list). Its three twins change
+        # things and are deliberately NOT here.
+        "mcp_tools",
     }
 
 
@@ -609,5 +642,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "delegate_to_agent",
         "machine_configure",
         "show_setup_qr",
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_call",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

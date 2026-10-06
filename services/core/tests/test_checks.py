@@ -41,6 +41,7 @@ from app.checks import (
     Finding,
     devices,
     inference,
+    mcp,
     money,
     prose,
     skills,
@@ -240,13 +241,16 @@ def test_exactly_the_stack_family_declares_urgent():
         | set(skills.NAMES)
         | set(inference.NAMES)
         | set(devices.NAMES)
+        | set(mcp.NAMES)
     ) <= set(checks.REGISTRY)
     # S17 (2026-09-11): the skills family joins the non-urgent side. A
     # procedure she has walked twice with nothing written down for it is
     # something to mention in the digest, never something to wake anyone with.
     # S42a (2026-09-27): the devices family joins the non-urgent side.
+    # S37a (2026-09-30): the MCP family joins the non-urgent side.
     assert not (
-        {*work.NAMES, *money.NAMES, *skills.NAMES, *inference.NAMES, *devices.NAMES} & urgent
+        {*work.NAMES, *money.NAMES, *skills.NAMES, *inference.NAMES, *devices.NAMES, *mcp.NAMES}
+        & urgent
     )
     assert checks.check_names() == sorted(checks.REGISTRY)
     assert checks.urgent_names() == sorted(urgent)

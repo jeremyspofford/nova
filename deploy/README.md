@@ -387,6 +387,70 @@ loading there is the check. The machine and model-server cards don't carry that 
 Every QR encodes the derived tailnet address (above), never `127.0.0.1` or a LAN address.
 With no address to give out, she says so and sends no card.
 
+## Connections (MCP servers)
+
+Nova can use the tools other services publish over MCP (the Model Context
+Protocol): GitHub's CI runs and job logs today, and any app she installs later
+that ships an MCP server over HTTP. **Settings → Connections** lists what is
+connected; she can connect and remove servers herself too.
+
+**Adding GitHub (CI).**
+1. On github.com: Settings → Developer settings → Fine-grained personal access
+   tokens → Generate. Repository access: the repositories she should watch.
+   Permissions: **Actions: Read** (Metadata: Read comes with it).
+2. In Nova: Settings → Connections → Connect a server → Start from **GitHub
+   (CI)** → paste the token → Connect. The server is asked what it offers
+   before it is saved; if it does not answer, the reason is shown and nothing
+   is saved.
+3. Ask her: "why is CI red on main?"
+
+**What is stored, and where.** The server's name, its tool list, and the
+token and any extra headers, in core's database, like provider keys: written
+once, never shown again, never in her context, the trace or a log. Only the
+address's ORIGIN (scheme, host, port) is ever shown or traced — never its
+path, because some servers authenticate BY a secret path (a server with no
+token or header beside it to catch by). A header's VALUE is treated as a
+credential — kept out of every reason, result and trace — only when the
+header's NAME says so: it contains `token`, `secret`, `password`, `auth`,
+`cookie` or `key` (case-insensitive, so `X-Api-Key` and `Authorization` both
+match, but `X-Api-Version` does not). Name any other credential header that
+way, or put it in the token field instead. Anyone who can read the database
+can read what is stored; the backup bundle is encrypted.
+
+**What she can do.** Connect a server (`mcp_connect`), remove one
+(`mcp_disconnect`), look up a server's tools (`mcp_tools`) and run one
+(`mcp_call`). Nothing asks you first. When she replaces or removes a server
+you added, or a server's tools change, your Inbox says so — and if you had
+muted that kind of change for a server, a later change of the same kind
+folds into the muted notice instead of raising a new one, and she says that
+when asked rather than claiming it is in your Inbox.
+
+**What she sees from a server is capped.** At most 64 KiB of a server's own
+words — the label, the answer and its notes together — reaches her from one
+call; past that it is cut, and the cut says how many more bytes were left
+out (ask the tool for less — fewer lines, one page). A server that sends
+more than 4 MiB for one answer is cut off mid-read with a stated reason
+("sent more than 4 MiB in one answer; stopped reading") rather than ever
+being fully buffered.
+
+**Tools a server declares badly are left out, and recorded.** A tool whose
+definition cannot be used is left out of her list; connecting names up to 20
+of them and how many more there were, and the same list is on the
+`mcp.server_connected` event on the Governance page.
+
+**Honesty checks.** If she says she cannot reach a server that is connected
+and whose last call did not fail, or credits a server with an answer when no
+call to it succeeded this turn, a sentence correcting her is appended to the
+reply. Nothing is refused or redone, and nothing is appended when the server
+really did answer. Two kinds of reply are not checked: a denial she hedges as
+a present limit ("right now", "because", "unless", …), and any turn on which
+she handed work to an agent, so a false sentence of either kind stands.
+
+**Limits.** HTTP(S) servers only (no local stdio servers); a token or extra
+headers, no OAuth sign-in; tools only (no MCP resources or prompts); an image
+or audio clip a tool returns is noted, not read. Both protocol eras are
+spoken: 2026-07-28 and the 2025 handshake.
+
 ## Backup
 
 `./install backup` writes **one encrypted file** that carries everything a

@@ -119,6 +119,8 @@ from app import (
     vision,
 )
 from app.identity import Person
+from app.mcp import client as mcp_client
+from app.mcp import servers as mcp_servers
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 logger = logging.getLogger("core")
@@ -452,6 +454,13 @@ def _said_not_done_meta(name: str, claim: object) -> dict:
             "tools": list(claim.tools),
             "phrase": claim.phrase,
             "where": claim.where,
+            "sentence": claim.text,
+        }
+    if name in ("mcp_server_denial", "mcp_server_claim"):
+        return {
+            "detected": True,
+            "server": claim.server,
+            "phrase": claim.phrase,
             "sentence": claim.text,
         }
     return {
@@ -1134,7 +1143,10 @@ NOTES_HEADER = (
 
 
 def volatile_system_prompt(
-    recall: Recalled, roster: str | None = None, skills_roster: str | None = None
+    recall: Recalled,
+    roster: str | None = None,
+    skills_roster: str | None = None,
+    mcp_roster: str | None = None,
 ) -> str | None:
     """The half that changes every turn — omitted entirely when there is nothing in it.
 
@@ -1148,6 +1160,10 @@ def volatile_system_prompt(
     observable. None when no skill is active — a draft is not a procedure she
     has been given — and then the prompt is byte-identical to before skills
     existed.
+
+    `mcp_roster` (S37a) is her line about the MCP servers she is connected
+    to — names and tool names, never their descriptions; None when none is
+    connected.
     """
     parts: list[str] = []
     if recall.notes:
@@ -1193,6 +1209,8 @@ def volatile_system_prompt(
         parts.append(roster)
     if skills_roster:
         parts.append(skills_roster)
+    if mcp_roster:
+        parts.append(mcp_roster)
     if not parts:
         return None
     parts.append(f"Current time: {datetime.now(UTC).isoformat()}")
@@ -1208,6 +1226,7 @@ def base_messages(
     roster: str | None = None,
     skills_roster: str | None = None,
     hint: str | None = None,
+    mcp_roster: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
@@ -1219,7 +1238,8 @@ def base_messages(
     (decision-role spec §2) is the decision role's one line: its own system
     message immediately before his message — the position measured at 3/3 —
     so the cached prefix (the system prompts and the history) is the same
-    bytes with or without it."""
+    bytes with or without it. `mcp_roster` (S37a) is her line about the MCP
+    servers she can use."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -1227,7 +1247,7 @@ def base_messages(
             model, persona.tool_names, agent_block=persona.instructions_block
         )
     messages = [{"role": "system", "content": stable}]
-    volatile = volatile_system_prompt(recall, roster, skills_roster)
+    volatile = volatile_system_prompt(recall, roster, skills_roster, mcp_roster)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
@@ -1710,38 +1730,364 @@ def _clip(text: str, limit: int) -> str:
     return f"{text[:limit]}… (+{len(text) - limit} more chars, {len(text)} total)"
 
 
-def _redact(value: object) -> object:
-    """Trace-sized arguments: the same shape, long strings cut to a head.
+# Argument keys whose VALUE is a credential (S37a, plan decision P14). Masked
+# before anything is bounded or stored: mcp_connect's token, a device command's
+# env GH_TOKEN, a header's API key must never reach turn_spans or Activity.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "api_key",
+        "apikey",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "private_key",
+    }
+)
+_CREDENTIAL_SUFFIXES = (
+    "_token",
+    "-token",
+    "_secret",
+    "-secret",
+    "_password",
+    "_api_key",
+    "-api-key",
+)
 
-    Nothing is filtered by name — none of S2's tools take a credential —
-    so "redacted" here means "not the whole payload": a 256 KB file body
-    must not be copied into the turn's trace, and the Activity page needs
-    something a person can read at a glance.
+
+def _credential_key(key: str, *, header: bool) -> bool:
+    """A credential-shaped argument KEY (S37a, plan decision P14). Outside a
+    `headers` object this tuple decides it alone, so a top-level `key`
+    argument (`"key": "digest"`) is NOT a credential. Inside one, the
+    header's NAME is the only clue (`X-Api-Key`, `X-Hass-Key`,
+    `Authorization`), so it is checked against `app.mcp.client.
+    is_credential_header` instead — the ONE predicate the client's own
+    reason scrub already uses (ruling T5-B-REVISED), so the scrub and this
+    mask can never disagree about a header name. This supersedes keeping a
+    second `_CREDENTIAL_HEADER_WORDS` tuple here (ruling F8's instruction,
+    before the carry)."""
+    lowered = key.strip().lower()
+    if lowered in _CREDENTIAL_KEYS or lowered.endswith(_CREDENTIAL_SUFFIXES):
+        return True
+    return header and mcp_client.is_credential_header(lowered)
+
+
+def _masked(value: object) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return f"<masked:{len(text)} chars>"
+
+
+def _leaves(value: object) -> list[str]:
+    """Every string in `value` — its keys too — for `_SpanScrub`."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_leaves(key))
+            found.extend(_leaves(item))
+        return found
+    if isinstance(value, list | tuple):
+        return [leaf for item in value for leaf in _leaves(item)]
+    return []
+
+
+class _SpanScrub:
+    """What `_span_record` masked out of a call's arguments, and the callable
+    that scrubs the same strings out of that span's own `result_head` and
+    `error` (S37a final review, ruling F-H1). A refusal that echoes an
+    argument — dispatch's "unknown argument 'ghp_…'", a store's reason —
+    would otherwise carry into the trace exactly what the arguments masked.
+    Derived from what was masked on THIS call, never a list kept here. A
+    string shorter than the client's own credential floor is never a
+    candidate: masking a `v` must not rewrite every `v` in a sentence."""
+
+    def __init__(self) -> None:
+        self._pairs: dict[str, str] = {}
+
+    def add(self, value: object, replacement: str = "[masked]") -> None:
+        for leaf in _leaves(value):
+            if len(leaf) < mcp_client._MIN_CREDENTIAL_CHARS:
+                continue
+            for form in (leaf, repr(leaf)[1:-1], json.dumps(leaf)[1:-1]):
+                self._pairs.setdefault(form, replacement)
+
+    def __call__(self, text: str) -> str:
+        for secret in sorted(self._pairs, key=len, reverse=True):
+            if secret in text:
+                text = text.replace(secret, self._pairs[secret])
+        return text
+
+    def tree(self, value: object) -> object:
+        """The same scrub over every string in a JSON-shaped value — the
+        span's `facts`, where a refused connect still names what it was
+        given (`mcp_server`)."""
+        if not self._pairs:
+            return value
+        if isinstance(value, str):
+            return self(value)
+        if isinstance(value, dict):
+            return {self(k) if isinstance(k, str) else k: self.tree(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.tree(item) for item in value]
+        return value
+
+
+def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
+    """Trace-sized arguments: the same shape, long strings cut to a head, and
+    credentials masked (S37a, plan decision P14).
+
+    A 256 KB file body must not be copied into the turn's trace, and the
+    Activity page needs something a person can read at a glance — so strings
+    are cut to a head. And a value under a credential-shaped key (`token`,
+    `password`, `api_key`, anything ending `_token` or `_secret`, and inside
+    a `headers` object any header whose NAME is `is_credential_header`)
+    becomes `<masked:N chars>` BEFORE `_bounded`, so no credential byte
+    reaches turn_spans. By key, not by the shape of a value: a token typed
+    into a command's text is not caught here (a carry for doing-things S29).
     """
     if isinstance(value, dict):
-        return {key: _redact(item) for key, item in value.items()}
+        out: dict = {}
+        for key, item in value.items():
+            if (
+                isinstance(key, str)
+                and item is not None
+                and _credential_key(key, header=in_headers)
+            ):
+                out[key] = _masked(item)
+                if sink is not None:
+                    sink.add(item)
+            else:
+                out[key] = _redact(
+                    item,
+                    in_headers=isinstance(key, str) and key.strip().lower() == "headers",
+                    sink=sink,
+                )
+        return out
     if isinstance(value, list):
-        return [_redact(item) for item in value]
+        return [_redact(item, sink=sink) for item in value]
     if isinstance(value, str):
         return _clip(value, SPAN_ARG_HEAD_CHARS)
     return value
 
 
-def _span_arguments(raw: object) -> object:
-    """What the model actually sent, recorded whether or not it parsed."""
+def _origin_or_masked(value: str) -> str:
+    """A URL argument a tool declared via `Tool.traced_as_origin` reaches the
+    trace as its ORIGIN only (S37a, ruling X2-REVISED) — `ha-mcp`
+    authenticates by a secret PATH, so that path must never exist, even
+    momentarily, in a string this module clips or stores.
+    `app.mcp.client._normalize_origin` is the one derivation (ruling R2-3,
+    never a second copy); a value it cannot read an http(s) host out of is
+    masked whole, same as a credential.
+
+    Every EXISTING caller of `_normalize_origin` only ever sees a URL this
+    slice's own connect path already validated. This caller has no such
+    guarantee — the model's own argument, unvalidated, possibly mistyped —
+    and `urlsplit(...).port`/`.hostname` raise ValueError on a bad port or an
+    unterminated IPv6 bracket. That is still "not a URL this module can read
+    a host out of", so it is masked whole, never left to crash the span."""
+    try:
+        origin = mcp_client._normalize_origin(value)
+    except ValueError:
+        return _masked(value)
+    scheme, _sep, rest = origin.partition("://")
+    if scheme in ("http", "https") and rest:
+        return origin
+    return _masked(value)
+
+
+def _origin_only(parsed: object, tool_name: str | None, sink: _SpanScrub | None = None) -> object:
+    """Reduce every argument `tool_name` declared (`Tool.traced_as_origin`)
+    to its URL's origin before anything else — including `_redact`'s own
+    per-string clip — ever sees it (S37a, ruling X2-REVISED). No tool name, an
+    unknown one, or a tool that declared nothing changes nothing here, and
+    `_redact` still runs on the result exactly as before."""
+    if tool_name is None or not isinstance(parsed, dict):
+        return parsed
+    tool = tools.REGISTRY.get(tool_name)
+    if tool is None or not tool.traced_as_origin:
+        return parsed
+    out = dict(parsed)
+    for key in tool.traced_as_origin:
+        value = out.get(key)
+        if isinstance(value, str):
+            out[key] = _origin_or_masked(value)
+        elif value is not None and key in out:
+            # A list or an object (`{"href": ".../secret-path/mcp"}`) has no
+            # origin to read, so it is masked whole (final review N1).
+            out[key] = _masked(value)
+        else:
+            continue
+        if sink is not None and out[key] != value:
+            sink.add(value)
+    return out
+
+
+def _carries_credentials(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s arguments can carry a credential or a secret address
+    (S37a final review I1) — derived from the tool itself, never a list kept
+    here: it declared `traced_as_origin`, or its schema names a
+    credential-shaped property (`_credential_key`) or a `headers` object."""
+    if tool is None:
+        return False
+    if tool.traced_as_origin:
+        return True
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(key, str)
+        and (_credential_key(key, header=False) or key.strip().lower() == "headers")
+        for key in properties
+    )
+
+
+def _has_free_form_object(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s schema has an object property that names none of its
+    own keys (`mcp_call`'s `arguments`, `run_skill`'s `inputs`): whatever a
+    third party's credential is called, it can sit in there (final review
+    N5). Read off the schema, never a list of tools."""
+    if tool is None:
+        return False
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(spec, dict) and spec.get("type") == "object" and not spec.get("properties")
+        for spec in properties.values()
+    )
+
+
+def _off_schema_masked(parsed: object, tool: tools.Tool, sink: _SpanScrub) -> object:
+    """For a tool that `_carries_credentials`: what did not arrive in the
+    shape its schema names is masked WHOLE, because masking by key and
+    reducing a declared URL to its origin both assume that shape. Ruling
+    F-H1: no name a caller chose reaches the span.
+
+    - Not an object at all: masked whole.
+    - A key the schema does not name (matched case-sensitively, so `URL` is
+      not `url`, and `pat` is not `token`): recorded as `<key N>` (its
+      position among this call's unknown keys), its value masked whole.
+    - A value whose property is declared a string but is not one: masked
+      whole (a `url` sent as a list or an object, N1).
+    - `headers`: a count only, `<masked:N headers>` — no check can tell a
+      header NAME from a credential (`ghp_…` is a valid header token), so
+      neither names nor values are recorded (N4). The owner sees the names
+      on the Connections tab.
+    - A connection tool's `name` (one that declares `traced_as_origin`) that
+      fails the store's one name rule (`mcp_servers.NAME_RE`, ruling F13):
+      masked, since the token pasted as a name is not a name (N2)."""
+    if not isinstance(parsed, dict):
+        sink.add(parsed)
+        return _masked(parsed)
+    properties = tool.parameters.get("properties") or {}
+    out: dict = {}
+    unknown = 0
+    for key, value in parsed.items():
+        spec = properties.get(key)
+        if spec is None:
+            unknown += 1
+            label = f"<key {unknown}>"
+            sink.add(key, label)
+            sink.add(value)
+            out[label] = _masked(value)
+        elif value is None or key in tool.traced_as_origin:
+            # A declared URL argument is `_origin_only`'s, strings and
+            # non-strings alike (N1).
+            out[key] = value
+        elif key.strip().lower() == "headers":
+            sink.add(value)
+            out[key] = (
+                f"<masked:{len(value)} headers>" if isinstance(value, dict) else _masked(value)
+            )
+        elif isinstance(spec, dict) and spec.get("type") == "string" and not isinstance(value, str):
+            sink.add(value)
+            out[key] = _masked(value)
+        elif (
+            key == "name"
+            and tool.traced_as_origin
+            and not (isinstance(value, str) and mcp_servers.NAME_RE.fullmatch(value))
+        ):
+            sink.add(value)
+            out[key] = _masked(value)
+        else:
+            out[key] = value
+    return out
+
+
+def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _SpanScrub]:
+    """What the model actually sent, recorded whether or not it parsed, and
+    the scrub for that span's own text (`_SpanScrub`).
+
+    `tool_name`, when the registry holds it, lets a tool reduce one of its
+    OWN arguments to a URL's origin before redaction (ruling X2-REVISED) —
+    what `mcp_connect` (Task 7) needs, since ha-mcp's secret is the path
+    itself, not a neighbouring token or header.
+
+    Arguments are recorded BEFORE dispatch validates them. So for a tool
+    whose arguments can carry a credential (`_carries_credentials`), or that
+    takes a free-form object (`_has_free_form_object`), text that does not
+    parse is recorded as its length only; and for the first kind anything
+    off its schema is masked whole (`_off_schema_masked`) — a local model's
+    missing brace must not put a token or a secret path into turn_spans (S37a
+    final review I1, N1-N5).
+    """
+    sink = _SpanScrub()
+    tool = tools.REGISTRY.get(tool_name) if tool_name is not None else None
+    guarded = _carries_credentials(tool)
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
-            return {}
+            return {}, sink
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
+            if guarded or _has_free_form_object(tool):
+                return f"<unparsed: {len(raw)} chars>", sink
             # Unparseable arguments are exactly the case worth seeing in the
-            # trace, so the raw text is kept rather than dropped.
+            # trace, so the raw text is kept rather than dropped — for a tool
+            # whose arguments cannot carry a credential.
             parsed = raw
     else:
         parsed = raw
-    return _bounded(_redact(parsed))
+    if guarded:
+        # Masks a connection tool's `name` itself (N2).
+        parsed = _off_schema_masked(parsed, tool, sink)
+    else:
+        parsed = _server_names_masked(parsed, tool_name, sink)
+    return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+# The arguments by which her MCP tools name a connection (`mcp_tools` and
+# `mcp_call` take `server`; `mcp_connect` and `mcp_disconnect` take `name`).
+_SERVER_NAME_KEYS = ("server", "name")
+
+
+def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) -> object:
+    """For any of her MCP tools: a connection name that fails the store's one
+    name rule (`mcp_servers.NAME_RE`, ruling F13) is masked, and scrubbed out
+    of the span's own text. A token pasted where a server's name goes is not a
+    name, and the store's "there is no connected MCP server …" refusal would
+    otherwise carry it into the trace (S37a final review, hub ruling after
+    fix round 2: N2's rule holds for every tool that names a server, not only
+    `mcp_connect`)."""
+    if not (tool_name or "").startswith("mcp_") or not isinstance(parsed, dict):
+        return parsed
+    out = dict(parsed)
+    for key in _SERVER_NAME_KEYS:
+        value = out.get(key)
+        if isinstance(value, str) and not mcp_servers.NAME_RE.fullmatch(value):
+            sink.add(value)
+            out[key] = _masked(value)
+    return out
+
+
+def _span_arguments(raw: object, tool_name: str | None = None) -> object:
+    """`_span_record`'s recorded arguments alone."""
+    return _span_record(raw, tool_name)[0]
 
 
 def _bounded(redacted: object) -> object:
@@ -2334,6 +2680,40 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
         return []
 
 
+def _shaped_like_a_name(title: str) -> bool:
+    """Whether a server-reported title reads as a proper name in prose (fix
+    round 1, M1): two or more words ("Home Assistant"), or a capital after its
+    first letter ("GitHub"). A title of "the" or "Files" would make a common
+    word name the server — "I can't access files outside my workspace" read as
+    a denial of it — so such a server is named by its connection name alone."""
+    return len(title.split()) >= 2 or any(ch.isupper() for ch in title[1:])
+
+
+async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
+    """Every connected MCP server as the guards see it (S37a) — from the table,
+    or an eval case's overlay. FAIL-OPEN to none, which keeps both server
+    guards silent: a store read that blips must never turn an honest reply
+    into a false correction."""
+    try:
+        rows = await mcp_servers.list_servers(pool)
+    except Exception:
+        logger.exception("mcp server list failed; the MCP server guards stay silent this turn")
+        return []
+    refs: list[guards.McpServerRef] = []
+    for server in rows:
+        words = {server.name.lower(), server.name.replace("_", " ").replace("-", " ").lower()}
+        if server.title and len(server.title) <= 40 and _shaped_like_a_name(server.title):
+            words.add(server.title.lower())
+        refs.append(
+            guards.McpServerRef(
+                name=server.name,
+                words=tuple(sorted(w for w in words if len(w) >= 3)),
+                failing=server.failing,
+            )
+        )
+    return refs
+
+
 async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
     """Every LIVE paired device's name and the machine its agent reported
     (devices.live_machines), for the said-not-done device claim: a call on
@@ -2558,7 +2938,7 @@ async def _run_tool(
     """
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
             # read off the wire. It still goes through schema validation — the
@@ -2585,13 +2965,14 @@ async def _run_tool(
         # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
             # Exactly what THIS call settled — the sink is append-only for the
             # turn, so the slice beyond the mark is this call's own contribution.
-            span.meta["facts"] = list(facts[facts_before:])
+            span.meta["facts"] = scrub.tree(list(facts[facts_before:]))
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     return result, ok
 
 
@@ -2622,7 +3003,7 @@ async def _run_script_step(
     a run of eight calls should move the bubble, not sit silent.
     """
     with turn.span("tool", name) as span:
-        span.meta["args_redacted"] = _span_arguments(args)
+        span.meta["args_redacted"], scrub = _span_record(args, name)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
@@ -2631,9 +3012,10 @@ async def _run_script_step(
         span.meta["result_head"] = NEVER_RETURNED
         result, ok = await tools.dispatch(name, args, tool_ctx)
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     emit(_activity_frame(name, "ok" if ok else "error", result))
     return result, ok
 
@@ -2789,10 +3171,10 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         if fact not in reason:
             reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta[flag] = True
         if call.from_markup:
             span.meta["parsed_from_markup"] = True
@@ -2836,10 +3218,10 @@ def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[s
     with the subset-scoped sentence. Returns that stated result."""
     reason = unknown_tool_refusal(call.name, subset)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["reason"] = "unknown_tool"
     return reason
 
@@ -4522,6 +4904,17 @@ async def _run_turn(
             except Exception as exc:
                 with turn.span("skills_roster") as span:
                     span.meta["error"] = peers.reason(exc)
+        # S37a: the MCP servers she can use, by name with their tools — for any
+        # persona given mcp_call (Nova holds every tool; an agent only if it was
+        # given it, plan decision P13). Read from the table, or an eval case's
+        # overlay, every turn; fail-open and never quiet, like the rosters above.
+        mcp_roster = None
+        if "mcp_call" in persona.tool_names:
+            try:
+                mcp_roster = await mcp_servers.roster_line(pool)
+            except Exception as exc:
+                with turn.span("mcp_roster") as span:
+                    span.meta["error"] = peers.reason(exc)
         recalled = await _recall(app, turn, person, message, shared=persona.shared_person_id)
         if persona.agent is None:
             # The bare call, exactly as before: the whole registry.
@@ -4692,6 +5085,7 @@ async def _run_turn(
             roster=roster,
             skills_roster=skills_roster,
             hint=hint,
+            mcp_roster=mcp_roster,
         )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
@@ -5979,10 +6373,23 @@ async def _run_turn(
         # it ran (the calls are on the agent's turn) — and a device claim is
         # backed by a call on any agent of the same machine: the machine each
         # agent reported, read here from the live rows.
+        #
+        # S37a adds the MCP server pair in the same shape (guards.py, "the MCP
+        # server claims"): a connected server she says she cannot reach, and a
+        # reading she attributes to one that answered no call this turn — each
+        # over the servers read once, after every redirect (mcp_refs). The
+        # denial is judged only for a persona that holds mcp_call (ruling F5,
+        # the capability guard's persona rule): an agent given none truly
+        # cannot reach one.
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
             machines = await _paired_machines(pool)
+            # The connected MCP servers, read HERE, after every redirect, like
+            # `machines` (fix round 1, item 1): read before the redirects, a
+            # server a redirect's mcp_disconnect removed was still "connected".
+            mcp_refs = await _mcp_server_refs(pool)
+            reachable_refs = mcp_refs if "mcp_call" in persona.tool_names else []
             for name, check in (
                 (
                     "written_call",
@@ -5993,6 +6400,14 @@ async def _run_turn(
                     lambda: guards.device_completion_check(
                         said, turn.spans, persona.tool_names, device_names, machines=machines
                     ),
+                ),
+                (
+                    "mcp_server_denial",
+                    lambda: guards.server_denial_check(said, turn.spans, reachable_refs),
+                ),
+                (
+                    "mcp_server_claim",
+                    lambda: guards.server_claim_check(said, turn.spans, mcp_refs),
                 ),
             ):
                 try:
