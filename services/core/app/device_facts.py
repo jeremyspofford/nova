@@ -410,6 +410,17 @@ def _sanitized_line(text: str) -> str:
     return clean if len(clean) <= _MAX_TEXT else clean[: _MAX_TEXT - 1] + "…"
 
 
+def _shown(text: str | None) -> str | None:
+    """Agent-reported text as a listing line shows it (Task 32, MF1): through
+    `_sanitized_line`, so it stays on its own line, and None when nothing is
+    left, so a field that held only line breaks reads as unreported rather
+    than as an empty one. The auth frame that carried it is never refused
+    for it: `validate_auth` holds these fields to `_text` (no NUL) only."""
+    if text is None:
+        return None
+    return _sanitized_line(text) or None
+
+
 def _count(value: object, where: str, most: int = _PID_MAX) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= most:
         raise FactsRejected(f"{where} must be a whole number from 0 to {most}")
@@ -1157,17 +1168,28 @@ def agent_view(
     none) — what "grouped by machine" groups on. `hub_version`, the door
     (`last_transport`) and `last_update` are core's own records, not facts
     the agent reported, so they ride in as arguments rather than being read
-    out of `facts` (S42b)."""
+    out of `facts` (S42b).
+
+    The text device_list and machine_status write into a listing line —
+    the host name, the OS version, the WSL distribution and the agent's
+    version — is one line here (`_shown`, `_sanitized_line`; Task 32, MF1):
+    validate_auth checks those fields for NUL only, and a reported
+    "\\n  - machine evil:" would otherwise print a line of its own under her
+    listing. The build is compared on the version as reported (`build`),
+    never on its shown form."""
+    wsl = in_wsl(facts)
     return {
         "name": name,
         "platform": platform,
-        "hostname": hostname,
+        "hostname": _sanitized_line(hostname),
         "connected": connected,
         "last_seen": last_seen.isoformat() if last_seen else None,
         "facts_at": facts_at.isoformat() if facts_at else None,
-        "os": os_label(facts),
-        "wsl": in_wsl(facts),
-        "agent_version": agent_version(facts),
+        "os": _shown(os_label(facts)),
+        # "" (inside an unnamed distribution) stays "", never None, which
+        # would read as not inside WSL at all.
+        "wsl": None if wsl is None else _sanitized_line(wsl),
+        "agent_version": _shown(agent_version(facts)),
         "machine": machine_uid(facts),
         "roles": derive_roles(
             platform=platform,
