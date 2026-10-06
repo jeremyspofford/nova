@@ -285,3 +285,24 @@ def test_a_relayed_bucket_is_never_an_unrelayed_clients(doors):
     assert tunnel not in unrelayed and funnel not in unrelayed
     # One relayed bucket per door: the tunnel's strangers never spend funnel's.
     assert tunnel != funnel
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        {"X-Real-IP": LOOPBACK, "Cf-Connecting-IP": "203.0.113.9"},
+        {"x-real-ip": LOOPBACK, "cf-connecting-ip": "203.0.113.9"},
+        {"X-REAL-IP": LOOPBACK, "CF-CONNECTING-IP": "203.0.113.9"},
+    ],
+)
+def test_a_plain_mapping_keeps_the_relay_split_whatever_its_spelling(doors, spelled):
+    """Fix round 1 (I5): bucket_of reads header names case-insensitively
+    itself (it lower-cases them), so a plain dict — which, unlike
+    Starlette's Headers, matches only the exact spelling — can never lose
+    the door or the relay mark."""
+    assert network.bucket_of(WEB, spelled) == f"relayed via {LOOPBACK}"
+    funnel = {k: v for k, v in spelled.items() if k.lower() == "x-real-ip"}
+    funnel = {next(iter(funnel)): SIDECAR}
+    assert network.bucket_of(WEB, funnel) == f"relayed via {SIDECAR}"
+    person = {**funnel, "TAILSCALE-USER-LOGIN": "a@example.com"}
+    assert network.bucket_of(WEB, person) == SIDECAR

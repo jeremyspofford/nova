@@ -211,7 +211,10 @@ def bucket_of(peer: str | None, headers: Mapping[str, str]) -> str:
     5 code failures in 15 minutes (devices_api) both key on this and
     nothing else. It is client_of's door, with a visitor who came through a public
     RELAY counted apart, as "relayed via <door>". `headers` are the
-    request's, as Starlette reads them (any case).
+    request's: any mapping, its names matched case-insensitively HERE —
+    lower-cased on the way in (fix round 1, I5) — so a plain dict, which
+    unlike Starlette's Headers matches only the exact spelling, can never
+    lose the door or the relay mark.
 
     A relay on the hub machine shares a door: the owner's cloudflared tunnel
     reaches web from the subnet gateway, as ./install and a browser on the
@@ -233,8 +236,7 @@ def bucket_of(peer: str | None, headers: Mapping[str, str]) -> str:
         one on funnel traffic, and nginx forwards the header only from the
         sidecar, so from web the login is serve's or nothing: the gate's
         own $tailnet_peer rule, negated. A tagged tailnet node, which
-        carries no identity header, lands here too; a false positive costs
-        a shared budget, never an action.
+        carries no identity header, lands here too.
     Both marks fail toward "relayed": an empty Cf-Connecting-IP is there, a
     blank login is no login. Nothing nginx does not already forward is read.
 
@@ -253,7 +255,19 @@ def bucket_of(peer: str | None, headers: Mapping[str, str]) -> str:
         its own door, never out of it, and never into another client's.
     If Cloudflare's header is ever absent, a tunnel visitor falls back to
     the loopback door's own bucket, where every visitor was counted before
-    this split: no worse than then."""
+    this split: no worse than then.
+
+    What being counted in a relayed bucket costs (fix round 1, I6): for the
+    downloads, a shared minute; for enroll, more — a bucket at five failures
+    is a refusal to pair from that door for up to 15 minutes, which anyone
+    in the same bucket can renew. The owner pairing through his own tunnel
+    shares the tunnel's relayed bucket with its strangers; his way round is
+    the tailnet or the hub machine, whose buckets no stranger reaches. A
+    tagged node shares the sidecar's relayed bucket with funnel's visitors —
+    but deploy/tailscale/start.sh turns funnel OFF on every restart, so
+    unless the owner turns it on again, only his own tagged nodes share it
+    and no stranger can renew a lock there."""
+    headers = {name.lower(): value for name, value in headers.items()}
     client = client_of(peer, headers.get("x-real-ip"))
     if peer is None or peer != _addr(WEB_ADDR_ENV):
         return client
