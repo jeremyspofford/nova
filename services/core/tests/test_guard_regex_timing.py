@@ -386,11 +386,18 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     deliberately, and not the difference: 1 new BARE module Pattern, reached
     by both walks — `_UPDATE_TOOK`, an update's RESULT said as done (her
     install of the build, the build it runs, the update done): 205 -> 206,
-    267 -> 268. Its cuts (`_TookCuts`) reuse patterns already counted."""
+    267 -> 268. Its cuts (`_TookCuts`) reuse patterns already counted.
+
+    Task 32 Phase B round 3 (CORE's concern 1) moved the two totals again,
+    deliberately, and not the difference: 1 new BARE module Pattern, reached
+    by both walks — `_SENT_BUILD`, the hub's build as a send's object, which
+    makes "I sent the hub's build to minipc" device_completion's install kind
+    rather than a notification: 206 -> 207, 268 -> 269. The recipient a send
+    names first is read by the device anchor already counted."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 206, len(old)
-    assert len(new) == 268, len(new)
+    assert len(old) == 207, len(old)
+    assert len(new) == 269, len(new)
     assert len(new) - len(old) == 62
 
 
@@ -558,6 +565,7 @@ UPDATE_PATTERNS = (
     "_NAME_WORD",
     "_CAP_UPDATE_AGENTS",
     "_UPDATE_TOOK",
+    "_SENT_BUILD",
 )
 
 
@@ -590,6 +598,16 @@ def _update_shapes(n: int) -> dict[str, str]:
         "name_run_then_copula": "a." * (n // 2) + " is now on the hub's" + pad + "x",
         "name_run_then_update": "a." * (n // 2) + "'s update is" + pad + "x",
         "many_result_claims": "eval_laptop is on the hub's build. " * (n // 35) + "x",
+        # Task 32 Phase B round 3: the shapes that enter _SENT_BUILD — each of
+        # its openings before padding, its trailing lookahead ("of", "for", a
+        # notice's noun…) after a run, and sends in a row, of the object and to
+        # a recipient written first.
+        "sent_build_then_spaces": "I sent the hub's" + pad + "build",
+        "sent_new_build_then_spaces": "I sent a new" + pad + "build",
+        "sent_agent_build_then_spaces": "I sent an agent" + pad + "build",
+        "sent_update_then_spaces": "I sent the update" + pad + "of",
+        "many_sends": "I sent the hub's build to eval_laptop. " * (n // 39) + "x",
+        "many_recipient_sends": "I sent eval_laptop the update. " * (n // 31) + "x",
     }
 
 
@@ -1014,6 +1032,13 @@ _ONE_SEARCH_IN_THIRTY = [
     *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
 ]
 _THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range(30)]
+# (Task 32 Phase B round 3) An update of the Dell among thirty recorded spans,
+# and the only call that performs an install: every send of the hub's build on
+# the Dell is read as far as its object, then silenced by it.
+_AN_UPDATE_IN_THIRTY = [
+    *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
+    _recorded("machine_update", {"machine": "DELL-XPS-8950"}),
+]
 
 
 @pytest.mark.parametrize(
@@ -1074,6 +1099,35 @@ _THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range
             "distinct unanchored pronouns beside thirty searches",
             _distinct("I launched it. Item {i}. "),
             _THIRTY_SEARCHES,
+        ),
+        # Task 32 Phase B round 3: a send's object read for its kind — after
+        # the verb, after a recipient written first, as the subject of "was
+        # sent", naming no machine beside another tool's work, and a
+        # notification ABOUT the update, whose recipient scan finds none.
+        (
+            "distinct backed sends of the hub's build",
+            _distinct("I sent the hub's build {i} to your DELL-XPS-8950. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct backed sends to a recipient",
+            _distinct("I sent DELL-XPS-8950 the update, part {i}. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct backed subjects sent",
+            _distinct("Item {i}: the hub's build was sent to your DELL-XPS-8950. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct sends naming no machine beside one search",
+            _distinct("I sent the update {i}. "),
+            _ONE_SEARCH,
+        ),
+        (
+            "distinct notifications about the update",
+            _distinct("I sent a note about the update {i} to your DELL-XPS-8950. "),
+            _THIRTY_OK,
         ),
     ],
 )

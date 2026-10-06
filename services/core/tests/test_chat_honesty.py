@@ -321,6 +321,65 @@ async def test_the_update_claim_names_a_machine_from_the_live_registry(
     ]
 
 
+async def test_an_honest_send_of_the_build_after_a_real_update_draws_no_sentence(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """Task 32 Phase B round 3 (CORE's concern 1): "I sent the hub's build to
+    minipc", after a real machine_update on minipc, is the wording an update
+    asks for — sent, not confirmed until it reconnects. "sent" read as a
+    notification appended "(No device_notify or device_run call ran on minipc
+    this turn.)" to it. A send of the build is an install, which the update
+    backs: no guard fires, nothing is appended, and the turn is knowledge."""
+    from app import machines
+
+    await _pair(pool, "minipc")
+    monkeypatch.setattr(machines, "plant", lambda: _UpdatePlant("sent"))
+    reply = "I sent the hub's build to minipc. It isn't confirmed until its agent reconnects on it."
+    gateway = ScriptedGateway(
+        rounds=(
+            (*streamed_call(0, "call_1", "machine_update", {"machine": "minipc"}),),
+            (text(reply),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "update the agent on minipc now")
+
+    (tool,) = await _spans(pool, "tool")
+    assert tool["name"] == "machine_update" and tool["meta"]["ok"] is True
+    assert not [f for f in sent if isinstance(f, dict) and "correction" in f]
+    assert await _spans(pool, "guard") == []
+    assert await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'") == reply
+    await chat.drain_background()
+    assert [ingest["exchange"]["assistant"] for ingest in memory.ingests] == [reply]
+
+
+async def test_the_same_send_with_no_update_draws_exactly_one_sentence(
+    owner_client, pool, mount_peers
+):
+    """…and with no call at all, the same claim draws exactly one correction —
+    device_completion's, naming what did not run — and stays out of memory."""
+    await _pair(pool, "minipc")
+    reply = "I sent the hub's build to minipc."
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(reply),),)), memory=memory)
+
+    sent = await _say(owner_client, "update the agent on minipc now")
+
+    expected = "(No machine_update or device_run call ran on minipc this turn.)"
+    assert [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f] == [
+        expected
+    ]
+    (guard,) = await _spans(pool, "guard")
+    assert guard["name"] == "device_completion"
+    assert (guard["meta"]["kind"], guard["meta"]["device"]) == ("install", "minipc")
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == f"{reply}\n\n{expected}"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
 async def test_a_regeneration_that_names_an_unconfirmed_machine_is_refused(
     owner_client, pool, mount_peers, monkeypatch
 ):

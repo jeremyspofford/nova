@@ -255,6 +255,8 @@ def _claims_of_every_record() -> list[guards.DeviceCompletionClaim]:
             ("I sent a notification to your DELL-XPS-8950.", []),
             ("I saved the notes to your DELL-XPS-8950.", []),
             ("Firefox is now open on your PC.", []),
+            # (Task 32 Phase B round 3) a send of the hub's build is an install
+            ("I sent the hub's build to your DELL-XPS-8950.", []),
         )
     ]
     assert all(claim is not None for claim in claims)
@@ -278,6 +280,7 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
         "(No device_notify or device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_write_file or device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_launch_app or device_run call ran on your PC this turn.)",
+        "(No machine_update or device_run call ran on DELL-XPS-8950 this turn.)",
     ]
     for said in (WROTE_LAUNCH, *texts_):
         lowered = said.lower()

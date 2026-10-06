@@ -2050,3 +2050,176 @@ def test_a_machine_update_of_another_machine_backs_no_claim_about_this_one():
         )
         is None
     )
+
+
+# -- Task 32 Phase B round 3: a send of the hub's build is an install ----------
+#
+# "sent" is a notify word, so after a REAL machine_update on minipc the honest
+# "I sent the hub's build to minipc" — the very wording S42b asks for after an
+# update ("sent, not confirmed until it reconnects") — was read as a
+# notification and drew "(No device_notify or device_run call ran on minipc
+# this turn.)": a false correction (CORE's concern 1). The ruling (option b): a
+# send whose OBJECT is the hub's build, a/the new build, the update or an agent
+# build is the INSTALL kind — backed by machine_update or device_run on that
+# machine, through MF4's mapping, and never read as a notification. With no
+# call it still draws exactly one sentence, naming what did not run. A
+# notification, a message or an alert sent stays the notify kind.
+
+SENT_BUILD_REPLIES = (
+    "I sent the hub's build to minipc.",
+    "I sent the new build to minipc.",
+    "I sent a new build to minipc.",
+    "I've sent the update to minipc; it isn't confirmed until its agent reconnects.",
+    "I sent an agent build to minipc.",
+    "I sent the build to minipc.",
+    # the recipient written first
+    "I sent minipc the hub's build.",
+    "I sent minipc the update.",
+    "I sent minipc's agent the new build.",
+    # machine_update's own answer, echoed (tools/machines.py, _UPDATE_WORDS)
+    "Sent the hub's build aaaaaaaaaaaa to minipc (its agent ran 0a0a0a0a0a0a). Not confirmed yet.",
+    # the build as the subject
+    "The hub's build has been sent to minipc.",
+    "The update was sent to minipc.",
+)
+# Her own send that names no machine: "it" is the recipient, or none is written.
+SENT_TO_NO_MACHINE = ("I sent it the update.", "I sent the update.")
+NO_INSTALL = "(No machine_update or device_run call ran this turn.)"
+NOTIFICATIONS_SENT = (
+    "I sent a notification to minipc.",
+    "I sent a message to minipc.",
+    "I sent an alert to minipc.",
+    # the update is what it is about, or what names it, not what was sent
+    "I sent a notification about the update to minipc.",
+    "I sent the update notification to minipc.",
+    "I sent the build alert to minipc.",
+    "I sent the new build message to minipc.",
+    "I sent the update about the outage to minipc.",
+)
+NO_NOTIFY_ON_MINIPC = "(No device_notify or device_run call ran on minipc this turn.)"
+
+
+def _notified(device: str = MINIPC) -> SimpleNamespace:
+    return _span("device_notify", args_redacted={"device": device, "message": "hi"})
+
+
+@pytest.mark.parametrize("outcome", ["sent", "confirmed"])
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+@pytest.mark.parametrize("reply", [*SENT_BUILD_REPLIES, *SENT_TO_NO_MACHINE])
+def test_an_honest_send_of_the_build_after_a_real_update_is_silent_from_both_guards(
+    reply, grouping, outcome
+):
+    spans = [_update(outcome=outcome)]
+    claim = guards.device_completion_check(reply, spans, NAMES, PAIRED, machines=grouping)
+    assert claim is None, claim.text
+    assert guards.narration_check(reply, spans, PAIRED) is None
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+@pytest.mark.parametrize("reply", SENT_BUILD_REPLIES)
+def test_the_same_send_with_no_call_draws_one_sentence_naming_what_did_not_run(reply, grouping):
+    claim = guards.device_completion_check(reply, [], NAMES, PAIRED, machines=grouping)
+    assert claim is not None
+    assert (claim.kind, claim.action, claim.device) == ("install", "install", MINIPC)
+    assert claim.record == guards.DeviceRecord()
+    assert claim.text == NO_INSTALL_ON_MINIPC
+    # …and the only one: the update-claim family reads no send.
+    assert guards.narration_check(reply, [], PAIRED) is None
+
+
+@pytest.mark.parametrize("reply", SENT_TO_NO_MACHINE)
+def test_a_send_naming_no_machine_with_no_call_draws_one_sentence(reply):
+    claim = guards.device_completion_check(reply, [], NAMES, PAIRED, machines=TWO_MACHINES)
+    assert claim is not None
+    assert (claim.kind, claim.action, claim.device) == ("install", "install", None)
+    assert claim.text == NO_INSTALL
+    assert guards.narration_check(reply, [], PAIRED) is None
+
+
+@pytest.mark.parametrize("reply", SENT_TO_NO_MACHINE)
+def test_a_send_naming_no_machine_is_never_corrected_beside_another_tools_work(reply):
+    """As every claim that names no device (fix round 4, R4): beside another
+    family's work, "it" or nothing may be what that tool sent to."""
+    search = _span("web_search", args_redacted={"query": "agent build"})
+    assert (
+        guards.device_completion_check(reply, [search], NAMES, PAIRED, machines=TWO_MACHINES)
+        is None
+    )
+
+
+@pytest.mark.parametrize("reply", SENT_BUILD_REPLIES)
+def test_a_send_beside_another_machines_update_is_still_corrected(reply):
+    claim = guards.device_completion_check(
+        reply, [_update(DEVICE, "sent")], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.kind == "install"
+    assert claim.text == NO_INSTALL_ON_MINIPC
+
+
+@pytest.mark.parametrize("reply", SENT_BUILD_REPLIES)
+def test_a_send_of_the_build_is_never_the_notify_kind(reply):
+    """A notification on minipc backs no send of the build there."""
+    claim = guards.device_completion_check(
+        reply, [_notified()], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.kind == "install"
+    assert claim.text == NO_INSTALL_ON_MINIPC
+
+
+@pytest.mark.parametrize("reply", NOTIFICATIONS_SENT)
+def test_a_notification_sent_stays_the_notify_kind(reply):
+    assert (
+        guards.device_completion_check(reply, [_notified()], NAMES, PAIRED, machines=TWO_MACHINES)
+        is None
+    )
+    for spans in ([], [_update(outcome="sent")]):
+        claim = guards.device_completion_check(reply, spans, NAMES, PAIRED, machines=TWO_MACHINES)
+        assert claim is not None
+        assert (claim.kind, claim.action) == ("notify", "notify")
+        assert claim.text == NO_NOTIFY_ON_MINIPC
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # someone else's build or update is no install of the hub's
+        "I sent the new build of Firefox to minipc.",
+        "I sent the update for the printer to minipc.",
+        # a pronoun object names nothing the guard can read
+        "I sent it to minipc.",
+    ],
+)
+def test_a_send_of_anything_else_is_still_a_notification(reply):
+    claim = guards.device_completion_check(reply, [], NAMES, PAIRED, machines=TWO_MACHINES)
+    assert claim is not None
+    assert claim.kind == "notify"
+    assert claim.text == NO_NOTIFY_ON_MINIPC
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["I sent you the update.", "I sent Alex the update.", "I sent them the new build."],
+)
+def test_a_recipient_that_is_no_machine_of_hers_is_no_claim(reply):
+    assert guards.device_completion_check(reply, [], NAMES, PAIRED, machines=TWO_MACHINES) is None
+
+
+def test_a_send_beside_a_failed_update_states_the_failure():
+    failed = _span(
+        "machine_update",
+        ok=False,
+        args_redacted={"machine": MINIPC},
+        error="Error: minipc is offline — it cannot take the hub's build until it reconnects",
+    )
+    claim = guards.device_completion_check(
+        "I sent the hub's build to minipc.", [failed], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert (claim.kind, claim.record.case, claim.record.tool) == (
+        "install",
+        "failed",
+        "machine_update",
+    )
+    assert claim.text == "(machine_update failed: minipc is offline.)"

@@ -5936,6 +5936,40 @@ def _kind_of(action: str) -> str:
     return action if action in _KINDED_ACTIONS else "command"
 
 
+# A SEND of the hub's build is an INSTALL (Task 32 Phase B round 3, the
+# controller's ruling on CORE's concern 1, option b). "sent" is a notify word,
+# so after a REAL machine_update on minipc the honest "I sent the hub's build
+# to minipc" — the very wording S42b asks for after an update ("sent, not
+# confirmed until it reconnects") — drew "(No device_notify or device_run call
+# ran on minipc this turn.)", a false correction. A send whose OBJECT is the
+# hub's build is read as the install kind instead: backed by machine_update or
+# device_run on that machine, through MF4's mapping, and never read as a
+# notification — so with no call it still draws exactly one sentence, "(No
+# machine_update or device_run call ran on minipc this turn.)". A notification,
+# a message or an alert sent stays the notify kind, and so does a send whose
+# object the guard cannot read ("I sent it to minipc").
+#
+# The objects are the update family's own words for the build (_ANY_BUILD: the
+# hub's build, the new build, the build, the agent build…), "the update", and
+# the ruling's indefinite "a new build" and "an agent build" — each the WHOLE
+# object: someone else's build or update ("…of Firefox", "…for the printer"),
+# news ("the update about the outage") and a notice the build names ("the
+# update notification", "the build alert": the delivery guard's words for one)
+# are no install of the hub's. Linear as _ANY_BUILD is: every alternative opens
+# on a fixed word, and every whitespace run is possessive.
+_SENT_BUILD = re.compile(
+    rf"\b(?:{_ANY_BUILD}"
+    r"|(?:an?\s++(?:(?:new|latest)\s++)?+(?:agent\s++)?+build|the\s++update)\b)"
+    r"(?!\s++(?:of|for|about|regarding|notifications?|notices?|alerts?|messages?|reminders?"
+    r"|notes?|pings?|push(?:es)?+|heads-?ups?)\b)",
+    re.I,
+)
+_SEND_WORDS = frozenset({"sent", "sending"})
+# A recipient written before a send's object — "sent minipc the hub's build",
+# "sent your Windows PC's agent the update" — is at most this many words.
+_RECIPIENT_WORDS = 4
+
+
 # An ACTION's participle or progressive — the only states that are claims (C1).
 _ACTION_PARTICIPLE = (
     r"(?:opened|launched|started|stopped|closed|killed|terminated|restarted|rebooted"
@@ -6248,6 +6282,56 @@ def _subject_start(text: str, position: int) -> int:
         start = begin
         words += 1
     return start
+
+
+def _sent_object(text: str, at: int) -> tuple[re.Match[str], tuple[int, int] | None] | None:
+    """The hub's build a send names (_SENT_BUILD), read from the end of its
+    verb at `at`: right after it — "sent the hub's build to minipc" — or after
+    a recipient written first, of up to _RECIPIENT_WORDS words within
+    _ANCHOR_REACH — "sent minipc the hub's build", "sent it the update".
+    Returns (object, recipient): the recipient's (start, end) in `text`, None
+    when none was written. None when the send names no build. Plain string
+    work over a bounded stretch after the verb."""
+    limit = min(len(text), at + _ANCHOR_REACH)
+    start = at
+    while start < limit and text[start] in " \t":
+        start += 1
+    if start == at or start >= limit:
+        return None
+    found = _SENT_BUILD.match(text, start)
+    if found is not None:
+        return found, None
+    end = start
+    for _ in range(_RECIPIENT_WORDS):
+        while end < limit and text[end] not in " \t,;:":
+            end += 1
+        following = end
+        while following < limit and text[following] in " \t":
+            following += 1
+        if following == end or following >= limit:
+            return None  # a clause mark, or past the reach: no object follows
+        found = _SENT_BUILD.match(text, following)
+        if found is not None:
+            return found, (start, end)
+        end = following
+    return None
+
+
+def _subject_build(text: str, begin: int, end: int) -> re.Match[str] | None:
+    """The hub's build as the SUBJECT of a send — "The hub's build has been
+    sent to minipc", "Done: the update was sent to minipc": the subject, from
+    `begin` (`_subject_start`, at most four words) to its copula at `end`,
+    ends in it. Tried from each of its words."""
+    at = begin
+    while at < end:
+        found = _SENT_BUILD.fullmatch(text, at, end)
+        if found is not None:
+            return found
+        while at < end and text[at] not in " \t":
+            at += 1
+        while at < end and text[at] in " \t":
+            at += 1
+    return None
 
 
 def _is_her_span(span: Any) -> bool:
@@ -6957,6 +7041,23 @@ class _Reading:
             self.places[key] = _resolve_place(found, self.names)
         return self.places[key]
 
+    def recipient(self, written: str) -> tuple[frozenset[str] | None, str | None] | None:
+        """The machine a send's recipient names (Task 32 Phase B round 3),
+        read as the anchor reads the same words after "to": "sent minipc the
+        hub's build" is "sent the hub's build to minipc", and "minipc's agent"
+        is minipc's. "it" is a machine she does not name: (None, None). None
+        when the recipient is no machine of hers — "you", a person, "them"."""
+        words = " ".join(written.split())
+        lowered = words.lower()
+        if lowered == "it":
+            return None, None
+        for suffix in ("'s agent", "’s agent"):
+            if lowered.endswith(suffix):
+                words = words[: -len(suffix)]
+                break
+        found = self.anchor.fullmatch(f"to {words}")
+        return None if found is None else self.place(found)
+
     def kind_ran(self, kind: str) -> bool:
         """Whether any call of the tools that perform `kind` ran, anywhere —
         without one, a claim naming no device can only be "none ran"."""
@@ -7114,17 +7215,48 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
         verb_end = m.end()
         place = place_after(verb_end)
         thing = it = None
-        # An unanchored claim is only her own lifecycle claim about an app or
-        # "it" — decided first, before anything costlier is read.
-        if place is None and (
-            shape != "first" or " ".join(m.group("verb").lower().split()) not in _LIFECYCLE_VERBS
-        ):
-            continue
         word = m.group("word") if shape == "state" else m.group("verb")
         word = " ".join(word.lower().split())
-        action = _ACTION_OF_WORD.get(word, "run")
-        kind = _kind_of(action)
-        if place is None and not reading.kind_ran(kind):
+        # A send of the hub's build is an install (Task 32 Phase B round 3):
+        # its object is read first — the subject of "…was sent", else what
+        # follows her own send — and a recipient written before it must be a
+        # machine of hers or "it" ("sent you the update" is no install).
+        build: re.Match[str] | None = None
+        recipient: tuple[frozenset[str] | None, str | None] | None = None
+        if word in _SEND_WORDS:
+            if shape == "state":
+                if place is not None:  # a state names its machine, or is no claim
+                    build = _subject_build(text, _subject_start(text, position), position)
+            elif shape in ("first", "head"):
+                sent = _sent_object(text, verb_end)
+                if sent is not None:
+                    build, written = sent
+                    if written is not None:
+                        recipient = reading.recipient(text[written[0] : written[1]])
+                        if recipient is None:
+                            build = None
+        if build is not None:
+            action = kind = "install"
+        else:
+            action = _ACTION_OF_WORD.get(word, "run")
+            kind = _kind_of(action)
+        devices: frozenset[str] | None = None
+        device_label: str | None = None
+        if place is not None:
+            devices, device_label = reading.place(place)
+        elif build is not None and recipient is not None and recipient[1] is not None:
+            devices, device_label = recipient  # "sent minipc the hub's build"
+        elif build is not None:
+            # Her own send of the build naming no machine ("I sent the update",
+            # "I sent it the update"): about any of them, and — as every claim
+            # naming no device — never read beside another tool's work.
+            if shape != "first" or (reading.outside_ran and not reading.kind_ran(kind)):
+                continue
+        # An unanchored claim is otherwise only her own lifecycle claim about an
+        # app or "it".
+        elif shape != "first" or word not in _LIFECYCLE_VERBS:
+            continue
+        elif not reading.kind_ran(kind):
             # What the record would say is that none ran. For a claim naming
             # no device it is never said beside another tool's work (it may be
             # about a page or a file that tool opened), nor about "it" (with no
@@ -7136,15 +7268,11 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
             thing = _APP_OBJECT.match(text, verb_end)
             if thing is None:
                 continue
-        elif place is None:
+        else:
             thing = _APP_OBJECT.match(text, verb_end)
             it = None if thing is not None else _PRONOUN_OBJECT.match(text, verb_end)
             if thing is None and it is None:
                 continue
-        devices: frozenset[str] | None = None
-        device_label: str | None = None
-        if place is not None:
-            devices, device_label = reading.place(place)
         if _silenced(reading, kind, devices):
             continue  # a call that performs it ran there, or may have (T3, R5)
         # The claim's own segment: back to the last clause break before it (I3).
@@ -7204,6 +7332,8 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
             end = thing.end()
         elif it is not None:
             target, end = it.group("object"), it.end()
+        elif place is None:
+            target, end = build.group(0), build.end()  # a send to its recipient, or to none
         else:
             end = place.end()
             target = subject if shape in ("state", "subject") else text[verb_end : place.start()]
