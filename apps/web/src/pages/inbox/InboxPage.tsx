@@ -253,7 +253,7 @@ export function InboxPage({
             aria-pressed={view === tab.key}
             className={`rounded-sm px-3 py-1.5 text-compact transition-colors ${
               view === tab.key
-                ? 'bg-surface-raised text-content-primary'
+                ? 'bg-surface-elevated text-content-primary'
                 : 'text-content-secondary hover:text-content-primary'
             }`}
           >

@@ -85,7 +85,7 @@ export function CompareView({ rows }: { rows: CatalogRow[] }) {
             if (facts.every(f => f === null)) return null
             const max = Math.max(...facts.map(f => f?.value ?? 0))
             return (
-              <tr key={spec.key} className="border-t border-line">
+              <tr key={spec.key} className="border-t border-border">
                 <th className={`${headerCell} py-2`}>{spec.label}</th>
                 {rows.map((row, i) => {
                   const fact = facts[i]
@@ -129,7 +129,7 @@ export function CompareView({ rows }: { rows: CatalogRow[] }) {
                               title={`${chip.basis}${chip.note ? ` — ${chip.note}` : ''}`}
                               className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
                                 !chip.value
-                                  ? 'border border-line text-content-tertiary line-through'
+                                  ? 'border border-border text-content-tertiary line-through'
                                   : chip.basis === 'inferred'
                                     ? 'border border-dashed border-warning text-warning'
                                     : 'bg-success-dim text-emerald-700 dark:text-emerald-400'

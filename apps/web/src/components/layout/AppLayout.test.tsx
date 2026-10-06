@@ -5,6 +5,10 @@ import { AppLayout } from './AppLayout'
 import { AuthProvider } from '../../stores/auth-store'
 import { ThemeProvider } from '../../stores/theme-store'
 import { navSections } from './Sidebar'
+import resolveConfig from 'tailwindcss/resolveConfig'
+// @ts-expect-error -- plain JS config, no declaration file
+import tailwindConfig from '../../../tailwind.config.js'
+import { findUndefinedColorTokens } from '../../lib/colorTokens'
 
 /**
  * Which navigation surface renders, at which width.
@@ -321,5 +325,140 @@ describe('AppLayout — the show-sidebar control has its own space', () => {
     fireEvent.click(screen.getByTestId('sidebar-handle'))
     await screen.findByTestId('show-sidebar')
     expect(main.className).toContain('md:pl-11')
+  })
+
+  it('reserves no sidebar room on a phone, even with a collapsed sidebar remembered from desktop', async () => {
+    // The collapsed flag persists in localStorage across viewports; a phone
+    // has no sidebar and no show-sidebar button, so no room is reserved.
+    localStorage.setItem('nova-sidebar-collapsed', 'true')
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(document.querySelector('main')!.className).not.toContain('md:pl-11')
+  })
+})
+
+/**
+ * ONE TOP-PADDING CLASS PER MODE (R1, ui-review-2026-10-06). On a phone <main>
+ * carried BOTH `pt-[var(--nova-safe-top,0px)]` and the `+3rem` class, and
+ * Tailwind emits the `+3rem` rule first, so the 0px one won and the menu
+ * button sat on every page title. jsdom applies no Tailwind CSS, so the pin
+ * is on the class list: exactly one variant-free `pt-*`, so emit order can
+ * never decide it again.
+ */
+function mainTokens(): string[] {
+  return document.querySelector('main')!.className.split(/\s+/).filter(Boolean)
+}
+const variantFree = (re: RegExp) => mainTokens().filter(t => re.test(t))
+const SAFE = 'pt-[var(--nova-safe-top,0px)]'
+const SAFE_PLUS_MENU = 'pt-[calc(var(--nova-safe-top,0px)+3rem)]'
+
+describe('AppLayout — <main> top padding: one pt-* class per mode', () => {
+  it('on a phone carries exactly one pt-* class, the +3rem one, and not the bare safe inset (crit 1)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(variantFree(/^pt-/), 'two pt-* classes let CSS emit order pick the padding').toEqual([
+      SAFE_PLUS_MENU,
+    ])
+    expect(mainTokens()).not.toContain(SAFE)
+  })
+
+  it('on a desktop carries exactly one pt-* class, the bare safe inset, plus md:pt-0 (crit 2)', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(variantFree(/^pt-/)).toEqual([SAFE])
+    expect(mainTokens()).toContain('md:pt-0')
+    expect(mainTokens()).not.toContain(SAFE_PLUS_MENU)
+  })
+
+  it.each(['mobile', 'desktop'] as const)(
+    'on %s carries no competing p-* or py-* shorthand (crit 3)',
+    async mode => {
+      setViewport(mode)
+      renderShell()
+      await screen.findByText('page')
+
+      expect(variantFree(/^(p|py)-/)).toEqual([])
+    },
+  )
+
+  it.each(['mobile', 'desktop'] as const)(
+    'on %s keeps the overflow class for a non-fullWidth page (crit 4)',
+    async mode => {
+      setViewport(mode)
+      renderShell()
+      await screen.findByText('page')
+
+      expect(mainTokens()).toContain('overflow-y-auto')
+    },
+  )
+})
+
+/**
+ * THE MENU BUTTON'S OWN CHIP (R1, ui-review-2026-10-06). The button was
+ * transparent at rest — only `hover:bg-surface-card` — so scrolled content
+ * showed straight through it. jsdom applies no Tailwind CSS, so the pin is on
+ * the class list: one variant-free `bg-*`, `bg-surface-root/90`, plus a blur.
+ */
+function buttonTokens(): string[] {
+  return menuButton()!.className.split(/\s+/).filter(Boolean)
+}
+const resolvedColors = (resolveConfig(tailwindConfig).theme as unknown as { colors: object }).colors
+
+describe('AppLayout — the menu button has its own opaque chip', () => {
+  it('carries exactly one variant-free bg-* class, bg-surface-root/90 (crit 1)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(
+      buttonTokens().filter(t => /^bg-/.test(t)),
+      'a button with no resting background lets scrolled content show through',
+    ).toEqual(['bg-surface-root/90'])
+  })
+
+  it('carries a variant-free backdrop-blur class (crit 2)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(buttonTokens().filter(t => /^backdrop-blur(-|$)/.test(t)).length).toBeGreaterThan(0)
+  })
+
+  it('names only defined colour tokens (crit 3)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(findUndefinedColorTokens(menuButton()!.className, resolvedColors)).toEqual([])
+  })
+
+  it('fits the 3rem reserve: h-9 at safe-top + 0.75rem, fixed, z-[60], md:hidden (crit 4)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    const tokens = buttonTokens()
+    for (const t of ['h-9', 'fixed', 'z-[60]', 'md:hidden']) expect(tokens).toContain(t)
+    expect(menuButton()!.style.top).toBe('calc(var(--nova-safe-top, 0px) + 0.75rem)')
+  })
+
+  it('is visible and pressable at rest, hidden only while the panel is open (crit 5)', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(buttonTokens()).not.toContain('opacity-0')
+    expect(buttonTokens()).not.toContain('pointer-events-none')
+
+    fireEvent.click(menuButton()!)
+    await screen.findByTestId('mobile-drawer')
+    expect(buttonTokens()).toContain('opacity-0')
+    expect(buttonTokens()).toContain('pointer-events-none')
   })
 })

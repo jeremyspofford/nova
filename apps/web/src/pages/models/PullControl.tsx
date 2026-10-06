@@ -16,7 +16,7 @@ export function PullControl({ pull, onCancel, onDismiss }: { pull: PullState; on
     <div
       data-testid="pull-panel"
       className={`rounded-md border px-4 py-3 text-compact ${
-        pull.error ? 'border-danger/30 bg-danger-dim' : 'border-line'
+        pull.error ? 'border-danger/30 bg-danger-dim' : 'border-border'
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
