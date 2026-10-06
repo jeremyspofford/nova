@@ -5361,7 +5361,7 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
     return f"Correction: I can do that — I have a tool for it ({listed})."
 ```
 
-  (i) In `capability_claim_check`, replace these lines from cycle 1:
+  (i) In `capability_claim_check`, replace these lines (PR #97's cycle 1, now on main):
 
 ```python
                 # A scope limit anywhere in this denial's own tail ("...files
