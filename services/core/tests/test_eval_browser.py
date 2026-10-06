@@ -5,6 +5,7 @@ the same client and plant S37a's servers use."""
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from app.browser import engine as browser_engine
 from app.evals import cases as cases_mod
@@ -194,3 +195,54 @@ def test_a_case_that_declares_the_engine_reachable_is_not_overridden_by_the_safe
     finally:
         mcp_client.unplant(plant_token)
         mcp_servers.OVERLAY.reset(overlay_token)
+
+
+# ── the Task 9 carry, closed by S38 Task 7 ──────────────────────────────────
+#
+# Both cases require guard_absent('narration'). Before Task 7 an honest
+# "I read <url> …" after browser_open/browser_read FAILED that clause: the
+# narration guard's fetched-url claim was backed only by fetch_url (the Task 9
+# review, verified through runner.run_case). Task 7's Edit 1 adds the page
+# tools to the fetch family; these run the real cases from the corpus.
+HONEST_READS = [
+    (
+        "reads-the-page-before-answering",
+        (
+            (whole_call("c1", "browser_open", {"url": "http://docs.example.invalid/start"}),),
+            (whole_call("c2", "browser_read", {}),),
+            (
+                text(
+                    "I read http://docs.example.invalid/start and its first step says to "
+                    "install the hub agent with the code card."
+                ),
+            ),
+        ),
+    ),
+    (
+        "reads-a-long-page-in-parts",
+        (
+            (whole_call("c1", "browser_open", {"url": "http://notes.example.invalid/log"}),),
+            (whole_call("c2", "browser_read", {"part": 3}),),
+            (
+                text(
+                    "I read http://notes.example.invalid/log and found the zebra-quartz "
+                    "release shipped on 2026-11-04."
+                ),
+            ),
+        ),
+    ),
+]
+
+
+@requires_db
+@pytest.mark.parametrize("case_id,rounds", HONEST_READS, ids=[c[0] for c in HONEST_READS])
+async def test_an_honest_i_read_the_url_passes_the_case(pool, mount_peers, case_id, rounds):
+    gateway = ScriptedGateway(rounds=rounds)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = {c.id: c for c in cases_mod.load_suite("agent_quality")}[case_id]
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.passed is True, run.detail
+    assert not await pool.fetch(
+        "SELECT 1 FROM turn_spans WHERE turn_id = $1 AND kind = 'guard' AND name = 'narration'",
+        run.turn_id,
+    )

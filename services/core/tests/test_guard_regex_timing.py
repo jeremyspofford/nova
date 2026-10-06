@@ -384,12 +384,18 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
        2  `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, the mcp_connect and
           mcp_call rows, reached through the container in the live walk only.
     The plan expected +2/+8/+6 for the server guards; X1's three bare
-    patterns, ruled after the plan was written, are the rest."""
+    patterns, ruled after the plan was written, are the rest.
+
+    S38 (2026-10): +2 module patterns (_CAP_BROWSER_ACT, _CAP_BROWSER_SCREENSHOT),
+    each also reached as a _CAPABILITY_TOOLS pair: old +2, new +4, difference
+    +2 — 205 -> 207, 272 -> 276, 67 -> 69 (measured). The two rows sit after
+    the S47 rows, at `_CAPABILITY_TOOLS[21][0]` and `[22][0]`, so the device_run
+    and MCP rows above moved to [23]..[25]; no id the fossil holds moved."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 205, len(old)
-    assert len(new) == 272, len(new)
-    assert len(new) - len(old) == 67
+    assert len(old) == 207, len(old)
+    assert len(new) == 276, len(new)
+    assert len(new) - len(old) == 69
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -1088,6 +1094,34 @@ def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
     )
 
 
+# -- narration reads her page actions in linear time (S38, ruling G4) ----------
+#
+# The browser_acted claim reads each clause's tokens once: every noun set's
+# last position and the first condition word are found in one pass, then the
+# verbs are walked once. A clause of nothing but page verbs, and one with a
+# control noun at its end so every verb is a candidate, must stay linear.
+NARRATION_FIFTY_KB = [
+    ("page verbs, no object", _repeat("I clicked typed pressed selected ")),
+    (
+        "page verbs, the object at the end",
+        lambda n: _repeat("clicked typed pressed ")(n - 11) + " the button",
+    ),
+    (
+        "other subjects, the object at the end",
+        lambda n: _repeat("you clicked and ")(n - 11) + " the button",
+    ),
+    ("downloads with no file", _repeat("I downloaded the latest one and ")),
+    ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
+]
+
+
+@pytest.mark.parametrize("label,build", NARRATION_FIFTY_KB, ids=[c[0] for c in NARRATION_FIFTY_KB])
+@pytest.mark.parametrize("on_a_page", [False, True], ids=["off a page", "on a page"])
+def test_narration_reads_her_page_actions_in_50_kb_in_linear_time(label, build, on_a_page):
+    spans = [_span("tool", "browser_open", ok=True)] if on_a_page else []
+    _assert_linear(f"narration {label}", lambda r: guards.narration_check(r, spans), build)
+
+
 # -- the capability guard reads 50 KB in linear time (S37a Task 12, ruling X1) --
 #
 # capability_claim_check asked, for EVERY capability phrase in a clause that
@@ -1125,6 +1159,25 @@ CAPABILITY_FIFTY_KB = [
         lambda n: _repeat("there is no delete operation and ")(n - 15) + " in my toolbox.",
     ),
     ("mcp phrases then a lead", lambda n: _repeat("connect to MCP servers ")(n - 9) + " I can't."),
+    # S38 (ruling G4): her browser's two rows, both orders, and their honest
+    # tail's window read after every phrase.
+    (
+        "browser phrases then a lead",
+        lambda n: _repeat("click links on web pages ")(n - 9) + " I can't.",
+    ),
+    (
+        "a lead then browser phrases",
+        lambda n: "I can't " + _repeat("fill in forms on websites and ")(n - 8),
+    ),
+    (
+        "a lead then screenshot phrases, a tail at the end",
+        lambda n: (
+            "I can't "
+            + _repeat("take screenshots of web pages or ")(n - 30)
+            + " behind your login right now"
+        ),
+    ),
+    ("browser denials", _repeat("I can't interact with websites that block automation and ")),
     ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
 ]
 

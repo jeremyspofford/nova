@@ -65,7 +65,13 @@ _WRITE_TOOLS = frozenset({"workspace_write_file", "memory_save"})
 _READ_TOOLS = frozenset({"workspace_read_file"})
 _DELETE_TOOLS = frozenset({"workspace_delete"})
 _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
-_FETCH_TOOLS = frozenset({"fetch_url"})
+# S38: her browser backs a fetch claim too — browser_open by the address it
+# was asked for and the one it landed on, browser_read and browser_back by the
+# page their facts name (see _target_of).
+_FETCH_TOOLS = frozenset({"fetch_url", "browser_open", "browser_read", "browser_back"})
+# S38: an action on a page — a click, typing, a choice, a submitted form — is
+# backed only by an ok browser_act span this turn.
+_BROWSER_ACT_TOOLS = frozenset({"browser_act"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
 _CONFIGURE_TOOLS = frozenset({"machine_configure"})
@@ -80,6 +86,7 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "deleted_file": _DELETE_TOOLS,
     "file_contents": _CONTENT_TOOLS,
     "fetched_url": _FETCH_TOOLS,
+    "browser_acted": _BROWSER_ACT_TOOLS,
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
     "configured_machine": _CONFIGURE_TOOLS,
@@ -352,8 +359,18 @@ CORRECTION_TEXT = (
 # set; which one fires is decided by the object it governs — a URL is a fetch,
 # a filename is a read.
 _FETCH_VERB_TOKENS = frozenset(
-    {"fetched", "retrieved", "downloaded", "visited", "accessed", "read", "pulled", "looked"}
-)
+    {
+        "fetched", "retrieved", "downloaded", "visited", "accessed", "read", "pulled",
+        "looked",
+        # S38: what her browser does to an address.
+        "opened", "navigated",
+    }
+)  # fmt: skip
+# S38 (ruling G9): the two verbs her browser added. A delegation that ran
+# this turn backs a claim made with one of them — the agent's calls are on
+# ITS turn (_a_delegation_ran), so "I opened <url> through my browser agent"
+# is not a fabrication. The older verbs' same gap is a carry, unchanged here.
+_BROWSER_FETCH_VERBS = frozenset({"opened", "navigated"})
 # A file the claim is about: a real filename TOKEN — a name with a known
 # extension (so "e.g." and an end-of-sentence period never read as files),
 # optionally carrying path segments. A filename is the ONLY thing that anchors
@@ -419,6 +436,44 @@ _READ_VERB_TOKENS = frozenset({"read", "checked", "reviewed", "opened", "examine
 # a file and a URL: a model reference carries a tag, a filename an extension.
 _DELETE_VERB_TOKENS = frozenset({"deleted", "removed", "erased"})
 _ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS | _DELETE_VERB_TOKENS
+# S38: a completed action on a page. A verb alone is not enough — "I typed
+# it up" is not a page — so the claim needs a page-control noun LATER in the
+# same clause, and which nouns count depends on the verb (ruling G2):
+#   * clicked/tapped/pressed/submitted say "a page" with a link, a button or
+#     a form — nobody clicks a link that is not on a screen.
+#   * selected/chose/filled/typed/ticked are ordinary words ("I selected the
+#     three most relevant links", "I filled in the form fields in form.md",
+#     "I typed up the form letter"), so they count only with a noun that names
+#     a page control and nothing else (checkbox, dropdown, textbox, searchbox,
+#     button) — or, once one of her browser_* tools ran this turn (she is on a
+#     page), with a field or a form too ("the search field" is one there).
+#     Never with a link: "I selected the links that looked most authoritative"
+#     is how she reports what she read, on a page or off it.
+# Not "box" (a machine), "tab" or "menu" (her own UI words), "option" (a model
+# choice is not a page).
+_BROWSER_CLICK_VERB_TOKENS = frozenset({"clicked", "tapped", "pressed", "submitted"})
+_BROWSER_CHOICE_VERB_TOKENS = frozenset({"selected", "chose", "filled", "typed", "ticked"})
+_BROWSER_CONTROL_TOKENS = frozenset(
+    {
+        "checkbox", "checkboxes", "dropdown", "dropdowns", "textbox", "textboxes",
+        "searchbox", "searchboxes", "button", "buttons",
+    }
+)  # fmt: skip
+_BROWSER_CLICK_OBJECT_TOKENS = _BROWSER_CONTROL_TOKENS | frozenset(
+    {"link", "links", "form", "forms"}
+)
+_BROWSER_PAGE_FIELD_TOKENS = frozenset({"field", "fields", "form", "forms"})
+# A clause that recaps an earlier turn is history, not this turn's claim;
+# one that opens with a condition ("if I clicked…") claims nothing.
+_BROWSER_RECAP_TOKENS = frozenset({"earlier", "before", "yesterday", "previously", "last"})
+_BROWSER_HYPOTHETICAL_TOKENS = frozenset({"if", "when", "once", "unless", "whether", "until"})
+# S38 (ruling G2, spec §4's "or downloaded"): "I downloaded <file>" — a real
+# filename token as the verb's own object (_objects_of, the file claims' rule)
+# — is backed only by a download her browser brought into the workspace this
+# turn: a {"browser": "download"} fact on ANY browser_* span, ok or not (a
+# download that finishes late lands on the NEXT call's answer, and a call that
+# then fails still brought it in — tools/browser.py _bring_downloads, _fail).
+_BROWSER_DOWNLOAD_VERB = "downloaded"
 # add/append name the CONTENT as their immediate object and the file as a
 # destination ("added milk TO groceries.md"). The write target is therefore
 # the destination file, never the immediate object — "added config.yaml to the
@@ -985,11 +1040,16 @@ def _externally_attributed(clause: str) -> bool:
     )
 
 
-def _claims_in(clause: str) -> list[tuple[str, str, str]]:
+def _claims_in(clause: str, on_a_page: bool = False) -> list[tuple[str, str | None, str]]:
     """Every completed-action self-claim in one clause, each tied to a REAL
     target (a filename token or a URL). A bare noun never qualifies, an action
     attributed to someone else or another time never qualifies, and a filename
-    that is not the verb's own object never qualifies."""
+    that is not the verb's own object never qualifies.
+
+    `on_a_page` (S38, ruling G2): one of her browser_* tools ran this turn, so
+    a choice verb with any page-control noun ("I typed it into the search
+    field") is read as an action on a page; without it only an unambiguous
+    control noun is."""
     claims: list[tuple[str, str, str]] = []
     if _externally_attributed(clause):
         return claims
@@ -1026,6 +1086,51 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
         for vi, tok in enumerate(tokens):
             if tok.lower() in _FETCH_VERB_TOKENS and _first_person_subject(tokens, vi):
                 claims.append(("fetched_url", urls[0], tok))
+                break
+
+    # S38: an action on a page — I + clicked/typed/submitted… + a page-control
+    # noun later in the clause (which nouns: the verb's own set, ruling G2).
+    # Target-free: which element is not checkable from prose, so any ok
+    # browser_act this turn backs it. One pass: each noun set's LAST position
+    # is found once, never searched again per verb. Tokens keep their
+    # punctuation ("button."), so it is trimmed here.
+    lowered = [tok.lower().rstrip(".,;:!?)]}\"'") for tok in tokens]
+    if not _BROWSER_RECAP_TOKENS.intersection(lowered):
+        click_objects = _BROWSER_CLICK_OBJECT_TOKENS
+        choice_objects = _BROWSER_CONTROL_TOKENS
+        if on_a_page:
+            click_objects = click_objects | _BROWSER_PAGE_FIELD_TOKENS
+            choice_objects = choice_objects | _BROWSER_PAGE_FIELD_TOKENS
+        last_click_object = last_choice_object = -1
+        first_condition = len(lowered)
+        for i, low in enumerate(lowered):
+            if low in click_objects:
+                last_click_object = i
+            if low in choice_objects:
+                last_choice_object = i
+            if low in _BROWSER_HYPOTHETICAL_TOKENS and first_condition == len(lowered):
+                first_condition = i
+        for vi, low in enumerate(lowered):
+            if vi > first_condition or vi >= max(last_click_object, last_choice_object):
+                break
+            if low in _BROWSER_CLICK_VERB_TOKENS:
+                last_object = last_click_object
+            elif low in _BROWSER_CHOICE_VERB_TOKENS:
+                last_object = last_choice_object
+            else:
+                continue
+            if vi < last_object and _first_person_subject(tokens, vi):
+                claims.append(("browser_acted", None, tokens[vi]))
+                break
+
+    # S38 (ruling G2): downloaded a FILE — I + downloaded + a filename token as
+    # the verb's own object. A URL in the clause is the fetch claim above, and
+    # a model reference is the pulled-model claim below; neither is a filename.
+    for vi, low in enumerate(lowered):
+        if low == _BROWSER_DOWNLOAD_VERB and _first_person_subject(tokens, vi):
+            names = _objects_of(tokens, vi)
+            if names:
+                claims.append(("browser_downloaded", names[0], tokens[vi]))
                 break
 
     # passive voice: "<file> has been updated / was read", filename-as-subject.
@@ -1133,6 +1238,18 @@ def _target_of(span: Any) -> str | None:
     if span.name == "fetch_url":
         url = args.get("url")
         return url if isinstance(url, str) else None
+    if span.name in ("browser_open", "browser_read", "browser_back"):
+        # S38: the address she asked for AND every page the call landed on
+        # (its `browser` page facts) — a redirect lands somewhere else, and
+        # both are true things to say she opened. Joined, because _backed
+        # reads one target per span by substring.
+        seen = [args.get("url")] + [
+            fact.get("url")
+            for fact in meta.get("facts") or ()
+            if isinstance(fact, dict) and fact.get("browser") == "page"
+        ]
+        urls = [url for url in seen if isinstance(url, str) and url]
+        return " ".join(urls) or None
     if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
@@ -1208,8 +1325,51 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # Normalise both sides for trailing punctuation/whitespace, so an honest
     # backed fetch is clean regardless of the sentence punctuation the URL
     # was written with ("…/data." vs the span's "…/data").
-    needle = _strip_trailing_punct(target.strip()).rsplit("/", 1)[-1].lower()
+    # The query and the fragment are not compared (S38): span arguments
+    # record an address without them (chat._redact masks them, since a
+    # reset link carries its token there), so a claim naming the full
+    # address is matched on the path it shares with the span.
+    claimed = _strip_trailing_punct(target.strip()).split("#", 1)[0].split("?", 1)[0]
+    needle = claimed.rsplit("/", 1)[-1].lower()
     return any(needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets)
+
+
+# S38: the claim kinds her browser agent may make good on a delegated turn.
+_BROWSER_DELEGABLE_KINDS = frozenset({"browser_acted", "browser_downloaded"})
+
+
+def _browser_spans(spans: Sequence[Any]):
+    """Every tool span of one of her browser_* tools this turn, ok or not —
+    except a call refused before it ran (`refused_*`, chat._refuse_call), which
+    put her on no page and brought nothing in."""
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        if not str(getattr(span, "name", None) or "").startswith("browser_"):
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if any(str(key).startswith("refused") for key in meta):
+            continue
+        yield meta
+
+
+def _browser_ran(spans: Sequence[Any]) -> bool:
+    """Whether one of her browser_* tools ran this turn (S38, ruling G2): she
+    is on a page, so "I typed it into the search field" is about one."""
+    return next(_browser_spans(spans), None) is not None
+
+
+def _browser_downloaded(spans: Sequence[Any]) -> bool:
+    """Whether her browser brought a download into the workspace this turn —
+    a {"browser": "download"} fact on ANY browser_* span (S38, ruling G2 as
+    amended by the Task 5 carry). Target-free: a download is saved under a
+    free name (files.bring_in), so "I downloaded report.pdf" is true of a
+    copy kept as "report (2).pdf"."""
+    return any(
+        isinstance(fact, dict) and fact.get("browser") == "download"
+        for meta in _browser_spans(spans)
+        for fact in meta.get("facts") or ()
+    )
 
 
 def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
@@ -1222,16 +1382,33 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
     if not reply_text or not reply_text.strip():
         return None
     successful = _successful(spans)
+    on_a_page = _browser_ran(spans)
+    delegated: bool | None = None  # read on the first claim that asks
     unbacked: list[UnbackedClaim] = []
     seen: set[tuple[str, str]] = set()
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue
-        for kind, target, phrase in _claims_in(clause):
+        for kind, target, phrase in _claims_in(clause, on_a_page):
             key = (kind, (target or "").lower())
             if key in seen:
                 continue
             seen.add(key)
+            if kind in _BROWSER_DELEGABLE_KINDS or (
+                kind == "fetched_url" and phrase.lower() in _BROWSER_FETCH_VERBS
+            ):
+                # S38 (ruling G9): her browser agent may have done it on its
+                # own turn, which this turn's spans cannot show.
+                if delegated is None:
+                    delegated = _a_delegation_ran(spans)
+                if delegated:
+                    continue
+            if kind == "browser_downloaded":
+                if not _browser_downloaded(spans):
+                    unbacked.append(
+                        UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80])
+                    )
+                continue
             if not _backed(kind, target, successful):
                 unbacked.append(UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80]))
     if not unbacked:
@@ -1523,6 +1700,48 @@ _CAP_PAIR_MACHINE = re.compile(
     r"(?!" + _PRESENT_STATE_TAIL + r")",
     re.I,
 )
+# S38: her browser. GENERAL abilities only, and only ON THE WEB (ruling G1,
+# as spec §4 phrases them: "click links or buttons on a page", "fill in forms
+# on websites"): the object must be qualified as a web one — "on a page", "on
+# websites", "in the browser", "web/online forms", "interact with websites".
+# A bare "I can't click buttons" may be a desktop app on a paired machine, an
+# email or a Word document, where it is TRUE ("I can't click buttons in Windows
+# apps", "I can't fill in forms in Word documents"); it is left alone, a miss in
+# the safe direction. "I can't click that button, it is disabled" reports one
+# element, not the ability. Browsing itself stays fetch_url's row (both tools
+# hold it).
+_WEB_PLACE = (
+    r"(?:on|in)\s++(?:a\s++|an\s++|the\s++|any\s++)?(?:web\s*+)?"
+    r"(?:pages?|sites?|websites?|browsers?)\b"
+)
+# The rows' LOCAL honest tail (ruling G1, the same shape as S37a's T12-B): a
+# web object QUALIFIED by what follows it — "websites that block automation",
+# "web pages behind your login", "forms on websites without your login
+# details", "… right now because the engine is not answering" — is a true
+# limit, never the general ability, and capability_claim REPLACES the sentence.
+# Only the ruling's words: a decorative tail ("… on any page", "… for you")
+# is no qualifier, and the denial is still corrected. Literal alternatives
+# behind possessive runs, bounded by _PRESENT_STATE_TAIL's own window: linear.
+_BROWSER_QUALIFIED_TAIL = (
+    r"(?!\s*+,?\s*+(?:that|which|behind|without|unless|requiring|needing)\b"
+    r"|" + _PRESENT_STATE_TAIL + r")"
+)
+# One group per row, so the honest tail applies to every alternative.
+_CAP_BROWSER_ACT = re.compile(
+    r"(?:(?:click(?:ing)?|press(?:ing)?|tap(?:ping)?)\s++(?:on\s++)?(?:a\s++|any\s++)?"
+    r"(?:links?|buttons?)(?:\s++(?:or|and)\s++(?:links?|buttons?))?\s++"
+    + _WEB_PLACE
+    + r"|(?:fill(?:ing)?\s++(?:in|out)|submit(?:ting)?)\s++(?:a\s++|any\s++)?"
+    r"(?:(?:web|online)\s++forms?\b|forms?\s++" + _WEB_PLACE + r")"
+    r"|interact(?:ing)?\s++with\s++(?:a\s++|any\s++)?(?:web\s*+pages?|websites?)\b)"
+    + _BROWSER_QUALIFIED_TAIL,
+    re.I,
+)
+_CAP_BROWSER_SCREENSHOT = re.compile(
+    r"tak(?:e|ing)\s++(?:a\s++)?screenshots?\s++of\s++(?:a\s++|any\s++)?"
+    r"(?:web\s*+pages?|websites?)\b" + _BROWSER_QUALIFIED_TAIL,
+    re.I,
+)
 _CAP_ON_A_PHONE = re.compile(
     r"put(?:ting)?\s+(?:myself|me|nova)\s+on\s+"
     r"(?:a\s+|an\s+|your\s+|another\s+)?(?:phones?|tablets?|iphones?|ipads?|android\s+phones?)\b"
@@ -1767,6 +1986,13 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (_CAP_SETUP_QR, "show_setup_qr"),
     (_CAP_PAIR_MACHINE, "show_setup_qr"),
     (_CAP_ON_A_PHONE, "show_setup_qr"),
+    # S38: her browser's two abilities beyond reading a page (see the
+    # patterns). Bound to module names like the S47 rows above, so the timing
+    # sweep times each under its own name as well as here; the sweep's
+    # reachability proof selects the device_run row by its tool's name (S37a
+    # F11), so where these sit does not move it.
+    (_CAP_BROWSER_ACT, "browser_act"),
+    (_CAP_BROWSER_SCREENSHOT, "browser_screenshot"),
     # S42a (the hub lane): Nova's agent runs on Windows and macOS, so "I can't
     # reach Windows machines" is the S12 disowning again. GENERAL nouns only —
     # "a Windows machine", "Windows computers", "Macs" — never a name and never
@@ -2231,6 +2457,11 @@ class _ActionClass(NamedTuple):
     tools: tuple[str, ...]
     action_phrase: str
     restated: re.Pattern[str] | None = None
+    # S38 (ruling G8): the tools whose successful span KEEPS a commitment of
+    # this class. Empty, the default, is the tool the commitment names (its
+    # first registered one), exactly as before; only a class that says so is
+    # kept by others — the fetch class, by every tool that backs a fetch claim.
+    keeps: tuple[str, ...] = ()
 
     def registered_tool(self, registered: frozenset[str]) -> str | None:
         """The first tool of this class in the live registry, or None — a class
@@ -2273,11 +2504,16 @@ _FETCH_URL = _ActionClass(
         r"(?:https?://\S+|\b(?:url|link|page|site|website|web\s*page)\b)",
         re.I,
     ),
-    ("fetch_url",),
+    # S38: browser_open performs it too (fetch_url stays first, the one a
+    # deferral names while it is registered).
+    ("fetch_url", "browser_open"),
     "fetch that page",
     restated=re.compile(
         r"\b(?:" + _FETCH_VERB_ALTS + r")\s+(?:it|that|this|them|that\s+one)\b", re.I
     ),
+    # S38 (ruling G8): "I'll open that page" is kept by any tool that backs a
+    # fetch claim — narration's own family, one source for both sides.
+    keeps=tuple(sorted(_FETCH_TOOLS)),
 )
 # The COMMITMENT shape's classes are declared below _SET_REMINDER (they are
 # read at import time, so the tuple must follow the classes it names).
@@ -2980,8 +3216,15 @@ def deferral_check(
                 continue  # the action must come AFTER the commitment lead
             if _COMMIT_NEGATION.search(clause[lead.end() : m.start()]):
                 continue  # "I will NOT search" — the commitment is negated
-            if _tool_ran(tool, successful):
-                continue  # the reply said "let me search" and actually searched
+            if any(_tool_ran(name, successful) for name in cls.keeps or (tool,)):
+                # The reply said "let me search" and actually searched — by the
+                # tool it names, or (S38, ruling G8) by any tool its class says
+                # keeps it: before this only the first registered tool counted,
+                # so an ok browser_open could not keep "I'll open that page".
+                # Scoped to the classes that declare `keeps` (the fetch class),
+                # so an "I'll set a reminder" kept only by list_timers stays a
+                # deferral.
+                continue
             phrase = clause[lead.start() : m.end()].strip()
             return DeferralClaim(tool=tool, action_phrase=cls.action_phrase, phrase=phrase[:80])
         # The COMPLETION shape: "your reminder is now running" / "I've set a
