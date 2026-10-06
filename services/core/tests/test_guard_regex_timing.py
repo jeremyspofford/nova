@@ -1383,3 +1383,46 @@ def test_narration_reads_a_long_dotted_or_dashed_token_in_linear_time(label, bui
 def test_the_filename_patterns_enter_a_run_once(name, label, build):
     pattern = getattr(guards, name)
     _assert_linear(f"{name} {label}", lambda text: list(pattern.finditer(text)), build)
+
+
+# ---------------------------------------------------------------------------
+# The capability guard reads each clause once (found while planning S29).
+#
+# capability_claim_check runs on every reply. Its per-phrase tail scan
+# (`_denial_tail`, then `_SCOPE_QUALIFIER` over that tail) re-read the rest of
+# the clause for EVERY capability phrase in it: one clause repeating a scoped
+# denial took 0.84 s at 12.5 KB and over 9 s at 50 KB, and
+# `_ABSENT_FROM_TOOLSET`'s lookahead walked to the clause's end from every
+# "there is no" (1.8 s at 50 KB) — on core's only event loop. Each shape is a
+# whole reply. The cap follows BIG_INPUT_CAP_S's own rule: a reply made of
+# nothing but denials has every clause read against every row of the table,
+# so it is the slowest honest-to-measure shape.
+CAPABILITY_CAP_S = 0.45
+CAPABILITY_SHAPES = [
+    (
+        "one clause, scoped denials, the scope at its end",
+        lambda n: "I can't " + _repeat("read files and ")(n - 30) + " outside my workspace.",
+    ),
+    (
+        "one clause, one ability denied over and over",
+        lambda n: "I can't " + _repeat("read files and ")(n),
+    ),
+    ("sentences of bare denials", _repeat("I can't browse the web. ")),
+    ("sentences of scoped denials", _repeat("I can't write files outside my workspace. ")),
+    ("trailing denials", _repeat("Reading files isn't something I can do and ")),
+    ("there is no, and no toolset", _repeat("there is no ")),
+    (
+        "there is no, the toolset at its end",
+        lambda n: _repeat("there is no x ")(n - 16) + " in my toolset.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,build", CAPABILITY_SHAPES, ids=[c[0] for c in CAPABILITY_SHAPES])
+def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"capability_claim {label}",
+        lambda r: guards.capability_claim_check(r, _NAMES),
+        build,
+        cap_s=CAPABILITY_CAP_S,
+    )

@@ -546,6 +546,13 @@ Rollback: `undo-move`, then bring the Dell stack back up.
 > with the agent ([`s46a/spec.md`](s46a/spec.md)) — then S46b, wake in chat,
 > which takes the hold from S44. Order: S42a → S42b → S46a → S46b, then S43a,
 > S43b, S44.
+>
+> **Amended 2026-10-06:** S46a runs at every agent's install on every device
+> that can be woken, changes firmware settings where the maker allows it, and
+> runs its changes through S30b's standing admin path instead of a helper. A
+> new S46c, a guide agent working from the phone's camera, follows it. Order:
+> S42b → provider balances → S30b → S46a → S46c; S46b stays paused
+> ([`s46a/spec.md`](s46a/spec.md) §2 and §11).
 
 **Core migration `038_wake`:**
 - `machine_overrides(device_id, mac_override[1..4], relay_override)`;
