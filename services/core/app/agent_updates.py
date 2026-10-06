@@ -193,6 +193,14 @@ class Eligibility:
         return f"{said} — {self.step}" if self.step else said
 
 
+def _card_step(name: str) -> str:
+    """The owner's one step for an agent Nova cannot update herself (P11,
+    P12): the command on its machine's setup card, which installs the hub's
+    build in place over the pairing it already has. One wording for every
+    cannot that names it."""
+    return f"run the command on {name}'s setup card there"
+
+
 def eligibility(row, build: agent_dist.Build) -> Eligibility:
     name, facts = row["name"], row["facts"]
     agent = facts.get("agent") if isinstance(facts, dict) else None
@@ -203,13 +211,13 @@ def eligibility(row, build: agent_dist.Build) -> Eligibility:
         return Eligibility(
             "no_facts",
             said="has not reported how it runs, so Nova cannot restart it",
-            step=f"run the command on {name}'s setup card there",
+            step=_card_step(name),
         )
     if mode not in device_facts.SERVICE_MODES:
         return Eligibility(
             "by_hand",
             said="was started by hand, not by its service, so Nova cannot restart it",
-            step=f"close the window it runs in, then run the command on {name}'s setup card there",
+            step=f"close the window it runs in, then {_card_step(name)}",
         )
     os_ = facts.get("os") or {}
     goos, arch = os_.get("goos"), os_.get("arch")
@@ -221,9 +229,17 @@ def eligibility(row, build: agent_dist.Build) -> Eligibility:
 
 
 class _BootstrapRefused(Exception):
-    def __init__(self, reason: str) -> None:
+    """A bootstrap step that could not be sent or did not succeed. `card`:
+    whether the owner's one step is the machine's setup card (_card_step) —
+    for every refusal but Nova having no address the machine can reach,
+    where no setup card can be shown either (tools/setup.send_machine_card
+    refuses first), so naming one would name a step that cannot be taken
+    (Task 32 Phase C, C6)."""
+
+    def __init__(self, reason: str, *, card: bool = True) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.card = card
 
 
 def _cannot(
@@ -247,6 +263,18 @@ def _one_line(text: str) -> str:
     clean = _BREAKS.sub(" ", text.encode("utf-8", "replace").decode("utf-8"))
     clean = " ".join(clean.split())
     return clean if len(clean) <= REASON_MAX else clean[: REASON_MAX - 1] + "…"
+
+
+def _with_step(reason: str, step: str) -> str:
+    """A reason with the owner's one step after it, as one stored line: when
+    the two run past REASON_MAX, the reason is cut, never the step (an
+    agent's output can fill the reason by itself)."""
+    tail = f" — {step}"
+    head = _one_line(reason)
+    room = REASON_MAX - len(tail)
+    if len(head) > room:
+        head = head[: room - 1] + "…"
+    return head + tail
 
 
 def _connected(row, facts_sink: list[dict] | None) -> bool:
@@ -502,11 +530,11 @@ async def update_now(
         await _close(pool, attempt_id, "refused", error, epoch=epoch)
         return await _await(pool, attempt_id, name, kw, 0, 0)
     if not able.bootstrap:
-        reason = (
+        reason = _with_step(
             f"cannot: {name}'s agent predates Nova-managed updates, and Nova updates such an "
             f"agent through its own hands only under a Linux systemd user unit (this one runs "
-            f"as {(facts.get('agent') or {}).get('mode')} on {os_.get('goos')}) — run the "
-            f"command on {name}'s setup card there"
+            f"as {(facts.get('agent') or {}).get('mode')} on {os_.get('goos')})",
+            _card_step(name),
         )
         await _close(pool, attempt_id, "refused", reason, epoch=epoch)
         return UpdateOutcome(
@@ -524,8 +552,13 @@ async def update_now(
     try:
         await _bootstrap(pool, row, build, entry, epoch=epoch)
     except _BootstrapRefused as exc:
-        await _close(pool, attempt_id, "refused", exc.reason, epoch=epoch)
-        return await _await(pool, attempt_id, name, kw, 0, 0)
+        # P12: the refusal names the owner's one step, the setup card, when
+        # there is one (Task 32 Phase C, C6). needs_card says so to the tile,
+        # which opens the card, but only once this refusal is what the ledger
+        # holds: a re-pair or revoke that ended the attempt first is not it.
+        reason = _with_step(exc.reason, _card_step(name)) if exc.card else exc.reason
+        closed = await _close(pool, attempt_id, "refused", reason, epoch=epoch)
+        return await _await(pool, attempt_id, name, {**kw, "needs_card": exc.card and closed}, 0, 0)
     return await _await(pool, attempt_id, name, kw, wait_s, in_flight, progress)
 
 
@@ -676,7 +709,8 @@ def _origin_for(row) -> str:
     if got.origin is None:
         raise _BootstrapRefused(
             f"Nova has no address {row['name']} can download its build from — {got.reason}; "
-            "nothing was run"
+            "nothing was run",
+            card=False,
         )
     return got.origin
 

@@ -159,7 +159,10 @@ not confirmed" — never "updated". An agent whose service predates S42b (a
 hand-written systemd unit that answers `unknown capability
 "daemon.update"`) is updated instead through its own `shell.exec`: core
 composes the download, the sha256 check and `install --restart-later`
-itself, and says so in the result.
+itself, and says so in the result. If one of those steps fails, the result
+names it and the one step left to you: run the command on that machine's
+setup card there, which installs the hub's build in place over the pairing
+it has. From the device's tile, Update then opens that card.
 
 ## Re-pair
 

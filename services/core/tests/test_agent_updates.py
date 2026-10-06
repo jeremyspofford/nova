@@ -28,6 +28,8 @@ from tests.test_devices_ws import _close, _enroll, _person
 pytestmark = [requires_db, pytest.mark.usefixtures("dist")]
 OLD = "000000000000"
 UNKNOWN = 'unknown capability "daemon.update"'
+# The owner's one step a refused bootstrap of `box` names (P12; Task 32 Phase C, C6).
+CARD_STEP = "run the command on box's setup card there"
 
 
 @pytest.fixture(autouse=True)
@@ -549,7 +551,9 @@ async def test_a_bootstrap_install_that_ran_and_failed_is_refused_in_its_words(p
     await device.answer_command(conn, exit_code=1, output="cannot: linger is off\n")
     outcome = await asyncio.wait_for(run, 3)
     assert outcome.outcome == "refused"
-    assert outcome.reason == "the install step failed on box (exit 1): cannot: linger is off"
+    assert outcome.reason == (
+        f"the install step failed on box (exit 1): cannot: linger is off — {CARD_STEP}"
+    )
     assert await _outcome_of(pool, device_id) == "refused"
     await _close(conn, task)
 
@@ -1077,7 +1081,8 @@ async def test_a_bootstrap_whose_time_runs_out_says_which_step_was_not_sent(
     outcome = await asyncio.wait_for(run, 3)
     assert outcome.outcome == "refused"
     assert outcome.reason == (
-        "the update's 120 s ran out before its download step was sent — nothing past it was run"
+        "the update's 120 s ran out before its download step was sent — nothing past it was "
+        f"run — {CARD_STEP}"
     )
     assert len(_commands(conn)) == 2, "daemon.update and system.info only"
     await _close(conn, task)
@@ -1095,7 +1100,7 @@ async def test_a_bootstrap_step_that_does_not_finish_in_time_is_named(pool, tail
     assert outcome.outcome == "refused"
     assert outcome.reason == (
         "the download step did not finish on box within the update's 0.5 s — nothing past it "
-        "was run"
+        f"was run — {CARD_STEP}"
     )
     await _close(conn, task)
 
@@ -1194,7 +1199,8 @@ async def test_a_bootstrap_whose_system_info_fails_says_the_agents_own_error(poo
     outcome = await asyncio.wait_for(run, 3)
     assert outcome.outcome == "refused"
     assert outcome.reason == (
-        "the system.info step failed on box: home: permission denied — nothing was run"
+        "the system.info step failed on box: home: permission denied — nothing was run — "
+        f"{CARD_STEP}"
     )
     assert len(_commands(conn)) == 2
     await _close(conn, task)
@@ -1461,3 +1467,85 @@ async def test_the_wait_is_never_said_for_an_attempt_the_ledger_already_decided(
         pool, attempt_id, "box", {"version": VERSION, "from_version": OLD}, 5, 0, said.append
     )
     assert outcome.outcome == "confirmed" and said == []
+
+
+# -- Task 32 Phase C (C6): a refused bootstrap names the owner's one step -------
+#
+# P11/P12: an old agent Nova cannot update through its own hands is a stated
+# cannot plus the one command, the one on its machine's setup card, which
+# installs the hub's build in place over the pairing it has. A refused
+# bootstrap named no step (review minor 9). It names that one now, in the
+# stored reason that her tool, the job, machine_status's line and the check
+# all say. The exception is a machine Nova has no address for: no setup card
+# can be shown then either (tools/setup.send_machine_card), so none is named.
+
+
+async def _bootstrap_fails_at_the_download(device, conn, output: str) -> None:
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    await device.answer_command(conn, output="host=box; home=/home/sam")
+    await device.answer_command(conn, exit_code=6, output=output)
+
+
+async def test_a_refused_bootstrap_names_the_owners_one_step_in_her_words(pool, tailnet):
+    device_id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(_machine_update("box"))
+    curl = "curl: (6) Could not resolve host: nova.fake-tailnet.ts.net"
+    await _bootstrap_fails_at_the_download(device, conn, curl + "\n")
+    said = await asyncio.wait_for(run, 3)
+    reason = f"the download step failed on box (exit 6): {curl} — {CARD_STEP}"
+    assert said == f"box cannot take the hub's build {VERSION}: {reason}."
+    stored = await pool.fetchrow(
+        "SELECT outcome, reason FROM agent_updates WHERE device_id = $1", device_id
+    )
+    assert (stored["outcome"], stored["reason"]) == ("refused", reason)
+    await _close(conn, task)
+
+
+async def test_the_job_says_the_owners_step_for_a_refused_bootstrap(pool, tailnet):
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    job = asyncio.create_task(agent_updates.reconcile(pool))
+    await _bootstrap_fails_at_the_download(device, conn, "curl: (6) Could not resolve host\n")
+    assert await asyncio.wait_for(job, 5) == (
+        f"box cannot take the hub's build {VERSION}: the download step failed on box (exit 6): "
+        f"curl: (6) Could not resolve host — {CARD_STEP}"
+    )
+    await _close(conn, task)
+
+
+async def test_the_owners_step_survives_a_reason_at_the_cap(pool, tailnet):
+    """A step's output fills the stored reason (REASON_MAX): the reason is
+    cut, never the step."""
+    name = "m" * 64
+    device_id, device, conn, task = await _online(pool, name, _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name=name, requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    await device.answer_command(conn, output="home=/home/sam")
+    await device.answer_command(conn, exit_code=22, output="curl: " + "x" * 400)
+    outcome = await asyncio.wait_for(run, 3)
+    assert outcome.outcome == "refused" and outcome.needs_card
+    assert len(outcome.reason) <= agent_updates.REASON_MAX
+    assert outcome.reason.startswith(f"the download step failed on {name} (exit 22): xxx")
+    assert outcome.reason.endswith(f"x… — run the command on {name}'s setup card there")
+    stored = await pool.fetchval("SELECT reason FROM agent_updates WHERE device_id = $1", device_id)
+    assert stored == outcome.reason
+    await _close(conn, task)
+
+
+async def test_a_bootstrap_with_no_address_names_no_card_it_could_not_show(
+    pool, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(tmp_path / "no-tailnet-status.json"))
+    _id, device, conn, task = await _online(pool, "box", _facts(OLD))
+    run = asyncio.create_task(
+        agent_updates.update_now(pool, name="box", requested_by="nova", wait_s=0.2)
+    )
+    await device.answer_command(conn, ok=False, exit_code=None, error=UNKNOWN)
+    outcome = await asyncio.wait_for(run, 3)
+    assert outcome.outcome == "refused"
+    assert outcome.reason.startswith("Nova has no address box can download its build from — ")
+    assert outcome.reason.endswith("; nothing was run")
+    assert "setup card" not in outcome.reason and not outcome.needs_card
+    assert len(_commands(conn)) == 1, "nothing past daemon.update"
+    await _close(conn, task)
