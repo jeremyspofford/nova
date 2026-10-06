@@ -265,7 +265,26 @@ async def test_an_id_too_short_to_name_anything_is_refused_before_the_query(pool
     assert "too short to name a notice" in result
 
 
-@pytest.mark.parametrize("name", ["notices", "notice_mute", "notice_seen"])
+async def test_she_can_mark_the_whole_inbox_read(pool, tmp_path):
+    """The badge he asked her to clear: one call, every unread row, and the
+    answer says how many — still a receipt only, nothing is silenced."""
+    person = await _person(pool)
+    one = await _raise(pool, "timer:1")
+    await _raise(pool, "timer:2", title="the 9pm sync is paused")
+
+    result, ok = await _call("notice_seen_all", {}, person, tmp_path)
+
+    assert ok is True
+    assert "2" in result and "receipt only" in result
+    assert await notices.unseen_count(pool) == 0
+    assert one.id in {n.id for n in await notices.deliverable(pool)}
+
+    again, ok = await _call("notice_seen_all", {}, person, tmp_path)
+    assert ok is True
+    assert "nothing" in again.lower()
+
+
+@pytest.mark.parametrize("name", ["notices", "notice_mute", "notice_seen", "notice_seen_all"])
 def test_none_of_these_tools_waits_on_him(name):
     """The rule test_no_approvals guards, asserted here too because this is
     the module most likely to grow one: an Inbox is where an approval queue

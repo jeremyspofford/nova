@@ -1,4 +1,4 @@
-"""Her side of the Inbox: notices, notice_mute, notice_seen.
+"""Her side of the Inbox: notices, notice_mute, notice_seen, notice_seen_all.
 
 She writes the daily digest into his conversation and then, until this
 module existed, could not answer a single question about it. "What was that
@@ -206,6 +206,24 @@ async def notice_seen(args: dict, ctx: ToolContext) -> str:
     )
 
 
+async def notice_seen_all(args: dict, ctx: ToolContext) -> str:
+    """Mark the whole Inbox read — the badge he sees goes to zero. Still a
+    receipt and nothing else (S25.1.3)."""
+    notices = _store()
+    pool = await db.get_pool()
+    try:
+        marked = await notices.mark_all_seen(pool)
+        left = await notices.unseen_count(pool)
+    except Exception as exc:  # noqa: BLE001 - the store's reason is the answer
+        raise _fail(exc) from exc
+    if not marked:
+        return f"Nothing was unread; nothing was written. Unread now: {left}."
+    return (
+        f"Marked {marked} notice(s) read. Unread now: {left}. That is a receipt only — "
+        "anything still true and never delivered is still owed to him."
+    )
+
+
 def _obj(properties: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": properties, "required": required}
 
@@ -287,5 +305,15 @@ TOOLS: tuple[Tool, ...] = (
             ["id"],
         ),
         executor=notice_seen,
+    ),
+    Tool(
+        name="notice_seen_all",
+        description=(
+            "Mark every unread notice in the Inbox read, so the unread badge on his Inbox "
+            "goes to zero. A read receipt and nothing else — it silences nothing. Use it "
+            "when he asks to clear the Inbox, mark everything read, or clear the badge."
+        ),
+        parameters=_obj({}, []),
+        executor=notice_seen_all,
     ),
 )
