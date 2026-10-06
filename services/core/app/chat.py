@@ -2054,8 +2054,35 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
     else:
         parsed = raw
     if guarded:
+        # Masks a connection tool's `name` itself (N2).
         parsed = _off_schema_masked(parsed, tool, sink)
+    else:
+        parsed = _server_names_masked(parsed, tool_name, sink)
     return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+# The arguments by which her MCP tools name a connection (`mcp_tools` and
+# `mcp_call` take `server`; `mcp_connect` and `mcp_disconnect` take `name`).
+_SERVER_NAME_KEYS = ("server", "name")
+
+
+def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) -> object:
+    """For any of her MCP tools: a connection name that fails the store's one
+    name rule (`mcp_servers.NAME_RE`, ruling F13) is masked, and scrubbed out
+    of the span's own text. A token pasted where a server's name goes is not a
+    name, and the store's "there is no connected MCP server …" refusal would
+    otherwise carry it into the trace (S37a final review, hub ruling after
+    fix round 2: N2's rule holds for every tool that names a server, not only
+    `mcp_connect`)."""
+    if not (tool_name or "").startswith("mcp_") or not isinstance(parsed, dict):
+        return parsed
+    out = dict(parsed)
+    for key in _SERVER_NAME_KEYS:
+        value = out.get(key)
+        if isinstance(value, str) and not mcp_servers.NAME_RE.fullmatch(value):
+            sink.add(value)
+            out[key] = _masked(value)
+    return out
 
 
 def _span_arguments(raw: object, tool_name: str | None = None) -> object:

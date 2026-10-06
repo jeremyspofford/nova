@@ -458,3 +458,50 @@ async def test_round_2_shapes_through_the_chat_loop_store_no_secret(pool, mount_
     everything = "\n".join(r["m"] for r in stored)
     for secret in (_TOKEN, _HEADER, _PATH):
         assert secret not in everything
+
+
+# ── hub ruling after fix round 2: every tool that names a server ─────────────
+#
+# N2's rule held only for `mcp_connect`. `mcp_tools` and `mcp_call` (`server`)
+# and `mcp_disconnect` (`name`) recorded a token pasted as the name, and the
+# store's "there is no connected MCP server named 'ghp_…'" carried it into the
+# span's result_head and error.
+
+_NAMES_A_SERVER = {
+    "mcp_tools": {"server": _TOKEN},
+    "mcp_call": {"server": _TOKEN, "tool": "list", "arguments": {}},
+    "mcp_disconnect": {"name": _TOKEN},
+}
+
+
+@pytest.mark.parametrize("tool", list(_NAMES_A_SERVER))
+def test_a_server_name_that_fails_the_name_rule_is_masked_for_every_mcp_tool(tool):
+    args = _NAMES_A_SERVER[tool]
+    recorded, scrub = chat._span_record(args, tool)
+    assert _TOKEN not in json.dumps(recorded)
+    assert scrub(f"there is no connected MCP server named {_TOKEN!r}") == (
+        "there is no connected MCP server named '[masked]'"
+    )
+
+
+@pytest.mark.parametrize("tool", list(_NAMES_A_SERVER))
+def test_a_real_server_name_is_kept_for_every_mcp_tool(tool):
+    key = "name" if tool == "mcp_disconnect" else "server"
+    args = {**_NAMES_A_SERVER[tool], key: "github"}
+    assert chat._span_arguments(args, tool)[key] == "github"
+
+
+@requires_db
+@pytest.mark.parametrize("tool", list(_NAMES_A_SERVER))
+async def test_a_token_as_the_server_name_through_the_chat_loop_stores_no_secret(
+    pool, mount_peers, tool
+):
+    owner = await _owner(pool)
+    raw = json.dumps(_NAMES_A_SERVER[tool])
+    gateway = ScriptedGateway(rounds=((_raw_call(tool, raw),), (text("That did not work."),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    turn, _ = await _nova_turn(pool, owner, "use github")
+    spans = [s for s in await _spans(pool, turn.id) if s["name"] == tool]
+    assert spans and spans[0]["meta"]["ok"] is False
+    stored = await pool.fetch("SELECT meta::text AS m FROM turn_spans WHERE turn_id = $1", turn.id)
+    assert _TOKEN not in "\n".join(r["m"] for r in stored)

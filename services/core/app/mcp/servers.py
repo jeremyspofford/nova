@@ -870,6 +870,13 @@ async def no_such_server(pool, name: str) -> str:
     say this two different ways."""
     known = [s.name for s in await list_servers(pool)]
     listed = ", ".join(known) if known else "none is connected"
+    if not NAME_RE.fullmatch(name):
+        # Never echoed: a token pasted where a name goes is not a name, and
+        # this sentence reaches her, the trace and a route (S37a final review).
+        return (
+            f"there is no connected MCP server by that name ({len(name)} characters, "
+            f"which is not a server name) — connected: {listed}"
+        )
     return f"there is no connected MCP server named {name!r} — connected: {listed}"
 
 

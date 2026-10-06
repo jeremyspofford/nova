@@ -1039,3 +1039,13 @@ async def test_an_nfkc_invalid_netloc_leaks_no_password_via_cause_or_context(poo
         )
     assert caught.value.reason == "that is not a usable http or https address"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+async def test_no_such_server_never_echoes_a_name_that_is_not_a_name(pool):
+    """Hub ruling after fix round 2: the one 'not connected' sentence (F13)
+    reaches her, the trace and a route, so a token given as the name is
+    stated by its length."""
+    reason = await servers.no_such_server(pool, _LEAK)
+    assert _LEAK not in reason
+    assert f"({len(_LEAK)} characters, which is not a server name)" in reason
+    assert "named 'nope'" in await servers.no_such_server(pool, "nope")
