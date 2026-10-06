@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -34,6 +35,18 @@ import (
 // ruling 3): an agent any test Configures probes through a FakeRunner, which
 // runs nothing — `sudo -n true` and wsl.exe included.
 func init() { probeRunner = &platform.FakeRunner{} }
+
+// hermeticFrame stands in for facts.GatherFrame in every agent these tests
+// build. GatherFrame reads this host's folders ($HOME, the XDG user-dirs
+// file) and interfaces, and no test's outcome may turn on the machine it
+// runs on (PR #106's CI: a runner with no user-dirs file). It is
+// GatherFrame's shape, fixed, with the carried entries repeated as
+// GatherFrame repeats them.
+func hermeticFrame(carried []facts.Unreadable) facts.Frame {
+	return facts.Frame{Type: "facts",
+		Net:        facts.Net{Ifaces: []facts.Iface{{Name: "eth0", MAC: "02:00:00:00:00:01", IPv4CIDR: []string{"192.0.2.10/24"}, Up: true}}},
+		Unreadable: append([]facts.Unreadable{}, carried...)}
+}
 
 // A full protocol walk over a REAL websocket against an in-process fake core:
 // challenge -> auth (raw-nonce signature) -> ready -> a core-signed system.info
@@ -141,6 +154,7 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.gatherFrame = hermeticFrame
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -215,6 +229,7 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.gatherFrame = hermeticFrame
 	return agent, auditLog
 }
 
@@ -1265,6 +1280,7 @@ func buildAgentWithHubs(t *testing.T, hubs []string, deviceID, corePubHex string
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.gatherFrame = hermeticFrame
 	return agent
 }
 
@@ -2105,5 +2121,21 @@ func TestTheProbesRealRunnerHasAWaitDelay(t *testing.T) {
 	}
 	if _, fake := probeRunner.(*platform.FakeRunner); !fake {
 		t.Fatalf("this package's tests must run with the fake, got %#v", probeRunner)
+	}
+}
+
+// New gathers the facts frame through facts.GatherFrame. Every agent the
+// tests here build reads hermeticFrame instead, so this holds the one line
+// that stands in for.
+func TestNewGathersTheFactsFrameThroughGatherFrame(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	cfg := config.Config{DeviceID: "dev-wiring-1", Server: "http://unused.invalid", CorePubKey: hex.EncodeToString(corePub)}
+	a, err := New(cfg, devPriv, nil, t.TempDir(), "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(a.gatherFrame).Pointer() != reflect.ValueOf(facts.GatherFrame).Pointer() {
+		t.Fatal("New must read the facts frame through facts.GatherFrame")
 	}
 }
