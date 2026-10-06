@@ -2247,6 +2247,15 @@ async def _thread_meta(pool, conversation_id: uuid.UUID) -> dict | None:
     }
 
 
+# What memory keeps in place of her reply on a turn that read live data.
+# Stated rather than empty, so a recalled exchange says WHY her answer is not
+# there and that the reading has to be taken again.
+LIVE_READ_NOT_KEPT = (
+    "(Her reply is not kept: it quoted a live reading that goes stale. "
+    "Read it again for the current value.)"
+)
+
+
 async def _ingest(
     app,
     person: Person,
@@ -4688,10 +4697,11 @@ async def _run_turn(
         # everything). Computed once, threaded into every dispatch site.
         subset = persona.tool_names if persona.agent is not None else None
         # Did this turn run an EPHEMERAL tool (a live, point-in-time read like a
-        # web fetch)? Its result goes stale, so the turn is not ingested into
-        # long-term memory — otherwise recall would serve the cached snapshot as
-        # "the latest" and the model would re-narrate it instead of fetching
-        # again. Derived from the tool's own `ephemeral` flag, not a name here.
+        # web fetch)? Its result goes stale, so her reply is not ingested into
+        # long-term memory (his words are; see LIVE_READ_NOT_KEPT) — otherwise
+        # recall would serve the cached snapshot as "the latest" and the model
+        # would re-narrate it instead of fetching again. Derived from the tool's
+        # own `ephemeral` flag, not a name here.
         #
         # It STARTS from the live checks (S14), which are calls this turn made
         # even though nobody asked for them: a check that read something which
@@ -6101,19 +6111,27 @@ async def _run_turn(
                 and not offer_redirected
             )
         )
-        # A turn that only READ live external data (a web fetch — an ephemeral
-        # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it
-        # makes recall serve a stale page as "the latest": the model regurgitates
-        # the cached result instead of fetching again (byte-identical, same old
-        # timestamp — the owner's walk caught exactly this). So skip it too; the
-        # next "what's the latest?" re-fetches.
-        if ingest and not plumbing_turn and not read_ephemeral:
+        # A turn that READ live data (a web fetch, a device reading — an
+        # ephemeral tool or live check) produced a point-in-time snapshot, and
+        # her reply quotes it. Ingesting that reply makes recall serve a stale
+        # page as "the latest" (byte-identical, same old timestamp — the
+        # owner's walk caught exactly this), so her half is left out and a
+        # stated note stands in its place.
+        #
+        # His half is kept. It used to be dropped with hers, and because a
+        # live check reads machine_status or device_list on most turns, no
+        # chat turn reached memory for 40 days (hub:3 2026-10-06): what he
+        # TOLD her is not a snapshot of anything.
+        if ingest and not plumbing_turn:
             _queue_ingest(
                 app,
                 turn,
                 person,
                 conversation_id,
-                {"user": message, "assistant": persisted},
+                {
+                    "user": message,
+                    "assistant": LIVE_READ_NOT_KEPT if read_ephemeral else persisted,
+                },
                 # S24: so the ingest can ask whether this was a room, and
                 # under what topic. Read there rather than threaded down, so
                 # nothing else in the turn has to carry a field it does not

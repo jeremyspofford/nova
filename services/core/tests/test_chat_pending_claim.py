@@ -255,7 +255,7 @@ def test_the_real_fetch_url_tool_is_ephemeral():
     assert any(t.name == "fetch_url" and t.ephemeral for t in web.TOOLS)
 
 
-async def test_a_fetch_runs_directly_and_is_not_ingested(
+async def test_a_fetch_runs_directly_and_her_reply_is_not_ingested(
     owner_client, pool, mount_peers, monkeypatch
 ):
     """A "what's the latest?" turn calls fetch_url and it runs DIRECTLY: no
@@ -281,9 +281,34 @@ async def test_a_fetch_runs_directly_and_is_not_ingested(
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
     await chat.drain_background()
-    # Ephemeral read: not ingested, so a later "what's the latest?" re-fetches
-    # rather than recalling this snapshot.
-    assert memory.ingests == []
+    # Ephemeral read: her reply is not kept, so a later "what's the latest?"
+    # re-fetches rather than recalling this snapshot. His words are kept.
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [chat.LIVE_READ_NOT_KEPT]
+
+
+async def test_a_live_read_turn_still_remembers_what_he_said(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The skip above dropped the WHOLE exchange, his words included — and a
+    live check runs machine_status or device_list on most turns, so for 40
+    days not one chat turn reached memory (hub:3 2026-10-06). His words are
+    not a point-in-time snapshot; her reply quoting the reading is. So the
+    exchange is kept with his words and a stated note in place of her reply."""
+    _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((fetch_call("c1", URL),), (text("The page says version 4.2 shipped today."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client, "my sister's birthday is March 3rd, and what's the latest?")
+
+    await chat.drain_background()
+    assert len(memory.ingests) == 1
+    exchange = memory.ingests[0]["exchange"]
+    assert exchange["user"] == "my sister's birthday is March 3rd, and what's the latest?"
+    assert "4.2" not in exchange["assistant"]
+    assert exchange["assistant"] == chat.LIVE_READ_NOT_KEPT
 
 
 def test_the_real_web_search_tool_is_ephemeral():
@@ -292,7 +317,7 @@ def test_the_real_web_search_tool_is_ephemeral():
     assert any(t.name == "web_search" and t.ephemeral for t in web_search.TOOLS)
 
 
-async def test_a_web_search_turn_runs_directly_and_is_not_ingested(
+async def test_a_web_search_turn_runs_directly_and_her_reply_is_not_ingested(
     owner_client, pool, mount_peers, monkeypatch
 ):
     """web_search end to end: the model asks for it, it runs DIRECTLY, the real
@@ -323,7 +348,8 @@ async def test_a_web_search_turn_runs_directly_and_is_not_ingested(
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
     await chat.drain_background()
-    assert memory.ingests == []  # ephemeral read: not ingested
+    # Ephemeral read: her reply is not kept.
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [chat.LIVE_READ_NOT_KEPT]
 
 
 async def test_every_round_advertises_tools_and_no_call_ever_waits(
