@@ -124,6 +124,17 @@ def test_a_file_whose_bytes_do_not_match_its_manifest_makes_the_build_unavailabl
         agent_dist.current()
 
 
+def test_a_test_that_lays_out_no_build_reads_an_empty_directory_never_the_hosts():
+    """Task 32 (L376): unset, the reader falls back to the host's /dist, and
+    the listings' tests would judge "the hub's build" by whatever build the
+    machine running them holds. conftest sets an empty directory for every
+    test that lays out none."""
+    where = agent_dist.dist_dir()
+    assert str(where) != agent_dist.DEFAULT_DIST_DIR
+    assert where.is_dir() and not any(where.iterdir())
+    assert agent_dist.current_version() is None
+
+
 def test_no_build_is_stated_not_guessed(tmp_path, monkeypatch):
     monkeypatch.setenv(agent_dist.DIST_DIR_ENV, str(tmp_path))
     with pytest.raises(agent_dist.DistUnavailable, match="no agent build on this hub yet"):
@@ -140,6 +151,16 @@ def test_the_seven_public_paths_are_exact():
         "/api/v1/auth/login",
         "/api/v1/devices/enroll",
     }
+
+
+def test_the_count_identity_states_for_its_public_paths_is_theirs():
+    """Task 32 (L376): the comment above identity.PUBLIC_PATHS said "the four
+    routes" beside eleven. It states the count again, and this pins it: a
+    public path added or dropped turns this red until that sentence moves
+    with it."""
+    assert len(identity.PUBLIC_PATHS) == 11
+    source = Path(identity.__file__).read_text(encoding="utf-8")
+    assert "# The eleven routes that cannot require an identity" in source
 
 
 @requires_db
@@ -770,11 +791,17 @@ def test_no_reason_names_a_host_path_a_user_or_a_key(dist, breakage):
 
 @requires_db
 async def test_the_manifests_503_carries_only_the_reason(client, dist, pool):
-    (dist / VERSION / "novad-linux-amd64").chmod(0)
+    target = dist / VERSION / "novad-linux-amd64"
+    target.chmod(0)
     try:
+        # As its sibling above does (Task 32, L376): a user who can read a
+        # mode-0 file (root, as CI's and containers' often is) is served the
+        # build, and this would fail for that, never for the reason it pins.
+        if os.access(target, os.R_OK):
+            pytest.skip("this test runs as a user who can read a mode-0 file (root)")
         resp = await client.get("/api/v1/agent/manifest")
     finally:
-        (dist / VERSION / "novad-linux-amd64").chmod(0o644)
+        target.chmod(0o644)
     assert resp.status_code == 503
     body = resp.text
     key = await devices.signing_key(pool)

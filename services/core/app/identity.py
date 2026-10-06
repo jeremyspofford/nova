@@ -37,17 +37,19 @@ COOKIE_NAME = "nova_session"
 SESSION_TTL_DAYS = 30
 SESSION_TTL_SECONDS = SESSION_TTL_DAYS * 24 * 60 * 60
 
-# The four routes that cannot require an identity: the wizard reads state and
-# mints one, and a daemon on a machine that has never talked to this instance
+# The eleven routes that cannot require an identity (their count is pinned in
+# tests/test_agent_dist.py, so this sentence cannot go stale unseen again —
+# Task 32, L376). Four are identity's own: the wizard reads state and mints
+# one, and a daemon on a machine that has never talked to this instance
 # enrolls with a pairing code as its only credential (minted by an
 # authenticated operator, shown once, stored hashed, single-use, ten-minute
 # TTL — and rate-limited in devices_api). Everything else under /api/v1 needs a
 # cookie or a bearer.
 #
-# S42b (P19): Nova's agent is downloaded before a machine has any identity —
-# the card's one-liner fetches it first — so the manifest and the six builds
-# are public, exactly, and rate-limited (agent_dist_api). They carry nothing
-# secret: the repo is public, and the manifest is signed.
+# The other seven, S42b (P19): Nova's agent is downloaded before a machine has
+# any identity — the card's one-liner fetches it first — so the manifest and
+# the six builds are public, exactly, and rate-limited (agent_dist_api). They
+# carry nothing secret: the repo is public, and the manifest is signed.
 PUBLIC_PATHS = frozenset(
     {
         "/api/v1/auth/state",
