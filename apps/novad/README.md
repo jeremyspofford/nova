@@ -48,7 +48,7 @@ outside `apps/novad` does not change the agent's version.
 
 In the Nova UI, **Settings → Devices**, mint a pairing code (short-lived,
 single-use). Then on the machine you are pairing, run the enroll command for
-your OS — see "Install per OS" below for the exact commands. Every OS does
+your OS — see "Install" below for the exact commands. Every OS does
 the same thing on the wire: `enroll` generates the device keypair locally
 (the private key **never leaves this machine**, stored `0600` on Linux/macOS
 or under the DACL described in Custody on Windows), sends only the public key
@@ -65,8 +65,13 @@ for Linux and macOS; one line of PowerShell 5.1 for Windows). Pasted into a
 shell, it downloads the hub's build for this machine to a fresh temp
 directory, checks its sha256 against the signed manifest **before anything
 runs**, runs `novad install` with the code already in it, and deletes the
-download whatever happened — nothing is left in Downloads. Inside WSL the
-card instead prints the Windows line: see "Inside WSL", below.
+download whatever happened — nothing is left in Downloads. The card has no
+WSL branch of its own: pasted inside WSL, the Linux command downloads the
+Linux build exactly as it would on a native Linux machine, and `novad
+install` is what then refuses, in its own words — see "Inside WSL", below.
+(Setting up the hub machine's *own* agent is different: a WSL hub's
+`./install` detects this itself and prints the Windows line instead of
+installing here — see `deploy/README.md`.)
 
 `novad install` itself:
 
