@@ -225,6 +225,13 @@ func GatherFrame(carried []Unreadable) Frame {
 			f.Unreadable = append(f.Unreadable, Unreadable{Item: "folders." + name, Reason: clip(err.Error())})
 			continue
 		}
+		// Every platform.Folder pairs "" with an error, but nothing enforces
+		// that across files (Task 32, L76): an empty path is no folder, and
+		// listed as one it would resolve against wherever the agent runs.
+		if p == "" {
+			f.Unreadable = append(f.Unreadable, Unreadable{Item: "folders." + name, Reason: "an empty path was read for it"})
+			continue
+		}
 		// RULING (S42b Task 7 preflight, overriding the brief's clip(p)):
 		// clipping a too-long folder path would silently truncate it into a
 		// WRONG path she would then act on. Too long is omitted and reported

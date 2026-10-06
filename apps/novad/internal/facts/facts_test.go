@@ -150,6 +150,39 @@ func TestTheFactsFrameCarriesTheFoldersAndSaysWhichCouldNotBeRead(t *testing.T) 
 	}
 }
 
+// Task 32, L76: an empty path with no error is not a folder. Every
+// platform.Folder pairs "" with an error today, but that is a contract across
+// files nothing enforced: here a reader that breaks it lands the folder in
+// unreadable, never in Folders as "" — a path she would resolve against
+// wherever the agent runs.
+func TestAnEmptyFolderPathIsUnreadableNeverAFolder(t *testing.T) {
+	oldIf, oldF := readIfaces, readFolder
+	t.Cleanup(func() { readIfaces, readFolder = oldIf, oldF })
+	readIfaces = func() ([]ifaceInfo, error) { return nil, nil }
+	readFolder = func(name string) (string, error) {
+		if name == "downloads" {
+			return "", nil
+		}
+		return "/home/sam/" + name, nil
+	}
+	f := GatherFrame(nil)
+	if p, present := f.Folders["downloads"]; present {
+		t.Fatalf("an empty path must never be a folder, got %q in %v", p, f.Folders)
+	}
+	if f.Folders["home"] != "/home/sam/home" {
+		t.Fatalf("the other folders must still be listed: %v", f.Folders)
+	}
+	found := false
+	for _, u := range f.Unreadable {
+		if u.Item == "folders.downloads" && strings.Contains(u.Reason, "empty path") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an empty folder path must be named in unreadable: %v", f.Unreadable)
+	}
+}
+
 // Controller ruling (S42b Task 7 preflight): clipping a too-long folder path
 // would silently truncate it into a WRONG path that she would then act on.
 // It must be omitted — reported unreadable — never clipped into a lie.
