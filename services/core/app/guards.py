@@ -5581,25 +5581,35 @@ class DeviceCompletionClaim:
 # and must not grow one (test_no_approvals pins Tool's fields). So the mapping
 # is kept here and pinned against the LIVE registry
 # (tests/test_device_completion_guard.py): every tool in it is a registered
-# device tool that changes something (reads_only False), and every such
-# registered tool is in it — rename or add one and that pin turns red.
+# tool that changes something (reads_only False), every registered device tool
+# that does is in it, and the one other tool in it is the update tool
+# (_UPDATE_TOOLS) — rename or add one and that pin turns red.
 # device_run performs them all: a shell command can open an app, write a file
 # or show a notification. "run" ("I ran Notepad", "I executed the script") is
 # running a program, and launching an app runs it (fix round 3: "I ran Notepad"
 # after a real device_launch_app was corrected with "no device_run call ran");
-# every other action — close, restart, delete, install… — only a command
-# performs.
+# every other action — close, restart, delete… — only a command performs.
+#
+# An install is a command's too, and machine_update's (Task 32, MF4): it
+# installs the hub's agent build on the machine it names (`machine`, read as
+# its device by `_span_device`), so "I installed the new build on minipc"
+# beside its call on minipc is backed — before, the guard appended "No
+# device_run call ran on minipc" to a true claim. Whether "installed"
+# over-claims an update that was only SENT is the update-claim guards'
+# question (Task 23), never this one's: a successful call backs, whatever
+# outcome it reported.
 DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
     "launch": ("device_launch_app", "device_run"),
     "write": ("device_write_file", "device_run"),
     "notify": ("device_notify", "device_run"),
     "run": ("device_launch_app", "device_run"),
+    "install": ("machine_update", "device_run"),
     "command": ("device_run",),
 }
 
 # The ACTIONS a claim can name, by the words it writes them with. The kind of
-# tool that performs one is its own name for launch, write, notify and run,
-# and a command for every other (`_kind_of`).
+# tool that performs one is its own name for launch, write, notify, run and
+# install, and a command for every other (`_kind_of`).
 _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "launch": (
         "open",
@@ -5625,7 +5635,7 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "run": ("ran", "run", "executed"),
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
-_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run"})
+_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install"})
 
 
 def _kind_of(action: str) -> str:
@@ -5965,8 +5975,12 @@ def _span_args(span: Any) -> dict | None:
 
 
 def _span_device(span: Any) -> str | None:
+    """The device a call's record names: its `device` argument — or, for the
+    update tool (_UPDATE_TOOLS), its `machine`, the paired machine whose agent
+    it updates (Task 32, MF4). None when the record names none."""
     args = _span_args(span)
-    device = args.get("device") if args is not None else None
+    key = "machine" if getattr(span, "name", None) in _UPDATE_TOOLS else "device"
+    device = args.get(key) if args is not None else None
     return device if isinstance(device, str) and device.strip() else None
 
 

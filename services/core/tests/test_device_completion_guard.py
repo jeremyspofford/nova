@@ -343,16 +343,18 @@ def test_the_action_map_is_the_live_registrys_acting_device_tools():
     """DEVICE_ACTION_TOOLS is the one list this guard keeps, because nothing in
     the registry says which tool performs which action (and Tool must not grow
     a field — test_no_approvals). So it is pinned to the LIVE registry: every
-    tool in it is a registered device tool that changes something, and every
-    such tool is in it. Rename one, add one, or make one a read, and this turns
-    red."""
+    registered device tool that changes something is in it, every device tool
+    in it is one, and the one other tool in it is the update tool (Task 32,
+    MF4: machine_update installs the hub's build). Rename one, add one, or make
+    one a read, and this turns red."""
     mapped = {name for tools_ in guards.DEVICE_ACTION_TOOLS.values() for name in tools_}
     acting = {
         name
         for name, tool in tools.REGISTRY.items()
         if name.startswith("device_") and not tool.reads_only
     }
-    assert mapped == acting
+    assert {name for name in mapped if name.startswith("device_")} == acting
+    assert mapped - acting == guards._UPDATE_TOOLS == {tools.REGISTRY["machine_update"].name}
     # device_run performs every kind: a shell command can do any of them.
     assert all("device_run" in tools_ for tools_ in guards.DEVICE_ACTION_TOOLS.values())
     # Every action a claim can name is performed by a kind in the map.
@@ -362,8 +364,22 @@ def test_the_action_map_is_the_live_registrys_acting_device_tools():
     # (fix round 3) "I ran Notepad" is running a program, which a launch does;
     # closing, deleting or restarting only a command does.
     assert "device_launch_app" in guards.DEVICE_ACTION_TOOLS[guards._kind_of("run")]
-    for action in ("close", "restart", "shutdown", "delete", "move", "install", "uninstall"):
+    for action in ("close", "restart", "shutdown", "delete", "move", "uninstall"):
         assert guards.DEVICE_ACTION_TOOLS[guards._kind_of(action)] == ("device_run",), action
+    # (Task 32, MF4) an install is a command's, and machine_update's.
+    install = guards.DEVICE_ACTION_TOOLS[guards._kind_of("install")]
+    assert install == ("machine_update", "device_run")
+
+
+def test_every_tool_the_action_map_names_is_a_registered_tool_that_acts():
+    """The map can never name a ghost (Task 32, MF4): a tool renamed or dropped
+    from the registry would otherwise leave a name here that no call can ever
+    carry — every claim of its kind then reads "none ran" beside the call that
+    really did it."""
+    for kind, names in guards.DEVICE_ACTION_TOOLS.items():
+        for name in names:
+            assert name in tools.REGISTRY, (kind, name)
+            assert not tools.REGISTRY[name].reads_only, (kind, name)
 
 
 def _launch(app: str = "notepad", device: str = DEVICE, **meta) -> SimpleNamespace:
@@ -1939,3 +1955,98 @@ def test_P1_only_a_delegation_refused_before_any_run_leaves_the_sentence():
     )
     claim = check(T98ECFB11, [refused])
     assert claim is not None and claim.text == NONE_ON_DELL
+
+
+# -- Task 32, MF4: machine_update installs the hub's build ---------------------
+#
+# After a CONFIRMED machine_update for a paired minipc, "I installed the new
+# build on minipc." had "(No device_run call ran on minipc this turn.)"
+# appended — a sentence contradicting a true claim: the map knew only
+# device_run for an install. machine_update now performs one on the machine it
+# names (its `machine` argument). Whether "installed" over-claims an update
+# that was only SENT stays the update-claim guards' question (Task 23): this
+# guard reads that the call ran there and succeeded, never its outcome.
+
+MINIPC = "minipc"
+PAIRED = (MINIPC, DEVICE)
+TWO_MACHINES = {MINIPC: "e" * 64, DEVICE: "d" * 64}
+INSTALLED = "I installed the new build on minipc."
+NO_INSTALL_ON_MINIPC = "(No machine_update or device_run call ran on minipc this turn.)"
+# Phase A's probe (scratch/t32a/update_vs_device_completion_probe.py), as it
+# was run: ten replies an update may get.
+UPDATE_REPLIES = (
+    "I updated minipc's agent. It reconnected on the hub's build.",
+    "I updated minipc's agent — it restarted on the hub's build and is connected again.",
+    "minipc's agent has restarted on the hub's build.",
+    "minipc's agent was restarted on the new build.",
+    "Done — the agent on minipc restarted and reconnected on the hub's build.",
+    "I restarted minipc's agent on the hub's build.",
+    "The agent on minipc is now running the hub's build.",
+    "minipc's agent is now running the new build.",
+    INSTALLED,
+    "The new build is installed on minipc and its agent is running it.",
+)
+
+
+def _update(machine: str = MINIPC, outcome: str = "confirmed") -> SimpleNamespace:
+    """machine_update's span as its executor leaves it (tools/machines.py)."""
+    return _span(
+        "machine_update",
+        args_redacted={"machine": machine},
+        facts=[
+            {
+                "machine_update": machine,
+                "hub": False,
+                "outcome": outcome,
+                "version": "a" * 12,
+                "confirmed": outcome == "confirmed",
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+@pytest.mark.parametrize("reply", UPDATE_REPLIES)
+def test_every_update_reply_beside_a_confirmed_machine_update_is_silent(reply, grouping):
+    claim = guards.device_completion_check(reply, [_update()], NAMES, PAIRED, machines=grouping)
+    assert claim is None, claim.text
+
+
+def test_a_sent_update_backs_the_install_claim_here_its_outcome_is_not_read():
+    """Not this guard's to judge: a send that is not yet confirmed is the
+    update-claim guards' question (Task 23)."""
+    claim = guards.device_completion_check(
+        INSTALLED, [_update(outcome="sent")], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is None
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_install_claim_with_no_update_and_no_command_is_still_corrected(grouping):
+    claim = guards.device_completion_check(INSTALLED, [], NAMES, PAIRED, machines=grouping)
+    assert claim is not None
+    assert (claim.kind, claim.action, claim.device) == ("install", "install", MINIPC)
+    assert claim.record == guards.DeviceRecord()
+    assert claim.text == NO_INSTALL_ON_MINIPC
+
+
+def test_a_machine_update_of_another_machine_backs_no_claim_about_this_one():
+    """The update named the Dell; the claim names minipc, and the rows say they
+    are two machines. (With no grouping read at all the guard says nothing, as
+    for every device tool: it cannot tell — fix round 4, R5.)"""
+    claim = guards.device_completion_check(
+        INSTALLED, [_update(DEVICE)], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.text == NO_INSTALL_ON_MINIPC
+    # Its own machine's update still backs its own claim.
+    assert (
+        guards.device_completion_check(
+            f"I installed the new build on {DEVICE}.",
+            [_update(DEVICE)],
+            NAMES,
+            PAIRED,
+            machines=TWO_MACHINES,
+        )
+        is None
+    )
