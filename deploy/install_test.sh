@@ -2294,6 +2294,18 @@ ha_never() {
     *) report 0 "$1" ;;
   esac
 }
+# The reason ./install ENDED with: the output from the last "ERROR: " (die's
+# prefix) to the end. A progress line saying 429 is not that reason — a run
+# that went on past its 429s and failed on something else ends with
+# something else (review a7374986a9ff4fbb4, J1). $3 is how it must begin.
+ha_final() {
+  local final
+  final="$(ha_field "$2" 5 | sed 's/.*ERROR: /ERROR: /')"
+  case "$final" in
+    "$3"*) report 0 "$1" ;;
+    *) report 1 "$1" "it ends: $(ha_masked "$final") — wanted it to begin: $3" ;;
+  esac
+}
 
 LOOP_ARGV="argv=install --if-missing --hub http://127.0.0.1:3000 env=none "
 MANIFEST_GET="GET /api/v1/agent/manifest?origin=loopback "
@@ -2422,21 +2434,33 @@ HA_429X="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_ASK_TRIES=3; HA_MANIFEST_S
 ha_is "429 every time: gives up" "$HA_429X" 1 1
 ha_is "429 every time: after HUB_ASK_TRIES asks (3 here) and the waits between" "$HA_429X" 2 \
   "built aaaaaaaaaaaa slept 5 slept 5 "
-ha_has "429 every time: says 429" "$HA_429X" 5 "429"
+ha_final "429 every time: it ENDS with the 429, not a progress line saying one" "$HA_429X"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 3 ask(s)"
 ha_lacks "429 every time: never as a checksum failure" "$HA_429X" 5 "sha256"
 ha_lacks "429 every time: never as unreachable" "$HA_429X" 5 "unreachable"
 ha_lacks "429 every time: never as did not arrive" "$HA_429X" 5 "did not arrive"
 ha_is "429 every time: nothing run" "$HA_429X" 4 ""
+# The same on the DOWNLOAD, where the step after the fetch is the checksum: a
+# 429 there must end as a 429 and run nothing — never fall through to "the
+# download's sha256 is not the manifest's" (C2; review J1).
+HA_429DX="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_ASK_TRIES=3; HA_DIST_SCRIPT="429:5"')"
+ha_is "429 every time on the download: gives up" "$HA_429DX" 1 1
+ha_is "429 every time on the download: after HUB_ASK_TRIES asks and the waits between" "$HA_429DX" 2   "built aaaaaaaaaaaa slept 5 slept 5 "
+ha_final "429 every time on the download: it ENDS with the 429" "$HA_429DX"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for novad-linux-amd64 after 3 ask(s)"
+ha_lacks "429 every time on the download: no sha256 anywhere in the output" "$HA_429DX" 5 "sha256"
+ha_is "429 every time on the download: nothing ran" "$HA_429DX" 4 ""
 HA_429SUM="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_WAIT_MAX_S=10; HA_MANIFEST_SCRIPT="429:4"')"
 ha_is "429s whose waits would pass HUB_WAIT_MAX_S: stops before the wait that would" "$HA_429SUM" 2 \
   "built aaaaaaaaaaaa slept 4 slept 4 "
 ha_is "429s past the wait bound: exit 1" "$HA_429SUM" 1 1
+ha_final "429s past the wait bound: it ENDS with the 429" "$HA_429SUM"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 3 ask(s) and 8 s of waiting"
 HA_429LONG="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:600"')"
 ha_is "a Retry-After past the bound: gives up without waiting" "$HA_429LONG" 2 "built aaaaaaaaaaaa "
 ha_has "a Retry-After past the bound: says 429 and the wait asked for" "$HA_429LONG" 5 "600 s"
+ha_final "a Retry-After past the bound: it ENDS with the 429" "$HA_429LONG"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 1 ask(s) and 0 s of waiting, and its Retry-After asks 600 s more"
 HA_429BARE="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429')"
 ha_is "a 429 with no Retry-After: gives up without guessing a wait" "$HA_429BARE" 2 "built aaaaaaaaaaaa "
 ha_has "a 429 with no Retry-After: says so" "$HA_429BARE" 5 "no Retry-After"
+ha_final "a 429 with no Retry-After: it ENDS with the 429" "$HA_429BARE"   "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with no Retry-After to wait for"
 HA_503="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=503')"
 ha_is "a 503: refused at once, nothing waited" "$HA_503" 2 "built aaaaaaaaaaaa "
 ha_has "a 503: says core's status and words" "$HA_503" 5 "HTTP 503"
