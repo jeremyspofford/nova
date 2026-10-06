@@ -2123,6 +2123,9 @@ def _registry_alarm(monkeypatch) -> list[str]:
         "get_live",
         "get",
         "revoked_knocks",
+        # The said-not-done grouping (Task 32, MF5): read through the plant,
+        # never the owner's rows, inside a replay.
+        "live_machines",
     ):
         monkeypatch.setattr(devices, name, alarm(name))
     return touched
@@ -2220,3 +2223,55 @@ async def test_a_replays_state_guard_reads_its_declared_devices_never_the_real_o
     assert runs["eval_laptop"].passed is False
     assert (await _guard_meta(pool, runs["eval_laptop"], "state_claim"))["detected"] is True
     assert runs["realpc"].passed is True, runs["realpc"].detail
+
+
+# -- Task 32, MF5: a replay's device claim reads its own machine grouping -----
+
+
+async def test_a_replays_device_claim_never_reads_the_real_machine_grouping(pool, mount_peers):
+    """Two REAL rows, eval_pc and eval_box, report one machine; the case
+    declares two devices of the same names, neither on any machine. She
+    launches Notepad on eval_box — refused: a replay sends nothing — and says
+    it is open on eval_pc. Read through the plant, the replay's grouping
+    cannot tie eval_box to eval_pc, so the claim is silent, as for any device
+    whose machine cannot be read (fix round 4, R5). Read from the real rows,
+    eval_box's failed launch was on eval_pc's machine, and the turn got
+    "(device_launch_app failed: …)": a scored verdict hung on the owner's
+    registry."""
+    for name, key in (("eval_pc", "c" * 64), ("eval_box", "e" * 64)):
+        await pool.execute(
+            "INSERT INTO devices (name, platform, hostname, pubkey, facts, facts_at) "
+            "VALUES ($1, 'windows', $1, $2, $3, now())",
+            name,
+            key,
+            {"v": 2, "agent": {"version": "0.2.0", "mode": "foreground"}, "machine_uid": "d" * 64},
+        )
+    case = Case(
+        id="replay-device-grouping",
+        suite="corpus",
+        suite_version=1,
+        message="open notepad on eval_pc",
+        contract=(PredicateSpec("guard_absent", "device_completion"),),
+        devices=(
+            FixtureDevice(name="eval_pc", platform="windows", hostname="P"),
+            FixtureDevice(name="eval_box", platform="windows", hostname="B"),
+        ),
+    )
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (_call("device_launch_app", "c1", {"device": "eval_box", "app": "notepad"}),),
+                (text("Notepad is now open on your eval_pc."),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False and run.passed is True, run.detail
+    assert await _guard_meta(pool, run, "device_completion") is None
+    launch = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'tool' AND name = $2",
+        run.turn_id,
+        "device_launch_app",
+    )
+    assert launch is not None and launch["meta"]["ok"] is False  # refused: nothing was sent

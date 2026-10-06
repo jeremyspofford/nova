@@ -103,7 +103,6 @@ from app import (
     conversations,
     db,
     decisions,
-    devices,
     guards,
     identity,
     live_facts,
@@ -2326,15 +2325,20 @@ async def _paired_device_names(app) -> list[str]:
         return []
 
 
-async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
-    """Every LIVE paired device's name and the machine its agent reported
-    (devices.live_machines), for the said-not-done device claim: a call on
-    another agent of the same machine is a call on that machine (fix round 4,
-    R5). Read from the rows, never a list. None on ANY failure — no grouping
-    can then be read, and the guard stays silent for a claim that a call on
-    another device might back (a blip costs a sentence, never a false one)."""
+async def _paired_machines(app) -> dict[str, str | None] | None:
+    """Every paired device's name and the machine its agent reported, for the
+    said-not-done device claim: a call on another agent of the same machine is
+    a call on that machine (fix round 4, R5). Read through the plant
+    (machines.plant().machine_groups): the LIVE rows (devices.live_machines) —
+    or, inside an eval replay, the case's declared devices alone (Task 32,
+    MF5), the world its paired names come from (_paired_device_names): a
+    declared name that matches a real device's never picks up that real
+    machine. Read from the rows, never a list. None on ANY failure — no
+    grouping can then be read, and the guard stays silent for a claim that a
+    call on another device might back (a blip costs a sentence, never a false
+    one)."""
     try:
-        return await devices.live_machines(pool)
+        return await machines.plant().machine_groups(app)
     except Exception:
         logger.exception("device machine read failed; the device claim reads no grouping")
         return None
@@ -5980,7 +5984,7 @@ async def _run_turn(
             said = without_markup(said_prose)
             # Not `machines`: that is the module S42b reads the plant through,
             # and a local of the same name would shadow it in all of _run_turn.
-            machine_groups = await _paired_machines(pool)
+            machine_groups = await _paired_machines(app)
             for name, check in (
                 (
                     "written_call",

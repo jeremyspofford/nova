@@ -631,6 +631,14 @@ def machine(facts: dict | None) -> str | None:
     return machine_uid(facts)
 
 
+def view_machine(view: Mapping) -> str | None:
+    """`machine` read off an agent_view rather than the facts it was built
+    from — its machine_uid, and None inside WSL — for a reader that holds
+    views only: an eval replay's declared devices (machines.FixturePlant,
+    Task 32, MF5)."""
+    return None if view.get("wsl") is not None else view.get("machine")
+
+
 def os_label(facts: dict | None) -> str | None:
     version = (facts.get("os") or {}).get("version") if isinstance(facts, dict) else None
     return version if isinstance(version, str) and version else None

@@ -190,6 +190,16 @@ class GatewayPlant:
         rows = await devices.rows_with_last_update(pool, live_only=True)
         return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
 
+    async def machine_groups(self, app) -> dict[str, str | None]:
+        """Every live paired device's name and the machine its agent reported
+        (devices.live_machines: its machine_uid, None where that cannot be
+        read) — the grouping the said-not-done device claim reads (fix round
+        4, R5): a call on another agent of the same machine is a call on that
+        machine. Read through the plant (Task 32, MF5), so a replay answers
+        with its declared devices instead (FixturePlant)."""
+        pool = await db.get_pool()
+        return await devices.live_machines(pool)
+
     async def paired_device(self, app, name: str):
         """The live device row a device tool acts on, by the name she gave
         (Task 22 fix round 1, 6) — read through the plant so that a replay
@@ -565,6 +575,15 @@ class FixturePlant(GatewayPlant):
             {"id": None, "name": name, "platform": view["platform"]}
             for name, view in sorted(self._devices.items())
         ]
+
+    async def machine_groups(self, app) -> dict[str, str | None]:
+        """This replay's declared devices ALONE, each with the machine its
+        declared facts report (device_facts.view_machine, the live rows' rule)
+        — None, standing alone, for a device whose facts declare no
+        machine_uid (Task 32, MF5). Never a real row: a declared name that
+        matches a real paired device's would pick up that real machine, and a
+        guard's verdict in a replay would hang on the owner's registry."""
+        return {name: device_facts.view_machine(view) for name, view in self._devices.items()}
 
     async def paired_device(self, app, name: str):
         """Never a row (Task 22 fix round 1, 6): a replay acts on no machine.

@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app import machines
+from app import device_facts, machines
 from app.checks import stack
 from app.evals.cases import FixtureMachine
 from app.main import app as core_app
@@ -619,4 +619,65 @@ def test_a_replay_declares_updates_only_for_its_devices_and_only_outcomes_it_can
     with pytest.raises(ValueError, match="'cannot'"):
         machines.FixturePlant(
             {}, devices={"eval_a": {"name": "eval_a"}}, updates={"eval_a": "cannot"}
+        )
+
+
+# -- Task 32, MF5: the said-not-done grouping goes through the plant -----------
+
+
+def _declared_view(name: str, facts: dict | None) -> dict:
+    """A declared device's view, as cases.FixtureDevice.as_view builds one."""
+    return device_facts.agent_view(
+        name=name,
+        platform="windows",
+        hostname=name.upper(),
+        connected=True,
+        last_seen=None,
+        facts=None if facts is None else device_facts.validate_auth(facts),
+        facts_at=None,
+    )
+
+
+_NATIVE = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "run-key", "session_interactive": True},
+    "os": {"goos": "windows", "arch": "amd64", "version": "Windows 11 Pro", "wsl": None},
+    "hostname": "PC",
+    "machine_uid": "c" * 64,
+}
+_INSIDE_WSL = {
+    **_NATIVE,
+    "agent": {**_NATIVE["agent"], "mode": "systemd-user"},
+    "os": {"goos": "linux", "arch": "amd64", "version": "Ubuntu", "wsl": {"distro": "Ubuntu"}},
+}
+
+
+async def test_a_replays_machine_grouping_is_its_declared_devices_alone(monkeypatch):
+    """Each declared device stands alone, with no machine, unless its declared
+    facts name one — read by the live rows' own rule (device_facts.machine:
+    never inside WSL) — and the real rows are never read."""
+    from app import devices
+
+    async def real_rows(*_a, **_kw):
+        raise AssertionError("a replay read the real device registry")
+
+    monkeypatch.setattr(devices, "live_machines", real_rows)
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_pc": _declared_view("eval_pc", None),
+            "eval_win": _declared_view("eval_win", _NATIVE),
+            "eval_wsl": _declared_view("eval_wsl", _INSIDE_WSL),
+        },
+    )
+    assert await plant.machine_groups(None) == {
+        "eval_pc": None,
+        "eval_win": "c" * 64,
+        "eval_wsl": None,
+    }
+    assert await machines.FixturePlant({}).machine_groups(None) == {}
+    for facts in (None, _NATIVE, _INSIDE_WSL):
+        clean = None if facts is None else device_facts.validate_auth(facts)
+        assert device_facts.view_machine(_declared_view("eval_x", facts)) == (
+            device_facts.machine(clean)
         )
