@@ -1845,9 +1845,13 @@ _NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+
 # is what keeps "there is no file at that path" out. Same lesson the trailing
 # family learned in S12: a denial does not stop being a denial for being said
 # about a possession rather than an ability.
+#
+# 2026-10-06: the lookahead reads at most 160 characters. Unbounded, it walked
+# to the clause's end from EVERY "there is no" — 1.6 s at 50 KB of them, on
+# core's only event loop. Her own sentence has 18 between the two.
 _ABSENT_FROM_TOOLSET = re.compile(
-    r"\bthere\s+(?:is|are)\s+no\b"
-    r"(?=[^.?!\n]*\bin\s+my\s+"
+    r"\bthere\s++(?:is|are)\s++no\b"
+    r"(?=[^.?!\n]{0,160}?\bin\s++my\s++"
     r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b)",
     re.I,
 )
@@ -1891,8 +1895,51 @@ _SCOPE_QUALIFIER = re.compile(
 )
 
 
-def _denial_tail(clause: str, phrase_end: int) -> str:
-    """The text that belongs to THIS denial — where a scope word may qualify it.
+def _match_starts(pattern: re.Pattern[str], text: str) -> list[int]:
+    """Every position `pattern` matches at in `text`, in order — exactly the
+    starts `pattern.search(text, pos)` returns for some `pos` — found in ONE
+    left-to-right pass."""
+    starts: list[int] = []
+    found = pattern.search(text)
+    while found is not None:
+        starts.append(found.start())
+        found = pattern.search(text, found.start() + 1)
+    return starts
+
+
+class _DenialMarks:
+    """Where each pattern a denial is judged by matches in ONE clause, found
+    once per pattern per clause (2026-10-06). `_denial_tail` used to search the
+    rest of the clause again for every capability phrase in it, and the scope
+    qualifier then searched that tail: one clause repeating a scoped denial
+    ("I can't read files and read files and … outside my workspace") took
+    0.84 s at 12.5 KB and over 9 s at 50 KB, on core's only event loop.
+
+    A mark is where a match STARTS, so a scope word counts when it starts in a
+    denial's tail — what searching the tail found, except a scope word that
+    straddles the next denial's first word, which only silences (the miss
+    direction this family errs in)."""
+
+    __slots__ = ("_clause", "_starts")
+
+    def __init__(self, clause: str) -> None:
+        self._clause = clause
+        self._starts: dict[re.Pattern[str], list[int]] = {}
+
+    def first(self, pattern: re.Pattern[str], pos: int) -> int:
+        """Where `pattern` first matches at or after `pos` — the start
+        `pattern.search(clause, pos)` returns — or the clause's end."""
+        starts = self._starts.get(pattern)
+        if starts is None:
+            starts = self._starts[pattern] = _match_starts(pattern, self._clause)
+        i = bisect_left(starts, pos)
+        return starts[i] if i < len(starts) else len(self._clause)
+
+
+def _denial_tail(marks: _DenialMarks, phrase_end: int) -> int:
+    """Where the tail that belongs to THIS denial ends. The tail runs from
+    `phrase_end` (the end of its capability phrase) to here, and is where a
+    scope word may qualify it.
 
     WHERE THE DENIAL ENDS, and why this is the right boundary. The outer unit
     is already the clause: _clauses splits on sentence terminators, semicolons,
@@ -1917,13 +1964,11 @@ def _denial_tail(clause: str, phrase_end: int) -> str:
     stale"), which silences the guard: a MISS, which is the direction this
     family always errs in (ruling S2d-R2 — a wrongly-corrected honest reply is
     worse than a missed lie).
+
+    2026-10-06: read off the clause's marks (`_DenialMarks`), found once per
+    clause, never by searching the rest of the clause again for each phrase.
     """
-    end = len(clause)
-    for pattern in (_DENIAL_LEAD, _TRAILING_DENIAL):
-        nxt = pattern.search(clause, phrase_end)
-        if nxt is not None:
-            end = min(end, nxt.start())
-    return clause[phrase_end:end]
+    return min(marks.first(_DENIAL_LEAD, phrase_end), marks.first(_TRAILING_DENIAL, phrase_end))
 
 
 def _capability_correction_text(tools_named: Sequence[str]) -> str:
@@ -1958,6 +2003,7 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
+        marks: _DenialMarks | None = None  # found when the first phrase needs them
         for pattern, tool in _CAPABILITY_TOOLS:
             if tool not in registered or tool in seen:
                 # No such tool -> the denial is HONEST; already seen -> counted.
@@ -1969,15 +2015,19 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
+                if not (after_lead or before_trailing):
+                    continue
+                if marks is None:
+                    marks = _DenialMarks(clause)
                 # A scope limit anywhere in this denial's own tail ("...files
                 # OUTSIDE my folder", "...files to paths OUTSIDE the
                 # workspace") is a true statement about containment, not a
                 # disowned capability. _denial_tail says where that tail ends.
-                scoped = _SCOPE_QUALIFIER.search(_denial_tail(clause, m.end()))
-                if (after_lead or before_trailing) and scoped is None:
-                    seen.add(tool)
-                    denied.append((m.group(0).strip(), tool))
-                    break
+                if marks.first(_SCOPE_QUALIFIER, m.end()) < _denial_tail(marks, m.end()):
+                    continue
+                seen.add(tool)
+                denied.append((m.group(0).strip(), tool))
+                break
     if not denied:
         return None
     tools_named = [tool for _phrase, tool in denied]
