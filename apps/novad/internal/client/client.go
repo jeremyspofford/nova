@@ -151,6 +151,17 @@ type Agent struct {
 	restart       atomic.Bool
 	sessionCancel atomic.Pointer[context.CancelFunc]
 
+	// workers are the goroutines a session starts (serve): each command's
+	// handler, the connect probe's frame, heartbeat and watchdog — all but
+	// the probe's own goroutine, which writes nothing (reprobe). Run waits
+	// for every one before it returns, so a command stopped mid-run still
+	// writes its outcome to the audit log, and nothing the agent started
+	// writes after Run has returned — to the audit log, a staged build, a
+	// file a command was writing. Before, a handler could still be appending
+	// its audit entry as main exited (or, in PR #106's windows-11-arm run, as
+	// a test's TempDir cleanup removed the state dir under it).
+	workers sync.WaitGroup
+
 	// verifier is built ONCE and reused across every reconnect, so its one-use
 	// seen-set spans the envelope validity window (TTL + skew) rather than a
 	// single socket lifetime. If it were rebuilt per connection, a command
@@ -340,8 +351,13 @@ func WSURL(server string) (string, error) {
 }
 
 // Run connects, serves, and reconnects with a capped backoff until ctx is done
-// or a fatal condition is hit (a changed core key; a revoked device).
+// or a fatal condition is hit (a changed core key; a revoked device). It
+// returns only once every worker its sessions started is done (a.workers):
+// leaving, however it leaves, ends them through runCtx and waits for each.
 func (a *Agent) Run(ctx context.Context) error {
+	runCtx, stop := context.WithCancel(ctx)
+	defer a.workers.Wait()
+	defer stop()
 	attempt := 0
 	for {
 		if a.restart.Load() {
@@ -352,7 +368,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			// naming a DIFFERENT (or no) session.
 			return ErrRestartForUpdate
 		}
-		authed, err := a.connectOnce(ctx)
+		authed, err := a.connectOnce(runCtx)
 		if a.restart.Load() {
 			// daemon.update staged a build and ended the session itself
 			// (handleCommand, via sessionCancel) only after its result and
@@ -570,7 +586,8 @@ func (a *Agent) replayAudit(ctx context.Context, c *websocket.Conn, lastSeqField
 // serve runs the heartbeat writer and the single reader. Commands are handled
 // in their own goroutines so the reader stays responsive (coder/websocket
 // needs a live reader to handle control frames) and a slow command cannot
-// block the heartbeat.
+// block the heartbeat. Every goroutine it starts is one of a.workers, which
+// Run waits for before it returns.
 func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -600,14 +617,14 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	// frame carrying them follows. They run on the agent's context, not this
 	// session's: a session that ends mid-probe neither cuts it short nor
 	// leaves the next connection to start another — its frames carry it.
-	go func() {
+	a.workers.Go(func() {
 		if err := a.reprobe(ctx, c, false); err != nil && serveCtx.Err() == nil {
 			a.logf("probe frame not sent: %v", err)
 		}
-	}()
+	})
 
-	go a.heartbeat(serveCtx, cancel, c)
-	go a.watchdog(serveCtx, cancel)
+	a.workers.Go(func() { a.heartbeat(serveCtx, cancel, c) })
+	a.workers.Go(func() { a.watchdog(serveCtx, cancel) })
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -619,7 +636,7 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 		}
 		switch t, _ := frame["type"].(string); t {
 		case wire.TypeCommand:
-			go a.handleCommand(serveCtx, c, frame)
+			a.workers.Go(func() { a.handleCommand(serveCtx, c, frame) })
 		default:
 			a.logf("ignoring unexpected frame type %q", t)
 		}
@@ -849,7 +866,9 @@ func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
 // round 1, I1): its programs are bounded probeGrace inside that, so they
 // answer "gave no answer in time" first; anything else that hangs is left
 // to finish on its own, nothing it answers later is kept, and probing
-// clears either way.
+// clears either way. So the probe's own goroutine is the one Run does not
+// wait for (workers): it may never return, and it writes nothing — its
+// answer goes to a channel no one reads once reprobe has gone.
 func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) error {
 	if a.probe == nil {
 		if force {

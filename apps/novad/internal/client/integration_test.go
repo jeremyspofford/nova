@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +30,7 @@ import (
 	"novad/internal/config"
 	"novad/internal/facts"
 	"novad/internal/platform"
+	"novad/internal/state"
 	"novad/internal/wire"
 )
 
@@ -158,7 +161,7 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	var obs observed
 	select {
@@ -231,6 +234,34 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 	}
 	agent.gatherFrame = hermeticFrame
 	return agent, auditLog
+}
+
+// runAgent runs agent.Run(ctx) on a goroutine of its own and hands back what
+// it returns. At the test's end it stops the agent and waits for Run to
+// return — and Run returns only once nothing it started can still write —
+// so nothing the agent writes (its audit log, its state dir) is still being
+// written when t.TempDir's cleanup removes it. PR #106's windows-11-arm run
+// failed exactly there: a refused replay's audit append was still writing
+// audit.jsonl as RemoveAll ran. Cleanups run last-registered first, so this
+// one runs before the TempDir cleanup buildAgent registered.
+func runAgent(t *testing.T, ctx context.Context, agent *Agent) <-chan error {
+	t.Helper()
+	ctx, stop := context.WithCancel(ctx)
+	runErr := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		runErr <- agent.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-returned:
+		case <-time.After(10 * time.Second):
+			t.Errorf("Run had not returned 10s after the agent was stopped")
+		}
+	})
+	return runErr
 }
 
 // I1: a command that FAILS verification must produce BOTH a result{ok:false}
@@ -307,7 +338,7 @@ func TestARefusedCommandIsAResultOkFalseAndAnAuditEntry(t *testing.T) {
 	agent, auditLog := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	var obs observed
 	select {
@@ -377,8 +408,7 @@ func TestAChangedCoreKeyIsFatalAndDoesNotReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	runErr := make(chan error, 1)
-	go func() { runErr <- agent.Run(ctx) }()
+	runErr := runAgent(t, ctx, agent)
 
 	select {
 	case err := <-runErr:
@@ -499,7 +529,7 @@ func TestAReplayIsRefusedAcrossAReconnect(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	got := map[int]outcome{}
 	for len(got) < 2 {
@@ -589,7 +619,7 @@ func TestTheAuthFrameCarriesFactsAndAFactsFrameFollowsReady(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, "dev-facts-1", hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	var got seen
 	select {
 	case got = <-ch:
@@ -653,7 +683,7 @@ func TestAHungFactsGatherDoesNotBlockTheHandshake(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case ok := <-readySeen:
 		if !ok {
@@ -730,7 +760,7 @@ func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case got := <-order:
 		if len(got.types) != 2 || got.types[0] != "facts" || got.types[1] != "result" {
@@ -835,7 +865,7 @@ func TestTheBackoffResetsAfterASessionThatAuthenticated(t *testing.T) {
 	agent.backoffs = []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond, 10 * time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	// Seven authenticated sessions: without the reset, the sixth waits 10 s.
 	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 7 })
 }
@@ -849,7 +879,7 @@ func TestAPingThatGoesUnansweredEndsTheSession(t *testing.T) {
 	agent.backoffs = []time.Duration{20 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
 }
 
@@ -880,7 +910,7 @@ func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
 	agent.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(offset) }
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	waitFor(t, 2*time.Second, func() bool { return len(arrivals()) >= 1 })
 	time.Sleep(120 * time.Millisecond) // let the session settle before jumping
 	mu.Lock()
@@ -1118,7 +1148,7 @@ func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
 			agent.backoffs = []time.Duration{20 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			go func() { _ = agent.Run(ctx) }()
+			runAgent(t, ctx, agent)
 			waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
 		})
 	}
@@ -1251,8 +1281,7 @@ func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
 			agent.backoffs = []time.Duration{20 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			runErr := make(chan error, 1)
-			go func() { runErr <- agent.Run(ctx) }()
+			runErr := runAgent(t, ctx, agent)
 			waitFor(t, 2*time.Second, func() bool { return attempts() >= 2 })
 			cancel()
 			select {
@@ -1325,7 +1354,7 @@ func TestTheAgentFallsThroughToTheNextLocatorWhenTheFirstDoesNotAnswer(t *testin
 	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", second.URL}, "dev-loc-1", hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case got := <-authed:
 		if got != "second" {
@@ -1352,8 +1381,7 @@ func TestALocatorPresentingAnotherCoreKeyIsSkippedWhileAnotherRemains(t *testing
 	agent := buildAgentWithHubs(t, []string{stranger.URL, ours.URL}, "dev-loc-2", hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	runErr := make(chan error, 1)
-	go func() { runErr <- agent.Run(ctx) }()
+	runErr := runAgent(t, ctx, agent)
 	select {
 	case got := <-authed:
 		if got != "ours" {
@@ -1482,8 +1510,7 @@ func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
 	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	runErr := make(chan error, 1)
-	go func() { runErr <- agent.Run(ctx) }()
+	runErr := runAgent(t, ctx, agent)
 	select {
 	case obs := <-results:
 		if ok, _ := obs.result["ok"].(bool); !ok {
@@ -1573,7 +1600,7 @@ func TestDaemonUpdateDownloadsFromTheLocatorThisSessionIsActuallyOn(t *testing.T
 	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case res := <-results:
 		if ok, _ := res["ok"].(bool); !ok {
@@ -1709,7 +1736,7 @@ func TestTheProbesRunAtConnectAndOnRefreshOnly(t *testing.T) {
 	agent.factsMinGap, agent.factsEvery, agent.heartbeatEvery = 10*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	var s seen
 	select {
 	case s = <-got:
@@ -1775,7 +1802,7 @@ func TestTheConnectProbeRunsOnceAcrossReconnects(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	next := func() string {
 		t.Helper()
 		select {
@@ -1950,7 +1977,7 @@ func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
 	agent.backoffs = []time.Duration{10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	var s seen
 	select {
 	case s = <-got:
@@ -2054,7 +2081,7 @@ func TestAProbeThatNeverAnswersIsLeftAtItsBudget(t *testing.T) {
 	agent.backoffs = []time.Duration{10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	var res map[string]any
 	select {
 	case res = <-results:
@@ -2137,5 +2164,159 @@ func TestNewGathersTheFactsFrameThroughGatherFrame(t *testing.T) {
 	}
 	if reflect.ValueOf(a.gatherFrame).Pointer() != reflect.ValueOf(facts.GatherFrame).Pointer() {
 		t.Fatal("New must read the facts frame through facts.GatherFrame")
+	}
+}
+
+// stateDirNow is every file under dir and what it holds, read now. A dir
+// not made yet holds nothing.
+func stateDirNow(dir string) (map[string]string, error) {
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == dir && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(rel)] = string(body)
+		return nil
+	})
+	return files, err
+}
+
+// PR #106's windows-11-arm run: t.TempDir's cleanup found the state dir
+// still being written — a refused replay's audit append, from a command
+// handler Run had never waited for. Run returns only once every worker it
+// started is done. Here a facts.refresh is held mid-command (its frame's
+// gather waits on the test, deaf to every context) when the agent is
+// stopped: Run must not return while it runs, the command's audit entry is
+// on disk the moment Run returns, and nothing in the state dir — the audit
+// log, the status file OnState writes — changes after.
+func TestNothingTheAgentStartedWritesItsStateDirAfterRunReturns(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-stop-1"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil || nextFacts(ctx, c) == nil {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "stop-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			if _, err := coreRead(ctx, c); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	stateDir := filepath.Join(agent.deps.Home, ".local", "state", "novad")
+	// What main's agentStatusWriter does at each change of connection state.
+	// Set without Configure: no connect probe sends a frame of its own.
+	agent.opts = Options{StateDir: stateDir, OnState: func(st, server string, _ error) {
+		if err := state.WriteJSON(filepath.Join(stateDir, state.AgentStatusFile), state.AgentStatus{V: 1, State: st, Server: server}); err != nil {
+			t.Errorf("writing the status: %v", err)
+		}
+	}}
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	var gathers atomic.Int32
+	agent.gatherFrame = func(carried []facts.Unreadable) facts.Frame {
+		if gathers.Add(1) == 2 { // the refresh's frame; the first went out at ready
+			close(held)
+			<-release
+		}
+		return hermeticFrame(carried)
+	}
+
+	type stopped struct {
+		files map[string]string
+		err   error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	returned, done := make(chan stopped, 1), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = agent.Run(ctx)
+		files, err := stateDirNow(stateDir) // the state dir as it is the moment Run returns
+		returned <- stopped{files, err}
+	}()
+	t.Cleanup(func() { // whatever failed: the held gather let go, and Run waited for
+		cancel()
+		free()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Errorf("Run never returned")
+		}
+	})
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the refresh never reached its frame")
+	}
+
+	cancel()
+	var at stopped
+	early := false
+	select {
+	case at = <-returned:
+		early = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	free()
+	if !early {
+		select {
+		case at = <-returned:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not return once the command it was waiting for had finished")
+		}
+	}
+	if at.err != nil {
+		t.Fatalf("reading the state dir when Run returned: %v", at.err)
+	}
+	// A writer still running when Run returned writes within moments of being
+	// let go: watch for it.
+	after := at.files
+	for deadline := time.Now().Add(300 * time.Millisecond); maps.Equal(after, at.files) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		files, err := stateDirNow(stateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after = files
+	}
+
+	if early {
+		t.Error("Run returned while a command it started was still running")
+	}
+	if !strings.Contains(at.files["audit.jsonl"], `"envelope_id":"stop-e1"`) {
+		t.Errorf("when Run returned, the audit log held no entry for the command it stopped: %q", at.files["audit.jsonl"])
+	}
+	if !maps.Equal(after, at.files) {
+		t.Errorf("the state dir changed after Run returned:\nat return: %q\nafter:     %q", at.files, after)
 	}
 }
