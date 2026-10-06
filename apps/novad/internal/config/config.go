@@ -125,7 +125,8 @@ func (p Paths) CheckEnrolled() error {
 	return nil
 }
 
-// Save writes the config and the private key with 0600 in a 0700 dir. The key
+// Save writes the config and the private key with 0600 in a 0700 dir, each
+// replaced whole (writeFile0600), so a failed write never tears them. The key
 // is stored as its 32-byte seed (hex): ed25519.NewKeyFromSeed re-derives the
 // full private key, and a seed is all that ever needs to be secret.
 func Save(p Paths, cfg Config, priv ed25519.PrivateKey) error {
@@ -181,17 +182,47 @@ func Load(p Paths) (Config, ed25519.PrivateKey, error) {
 	return cfg, ed25519.NewKeyFromSeed(seed), nil
 }
 
+// writeAll writes body to f and syncs it to the disk; a test makes it fail
+// partway, as a crash or a full disk would.
+var writeAll = func(f *os.File, body []byte) error {
+	if _, err := f.Write(body); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// writeFile0600 replaces path with body whole (Task 32, L223): written and
+// synced to a temp file in the same directory — 0600 from its creation, and
+// under the custody DACL there on Windows — then renamed over path. A write
+// that fails or a crash leaves the old file exactly as it was, never a torn
+// config or key. The rename is retried briefly, as state.WriteJSON's is: on
+// Windows a reader holding the old file open refuses it for a moment.
 func writeFile0600(path string, body []byte) error {
-	// O_TRUNC so a shorter rewrite cannot leave a stale tail; 0600 explicit.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(body); err != nil {
-		f.Close()
+	name := tmp.Name()
+	if err := writeAll(tmp, body); err != nil {
+		tmp.Close()
+		os.Remove(name)
 		return err
 	}
-	return f.Close()
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	for i := 0; ; i++ {
+		err = os.Rename(name, path)
+		if err == nil || i == 9 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		os.Remove(name)
+	}
+	return err
 }
 
 // Wipe removes this device's identity after core revoked it: the config and

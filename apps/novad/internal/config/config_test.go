@@ -140,6 +140,58 @@ func TestWipeDoesNotClobberAnExistingSetAside(t *testing.T) {
 	}
 }
 
+// Task 32, L223: Save rewrites the config and the key on every keep (each
+// update), so a write that fails partway — a crash, a full disk — must leave
+// the pairing on disk exactly as it was, never a torn config or key that
+// even `install --code` cannot read past. Nothing half-written is left
+// beside them either.
+func TestASaveThatFailsPartwayLeavesThePairingWhole(t *testing.T) {
+	p := testPaths(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d1", Name: "laptop", Server: "https://a.example", CorePubKey: strings.Repeat("ab", 32)}, priv); err != nil {
+		t.Fatal(err)
+	}
+	cfgBefore, keyBefore := readFile(t, p.ConfigFile), readFile(t, p.KeyFile)
+
+	was := writeAll
+	t.Cleanup(func() { writeAll = was })
+	writeAll = func(f *os.File, body []byte) error {
+		_, _ = f.Write(body[:len(body)/2])
+		return errors.New("no space left on device")
+	}
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d2", Name: "laptop", Server: "https://b.example", CorePubKey: strings.Repeat("cd", 32)}, other); err == nil {
+		t.Fatal("a write that failed must be an error")
+	}
+	if got := readFile(t, p.ConfigFile); !bytes.Equal(got, cfgBefore) {
+		t.Fatalf("the config was torn by a failed write:\n%s", got)
+	}
+	if got := readFile(t, p.KeyFile); !bytes.Equal(got, keyBefore) {
+		t.Fatalf("the key was torn by a failed write: %q", got)
+	}
+	if _, _, err := Load(p); err != nil {
+		t.Fatalf("the pairing no longer loads: %v", err)
+	}
+	entries, err := os.ReadDir(p.ConfigDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.json" && e.Name() != "key" {
+			t.Errorf("left behind beside the pairing: %s", e.Name())
+		}
+	}
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestHubsAreTheLocatorsElseTheServer(t *testing.T) {
 	c := Config{Server: "https://a.example"}
 	if got := c.Hubs(); !reflect.DeepEqual(got, []string{"https://a.example"}) {
