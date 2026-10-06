@@ -671,6 +671,68 @@ async def _audit_break(
         )
 
 
+# Task 32 (L274): an entry core could not store because of a fault in CORE — a
+# dropped database connection, a timeout — is the first of a run of unstored
+# ones: the agent sends each later entry once, as it happens, and replays what
+# core does not hold only when it next connects, so every entry it sends after
+# this, this session, arrives after a gap. A gap reads as a broken chain. So the
+# fault is recorded as what it is, and the seq it stopped at is kept here, per
+# device and audit epoch, for each such gap to name it — until an entry at or
+# past it is stored, which cannot happen before it is (each stored entry was
+# checked against the one before it). In-process on purpose: those gaps end with
+# the session, and a core restart ends every session.
+_UNSTORED_FROM: dict[tuple[uuid.UUID, int], int] = {}
+
+
+async def _audit_fault(pool, device_id: uuid.UUID, seq: int, exc: Exception, *, epoch: int) -> None:
+    """Record that core could not store `seq` and what follows it: a fault in
+    core, never a break in the device's chain (Task 32, L274). The record is a
+    DEVICE_AUDIT_BREAK beside the breaks it explains, its reason saying so. A
+    database that cannot store the entry may not store this either: then the
+    log line is the record, and the caller's own error still reaches serve()."""
+    key = (device_id, epoch)
+    _UNSTORED_FROM[key] = min(seq, _UNSTORED_FROM.get(key, seq))
+    reason = (
+        f"core could not store seq {seq} or anything after it in this batch — a fault in core "
+        f"({type(exc).__name__}), not a break in the device's chain; the agent sends what core "
+        "does not hold again when it next connects"
+    )
+    logger.error(
+        "device %s: audit entries from epoch=%s seq=%s not stored — %s",
+        device_id,
+        epoch,
+        seq,
+        reason,
+    )
+    meta = {
+        "device_id": str(device_id),
+        "epoch": epoch,
+        "seq": seq,
+        "expected_prev": None,
+        "got_prev": None,
+        "reason": reason,
+    }
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            await governance.record_event(
+                conn, kind=governance.DEVICE_AUDIT_BREAK, subject_ref=device_id, meta=meta
+            )
+    except Exception:  # noqa: BLE001 — the line above is the record then
+        logger.exception("device %s: the audit fault at seq %s was not recorded", device_id, seq)
+
+
+def _gap_reason(device_id: uuid.UUID, seq: int, epoch: int) -> str | None:
+    """Why seq-1 is missing when core's own fault left it unstored (L274),
+    or None: a gap no fault explains is a break, stated as one."""
+    fault = _UNSTORED_FROM.get((device_id, epoch))
+    if fault is None or fault > seq - 1:
+        return None
+    return (
+        f"seq {seq - 1} is not stored because core could not store seq {fault} and what "
+        "followed it — a fault in core, recorded then, not a break in the device's chain"
+    )
+
+
 async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch: int = 0) -> dict:
     """Verify and store a replayed audit batch, in seq order, stopping at the
     first break.
@@ -692,7 +754,12 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch
     out-of-range exit_code was the live case) also does NOT store past
     itself, and also leaves the socket alive — but writes no
     DEVICE_AUDIT_BREAK, since the chain was never tampered with; only an
-    ERROR log names the device and seq."""
+    ERROR log names the device and seq.
+
+    Any other fault reading or storing an entry is core's (Task 32, L274): it
+    is recorded as one (_audit_fault) and raised on to serve(), which keeps
+    the socket up; each gap it leaves behind this session says so
+    (_gap_reason), never reading as a broken chain."""
     device_uuid = _as_uuid(device_id)
     if not all(isinstance(e, dict) and _is_int(e.get("seq")) for e in entries):
         await _audit_break(
@@ -734,15 +801,29 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch
         if seq == 0:
             expected_prev: str | None = ""
         else:
-            expected_prev = await pool.fetchval(
-                "SELECT hash FROM device_audit WHERE device_id = $1 AND epoch = $2 AND seq = $3",
-                device_uuid,
-                epoch,
-                seq - 1,
-            )
+            try:
+                expected_prev = await pool.fetchval(
+                    "SELECT hash FROM device_audit WHERE device_id = $1 AND epoch = $2 "
+                    "AND seq = $3",
+                    device_uuid,
+                    epoch,
+                    seq - 1,
+                )
+            except Exception as exc:
+                await _audit_fault(pool, device_uuid, seq, exc, epoch=epoch)
+                raise
         if expected_prev is None:
-            # seq-1 is neither stored nor earlier in this batch: a gap.
-            await _audit_break(pool, device_uuid, seq, None, _echoable_text(got_prev), epoch=epoch)
+            # seq-1 is neither stored nor earlier in this batch: a gap — said as
+            # core's own fault when one left it unstored (L274).
+            await _audit_break(
+                pool,
+                device_uuid,
+                seq,
+                None,
+                _echoable_text(got_prev),
+                epoch=epoch,
+                reason=_gap_reason(device_uuid, seq, epoch),
+            )
             return {"stored": stored, "break": seq}
         if got_prev != expected_prev:
             await _audit_break(
@@ -808,6 +889,14 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list, *, epoch
                 exc,
             )
             return {"stored": stored, "break": seq}
+        except Exception as exc:
+            # Anything else is a fault in core — the database dropped, timed
+            # out — never something the chain did (L274).
+            await _audit_fault(pool, device_uuid, seq, exc, epoch=epoch)
+            raise
+        fault = _UNSTORED_FROM.get((device_uuid, epoch))
+        if fault is not None and seq >= fault:
+            del _UNSTORED_FROM[(device_uuid, epoch)]
         stored += 1
     return {"stored": stored, "break": None}
 

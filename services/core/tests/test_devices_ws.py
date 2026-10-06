@@ -61,10 +61,12 @@ def _clean_hub():
     devices_ws.hub._conns.clear()
     devices_ws.hub._pending.clear()
     devices_ws.hub._last_command.clear()
+    devices_ws._UNSTORED_FROM.clear()  # Task 32 (L274): process-global the same way
     yield
     devices_ws.hub._conns.clear()
     devices_ws.hub._pending.clear()
     devices_ws.hub._last_command.clear()
+    devices_ws._UNSTORED_FROM.clear()
 
 
 # -- helpers -----------------------------------------------------------------
@@ -1729,6 +1731,149 @@ async def test_a_huge_malformed_value_is_named_in_a_bounded_reason(
     assert len(logged) == 1 and f"reason={reason}" in logged[0]
     if probe is not None:
         assert probe not in logged[0] and probe not in json.dumps(event["meta"])
+
+
+# -- Task 32 (L274): a fault in core never reads as a broken chain ------------
+#
+# serve() keeps a session up through a frame core cannot handle (P27), and the
+# agent sends each entry once, as it happens — it replays what core does not
+# hold only when it next connects. So a database fault mid-ingest left an entry
+# unstored, and every later entry of that session arrived after a gap: a
+# DEVICE_AUDIT_BREAK each, reading exactly as tampering. The fault is recorded
+# as core's, each gap it leaves says so, and a gap nothing explains is still a
+# plain break.
+
+
+def _dropped_connection() -> Exception:
+    return asyncpg.exceptions.ConnectionDoesNotExistError(
+        "simulated: the connection was closed in the middle of operation"
+    )
+
+
+async def _break_at(pool, device_id, seq: int) -> dict | None:
+    for row in await pool.fetch(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",
+        governance.DEVICE_AUDIT_BREAK,
+        device_id,
+    ):
+        if row["meta"]["seq"] == seq:
+            return row["meta"]
+    return None
+
+
+async def test_a_fault_storing_an_entry_is_cores_and_so_is_every_gap_it_leaves(pool, monkeypatch):
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    e0, e1, e2, _e3, e4 = _chain({}, {}, {}, {}, {})
+    real_execute = type(pool).execute
+    dropped: list[int] = []
+
+    async def _drop_once(self, query, *args, **kwargs):
+        if "INSERT INTO device_audit" in query and args[1] == 1 and not dropped:
+            dropped.append(args[1])
+            raise _dropped_connection()
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _drop_once)
+    conn.feed({"type": "audit", "entries": [e0, e1]})
+
+    async def fault_recorded():
+        return await _break_at(pool, device_id, 1) is not None
+
+    await _until(fault_recorded)
+    fault = await _break_at(pool, device_id, 1)
+    assert fault["reason"] == (
+        "core could not store seq 1 or anything after it in this batch — a fault in core "
+        "(ConnectionDoesNotExistError), not a break in the device's chain; the agent sends what "
+        "core does not hold again when it next connects"
+    )
+    await _still_up(pool, conn, device_id)
+    # The session's next entry arrives after the gap the fault left.
+    conn.feed({"type": "audit", "entries": [e2]})
+
+    async def gap_recorded():
+        return await _break_at(pool, device_id, 2) is not None
+
+    await _until(gap_recorded)
+    gap = await _break_at(pool, device_id, 2)
+    assert gap["reason"] == (
+        "seq 1 is not stored because core could not store seq 1 and what followed it — a fault "
+        "in core, recorded then, not a break in the device's chain"
+    )
+    # Its next connection replays what core does not hold: the chain joins up…
+    conn.feed({"type": "audit", "entries": [e1, e2]})
+
+    async def replayed():
+        count = await pool.fetchval(
+            "SELECT count(*) FROM device_audit WHERE device_id = $1", device_id
+        )
+        return count == 3
+
+    await _until(replayed)
+    # …and a gap no fault explains is a plain break again.
+    conn.feed({"type": "audit", "entries": [e4]})
+
+    async def plain_gap():
+        return await _break_at(pool, device_id, 4) is not None
+
+    await _until(plain_gap)
+    assert "reason" not in await _break_at(pool, device_id, 4)
+    await _close(conn, task)
+
+
+async def test_a_fault_reading_the_chain_is_cores_too(pool, monkeypatch):
+    """The other database call on an entry's way in: reading the hash of the
+    one before it."""
+    device_id, _device = await _enroll(pool, name="pc")
+    e0, e1 = _chain({}, {})
+    assert await devices_ws.ingest_audit(pool, device_id, [e0]) == {"stored": 1, "break": None}
+    real_fetchval = type(pool).fetchval
+
+    async def _drop(self, query, *args, **kwargs):
+        if "SELECT hash FROM device_audit" in query:
+            raise _dropped_connection()
+        return await real_fetchval(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "fetchval", _drop)
+    with pytest.raises(asyncpg.exceptions.ConnectionDoesNotExistError):
+        await devices_ws.ingest_audit(pool, device_id, [e1])
+    monkeypatch.setattr(type(pool), "fetchval", real_fetchval)
+    fault = await _break_at(pool, device_id, 1)
+    assert fault is not None and "a fault in core (ConnectionDoesNotExistError)" in fault["reason"]
+
+
+async def test_a_fault_whose_own_record_fails_still_raises_itself_and_names_its_gaps(
+    pool, monkeypatch, caplog
+):
+    """A database that cannot store an entry may not store the fault's record
+    either: the log line is the record then, the entry's own error still
+    reaches serve(), and the gaps it leaves still say why once the database is
+    back."""
+    device_id, _device = await _enroll(pool, name="pc")
+    e0, e1, e2 = _chain({}, {}, {})
+    real_execute = type(pool).execute
+    real_record = devices_ws.governance.record_event
+
+    async def _drop(self, query, *args, **kwargs):
+        if "INSERT INTO device_audit" in query and args[1] == 1:
+            raise _dropped_connection()
+        return await real_execute(self, query, *args, **kwargs)
+
+    async def _cannot_record(*args, **kwargs):
+        raise _dropped_connection()
+
+    monkeypatch.setattr(type(pool), "execute", _drop)
+    monkeypatch.setattr(devices_ws.governance, "record_event", _cannot_record)
+    with caplog.at_level("ERROR", logger="core"):
+        with pytest.raises(asyncpg.exceptions.ConnectionDoesNotExistError):
+            await devices_ws.ingest_audit(pool, device_id, [e0, e1])
+    said = [r.getMessage() for r in caplog.records]
+    assert any("seq=1 not stored — core could not store seq 1" in line for line in said)
+    assert any("the audit fault at seq 1 was not recorded" in line for line in said)
+    monkeypatch.setattr(type(pool), "execute", real_execute)
+    monkeypatch.setattr(devices_ws.governance, "record_event", real_record)
+    assert await devices_ws.ingest_audit(pool, device_id, [e2]) == {"stored": 0, "break": 2}
+    gap = await _break_at(pool, device_id, 2)
+    assert "because core could not store seq 1" in gap["reason"]
 
 
 # Controller ruling (2026-10-01): as written, a result frame for an envelope
