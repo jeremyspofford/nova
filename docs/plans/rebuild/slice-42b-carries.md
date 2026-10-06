@@ -242,6 +242,62 @@ points at the step in `progress.md` that first raised it.
   annotated `include` or `move-only`, this reappears, undetected, in a
   function MF3 never touched.
 
+Task 32 Phase C's whole-branch review (`task-32-phase-c-review.md.report`)
+approved the branch with ten minors. Its fix round fixed five (C2–C6) plus
+a single-sample timing pin (C1). These are carried:
+
+- **Review minor 2** (`docs/plans/rebuild/s42b/plan.md`, Review Focus 3):
+  the plan names `test_a_uint32_windows_exit_code_is_stored`, a test that
+  does not exist. The pin is
+  `test_a_windows_exit_code_over_int32_range_is_stored_after_the_migration`
+  (`services/core/tests/test_devices_ws.py`), which stores `0x80070005` and
+  `0xFFFFFFFF` and passed in the review's control run. Only the plan's line
+  is wrong; the protection is pinned.
+- **Review minor 3** (`services/core/app/checks/devices.py`, `agents_behind`):
+  while a hub-door agent (`last_transport == "host"`) is behind and not yet
+  tried with the build, the job sends to no other machine. That is the P10
+  ruling (progress.md: offline, busy or hand-started hub agents still hold
+  the others). A hub agent that is never tried (left offline by
+  `novad uninstall` without a revoke, started by hand, no facts) therefore
+  parks every other agent. The job's firing text says the others wait for the
+  hub's agent, but the check's "stale" finding a day later says only "Nova
+  has not updated it to it yet", with no cause. The fix is the check's
+  wording: a `hub_wait` token that names the hub agent the others wait for.
+- **Review minor 8** (`services/core/app/agent_card.py`, the card's POSIX
+  one-liner): on a machine whose temp directory is mounted `noexec`,
+  `"$d/novad" install …` fails with the shell's bare "Permission denied"
+  (exit 126). `./install` recognises 126 and names `TMPDIR` as the way out
+  (`deploy/install.sh`). The card says nothing. The fix is the same note on
+  the card's line or in `LINUX_NOTE`.
+- **Review minor 10** (`services/core/app/agent_updates.py`, `update_now`;
+  `devices_ws.Hub.command`): `update_now` records `{"device", "connected":
+  True}` from `hub.is_connected`. `hub.command` can then raise `NotSent` and
+  record `connected: False` when the only socket is at an older epoch. That
+  leaves two contradictory facts on one span, and the state guard reads
+  either. It is reachable only between a re-pair's commit and `_still_bound`
+  dropping the old socket. The fix is to read the epoch in `_connected` (or a
+  `hub.is_connected_at(epoch)`).
+- **Phase B3's remaining false corrections** (`services/core/app/guards.py`,
+  `device_completion_check`; measured in Task 32 Phase B3,
+  `task-32-phase-b3-report.md`, probes under `scratch/t32b3/`):
+  - "I started the update on X." after a real update reads "started" as a
+    launch and appends "(No device_launch_app or device_run call ran on X
+    this turn.)": **1 of Task 24's 48 honest replies** beside the replay's
+    send.
+  - "I sent it to X." and "Sent it to X; not confirmed until it reconnects."
+    after a real update keep the notify sentence. A pronoun object names
+    nothing the object test can read. **Both of the 2 phrasings probed**
+    draw it; neither is in a corpus. The same probe found "the agent
+    update", "the hub's update" and "an update" as the object keep it too.
+  - "I sent the update to X as a notification." beside a REAL
+    `device_notify` is now corrected with the install sentence, because the
+    ruling's "the update" reads as the build: **1 of 23 honest notification
+    replies** (`notify_probe.py`; 0 of 23 before B3).
+
+  Each needs an object test on its own shape, or a ruling that either family
+  backs a pronoun object. Each new pattern needs the timing sweep every guard
+  pattern gets. B3 did not widen the guard without that ruling.
+
 ### Dropped, with why
 
 - **L28** (`docs/plans/rebuild/hub-p0-measurements.md:492-493`): mislabels
