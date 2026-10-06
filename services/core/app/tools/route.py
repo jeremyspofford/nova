@@ -1,10 +1,17 @@
-"""Her routing tool: why a role's call goes where it goes (S10-2).
+"""Her routing tools: why a role's call goes where it goes (S10-2), and
+which model chat answers with first (2026-10-05).
 
-Reads the gateway's explain walk — the same one the Routing page shows —
-and says every link's verdict in words. Nothing is called, nothing is
-charged; a fallback reason is the gateway's own sentence, quoted. The
-decision role's walk follows the owner's two decision switches (decision-role
-spec §6), so it is explained with them, read here.
+route_explain reads the gateway's explain walk — the same one the Routing
+page shows — and says every link's verdict in words. Nothing is called,
+nothing is charged; a fallback reason is the gateway's own sentence, quoted.
+The decision role's walk follows the owner's two decision switches
+(decision-role spec §6), so it is explained with them, read here.
+
+set_chat_model makes the one pick write the chat switcher, Models and
+Settings make (app/chat_pick.py): the model goes first and the one it
+replaces becomes the first fallback. The owner asked her to put the Dell
+first and she could not ("I can't edit the settings page myself") — the
+change was made for him by hand, which left her exactly as unable.
 """
 
 from __future__ import annotations
@@ -123,6 +130,38 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
     return describe(body, kinds=kinds)
 
 
+async def set_chat_model(args: dict, ctx: ToolContext) -> str:
+    """The pick, and chat's order as STORED — the answer first, for a small
+    model that reads the top line and stops."""
+    # Function-local, like route_explain's import of app.chat.
+    from app import chat_pick
+
+    model = str(args.get("model") or "").strip()
+    if not model:
+        raise ToolFailure("name the model to put first: provider:model, e.g. dell:qwen3:8b")
+    try:
+        picked = await chat_pick.set_primary(ctx.app, model)
+    except chat_pick.PickFailed as exc:
+        raise ToolFailure(f"the pick did not run — {exc.detail}") from exc
+    order = [picked.chat_model, *picked.chain]
+    moved = picked.previous != picked.chat_model
+    lines = [
+        f"Answer: chat now answers with {picked.chat_model} first — stored and read back."
+        if moved
+        else f"Answer: {picked.chat_model} was already chat's first choice.",
+        "Chat's order now: " + "; ".join(f"{i}. {link}" for i, link in enumerate(order, 1)) + ".",
+    ]
+    if moved and picked.previous and not picked.note:
+        lines.append(f"{picked.previous}, the previous pick, is now the first fallback.")
+    if picked.note:
+        lines.append(f"Not kept: {picked.note}.")
+    lines.append(
+        "This changed the order only — whether each model can answer right now is "
+        "route_explain's to say."
+    )
+    return "\n".join(lines)
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="route_explain",
@@ -163,5 +202,33 @@ TOOLS: tuple[Tool, ...] = (
         # models"): a read of those machines for the state guard (S40b fix
         # wave C2).
         reads_machines=True,
+    ),
+    Tool(
+        name="set_chat_model",
+        description=(
+            "Choose the model chat answers with FIRST — the same pick the chat model "
+            "switcher and Settings make. The model it replaces becomes the first fallback, "
+            "so nothing is dropped, and a model already among the fallbacks moves to the "
+            "front. Use it when the owner asks to switch, prefer or put a model first for "
+            "chat. For an order such as 'the Dell first, then OpenRouter', pick the fallback "
+            "first and the first choice last: set_chat_model('openrouter:<model>') then "
+            "set_chat_model('dell:<model>'). Ids are provider:model, as route_explain and "
+            "model_catalog_search show them. Answers with chat's order as stored."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "provider:model to put first, e.g. dell:qwen3:8b or "
+                        "openrouter:google/gemini-3.8-flash"
+                    ),
+                },
+            },
+            "required": ["model"],
+            "additionalProperties": False,
+        },
+        executor=set_chat_model,
     ),
 )

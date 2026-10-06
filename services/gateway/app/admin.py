@@ -1175,7 +1175,8 @@ async def delete_route(role: str) -> dict:
 @router.get("/catalog")
 async def catalog_route(request: Request) -> dict:
     """Every model Nova can run or reach, in one row shape, every fact
-    labelled with its source and fetch time (app/catalog.py)."""
+    labelled with its source and fetch time (app/catalog.py). `?fresh=1`
+    dials every provider, a remembered outage included."""
     pool = await db.get_pool()
     return await catalog.build(
         request.app,
@@ -1183,6 +1184,7 @@ async def catalog_route(request: Request) -> dict:
         fit_context=_fit_context,
         listing_for=_listing_for,
         latest_probes=_latest_probes,
+        fresh=request.query_params.get("fresh") in {"1", "true"},
     )
 
 

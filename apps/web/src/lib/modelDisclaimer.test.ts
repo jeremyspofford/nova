@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  ACCURACY_DISCLAIMER,
-  ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
-  ACCURACY_DISCLAIMER_SHORT,
-} from './modelDisclaimer'
+import { ACCURACY_DISCLAIMER, ACCURACY_DISCLAIMER_SHORT } from './modelDisclaimer'
 
 /**
  * The no-fake-numbers rail, pinned at the source rather than only through the
@@ -12,11 +8,7 @@ import {
  * it stays qualitative until S4's evals produce real, measured numbers.
  */
 describe('model accuracy disclaimer copy', () => {
-  const strings = [
-    ACCURACY_DISCLAIMER,
-    ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
-    ACCURACY_DISCLAIMER_SHORT,
-  ]
+  const strings = [ACCURACY_DISCLAIMER, ACCURACY_DISCLAIMER_SHORT]
 
   it('never states a percentage', () => {
     for (const s of strings) expect(s).not.toMatch(/\d+(\.\d+)?\s*%/)

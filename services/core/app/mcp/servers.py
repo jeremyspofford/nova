@@ -401,9 +401,11 @@ def _validated(
     before any network attempt."""
     name = str(name or "").strip()
     if not NAME_RE.match(name):
+        # Never echoed (final review N2): a token pasted as the name is not a
+        # name, and this reason reaches her tool result and the span.
         raise ServerError(
-            f"{name!r} cannot be a server name: use 2 to 32 lowercase letters, digits, - or _, "
-            "starting with a letter or a digit"
+            f"that ({len(name)} characters) cannot be a server name: use 2 to 32 lowercase "
+            "letters, digits, - or _, starting with a letter or a digit"
         )
     url = str(url or "").strip()
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
@@ -418,7 +420,8 @@ def _validated(
     # Userinfo first (ruling T5-D), before the scheme is named in any way.
     if parts.username is not None or parts.password is not None:
         raise ServerError(
-            "that address may not carry a username or password; use the token field instead"
+            "an address cannot carry a username or password here; "
+            "put the credential in the token field"
         )
     if parts.scheme not in ("http", "https"):
         # Ruling D: not even the scheme word is echoed — it can itself be a
@@ -465,23 +468,36 @@ def _validated(
     if headers is not None and not isinstance(headers, Mapping):
         raise ServerError("headers must be an object of header names to values")
     clean: dict[str, str] = {}
-    for key, value in (headers or {}).items():
+    given = list((headers or {}).items())
+    for position, (key, value) in enumerate(given, start=1):
+        # Ruling F-H1: a header is named by its POSITION in every refusal,
+        # never by its name — `ghp_…` is a valid header token, so no check
+        # can tell a name from a credential.
+        which = f"header {position} of {len(given)}"
         # The same token-name shape the client itself demands of a header
         # name (ruling F13: one source, never a second copy of the pattern),
         # anchored at both ends (ruling M6: `_TCHAR`'s `$` matches before a
         # trailing newline, so `.fullmatch` is the single fix at every use).
         if not isinstance(key, str) or not client._TCHAR.fullmatch(key):
-            raise ServerError(f"{key!r} is not an HTTP header name")
+            # Never echoed (S37a final review I1): a NAME can hold the
+            # credential itself — a whole `Authorization: Bearer …` line
+            # pasted as a key — and this reason reaches her tool result and
+            # the span's error. Its length is all that is said.
+            size = len(key) if isinstance(key, str) else len(str(key))
+            raise ServerError(
+                f"{which}: a header name is not a valid HTTP token ({size} characters); "
+                "use a name such as X-Api-Key, with no spaces or colons"
+            )
         lowered = key.lower()
         if lowered in _CLIENT_HEADERS or (lowered == "authorization" and token is not None):
-            raise ServerError(f"{key} is set by the client itself and cannot be given here")
+            raise ServerError(f"{which} is set by the client itself and cannot be given here")
         if (
             not isinstance(value, str)
             or "\r" in value
             or "\n" in value
             or len(value) > MAX_CREDENTIAL_CHARS
         ):
-            raise ServerError(f"the value of {key} must be one line of at most 4096 characters")
+            raise ServerError(f"the value of {which} must be one line of at most 4096 characters")
         clean[key] = value
     if len(clean) > MAX_HEADERS:
         raise ServerError(f"at most {MAX_HEADERS} extra headers")
@@ -854,6 +870,13 @@ async def no_such_server(pool, name: str) -> str:
     say this two different ways."""
     known = [s.name for s in await list_servers(pool)]
     listed = ", ".join(known) if known else "none is connected"
+    if not NAME_RE.fullmatch(name):
+        # Never echoed: a token pasted where a name goes is not a name, and
+        # this sentence reaches her, the trace and a route (S37a final review).
+        return (
+            f"there is no connected MCP server by that name ({len(name)} characters, "
+            f"which is not a server name) — connected: {listed}"
+        )
     return f"there is no connected MCP server named {name!r} — connected: {listed}"
 
 

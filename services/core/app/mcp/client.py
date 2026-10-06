@@ -276,8 +276,8 @@ async def list_tools(endpoint: Endpoint, *, refresh: bool = False) -> ToolList:
         kind = result.get("resultType", "complete")
         if kind != "complete":
             raise ClientError(
-                f"{endpoint.name} answered tools/list with resultType {kind!r}, which that "
-                "method may not use",
+                f"{endpoint.name} answered tools/list with resultType {kind!r}, which "
+                "tools/list cannot return",
                 reachable=True,
             )
         for raw in result.get("tools") or []:
@@ -715,20 +715,23 @@ def _safe_credential(value: str) -> bool:
 
 def _check_credentials(endpoint: Endpoint) -> None:
     """Refuse BEFORE sending anything when a credential cannot be a header
-    value, naming the header but never the value (ruling R2-2): httpx/h11
-    would otherwise quote a bad value verbatim in their own exception text —
-    e.g. a pasted token with a trailing newline — and `from exc` would carry
-    that into a traceback."""
+    value, naming the header by its position, never its name or value
+    (rulings R2-2, F-H1): httpx/h11 would otherwise quote a bad value
+    verbatim in their own exception text — e.g. a pasted token with a
+    trailing newline — and `from exc` would carry that into a traceback."""
     if endpoint.token and not _safe_credential(endpoint.token):
         raise ClientError(
             f"{endpoint.name}'s token has characters a header cannot carry; nothing was sent",
             reachable=False,
         )
-    for key in endpoint.headers:
+    names = list(endpoint.headers)
+    for position, key in enumerate(names, start=1):
         if not _safe_credential(endpoint.headers[key]):
+            # By position, never by name (ruling F-H1): a valid header token
+            # can itself be the credential.
             raise ClientError(
-                f"{endpoint.name}'s header {key!r} has characters a header cannot carry; "
-                "nothing was sent",
+                f"{endpoint.name}'s header {position} of {len(names)} has characters a header "
+                "cannot carry; nothing was sent",
                 reachable=False,
             )
 
@@ -801,8 +804,16 @@ def _scrub_text(text: str, candidates: Sequence[str]) -> str:
     return text
 
 
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
 def _has_lone_surrogate(text: str) -> bool:
-    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+    # Runs on every decoded string, on core's event loop: a per-character
+    # Python loop blocked it 177 ms per 4 MiB (S37a final review m1). ASCII
+    # cannot hold a surrogate, and the regex scan runs at C speed otherwise.
+    if text.isascii():
+        return False
+    return _SURROGATE_RE.search(text) is not None
 
 
 def _replace_lone_surrogates(text: str) -> str:

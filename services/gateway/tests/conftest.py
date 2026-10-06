@@ -129,7 +129,7 @@ def fresh_upstream_caches():
     content-addressed by digest and the fakes derive a digest from the tag
     name, so one test's faked capabilities would otherwise answer another's
     (the routing standby reads them)."""
-    from app import engines, hf_hub, ollama_registry
+    from app import catalog, engines, hf_hub, ollama_registry
     from app.adapters import ollama
 
     def _clear() -> None:
@@ -137,6 +137,7 @@ def fresh_upstream_caches():
         ollama_registry.clear()
         engines.clear_cache()
         ollama.SHOW_CACHE.clear()
+        catalog.clear()
 
     _clear()
     yield

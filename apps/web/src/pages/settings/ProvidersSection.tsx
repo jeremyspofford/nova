@@ -29,7 +29,7 @@ import {
   getProviderPresets as apiGetProviderPresets,
   getProviders as apiGetProviders,
   makeDefaultProvider as apiMakeDefaultProvider,
-  putSetting as apiPutSetting,
+  setChatPrimary as apiSetChatPrimary,
   updateProvider as apiUpdateProvider,
   type Provider,
   type ProviderAdapter,
@@ -49,9 +49,10 @@ import {
  * refusal is shown in the provider's own words. Model lists are fetched live
  * per provider and labelled with their source and fetch time (never an
  * unlabelled number); a provider with no listing says so and offers a model
- * id field instead of a fake empty list. "Use" writes `provider:model` to
- * `chat.model` through the same setting Settings → Models writes, and calls
- * `onModelChanged` ONLY after the PUT returned.
+ * id field instead of a fake empty list. "Use" makes `provider:model` chat's
+ * primary through the one pick write every surface makes (setChatPrimary —
+ * the model it replaces becomes the first fallback), and calls
+ * `onModelChanged` ONLY after core stored it.
  *
  * `api` is the same dependency-injection seam ModelsSection/DevicesSection
  * use: production binds the real lib/api calls; tests inject fakes.
@@ -64,7 +65,7 @@ interface ProvidersApi {
   deleteProvider: typeof apiDeleteProvider
   makeDefaultProvider: typeof apiMakeDefaultProvider
   getProviderModels: typeof apiGetProviderModels
-  putSetting: typeof apiPutSetting
+  setChatPrimary: typeof apiSetChatPrimary
 }
 
 const DEFAULT_API: ProvidersApi = {
@@ -75,7 +76,7 @@ const DEFAULT_API: ProvidersApi = {
   deleteProvider: apiDeleteProvider,
   makeDefaultProvider: apiMakeDefaultProvider,
   getProviderModels: apiGetProviderModels,
-  putSetting: apiPutSetting,
+  setChatPrimary: apiSetChatPrimary,
 }
 
 const ADAPTER_LABELS: Record<ProviderAdapter, string> = {
@@ -594,8 +595,10 @@ function ProviderRow({
     setSwitching(modelId)
     setSwitchError(null)
     try {
-      await api.putSetting('chat.model', qualified)
-      onModelChanged(qualified)
+      const stored = await api.setChatPrimary(qualified)
+      onModelChanged(stored.chat_model)
+      // What the pick did not keep, said where it was made.
+      if (stored.note) setSwitchError(stored.note)
     } catch (err) {
       setSwitchError(reasonOf(err))
     } finally {
@@ -612,6 +615,12 @@ function ProviderRow({
 
   // A decision model answers typed questions and has no chat: never offered
   // as the chat model — its place is the Decisions chain on Settings → Routing.
+  // A proven key that a later listing refused is no longer drawn as a pass:
+  // 2026-10-05 the Anthropic row read "Key verified" in green beside "the
+  // last listing was refused (401): API key is invalid". The verdict is read
+  // off the listing STATE the gateway recorded, never the wording of a note.
+  const provedNow = provider.key_proven === true && provider.listing !== 'unknown'
+
   const isDecisionModel = (model: ProviderModel) =>
     provider.adapter === 'systemone' || (model.output_modalities ?? []).includes('decisions')
 
@@ -641,14 +650,16 @@ function ProviderRow({
             no model listing
           </Badge>
         )}
-        <span className="text-caption text-content-tertiary font-mono truncate">
+        <span className="min-w-0 max-w-full text-caption text-content-tertiary font-mono truncate">
           {provider.base_url}
         </span>
         <span className="text-caption text-content-tertiary">
           {AUTH_LABELS[provider.auth_shape]}
           {provider.api_key ? ` ${provider.api_key}` : ''}
         </span>
-        <span className="ml-auto flex items-center gap-1">
+        {/* Wraps: four buttons in one unbreakable row ran 16 px past a
+            phone's edge (2026-10-05). */}
+        <span className="ml-auto flex flex-wrap items-center gap-1">
           {/* THE affordance: the model list is what a provider is for, and
               nothing else on this row says it exists. */}
           <Button
@@ -708,14 +719,14 @@ function ProviderRow({
         <p
           data-testid={`provider-status-${provider.name}`}
           className={`mt-1.5 inline-flex items-start gap-1.5 text-caption ${
-            provider.key_proven === true
+            provedNow
               ? 'text-success'
               : provider.key_proven === false
                 ? 'text-warning'
                 : 'text-content-tertiary'
           }`}
         >
-          {provider.key_proven === true ? (
+          {provedNow ? (
             <Check size={12} className="shrink-0 mt-0.5" />
           ) : provider.key_proven === false ? (
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
@@ -724,6 +735,7 @@ function ProviderRow({
             {provider.key_proven === true ? 'Key verified' : 'Checked'}{' '}
             {formatRelativeTime(provider.verified_at)}
             {provider.verify_note ? ` — ${provider.verify_note}` : ''}
+            {provider.key_proven === true && !provedNow ? ' — before the refused listing below' : ''}
           </span>
         </p>
       )}

@@ -42,6 +42,30 @@ manual, no Headscale or LAN). **In progress:** S42b (install, service,
 updates, the hub's own agent) and, from 2026-09-30, **S37a, the MCP client**,
 beside it. Unbuilt: the doing lane, S26, S27.
 
+**2026-10-05, the owner moved self-coding forward and widened it**
+([`nova-codes.md`](nova-codes.md)). Nova runs her own development: she codes
+what the owner asks, starts work herself, and reacts to monitoring and CI. She
+always drives — the code comes from her own loop on any model or from an
+outside coder she runs (Claude Code first). The doing lane now runs, after
+S42b and the provider-balances slice: S29 → S30 → S32 → S32b → S33 → S34 →
+S35 → S34b → S37c → S32c → S30b → S37d → the install walk → S39. `CLAUDE.md`
+became `AGENTS.md`, and `CLAUDE.md` is now a symlink to it.
+
+**2026-10-06, the owner un-paused machine setup and made wake part of every
+agent's install** ([`s46a/spec.md`](s46a/spec.md), amended). After the Dell
+could not be woken (v1 had woken it through an Ethernet port that now has no
+link, and the Dell stays on Wi-Fi), he asked for wake to be set up "as much as
+possible" whenever an agent is installed on a device that can be woken, with
+the user walked through their own model's steps, the BIOS included, where Nova
+cannot make the change. The order after S42b is now: provider balances →
+**S30b** (the standing admin path, moved ahead) → **S46a** (machine setup:
+wake at install on every device that can be woken; firmware settings changed
+where the maker allows it, walked through where it does not) → **S46c** (new:
+a dedicated guide agent that walks the user through those steps by the phone's
+camera, one photo per step or live video, on a local model where one can do
+it) → the doing lane from S29, without S30b. S46b (wake in chat) and the rest
+of the hub lane stay paused.
+
 ---
 
 ## The order of work
@@ -58,8 +82,9 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
 | — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S47 shipped 2026-09-26, walked 2026-09-30** (setup QR codes for a phone, a machine or a model server). **S42a shipped 2026-09-28** (the agent on every OS). **S42b in progress** (install, service, downloads, the code card, the hub's own agent). **Paused by the owner 2026-09-30:** S46a, S46b, S43a, S43b, S44, S48, S49 — the doing lane goes next (row below). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
 | — | **The decision role — Jev and Kev** ([`decision-role/spec.md`](decision-role/spec.md)) | **Shipped 2026-09-29** (PR #85), **with a local/cloud switch** the same day (PR #86), after the owner pulled it forward from the optional list on 2026-09-27. Built on `slice/decisions` ([plan](decision-role/plan.md), close-out at its end): the gateway's `decisions` role and `POST /v1/systemone`; core asks two questions (the tool hint, the recall check) on typed turns and eval turns, fail-open in 5 s; Routing and Models; a Jev Router switch on chat, scheduled and agent roles. **Measured** on the deployed stack (`dell:qwen3:8b` chatting, the whole eval corpus × 3): with Jev (cloud, the default) answering, 90 of 90 turns decided in 0.7 s median, no case worse and three better, and the S47 phone case went from 1 of 3 right to 3 of 3. Kev (local) shares the Dell's GPU with the chat model and decided only 1 of 90 turns in time, so its arm is not yet judged — the reason local ships off by default. Walked in the owner's real chat 2026-09-30. The Kev engine on the Dell (spec §5) is a separate, later plan. |
-| — | **The doing lane — S29–S39** ([`doing-things.md`](doing-things.md)) | **Next after S42b** (owner, 2026-09-30). Designed 2026-09-18, refreshed 2026-09-30; its open questions, each with a default, are at the end of the doc. Order: S29 → S30 → S30b (the standing admin path, owner Q17) → S37d → the install walk → S34 → S37c → S39 → S32 → S32b (Claude Code as a coder, owner Q5) → S33 → S35, with **S38 (her browser) and then S38b (reading past the context) in parallel now** beside S37a (owner, 2026-09-30). All the doc's open questions were answered 2026-09-30. S31 is superseded by S42b. |
+| — | **The doing lane — S29–S39** ([`doing-things.md`](doing-things.md)) | **Next after S42b and the provider-balances slice** (owner, 2026-09-30; order revised 2026-10-05). Designed 2026-09-18 and refreshed 2026-09-30. **Self-coding was moved forward and widened 2026-10-05** in [`nova-codes.md`](nova-codes.md), which wins where the two docs differ. Order: S29 → S30 (+ part-file edits, code search) → S32 → S32b (outside coders, Nova driving) → S33 → S34 → S35 (frontier first, then local) → S34b (she starts work herself) → S37c (she reacts, widened to monitoring and CI) → S32c (other repos) → S30b (the standing admin path, owner Q17) → S37d → the install walk → S39. **S38 (her browser) and then S38b (reading past the context) run in parallel now**, beside S37a (owner, 2026-09-30). Every open question in `doing-things.md` was answered 2026-09-30. S31 is superseded by S42b. |
 | — | **S37a — the MCP client** | **In progress since 2026-09-30** (`slice/mcp-client`, spec `s37a/spec.md` on that branch), beside S42b. The first part of the doing lane's integrations: GitHub's MCP server for CI, and whatever MCP server an installed app brings. |
+| — | **S50–S52 — one Devices page, the Nova page, devices she can see into** ([`s50-devices-config-router.md`](s50-devices-config-router.md)) | **Designed 2026-10-06, unscheduled, low priority** (owner: "I'd rather do other things instead"). S50: one card per physical computer, with storage and activity. S51: a `/nova` page for her configuration, absorbing S37b. S52: device health, the router (browser driver first, needs S38). |
 | 4 | **S26 — the quality corpus** | Nothing built. A spec was written 2026-09-25 on `slice/s26` (`a3f61c99`), not on `main`, and waits on the owner's review. Order (2026-09-30): after the doing lane and the paused hub slices. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 | 6 | **After release: the optional list** ([below](#after-release-the-optional-list)) | Only after Nova is released. Things the owner marked optional, each one to research, build or decide on. |
@@ -359,7 +384,7 @@ kept for the record).
 | S26 | quality corpus | spec on `slice/s26` (`a3f61c99`), not on `main` |
 | S27 | feature flags | `slice-27-feature-flags.md` — **last** |
 | S28 | attachments | `slice-28-attachments.md` |
-| S29–S39 | the doing lane: checkable hands, jobs, goals, integrations (S37a MCP, S37b her configuration, S37c events, S37d HTTP requests), her own browser, screens, self-coding | [`doing-things.md`](doing-things.md) — designed 2026-09-18, **refreshed 2026-09-30**; S31 superseded by S42b; S37a in progress |
+| S29–S39 | the doing lane: checkable hands, jobs, goals, integrations (S37a MCP, S37b her configuration, S37c events and monitoring, S37d HTTP requests), her own browser, screens, self-coding (S32b outside coders, S32c other repos, S34b work she starts herself) | [`doing-things.md`](doing-things.md) — designed 2026-09-18, **refreshed 2026-09-30**; [`nova-codes.md`](nova-codes.md) — self-coding moved forward and widened 2026-10-05; S31 superseded by S42b; S37a in progress |
 | S40 | engines and measurement identity | `slice-40-engines.md`, `-carries`, `s40/` (task files + review rulings) |
 | S40b | honest claims about machines, models and memory | `slice-40b-honest-machine-claims.md`, `-carries`, `s40b/` (design verdict, rulings, review trail) |
 | S41–S49 | the rest of the hub lane: backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18** |

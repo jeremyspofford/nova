@@ -478,6 +478,22 @@ no ICMP from the LAN even when awake.
   state it entered (S3 or Modern Standby) not supporting Wi-Fi wake on this
   platform.
 
+**Added 2026-10-05.** Two facts narrow the cause, neither a measurement of a
+wake:
+
+- **v1 woke this Dell through its Ethernet port, not its Wi-Fi.** The MAC in
+  v1's saved wake settings carries the Dell Inc. vendor prefix and matches the
+  adapter the Windows agent reports as "Ethernet". That port has had no link
+  since at least 2026-09-18. This trial sent to the Intel Wi-Fi adapter, so v1
+  working says nothing about Wi-Fi.
+- **The XPS 8950's firmware offers no Wi-Fi wake setting.** Dell's service
+  manual lists none under Power Options, and owners' reports show only "Wake Up
+  by Integrated LAN", a wired option.
+
+The owner chose to keep the Dell on Wi-Fi (2026-10-05). Whether it can wake
+over Wi-Fi is now measured by S46a's walk ([`s46a/spec.md`](s46a/spec.md)
+§1, §6.6, §12).
+
 **The schedule was stopped on purpose.** The plan's P0-1 schedule is 5 min × 5,
 90 min × 3 and overnight × 2. Trial 1 failed completely at the shortest sleep,
 the condition most favourable to landing, and repeating an unchanged

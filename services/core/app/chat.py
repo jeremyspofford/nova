@@ -1797,7 +1797,63 @@ def _address_without_secrets(value: str) -> str:
     return addresses.masked(value)
 
 
-def _redact(value: object, *, in_headers: bool = False) -> object:
+def _leaves(value: object) -> list[str]:
+    """Every string in `value` — its keys too — for `_SpanScrub`."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_leaves(key))
+            found.extend(_leaves(item))
+        return found
+    if isinstance(value, list | tuple):
+        return [leaf for item in value for leaf in _leaves(item)]
+    return []
+
+
+class _SpanScrub:
+    """What `_span_record` masked out of a call's arguments, and the callable
+    that scrubs the same strings out of that span's own `result_head` and
+    `error` (S37a final review, ruling F-H1). A refusal that echoes an
+    argument — dispatch's "unknown argument 'ghp_…'", a store's reason —
+    would otherwise carry into the trace exactly what the arguments masked.
+    Derived from what was masked on THIS call, never a list kept here. A
+    string shorter than the client's own credential floor is never a
+    candidate: masking a `v` must not rewrite every `v` in a sentence."""
+
+    def __init__(self) -> None:
+        self._pairs: dict[str, str] = {}
+
+    def add(self, value: object, replacement: str = "[masked]") -> None:
+        for leaf in _leaves(value):
+            if len(leaf) < mcp_client._MIN_CREDENTIAL_CHARS:
+                continue
+            for form in (leaf, repr(leaf)[1:-1], json.dumps(leaf)[1:-1]):
+                self._pairs.setdefault(form, replacement)
+
+    def __call__(self, text: str) -> str:
+        for secret in sorted(self._pairs, key=len, reverse=True):
+            if secret in text:
+                text = text.replace(secret, self._pairs[secret])
+        return text
+
+    def tree(self, value: object) -> object:
+        """The same scrub over every string in a JSON-shaped value — the
+        span's `facts`, where a refused connect still names what it was
+        given (`mcp_server`)."""
+        if not self._pairs:
+            return value
+        if isinstance(value, str):
+            return self(value)
+        if isinstance(value, dict):
+            return {self(k) if isinstance(k, str) else k: self.tree(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.tree(item) for item in value]
+        return value
+
+
+def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
     """Trace-sized arguments: the same shape, long strings cut to a head, and
     credentials masked (S37a, plan decision P14).
 
@@ -1819,17 +1875,21 @@ def _redact(value: object, *, in_headers: bool = False) -> object:
                 and _credential_key(key, header=in_headers)
             ):
                 out[key] = _masked(item)
+                if sink is not None:
+                    sink.add(item)
             elif isinstance(key, str) and key.strip().lower() == "url" and isinstance(item, str):
                 # S38: an address keeps its host and path; its query, fragment
                 # and user info are masked (a reset link's token lives there).
                 out[key] = _clip(_address_without_secrets(item), SPAN_ARG_HEAD_CHARS)
             else:
                 out[key] = _redact(
-                    item, in_headers=isinstance(key, str) and key.strip().lower() == "headers"
+                    item,
+                    in_headers=isinstance(key, str) and key.strip().lower() == "headers",
+                    sink=sink,
                 )
         return out
     if isinstance(value, list):
-        return [_redact(item) for item in value]
+        return [_redact(item, sink=sink) for item in value]
     if isinstance(value, str):
         return _clip(value, SPAN_ARG_HEAD_CHARS)
     return value
@@ -1860,7 +1920,7 @@ def _origin_or_masked(value: str) -> str:
     return _masked(value)
 
 
-def _origin_only(parsed: object, tool_name: str | None) -> object:
+def _origin_only(parsed: object, tool_name: str | None, sink: _SpanScrub | None = None) -> object:
     """Reduce every argument `tool_name` declared (`Tool.traced_as_origin`)
     to its URL's origin before anything else — including `_redact`'s own
     per-string clip — ever sees it (S37a, ruling X2-REVISED). No tool name, an
@@ -1876,30 +1936,175 @@ def _origin_only(parsed: object, tool_name: str | None) -> object:
         value = out.get(key)
         if isinstance(value, str):
             out[key] = _origin_or_masked(value)
+        elif value is not None and key in out:
+            # A list or an object (`{"href": ".../secret-path/mcp"}`) has no
+            # origin to read, so it is masked whole (final review N1).
+            out[key] = _masked(value)
+        else:
+            continue
+        if sink is not None and out[key] != value:
+            sink.add(value)
     return out
 
 
-def _span_arguments(raw: object, tool_name: str | None = None) -> object:
-    """What the model actually sent, recorded whether or not it parsed.
+def _carries_credentials(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s arguments can carry a credential or a secret address
+    (S37a final review I1) — derived from the tool itself, never a list kept
+    here: it declared `traced_as_origin`, or its schema names a
+    credential-shaped property (`_credential_key`) or a `headers` object."""
+    if tool is None:
+        return False
+    if tool.traced_as_origin:
+        return True
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(key, str)
+        and (_credential_key(key, header=False) or key.strip().lower() == "headers")
+        for key in properties
+    )
+
+
+def _has_free_form_object(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s schema has an object property that names none of its
+    own keys (`mcp_call`'s `arguments`, `run_skill`'s `inputs`): whatever a
+    third party's credential is called, it can sit in there (final review
+    N5). Read off the schema, never a list of tools."""
+    if tool is None:
+        return False
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(spec, dict) and spec.get("type") == "object" and not spec.get("properties")
+        for spec in properties.values()
+    )
+
+
+def _off_schema_masked(parsed: object, tool: tools.Tool, sink: _SpanScrub) -> object:
+    """For a tool that `_carries_credentials`: what did not arrive in the
+    shape its schema names is masked WHOLE, because masking by key and
+    reducing a declared URL to its origin both assume that shape. Ruling
+    F-H1: no name a caller chose reaches the span.
+
+    - Not an object at all: masked whole.
+    - A key the schema does not name (matched case-sensitively, so `URL` is
+      not `url`, and `pat` is not `token`): recorded as `<key N>` (its
+      position among this call's unknown keys), its value masked whole.
+    - A value whose property is declared a string but is not one: masked
+      whole (a `url` sent as a list or an object, N1).
+    - `headers`: a count only, `<masked:N headers>` — no check can tell a
+      header NAME from a credential (`ghp_…` is a valid header token), so
+      neither names nor values are recorded (N4). The owner sees the names
+      on the Connections tab.
+    - A connection tool's `name` (one that declares `traced_as_origin`) that
+      fails the store's one name rule (`mcp_servers.NAME_RE`, ruling F13):
+      masked, since the token pasted as a name is not a name (N2)."""
+    if not isinstance(parsed, dict):
+        sink.add(parsed)
+        return _masked(parsed)
+    properties = tool.parameters.get("properties") or {}
+    out: dict = {}
+    unknown = 0
+    for key, value in parsed.items():
+        spec = properties.get(key)
+        if spec is None:
+            unknown += 1
+            label = f"<key {unknown}>"
+            sink.add(key, label)
+            sink.add(value)
+            out[label] = _masked(value)
+        elif value is None or key in tool.traced_as_origin:
+            # A declared URL argument is `_origin_only`'s, strings and
+            # non-strings alike (N1).
+            out[key] = value
+        elif key.strip().lower() == "headers":
+            sink.add(value)
+            out[key] = (
+                f"<masked:{len(value)} headers>" if isinstance(value, dict) else _masked(value)
+            )
+        elif isinstance(spec, dict) and spec.get("type") == "string" and not isinstance(value, str):
+            sink.add(value)
+            out[key] = _masked(value)
+        elif (
+            key == "name"
+            and tool.traced_as_origin
+            and not (isinstance(value, str) and mcp_servers.NAME_RE.fullmatch(value))
+        ):
+            sink.add(value)
+            out[key] = _masked(value)
+        else:
+            out[key] = value
+    return out
+
+
+def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _SpanScrub]:
+    """What the model actually sent, recorded whether or not it parsed, and
+    the scrub for that span's own text (`_SpanScrub`).
 
     `tool_name`, when the registry holds it, lets a tool reduce one of its
     OWN arguments to a URL's origin before redaction (ruling X2-REVISED) —
     what `mcp_connect` (Task 7) needs, since ha-mcp's secret is the path
     itself, not a neighbouring token or header.
+
+    Arguments are recorded BEFORE dispatch validates them. So for a tool
+    whose arguments can carry a credential (`_carries_credentials`), or that
+    takes a free-form object (`_has_free_form_object`), text that does not
+    parse is recorded as its length only; and for the first kind anything
+    off its schema is masked whole (`_off_schema_masked`) — a local model's
+    missing brace must not put a token or a secret path into turn_spans (S37a
+    final review I1, N1-N5).
     """
+    sink = _SpanScrub()
+    tool = tools.REGISTRY.get(tool_name) if tool_name is not None else None
+    guarded = _carries_credentials(tool)
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
-            return {}
+            return {}, sink
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
+            if guarded or _has_free_form_object(tool):
+                return f"<unparsed: {len(raw)} chars>", sink
             # Unparseable arguments are exactly the case worth seeing in the
-            # trace, so the raw text is kept rather than dropped.
+            # trace, so the raw text is kept rather than dropped — for a tool
+            # whose arguments cannot carry a credential.
             parsed = raw
     else:
         parsed = raw
-    return _bounded(_redact(_origin_only(parsed, tool_name)))
+    if guarded:
+        # Masks a connection tool's `name` itself (N2).
+        parsed = _off_schema_masked(parsed, tool, sink)
+    else:
+        parsed = _server_names_masked(parsed, tool_name, sink)
+    return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+# The arguments by which her MCP tools name a connection (`mcp_tools` and
+# `mcp_call` take `server`; `mcp_connect` and `mcp_disconnect` take `name`).
+_SERVER_NAME_KEYS = ("server", "name")
+
+
+def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) -> object:
+    """For any of her MCP tools: a connection name that fails the store's one
+    name rule (`mcp_servers.NAME_RE`, ruling F13) is masked, and scrubbed out
+    of the span's own text. A token pasted where a server's name goes is not a
+    name, and the store's "there is no connected MCP server …" refusal would
+    otherwise carry it into the trace (S37a final review, hub ruling after
+    fix round 2: N2's rule holds for every tool that names a server, not only
+    `mcp_connect`)."""
+    if not (tool_name or "").startswith("mcp_") or not isinstance(parsed, dict):
+        return parsed
+    out = dict(parsed)
+    for key in _SERVER_NAME_KEYS:
+        value = out.get(key)
+        if isinstance(value, str) and not mcp_servers.NAME_RE.fullmatch(value):
+            sink.add(value)
+            out[key] = _masked(value)
+    return out
+
+
+def _span_arguments(raw: object, tool_name: str | None = None) -> object:
+    """`_span_record`'s recorded arguments alone."""
+    return _span_record(raw, tool_name)[0]
 
 
 def _bounded(redacted: object) -> object:
@@ -2741,7 +2946,7 @@ async def _run_tool(
     """
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
             # read off the wire. It still goes through schema validation — the
@@ -2768,13 +2973,14 @@ async def _run_tool(
         # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
             # Exactly what THIS call settled — the sink is append-only for the
             # turn, so the slice beyond the mark is this call's own contribution.
-            span.meta["facts"] = list(facts[facts_before:])
+            span.meta["facts"] = scrub.tree(list(facts[facts_before:]))
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     return result, ok
 
 
@@ -2805,7 +3011,7 @@ async def _run_script_step(
     a run of eight calls should move the bubble, not sit silent.
     """
     with turn.span("tool", name) as span:
-        span.meta["args_redacted"] = _span_arguments(args, name)
+        span.meta["args_redacted"], scrub = _span_record(args, name)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
@@ -2814,9 +3020,10 @@ async def _run_script_step(
         span.meta["result_head"] = NEVER_RETURNED
         result, ok = await tools.dispatch(name, args, tool_ctx)
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     emit(_activity_frame(name, "ok" if ok else "error", result))
     return result, ok
 
@@ -2972,10 +3179,10 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         if fact not in reason:
             reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta[flag] = True
         if call.from_markup:
             span.meta["parsed_from_markup"] = True
@@ -3019,10 +3226,10 @@ def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[s
     with the subset-scoped sentence. Returns that stated result."""
     reason = unknown_tool_refusal(call.name, subset)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["reason"] = "unknown_tool"
     return reason
 
@@ -3124,6 +3331,8 @@ async def _gateway_round(
     # One site covers every round there is — the loop's, the narration
     # round, both redirect shapes — because they all come through here.
     traces.set_doing(turn.id, "thinking")
+    # And so does asking for chat's pick as it stands now, for the same reason.
+    model = await _round_model(turn, model, messages)
     collected: list[str] = []
     buffer = ToolCallBuffer()
     failure: str | None = None
@@ -3169,7 +3378,8 @@ async def _gateway_round(
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
-                        detail = (await response.aread()).decode(errors="replace")[:400]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         raise GatewayFailure(
                             f"the gateway refused the request ({response.status_code}): {detail}"
                         )
@@ -3477,6 +3687,62 @@ def _role_of(turn: traces.Turn) -> str | None:
     return turn.role or _ROLE_BY_KIND.get(traces.purpose_of(turn))
 
 
+def _carries_pictures(messages: Sequence[dict]) -> bool:
+    """Do these messages hand the model a picture (an image content part)?"""
+    return any(
+        isinstance(message, dict)
+        and isinstance(message.get("content"), list)
+        and any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in message["content"]
+        )
+        for message in messages
+    )
+
+
+async def _round_model(turn: traces.Turn, model: str, messages: Sequence[dict]) -> str:
+    """The model a gateway call of this turn asks for: chat's pick as it
+    stands NOW when the turn is sending chat's pick, else `model`.
+
+    A turn reads chat.model once, when it opens, but chat's chain is read live
+    on every call — and a pick moves the model it replaces INTO that chain and
+    the new pick out of it (chat_pick). A call still asking for the pick the
+    turn opened with therefore walks the old pick alone, and fails outright
+    while it cannot answer. The walk on 2026-10-05 did exactly that: her own
+    set_chat_model switched chat to Gemini, the pick was stored and read back,
+    and round 4 of the same turn died on the walled Dell it had replaced. A
+    pick made anywhere lands the same way — her tool, the switcher while she
+    is answering, an agent she delegated to — so the pick is read, never
+    remembered.
+
+    Everything else keeps `model`. An agent's turn walks its own role and an
+    eval names its candidate (neither role is in CHAT_MODEL_ROLES); a turn
+    swapped to a model that can see its pictures no longer sends the model it
+    opened with; and a turn carrying pictures keeps the model they were
+    checked against, so a pick never hands them to a model that cannot see.
+    A pick that cannot be read keeps it too: the call still runs, on what the
+    turn was already asking for.
+    """
+    if _role_of(turn) not in CHAT_MODEL_ROLES or model != (turn.model or ""):
+        return model
+    if _carries_pictures(messages):
+        return model
+    try:
+        now = await settings_store.read_value(await db.get_pool(), "chat.model")
+    except Exception as exc:  # noqa: BLE001 - the call runs on what the turn had
+        logger.warning("turn %s: chat.model could not be read — %s", turn.id, peers.reason(exc))
+        return model
+    return now if isinstance(now, str) and now else model
+
+
+def _asked_model(turn: traces.Turn, model: str) -> str:
+    """What the turn's last gateway call asked for, as its span recorded it
+    (_round_model may have moved it off `model`); `model` when none did."""
+    llm = _last_llm_span(turn.spans)
+    asked = llm.meta.get("model") if llm is not None else None
+    return asked if isinstance(asked, str) and asked else model
+
+
 async def _collect_completion(
     app,
     turn: traces.Turn,
@@ -3504,6 +3770,7 @@ async def _collect_completion(
     # A redirect or judge round is a gateway round too: whoever asks what the
     # turn is doing gets the same answer as for its own rounds (traces.DOING).
     traces.set_doing(turn.id, "thinking")
+    model = await _round_model(turn, model, messages)
     payload: dict = {"messages": list(messages), "stream": True}
     if model:
         # An empty chat.model means "the gateway default"; sending "" would ask
@@ -3528,7 +3795,8 @@ async def _collect_completion(
                     _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
-                        detail = (await response.aread()).decode(errors="replace")[:200]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         span.meta["gateway_status"] = response.status_code
                         raise GatewayFailure(
                             f"the gateway refused ({response.status_code}): {detail}"
@@ -4529,7 +4797,9 @@ async def _run_turn(
         statement = (
             stated
             if verbatim
-            else model_failure_statement(model=model, failure=stated, spans=turn.spans)
+            else model_failure_statement(
+                model=_asked_model(turn, model), failure=stated, spans=turn.spans
+            )
         )
         logger.warning("chat turn %s failed: %s", turn.id, stated)
         decided = "error"
@@ -4809,9 +5079,11 @@ async def _run_turn(
                 # OpenAI-compatible content parts: the text, then the images.
                 # Read from DISK at send time, because the upload may have
                 # been hours ago and the file is the fact.
-                parts = attachments.image_parts(pictures)
-                if parts:
-                    ask = [{"type": "text", "text": ask}, *parts]
+                # Not `parts`: that is the reply this turn accumulates, and
+                # the images bound to it were joined as the reply's text.
+                picture_parts = attachments.image_parts(pictures)
+                if picture_parts:
+                    ask = [{"type": "text", "text": ask}, *picture_parts]
         messages = base_messages(
             model,
             recalled,

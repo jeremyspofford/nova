@@ -163,6 +163,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "spend_report",
         # S10-2 (2026-09-08): the routing walk in words. TWENTY-FIVE -> TWENTY-SIX.
         "route_explain",
+        # 2026-10-05: her own pick of chat's first model — the one write the
+        # chat switcher, Models and Settings make (app/chat_pick.py). The owner
+        # asked her to put the Dell first and she could not; it was done for
+        # him by hand. One more registered tool: the count moves by one.
+        "set_chat_model",
         "create_timer",
         "list_timers",
         "cancel_timer",

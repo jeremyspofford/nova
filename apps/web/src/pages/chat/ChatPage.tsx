@@ -413,7 +413,9 @@ export function ChatPage({
     if (distanceFromBottom < 200) el.scrollTop = el.scrollHeight
   }, [state.rows])
 
-  const model = state.model || initialModel || ''
+  // `??`, not `||`: an empty pick the store was told about is "no pick", not
+  // a cue to fall back to the value read when the app started.
+  const model = state.model ?? initialModel ?? ''
 
   return (
     <div

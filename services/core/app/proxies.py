@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.responses import Response
 
-from app import chat, db, decisions, peers, settings_store
+from app import chat, chat_pick, db, decisions, peers, settings_store
 
 router = APIRouter(prefix="/api/v1", tags=["wizard"])
 logger = logging.getLogger("core")
@@ -230,9 +230,12 @@ async def _chat_model() -> str:
 CHAT_MODEL_PARAMS = frozenset({"chat_model", "chat_model_roles"})
 
 
-async def _chat_model_params() -> dict[str, str]:
-    """`?chat_model=` and the roles it is link 1 of, or nothing while it is empty."""
-    chat_model = await _chat_model()
+async def _chat_model_params(chat_model: str | None = None) -> dict[str, str]:
+    """`?chat_model=` and the roles it is link 1 of, or nothing while it is
+    empty. `chat_model` is a value the caller already read, so one handler
+    states the same chat.model it acts on."""
+    if chat_model is None:
+        chat_model = await _chat_model()
     if not chat_model:
         return {}
     return {"chat_model": chat_model, "chat_model_roles": ",".join(chat.CHAT_MODEL_ROLES)}
@@ -364,6 +367,15 @@ async def put_jev_router(role: str, request: Request) -> Response:
     The owner gets the first answer, which names the chat model; if the OFF
     asked again fails, the answer's note says so."""
     await _refuse_an_agent_role_with_no_agent(role)
+    if role in chat.CHAT_MODEL_ROLES:
+        # The pick's lock: both move chat.model together with a chain.
+        async with chat_pick.LOCK:
+            return await _jev_router_switch(request, role)
+    return await _jev_router_switch(request, role)
+
+
+async def _jev_router_switch(request: Request, role: str) -> Response:
+    """put_jev_router's work, under the pick lock for a chat-model role."""
     path = f"/admin/routes/{role}/jev-router"
     answer = await _forward(request, "PUT", path, content=await _switch_body(request, role))
     if answer.status_code != 200 or role not in chat.CHAT_MODEL_ROLES:
@@ -388,6 +400,29 @@ async def put_jev_router(role: str, request: Request) -> Response:
     )
     stated["note"] = f"{stated['note']}; {said}" if stated.get("note") else said
     return Response(content=json.dumps(stated), status_code=200, media_type="application/json")
+
+
+@router.put("/routes/chat/primary")
+async def put_chat_primary(request: Request) -> Response:
+    """{model} becomes the chat model and the model it replaces chat's first
+    fallback — the one pick write (app/chat_pick.py has the rules). A gateway
+    refusal comes back verbatim; the answer is what was stored."""
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    model = body.get("model") if isinstance(body, dict) else None
+    if not isinstance(model, str) or not model.strip():
+        raise HTTPException(status_code=400, detail="name the model to pick: provider:model")
+    try:
+        picked = await chat_pick.set_primary(request.app, model)
+    except chat_pick.PickFailed as exc:
+        if exc.body is not None:
+            return Response(content=exc.body, status_code=exc.status, media_type=exc.media_type)
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    return Response(
+        content=json.dumps(picked.as_dict()), status_code=200, media_type="application/json"
+    )
 
 
 @router.delete("/routes/{role}")

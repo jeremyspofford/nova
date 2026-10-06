@@ -13,7 +13,11 @@ from starlette.responses import Response
 # No read timeout on completions: a model thinking is not a failure.
 # Connect/write stay bounded so a truly dead backend is reported quickly.
 COMPLETIONS_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.0)
-MODELS_TIMEOUT = httpx.Timeout(10.0)
+# A listing's connect is bounded tighter than its read: a reachable host —
+# over the tailnet too — connects in well under a second, and a machine that
+# is off answers nothing at all, so the old 10 s connect bound was what every
+# catalogue read cost while the Dell was asleep (2026-10-05).
+MODELS_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
 VERIFY_TIMEOUT = httpx.Timeout(10.0)
 
 #: What a decision model's listing row says it outputs — OpenRouter's own word
