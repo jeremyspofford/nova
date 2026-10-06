@@ -783,6 +783,83 @@ func TestStartingWithNoBuildInstalledSaysSo(t *testing.T) {
 	}
 }
 
+// denyLstat makes the supervisor's own lstat of path fail as permission
+// denied: a state that is neither "there" nor "gone".
+func denyLstat(t *testing.T, path string) {
+	t.Helper()
+	was := lstat
+	lstat = func(p string) (fs.FileInfo, error) {
+		if p == path {
+			return nil, &fs.PathError{Op: "lstat", Path: p, Err: fs.ErrPermission}
+		}
+		return os.Lstat(p)
+	}
+	t.Cleanup(func() { lstat = was })
+}
+
+// Task 32, L144: an Lstat that fails for any reason but "does not exist" is
+// neither "there" nor "gone". Starting up, the supervisor never reads it as
+// "nothing to restore" in silence: it says it cannot tell, and puts nothing
+// back over a build that may be there.
+func TestAStartThatCannotCheckTheBuildOrPrevSaysSoAndPutsNothingBack(t *testing.T) {
+	r := newRig(t)
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	if err := os.Rename(r.bin, r.bin+".prev"); err != nil {
+		t.Fatal(err)
+	}
+	for _, denied := range []string{r.bin, r.bin + ".prev"} {
+		t.Run(filepath.Base(denied), func(t *testing.T) {
+			denyLstat(t, denied)
+			var logged logLines
+			cfg := r.config()
+			cfg.Logf = logged.logf
+			s := &sup{cfg: withDefaults(cfg)}
+			if due := s.unrestored(); due != nil {
+				t.Fatalf("a restore was planned on a state it could not check: %+v", due)
+			}
+			if !logged.contain("cannot tell whether") || !logged.contain(denied+" (") {
+				t.Fatalf("the unknown must be said, naming %s and why: %q", denied, logged.lines)
+			}
+		})
+	}
+}
+
+// A revert that failed, with the build's place unknown, never says nothing
+// is installed: that would put .prev back over a build that may be there and
+// record that nothing was. It says it cannot tell, and the revert is retried
+// as for a build still installed.
+func TestAFailedRevertThatCannotCheckTheBuildNeverSaysNothingIsInstalled(t *testing.T) {
+	r := newRig(t)
+	swapRevert(t, func(string) error { return errors.New("the disk refused") })
+	denyLstat(t, r.bin)
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	s := &sup{cfg: withDefaults(cfg)}
+	reverted, installed := s.revert("aaaaaaaaaaaa", "the new build exited with 2 before it connected")
+	if reverted || !installed {
+		t.Fatalf("revert = %v, %v; want not reverted and never read as nothing installed", reverted, installed)
+	}
+	if logged.contain("nothing is installed") || !logged.contain("cannot tell whether a build is installed at "+r.bin+" (") ||
+		!logged.contain("the revert is retried") {
+		t.Fatalf("log %q", logged.lines)
+	}
+}
+
+// An agent started while its build cannot be checked says that, never that
+// no build is installed.
+func TestStartingWhenTheBuildCannotBeCheckedNeverSaysNoneIsInstalled(t *testing.T) {
+	r := newRig(t)
+	denyLstat(t, r.bin)
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 1 })
+	if logged.contain("no build is installed") || !logged.contain("cannot tell whether a build is installed at "+r.bin+" (") {
+		t.Fatalf("log %q", logged.lines)
+	}
+}
+
 // P3 holds while a revert fails: an unconfirmed build that exits 78 (it can
 // never get in) and cannot be reverted is not respawned forever. Run ends with
 // 0 and records nothing; update.json stays staged, so the next start confirms

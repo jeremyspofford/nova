@@ -147,8 +147,11 @@ func (s *sup) loop(ctx context.Context) int {
 			s.record(restore.version, state.UpdateRolledBack, restore.reason)
 			restore = nil
 		}
-		if _, err := os.Lstat(s.cfg.Binary); err != nil {
-			s.cfg.Logf("no build is installed at %s (%v): starting the agent will fail", s.cfg.Binary, err)
+		switch gone, err := absent(s.cfg.Binary); {
+		case err != nil:
+			s.cfg.Logf("cannot tell whether a build is installed at %s (%v); starting the agent", s.cfg.Binary, err)
+		case gone:
+			s.cfg.Logf("no build is installed at %s: starting the agent will fail", s.cfg.Binary)
 		}
 		started := s.cfg.Now()
 		child, err := s.cfg.Spawn(ctx, s.cfg.Binary, []string{"run"}, s.env())
@@ -453,16 +456,27 @@ func (s *sup) lastRestore(r *restoreDue) {
 // unrestored is a restore due from before this start. Nothing is installed
 // at Binary, the build a swap (or a revert) moved aside waits at .prev, and
 // update.json still says staged: the last supervisor stopped while putting
-// it back kept failing. nil when there is none.
+// it back kept failing. nil when there is none — and when that cannot be
+// told, which is said, never read as either (Task 32, L144): nothing is
+// put back over a build that may be there.
 func (s *sup) unrestored() *restoreDue {
-	if _, err := os.Lstat(s.cfg.Binary); !errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if _, err := os.Lstat(s.cfg.Binary + ".prev"); err != nil {
-		return nil
-	}
 	var u state.Update
 	if state.ReadJSON(filepath.Join(s.cfg.StateDir, state.UpdateFile), &u) != nil || u.Outcome != state.UpdateStaged {
+		return nil
+	}
+	switch gone, err := absent(s.cfg.Binary); {
+	case err != nil:
+		s.cfg.Logf("cannot tell whether a build is installed at %s (%v); putting nothing back over it", s.cfg.Binary, err)
+		return nil
+	case !gone:
+		return nil
+	}
+	switch gone, err := absent(s.cfg.Binary + ".prev"); {
+	case err != nil:
+		s.cfg.Logf("nothing is installed at %s, and cannot tell whether the previous build waits at %s.prev (%v); not putting it back",
+			s.cfg.Binary, s.cfg.Binary, err)
+		return nil
+	case gone:
 		return nil
 	}
 	s.cfg.Logf("nothing is installed at %s and the previous build waits at .prev; putting it back", s.cfg.Binary)
@@ -473,12 +487,31 @@ func (s *sup) unrestored() *restoreDue {
 // revertBuild is Revert; a test makes it fail.
 var revertBuild = Revert
 
+// lstat is os.Lstat; a test makes it fail.
+var lstat = os.Lstat
+
+// absent is whether path is confirmed missing. An Lstat error other than
+// "does not exist" is returned instead: the path is then neither there nor
+// gone, and is never read as either (Task 32, L144).
+func absent(path string) (bool, error) {
+	_, err := lstat(path)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	default:
+		return false, err
+	}
+}
+
 // revert puts .prev back for a build that failed to confirm, and records
 // rolled_back only once that has happened. A revert that fails records
 // nothing, since the record would be false (and a next start would read it
 // as done and never retry). It is logged, saying what the failure left. When
-// the failed build is still installed (installed), the caller confirms it
-// again, which retries the revert. When nothing is installed — .prev could
+// the failed build is still installed (installed) — or whether it is cannot
+// be told, which is said — the caller confirms it again, which retries the
+// revert. When nothing is installed — .prev could
 // not come back, nor the failed build return — the caller puts .prev back
 // before anything starts, and keeps .failed.
 func (s *sup) revert(version, reason string) (reverted, installed bool) {
@@ -488,7 +521,14 @@ func (s *sup) revert(version, reason string) (reverted, installed bool) {
 		s.record(version, state.UpdateRolledBack, reason)
 		return true, true
 	}
-	if _, lerr := os.Lstat(s.cfg.Binary); lerr != nil {
+	switch gone, lerr := absent(s.cfg.Binary); {
+	case lerr != nil:
+		// Read as installed: nothing is put back over a build that may be
+		// there, and nothing is recorded as having been missing.
+		s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; cannot tell whether a build is installed at %s (%v), so the revert is retried",
+			version, reason, err, s.cfg.Binary, lerr)
+		return false, true
+	case gone:
 		s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; nothing is installed at %s, and putting it back is retried",
 			version, reason, err, s.cfg.Binary)
 		return false, false
