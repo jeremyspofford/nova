@@ -511,9 +511,9 @@ func absent(path string) (bool, error) {
 // as done and never retry). It is logged, saying what the failure left. When
 // the failed build is still installed (installed) — or whether it is cannot
 // be told, which is said — the caller confirms it again, which retries the
-// revert. When nothing is installed — .prev could
-// not come back, nor the failed build return — the caller puts .prev back
-// before anything starts, and keeps .failed.
+// revert. When nothing is installed — .prev could not come back, nor the
+// failed build return — the caller puts .prev back before anything starts,
+// and keeps .failed.
 func (s *sup) revert(version, reason string) (reverted, installed bool) {
 	err := revertBuild(s.cfg.Binary)
 	if err == nil {
