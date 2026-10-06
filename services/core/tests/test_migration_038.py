@@ -99,8 +99,38 @@ async def test_an_open_attempt_has_no_outcome_time_and_a_decided_one_has_one(poo
         )
 
 
+# The constraints 038 drops and adds again: re-running it gives each a new oid,
+# so their oids say whether a re-run happened, and whether it was kept.
+_REBUILT = ("devices_last_transport", "device_audit_pkey")
+
+
+async def _rebuilt_oids(conn) -> dict[str, int]:
+    rows = await conn.fetch(
+        "SELECT conname, oid FROM pg_constraint "
+        "WHERE connamespace = 'public'::regnamespace AND conname = ANY($1::text[])",
+        list(_REBUILT),
+    )
+    return {r["conname"]: r["oid"] for r in rows}
+
+
 async def test_the_migration_runs_twice(pool):
-    await pool.execute(MIGRATION.read_text(encoding="utf-8"))
+    """038 runs again over the suite's schema — inside a transaction that is
+    rolled back (Task 32, L301). Applied for good, the re-run put back 038's
+    own CHECK on devices.last_transport, and would narrow it again for every
+    later test the day S43a/S48/S49 widen it."""
+    async with pool.acquire() as conn:
+        before = await _rebuilt_oids(conn)
+        assert set(before) == set(_REBUILT)
+        tx = conn.transaction()
+        await tx.start()
+        try:
+            await conn.execute(MIGRATION.read_text(encoding="utf-8"))
+            during = await _rebuilt_oids(conn)
+            assert set(during) == set(_REBUILT)
+            assert all(during[name] != before[name] for name in _REBUILT)  # it ran
+        finally:
+            await tx.rollback()
+        assert await _rebuilt_oids(conn) == before  # and nothing of it was kept
 
 
 def _scoped_dsn(schema: str) -> str:
