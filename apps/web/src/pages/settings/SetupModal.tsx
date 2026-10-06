@@ -6,11 +6,12 @@ import {
   getNetworkAddress as apiGetNetworkAddress,
   mintPairingCode as apiMintPairingCode,
   mintRepairCode as apiMintRepairCode,
+  reasonOf,
   type NetworkAddress,
   type OsKey,
   type PairingCode,
 } from '../../lib/api'
-import { fillCode, isMachineSetup, OS_KEYS, SETUP_TITLES, type SetupKind } from '../../lib/setupSteps'
+import { fillCommands, isMachineSetup, SETUP_TITLES, type SetupKind } from '../../lib/setupSteps'
 
 /**
  * One setup, opened from Settings (S47). It reads the derived address every time
@@ -51,20 +52,6 @@ type Loaded =
   | { status: 'loading' }
   | { status: 'error'; reason: string }
   | { status: 'ready'; address: NetworkAddress; code: PairingCode | null; manifest: ManifestState | null }
-
-function reasonOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
-/** Every OS line filled with this one code — null when there is nothing to
- *  fill (no command, or no live code yet). Filled in the BROWSER (S42b D3):
- *  fillCode itself refuses anything but a canonical code. */
-function fillCommands(commands: Record<OsKey, string> | null, code: string | undefined): Record<OsKey, string> | null {
-  if (!commands || !code) return null
-  const out = {} as Record<OsKey, string>
-  for (const key of OS_KEYS) out[key] = fillCode(commands[key], code)
-  return out
-}
 
 export function SetupModal({
   setup,
@@ -109,9 +96,12 @@ export function SetupModal({
     return () => {
       live = false
     }
-  }, [setup, api, attempt, repair])
+    // S42b K11: keyed on the id, not the object — a re-render handing in a
+    // new-but-equal `{id, name}` must not mint a second code.
+  }, [setup, api, attempt, repair?.id])
 
   const title = repair ? `Re-pair ${repair.name}` : setup ? SETUP_TITLES[setup] : ''
+  const filled = state.status === 'ready' ? fillCommands(state.manifest?.commands ?? null, state.code?.code) : { commands: null, reason: null }
   return (
     <Modal open={setup !== null} onClose={onClose} size="md" title={title}>
       <div role="dialog" aria-label={title} className="space-y-4">
@@ -128,10 +118,12 @@ export function SetupModal({
             reason={state.address.reason}
             code={state.code?.code ?? null}
             expiresAt={state.code?.expires_at ?? null}
-            fallbackOrigin={window.location.origin}
             onNewCode={() => setAttempt(n => n + 1)}
-            commands={fillCommands(state.manifest?.commands ?? null, state.code?.code)}
-            commandsReason={state.manifest?.commands_reason ?? null}
+            commands={filled.commands}
+            // S42b K3/K5: fillCommands' own reason (the code was not
+            // canonical) wins when there is one; otherwise core's own
+            // commands_reason (no address to download from at all).
+            commandsReason={filled.reason ?? state.manifest?.commands_reason ?? null}
             walks={state.manifest?.walks ?? null}
             notes={state.manifest?.notes ?? null}
           />

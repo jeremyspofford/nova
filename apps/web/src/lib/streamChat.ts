@@ -54,8 +54,10 @@
 
 import { createLineBuffer } from './lineBuffer'
 import { statedReason } from './statedReason'
+import { OS_KEYS } from './setupSteps'
 // Type-only: api.ts imports this module at runtime, so a value import here
-// would be a cycle.
+// would be a cycle. setupSteps.ts only imports api.ts's OsKey as a type (also
+// erased), so OS_KEYS above introduces no cycle.
 import type { SetupCard } from './api'
 
 export type StreamEvent =
@@ -286,7 +288,18 @@ function frameToEvent(payload: string): StreamEvent | null {
       }
       for (const key of ['commands', 'walks', 'notes'] as const) {
         const value = c[key]
-        if (value !== null && typeof value === 'object' && Object.values(value).every(v => typeof v === 'string')) {
+        // S42b K12: every one of the three OS keys, each a string — not just
+        // "every value present happens to be a string", which `{}` and a
+        // partial object both satisfy vacuously, and which an array of three
+        // strings satisfies by accident (Object.values on an array is its
+        // elements). A card missing one is dropped whole, same as missing
+        // kind/setup/address/url above: the reason path shows instead.
+        if (
+          value !== null &&
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          OS_KEYS.every(os => typeof (value as Record<string, unknown>)[os] === 'string')
+        ) {
           card[key] = value as Record<string, string>
         }
       }

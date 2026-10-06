@@ -8,6 +8,7 @@ import { currentPlatform, type DevicePlatform } from '../lib/devicePlatform'
 import {
   AGENT_STEPS,
   MODEL_SERVER_NOTE,
+  NOT_CANONICAL_REASON,
   NOVAD_README,
   OS_KEYS,
   OS_LABELS,
@@ -24,8 +25,10 @@ import {
 /**
  * One setup's QR code and steps (S47) — the same panel in Settings and in her
  * chat card. The QR code only ever encodes `address`, the derived address core
- * states; `fallbackOrigin` (this browser's own origin) may appear in a COMMAND
- * for a machine that reaches the same page, never in a QR code.
+ * states — never this browser's own origin (there is no fallback to it: S42b
+ * K6 removed the one wording that used to mention it, as misleading in
+ * practice — core's commands come from the same address reader the QR code
+ * does, so when there is no address there is no command either).
  */
 export interface SetupPanelProps {
   setup: SetupKind
@@ -34,10 +37,6 @@ export interface SetupPanelProps {
   /** A machine setup's live code. Absent on a reloaded card: a code is shown once. */
   code?: string | null
   expiresAt?: string | null
-  /** This browser's own origin. Since S42b it affects wording only (the
-   *  QR-less case, below) — the one-liners themselves always come from
-   *  `commands`, never derived from an origin in the browser. */
-  fallbackOrigin?: string | null
   compact?: boolean
   onNewCode?: () => void
   clock?: () => Date
@@ -111,7 +110,6 @@ export function SetupPanel({
   reason,
   code,
   expiresAt,
-  fallbackOrigin,
   compact = false,
   onNewCode,
   clock = systemClock,
@@ -145,7 +143,6 @@ export function SetupPanel({
       {address === null && (
         <p role="alert" className="rounded-sm border border-warning/30 bg-warning/10 px-3 py-2 text-caption text-warning">
           No QR code: {reason ?? 'Nova has no address another device can reach.'}
-          {fallbackOrigin && machine && ` This page is open directly at ${fallbackOrigin}.`}
         </p>
       )}
       {machine && !live && (
@@ -231,11 +228,22 @@ export function AgentCommands({
       </p>
     )
   }
+  const line = commands[active]
+  // S42b K3: a line that is missing (a malformed commands map — K12 guards
+  // the wire, this guards the prop directly) or that still carries {CODE}
+  // (an un-filled line that slipped through) is never offered for copying.
+  if (!line || line.includes('{CODE}')) {
+    return (
+      <p role="alert" className="rounded-sm border border-warning/30 bg-warning/10 px-3 py-2 text-caption text-warning">
+        {AGENT_STEPS.noCommand} {reason ?? NOT_CANONICAL_REASON}
+      </p>
+    )
+  }
   return (
     <div className="space-y-2">
       <p className="text-caption font-medium">{AGENT_STEPS.command}</p>
       <Tabs tabs={OS_KEYS.map(key => ({ id: key, label: OS_LABELS[key] }))} activeTab={active} onChange={id => setActive(id as OsKey)} />
-      <CopyLine value={commands[active]} label={`the ${OS_LABELS[active]} command`} />
+      <CopyLine value={line} label={`the ${OS_LABELS[active]} command`} />
       {walks?.[active] && <p className="text-caption text-content-tertiary">{walks[active]}</p>}
       {notes?.[active] && <p className="text-caption">{notes[active]}</p>}
       {active === 'windows' && <p className="text-caption">{AGENT_STEPS.wsl}</p>}

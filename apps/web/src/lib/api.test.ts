@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  ApiError,
   parsePullLine,
   pullModel,
   getActivity,
@@ -303,7 +304,7 @@ describe('machines (S40): the routes and the bodies, verbatim', () => {
   })
 })
 
-describe('updateDevice (S42b D4, carried from Task 26): a dead or slow gateway is typed, never thrown', () => {
+describe('updateDevice (S42b D4/K4, carried from Task 26): a dead or slow gateway is typed, never thrown', () => {
   function stubStatus(status: number, body = '') {
     vi.stubGlobal(
       'fetch',
@@ -324,11 +325,12 @@ describe('updateDevice (S42b D4, carried from Task 26): a dead or slow gateway i
     expect(outcome.version).toBeNull()
     expect(outcome.from_version).toBeNull()
     expect(outcome.needs_card).toBe(false)
+    expect(outcome.in_flight).toBeNull()
     expect(outcome.reason).toContain('sent or not, not known yet')
     expect(outcome.reason).not.toContain('<html>')
   })
 
-  it('a network failure after the request was sent is also not_known_yet, not a thrown error', async () => {
+  it('a network failure says "may or may not" — status 0 happens BEFORE sending too, so it never claims the request was sent (K4)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -337,7 +339,25 @@ describe('updateDevice (S42b D4, carried from Task 26): a dead or slow gateway i
     )
     const outcome = await updateDevice('d-1')
     expect(outcome.outcome).toBe('not_known_yet')
-    expect(outcome.reason).toContain('the network failed after the request was sent')
+    expect(outcome.reason).toContain('may or may not have received it')
+    expect(outcome.reason).not.toContain('after the request was sent')
+  })
+
+  it('a 200 whose body cannot be read is not_known_yet too — core certainly got the request (K4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => {
+          throw new TypeError('network error')
+        },
+      }) as unknown as Response),
+    )
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.reason).toContain('its body could not be read')
   })
 
   it('a real refusal (404, unpaired device) is thrown verbatim, never absorbed into not_known_yet', async () => {
@@ -348,8 +368,19 @@ describe('updateDevice (S42b D4, carried from Task 26): a dead or slow gateway i
     })
   })
 
-  it('a real answer passes through verbatim, to the fixed path, as a POST', async () => {
-    const body = { outcome: 'sent', version: 'abcdef123456', from_version: '111111111111', reason: null, needs_card: false }
+  it.each([500, 503])('status %i reads as itself — thrown with core’s own reason, never not_known_yet (K10)', async status => {
+    stubStatus(status, JSON.stringify({ error: `core said ${status}` }))
+    const err: unknown = await updateDevice('d-1').then(
+      v => v,
+      e => e,
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(status)
+    expect((err as ApiError).message).toContain(`core said ${status}`)
+  })
+
+  it('a real answer passes through verbatim, including in_flight (K9), to the fixed path, as a POST', async () => {
+    const body = { outcome: 'sent', version: 'abcdef123456', from_version: '111111111111', reason: null, needs_card: false, in_flight: 2 }
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({

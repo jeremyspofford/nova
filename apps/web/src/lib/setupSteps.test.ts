@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { defaultOs, fillCode, formatCode, installSteps, OS_KEYS, parseCodeFragment, setupLink } from './setupSteps'
+import {
+  defaultOs,
+  fillCode,
+  fillCommands,
+  formatCode,
+  installSteps,
+  NOT_CANONICAL_REASON,
+  OS_KEYS,
+  parseCodeFragment,
+  setupLink,
+} from './setupSteps'
 
 const ADDRESS = 'https://nova.fake-tailnet.ts.net'
 
@@ -110,5 +120,27 @@ describe('fillCode — never fills anything but a canonical pairing code (S42b D
       expect(fillCode(commands.macos, code)).toBe(`M --code ${dashed}`)
       expect(fillCode(commands.windows, code)).toBe(`W --code ${dashed}`)
     }
+  })
+})
+
+describe('fillCommands — the one helper that fills every OS line (S42b K3/K5)', () => {
+  const COMMANDS = { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' }
+
+  it('fills all three lines with a canonical code', () => {
+    expect(fillCommands(COMMANDS, 'abcd2345')).toEqual({
+      commands: { linux: 'L --code ABCD-2345', macos: 'M --code ABCD-2345', windows: 'W --code ABCD-2345' },
+      reason: null,
+    })
+  })
+
+  it('a non-canonical code (the reviewer’s probe value) fills nothing, with a stated reason — never {CODE} left in a line', () => {
+    const result = fillCommands(COMMANDS, 'ABC0-2345')
+    expect(result).toEqual({ commands: null, reason: NOT_CANONICAL_REASON })
+  })
+
+  it('no commands, or no code yet, is a quiet null — nothing is wrong, there is just nothing yet', () => {
+    expect(fillCommands(null, 'ABCD2345')).toEqual({ commands: null, reason: null })
+    expect(fillCommands(COMMANDS, null)).toEqual({ commands: null, reason: null })
+    expect(fillCommands(COMMANDS, undefined)).toEqual({ commands: null, reason: null })
   })
 })

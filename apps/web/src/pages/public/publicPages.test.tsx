@@ -109,6 +109,20 @@ describe('AddPage', () => {
     renderPage(<AddPage platform={LINUX} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
     expect((await screen.findByRole('alert')).textContent).toContain('the hub has no agent build yet')
   })
+  it('says nothing is wrong while still asking — no alert while the manifest is pending (K1)', () => {
+    renderPage(<AddPage platform={LINUX} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={() => new Promise(() => {})} />)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('Asking Nova for the command…')).toBeTruthy()
+  })
+  it('passes through core’s own commands_reason when the manifest answers with none (K2)', async () => {
+    const getManifest = vi.fn(async () => ({
+      ...MANIFEST,
+      commands: null,
+      commands_reason: 'Nova has no address another device can reach',
+    }))
+    renderPage(<AddPage platform={LINUX} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
+    expect((await screen.findByRole('alert')).textContent).toContain('Nova has no address another device can reach')
+  })
   it('a bare "#" carries no code either, and asks the same friendly way (Review Focus 2)', () => {
     renderPage(<AddPage platform={LINUX} hash="#" origin={ORIGIN} share={undefined} />)
     expect(screen.getByText('This page adds a machine to Nova. Type the code Nova showed you.')).toBeTruthy()
@@ -123,15 +137,19 @@ describe('AddPage', () => {
     expect(screen.getByTestId('add-code').textContent).toBe('K7PQ-9XYZ')
     await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1))
   })
-  it('on a phone: open it on the computer, with Share only where sharing exists (Review Focus 5)', () => {
+  it('on a phone: open it on the computer, with Share only where sharing exists (Review Focus 5)', async () => {
     const share = vi.fn(async () => {})
     const getManifest = vi.fn(async () => MANIFEST)
     const { unmount } = renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} getManifest={getManifest} />)
     expect(screen.getByText('Open this on the computer you’re adding.')).toBeTruthy()
+    // K7: awaited so the manifest's own state update lands inside act(),
+    // not as a stray warning once this test has already moved on.
+    await screen.findByText('L --code ABCD-2345')
     fireEvent.click(screen.getByRole('button', { name: /Share this link/ }))
     expect(share).toHaveBeenCalledWith({ title: 'Add a machine to Nova', url: `${ORIGIN}/add#ABCD-2345` })
     unmount()
     renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
+    await screen.findByText('L --code ABCD-2345')
     expect(screen.queryByRole('button', { name: /Share/ })).toBeNull()
   })
   it('a cancelled share leaves no unhandled rejection, and the page stays as it was', async () => {
@@ -155,6 +173,8 @@ describe('AddPage', () => {
     nodeProcess.on('unhandledRejection', onUnhandledRejection)
     try {
       renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} getManifest={getManifest} />)
+      // K7: awaited so the manifest's own state update lands inside act().
+      await screen.findByText('L --code ABCD-2345')
       fireEvent.click(screen.getByRole('button', { name: /Share this link/ }))
       // Flushes past the microtask the rejection settles on. If nothing in
       // AddPage catches it, it surfaces here as an unhandled rejection —
@@ -166,5 +186,41 @@ describe('AddPage', () => {
     expect(calledWith).toEqual({ title: 'Add a machine to Nova', url: `${ORIGIN}/add#ABCD-2345` })
     expect(rejections).toEqual([])
     expect(screen.getByRole('button', { name: /Share this link/ })).toBeTruthy()
+  })
+
+  // S42b K8: the two tests above inject `getManifest` and never touch the
+  // real wire. These pin the same claims one layer down — the REAL default
+  // getManifest, against a stubbed global fetch — so a regression in
+  // getAgentManifest/apiGet itself (not just in AddPage's own plumbing)
+  // would also be caught here.
+  describe('the security claims, pinned at the fetch level', () => {
+    it('exactly one request, to the manifest, carrying the code nowhere — not in its URL, not in its body', async () => {
+      const fetchSpy = vi.fn(
+        async () => ({ ok: true, status: 200, json: async () => MANIFEST, text: async () => JSON.stringify(MANIFEST) }) as unknown as Response,
+      )
+      vi.stubGlobal('fetch', fetchSpy)
+      renderPage(<AddPage platform={LINUX} hash="#abcd2345" origin={ORIGIN} share={undefined} />)
+      expect(await screen.findByText('L --code ABCD-2345')).toBeTruthy()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+      expect(url).toBe('/api/v1/agent/manifest')
+      expect(init.body).toBeUndefined()
+      const whole = JSON.stringify(fetchSpy.mock.calls).toUpperCase()
+      expect(whole).not.toContain('ABCD')
+      expect(whole).not.toContain('2345')
+    })
+
+    it('typing: a partial code makes no request; a whole one makes exactly one', async () => {
+      const fetchSpy = vi.fn(
+        async () => ({ ok: true, status: 200, json: async () => MANIFEST, text: async () => '' }) as unknown as Response,
+      )
+      vi.stubGlobal('fetch', fetchSpy)
+      renderPage(<AddPage platform={LINUX} hash="" origin={ORIGIN} share={undefined} />)
+      fireEvent.change(screen.getByLabelText('The code Nova showed you'), { target: { value: 'k7pq9' } })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      fireEvent.change(screen.getByLabelText('The code Nova showed you'), { target: { value: 'k7pq9xyz' } })
+      expect(await screen.findByText('L --code K7PQ-9XYZ')).toBeTruthy()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within, act } from '@testing-library/react'
 import { SetupModal, type SetupModalApi } from './SetupModal'
 
 const ADDRESS = { address: 'https://nova.fake-tailnet.ts.net', reason: null, read_at: '2026-09-25T14:00:00Z' }
@@ -52,5 +52,18 @@ describe('SetupModal — repair mode (S42b decision 4)', () => {
     expect((await within(dialog).findByRole('alert')).textContent).toContain('the hub has no agent build yet')
     // The QR code and the live pairing code still work.
     expect(within(dialog).getByTestId('setup-code').textContent).toBe('ABCD-2345')
+  })
+
+  it('a re-render with a new but equal-valued repair object mints only once (S42b K11)', async () => {
+    const api = fakeApi()
+    const { rerender } = render(
+      <SetupModal setup="add_machine" onClose={vi.fn()} api={api} repair={{ id: 'd-9', name: 'thinkpad' }} />,
+    )
+    await waitFor(() => expect(api.mintRepairCode).toHaveBeenCalledTimes(1))
+    rerender(<SetupModal setup="add_machine" onClose={vi.fn()} api={api} repair={{ id: 'd-9', name: 'thinkpad' }} />)
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(api.mintRepairCode).toHaveBeenCalledTimes(1)
   })
 })

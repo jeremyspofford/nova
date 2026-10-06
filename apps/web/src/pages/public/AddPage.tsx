@@ -3,8 +3,8 @@ import { Share2 } from 'lucide-react'
 import { Button, Input } from '../../components/ui'
 import { AgentCommands } from '../../components/SetupPanel'
 import { currentPlatform, type DevicePlatform } from '../../lib/devicePlatform'
-import { getAgentManifest as apiGetAgentManifest, type AgentManifest, type OsKey } from '../../lib/api'
-import { AGENT_STEPS, fillCode, OS_KEYS, parseCodeFragment } from '../../lib/setupSteps'
+import { getAgentManifest as apiGetAgentManifest, reasonOf, type AgentManifest } from '../../lib/api'
+import { AGENT_STEPS, fillCommands, parseCodeFragment } from '../../lib/setupSteps'
 import { PublicShell } from './PublicShell'
 
 type Share = (data: { title: string; url: string }) => Promise<void>
@@ -14,24 +14,10 @@ function browserShare(): Share | undefined {
   return navigator.share.bind(navigator)
 }
 
-function reasonOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
 type ManifestState =
   | { status: 'loading' }
   | { status: 'ready'; manifest: AgentManifest }
   | { status: 'error'; reason: string }
-
-/** Every OS line filled with this one code — null until the manifest is in
- *  and there is something to fill. Filled in the BROWSER (S42b D3): fillCode
- *  itself refuses anything but a canonical code. */
-function fillCommands(commands: Record<OsKey, string> | null, code: string | null): Record<OsKey, string> | null {
-  if (!commands || !code) return null
-  const out = {} as Record<OsKey, string>
-  for (const key of OS_KEYS) out[key] = fillCode(commands[key], code)
-  return out
-}
 
 /**
  * /add (S47, S42b): the page a machine setup's QR code opens. The code rides
@@ -77,8 +63,17 @@ export function AddPage({
     }
   }, [code, getManifest])
 
-  const filled =
-    manifestState.status === 'ready' ? fillCommands(manifestState.manifest.commands, code) : null
+  // S42b K3/K5: the one shared fill helper, not a local copy of it.
+  const filled = manifestState.status === 'ready' ? fillCommands(manifestState.manifest.commands, code) : { commands: null, reason: null }
+  // S42b K2: core's own commands_reason (no address to download from) is
+  // never dropped once the manifest answers — only overridden by a fill
+  // problem of this page's own (the code itself was not canonical).
+  const reason =
+    manifestState.status === 'error'
+      ? manifestState.reason
+      : manifestState.status === 'ready'
+        ? filled.reason ?? manifestState.manifest.commands_reason
+        : null
 
   return (
     <PublicShell title="Add a machine to Nova">
@@ -127,13 +122,20 @@ export function AddPage({
               <p>{AGENT_STEPS.phoneSelf}</p>
             </div>
           )}
-          <AgentCommands
-            commands={filled}
-            reason={manifestState.status === 'error' ? manifestState.reason : null}
-            walks={manifestState.status === 'ready' ? manifestState.manifest.walks : null}
-            notes={manifestState.status === 'ready' ? manifestState.manifest.notes : null}
-            platform={platform}
-          />
+          {manifestState.status === 'loading' ? (
+            // S42b K1: a quiet line, never the "No command" alert — nothing
+            // has failed, Nova just hasn't answered yet, and a screen reader
+            // must not announce a failure that is not one.
+            <p className="text-caption text-content-tertiary">Asking Nova for the command…</p>
+          ) : (
+            <AgentCommands
+              commands={filled.commands}
+              reason={reason}
+              walks={manifestState.status === 'ready' ? manifestState.manifest.walks : null}
+              notes={manifestState.status === 'ready' ? manifestState.manifest.notes : null}
+              platform={platform}
+            />
+          )}
         </>
       )}
     </PublicShell>

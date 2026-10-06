@@ -45,9 +45,16 @@ const PAGE: Record<SetupKind, string> = {
   add_model_server: '/add',
 }
 
+// S42b K13: the ONE normalisation formatCode and fillCode both build on —
+// so "fillCode is derived from the same cleanup formatCode does" is literally
+// true, not just true by construction twice.
+function clean(code: string): string {
+  return code.replace(/[\s-]/g, '').toUpperCase()
+}
+
 export function formatCode(code: string): string {
-  const clean = code.replace(/[\s-]/g, '').toUpperCase()
-  return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean
+  const c = clean(code)
+  return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c
 }
 
 /** The link a setup's QR code encodes. A machine code rides the fragment, which a browser never sends. */
@@ -218,9 +225,35 @@ export const OS_LABELS: Record<OsKey, string> = { linux: 'Linux', macos: 'macOS'
  * into, and never a partly filled line.
  */
 export function fillCode(command: string, code: string): string {
-  const clean = code.replace(/[\s-]/g, '').toUpperCase()
-  if (!CANONICAL_CODE.test(clean)) return command
-  return command.split('{CODE}').join(`${clean.slice(0, 4)}-${clean.slice(4)}`)
+  const c = clean(code)
+  if (!CANONICAL_CODE.test(c)) return command
+  return command.split('{CODE}').join(`${c.slice(0, 4)}-${c.slice(4)}`)
+}
+
+/** The one sentence a bad code earns, verbatim (S42b K3) — a line that still
+ *  carries `{CODE}` is never shown as if it were safe to copy and paste. */
+export const NOT_CANONICAL_REASON = "the pairing code is not in Nova's code format, so no command was filled"
+
+/**
+ * The ONE helper that fills every OS line with one code (S42b K3/K5) —
+ * AddPage and SetupModal both call this rather than each keeping their own
+ * copy. Either every line is filled (the code checked once, up front) or
+ * none are, with a stated reason — never a partial fill, and never a line
+ * silently left carrying `{CODE}`. `commands` null, or no code yet, is a
+ * quiet `{commands: null, reason: null}`: there is nothing wrong, there is
+ * just nothing to fill yet.
+ */
+export function fillCommands(
+  commands: Record<OsKey, string> | null,
+  code: string | null | undefined,
+): { commands: Record<OsKey, string> | null; reason: string | null } {
+  if (!commands || !code) return { commands: null, reason: null }
+  const c = clean(code)
+  if (!CANONICAL_CODE.test(c)) return { commands: null, reason: NOT_CANONICAL_REASON }
+  const dashed = `${c.slice(0, 4)}-${c.slice(4)}`
+  const out = {} as Record<OsKey, string>
+  for (const key of OS_KEYS) out[key] = fillCode(commands[key], dashed)
+  return { commands: out, reason: null }
 }
 
 /** The tab a card opens on: the OS asked for (a WSL machine is a Windows PC),

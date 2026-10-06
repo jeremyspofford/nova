@@ -25,6 +25,14 @@ export class ApiError extends Error {
   }
 }
 
+/** A caught `unknown`'s one-line message (S42b K5: the ONE copy — several
+ *  pages each kept their own before this). An `ApiError`'s message is
+ *  already the server's own stated reason; this is just as happy with any
+ *  other thrown value. */
+export function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   let response: Response
   try {
@@ -1279,42 +1287,66 @@ export interface UpdateOutcome {
   from_version: string | null
   reason: string | null
   needs_card: boolean
+  /** How many commands were already running there when it was sent (S42b K9)
+   *  — null for a `not_known_yet` outcome built here, never a guessed 0. */
+  in_flight: number | null
 }
 
 // The statuses that mean the gateway itself never properly answered — a dead
 // or overloaded proxy, not core's own stated refusal (S42b D4). 524 is
 // Cloudflare's own "the origin took too long" status; 0 is what ApiError
-// carries when fetch itself threw (the network failed, possibly after the
-// request had already reached the server).
+// carries when fetch itself threw.
 const GATEWAY_DOWN_STATUSES = new Set([502, 504, 524])
 
-function gatewayDownReason(status: number): string {
+const UNKNOWN_TAIL = "sent or not, not known yet — the machine's line will say"
+
+function notKnownYet(cause: string): UpdateOutcome {
+  return {
+    outcome: 'not_known_yet',
+    version: null,
+    from_version: null,
+    reason: `${cause}; ${UNKNOWN_TAIL}`,
+    needs_card: false,
+    in_flight: null,
+  }
+}
+
+// S42b K4: status 0 is ANY fetch rejection — offline, DNS, refused, TLS —
+// and most of those happen BEFORE the request leaves the browser. Claiming
+// "after the request was sent" states something this client cannot know;
+// the honest word is "may or may not".
+function gatewayDownCause(status: number): string {
   return status === 0
-    ? 'the network failed after the request was sent'
+    ? 'the network failed — Nova may or may not have received it'
     : `the gateway did not answer in time (status ${status})`
 }
 
 /**
- * POST /devices/{id}/update. Never throws for a dead or slow gateway: that
- * answer comes back as a TYPED `not_known_yet` outcome, not a generic thrown
- * error — it is not a refusal, since the update may have reached the agent
- * anyway. Every other failure (a real refusal, a 404, a bug) still throws,
- * exactly as every other apiSend call does.
+ * POST /devices/{id}/update. Never throws for a dead or slow gateway, or for
+ * a response that said ok but whose body never arrived or could not be
+ * parsed: each comes back as a TYPED `not_known_yet` outcome, not a generic
+ * thrown error — none of them is a refusal, since the update may have
+ * reached the agent anyway (S42b D4/K4). Every other failure (a real
+ * refusal, a 404, a bug) still throws, exactly as every other apiSend call
+ * does (S42b K10).
  */
 export async function updateDevice(id: string): Promise<UpdateOutcome> {
+  let response: Response
   try {
-    return await apiSend<UpdateOutcome>(`/api/v1/devices/${encodeURIComponent(id)}/update`, 'POST')
+    response = await request(`/api/v1/devices/${encodeURIComponent(id)}/update`, { method: 'POST' })
   } catch (err) {
     if (err instanceof ApiError && (err.status === 0 || GATEWAY_DOWN_STATUSES.has(err.status))) {
-      return {
-        outcome: 'not_known_yet',
-        version: null,
-        from_version: null,
-        reason: `${gatewayDownReason(err.status)} — sent or not, not known yet; the machine's line will say`,
-        needs_card: false,
-      }
+      return notKnownYet(gatewayDownCause(err.status))
     }
     throw err
+  }
+  try {
+    return (await response.json()) as UpdateOutcome
+  } catch {
+    // The response arrived and said it was ok — core certainly got the
+    // request — but its body never came, or came back unreadable. The
+    // update may be running regardless (S42b K4).
+    return notKnownYet('the response arrived but its body could not be read')
   }
 }
 
