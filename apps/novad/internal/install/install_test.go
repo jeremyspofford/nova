@@ -798,7 +798,7 @@ func TestUninstallMovesABuildItCannotRemoveAsideAndSaysSo(t *testing.T) {
 	if err := Uninstall(context.Background(), UninstallOptions{Paths: paths(t), InstallDir: dir, Service: &fakeService{}, Now: time.Now, Out: &out}); err != nil {
 		t.Fatal(err)
 	}
-	olds, err := oldBuilds(dir, platform.BinaryName)
+	olds, err := platform.OldBuilds(dir, platform.BinaryName)
 	if err != nil || len(olds) != 1 {
 		t.Fatalf("want the one build moved aside, got %v (%v)", olds, err)
 	}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"novad/internal/platform"
 )
 
 // rename is os.Rename; a test makes one fail.
@@ -83,10 +85,14 @@ func moveAside(path string) error {
 }
 
 // removeOld deletes the builds moved aside earlier; one a process still runs
-// from stays until the next start.
+// from stays until the next start. The install directory is read, never
+// globbed (platform.OldBuilds, the reader uninstall uses): under a folder
+// named with a bracket a glob matches another folder's files, and this
+// deletes what it matches (Task 32 Phase C, C3). A directory that cannot be
+// read leaves everything where it is; nothing here is reported as removed.
 func removeOld(binary string) {
-	matches, _ := filepath.Glob(binary + "*.old-*")
-	for _, m := range matches {
-		_ = os.Remove(m)
+	olds, _ := platform.OldBuilds(filepath.Dir(binary), filepath.Base(binary))
+	for _, f := range olds {
+		_ = os.Remove(f)
 	}
 }

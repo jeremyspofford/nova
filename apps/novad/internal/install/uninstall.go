@@ -65,7 +65,7 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 
 	// The builds moved aside earlier go first, so a file moved aside below
 	// — in use right now — is not tried again and reported twice.
-	olds, err := oldBuilds(o.InstallDir, platform.BinaryName)
+	olds, err := platform.OldBuilds(o.InstallDir, platform.BinaryName)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("looking for the builds moved aside in %s: %w", o.InstallDir, err))
 	}
@@ -132,49 +132,4 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 		fmt.Fprintf(o.Out, "Nova still lists %s as paired%s — revoke it in Settings → Devices, or run novad install to bring it back\n", name, how)
 	}
 	return errors.Join(errs...)
-}
-
-// oldBuilds are the builds moved aside in dir: <name>.old-<nanos> (place,
-// and an uninstall that met a file in use) and <name>.<prev|new|failed|
-// installing>.old-<nanos> (supervise; uninstall). Only names of that shape:
-// a file that merely starts the same way is never touched. The directory is
-// read, not globbed, so a bracket in a Windows user folder cannot change the
-// match.
-func oldBuilds(dir, name string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		rest, ok := strings.CutPrefix(e.Name(), name+".")
-		if !ok {
-			continue
-		}
-		for _, kind := range []string{"prev.", "new.", "failed.", "installing."} {
-			if r, ok := strings.CutPrefix(rest, kind); ok {
-				rest = r
-				break
-			}
-		}
-		if nanos, ok := strings.CutPrefix(rest, "old-"); ok && allDigits(nanos) {
-			out = append(out, filepath.Join(dir, e.Name()))
-		}
-	}
-	return out, nil
-}
-
-func allDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
