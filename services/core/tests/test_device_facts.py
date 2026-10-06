@@ -347,7 +347,7 @@ def test_behind_means_not_the_hubs_build_never_older():
         "state": "current",
         "hub_version": "aaaaaaaaaaaa",
     }
-    assert df.build_state("dcde74c4b9a8", "aaaaaaaaaaaa") == {
+    assert df.build_state("bbbbbbbbbbbb", "aaaaaaaaaaaa") == {
         "state": "behind",
         "hub_version": "aaaaaaaaaaaa",
     }

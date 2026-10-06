@@ -188,7 +188,7 @@ helper come from the hub's agent-dist" (`s46a/spec.md:420-422`). → decision 1.
 - S42a stamps 12 hex characters of the **commit** (`apps/novad/README.md`,
   "Build"; `.github/workflows/rebuild-ci.yml:223` uses `${GITHUB_SHA::12}`).
   D13 keys `agent-dist` by the `apps/novad` **tree** (`hub/r2-integration.md:59`).
-- **Read now:** the Dell's Windows agent reports `dcde74c4b9a8`, main is
+- **Read now:** the Dell's Windows agent reports `bbbbbbbbbbbb`, main is
   `d9cfadde`, and `apps/novad` is the same tree at both commits
   (`f06466148ce1`).
 - The consequence: a commit-stamped hub build would mark that agent behind
