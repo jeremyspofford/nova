@@ -2127,9 +2127,13 @@ async def test_a_folder_the_agent_could_not_read_is_refused_in_its_own_words(poo
 
 @pytest.mark.parametrize(
     "path",
-    # "@desktop\n" (Task 21 fix round 1): a `$` anchor also matches before a
-    # trailing newline, so the token is held to fullmatch.
-    ["@Desktop", "@pictures/a.png", "@", "@desk top", "@desktop\n", "@home\n/x"],
+    # Task 21 fix round 1 held the token to fullmatch: a `$` anchor also
+    # matches before a trailing newline. Pin moved (Task 32, L452):
+    # "@desktop\n" left this list — a line break the argument ENDS in is now
+    # dropped, so it names @desktop (pinned below), and the newline still never
+    # reaches the agent, which is what that round pinned. A break inside the
+    # token still names no folder.
+    ["@Desktop", "@pictures/a.png", "@", "@desk top", "@home\n/x"],
 )
 async def test_a_folder_token_that_names_no_known_folder_is_refused_before_the_wire(pool, path):
     _id, _device, conn, task = await _connect(pool, name="laptop")
@@ -2179,6 +2183,51 @@ async def test_a_folder_token_reaches_the_agent_unresolved_when_it_reported_the_
     )
     frame = await asyncio.wait_for(ans, 2)
     assert ok is True and frame["envelope"]["args"] == {"path": "@desktop/notes"}
+    await _close(conn, task)
+
+
+# Task 32 (L452): the token's rest was read with re.S, so a line break the
+# call's argument ended in rode into it — "@desktop/notes\n" sent the agent a
+# file name with a newline in it. The token is read, and sent, without it.
+@pytest.mark.parametrize(
+    "path,sent",
+    [
+        ("@desktop/notes\n", "@desktop/notes"),
+        ("@desktop/notes\r\n", "@desktop/notes"),
+        ("@desktop/a b.txt\n\n", "@desktop/a b.txt"),
+        ("@desktop\n", "@desktop"),
+    ],
+)
+def test_a_line_break_a_folder_token_ends_in_is_never_sent(path, sent):
+    assert device_tools._check_fs_path(path, "linux", ("desktop",)) == sent
+
+
+async def test_a_folder_token_reaches_the_agent_without_the_line_break_it_ended_in(pool):
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed({"type": "facts", "folders": {"desktop": "C:\\Users\\sam\\Desktop"}})
+    await _wait_for_facts_key(pool, device_id, "folders")
+    person = await _person(pool)
+    ans = asyncio.create_task(device.answer_command(conn, output="entries"))
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "dell", "path": "@desktop/notes\n"}, _ctx(person)
+    )
+    frame = await asyncio.wait_for(ans, 2)
+    assert ok is True and frame["envelope"]["args"] == {"path": "@desktop/notes"}
+    await _close(conn, task)
+
+
+async def test_a_bare_folder_token_with_a_trailing_line_break_names_its_folder(pool):
+    """The moved pin's other half: "@desktop\n" is @desktop, so an agent that
+    reported no folders gets @desktop's cannot, never "names no known
+    folder"."""
+    _id, _device, conn, task = await _connect(pool, name="laptop")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": "@desktop\n"}, _ctx(person)
+    )
+    assert ok is False and "cannot: laptop's agent did not report its desktop folder" in result
+    assert _command_frames(conn) == []
     await _close(conn, task)
 
 

@@ -131,8 +131,11 @@ _WINDOWS_DEVICE = ("\\\\?\\", "\\\\.\\", "//?/", "//./")
 # A known folder (S42b P16): @<name>, then optionally one "/" or "\" and the
 # rest — the agent's own grammar (apps/novad internal/caps/fs.go resolvePath),
 # which resolves it ON the machine, as its OS names the folder. Matched with
-# fullmatch, never a `$` anchor, which also matches before a trailing
-# newline — "@desktop\n" names no folder (Task 21 fix round 1).
+# fullmatch, never a `$` anchor, which also matches before a trailing newline
+# and so passed "@desktop\n" on with it (Task 21 fix round 1). A line break a
+# call's argument ENDS in is dropped before the match (_check_fs_path; Task 32,
+# L452): "@desktop/notes\n" read the rest as "notes\n" and sent the agent a
+# file name with a newline in it. One inside the token still names no folder.
 _FOLDER_TOKEN = re.compile(r"@([a-z]+)(?:[\\/](.*))?", re.S)
 
 
@@ -151,7 +154,8 @@ def _check_fs_path(
     so the daemon receives one spelling.
 
     Or it names a known folder, @desktop/notes.txt (P16): passed through
-    UNRESOLVED when the device's agent reported that folder (`folders`,
+    UNRESOLVED — less a line break it ends in — when the device's agent
+    reported that folder (`folders`,
     device_facts.folders_of) — the machine resolves it as its OS names it,
     never core — and otherwise a stated cannot, in the agent's own words
     when it said why it could not read the folder (`unread`,
@@ -164,6 +168,9 @@ def _check_fs_path(
     would break the one-spelling rule. An unknown platform cannot be checked,
     and says so."""
     if isinstance(path, str) and path.startswith("@"):
+        # The token is read without the line break the argument ends in, and
+        # passed on without it: never a file named "notes\n" (Task 32, L452).
+        path = path.rstrip("\r\n")
         m = _FOLDER_TOKEN.fullmatch(path)
         if m is None or m.group(1) not in device_facts.FOLDER_NAMES:
             known = ", ".join(f"@{n}" for n in device_facts.FOLDER_NAMES)
