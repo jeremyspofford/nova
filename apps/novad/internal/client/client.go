@@ -933,7 +933,12 @@ func (a *Agent) frameBytes() ([]byte, error) {
 	frame := a.gatherFrame(carried)
 	if probed != nil {
 		full := frame
-		full.Unreadable = append([]facts.Unreadable(nil), frame.Unreadable...)
+		// A copy, so ApplyTo never appends into frame's own list — and an
+		// empty one, never nil: encoding/json writes a nil slice as null, and
+		// core refused a frame whose unreadable was null. Build 8a2c15dab611
+		// sent exactly that whenever nothing was unreadable — every frame a
+		// healthy agent sent once its probe had run.
+		full.Unreadable = append([]facts.Unreadable{}, frame.Unreadable...)
 		probed.ApplyTo(&full)
 		data, err := json.Marshal(full)
 		if err != nil {

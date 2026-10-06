@@ -1,0 +1,27 @@
+{
+  "type": "auth",
+  "device_id": "00000000-0000-4000-8000-0000000000f1",
+  "sig": "aad5851a3ca2988827c50a74cf69b239c89271ca58ad714aae3052dd668568484977052959e2f2c05445c681c9e40b3ca8098839e201962d0f4c9ba99524ec0f",
+  "facts": {
+    "v": 2,
+    "agent": {
+      "version": "0123456789ab",
+      "mode": "run-key",
+      "session_interactive": true,
+      "update": {
+        "version": "0123456789ab",
+        "outcome": "applied",
+        "reason": "",
+        "at": "2026-10-06T12:00:00Z"
+      }
+    },
+    "os": {
+      "goos": "windows",
+      "arch": "amd64",
+      "version": "Windows 11 Pro 24H2 (build 26100)",
+      "wsl": null
+    },
+    "hostname": "FIXTURE-PC",
+    "machine_uid": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+}
