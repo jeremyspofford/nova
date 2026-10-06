@@ -133,6 +133,26 @@ def _is_ascii_word(piece: str, word: str) -> bool:
     return piece.isascii() and piece.lower() == word
 
 
+def _host_start(text: str, at: int) -> int:
+    """Where the host of the URL whose scheme starts at `at` begins: past the
+    last `@` of its authority, or right after `://` when it has no user info.
+
+    The authority ends only at `/`, `?`, `#` or whitespace (RFC 3986) — NOT
+    at a quote or a bracket, which user info may legally hold: ending a URL
+    there first left `https://alice:hun` of `https://alice:hun'ter2@b/…`
+    with no `@` to recognise, and the scrub handed the password through
+    (hub, S38 final review, after fix round 2). Linear: the scan stops at
+    the next scheme's own `/`, so no character is read by two of these."""
+    j = start = text.index("://", at) + 3
+    last_at = -1
+    n = len(text)
+    while j < n and not text[j].isspace() and text[j] not in "/?#":
+        if text[j] == "@":
+            last_at = j
+        j += 1
+    return start if last_at == -1 else last_at + 1
+
+
 def _url_end(text: str, at: int) -> int:
     end, n = at, len(text)
     while end < n and not text[end].isspace() and text[end] not in _STOP_CHARS:
@@ -160,8 +180,10 @@ def scrub(text: str) -> str:
             out.append(text[i:])
             return "".join(out)
         out.append(text[i:at])
-        end = _url_end(text, at)
-        out.append(shown(text[at:end]) or text[at:end])
+        host = _host_start(text, at)
+        end = _url_end(text, host)
+        candidate = text[at : text.index("://", at) + 3] + text[host:end]
+        out.append(shown(candidate) or candidate)
         i = end
 
 
@@ -178,7 +200,9 @@ def scrub_bounded(text: str, limit: int) -> tuple[str, int]:
         return scrub(text), 0
     head = text[:limit]
     run = len(head)
-    while run > 0 and not head[run - 1].isspace() and head[run - 1] not in _STOP_CHARS:
+    # The last WHITESPACE-delimited run, not one ended by a quote or a
+    # bracket: user info may hold those (see `_host_start`).
+    while run > 0 and not head[run - 1].isspace():
         run -= 1
     split = _scheme_at(head, run)
     if split != -1:
