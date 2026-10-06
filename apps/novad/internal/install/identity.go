@@ -230,15 +230,22 @@ func (o *Options) pair(ctx context.Context, hubs []string) (config.Config, strin
 	if name == "" {
 		name = host
 	}
-	var lastErr error
+	// What each address that gave no final answer said, in order: a later
+	// answer never replaces it. An address whose answer was lost may have
+	// spent the code, and the next one's "already used" alone would hide
+	// that (Task 32, L222).
+	var said []string
 	for _, hub := range hubs {
 		res, err := o.Enroll(ctx, hub, o.Code, name, host, pub)
 		var refused *EnrollRefused
 		if errors.As(err, &refused) {
+			if len(said) > 0 {
+				return config.Config{}, "", fmt.Errorf("%w (before that: %s)", err, strings.Join(said, "; "))
+			}
 			return config.Config{}, "", err
 		}
 		if err != nil {
-			lastErr = err
+			said = append(said, err.Error())
 			continue
 		}
 		cfg := config.Config{DeviceID: res.DeviceID, Name: res.Name, Server: hub, CorePubKey: res.CorePubKey, Locators: hubs}
@@ -250,5 +257,5 @@ func (o *Options) pair(ctx context.Context, hubs []string) (config.Config, strin
 		}
 		return cfg, fmt.Sprintf("paired as %q", res.Name), nil
 	}
-	return config.Config{}, "", fmt.Errorf("could not pair: %w", lastErr)
+	return config.Config{}, "", fmt.Errorf("could not pair: %s", strings.Join(said, "; "))
 }

@@ -122,9 +122,10 @@ func cmdEnroll(argv []string) {
 	}
 
 	// install.Enroll is the one enroll call (S42b): its errors are this
-	// command's own words — "could not reach <url>: …", the server's reason
-	// verbatim as "enrollment refused (<status>): <reason>" (spent/expired
-	// code, name taken), or an unreadable answer.
+	// command's own words — "could not reach <url>: …", the hub's stated
+	// reason verbatim as "enrollment refused (<status>): <reason>"
+	// (spent/expired code, name taken), "<url> answered <status>" for a
+	// status that is not the hub's stated refusal, or an unreadable answer.
 	ok, err := install.Enroll(context.Background(), *server, *code, devName, hostname, pub)
 	if err != nil {
 		fail("%v", err)
