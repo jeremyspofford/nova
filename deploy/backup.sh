@@ -2838,8 +2838,16 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
   bk_coverage_rows < "$cov" | awk -F'\037' '$1 == "database" { print $2 }' |
     LC_ALL=C sort > "$stage/dbs.carried"
   bk_dsn_databases < "$facts/config.yaml" > "$stage/dbs.named"
-  missing="$(comm -13 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
-  extra="$(comm -23 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
+  # Both files above are sorted under LC_ALL=C (bk_dsn_databases sorts its
+  # own output the same way; dbs.carried is piped through LC_ALL=C sort just
+  # above). comm must run in that same collation (Task 32, the MF6 twin —
+  # bk_fill_volume's own fix, here): under a locale that collates
+  # differently from C, comm can walk a C-sorted pair out of step and name a
+  # database both sides actually agree on as missing on one side and extra
+  # on the other. Measured by backup_test.sh under both LC_ALL=en_US.UTF-8
+  # and LC_ALL=C.
+  missing="$(LC_ALL=C comm -13 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
+  extra="$(LC_ALL=C comm -23 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
   if [ -n "${missing# }" ] || [ -n "${extra# }" ]; then
     bk_fail "the two sources disagree about which databases this stack holds, and
        neither one is preferred over the other.

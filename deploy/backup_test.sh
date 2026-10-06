@@ -3397,6 +3397,35 @@ nova_memory|memory"
   expect_has "the_refusal_says_which_side_has_the_extra_one" \
     "$BKT_ERR" "no service names it: nova_leftover"
 
+  # Task 32, the MF6 twin: the exact same sort/comm collation bug MF6 fixed
+  # in bk_fill_volume, here in this reconciliation's own comm calls. Both
+  # dbs.carried and dbs.named are sorted LC_ALL=C; comm must read them back
+  # in that same collation. "Zephyr_db" is a database no service names
+  # (same shape as nova_leftover above), chosen because under a real
+  # locale's collation it sorts relative to the three real names
+  # differently than LC_ALL=C does — so an unprefixed comm here does not
+  # just miss Zephyr_db, it also calls nova_core, nova_gateway and
+  # nova_memory extra AND missing even though both sources agree on them.
+  # This is the same test as the one just above it, with a name picked to
+  # expose that collation bug rather than to miss it by chance.
+  bkt_reset
+  STUB_DATABASES="nova_core|core
+nova_gateway|gateway
+nova_memory|memory
+Zephyr_db|postgres"
+  bkt_backup
+  STUB_DATABASES="nova_core|core
+nova_gateway|gateway
+nova_memory|memory"
+  expect_str "a_collation_sensitive_extra_database_still_refuses" \
+    "$BKT_RC" "1"
+  expect_has "the_three_agreed_databases_are_read_as_agreeing_not_missing" \
+    "$BKT_ERR" "a service names it and this run would NOT carry it: nothing"
+  expect_has "the_refusal_names_only_the_collation_sensitive_extra_one" \
+    "$BKT_ERR" "no service names it: Zephyr_db"
+  expect_lacks "the_agreed_databases_are_never_bundled_into_the_extra_line" \
+    "$BKT_ERR" "no service names it: Zephyr_db nova_core"
+
   # ── the zero-database refusal, reachable at last (M14) ───────────────────
   #
   # It survived every sweep because coverage refuses R7 first whenever the
