@@ -1,0 +1,76 @@
+{
+  "type": "facts",
+  "net": {
+    "ifaces": [
+      {
+        "name": "Ethernet",
+        "mac": "02:00:00:00:00:01",
+        "ipv4_cidr": [
+          "192.0.2.10/24"
+        ],
+        "up": true
+      },
+      {
+        "name": "Wi-Fi",
+        "mac": "02:00:00:00:00:02",
+        "ipv4_cidr": [],
+        "up": false
+      }
+    ]
+  },
+  "folders": {
+    "desktop": "C:\\Users\\fixture\\Desktop",
+    "documents": "C:\\Users\\fixture\\Documents",
+    "downloads": "C:\\Users\\fixture\\Downloads",
+    "home": "C:\\Users\\fixture"
+  },
+  "unreadable": null,
+  "service": {
+    "name": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent",
+    "binary": "C:\\Users\\fixture\\AppData\\Local\\Programs\\Nova\\novad.exe",
+    "config": "C:\\Users\\fixture\\AppData\\Roaming\\novad\\config.json",
+    "process": "novad.exe",
+    "pid": 4321,
+    "supervisor_pid": 4300,
+    "user": "FIXTURE-PC\\fixture"
+  },
+  "elevation": {
+    "elevated": false,
+    "admin": true,
+    "sudo": "off"
+  },
+  "wsl_distros": {
+    "distros": [
+      {
+        "name": "Ubuntu-Fixture",
+        "default": true,
+        "version": 2,
+        "running": true,
+        "looked": true,
+        "pid1": "systemd",
+        "user": "fixture",
+        "sudo": "no_password",
+        "root": true,
+        "novad_unit": {
+          "active": "active",
+          "file": "enabled",
+          "restart": "always",
+          "main_pid": 412
+        },
+        "novad_pids": [
+          412
+        ]
+      },
+      {
+        "name": "Stopped-Fixture",
+        "default": false,
+        "version": 2,
+        "running": false,
+        "looked": false,
+        "root": false,
+        "novad_pids": []
+      }
+    ]
+  },
+  "probed_at": "2026-10-06T12:00:00Z"
+}

@@ -223,6 +223,22 @@ def _bool(value: object, where: str) -> bool:
     return value
 
 
+def _list(value: object, where: str) -> list:
+    """A list the agent sent, where null — or the key left out — is the empty
+    list. Go's encoding/json writes a nil slice as null: agent build
+    8a2c15dab611 sent "unreadable": null in every facts frame that carried a
+    probe and had nothing unreadable, and core refused each WHOLE frame —
+    net, folders and the probe with it (fix/facts-unreadable-null). Only null
+    reads as empty; any other value that is not a list is still refused.
+    novad_pids does not come through here: its null means unknown, never
+    none (_distro)."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise FactsRejected(f"{where} must be a list")
+    return value
+
+
 def _line(value: object, where: str) -> str:
     """Text core renders INTO a line: one line. A newline in an agent-reported
     name would split the line tools.machines.device_line_shown reads back —
@@ -325,9 +341,7 @@ def _cidr(value: object, where: str) -> str:
 
 def _net(raw: object) -> dict:
     net = _object(raw, "facts.net")
-    ifaces_raw = net.get("ifaces")
-    if not isinstance(ifaces_raw, list):
-        raise FactsRejected("facts.net.ifaces must be a list")
+    ifaces_raw = _list(net.get("ifaces"), "facts.net.ifaces")
     if len(ifaces_raw) > _MAX_IFACES:
         raise FactsRejected(f"facts.net.ifaces lists more than {_MAX_IFACES} interfaces")
     ifaces = []
@@ -337,7 +351,8 @@ def _net(raw: object) -> dict:
         mac = _text(iface.get("mac", ""), f"{where}.mac").lower()
         if not _MAC.match(mac):
             raise FactsRejected(f"{where}.mac {mac!r} is not a hardware address")
-        cidrs = iface.get("ipv4_cidr", [])
+        cidrs = iface.get("ipv4_cidr")
+        cidrs = [] if cidrs is None else cidrs
         if not isinstance(cidrs, list) or len(cidrs) > _MAX_ADDRS:
             raise FactsRejected(f"{where}.ipv4_cidr must be a list of at most {_MAX_ADDRS}")
         ifaces.append(
@@ -352,8 +367,7 @@ def _net(raw: object) -> dict:
 
 
 def _unreadable(raw: object) -> list[dict]:
-    if not isinstance(raw, list):
-        raise FactsRejected("facts.unreadable must be a list")
+    raw = _list(raw, "facts.unreadable")
     if len(raw) > _MAX_UNREADABLE:
         raise FactsRejected(f"facts.unreadable lists more than {_MAX_UNREADABLE} items")
     out = []
@@ -506,9 +520,7 @@ def _distro(raw: object, where: str) -> dict:
 
 def _wsl_distros(raw: object) -> dict:
     w = _object(raw, "facts.wsl_distros")
-    items = w.get("distros")
-    if not isinstance(items, list):
-        raise FactsRejected("facts.wsl_distros.distros must be a list")
+    items = _list(w.get("distros"), "facts.wsl_distros.distros")
     if len(items) > _MAX_DISTROS:
         raise FactsRejected(f"facts.wsl_distros lists more than {_MAX_DISTROS} distributions")
     return {
