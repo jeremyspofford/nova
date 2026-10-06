@@ -195,21 +195,36 @@ results, which are third-party text like a fetched page.
 ### 6. Guards (`services/core/app/guards.py`)
 
 Both are pure, precision-first, append-only (the said-not-done ruling: a correction sentence,
-never a redirect), and read the live server list passed in by the turn. None of them reads the
-owner's message (the 2026-09-27 no-phrase-matchers ruling).
+never a redirect). Both take the live server list, read once in `chat.py` **after every
+redirect has run** (`_mcp_server_refs`) — so a server an earlier redirect's `mcp_disconnect`
+removed is not "connected" by the time these run, and a server it added is. Neither reads the
+owner's message (the 2026-09-27 no-phrase-matchers ruling); both are silent on a turn whose
+delegation may have run an agent (the agent's own calls are on its own turn, not this one).
+A server's title counts as one of its names only when it looks like a proper name in prose —
+two or more words, or a capital after its first letter (`_shaped_like_a_name`); a title like
+"the" or "Files" would make a common word name the server, so such a server is matched by its
+connection name alone.
 
-- **`server_denial_check(reply, servers)`**
+- **`server_denial_check(reply, spans, servers)`**
   - Fires on a first-person, present-tense denial whose object is a connected server's name or
-    title as a whole word ("I don't have access to GitHub", "I can't reach GitHub").
-  - Silent when that server's last call failed, this turn or on its row: then the sentence is
-    true. Also silent on questions, hedges, past attempts and time-qualified states ("right
-    now").
-  - Correction: "(GitHub is connected: `mcp_call` can reach it.)"
+    title as a whole word ("I don't have access to GitHub", "I can't reach GitHub"). Judged only
+    for a persona that holds `mcp_call` — an agent given none truly cannot reach one, so no
+    server is "connected" from its point of view.
+  - Silent when that server's last call failed or was disconnected this turn, or is already
+    marked failing: then the denial is true. Also silent on questions and on a clause carrying a
+    present-state qualifier ("right now", "currently", "because", "unless", …).
+  - Correction: `"(GitHub is connected: mcp_call can reach it.)"`
 - **`server_claim_check(reply, spans, servers)`**
   - Fires on a first-person past-tense read of a connected server ("I checked GitHub", "I looked
-    at the GitHub run"), or an attribution ("according to GitHub", "GitHub shows"), when no ok
-    `mcp_call` span for that server exists this turn.
-  - Correction: "(No call to github ran this turn.)"
+    at the GitHub run"), or an attribution ("according to GitHub", "GitHub shows"), for a server
+    that answered no call this turn — "answered" means an ok `mcp_call` span, OR a call whose own
+    `isError` is true (the server's own answer, never a failing server, so it backs the claim and
+    the guard stays silent) — and whose name isn't among the arguments of an ok live-read call
+    this turn (a web fetch, a search: reading its own words is not reading the server). Also
+    silent on a clause carrying a past-tense qualifier ("earlier", "yesterday", "last time", …).
+  - Correction: says a call to the server did not **succeed** this turn when one ran and failed
+    ("No call to github succeeded this turn."); says none **ran** when none did at all ("No call
+    to github ran this turn."); stays silent whenever the server answered.
 - **Timing:** both get the timing sweep the family requires, for 50 KB replies and the worst
   case under a set time budget (the 15.4 s regex, 2026-09-12, is why).
 
