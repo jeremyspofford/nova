@@ -398,9 +398,17 @@ def test_a_long_run_of_complete_blocks_is_still_fast_and_still_correct():
         for i in range(unit_count)
     )
     assert len(text) > 100_000  # comfortably in the same order as the repro
-    started = time.perf_counter()
-    scan = markup_calls.parse_markup_tool_calls(text)
-    elapsed = time.perf_counter() - started
+    # The best of three, as the house's timing pins take it
+    # (test_guard_regex_timing._best_of): the pin measures the parser, not the
+    # process around it. In the full core suite one generation-2 collection,
+    # over ~310k live objects, landed inside this one parse: 0.087 s of a
+    # 0.118 s call that takes 0.030 s alone (Task 32 Phase B, measured with
+    # gc.callbacks). A parse that has gone superlinear misses 0.05 s every time.
+    elapsed = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        scan = markup_calls.parse_markup_tool_calls(text)
+        elapsed = min(elapsed, time.perf_counter() - started)
     assert elapsed < 0.05, f"took {elapsed:.3f}s"
     # Every block is complete and distinct, so every one of them is read: the
     # bound only caps how far a match can look, and none of these bodies come
