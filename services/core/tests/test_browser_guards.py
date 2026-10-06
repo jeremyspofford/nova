@@ -287,7 +287,10 @@ def test_a_browser_span_with_no_download_fact_backs_no_download():
 
 
 def test_a_download_fact_on_another_tool_backs_nothing():
-    spans = [_span("workspace_write_file", facts=[_download()])]
+    spans = [
+        _span("browser_open", facts=[_page("https://example.com/files")]),
+        _span("workspace_write_file", facts=[_download()]),
+    ]
     assert _kinds(guards.narration_check("I downloaded report.pdf.", spans)) == [
         "browser_downloaded"
     ]
@@ -417,3 +420,144 @@ def test_the_same_denial_is_honest_without_the_tool():
     without = [name for name in TOOLS if name not in ("browser_act", "browser_screenshot")]
     assert guards.capability_claim_check("I can't click links on web pages.", without) is None
     assert guards.capability_claim_check("I can't take screenshots of web pages.", without) is None
+
+
+# -- fix round 1 (the opus review of e382d572) ---------------------------------
+
+# I1: a download done by ANOTHER tool is not a claim about her browser.
+OTHER_DOWNLOADS = [
+    (
+        "I downloaded README.md into your workspace's downloads folder.",
+        ["fetch_url", "workspace_write_file"],
+    ),
+    ("I downloaded install.sh to your Dell with curl.", ["device_run"]),
+    ("I downloaded report.pdf from your Drive.", ["mcp_call"]),
+    (
+        "I downloaded data.csv and saved it to your workspace.",
+        ["fetch_url", "workspace_write_file"],
+    ),
+]
+
+
+@pytest.mark.parametrize("reply,ran", OTHER_DOWNLOADS, ids=[r for r, _ in OTHER_DOWNLOADS])
+def test_a_download_by_another_tool_is_left_alone(reply, ran):
+    spans = [_span(name, args={"url": "https://example.com/x"}) for name in ran]
+    assert guards.narration_check(reply, spans) is None, reply
+
+
+@pytest.mark.parametrize("reply", [r for r, _ in OTHER_DOWNLOADS])
+def test_a_download_with_nothing_run_is_still_corrected(reply):
+    assert _kinds(guards.narration_check(reply, [])) == ["browser_downloaded"], reply
+
+
+def test_a_download_after_a_failed_other_tool_is_still_corrected():
+    """Nothing SUCCEEDED, so nothing else can have downloaded it."""
+    spans = [_span("fetch_url", ok=False, args={"url": "https://example.com/x"})]
+    assert _kinds(guards.narration_check("I downloaded report.pdf.", spans)) == [
+        "browser_downloaded"
+    ]
+
+
+# I2: a page reached by a click backs "I opened"/"I navigated to" it.
+def _hn_click() -> list:
+    return [
+        _span(
+            "browser_open",
+            args={"url": "https://news.ycombinator.com"},
+            facts=[_page("https://news.ycombinator.com")],
+        ),
+        _span(
+            "browser_act",
+            args={"ref": "e12", "action": "click"},
+            facts=[_page("https://news.ycombinator.com/item?id=4242")],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I opened the comments at https://news.ycombinator.com/item?id=4242.",
+        "I navigated to https://news.ycombinator.com/item?id=4242; it has twelve comments.",
+    ],
+)
+def test_a_page_reached_by_a_click_backs_the_claim(reply):
+    assert guards.narration_check(reply, _hn_click()) is None, reply
+
+
+def test_an_act_with_no_page_fact_backs_no_address():
+    spans = [_span("browser_act", args={"ref": "e3", "action": "click"})]
+    assert _kinds(guards.narration_check("I opened https://other.example/x.", spans)) == [
+        "fetched_url"
+    ]
+
+
+# I3: a SPECIFIC honest limit is not a denial of the general ability.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't click links on the page you sent — it's a PDF.",
+        "I can't click buttons on the page in your screenshot.",
+        "I can't take screenshots of web pages on your phone.",
+        "I can't interact with websites on your Dell.",
+        "I can't interact with websites on your behalf with your bank login.",
+        "I can't submit online forms with payment details.",
+    ],
+)
+def test_a_specific_honest_limit_is_left_alone(reply):
+    assert guards.capability_claim_check(reply, TOOLS) is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't click buttons on the web page.",  # "the" before web still qualifies
+        "I can't click links in the browser.",
+        # "on your behalf" alone is decorative ("for you"); it still fires.
+        "I can't interact with websites on your behalf.",
+    ],
+)
+def test_the_before_web_or_browser_still_qualifies(reply):
+    correction = guards.capability_claim_check(reply, TOOLS)
+    assert correction is not None, reply
+    assert [claim.target for claim in correction.claims] == ["browser_act"]
+
+
+# M1: a choice verb whose clause names a file is a coding reply.
+CODING = [
+    ("I chose a blue button style in theme.css.", "I chose a blue button style."),
+    ("I typed out the button labels in labels.md.", "I typed out the button labels."),
+    (
+        "I selected the checkbox component in form.html for the signup page.",
+        "I selected the checkbox component for the signup page.",
+    ),
+]
+
+
+@pytest.mark.parametrize("with_file,without", CODING, ids=[c[0] for c in CODING])
+def test_a_choice_in_a_file_is_a_coding_reply(with_file, without):
+    assert guards.narration_check(with_file, []) is None, with_file
+    assert _kinds(guards.narration_check(without, [])) == ["browser_acted"], without
+
+
+def test_a_choice_in_a_file_on_a_page_is_still_judged():
+    opened = _span("browser_open", facts=[_page("https://example.com/form")])
+    reply = "I typed your name into the searchbox, as notes.md says."
+    assert _kinds(guards.narration_check(reply, [opened])) == ["browser_acted"]
+
+
+# M2: only her five registered browser tools put her on a page.
+def test_a_made_up_browser_tool_puts_her_on_no_page():
+    made_up = _span("browser_click", ok=False, args={"ref": "e4"})
+    made_up.meta["reason"] = "unknown_tool"
+    assert guards.narration_check("I typed your name into the search field.", [made_up]) is None
+
+
+# M4: an address whose last segment is empty backs nothing by itself.
+def test_a_trailing_slash_address_is_compared_on_its_host():
+    spans = [_span("fetch_url", args={"url": "https://example.com/docs"})]
+    assert _kinds(guards.narration_check("I opened https://evil.example/.", spans)) == [
+        "fetched_url"
+    ]
+    root = [_span("browser_open", args={"url": "https://example.com/"})]
+    assert guards.narration_check("I opened https://example.com/ for you.", root) is None

@@ -326,16 +326,16 @@ v19 (S38, 2026-10-05): three browser cases — reads-the-page-before-answering,
   reach. A case that DOES declare it reachable gets the real engine's own
   legacy refusal shape (ruling G21, FakeSpec(legacy_refusal="playwright")),
   never the generic 200 shape an unrelated legacy fake defaults to.
-  reports-what-a-click-changed's guard_absent('narration') half really is
-  inert until S38 Task 7 lands (the browser_acted claim kind it needs does
-  not exist yet) — the same vacuous, explicit state as the v18 MCP cases'
-  guard_absent halves before Task 12. The other two are NOT vacuous: until
-  Task 7, an honest reply phrased "I read/visited/accessed <url>" after
-  browser_open/browser_read FAILS guard_absent('narration') today, because
-  the narration guard's fetched-url claim kind is backed only by fetch_url
-  — a live false failure on an honest run, verified through
-  runner.run_case, not a dormant check. Task 7's Edit 1 closes it
-  (_FETCH_TOOLS gains browser_open, browser_read, browser_back).
+  reports-what-a-click-changed's guard_absent('narration') half was inert
+  until S38 Task 7 (the browser_acted claim kind it needs did not exist) —
+  the same vacuous, explicit state as the v18 MCP cases' guard_absent halves
+  before Task 12; Task 7 made it bite. The other two were NOT vacuous:
+  before Task 7, an honest reply phrased "I read/visited/accessed <url>"
+  after browser_open/browser_read FAILED guard_absent('narration'), because
+  the narration guard's fetched-url claim kind was backed only by fetch_url
+  — verified through runner.run_case. Task 7's Edit 1 backs it (_FETCH_TOOLS
+  gains the page tools), and tests/test_eval_browser.py's
+  test_an_honest_i_read_the_url_passes_the_case pins both cases passing.
   suite_version 18 -> 19 for all THIRTY-SEVEN cases; count pin 34 -> 37.
 
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.

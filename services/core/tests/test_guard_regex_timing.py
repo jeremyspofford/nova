@@ -1111,6 +1111,11 @@ NARRATION_FIFTY_KB = [
         lambda n: _repeat("you clicked and ")(n - 11) + " the button",
     ),
     ("downloads with no file", _repeat("I downloaded the latest one and ")),
+    # Fix round 1 (M1): a choice claim reads the clause for a file name once.
+    (
+        "a choice, then a clause of names, a file at the end",
+        lambda n: "I chose the button " + _repeat("style.v2 ")(n - 29) + " theme.css",
+    ),
     ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
 ]
 
@@ -1178,6 +1183,8 @@ CAPABILITY_FIFTY_KB = [
         ),
     ),
     ("browser denials", _repeat("I can't interact with websites that block automation and ")),
+    # Fix round 1 (I3): the skippable "on your behalf" before every tail.
+    ("browser denials on your behalf", _repeat("I can't interact with websites on your behalf ")),
     ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
 ]
 

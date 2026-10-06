@@ -66,9 +66,12 @@ _READ_TOOLS = frozenset({"workspace_read_file"})
 _DELETE_TOOLS = frozenset({"workspace_delete"})
 _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 # S38: her browser backs a fetch claim too — browser_open by the address it
-# was asked for and the one it landed on, browser_read and browser_back by the
-# page their facts name (see _target_of).
-_FETCH_TOOLS = frozenset({"fetch_url", "browser_open", "browser_read", "browser_back"})
+# was asked for and the one it landed on, browser_read, browser_back and
+# browser_act by the page their facts name (see _target_of): a click that
+# lands on a page is a true "I opened"/"I navigated to" it (fix round 1, I2).
+_FETCH_TOOLS = frozenset(
+    {"fetch_url", "browser_open", "browser_read", "browser_back", "browser_act"}
+)
 # S38: an action on a page — a click, typing, a choice, a submitted form — is
 # backed only by an ok browser_act span this turn.
 _BROWSER_ACT_TOOLS = frozenset({"browser_act"})
@@ -1040,6 +1043,21 @@ def _externally_attributed(clause: str) -> bool:
     )
 
 
+def _names_a_file(token: str) -> bool:
+    """A token shaped like a file name with ANY short extension — "theme.css",
+    "form.html", "labels.md" — for the page-action claim's coding cut (S38 fix
+    round 1, M1). Wider than _FILENAME on purpose: it only ever SILENCES a
+    claim, so a stray "e.g." costs a miss, never a false correction. An
+    address is not a file. String methods only, one pass."""
+    token = _strip_trailing_punct(token)
+    if "://" in token:
+        return False
+    stem, dot, ext = token.rpartition(".")
+    return bool(dot and stem and ext.isalpha() and len(ext) <= 5) and (
+        stem[-1].isalnum() or stem[-1] in "_-"
+    )
+
+
 def _claims_in(clause: str, on_a_page: bool = False) -> list[tuple[str, str | None, str]]:
     """Every completed-action self-claim in one clause, each tied to a REAL
     target (a filename token or a URL). A bare noun never qualifies, an action
@@ -1120,7 +1138,16 @@ def _claims_in(clause: str, on_a_page: bool = False) -> list[tuple[str, str | No
             else:
                 continue
             if vi < last_object and _first_person_subject(tokens, vi):
-                claims.append(("browser_acted", None, tokens[vi]))
+                # Fix round 1 (M1): off a page, a CHOICE verb in a clause that
+                # names a file is a coding reply ("I chose a blue button style
+                # in theme.css"). A click verb keeps its claim: nobody clicks
+                # a button in a file. Read once, only here: the loop ends.
+                if (
+                    on_a_page
+                    or low in _BROWSER_CLICK_VERB_TOKENS
+                    or not any(_names_a_file(tok) for tok in tokens)
+                ):
+                    claims.append(("browser_acted", None, tokens[vi]))
                 break
 
     # S38 (ruling G2): downloaded a FILE — I + downloaded + a filename token as
@@ -1250,6 +1277,18 @@ def _target_of(span: Any) -> str | None:
         ]
         urls = [url for url in seen if isinstance(url, str) and url]
         return " ".join(urls) or None
+    if span.name == "browser_act":
+        # S38 fix round 1 (I2): only the page a click LANDED on. An act with no
+        # page fact reached no page this guard can name, so its target is ""
+        # — never None, which would back a fetch claim of ANY address.
+        return " ".join(
+            fact["url"]
+            for fact in meta.get("facts") or ()
+            if isinstance(fact, dict)
+            and fact.get("browser") == "page"
+            and isinstance(fact.get("url"), str)
+            and fact["url"]
+        )
     if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
@@ -1331,6 +1370,14 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # address is matched on the path it shares with the span.
     claimed = _strip_trailing_punct(target.strip()).split("#", 1)[0].split("?", 1)[0]
     needle = claimed.rsplit("/", 1)[-1].lower()
+    if not needle.strip():
+        # S38 fix round 1 (M4): "https://evil.example/" ends in an empty
+        # segment, and "" is a substring of every span target — it backed any
+        # address after any fetch. Compare its last NON-empty segment (the host
+        # for a bare root) instead; with none at all, it matches nothing.
+        needle = claimed.rstrip("/").rsplit("/", 1)[-1].lower()
+        if not needle.strip() or needle.endswith(":"):
+            return False
     return any(needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets)
 
 
@@ -1338,14 +1385,27 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
 _BROWSER_DELEGABLE_KINDS = frozenset({"browser_acted", "browser_downloaded"})
 
 
+def _browser_tool_names() -> frozenset[str]:
+    """Her browser tools, DERIVED from the live registry (fix round 1, M2): a
+    made-up `browser_click` the model wrote is refused as an unknown tool and
+    put her on no page. Imported inside the call because app.tools imports
+    this module (_spend_tools' rule)."""
+    from app import tools
+
+    return frozenset(name for name in tools.tool_names() if name.startswith("browser_"))
+
+
 def _browser_spans(spans: Sequence[Any]):
-    """Every tool span of one of her browser_* tools this turn, ok or not —
-    except a call refused before it ran (`refused_*`, chat._refuse_call), which
-    put her on no page and brought nothing in."""
+    """Every tool span of one of her registered browser tools this turn, ok or
+    not — except a call refused before it ran (`refused_*`,
+    chat._refuse_call), which put her on no page and brought nothing in."""
+    names: frozenset[str] | None = None
     for span in spans:
         if getattr(span, "kind", None) != "tool":
             continue
-        if not str(getattr(span, "name", None) or "").startswith("browser_"):
+        if names is None:
+            names = _browser_tool_names()
+        if getattr(span, "name", None) not in names:
             continue
         meta = getattr(span, "meta", None) or {}
         if any(str(key).startswith("refused") for key in meta):
@@ -1404,7 +1464,11 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
                 if delegated:
                     continue
             if kind == "browser_downloaded":
-                if not _browser_downloaded(spans):
+                # Fix round 1 (I1): judged only when her browser ran, or when
+                # nothing succeeded at all. After fetch_url and a write,
+                # device_run's curl or an MCP call, "I downloaded <file>" is
+                # that tool's work, not a claim about her browser.
+                if (on_a_page or not successful) and not _browser_downloaded(spans):
                     unbacked.append(
                         UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80])
                     )
@@ -1710,8 +1774,11 @@ _CAP_PAIR_MACHINE = re.compile(
 # the safe direction. "I can't click that button, it is disabled" reports one
 # element, not the ability. Browsing itself stays fetch_url's row (both tools
 # hold it).
+# "the" qualifies only before web or browser (fix round 1, I3): "on the web
+# page", "in the browser" are the general place; "on the page" names ONE page
+# ("I can't click links on the page you sent — it's a PDF").
 _WEB_PLACE = (
-    r"(?:on|in)\s++(?:a\s++|an\s++|the\s++|any\s++)?(?:web\s*+)?"
+    r"(?:on|in)\s++(?:a\s++|an\s++|the\s++(?=web|browser)|any\s++)?(?:web\s*+)?"
     r"(?:pages?|sites?|websites?|browsers?)\b"
 )
 # The rows' LOCAL honest tail (ruling G1, the same shape as S37a's T12-B): a
@@ -1722,8 +1789,15 @@ _WEB_PLACE = (
 # Only the ruling's words: a decorative tail ("… on any page", "… for you")
 # is no qualifier, and the denial is still corrected. Literal alternatives
 # behind possessive runs, bounded by _PRESENT_STATE_TAIL's own window: linear.
+#
+# Fix round 1 (I3): a place or a means of HIS ("on your phone", "on your
+# Dell", "with your bank login") or any "with <noun>" ("with payment details")
+# names a specific case, not the ability. "On your behalf" alone is decorative
+# (it is "for you") and still fires; before a real qualifier it is skipped.
 _BROWSER_QUALIFIED_TAIL = (
-    r"(?!\s*+,?\s*+(?:that|which|behind|without|unless|requiring|needing)\b"
+    r"(?!\s*+,?\s*+(?:on\s++your\s++behalf\s++)?"
+    r"(?:(?:that|which|behind|without|unless|requiring|needing)\b"
+    r"|(?:on|in|with|from)\s++your\b(?!\s++behalf\b)|with\s++\w)"
     r"|" + _PRESENT_STATE_TAIL + r")"
 )
 # One group per row, so the honest tail applies to every alternative.

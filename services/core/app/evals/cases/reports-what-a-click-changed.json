@@ -53,5 +53,5 @@
       "arg": "narration"
     }
   ],
-  "comment": "S38. The landed page's title is known only from what the click REPORTED (browser_act's result names the new page), so the right title proves she read her own tool's report rather than inventing one. guard_absent narration fails a reply that claims a click with no browser_act behind it (kind browser_acted) -- that kind arrives with S38 Task 7 (itself waiting on S37a Task 12); until then this half holds vacuously, the same known state as S37a's four MCP cases' guard_absent halves before Task 12, and Task 7's arrival makes it bite with no edit to this case. Added with the S38 corpus bump."
+  "comment": "S38. The landed page's title is known only from what the click REPORTED (browser_act's result names the new page), so the right title proves she read her own tool's report rather than inventing one. guard_absent narration fails a reply that claims a click with no browser_act behind it (kind browser_acted) -- that kind arrived with S38 Task 7; before it this half held vacuously, the same known state as S37a's four MCP cases' guard_absent halves before Task 12, and Task 7 made it bite with no edit to this case's contract. Added with the S38 corpus bump."
 }
