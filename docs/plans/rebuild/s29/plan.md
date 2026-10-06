@@ -52,6 +52,7 @@ Every task's requirements include these.
 - **Eval pins:** corpus +8 cases, `suite_version` +1 for every case. If S26, S37a, S38 or the balances slice moved the pins first, renumber once on top of where they left them, and say so in the docstring.
 - **No migration.** Facts live in `turn_spans.meta` (jsonb, migration 002).
 - **Formatting:** `ruff format` only the Python files you edited; `ruff check` clean on them. v4 trees are not format-clean.
+- **One heavy job at a time on the mini PC** (the lanes' shared rule, 2026-10-02, extended 2026-10-05). The full core suite, every timing test or sweep (`test_guard_regex_timing.py`, `test_masking.py`'s timing pins, any `_assert_linear` run), the precision pass, and every image build (`./install`, `docker compose build`) run under the shared lock `flock -w 3600 /tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock <command>`, so they never overlap another lane's locked suite on the 4-core N150. Targeted test runs stay unlocked. A timing failure seen under the lock is a real signal to read.
 - **Core tests** run against your OWN scratch database `nova_core_s29` on `nova-scratch-pg` (127.0.0.1:55432), with `TEST_DATABASE_URL` set and an absolute `cd`; report the skip count (0 expected).
 - **Web tests:** `npm test` (never `npx vitest run` — it fails on Node 26) plus `npx tsc --noEmit`.
 - **Git:** branch `slice/s29` in `~/workspace/nova/.worktrees/s29`. Always `git -C <path>`. Stage by path, never `git add -A`. `git show --stat HEAD` after every commit. Never a bare `git stash`. Every commit message ends with the two trailer lines this session was given (`Co-Authored-By: …` and `Claude-Session: …`).
@@ -247,6 +248,9 @@ def fact_matches(spans: Sequence[Any], reply: str, arg: str) -> tuple[bool, str]
 Each Bash call is a fresh shell, so every step runs one of these whole.
 
 - **Core tests:** `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh <pytest args>`. Task 0 writes the helper (untracked): it reads the scratch password from `nova-scratch-pg`, sets `TEST_DATABASE_URL` to `nova_core_s29`, runs `uv run pytest -q -rs <args>` in `services/core` and prints the tail.
+  - With no arguments (the full suite), it takes the shared lock itself.
+  - Timing tests and sweeps run as `ct.sh --heavy <pytest args>`, which also takes the lock.
+  - Any other heavy command (the precision pass, `./install`, an image build) is prefixed with `flock -w 3600 /tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock`.
 - **Web tests:** `(cd ~/workspace/nova/.worktrees/s29/apps/web && npm test -- <filter> 2>&1 | tail -8)`; types: `(cd ~/workspace/nova/.worktrees/s29/apps/web && npx tsc --noEmit && echo TSC-OK)`.
 - **Format and lint, edited files only:** `(cd ~/workspace/nova/.worktrees/s29/services/core && uv run ruff format <files> && uv run ruff check <files>)`.
 - **Commit:** `git -C ~/workspace/nova/.worktrees/s29 add <paths>`, then `git -C ~/workspace/nova/.worktrees/s29 commit -F -` with the message on stdin, ending with the two trailer lines, then `git -C ~/workspace/nova/.worktrees/s29 show --stat HEAD`.
@@ -315,8 +319,18 @@ Expected: the plan commit sits on top of `origin/main`; the tree is clean apart 
 W=~/workspace/nova/.worktrees/s29
 cat > $W/.superpowers/sdd/plan/ct.sh <<'EOF'
 #!/usr/bin/env bash
-# Core's pytest on S29's own scratch database. Usage: ct.sh <pytest args>
+# Core's pytest on S29's own scratch database.
+#   ct.sh <pytest args>           a targeted run, unlocked
+#   ct.sh                         the full suite, under the lanes' shared lock
+#   ct.sh --heavy <pytest args>   timing tests and sweeps, under the same lock
 set -euo pipefail
+LOCK=/tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock
+if [ "${1:-}" != "--locked" ] && { [ "$#" -eq 0 ] || [ "${1:-}" = "--heavy" ]; }; then
+  [ "${1:-}" = "--heavy" ] && shift
+  mkdir -p "$(dirname "$LOCK")"
+  exec flock -w 3600 "$LOCK" bash "$0" --locked "$@"
+fi
+[ "${1:-}" = "--locked" ] && shift
 W=~/workspace/nova/.worktrees/s29
 PW=$(docker inspect nova-scratch-pg --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_PASSWORD=//p')
 cd "$W/services/core"
@@ -463,7 +477,7 @@ if __name__ == "__main__":
         sys.path.insert(0, ".")
         print(json.dumps(_fires(), indent=1, sort_keys=True))
 EOF
-cd ~/workspace/nova/.worktrees/s29/services/core && uv run python $P/run.py > $P/base.json && python3 -c "import json;d=json.load(open('$P/base.json'));print(len(d),'turns fire at base')"
+cd ~/workspace/nova/.worktrees/s29/services/core && flock -w 3600 /tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock uv run python $P/run.py > $P/base.json && python3 -c "import json;d=json.load(open('$P/base.json'));print(len(d),'turns fire at base')"
 ```
 
 Expected: a count of turns with at least one firing at base, recorded in `baseline.md`, and no `:signature` entry. A `:signature` entry means a guard's signature changed since this plan was written: fix `run.py`'s call before going on. Every guard task re-runs `run.py` into `precision/after-task-N.json` and diffs it against `base.json`. A **NEW** firing is read turn by turn. If the reply was honest, the task is not done. If the reply really was false, the turn id goes in the task's report as a true catch.
@@ -2436,7 +2450,7 @@ Expected: all pass, 0 skipped.
 Neighbours. These read the same backing sets, device families and tool declarations. Run: `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_chat_said_not_done.py tests/test_chat_honesty.py tests/test_chat_state_claim.py tests/test_capability_guard.py tests/test_written_call_guard.py tests/test_tools_workspace.py tests/test_tools_web.py tests/test_tools_models.py tests/test_tools_machines.py tests/test_tools_setup.py tests/test_devices_ws.py`
 Expected: all pass. No pinned text moves: device_run stays last, so "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)" is unchanged.
 
-The timing ledger. Run: `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py`
+The timing ledger. Run: `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py`
 Expected: green. `test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns` should hold at the numbers Task 0 recorded. `_collect_patterns` walks tuples, lists and dict values. The deleted constants hold only strings: frozensets of names, which the walk does not enter, and a dict of tuples of names. `device_action_tools` is a function. If either count moves, the deletion reached a Pattern. Stop and read why before writing a docstring-ledger paragraph. No regex is added or changed here, so nothing new needs registering and no guard needs an `_assert_linear` test.
 
 Format and lint: `(cd ~/workspace/nova/.worktrees/s29/services/core && uv run ruff format app/tools/base.py app/tools/__init__.py app/tools/workspace.py app/tools/memory_tools.py app/tools/web.py app/tools/models.py app/tools/machines.py app/tools/setup.py app/tools/devices.py app/guards.py tests/test_tools_registry.py tests/test_no_approvals.py tests/test_guards.py tests/test_device_completion_guard.py tests/test_state_guard.py && uv run ruff check app/tools/base.py app/tools/__init__.py app/tools/workspace.py app/tools/memory_tools.py app/tools/web.py app/tools/models.py app/tools/machines.py app/tools/setup.py app/tools/devices.py app/guards.py tests/test_tools_registry.py tests/test_no_approvals.py tests/test_guards.py tests/test_device_completion_guard.py tests/test_state_guard.py)`
@@ -3003,7 +3017,7 @@ bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guar
 Expected: 13 failed.
 - `test_guards.py` (8): `test_an_honest_read_on_a_device_stands`, the four `test_the_claims_basename_is_matched_in_every_path_shape` cases, `test_a_device_read_backs_the_files_contents_shown`, `test_an_unconfirmed_device_span_never_takes_the_lenient_none` (an `AttributeError` on `_NO_FILE_FACT`) and `test_a_device_write_backs_its_passive_and_its_contents`.
 - `test_device_completion_guard.py` (1): `test_s29_an_honest_desktop_write_satisfies_both_guards`, on narration's "Correction: I did not actually do that…".
-- `test_tools_registry.py` (4): `test_each_claim_kind_is_backed_by_exactly_these_tools[wrote_file]`, `[read_file]`, `[file_contents]` and `test_tool_names_backing_reads_the_live_registry`. Three tests already pass and must stay green: `test_a_device_read_backs_only_the_file_it_read`, `test_a_device_read_with_no_file_fact_backs_nothing` and `test_a_device_write_does_not_back_a_read`. `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py -k device_file_claims` passes before and after the change, because it pins linearity.
+- `test_tools_registry.py` (4): `test_each_claim_kind_is_backed_by_exactly_these_tools[wrote_file]`, `[read_file]`, `[file_contents]` and `test_tool_names_backing_reads_the_live_registry`. Three tests already pass and must stay green: `test_a_device_read_backs_only_the_file_it_read`, `test_a_device_read_with_no_file_fact_backs_nothing` and `test_a_device_write_does_not_back_a_read`. `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k device_file_claims` passes before and after the change, because it pins linearity.
 
 - [ ] **Step 3: Declare what the device file tools back**
 
@@ -3164,7 +3178,7 @@ Matching keeps today's rule: the claim's basename, lower-cased, must be a substr
 - [ ] **Step 5: Run the tests**
 
 ```bash
-bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guards.py tests/test_device_completion_guard.py tests/test_tools_registry.py tests/test_guard_regex_timing.py
+bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guards.py tests/test_device_completion_guard.py tests/test_tools_registry.py tests/test_guard_regex_timing.py
 ```
 
 Expected: all pass, 0 skipped. Then the neighbours a backing change can move:
@@ -3885,7 +3899,7 @@ Expected: 43 failed.
 The must-not-fire lists (`TESTS_HONEST`, `RAN_NOT_A_CLAIM`, `EDIT_NOT_A_CLAIM`) and `test_s29_a_run_she_claims_on_a_device_gets_one_correction` already pass. They are the pins that must stay green.
 
 ```bash
-bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py -k "count_grew or s29_patterns or s29_claim_legs"
+bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k "count_grew or s29_patterns or s29_claim_legs"
 ```
 
 Expected: 20 failed. The count pin finds 204 and 266, and the 18 pattern cases and the legs test fail on `AttributeError` or a missing name.
@@ -4686,7 +4700,7 @@ Expected: every `NEW` narration line is read turn by turn, against that turn's s
 - [ ] **Step 7: Run the timing pins**
 
 ```bash
-bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py
+bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py
 ```
 
 Expected: all pass. That covers the count pin at 210 / 272 / 62, the global sweep with the eight new legs, the S29 pattern cases at 200 / 1,500 / 6,000 characters, and `test_narrations_s29_claims_read_50_kb_in_linear_time`, including its dotted and dashed legs (Step 1's fix). Measured on the N150 against a prototype of this code: x3.3 to x4.2 growth from 12.5 to 50 KB, and 160 ms at most at 50 KB (`device_clauses`) against the 300 ms cap.
@@ -4821,7 +4835,7 @@ def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
 ```
 
 - [ ] **Step 2: Run it to make sure it fails.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py -k capability_guard_reads`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k capability_guard_reads`
   Expected: 2 failed, 5 passed. `one clause, scoped denials, the scope at its end` fails on the cap ("50,000 chars took …9,000 ms"), and so does `there is no, and no toolset` ("…1,800 ms", or growth near x16). The red run takes about a minute, because the quadratic is what it measures.
 
 - [ ] **Step 3: Implement (cycle 1).** In `services/core/app/guards.py`:
@@ -4973,7 +4987,7 @@ def _denial_tail(marks: _DenialMarks, phrase_end: int) -> int:
 ```
 
 - [ ] **Step 4: Run the tests.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guard_regex_timing.py -k capability_guard_reads`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k capability_guard_reads`
   Expected: 7 passed.
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_capability_guard.py`
   Expected: all passed, with no pin edited. This cycle changes no verdict.
@@ -5261,7 +5275,7 @@ def test_the_sweep_reaches_every_capability_row_and_its_reasons():
   (Place the `CAPABILITY_SHAPES += [...]` block **between** the list and `test_the_capability_guard_reads_50_kb_in_linear_time`, so the parametrize decorator reads the whole list. Or fold the entries into the list literal; either is fine.)
 
 - [ ] **Step 6: Run them to make sure they fail.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_capability_guard.py tests/test_guard_regex_timing.py -k "s29 or device_correction or mixed_denial or registered or covered_or_excused or failed_device_run or capability_row or capability_guard_reads"`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_capability_guard.py tests/test_guard_regex_timing.py -k "s29 or device_correction or mixed_denial or registered or covered_or_excused or failed_device_run or capability_row or capability_guard_reads"`
   Expected failures:
   - `AttributeError: module 'app.guards' has no attribute 'DEVICE_CAPABILITY_CORRECTION'` (and the same for `CAPABILITY_EXCUSED`);
   - `assert None is not None` on the S29 must-fire cases;
@@ -5613,7 +5627,7 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
   For example, 204/266/62 with no move by Tasks 1–5 becomes 206/276/70.
 
 - [ ] **Step 9: Run the tests.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_capability_guard.py tests/test_guard_regex_timing.py`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_capability_guard.py tests/test_guard_regex_timing.py`
   Expected: all passed. That includes every pre-existing MUST_FIRE / MUST_NOT_FIRE pin, the scope-limit list, `test_the_sweep_now_reaches_the_new_capability_pattern` (S42a's row is still `[-1]`) and S42b's `test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds`.
   Then the neighbours. They call `capability_claim_check` on their own texts, format every CORRECTION constant, or read `chat._failed_tool_names`:
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guards.py tests/test_device_completion_guard.py tests/test_written_call_guard.py tests/test_setup_guards.py tests/test_consent_guard.py tests/test_state_guard.py tests/test_presented_listing_guard.py tests/test_memory_claim_guard.py tests/test_served_guard.py tests/test_chat_deferral.py tests/test_chat_said_not_done.py tests/test_chat_setup_guards.py tests/test_chat_agents.py tests/test_eval_corpus.py tests/test_tools_registry.py`
@@ -5858,7 +5872,7 @@ def _failing_reachability_reading(spans: Sequence[Any]) -> bool:
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guards.py`
   Expected: all passed.
   Neighbours (they call `stack_claim_check` on their own texts, or drive it through chat):
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_state_guard.py tests/test_memory_claim_guard.py tests/test_served_guard.py tests/test_chat_stack_claim.py tests/test_eval_corpus.py tests/test_guard_regex_timing.py`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_state_guard.py tests/test_memory_claim_guard.py tests/test_served_guard.py tests/test_chat_stack_claim.py tests/test_eval_corpus.py tests/test_guard_regex_timing.py`
   Expected: all passed, 0 skipped. The sweep counts are unchanged.
 
 - [ ] **Step 5: Format, lint, commit.**
@@ -6315,7 +6329,7 @@ _THIRTY_UNANSWERED = [
     and subtract **1** from the `len(old)` pin and **1** from the `len(new)` pin. The difference pin does not move.
 
 - [ ] **Step 2: Run them to make sure they fail.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_state_guard.py tests/test_device_completion_guard.py tests/test_devices_ws.py tests/test_chat_said_not_done.py tests/test_guard_regex_timing.py -k "connectivity or unanswered or no_answer or never_answered or R3 or R2 or the_record or every_record or socket or never_sent or before_the_send or sweep_count or said_not_done_legs or thirty"`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_state_guard.py tests/test_device_completion_guard.py tests/test_devices_ws.py tests/test_chat_said_not_done.py tests/test_guard_regex_timing.py -k "connectivity or unanswered or no_answer or never_answered or R3 or R2 or the_record or every_record or socket or never_sent or before_the_send or sweep_count or said_not_done_legs or thirty"`
   Expected failures:
   - `AttributeError: … has no attribute 'last_connectivity'`;
   - the device-completion pins: `record.case` is 'failed' where 'no_answer' is expected (the fact is not read yet), and 'no_answer' where 'failed' is expected (`_NO_ANSWER` still reads the words);
@@ -6477,7 +6491,7 @@ def _failure_record(call: _Ran) -> DeviceRecord:
 ```
 
 - [ ] **Step 4: Run the tests.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_state_guard.py tests/test_device_completion_guard.py tests/test_devices_ws.py tests/test_chat_said_not_done.py tests/test_guard_regex_timing.py`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_state_guard.py tests/test_device_completion_guard.py tests/test_devices_ws.py tests/test_chat_said_not_done.py tests/test_guard_regex_timing.py`
   Expected: all passed, 0 skipped. That includes `test_every_connectivity_read_site_is_allow_listed`: `Hub.command` still mentions `facts_sink`, and `_file_unanswered` reads no socket. It also includes `test_R2_the_known_refusals_are_read_from_their_sources`, which finds the hub's words through `_NoAnswer`.
   Neighbours (machine_update threads a facts_sink through `Hub.command`; the device tools raise through it):
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_agent_updates.py tests/test_devices.py tests/test_devices_e2e.py tests/test_machines.py tests/test_live_facts.py tests/test_written_call_guard.py tests/test_guards.py tests/test_chat_honesty.py`
@@ -6687,7 +6701,7 @@ def test_the_presented_listing_guard_reads_50_kb_in_linear_time(label, check, bu
 ```
 
 - [ ] **Step 2: Run them to make sure they fail.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_presented_listing_guard.py tests/test_guard_regex_timing.py -k "bare_ls or command_run or recalled_run or without_a_run_fact or presented_listing_guard_reads"`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_presented_listing_guard.py tests/test_guard_regex_timing.py -k "bare_ls or command_run or recalled_run or without_a_run_fact or presented_listing_guard_reads"`
   Expected failures:
   - `test_a_command_run_backs_a_bare_name_listing_by_its_run_fact`: the factless-head line returns a claim;
   - `test_a_recalled_run_line_is_not_a_command_run`: the recalled line still backs, so `check` returns None;
@@ -6787,7 +6801,7 @@ def _listing_ran(spans: Sequence[Any], listing_tools: Sequence[str]) -> bool:
   and subtract **1** from the `len(old)` pin and **1** from the `len(new)` pin. The difference pin does not move.
 
 - [ ] **Step 4: Run the tests.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_presented_listing_guard.py tests/test_guard_regex_timing.py`
+  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_presented_listing_guard.py tests/test_guard_regex_timing.py`
   Expected: all passed. `test_the_same_text_is_clean_after_a_listing_shaped_result` (its `ls -la` head has mode strings) and `test_a_find_or_du_result_backs_the_listing` (a slash and sizes) still back on shape alone.
   Neighbours (chat drives the guard with real tool spans; device_run files the fact the guard now reads):
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_chat_presented_listing.py tests/test_devices.py tests/test_devices_ws.py tests/test_chat_tools.py tests/test_guards.py tests/test_live_facts.py`
@@ -7143,7 +7157,7 @@ def test_every_masking_pattern_walks_1500_characters_of_padding_in_milliseconds(
 
 - [ ] **Step 2: Run it to make sure it fails**
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_masking.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_masking.py`
 
 Expected: a collection error, `ImportError: cannot import name 'masking' from 'app'`.
 
@@ -7342,7 +7356,7 @@ def is_masked(value: object) -> bool:
 
 - [ ] **Step 4: Run the tests**
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_masking.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_masking.py`
 
 Expected: `70 passed`, 0 skipped. The 70 are 11 whole shapes, 13 value shapes, 11 untouched, 6 rule tests, 22 at 50 KB and 7 padding sweeps.
 
@@ -7598,7 +7612,7 @@ async def test_a_token_in_a_device_command_never_reaches_the_trace(
 
 - [ ] **Step 6: Run them to make sure they fail**
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_masking.py tests/test_live_facts.py tests/test_chat_tools.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_masking.py tests/test_live_facts.py tests/test_chat_tools.py`
 
 Expected: 9 failures, all because the raw token is still recorded:
 - the 7 new span-writer tests in `test_masking.py`
@@ -7752,7 +7766,7 @@ Every new call above is synchronous, so `test_no_approvals`' pin that `_run_tool
 
 - [ ] **Step 8: Run the tests**
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_masking.py tests/test_live_facts.py tests/test_chat_tools.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_masking.py tests/test_live_facts.py tests/test_chat_tools.py`
 
 Expected: all pass, 0 skipped. `test_masking.py` now has 77 tests.
 
@@ -7908,7 +7922,7 @@ async def walks_with_args(
 
 Expected: all pass. Then run every suite that reads `args_redacted`, `result_head` or `error`, or that pins the span writers:
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_masking.py tests/test_chat_tools.py tests/test_live_facts.py tests/test_tools_agents.py tests/test_no_approvals.py tests/test_chat_markup.py tests/test_chat_model_failure.py tests/test_chat_said_not_done.py tests/test_devices_ws.py tests/test_eval_predicates.py tests/test_presented_listing_guard.py tests/test_device_completion_guard.py tests/test_agents.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_masking.py tests/test_chat_tools.py tests/test_live_facts.py tests/test_tools_agents.py tests/test_no_approvals.py tests/test_chat_markup.py tests/test_chat_model_failure.py tests/test_chat_said_not_done.py tests/test_devices_ws.py tests/test_eval_predicates.py tests/test_presented_listing_guard.py tests/test_device_completion_guard.py tests/test_agents.py`
 
 Expected: all pass, 0 skipped.
 
@@ -8071,7 +8085,7 @@ from app.traces import SPAN_RESULT_HEAD_CHARS
 
 Expected: all pass. Then:
 
-`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_chat_tools.py tests/test_masking.py tests/test_traces.py tests/test_agents.py tests/test_devices_ws.py`
+`bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_chat_tools.py tests/test_masking.py tests/test_traces.py tests/test_agents.py tests/test_devices_ws.py`
 
 Expected: all pass, 0 skipped.
 - `test_chat_tools` reads `chat.SPAN_RESULT_HEAD_CHARS`.
@@ -12864,7 +12878,7 @@ W=~/workspace/nova/.worktrees/s29
 bash $W/.superpowers/sdd/plan/ct.sh
 (cd $W/services/core && git -C $W diff --name-only origin/main...HEAD -- '*.py' | sed 's#^services/core/##' | grep -v '^\.\.' | xargs -r uv run ruff check)
 (cd $W/apps/web && npm test 2>&1 | tail -3 && npx tsc --noEmit && echo TSC-OK && npm run build 2>&1 | tail -1)
-cd $W/services/core && uv run python $W/.superpowers/sdd/plan/precision/run.py > $W/.superpowers/sdd/plan/precision/final.json
+cd $W/services/core && flock -w 3600 /tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock uv run python $W/.superpowers/sdd/plan/precision/run.py > $W/.superpowers/sdd/plan/precision/final.json
 python3 $W/.superpowers/sdd/plan/precision/run.py --diff $W/.superpowers/sdd/plan/precision/base.json $W/.superpowers/sdd/plan/precision/final.json
 git -C $W diff --stat origin/main...HEAD | tail -1
 git -C $W diff origin/main...HEAD -- services/core/tests/test_no_approvals.py | grep '^[-+]' | grep -v '^[-+][-+]'
@@ -12896,7 +12910,7 @@ Push `slice/s29` and open the PR. Title: "S29 — facts on device spans, guards 
 ```bash
 cd ~/workspace/nova && git status --short && git log -1 --oneline
 docker tag nova-core:latest nova-core:pre-s29 && docker tag nova-web:latest nova-web:pre-s29
-./install
+flock -w 3600 /tmp/claude-1000/-home-jeremy-workspace-nova/40f5832f-dc1b-43c9-8eab-f82886ea7056/scratchpad/full-suite.lock ./install
 ```
 
 Expected: the health table all healthy, with core and web rebuilt from this commit. There is no migration. A failure stops the walk. It is read from core's log and fixed as code, never worked around by hand. The rollback tags are `nova-core:pre-s29` and `nova-web:pre-s29`.
