@@ -49,6 +49,47 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest
+      # G1 (preflight F10, S42b Task 30): the Windows one-liner the setup
+      # card and the public manifest both send is core's own code
+      # (app.agent_card.commands, the function both callers use) — core
+      # keeps no skipif test for parsing it as PowerShell (no pwsh in its own
+      # suite), so it is generated here, against a fixture build with the
+      # {CODE} slot left as CODE_SLOT (exactly what the manifest sends), and
+      # handed to a real PowerShell parser below. This reuses the `uv sync`
+      # a few lines up — core's own Python env — rather than installing one
+      # again. Never a copy of the line pasted into this file: that copy
+      # would drift silently the moment agent_card.py changes.
+      - name: generate the Windows one-liner with core's own code (G1)
+        if: matrix.service == 'core'
+        run: |
+          uv run python - <<'PY' > /tmp/windows-line.txt
+          import hashlib
+
+          from app import agent_card, agent_dist
+
+          files = {
+              agent_dist.file_key(goos, arch): {
+                  "name": agent_dist.file_name(goos, arch),
+                  "sha256": hashlib.sha256(f"{goos}{arch}".encode()).hexdigest(),
+                  "size": 1,
+              }
+              for goos, arch in agent_dist.TARGETS
+          }
+          build = agent_dist.Build(version="aaaaaaaaaaaa", built_at="", go="", files=files)
+          cmd = agent_card.commands(
+              build, origin=agent_card.LOOPBACK, code=agent_card.CODE_SLOT
+          )["windows"]
+          print(cmd)
+          PY
+          cat /tmp/windows-line.txt
+      - name: the Windows one-liner parses as PowerShell 5.1 (G1)
+        if: matrix.service == 'core'
+        shell: pwsh
+        run: |
+          $cmd = Get-Content -Raw /tmp/windows-line.txt
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseInput($cmd, [ref]$null, [ref]$e)
+          if ($e) { $e; exit 1 }
 
   # The installer is the real install path, so its decisions get a real suite.
   # No docker and no network: install_test.sh sources install.sh (whose entry
@@ -72,17 +113,46 @@ jobs:
       - run: bash -n deploy/agent_version.sh && bash -n deploy/agent_version_test.sh
       - run: shellcheck -S warning deploy/agent_version.sh deploy/agent_version_test.sh
       - run: ./deploy/agent_version_test.sh
+      # agent-dist (S42b Task 25): the build that `install` and the
+      # novad job's "agent-dist builds what CI builds" step both invoke.
+      - run: bash -n deploy/agent-dist/build_test.sh && sh -n deploy/agent-dist/build.sh
+      - run: shellcheck -S warning -s sh deploy/agent-dist/build.sh && shellcheck -S warning deploy/agent-dist/build_test.sh
+      - run: ./deploy/agent-dist/build_test.sh
+      # install.ps1 (Task 27): the Windows hub script. PowerShell's own parser
+      # catches what a human reading it would miss; core's generated Windows
+      # ONE-LINER (a different string, from app.agent_card) is parsed the
+      # same way below, in the services/core leg of the `services` job (G1).
+      - name: install.ps1 parses (a Windows hub is told cannot, D20)
+        shell: pwsh
+        run: |
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path install.ps1), [ref]$null, [ref]$e)
+          if ($e) { $e; exit 1 }
       # A REAL bash 3.2 parser, on Linux, needing no macOS runner. S41's
       # portability rule (map-portability.md §6) is otherwise enforced by code
       # review alone, and one bash-4-ism already slipped into the tree
       # (deploy/tailnet_topology_test.sh:248). This catches the syntax half on
       # every push; the macos-15 job below is what actually RUNS these under
       # 3.2 with a BSD userland.
+      #
+      # Fix round (S42b Task 30, G2): `bash -n a b c …` parses only the FIRST
+      # file — the rest become ITS OWN $1, $2, … and are never read as
+      # scripts, so every file past install.sh here was silently unchecked.
+      # Rewritten as one `bash -n` per file inside the container, failing on
+      # the first bad file and naming it. install_test.sh (run directly under
+      # this same bash 3.2 by backup-macos below, so it must parse here too)
+      # and agent-dist's two scripts (Task 25/30) join the list.
       - name: parse every portable script with a real bash 3.2
         run: |
-          docker run --rm -v "$PWD:/w" bash:3.2 bash -n \
-            /w/deploy/install.sh /w/deploy/backup.sh /w/deploy/subnet.sh \
-            /w/deploy/passphrase.sh /w/deploy/compose_read.sh /w/deploy/backup_test.sh
+          docker run --rm -v "$PWD:/w" bash:3.2 bash -c '
+            set -e
+            for f in /w/deploy/install.sh /w/deploy/install_test.sh /w/deploy/backup.sh \
+                     /w/deploy/subnet.sh /w/deploy/passphrase.sh /w/deploy/compose_read.sh \
+                     /w/deploy/backup_test.sh /w/deploy/agent-dist/build.sh /w/deploy/agent-dist/build_test.sh
+            do
+              echo "bash -n $f"
+              bash -n "$f" || { echo "FAILED: $f"; exit 1; }
+            done'
 
   # The bundle's python half: the format, the manifest, coverage, and the
   # reader that travels inside every bundle. No docker, no live stack.
@@ -133,6 +203,14 @@ jobs:
       - name: prove /bin/bash is 3.2 before believing anything else
         run: /bin/bash -c 'echo "$BASH_VERSION"; [ "${BASH_VERSINFO[0]}" -eq 3 ]'
       - run: /bin/bash -n deploy/install.sh deploy/install_test.sh deploy/backup.sh deploy/backup_test.sh deploy/passphrase.sh deploy/subnet.sh deploy/compose_read.sh
+      # G3 (S42b Task 30): this is also the ONLY job that runs
+      # install_test.sh's entry-guard-under-zsh cases — macOS ships zsh as
+      # a system binary, so install_test.sh's own `command -v zsh` finds
+      # one here. The installer job's ubuntu-latest runner has no zsh, so
+      # the same two cases print "NOT RUN" there; this leg is where they
+      # actually run (and nowhere adds zsh to the Ubuntu runner, since this
+      # leg already covers it — silence here would read as coverage, so it
+      # is said instead).
       - run: /bin/bash ./deploy/install_test.sh
       - run: /bin/bash ./deploy/backup_test.sh
       - uses: astral-sh/setup-uv@v3
@@ -232,6 +310,28 @@ jobs:
           (cd /tmp/novad-b && sha256sum novad-* | sort) > /tmp/b.sha
           cat /tmp/a.sha
           diff /tmp/a.sha /tmp/b.sha
+      # D13's other half: not just "this checkout's host build is
+      # reproducible" (above) but "the hub's own build, from agent-dist, is
+      # the SAME bytes" — the path install.sh actually drives in production.
+      # working-directory: . overrides this job's apps/novad default: the
+      # image reference lives in deploy/docker-compose.yml and the
+      # entrypoint in deploy/agent-dist, both repo-root-relative, and `git
+      # archive HEAD apps/novad` names a tree path from the repo root too
+      # (git resolves it against cwd, so running this from apps/novad would
+      # ask for the nonexistent apps/novad/apps/novad).
+      - name: agent-dist builds what CI builds (D13)
+        working-directory: .
+        run: |
+          set -eu
+          V=$(git rev-parse HEAD:apps/novad | cut -c1-12)
+          IMAGE=$(sed -n 's/^ *image: \(golang:1\.27\.1@sha256:[0-9a-f]*\)$/\1/p' deploy/docker-compose.yml)
+          test -n "$IMAGE"
+          mkdir -p /tmp/agent-dist
+          git archive --format=tar HEAD apps/novad | docker run --rm -i -e CGO_ENABLED=0 -e GOTOOLCHAIN=local \
+            -e DIST_DIR=/dist -v /tmp/agent-dist:/dist -v "$PWD/deploy/agent-dist:/build:ro" "$IMAGE" sh /build/build.sh "$V"
+          (cd "/tmp/agent-dist/$V" && sha256sum novad-* | sort) > /tmp/dist.sha
+          (cd /tmp/novad-a && sha256sum novad-* | sort) > /tmp/ci.sha
+          diff /tmp/dist.sha /tmp/ci.sha
       - uses: actions/upload-artifact@v4
         with:
           name: novad-${{ github.sha }}
