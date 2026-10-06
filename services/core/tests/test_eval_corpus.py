@@ -311,6 +311,23 @@ v18 (S37a, 2026-09-30): four MCP cases —
   below is what makes sure it stays that way and never silently becomes one.
   suite_version 17 -> 18 for all THIRTY-FOUR cases; count pin 30 -> 34.
 
+v19 (S38, 2026-10-05): three browser cases — reads-the-page-before-answering,
+  reports-what-a-click-changed, reads-a-long-page-in-parts — each declaring
+  the fake engine at http://browser:8931/mcp, listed nowhere (S37a's seam,
+  listed: false); her five browser tools reach it through the client. The
+  runner now plants that SAME origin unreachable for every OTHER case in the
+  corpus too (ruling G5): her browser engine is never a declared server (it
+  is called directly through app.browser.engine, never mcp_call), so a case
+  that declares none must not leave the real address free for the turn to
+  reach. A case that DOES declare it reachable gets the real engine's own
+  legacy refusal shape (ruling G21, FakeSpec(legacy_refusal="playwright")),
+  never the generic 200 shape an unrelated legacy fake defaults to. Their
+  guard_absent('narration') halves cover an unbacked browser
+  opened/navigated/click claim only once S38 Task 7 lands (itself waiting on
+  S37a Task 12) — until then they hold vacuously, the same known, explicit
+  state as the v18 MCP cases' guard_absent halves before Task 12.
+  suite_version 18 -> 19 for all THIRTY-SEVEN cases; count pin 34 -> 37.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -482,13 +499,14 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # declare a device (an agent). 29 -> 30.
     # S37a (2026-09-30): the four MCP cases, the first to declare mcp_servers.
     # 30 -> 34.
-    assert len(ids) == 34
-    assert len(set(ids)) == 34  # no duplicate ids
+    # S38 (2026-10-05): the three browser cases. 34 -> 37.
+    assert len(ids) == 37
+    assert len(set(ids)) == 37  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {18}
+    assert {c.suite_version for c in cases} == {19}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -506,8 +524,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
-#    case; v18: the S37a MCP cases -- see the module docstring); the version
-#    assertion inside this test tracks the live value, 18, not "2".
+#    case; v18: the S37a MCP cases; v19: the S38 browser cases -- see the
+#    module docstring); the version assertion inside this test tracks the
+#    live value, 19, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -530,7 +549,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 18
+        assert case.suite_version == 19
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

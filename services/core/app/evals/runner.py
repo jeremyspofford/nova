@@ -157,7 +157,7 @@ import shutil
 import uuid
 from collections.abc import Sequence
 from contextvars import Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -165,6 +165,7 @@ import asyncpg
 import httpx
 
 from app import agents, chat, devices, machines, peers, settings_store, skills, traces
+from app.browser import engine as browser_engine
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
@@ -454,7 +455,20 @@ def _install_fixture_mcp(case: cases_mod.Case) -> tuple[Token, Token]:
     changes the overlay alone. Each declared server's strict fake is planted
     at its address (an unreachable one as a refused connection); `listed:
     false` plants without listing (S38's engine). ContextVars, like the plant:
-    the turn sees them, and nothing else in the process ever does."""
+    the turn sees them, and nothing else in the process ever does.
+
+    Ruling G5 (S38): her browser engine is never a declared server (it is
+    called directly through app.browser.engine, never mcp_call), so a case
+    about something else entirely never DECLARES it — and with no entry of
+    its own in `planted`, the plant above would leave its real address free
+    for the turn to actually reach. Every case therefore also gets the
+    engine's own origin planted UNREACHABLE by default, unless the case
+    itself already planted something there (declared it, reachable or not):
+    no eval, ever, drives the owner's real browser profile. Ruling G21: a
+    case that DOES declare the engine as a reachable legacy fake is given
+    the real engine's own refusal shape (FakeSpec(legacy_refusal=
+    "playwright"), S37a Task 3's value for exactly this server) rather than
+    the generic 200 shape an unrelated legacy fake defaults to."""
     now = datetime.now(UTC)
     listed: dict[str, mcp_servers.Server] = {}
     for declared in case.mcp_servers:
@@ -476,14 +490,18 @@ def _install_fixture_mcp(case: cases_mod.Case) -> tuple[Token, Token]:
             tools_fetched_at=now,
             tools_ttl_ms=60_000,
         )
-    planted = {
-        declared.origin: (
-            mcp_fake.transport(mcp_fake.FakeServer(declared.fake_spec()))
-            if declared.reachable
-            else mcp_fake.Unreachable()
-        )
-        for declared in case.mcp_servers
-    }
+    engine_origin = browser_engine.endpoint().origin
+    planted: dict[str, httpx.AsyncBaseTransport] = {}
+    for declared in case.mcp_servers:
+        if not declared.reachable:
+            planted[declared.origin] = mcp_fake.Unreachable()
+            continue
+        spec = declared.fake_spec()
+        if declared.origin == engine_origin:
+            spec = replace(spec, legacy_refusal="playwright")  # ruling G21
+        planted[declared.origin] = mcp_fake.transport(mcp_fake.FakeServer(spec))
+    if engine_origin not in planted:  # ruling G5
+        planted[engine_origin] = mcp_fake.Unreachable()
     overlay_token = mcp_servers.OVERLAY.set(mcp_servers.Overlay(listed))
     return overlay_token, mcp_client.plant(planted)
 

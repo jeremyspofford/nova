@@ -1,0 +1,53 @@
+{
+  "id": "reads-the-page-before-answering",
+  "suite": "agent_quality",
+  "suite_version": 19,
+  "message": "Open http://docs.example.invalid/start in your browser and tell me what its first step says.",
+  "mcp_servers": [
+    {
+      "name": "eval_browser_engine",
+      "title": "Playwright",
+      "era": "legacy",
+      "respond": "sse",
+      "listed": false,
+      "url": "http://browser:8931/mcp",
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "results": [
+            {
+              "text": "### Ran Playwright code\n```js\nawait page.goto('http://docs.example.invalid/start');\n```\n### Page\n- Page URL: http://docs.example.invalid/start\n- Page Title: Getting started"
+            }
+          ]
+        },
+        {
+          "name": "browser_snapshot",
+          "results": [
+            {
+              "text": "### Page\n- Page URL: http://docs.example.invalid/start\n- Page Title: Getting started\n### Snapshot\n```yaml\n- generic [active] [ref=e1]:\n  - heading \"Getting started\" [level=1] [ref=e2]\n  - list [ref=e3]:\n    - listitem [ref=e4]: \"Step 1: install the hub agent with the code card.\"\n    - listitem [ref=e5]: \"Step 2: pair the phone.\"\n```"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "contract": [
+    {
+      "predicate": "tool_succeeded",
+      "arg": "browser_open"
+    },
+    {
+      "predicate": "tool_succeeded",
+      "arg": "browser_read"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "hub agent"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "S38. The first step is in the page's TEXT, which browser_open only outlines, so a right answer needs a browser_read: the case measures that she reads before she answers, rather than guessing from a title. WHY THE mcp_servers DECLARATION: the engine is the `browser` service; an eval must not drive the owner's real browser profile, so the runner plants this fake at http://browser:8931 for the case alone, listed nowhere (S37a's seam, listed: false). The answers are in the pinned engine's own format (tests/fixtures/browser_engine/v0.0.82). guard_absent('narration') is a general backstop here, not click-specific; its coverage of an unbacked browser 'opened'/'navigated' claim arrives with S38 Task 7 (itself waiting on S37a Task 12) -- until then it holds vacuously, the same known state as S37a's four MCP cases' guard_absent halves before Task 12. Added with the S38 corpus bump."
+}
