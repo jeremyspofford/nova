@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { DevicesSection } from './DevicesSection'
-import type { AgentManifest, Device, PairingCode } from '../../lib/api'
+import type { AgentManifest, Device, PairingCode, UpdateOutcome } from '../../lib/api'
 
 // S42b: the public manifest (Task 19/28) — the same shape publicPages.test.tsx
 // reads, so the pairing modal's filled command and the public /add page's
@@ -241,6 +241,37 @@ describe('DevicesSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
     expect(await screen.findByText('Re-pair laptop')).toBeTruthy()
     expect(mintRepairCode).toHaveBeenCalledWith('d-1')
+    // S42b Task 32, L699: the "cannot" reason is rendered to the owner, not
+    // just acted on — nothing used to pin that it stays visible.
+    expect(await screen.findByText("cannot: laptop's agent was started by hand")).toBeTruthy()
+  })
+
+  it('clicking Update twice before it resolves calls the API once (S42b Task 32, L698)', async () => {
+    let resolveUpdate: (value: UpdateOutcome) => void = () => {}
+    const updateDevice = vi.fn(
+      () =>
+        new Promise<UpdateOutcome>(resolve => {
+          resolveUpdate = resolve
+        }),
+    )
+    renderSection({
+      updateDevice,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })]),
+    })
+    const button = await screen.findByRole('button', { name: 'Update' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(updateDevice).toHaveBeenCalledTimes(1)
+    resolveUpdate({
+      outcome: 'sent',
+      version: 'aaaaaaaaaaaa',
+      from_version: 'bbbbbbbbbbbb',
+      reason: null,
+      needs_card: false,
+      in_flight: 0,
+    })
+    await screen.findByText('Sent aaaaaaaaaaaa — not confirmed until it reconnects on it.')
+    expect(updateDevice).toHaveBeenCalledTimes(1)
   })
 
   it('clicking Re-pair directly opens that machine’s re-pair card, keyed on its id', async () => {
