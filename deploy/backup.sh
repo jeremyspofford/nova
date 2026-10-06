@@ -4160,10 +4160,16 @@ bk_fill_volume() {
       find . -type f -print0 | LC_ALL=C sort -z > /tmp/f
       if [ -s /tmp/f ]; then xargs -0 -a /tmp/f sha256sum > /tmp/h; else : > /tmp/h; fi
       cat /tmp/meta /tmp/h > /tmp/got
+      # Every comm here runs under LC_ALL=C, the collation its input was
+      # sorted in (Task 32, MF6). comm checks its input against the order of
+      # the locale it runs under: under a UTF-8 one it called a C-sorted
+      # listing out of order and exited 1 (measured by backup_test.sh), so a
+      # restore refused a volume whose listing was identical. The postgres
+      # image this runs in sets LANG=en_US.utf8.
       LC_ALL=C sort "$want" > /tmp/want.s
       LC_ALL=C sort /tmp/got > /tmp/got.s
-      comm -13 /tmp/want.s /tmp/got.s > /tmp/plus
-      comm -23 /tmp/want.s /tmp/got.s > /tmp/minus
+      LC_ALL=C comm -13 /tmp/want.s /tmp/got.s > /tmp/plus
+      LC_ALL=C comm -23 /tmp/want.s /tmp/got.s > /tmp/minus
       # The PATH out of each line kind, so a difference names an ENTRY rather
       # than a line: "L <path> -> <target>", "<d|f|l> <mode> <uid> <gid>
       # <path>", "<sha256>  <path>". A path in BOTH directions changed; one in
@@ -4177,9 +4183,9 @@ bk_fill_volume() {
       }
       paths /tmp/plus > /tmp/plus.p
       paths /tmp/minus > /tmp/minus.p
-      comm -12 /tmp/plus.p /tmp/minus.p > /tmp/changed.p
-      comm -23 /tmp/plus.p /tmp/minus.p > /tmp/added.p
-      comm -13 /tmp/plus.p /tmp/minus.p > /tmp/removed.p
+      LC_ALL=C comm -12 /tmp/plus.p /tmp/minus.p > /tmp/changed.p
+      LC_ALL=C comm -23 /tmp/plus.p /tmp/minus.p > /tmp/added.p
+      LC_ALL=C comm -13 /tmp/plus.p /tmp/minus.p > /tmp/removed.p
       sed "s/^/added   /" /tmp/added.p > /tmp/report
       sed "s/^/removed /" /tmp/removed.p >> /tmp/report
       sed "s/^/changed /" /tmp/changed.p >> /tmp/report
