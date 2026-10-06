@@ -97,18 +97,25 @@ async def test_a_repair_code_rebinds_the_row_keeping_its_name_and_history(pool):
 
 
 async def test_a_repaired_device_starts_a_new_audit_chain_without_a_break(pool):
+    """Review Focus 6. Each chain is fed at the epoch the ROW holds — the one
+    serve passes for a socket — read before and after the re-pair, never a
+    number the test stamps (Task 32 Phase C): a rebind that kept the epoch
+    would lay the new key's chain over the old one, and it would break."""
     device_id, _old = await _enroll(pool, name="pc")
-    await devices_ws.ingest_audit(pool, device_id, _chain({}, {}, {}))
+    old_epoch = (await devices.get(pool, device_id))["audit_epoch"]
+    await devices_ws.ingest_audit(pool, device_id, _chain({}, {}, {}), epoch=old_epoch)
     new = FakeDevice()
     await _repair(pool, device_id, new, platform="linux")
-    got = await devices_ws.ingest_audit(pool, device_id, _chain({}), epoch=1)
-    assert got == {"stored": 1, "break": None}
-    breaks = await pool.fetchval(
-        "SELECT count(*) FROM governance_events WHERE kind = $1 AND subject_ref = $2",
-        governance.DEVICE_AUDIT_BREAK,
-        device_id,
+    epoch = (await devices.get(pool, device_id))["audit_epoch"]
+    # The new key's agent writes its own entries, never the old chain's.
+    got = await devices_ws.ingest_audit(
+        pool, device_id, _chain({"summary": "new"}, {"summary": "new"}), epoch=epoch
     )
-    assert breaks == 0
+    assert got == {"stored": 2, "break": None}
+    # Both chains stay whole, each under its own epoch.
+    assert await _audit_rows(pool, device_id, old_epoch) == 3
+    assert await _audit_rows(pool, device_id, epoch) == 2
+    assert await _breaks(pool, device_id) == []
 
 
 async def test_a_repair_code_for_a_revoked_device_is_refused_at_mint(pool):
@@ -829,13 +836,15 @@ async def test_frames_the_old_key_had_in_flight_never_reach_the_new_epoch_or_the
 
 async def test_a_break_in_the_new_chain_names_its_epoch(pool):
     """After a re-pair a device has two chains that both start at seq 0, so a
-    break that named only the seq could not be told apart."""
+    break that named only the seq could not be told apart. The new chain's
+    epoch is read off the row, never stamped (Task 32 Phase C)."""
     device_id, _old = await _enroll(pool, name="pc")
     await devices_ws.ingest_audit(pool, device_id, _chain({}, {}))
     await _repair(pool, device_id, FakeDevice(), platform="linux")
+    epoch = (await devices.get(pool, device_id))["audit_epoch"]
     good, tampered = _chain({}, {})
     tampered["summary"] = "rewritten after the hash was taken"
-    got = await devices_ws.ingest_audit(pool, device_id, [good, tampered], epoch=1)
+    got = await devices_ws.ingest_audit(pool, device_id, [good, tampered], epoch=epoch)
     assert got == {"stored": 1, "break": 1}
     (event,) = await _breaks(pool, device_id)
-    assert (event["meta"]["epoch"], event["meta"]["seq"]) == (1, 1)
+    assert (event["meta"]["epoch"], event["meta"]["seq"]) == (epoch, 1)
