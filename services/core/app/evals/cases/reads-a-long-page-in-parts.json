@@ -45,5 +45,5 @@
       "arg": "narration"
     }
   ],
-  "comment": "S38 (spec: the answer is in part 3). The page reads as three parts of 24,000 characters and the answer is entry 380, in part 3, so she must read on or search (browser_read with a part or a query); parts 1 and 2 cannot answer it. Measures the parts reader. guard_absent('narration') is a general backstop here too; its coverage of an unbacked browser 'opened'/'navigated' claim arrives with S38 Task 7 (itself waiting on S37a Task 12) -- until then it holds vacuously, the same known state as S37a's four MCP cases' guard_absent halves before Task 12. Added with the S38 corpus bump."
+  "comment": "S38 (spec: the answer is in part 3). The page reads as three parts of 24,000 characters and the answer is entry 380, in part 3, so she must read on or search (browser_read with a part or a query); parts 1 and 2 cannot answer it. Measures the parts reader. guard_absent('narration') is NOT vacuous here either: until S38 Task 7 lands, an honest reply phrased 'I read/visited/accessed http://notes.example.invalid/log' FAILS this clause today, for the same reason -- the narration guard's fetched-url claim kind is backed only by fetch_url, never browser_open/browser_read. Task 7's Edit 1 closes it (_FETCH_TOOLS gains browser_open, browser_read, browser_back). Added with the S38 corpus bump."
 }

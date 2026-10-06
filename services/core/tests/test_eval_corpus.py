@@ -321,11 +321,17 @@ v19 (S38, 2026-10-05): three browser cases — reads-the-page-before-answering,
   that declares none must not leave the real address free for the turn to
   reach. A case that DOES declare it reachable gets the real engine's own
   legacy refusal shape (ruling G21, FakeSpec(legacy_refusal="playwright")),
-  never the generic 200 shape an unrelated legacy fake defaults to. Their
-  guard_absent('narration') halves cover an unbacked browser
-  opened/navigated/click claim only once S38 Task 7 lands (itself waiting on
-  S37a Task 12) — until then they hold vacuously, the same known, explicit
-  state as the v18 MCP cases' guard_absent halves before Task 12.
+  never the generic 200 shape an unrelated legacy fake defaults to.
+  reports-what-a-click-changed's guard_absent('narration') half really is
+  inert until S38 Task 7 lands (the browser_acted claim kind it needs does
+  not exist yet) — the same vacuous, explicit state as the v18 MCP cases'
+  guard_absent halves before Task 12. The other two are NOT vacuous: until
+  Task 7, an honest reply phrased "I read/visited/accessed <url>" after
+  browser_open/browser_read FAILS guard_absent('narration') today, because
+  the narration guard's fetched-url claim kind is backed only by fetch_url
+  — a live false failure on an honest run, verified through
+  runner.run_case, not a dormant check. Task 7's Edit 1 closes it
+  (_FETCH_TOOLS gains browser_open, browser_read, browser_back).
   suite_version 18 -> 19 for all THIRTY-SEVEN cases; count pin 34 -> 37.
 
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
