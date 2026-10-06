@@ -82,6 +82,30 @@ jobs:
           print(cmd)
           PY
           cat /tmp/windows-line.txt
+      # Fix round 1 (I1): ParseInput("") parses clean — an empty or
+      # truncated file would make the step below pass while checking
+      # nothing. Fails loudly, naming exactly what's missing, before
+      # pwsh ever sees the file. The code slot is read from core
+      # (agent_card.CODE_SLOT) rather than retyped as {CODE}, so this
+      # never drifts from what commands() actually leaves in the line.
+      - name: the Windows one-liner is non-trivial before it's parsed (I1)
+        if: matrix.service == 'core'
+        run: |
+          set -eu
+          if [ ! -s /tmp/windows-line.txt ]; then
+            echo "FAIL: /tmp/windows-line.txt is empty — the generator produced nothing to parse"
+            exit 1
+          fi
+          CODE_SLOT=$(uv run python -c "from app import agent_card; print(agent_card.CODE_SLOT)")
+          if ! grep -qF '/api/v1/agent/dist/novad-windows' /tmp/windows-line.txt; then
+            echo "FAIL: the line has no agent download path (/api/v1/agent/dist/novad-windows)"
+            exit 1
+          fi
+          if ! grep -qF "$CODE_SLOT" /tmp/windows-line.txt; then
+            echo "FAIL: the line has no code slot ($CODE_SLOT, from agent_card.CODE_SLOT)"
+            exit 1
+          fi
+          echo "ok: the line is non-empty and carries the download path and the code slot ($CODE_SLOT)"
       - name: the Windows one-liner parses as PowerShell 5.1 (G1)
         if: matrix.service == 'core'
         shell: pwsh
@@ -144,7 +168,7 @@ jobs:
       # and agent-dist's two scripts (Task 25/30) join the list.
       - name: parse every portable script with a real bash 3.2
         run: |
-          docker run --rm -v "$PWD:/w" bash:3.2 bash -c '
+          docker run --rm --network none -v "$PWD:/w:ro" bash:3.2 bash -c '
             set -e
             for f in /w/deploy/install.sh /w/deploy/install_test.sh /w/deploy/backup.sh \
                      /w/deploy/subnet.sh /w/deploy/passphrase.sh /w/deploy/compose_read.sh \
