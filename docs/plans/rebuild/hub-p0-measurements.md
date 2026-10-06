@@ -478,13 +478,6 @@ no ICMP from the LAN even when awake.
   state it entered (S3 or Modern Standby) not supporting Wi-Fi wake on this
   platform.
 
-**The schedule was stopped on purpose.** The plan's P0-1 schedule is 5 min × 5,
-90 min × 3 and overnight × 2. Trial 1 failed completely at the shortest sleep,
-the condition most favourable to landing, and repeating an unchanged
-configuration measures nothing new. The remaining trials wait until the Dell's
-settings are read — by the owner's decision of 2026-09-25, through Nova's agent
-(`s46/design-basis.md` §9), not by hand.
-
 **Added 2026-10-05.** Two facts narrow the cause, neither a measurement of a
 wake:
 
@@ -500,4 +493,11 @@ wake:
 The owner chose to keep the Dell on Wi-Fi (2026-10-05). Whether it can wake
 over Wi-Fi is now measured by S46a's walk ([`s46a/spec.md`](s46a/spec.md)
 §1, §6.6, §12).
+
+**The schedule was stopped on purpose.** The plan's P0-1 schedule is 5 min × 5,
+90 min × 3 and overnight × 2. Trial 1 failed completely at the shortest sleep,
+the condition most favourable to landing, and repeating an unchanged
+configuration measures nothing new. The remaining trials wait until the Dell's
+settings are read — by the owner's decision of 2026-09-25, through Nova's agent
+(`s46/design-basis.md` §9), not by hand.
 
