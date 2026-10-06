@@ -16,6 +16,12 @@
 # passed through as the TLS hop sent it; identity headers dropped unless
 # from the sidecar) is asserted on what ARRIVED, never on the conf alone.
 #
+# Since S42b it also pins the agent's carve-outs (`/api/v1/agent/` and
+# `/api/v1/devices/enroll` pass the gate; nothing beside them does, a dot
+# segment included), the update route's own location (still gated), and
+# that every proxied location forwards X-Real-IP as nginx's own $remote_addr
+# and Cf-Connecting-IP as sent — the facts core counts its rate limits by.
+#
 # No stack needs to be running. Leaves nothing behind — every container,
 # network and temp dir this script creates is removed on exit, success or
 # failure. Names carry GATE_TEST_PREFIX (default nova-gate-test) so a run can
@@ -40,6 +46,8 @@ NET="${PREFIX}-net-$$"
 SUBNET="10.99.0.0/24"
 SIDECAR_IP="10.99.0.50"
 OTHER_IP="10.99.0.60"
+# A device id for the update route's location (any one segment matches it).
+DEVICE_ID="00000000-0000-4000-8000-000000000001"
 STUB_DIR=""
 PASS=0
 FAIL=0
@@ -136,8 +144,8 @@ else
       || report 1 "gate on, no cookie: $path -> 401" "got $code"
   done
 
-  # /api/v1/devices/ws is the OTHER deliberate carve-out (see the nginx
-  # template's own comment on that location): a paired device sends no
+  # /api/v1/devices/ws is a deliberate carve-out (see the nginx template's
+  # own comment on that location): a paired device sends no
   # cookie, and the socket authenticates itself by ed25519 challenge, so
   # gating it would only take real daemons offline. With no cookie at all it
   # must NOT be blocked by the gate (not 401) — core is never started in
@@ -147,6 +155,34 @@ else
   code="$(status_of "$ON_BASE" "/api/v1/devices/ws")"
   [ "$code" != "401" ] && report 0 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" \
     || report 1 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" "got 401, expected the gate to let this through"
+
+  # S42b: the agent downloads and the enroll call are carved out too — the
+  # signed manifest and the one-time code are their own credentials. Core is
+  # not running here, so "not gated" shows up as 502 (nginx reached the
+  # proxy_pass), never 401.
+  for path in "/api/v1/agent/manifest" "/api/v1/agent/dist/novad-linux-amd64" "/api/v1/devices/enroll"; do
+    code="$(status_of "$ON_BASE" "$path")"
+    [ "$code" = "502" ] && report 0 "gate on, no cookie: $path is NOT gated (502: reaches the proxy, core absent)" \
+      || report 1 "gate on, no cookie: $path is NOT gated (502: reaches the proxy, core absent)" "got $code"
+  done
+  # ...and nothing beside them: the device list, the code mint, near-misses
+  # and the update route (an owner action, in a location of its own) stay
+  # gated.
+  for path in "/api/v1/devices" "/api/v1/devices/pairing-code" "/api/v1/devices/enrollx" \
+      "/api/v1/agentx" "/api/v1/devices/$DEVICE_ID/update" "/api/v1/devices/$DEVICE_ID/updatex"; do
+    code="$(status_of "$ON_BASE" "$path")"
+    [ "$code" = "401" ] && report 0 "gate on, no cookie: $path -> 401" \
+      || report 1 "gate on, no cookie: $path -> 401" "got $code"
+  done
+  # A dot segment cannot walk out of the carve-out: nginx resolves `..` (and
+  # its percent-encoded spelling) BEFORE it picks a location, so these are
+  # gated as the path they resolve to. --path-as-is: curl would otherwise
+  # resolve them itself and the request would prove nothing.
+  for path in "/api/v1/agent/../devices/pairing-code" "/api/v1/agent/%2e%2e/devices/pairing-code"; do
+    code="$(status_of "$ON_BASE" "$path" --path-as-is)"
+    [ "$code" = "401" ] && report 0 "gate on, no cookie, as sent: $path -> 401" \
+      || report 1 "gate on, no cookie, as sent: $path -> 401" "got $code"
+  done
 
   code="$(status_of "$ON_BASE" "/gate?token=$WRONG")"
   [ "$code" = "401" ] && report 0 "gate on: /gate?token=wrong -> 401" \
@@ -238,18 +274,19 @@ fi
 # ── gate ON, trusted sidecar address, upstream stub: who is exempt ────────
 # A private network with a declared subnet, a stub that answers as `core`
 # (the name the template's proxy_pass resolves through docker's embedded
-# DNS, which only a user-defined network provides) and echoes the four
-# headers this split cares about, and a web container told the sidecar
-# lives at $SIDECAR_IP. Clients are then placed AT that address and at
-# another one — the source address is the claim under test, so it is made
-# for real, not simulated with a header.
+# DNS, which only a user-defined network provides) and echoes the headers
+# this split cares about — plus X-Real-IP and Cf-Connecting-IP, which core
+# counts its rate limits by (S42b), and the request target as it arrived —
+# and a web container told the sidecar lives at $SIDECAR_IP. Clients are
+# then placed AT that address and at another one — the source address is
+# the claim under test, so it is made for real, not simulated with a header.
 STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/default.conf" <<'STUB'
 server {
     listen 8000;
     location / {
         default_type text/plain;
-        return 200 "proto=$http_x_forwarded_proto\nlogin=$http_tailscale_user_login\nname=$http_tailscale_user_name\npic=$http_tailscale_user_profile_pic\n";
+        return 200 "proto=$http_x_forwarded_proto\nlogin=$http_tailscale_user_login\nname=$http_tailscale_user_name\npic=$http_tailscale_user_profile_pic\nrealip=$http_x_real_ip\ncf=$http_cf_connecting_ip\nuri=$request_uri\n";
     }
 }
 STUB
@@ -312,6 +349,68 @@ else
   code="$(client_status "$SIDECAR_IP" "http://$FWD/api/v1/devices/ws")"
   [ "$code" = "200" ] && report 0 "from $SIDECAR_IP, no header, no cookie: /api/v1/devices/ws is NOT gated (200 from core)" \
     || report 1 "from $SIDECAR_IP, no header, no cookie: /api/v1/devices/ws is NOT gated (200 from core)" "got '$code'"
+  # S42b: so do the agent's downloads and the enroll call (a machine added
+  # through funnel has no header and no cookie either).
+  for path in "/api/v1/agent/manifest" "/api/v1/devices/enroll"; do
+    code="$(client_status "$SIDECAR_IP" "http://$FWD$path")"
+    [ "$code" = "200" ] && report 0 "from $SIDECAR_IP, no header, no cookie: $path reaches core" \
+      || report 1 "from $SIDECAR_IP, no header, no cookie: $path reaches core" "got '$code'"
+  done
+
+  # The carve-outs overwrite the identity headers like every other location:
+  # a forged login from anywhere but the sidecar never reaches core, and
+  # serve's own copy from the sidecar does.
+  for path in "/api/v1/agent/manifest" "/api/v1/devices/enroll"; do
+    body="$(client_body "$OTHER_IP" "http://$FWD$path" --header "Tailscale-User-Login: forged@example.com")"
+    if printf '%s' "$body" | grep -qx 'login='; then
+      report 0 "from $OTHER_IP + forged Tailscale-User-Login, no cookie: $path reaches core with no login"
+    else
+      report 1 "from $OTHER_IP + forged Tailscale-User-Login, no cookie: $path reaches core with no login" "$body"
+    fi
+    body="$(client_body "$SIDECAR_IP" "http://$FWD$path" --header "Tailscale-User-Login: a@b")"
+    if printf '%s' "$body" | grep -qx 'login=a@b'; then
+      report 0 "from $SIDECAR_IP + Tailscale-User-Login: $path reaches core with serve's login"
+    else
+      report 1 "from $SIDECAR_IP + Tailscale-User-Login: $path reaches core with serve's login" "$body"
+    fi
+    # What core counts a request by: X-Real-IP is nginx's own $remote_addr,
+    # written over the caller's copy, and Cf-Connecting-IP passes as sent
+    # (core reads only whether it is there).
+    body="$(client_body "$OTHER_IP" "http://$FWD$path" --header "X-Real-IP: 198.51.100.7" \
+      --header "Cf-Connecting-IP: 203.0.113.9")"
+    if printf '%s' "$body" | grep -qx "realip=$OTHER_IP" && printf '%s' "$body" | grep -qx 'cf=203.0.113.9'; then
+      report 0 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent"
+    else
+      report 1 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent" "$body"
+    fi
+  done
+
+  # The update route's own location (S42b: a longer read timeout than
+  # /api/'s, since an update waits on the agent) is an owner action and
+  # stays gated: no cookie from another address is a 401; the cookie, or a
+  # tailnet peer, reaches core.
+  code="$(client_status "$OTHER_IP" "http://$FWD/api/v1/devices/$DEVICE_ID/update")"
+  [ "$code" = "401" ] && report 0 "from $OTHER_IP, no cookie: /api/v1/devices/<id>/update -> 401" \
+    || report 1 "from $OTHER_IP, no cookie: /api/v1/devices/<id>/update -> 401" "got '$code'"
+  code="$(status_of "$FWD_BASE" "/api/v1/devices/$DEVICE_ID/update" -b "nova_gate=$TOKEN")"
+  [ "$code" = "200" ] && report 0 "published port + cookie: /api/v1/devices/<id>/update reaches core" \
+    || report 1 "published port + cookie: /api/v1/devices/<id>/update reaches core" "got $code"
+  code="$(client_status "$SIDECAR_IP" "http://$FWD/api/v1/devices/$DEVICE_ID/update" --header "Tailscale-User-Login: a@b")"
+  [ "$code" = "200" ] && report 0 "from $SIDECAR_IP + Tailscale-User-Login, no cookie: /api/v1/devices/<id>/update reaches core" \
+    || report 1 "from $SIDECAR_IP + Tailscale-User-Login, no cookie: /api/v1/devices/<id>/update reaches core" "got '$code'"
+
+  # The prefix carve-out's backstop is core: nginx resolves dot segments to
+  # pick a location, but forwards the target AS SENT ($request_uri). So a
+  # path that resolves INTO /api/v1/agent/ reaches core unresolved — where
+  # only an exact identity.PUBLIC_PATHS entry is served without an identity
+  # (pinned on core's side by test_agent_dist.py). This pins nginx's half.
+  raw="/api/v1/devices/pairing-code/../../agent/manifest"
+  body="$(curl -s --path-as-is "$FWD_BASE$raw")"
+  if printf '%s' "$body" | grep -qxF "uri=$raw"; then
+    report 0 "published port, no cookie, as sent: $raw reaches core unresolved"
+  else
+    report 1 "published port, no cookie, as sent: $raw reaches core unresolved" "$body"
+  fi
 
   # From ANOTHER address with the header: the header is worth nothing, and
   # even with a valid cookie core sees none of the identity headers.
@@ -338,8 +437,10 @@ else
   else
     report 1 "published port + cookie + forged Tailscale-User-{Login,Name,Profile-Pic}: core sees NONE of them" "$body"
   fi
-  # ...on the streaming and WS locations too (each has its own header set).
-  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/devices/ws"; do
+  # ...on the streaming, WS, carve-out and update locations too (each has its
+  # own header set).
+  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/devices/ws" \
+      "/api/v1/agent/manifest" "/api/v1/devices/enroll" "/api/v1/devices/$DEVICE_ID/update"; do
     body="$(curl -s -b "nova_gate=$TOKEN" -H "Tailscale-User-Login: forged@example.com" "$FWD_BASE$path")"
     if printf '%s' "$body" | grep -qx 'login='; then
       report 0 "published port + forged Tailscale-User-Login on $path: core sees no login"
@@ -399,6 +500,15 @@ else
   n_name="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header Tailscale-User-Name \$ts_user_name_upstream;')"
   n_pic="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header Tailscale-User-Profile-Pic \$ts_user_pic_upstream;')"
   n_scheme="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header X-Forwarded-Proto \$scheme;')"
+  n_realip="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header X-Real-IP \$remote_addr;')"
+  # Core believes X-Real-IP from web only because nginx writes its own
+  # $remote_addr over the caller's copy: a proxied location without this
+  # line would hand a caller's header to core as nginx's word (S42b).
+  if [ "$n_pass" -gt 0 ] && [ "$n_realip" -eq "$n_pass" ]; then
+    report 0 "rendered conf: every proxied location ($n_pass) sets X-Real-IP \$remote_addr"
+  else
+    report 1 "rendered conf: every proxied location ($n_pass) sets X-Real-IP \$remote_addr" "proxy_pass=$n_pass x_real_ip=$n_realip"
+  fi
   if [ "$n_pass" -gt 0 ] && [ "$n_fwd" -eq "$n_pass" ] && [ "$n_scheme" -eq 0 ]; then
     report 0 "rendered conf: every proxied location ($n_pass) forwards X-Forwarded-Proto \$fwd_proto, none forwards bare \$scheme"
   else
