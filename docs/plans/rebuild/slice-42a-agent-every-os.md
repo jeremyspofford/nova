@@ -390,9 +390,8 @@ The owner's verdict: "the walk worked flawlessly. All 4 worked."
   windows; facts: Windows 11 Pro 25H2 (build 26200); agent `bbbbbbbbbbbb`),
   running in a PowerShell window (`novad run`; the Run key is S42b).
 - D13: a local build of `novad.exe` (go1.27.1, windows/amd64) has sha256
-  `2633c29db753db7374faafee9d86e149c495d88116d14eb22b560d318e0076a6`,
-  identical to CI's `novad-windows-amd64.exe` artifact from main's run
-  `36428974635`. The owner verified the same hash on the Dell with
+  `<BUILD-SHA256>`, identical to CI's `novad-windows-amd64.exe` artifact from
+  main's run `36428974635`. The owner verified the same hash on the Dell with
   `Get-FileHash` after a Taildrop transfer.
 - The old WSL agent had not connected since 2026-09-22 19:09 UTC (the day
   the hub moved to the mini PC); core saw no attempt from it. The owner
