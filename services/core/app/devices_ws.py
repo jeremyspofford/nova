@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import reprlib
 import secrets
 import time
 import uuid
@@ -577,19 +578,35 @@ def _text_problem(value: object) -> str | None:
     return None
 
 
+# What a break's reason shows of a value the device sent: NAMED, never echoed
+# whole. The reason lands in an ERROR line and in the break's governance row,
+# and a malformed field can be as long as the frame itself (Task 32, L275: a
+# 10,000-character `ok` went into both verbatim). reprlib bounds every shape a
+# frame can carry — a long string, a long list, nesting, a huge integer — and
+# the clip bounds what is left.
+_SHOWN_MAX = 80
+_SHOWN = reprlib.Repr(maxlevel=2)
+
+
+def _shown(value: object) -> str:
+    said = _SHOWN.repr(value)
+    return said if len(said) <= _SHOWN_MAX else said[: _SHOWN_MAX - 1] + "…"
+
+
 def _entry_problem(entry: dict) -> str | None:
-    """Why this audit entry cannot be stored as sent, or None."""
+    """Why this audit entry cannot be stored as sent, or None. What the device
+    sent is shown bounded (_shown), never whole."""
     seq = entry.get("seq")
     if not _is_int(seq) or not 0 <= seq <= _BIGINT[1]:
-        return f"seq {seq!r} is not a non-negative 64-bit integer"
+        return f"seq {_shown(seq)} is not a non-negative 64-bit integer"
     ts = entry.get("ts")
     if not _is_int(ts) or not _TS_RANGE[0] <= ts <= _TS_RANGE[1]:
-        return f"ts {ts!r} is not a time between 1970 and 9999"
+        return f"ts {_shown(ts)} is not a time between 1970 and 9999"
     code = entry.get("exit_code")
     if code is not None and (not _is_int(code) or not _BIGINT[0] <= code <= _BIGINT[1]):
-        return f"exit_code {code!r} does not fit a 64-bit integer"
+        return f"exit_code {_shown(code)} does not fit a 64-bit integer"
     if not isinstance(entry.get("ok"), bool):
-        return f"ok {entry.get('ok')!r} is not true or false"
+        return f"ok {_shown(entry.get('ok'))} is not true or false"
     for key in ("envelope_id", "capability", "summary", "prev_hash", "hash"):
         value = entry.get(key)
         if value is None:

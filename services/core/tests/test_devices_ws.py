@@ -1691,6 +1691,46 @@ async def test_a_batch_with_any_malformed_seq_stores_nothing_from_it(pool):
     assert event is not None and "no integer seq" in event["meta"]["reason"]
 
 
+# -- Task 32 (L275): a value the device sent is named, never echoed whole -------
+#
+# A break's reason lands in an ERROR line and in its governance row, and a
+# malformed field can be as long as the frame: a 10,000-character `ok` went
+# into both verbatim. (`probe`: a run of the value that must not appear in
+# either. The seq case has none for the log: the break's own seq field carries
+# the seq as sent, at most the 4,300 digits the frame's JSON parser reads.)
+@pytest.mark.parametrize(
+    "override,named,probe",
+    [
+        ({"ok": "x" * 10_000}, "ok", "x" * 200),
+        ({"ts": "9" * 10_000}, "ts", "9" * 200),
+        ({"exit_code": [0] * 5_000}, "exit_code", "0, " * 20),
+        ({"exit_code": {"k" * 5_000: "v" * 5_000}}, "exit_code", "k" * 200),
+        ({"ok": [[["x" * 3_000] * 50] * 50]}, "ok", "x" * 200),
+        ({"seq": 10**4000}, "seq", None),
+    ],
+    ids=["ok_text", "ts_text", "exit_code_list", "exit_code_object", "ok_nested", "seq_digits"],
+)
+async def test_a_huge_malformed_value_is_named_in_a_bounded_reason(
+    pool, caplog, override, named, probe
+):
+    device_id, _device = await _enroll(pool, name="pc")
+    with caplog.at_level("ERROR", logger="core"):
+        res = await devices_ws.ingest_audit(pool, device_id, _chain({}, override))
+    assert res["stored"] == 1
+    event = await pool.fetchrow(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2",
+        governance.DEVICE_AUDIT_BREAK,
+        device_id,
+    )
+    reason = event["meta"]["reason"]
+    assert reason.startswith(f"the entry cannot be stored: {named} "), reason[:120]
+    assert len(reason) < 200, len(reason)
+    logged = [r.getMessage() for r in caplog.records if "chain break" in r.getMessage()]
+    assert len(logged) == 1 and f"reason={reason}" in logged[0]
+    if probe is not None:
+        assert probe not in logged[0] and probe not in json.dumps(event["meta"])
+
+
 # Controller ruling (2026-10-01): as written, a result frame for an envelope
 # nobody is waiting on was ALREADY a no-op before this task — hub.resolve pops
 # nothing for an unknown envelope_id and simply returns, so a bare "absurd
