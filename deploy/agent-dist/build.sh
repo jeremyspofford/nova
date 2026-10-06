@@ -84,9 +84,28 @@ TARGETS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows
 
 name_of() { if [ "$1" = windows ]; then echo "novad-$1-$2.exe"; else echo "novad-$1-$2"; fi; }
 
+# manifest_shape_ok confirms manifest.json describes what core's own reader
+# (services/core/app/agent_dist.py's _current) requires before verified()
+# trusts the fast "already built" path (Task 32, L541 part 2): the wire
+# version is 1, the version field names THIS build, and all six targets have
+# a files entry. sha256sum -c alone only proves the six binaries on disk
+# match the sums manifest.json itself gives — never that the manifest is one
+# core will actually accept. Without this, verified() could return true on a
+# manifest.json core refuses outright, and ./install would never notice or
+# rebuild to self-repair.
+manifest_shape_ok() {
+  grep -qF '"v":1' "$1" || return 1
+  grep -qF "\"version\":\"$V\"" "$1" || return 1
+  for t in $TARGETS; do
+    os=${t%/*}; arch=${t#*/}
+    grep -qF "\"$os-$arch\":{\"name\":\"$(name_of "$os" "$arch")\"" "$1" || return 1
+  done
+}
+
 verified() {
   [ -f "$DIST/$V/manifest.json" ] && [ -f "$DIST/$V/SHA256SUMS" ] || return 1
-  (cd "$DIST/$V" && sha256sum -c --status SHA256SUMS)
+  (cd "$DIST/$V" && sha256sum -c --status SHA256SUMS) || return 1
+  manifest_shape_ok "$DIST/$V/manifest.json"
 }
 
 if verified; then

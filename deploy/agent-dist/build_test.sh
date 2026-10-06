@@ -123,6 +123,28 @@ out="$(build "$D" "$V1" < "$T/tree1.tar" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && grep -q '^build' "$T/go.log" && (cd "$D/$V1" && sha256sum -c --status SHA256SUMS) \
   && report 0 "a build that no longer matches its sums is built again" || report 1 "a build that no longer matches its sums is built again" "rc=$rc"
 
+# L541 part 2 (Task 32): verified() must also check manifest.json's SHAPE,
+# not just that the six binaries match SHA256SUMS. Dropping one target's
+# entry here leaves SHA256SUMS (a different file, listing the six binaries
+# only) completely untouched, so this is exactly the gap the ledger named:
+# a corrupt manifest that still passes `sha256sum -c`. No -i (BSD sed on
+# the macOS leg takes no bare -i argument): write to a new file, then
+# `command cp -f` over it, same as the shell rule for this worktree.
+sed 's/,"windows-arm64":{[^}]*}//' "$D/$V1/manifest.json" > "$T/manifest.trimmed"
+command cp -f "$T/manifest.trimmed" "$D/$V1/manifest.json"
+(cd "$D/$V1" && sha256sum -c --status SHA256SUMS) \
+  || report 1 "a manifest missing one target's entry still passes sha256sum -c (the fixture, not the fix, is wrong)" "SHA256SUMS does not name manifest.json"
+: > "$T/go.log"
+out="$(build "$D" "$V1" < "$T/tree1.tar" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '^build' "$T/go.log" \
+  && ! printf '%s' "$out" | grep -q 'already built and verified' \
+  && grep -q '"windows-arm64"' "$D/$V1/manifest.json"
+then
+  report 0 "a manifest missing one target's entry is rebuilt, never trusted as already built and verified"
+else
+  report 1 "a manifest missing one target's entry is rebuilt, never trusted as already built and verified" "rc=$rc go.log=$(cat "$T/go.log") out=$out"
+fi
+
 make_tar "$T/tree2.tar" fixture-2
 V2="$(tree_version_of "$T/tree2.tar")"
 make_tar "$T/tree3.tar" fixture-3
