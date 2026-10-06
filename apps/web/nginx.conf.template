@@ -482,26 +482,25 @@ server {
 
     # The enroll body is held to 8k here, not the server's 100m: a stranger
     # reaches this POST with no cookie, and core reads and parses a body
-    # before it can refuse one. 8k is derived from the largest body core
-    # ACCEPTS. devices_api.EnrollBody sets no max length on any field;
-    # devices.enroll checks each one after stripping it. Field by field:
-    #   * code: 8 characters once the whitespace and hyphens a person types
-    #     are dropped. Counted at 15, a separator between each.
-    #   * pubkey: 64 characters.
-    #   * name: 64 characters.
-    #   * platform: 7 ("windows", the longest).
-    #   * hostname: NO limit in core, so MEASURED instead: at most 255 bytes,
-    #     the most the agent's os.Hostname() can return (Darwin's
-    #     MAXHOSTNAMELEN 256 with its NUL; Linux's is 64, Windows's DNS host
-    #     name 63).
-    # With every character written as a JSON \u escape (6 bytes; 12 for each
-    # of the name's, taken outside the BMP so each is a surrogate pair) and
-    # the five keys around them: 2,875 bytes, the worst any client can send
-    # that core accepts. The agent's own encoder
-    # (install.Body, measured with Go 1.27.1) sends 460 bytes at those
-    # sizes and 2,055 at its worst. 8k leaves 5,317 bytes beyond 2,875 —
-    # room for the home-folder path a 2026-09-01..03 agent still adds as a
-    # sixth key, which core ignores. gate_test.sh pins 8k from both sides.
+    # before it can refuse one. 8k is derived from what Nova's agent itself
+    # sends at its worst. Its encoder (install.Body: Go's json.Marshal of
+    # the five keys) writes at most 6 bytes for each byte of text (`<` is
+    # \u003c), and the agent's name defaults to its hostname, so the hostname
+    # goes out twice:
+    #   * hostname, and name: at most 255 bytes each — the most os.Hostname()
+    #     returns (Darwin's MAXHOSTNAMELEN 256 with its NUL; Linux's is 64, a
+    #     Windows DNS host name 63), which core now holds both to, one line
+    #     each (devices.MAX_HOSTNAME_LENGTH);
+    #   * code: 8 characters, counted at 15 (typed with a separator between
+    #     each);
+    #   * pubkey: 64 hex characters; platform: 7 ("windows", the longest).
+    # That is 3,207 bytes at worst, measured with Go 1.27.1 (a 255-byte
+    # hostname of `<`, sent twice); a realistic full-size body is 651 bytes.
+    # 8k is 2.5 times the worst — room, too, for the home-folder path that
+    # an agent built 2026-09-01..03 still sends as a sixth key, which core
+    # ignores. (It is not "the most core accepts": core still takes any
+    # amount of whitespace around a code. Through this origin that amount
+    # is 8k.) gate_test.sh pins 8k from both sides.
     location = /api/v1/devices/enroll {
         set $core_upstream http://core:8000;
         proxy_pass $core_upstream$request_uri;

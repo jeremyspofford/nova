@@ -420,15 +420,18 @@ else
     fi
   done
 
-  # The carve-outs' bodies (fix round 0, controller ruling): no cookie
-  # reaches them, so a body is held to what a real client sends. The agent's
-  # full-size enroll body — its five keys, a code typed with its separator, a
-  # 255-character host name, a 64-character name — and one of exactly
-  # ENROLL_BODY_MAX bytes reach core; one byte more is nginx's 413 and core
-  # never sees it. The agent's paths take no body at all. The over-limit
-  # requests go first, so the controls the stub logs after them make their
-  # absence from its log mean something.
-  full_enroll='{"code":"ZZZZ-ZZZZ","hostname":"'"$(bytes_of 255 h)"'","name":"'"$(bytes_of 64 n)"'","platform":"windows","pubkey":"'"$(bytes_of 64 a)"'"}'
+  # The carve-outs' bodies (fix rounds 0 and 1, controller rulings): no
+  # cookie reaches them, so a body is held to what Nova's agent sends. Its
+  # realistic full-size enroll body — the five keys, a code typed with its
+  # separator, and a 255-character host name sent twice, as the hostname and
+  # as the name it defaults to — and one of exactly ENROLL_BODY_MAX bytes
+  # reach core; one byte more is nginx's 413 and core never sees it (the
+  # 8k's derivation, from the agent's worst case, is in the template). The
+  # agent's paths take no body at all. The over-limit requests go first, so
+  # the controls the stub logs after them make their absence from its log
+  # mean something.
+  host_255="$(bytes_of 255 h)"
+  full_enroll='{"code":"ZZZZ-ZZZZ","hostname":"'"$host_255"'","name":"'"$host_255"'","platform":"windows","pubkey":"'"$(bytes_of 64 a)"'"}'
   over_enroll="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of $((ENROLL_BODY_MAX + 1)))" POST enroll-over)"
   over_agent="$(send_body "$FWD_BASE" "/api/v1/agent/manifest" "$(bytes_of $((AGENT_BODY_MAX + 1)) x)" GET agent-over)"
   full="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$full_enroll" POST enroll-full)"
