@@ -4398,6 +4398,7 @@ def test_a_word_the_record_does_not_name_still_names_no_machine():
     [
         "-eval_laptop's agent is updated.",
         "...eval_laptop's agent has been updated.",
+        "-eval_laptop is now on the hub's build.",
     ],
 )
 def test_punctuation_against_the_front_of_a_name_is_not_part_of_it(reply):
@@ -4413,6 +4414,180 @@ def test_a_name_that_begins_with_a_dash_is_still_read_whole():
     names = (*PAIRED, "-lab")
     correction = guards.narration_check("-lab's agent is updated.", [other_span()], names)
     assert correction is not None and targets(correction) == ["-lab"]
+
+
+# -- Task 32 (Phase B round 2), the MF4 gap: an update's RESULT, said as done --
+#
+# Since MF4 a machine_update on minipc backs an install claim about minipc for
+# device_completion, whatever it answered — a send too — because whether the
+# install TOOK is this family's question. The family read only "I updated …"
+# and "…'s agent is updated", so "I installed the new build on minipc" beside a
+# SENT update was corrected by neither guard. Three more ways, each about a
+# machine she names (guards._UPDATE_TOOK): her install of the build, an act;
+# the build installed there or the update done; and the build it runs — states.
+RESULT_ACTS = (
+    ("I installed the new build on minipc.", "minipc"),
+    ("I've installed the hub's build on eval_laptop.", "eval_laptop"),
+    ("Done — I just installed the latest build on minipc.", "minipc"),
+)
+RESULT_STATES = (
+    ("The new build has been installed on minipc.", "minipc"),
+    ("The update is complete on minipc.", "minipc"),
+    ("The update on eval_laptop is done.", "eval_laptop"),
+    ("minipc's update is finished.", "minipc"),
+    ("The update has completed on your Dell.", "DELL-XPS-8950"),
+    ("minipc is now on the hub's build.", "minipc"),
+    ("minipc's agent is running the new build.", "minipc"),
+    ("The agent on eval_laptop is now running the hub's build.", "eval_laptop"),
+    ("No problem — minipc now runs the hub's build.", "minipc"),
+)
+RESULT_CLAIMS = RESULT_ACTS + RESULT_STATES
+
+
+@pytest.mark.parametrize("reply,machine", RESULT_CLAIMS)
+def test_an_updates_result_beside_a_send_is_corrected_and_a_confirmed_one_backs_it(reply, machine):
+    sent = guards.narration_check(reply, [_update_span(machine, outcome="sent")], PAIRED)
+    assert sent is not None and kinds(sent) == ["updated_machine"], reply
+    assert targets(sent) == [machine]
+    assert sent.text == (
+        f"Correction: nothing this turn confirmed an update of a machine named {machine} — only "
+        "the agent reconnecting on the hub's build confirms one."
+    )
+    confirmed = [_update_span(machine, outcome="confirmed")]
+    assert guards.narration_check(reply, confirmed, PAIRED) is None, reply
+    # A confirmed update of another machine backs nothing about this one.
+    elsewhere = [_update_span(machine, outcome="sent"), _update_span("box", outcome="confirmed")]
+    assert guards.narration_check(reply, elsewhere, PAIRED) is not None, reply
+
+
+@pytest.mark.parametrize("reply,machine", RESULT_CLAIMS)
+def test_current_backs_the_state_an_update_leaves_but_never_her_install(reply, machine):
+    """machine_update's "current": nothing was sent, its agent last reported
+    the hub's build. The state is true; "I installed the new build" is not."""
+    current = [_update_span(machine, outcome="current")]
+    correction = guards.narration_check(reply, current, PAIRED)
+    if (reply, machine) in RESULT_ACTS:
+        assert correction is not None and targets(correction) == [machine], reply
+    else:
+        assert correction is None, reply
+
+
+# Measured, not guessed (scratch/t32b2-core/mf4_gap_precision.py: 96 honest
+# replies after a send, 0 corrected): a sample of the honest ones — negated,
+# conditional, future, an intent to check, a step that is not the result, the
+# family's clause split ("yet", "then") cutting a complement or a consequent
+# off what governs it, and other software's builds and updates.
+RESULT_HONEST_AFTER_A_SEND = (
+    "I sent it; it installs once it reconnects.",
+    "It is not installed yet.",
+    "The new build is not installed on minipc yet.",
+    "minipc isn't on the hub's build yet.",
+    "The update on minipc is not complete yet.",
+    "I haven't installed the new build on minipc — I only sent it.",
+    "If the update is complete on minipc, machine_status will say so.",
+    "Once minipc is on the hub's build, I'll tell you.",
+    "As soon as minipc is running the hub's build, the update is confirmed.",
+    "minipc is on the hub's build only once it reconnects.",
+    "minipc will be running the hub's build after it restarts.",
+    "I'll confirm minipc is on the hub's build once it reconnects.",
+    "Let me check that the update is complete on minipc.",
+    "You'll see minipc is on the hub's build when it reconnects.",
+    "I can't say minipc is on the hub's build yet.",
+    "Nothing confirms that minipc is on the hub's build yet.",
+    "The update is done sending; minipc confirms it when it reconnects.",
+    "The update on minipc is done downloading — it restarts next.",
+    "There's no sign yet that the update finished on minipc.",
+    "If minipc reconnects, then the update is complete on minipc.",
+    "Has the update completed on minipc? Not yet.",
+    "Firefox on minipc is now on the latest build.",
+    "I installed the new build of Firefox on minipc.",
+    "The apt update is complete on minipc.",
+)
+
+
+@pytest.mark.parametrize("reply", RESULT_HONEST_AFTER_A_SEND)
+def test_honest_words_about_a_sent_update_are_never_corrected(reply):
+    correction = guards.narration_check(reply, [_update_span("minipc", outcome="sent")], PAIRED)
+    assert correction is None, (reply, correction)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The update is complete.",
+        "It is now on the hub's build.",
+        "I installed the new build on it.",
+        "Your new phone is now on the hub's build.",
+    ],
+)
+def test_a_result_that_names_no_machine_is_no_claim(reply):
+    """ "the new build" and "the update" are anyone's: only a machine she names
+    makes one of these an update claim."""
+    assert guards.narration_check(reply, [_update_span("minipc", outcome="sent")], PAIRED) is None
+
+
+def test_an_install_or_an_update_done_is_read_only_beside_this_turns_update_of_it():
+    """Without this turn's update of that machine an install is
+    device_completion's claim — "(No machine_update or device_run call ran on
+    minipc this turn.)", the one true sentence (MF4's division) — and "the
+    update" may be apt's or Windows'. The build it RUNS is read beside any
+    update fact this turn holds for it: machine_status's row too. device_list
+    states an agent's build and records no update fact, so nothing it showed
+    is contradicted here."""
+    install = "I installed the new build on minipc."
+    done = "The update is complete on minipc."
+    on_build = "minipc is now on the hub's build."
+    row_sent = [_status_span("minipc", outcome="sent")]
+    listing = [
+        SimpleNamespace(
+            kind="tool",
+            name="device_list",
+            meta={"ok": True, "facts": [{"device": "minipc", "connected": True}]},
+        )
+    ]
+    for spans in ([], [other_span()], row_sent, listing):
+        assert guards.narration_check(install, spans, PAIRED) is None
+        assert guards.narration_check(done, spans, PAIRED) is None
+    assert guards.narration_check(on_build, [], PAIRED) is None
+    assert guards.narration_check(on_build, listing, PAIRED) is None
+    corrected = guards.narration_check(on_build, row_sent, PAIRED)
+    assert corrected is not None and targets(corrected) == ["minipc"]
+    # This turn's update of ANOTHER machine makes no claim about this one.
+    other = [_update_span("eval_laptop", outcome="sent")]
+    assert guards.narration_check(install, other, PAIRED) is None
+
+
+DEVICE_TOOLS = ("device_run", "device_launch_app", "device_write_file", "device_notify")
+TWO_MACHINES = {"minipc": "e" * 64, "eval_laptop": "f" * 64}
+
+
+@pytest.mark.parametrize("reply,machine", [*RESULT_ACTS, RESULT_STATES[0]])
+def test_one_install_claim_draws_one_sentence_whatever_the_record(reply, machine):
+    """The re-check the brief asked for: MF4 (a machine_update on X backs
+    device_completion's install claim about X) and this widening never both
+    correct one reply. A send: this family alone. Confirmed: neither. No
+    update of X — none at all, a failed one, or another machine's — the
+    device guard alone, and this family says nothing."""
+    tools_ = [*DEVICE_TOOLS, "machine_update"]
+    failed = _update_span(machine, outcome="cannot", ok=False)
+    records = {
+        "sent": ([_update_span(machine, outcome="sent")], "narration"),
+        "confirmed": ([_update_span(machine, outcome="confirmed")], None),
+        "none": ([], "device_completion"),
+        "failed": ([failed], "device_completion"),
+        "another": ([_update_span("box", outcome="sent")], "device_completion"),
+    }
+    for label, (spans, which) in records.items():
+        narration = guards.narration_check(reply, spans, PAIRED)
+        device = guards.device_completion_check(
+            reply, spans, tools_, PAIRED, machines={**TWO_MACHINES, "box": "b" * 64}
+        )
+        said = {
+            name
+            for name, claim in (("narration", narration), ("device_completion", device))
+            if claim is not None
+        }
+        assert said == ({which} if which else set()), (label, reply, narration, device)
 
 
 # -- one binding per name, module-wide -------------------------------------------

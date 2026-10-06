@@ -380,11 +380,17 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
        1  `_CAPABILITY_TOOLS` grew a 23rd `(Pattern, str)` pair — the same
           `_CAP_UPDATE_AGENTS` under a second id, reached by the live walk
           only (inserted before the S42a device_run row, which stays [-1]):
-          266 -> 267, and the difference 61 -> 62."""
+          266 -> 267, and the difference 61 -> 62.
+
+    Task 32 Phase B round 2 (the MF4 gap) moved the two totals again,
+    deliberately, and not the difference: 1 new BARE module Pattern, reached
+    by both walks — `_UPDATE_TOOK`, an update's RESULT said as done (her
+    install of the build, the build it runs, the update done): 205 -> 206,
+    267 -> 268. Its cuts (`_TookCuts`) reuse patterns already counted."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 205, len(old)
-    assert len(new) == 267, len(new)
+    assert len(old) == 206, len(old)
+    assert len(new) == 268, len(new)
     assert len(new) - len(old) == 62
 
 
@@ -546,7 +552,13 @@ def test_the_sweep_reaches_the_in_use_and_line_patterns():
 # 1,500), and main's linear-filenames fix (#96) made them linear, with its own
 # runs (FILENAME_RUNS, below). Since that fix, the guards below read the run as
 # well.
-UPDATE_PATTERNS = ("_UPDATED_MACHINE", "_UPDATE_RECAP", "_NAME_WORD", "_CAP_UPDATE_AGENTS")
+UPDATE_PATTERNS = (
+    "_UPDATED_MACHINE",
+    "_UPDATE_RECAP",
+    "_NAME_WORD",
+    "_CAP_UPDATE_AGENTS",
+    "_UPDATE_TOOK",
+)
 
 
 def _update_shapes(n: int) -> dict[str, str]:
@@ -563,6 +575,21 @@ def _update_shapes(n: int) -> dict[str, str]:
         "update_agents_then_spaces": "update the agents" + pad + "x",
         "update_agents_on_then_spaces": "update the agents on your" + pad + "machines x",
         "many_update_verbs": "update " * (n // 7) + "agents x",
+        # Task 32 (the MF4 gap): the shapes that enter _UPDATE_TOOK — her
+        # install, the build installed, the update done, the build it runs —
+        # each before padding, a name run before each name slot's tail, a long
+        # word after "done" (its "-ing" lookahead), and many claims in a row.
+        "installed_then_spaces": "I installed the new build on" + pad + "x",
+        "installed_object_then_spaces": "I installed the hub's" + pad + "build",
+        "build_installed_then_spaces": "the new build has been" + pad + "installed",
+        "update_done_then_spaces": "the update is" + pad + "complete",
+        "update_on_then_spaces": "the update on" + pad + "x",
+        "update_done_then_word": "the update is done " + "a" * n + "ing",
+        "agent_on_then_spaces": "the agent on" + pad + "x",
+        "name_on_build_then_spaces": "eval_laptop is now on the" + pad + "x",
+        "name_run_then_copula": "a." * (n // 2) + " is now on the hub's" + pad + "x",
+        "name_run_then_update": "a." * (n // 2) + "'s update is" + pad + "x",
+        "many_result_claims": "eval_laptop is on the hub's build. " * (n // 35) + "x",
     }
 
 

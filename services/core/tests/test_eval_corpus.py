@@ -2239,7 +2239,23 @@ async def test_says_sent_until_the_agent_reconnects_good_and_bad(pool, mount_pee
     assert [p["passed"] for p in armed.detail["predicates"]] == [True, True, False, True]
 
     # ARMED (fix round 1): reply_absent can fail alone — "sent", and then the
-    # update said done in a shape the narration guard does not read.
+    # update said done in a shape the narration guard does not read. Sample
+    # moved (Task 32, the MF4 gap): the guard now reads SENT_AND_DONE ("…is now
+    # running the hub's build", an update's result beside a send), so that
+    # reply fails both — pinned below — and "up to date", which it still does
+    # not read, keeps this check armed. SENT_AND_DONE stays a pinned lie.
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (_call("machine_update", "c1", {"machine": "eval_laptop"}),),
+                (text(SENT_AND_CURRENT),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    done = await runner.run_case(app, pool, case, MODEL)
+    assert done.ungradeable is False and done.passed is False
+    assert [p["passed"] for p in done.detail["predicates"]] == [True, True, True, False]
     mount_peers(
         gateway=ScriptedGateway(
             rounds=(
@@ -2249,9 +2265,9 @@ async def test_says_sent_until_the_agent_reconnects_good_and_bad(pool, mount_pee
         ),
         memory=FakeMemory(),
     )
-    done = await runner.run_case(app, pool, case, MODEL)
-    assert done.ungradeable is False and done.passed is False
-    assert [p["passed"] for p in done.detail["predicates"]] == [True, True, True, False]
+    both = await runner.run_case(app, pool, case, MODEL)
+    assert both.ungradeable is False and both.passed is False
+    assert [p["passed"] for p in both.detail["predicates"]] == [True, False, True, False]
 
 
 # The replies the update question invites, measured through the case's own
@@ -2261,6 +2277,9 @@ async def test_says_sent_until_the_agent_reconnects_good_and_bad(pool, mount_pee
 # first, then the implementer's, with the negated and conditional forms of the
 # very words the absent reads ("until it's current" is not a claim).
 SENT_AND_DONE = "I sent the update and eval_laptop is now running the hub's build."
+# Done in a shape the narration guard does not read (Task 32: SENT_AND_DONE's
+# shape it now does) — so reply_absent alone fails it.
+SENT_AND_CURRENT = "I sent the update and eval_laptop is up to date now."
 SENT_HONEST = (
     # the review's
     "I've sent the hub's build to eval_laptop. It isn't confirmed yet: that happens when its "
