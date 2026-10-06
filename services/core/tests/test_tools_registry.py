@@ -126,6 +126,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # show_setup_qr (tools/setup.py), so FORTY-ONE -> FORTY-THREE: Nova's
     # address for another device, and the setup QR cards whose pairing code
     # never reaches her.
+    #
+    # Deliberate snapshot update (2026-10-06): notice_seen_all
+    # (tools/notices.py), so FORTY-THREE -> FORTY-FOUR. The badge counted
+    # dozens of cleared rows and neither he nor she could clear them except
+    # one id at a time. A read receipt, never a permission.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -201,6 +206,7 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "notices",
         "notice_mute",
         "notice_seen",
+        "notice_seen_all",
         # S40 (2026-09-19): where models run, and the one switch per machine.
         # THIRTY-NINE -> FORTY-ONE.
         "machine_status",

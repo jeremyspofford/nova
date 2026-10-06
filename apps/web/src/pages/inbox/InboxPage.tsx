@@ -7,6 +7,7 @@ import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
 import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
+  markAllNoticesSeen as apiMarkAllNoticesSeen,
   muteNotice as apiMuteNotice,
   listNoticeDigests as apiListNoticeDigests,
   talkAboutNotice as apiTalkAboutNotice,
@@ -65,6 +66,7 @@ import {
 interface InboxApi {
   listNotices: typeof apiListNotices
   markNoticeSeen: typeof apiMarkNoticeSeen
+  markAllNoticesSeen: typeof apiMarkAllNoticesSeen
   muteNotice: typeof apiMuteNotice
   talkAboutNotice: typeof apiTalkAboutNotice
   listNoticeDigests: typeof apiListNoticeDigests
@@ -73,6 +75,7 @@ interface InboxApi {
 const DEFAULT_API: InboxApi = {
   listNotices: apiListNotices,
   markNoticeSeen: apiMarkNoticeSeen,
+  markAllNoticesSeen: apiMarkAllNoticesSeen,
   muteNotice: apiMuteNotice,
   talkAboutNotice: apiTalkAboutNotice,
   listNoticeDigests: apiListNoticeDigests,
@@ -110,6 +113,8 @@ export function InboxPage({
   const [notTold, setNotTold] = useState<Notice[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const shell = useUnseenNotices()
   const navigate = useNavigate()
@@ -181,6 +186,23 @@ export function InboxPage({
     [read, shell],
   )
 
+  /** Every unread row at once — the same receipt as one row's "Mark seen",
+   * then the server's own count. A refusal is stated beside the button,
+   * because it belongs to no one row. */
+  const readAll = useCallback(async () => {
+    setClearing(true)
+    setClearError(null)
+    try {
+      await api.markAllNoticesSeen()
+      await read()
+      shell.refresh()
+    } catch (err) {
+      if (mounted.current) setClearError(reasonOf(err))
+    } finally {
+      if (mounted.current) setClearing(false)
+    }
+  }, [api, read, shell])
+
   /** Open the room off the message that told him, and go there (S25.2.4).
    *
    * NOT through `write`: that re-reads the listing after every call, and
@@ -244,11 +266,23 @@ export function InboxPage({
           happens to be holding. Left off entirely when there is nothing to
           list, where the empty state already says it. */}
       {unseenCount !== null && notices !== null && notices.length > 0 && (
-        <p className="mb-6 text-compact text-content-secondary" data-testid="unseen-count">
-          {unseenCount === 0
-            ? 'Nothing here is unread.'
-            : `${unseenCount} unread — counted by the server, not by this page.`}
-        </p>
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          <p className="text-compact text-content-secondary" data-testid="unseen-count">
+            {unseenCount === 0
+              ? 'Nothing here is unread.'
+              : `${unseenCount} unread — counted by the server, not by this page.`}
+          </p>
+          {unseenCount > 0 && (
+            <Button size="sm" variant="secondary" disabled={clearing} onClick={() => void readAll()}>
+              Mark all read
+            </Button>
+          )}
+          {clearError && (
+            <span role="alert" className="text-compact text-danger">
+              Could not mark them read: {clearError}
+            </span>
+          )}
+        </div>
       )}
 
       {error && (
