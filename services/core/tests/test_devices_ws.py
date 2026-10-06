@@ -2272,14 +2272,63 @@ async def test_device_list_with_nothing_paired_says_so_and_hands_no_step(pool):
 
 
 async def test_a_folder_token_for_an_agent_that_reports_no_folders_is_a_stated_cannot(pool):
-    """Review Focus 8: an S42a agent reports no folders, so @desktop cannot be sent."""
+    """Review Focus 8: no folder reported, so @desktop cannot be sent — and
+    with no facts at all, nothing says why: the plain fact, never a cause
+    (fix/facts-unreadable-null)."""
     _id, _device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
     result, ok = await tools.dispatch(
         "device_list_files", {"device": "laptop", "path": "@desktop"}, _ctx(person)
     )
     assert ok is False and "cannot: laptop's agent did not report its desktop folder" in result
-    assert "(it has reported no folders — an agent from before S42b reports none)" in result
+    assert "(it has reported no folders) — give an absolute path instead" in result
+    assert "before S42b" not in result
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+async def test_an_s42b_agent_whose_frames_never_landed_is_never_called_older(pool):
+    """The walk of 2026-10-06: DELL-XPS-8950's agent is an S42b build
+    (8a2c15dab611), and its folders were never stored only because core
+    refused every facts frame it sent. Its auth facts landed and no frame
+    did: "an agent from before S42b" was a cause nobody checked."""
+    device_id, device = await _enroll(pool, name="dell", platform="windows")
+    s42b = {
+        **AUTH_FACTS,
+        "agent": {**AUTH_FACTS["agent"], "version": "8a2c15dab611", "mode": "run-key"},
+    }
+    conn, task, _ = await _auth_with(pool, device_id, device, s42b)
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "dell", "path": "@desktop"}, _ctx(person)
+    )
+    assert ok is False
+    assert result.endswith(
+        "cannot: dell's agent did not report its desktop folder (it has reported no folders) "
+        "— give an absolute path instead"
+    ), result
+    assert "before S42b" not in result
+    assert _command_frames(conn) == []
+    await _close(conn, task)
+
+
+async def test_an_agent_whose_frame_accounts_for_no_folder_is_said_to_predate_them(pool):
+    """The cause is said when the agent's own facts show it: a facts frame
+    landed (net) and accounted for none of the four folders — an agent that
+    has folders reports each one, or files why it could not."""
+    device_id, device = await _enroll(pool, name="laptop", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed({"type": "facts", "net": {"ifaces": []}, "unreadable": []})
+    await _wait_for_facts_key(pool, device_id, "net")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": "@desktop"}, _ctx(person)
+    )
+    assert ok is False
+    assert result.endswith(
+        "cannot: laptop's agent did not report its desktop folder (it has reported no folders "
+        "— an agent from before S42b reports none) — give an absolute path instead"
+    ), result
     assert _command_frames(conn) == []
     await _close(conn, task)
 

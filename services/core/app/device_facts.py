@@ -721,6 +721,27 @@ def folders_unread(facts: dict | None) -> dict[str, str]:
     return {name: why[f"folders.{name}"] for name in FOLDER_NAMES if f"folders.{name}" in why}
 
 
+def predates_folders(facts: dict | None) -> bool:
+    """Whether this agent's own facts show it predates the known folders (S42b
+    P16) — not merely that none have landed. An agent that has them accounts
+    for all four in every facts frame: reported under `folders`, or filed
+    unreadable as "folders.<name>" (apps/novad facts.GatherFrame). The auth
+    frame replaces the facts and carries no frame section, so `net`, which
+    every facts frame carries, says one landed since; only a frame that
+    landed and accounted for none of the four shows it. Before one lands
+    nothing does — core refused every frame build 8a2c15dab611 sent with a
+    probe in it, and "an agent from before S42b" was then said of an S42b
+    agent (fix/facts-unreadable-null). Its version cannot show it either: a
+    build's version is a hash with no order (build_state). A list cut at the
+    cap (its "unreadable" entry) may have lost a folder's entry, so it shows
+    nothing."""
+    if not isinstance(facts, dict) or "net" not in facts:
+        return False
+    if folders_of(facts) or folders_unread(facts):
+        return False
+    return "unreadable" not in _reasons_by_item(facts)
+
+
 # -- what she needs to act (S42b P29) ----------------------------------------
 
 

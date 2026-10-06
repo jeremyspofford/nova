@@ -1966,3 +1966,49 @@ def test_the_auth_frame_novad_sends_is_recorded_in_its_shape():
     assert frame["type"] == "auth" and frame["device_id"] and frame["sig"]
     assert df.validate_auth(frame["facts"]) == frame["facts"]
     assert frame["facts"]["agent"]["update"]["outcome"] == "applied"
+
+
+# -- the folders an agent's own facts show it predates -------------------------
+#
+# device_list_files' @folder refusal said "an agent from before S42b reports
+# none" of every agent that had reported no folders — and of the live S42b
+# agents above, whose frames core had refused, that cause was false. It is
+# said only when the agent's own facts show it.
+
+_FRAME_ROW = {**WINDOWS, "net": {"ifaces": []}, "unreadable": []}
+
+
+@pytest.mark.parametrize(
+    "facts,shows",
+    [
+        (None, False),
+        (WINDOWS, False),
+        (_FRAME_ROW, True),
+        ({**_FRAME_ROW, "folders": {"home": "C:\\Users\\sam"}}, False),
+        ({**_FRAME_ROW, "unreadable": [{"item": "folders.desktop", "reason": "x"}]}, False),
+        ({**_FRAME_ROW, "unreadable": [{"item": "folders.desktop", "reason": ""}]}, False),
+        (
+            {
+                **_FRAME_ROW,
+                "unreadable": [
+                    {"item": "unreadable", "reason": "more unreadable items than can be listed"}
+                ],
+            },
+            False,
+        ),
+    ],
+    ids=[
+        "no-facts",
+        "auth-only-no-frame-yet",
+        "a-frame-that-accounts-for-no-folder",
+        "a-folder-reported",
+        "a-folder-filed-unreadable",
+        "a-folder-filed-with-no-reason",
+        "a-list-cut-at-the-cap",
+    ],
+)
+def test_only_a_frame_that_accounts_for_no_folder_shows_an_agent_predates_them(facts, shows):
+    """Every agent with folders accounts for all four in every frame —
+    reported, or filed unreadable — so only a frame that landed (net) and
+    accounted for none shows it. Before a frame lands nothing does."""
+    assert df.predates_folders(facts) is shows
