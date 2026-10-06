@@ -667,7 +667,7 @@ function RoleEditor({
   )
 
   return (
-    <div className="rounded-md border border-line px-4 py-3" data-testid={`route-${role}`}>
+    <div className="rounded-md border border-border px-4 py-3" data-testid={`route-${role}`}>
       <div className="flex flex-wrap items-center gap-2">
         {label}
         {reserved && <Badge size="sm" color="neutral">no user yet</Badge>}

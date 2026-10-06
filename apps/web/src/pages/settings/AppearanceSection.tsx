@@ -273,7 +273,7 @@ function IconPicker({
               'flex items-center gap-2.5 rounded-sm border px-3 py-2 text-left transition-colors',
               value === choice.key
                 ? 'border-accent bg-accent-dim'
-                : 'border-border hover:border-border-strong',
+                : 'border-border hover:border-border-focus',
             )}
           >
             <img
@@ -328,7 +328,7 @@ function FontPicker({
             onClick={() => onPick(key)}
             className={clsx(
               'flex items-center gap-3 rounded-sm border px-3 py-2 text-left transition-colors max-w-[22rem]',
-              value === key ? 'border-accent bg-accent-dim' : 'border-border hover:border-border-strong',
+              value === key ? 'border-accent bg-accent-dim' : 'border-border hover:border-border-focus',
             )}
           >
             {/* Set in the face it offers, which is the only description of a

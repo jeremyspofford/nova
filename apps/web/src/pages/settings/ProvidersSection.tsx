@@ -362,7 +362,7 @@ export function ProvidersSection({
       ) : (
         <form
           data-testid="provider-form"
-          className="mt-3 space-y-3 rounded-md border border-line p-4"
+          className="mt-3 space-y-3 rounded-md border border-border p-4"
           onSubmit={e => {
             e.preventDefault()
             void save()
@@ -629,7 +629,7 @@ function ProviderRow({
   )
 
   return (
-    <div className="rounded-md border border-line p-3" data-testid={`provider-${provider.name}`}>
+    <div className="rounded-md border border-border p-3" data-testid={`provider-${provider.name}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-compact font-medium text-content-primary">{provider.name}</span>
         <Badge size="sm" color="neutral">
@@ -823,7 +823,7 @@ function ProviderRow({
                   />
                 )}
               </div>
-              <ul className="max-h-72 overflow-y-auto divide-y divide-line rounded-sm border border-line">
+              <ul className="max-h-72 overflow-y-auto divide-y divide-border rounded-sm border border-border">
                 {visible.slice(0, 200).map(model => {
                   const current = isCurrent(model.id)
                   const price = formatPrice(model)

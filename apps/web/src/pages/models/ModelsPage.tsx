@@ -565,7 +565,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
             data-basis={chip.basis}
             className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
               !chip.value
-                ? 'border border-line text-content-tertiary line-through'
+                ? 'border border-border text-content-tertiary line-through'
                 : chip.basis === 'inferred'
                   ? 'border border-dashed border-warning text-warning'
                   : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
@@ -870,7 +870,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
 
       {(facets.tab === 'available' || facets.tab === 'all') && (
         <div className="grid gap-3 md:grid-cols-2" data-testid="available-tools">
-          <div className="rounded-md border border-line p-3 space-y-2">
+          <div className="rounded-md border border-border p-3 space-y-2">
             <p className="text-compact font-medium">Search Hugging Face (GGUF)</p>
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-[12rem] flex-1">
@@ -902,7 +902,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               </p>
             )}
           </div>
-          <div className="rounded-md border border-line p-3 space-y-2">
+          <div className="rounded-md border border-border p-3 space-y-2">
             <p className="text-compact font-medium">Pull by name</p>
             <p className="text-caption text-content-tertiary">
               Ollama's library has no search API — type a name:tag from ollama.com (or hf.co/org/repo[:quant]) and it is
@@ -1077,7 +1077,7 @@ function QuantMenu({ options, onPick }: { options: PullOption[] | 'loading' | st
   if (typeof options === 'string') return <p className="text-caption text-danger p-2">{options}</p>
   if (options.length === 0) return <p className="text-caption text-content-tertiary p-2">this repo lists no GGUF files</p>
   return (
-    <ul className="min-w-[16rem] divide-y divide-line" data-testid="quant-menu">
+    <ul className="min-w-[16rem] divide-y divide-border" data-testid="quant-menu">
       {options.map(o => (
         <li key={o.tag}>
           <button

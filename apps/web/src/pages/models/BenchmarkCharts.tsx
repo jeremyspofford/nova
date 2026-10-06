@@ -51,7 +51,7 @@ export function BenchmarkCharts({ rows }: { rows: CatalogRow[] }) {
                     <span key={t} className="leading-none">{t}</span>
                   ))}
                 </div>
-                <div className="relative flex h-40 flex-1 items-end gap-2 border-b border-l border-line pl-1">
+                <div className="relative flex h-40 flex-1 items-end gap-2 border-b border-l border-border pl-1">
                   {withData.length === 0 ? (
                     <span className="mb-2 text-caption text-content-tertiary">no data</span>
                   ) : (
@@ -100,7 +100,7 @@ export function BenchmarkCharts({ rows }: { rows: CatalogRow[] }) {
       </div>
 
       {hovered && (
-        <div className="mt-3 inline-block rounded-md border border-line bg-surface-card px-3 py-2 text-caption shadow-sm" data-testid="benchmark-tooltip">
+        <div className="mt-3 inline-block rounded-md border border-border bg-surface-card px-3 py-2 text-caption shadow-sm" data-testid="benchmark-tooltip">
           <div className="mb-1 font-medium text-content-primary">{hovered.label}</div>
           <table className="font-mono text-content-secondary">
             <tbody>

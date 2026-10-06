@@ -94,10 +94,12 @@ export function AppLayout({
               exactly what the owner saw. Only the two BOTTOM insets were
               handled before this. `md:pt-0` because a desktop has no inset
               and the value resolves to 0 there anyway; stating it keeps the
-              intent legible. */}
+              intent legible. ONE pt-* class per mode, never two: with both on
+              <main>, Tailwind's CSS emit order — not this code — decided the
+              padding, and the bare inset won on a phone (2026-10-06, R1). */}
           <main
             className={clsx(
-              'flex-1 min-h-0 pt-[var(--nova-safe-top,0px)] md:pt-0',
+              'flex-1 min-h-0',
               // ROOM FOR THE MENU BUTTON, the mobile twin of the md:pl-11
               // below (2026-09-16). The button floats in the shell so it
               // works on every page — including the ones nobody has written
@@ -105,8 +107,11 @@ export function AppLayout({
               // without this it would sit on top of the first message.
               // Reserved DOWNWARD rather than sideways: 44px off the width
               // of a 393px screen is a real loss, 44px off the top is the
-              // slim bar Claude has there anyway.
-              isMobile && 'pt-[calc(var(--nova-safe-top,0px)+3rem)]',
+              // slim bar Claude has there anyway. The +3rem class REPLACES
+              // the bare inset rather than joining it.
+              isMobile
+                ? 'pt-[calc(var(--nova-safe-top,0px)+3rem)]'
+                : 'pt-[var(--nova-safe-top,0px)] md:pt-0',
               fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar',
               // ROOM FOR THE SHOW-SIDEBAR BUTTON. It floats in the shell so
               // it works on every page, and without this it floats ON TOP of
