@@ -166,8 +166,9 @@ class Eligibility:
     capability "daemon.update"`, its own shell.exec can still update it —
     only under a Linux systemd user unit, the one manager `install
     --restart-later` restarts from outside the old agent's process tree.
-    Under a Run key or a LaunchAgent it fails after the new build is placed
-    and registered (Task 12), so the bootstrap is never sent there."""
+    Under a Run key it refuses before anything is placed (Task 32, L245);
+    under a LaunchAgent it still fails after the new build is placed and
+    registered (Task 12). So the bootstrap is never sent to either."""
 
     token: str
     said: str | None = None
