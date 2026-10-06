@@ -66,3 +66,224 @@
   `deploy/README.md` now gives the script's own words directly, and
   `powershell -ExecutionPolicy Bypass -File .\install.ps1` for running it.
   Carried: the script itself does not detect or work around the policy.
+
+## From the build's reviews
+
+Task 32's triage of the 79 deferred minors across Tasks 2-31
+(`scratch/t32/triage.md`) ruled most of them CARRY or DROP rather than FIX
+NOW. The lines below are that ruling, in plain words: what each item is,
+and why it waits rather than being fixed now. A ledger line like "L60"
+points at the step in `progress.md` that first raised it.
+
+- **L60** (`internal/state/lock.go`, `Acquire`): a pid-write error after the
+  lock file itself is already held gets swallowed. The lock is genuinely
+  held either way; only a future contender's stale-pid message could be
+  imprecise. Waits because it is a diagnostic-only gap on an already-safe
+  path.
+- **L62** (`internal/state/state_test.go`): the held-lock test only proves
+  same-process exclusion; the PID-zero and unreadable-PID branches, and
+  true cross-process exclusion, are untested. Waits because the untested
+  code already degrades safely (`readPID` has no unsafe failure mode) —
+  this is a coverage gap, not a known-wrong behavior.
+- **L70** (`internal/config/config.go`, `freeName`): a bare `os.Lstat` error
+  with no "checking a set-aside name" context. Several sibling call sites
+  in the same file have the identical pattern. Waits for a batched
+  error-wrapping pass across all of them, rather than fixing this one site
+  alone.
+- **L78** (`internal/platform/folders_linux.go`): a failed `$HOME` lookup
+  returns the raw OS error instead of this file's own wording template;
+  darwin has no equivalent branch. Reachable only when `$HOME` is genuinely
+  unset. Waits to be bundled with L70 and L228 in one future wording pass.
+- **L89** (`internal/service/systemd_linux.go` and `launchd_darwin.go`,
+  `New()`): a home/config-base lookup error is discarded. Waits because it
+  is confirmed unreachable today — `config.DefaultPaths()` already refuses
+  loudly on the identical failure earlier in every real path.
+- **L91** (`internal/service/launchd_darwin.go`, `Restart`): `kickstart -k`
+  right after bootstrap can kill the instance RunAtLoad just started. Waits
+  because macOS service management is unwalked and CI-only today (already
+  tagged CARRY in the ledger).
+- **L92** (`main_test.go`, `launchd_darwin_test.go`,
+  `platform/detach_test.go`): test-quality gaps only — tracking "ever seen"
+  rather than the last `Restart=` value, no negative plist assertion, and a
+  detach test that proves the child ran but not that it got its own
+  session. Waits because no current writer produces conflicting directives,
+  so there is no live bug to fix yet.
+- **L93** (systemd unit, S42a carry-over): `After=`/`Wants=
+  network-online.target` are no-ops in a systemd user unit. Waits because
+  this predates S42b and is not this slice's to fix.
+- **L99** (`internal/platform/runkey_windows.go`, `Stop`): up to three
+  sequential 10-second waits, worst case about 30 seconds. Waits as a UX
+  note already flagged for later tasks (9/12) rather than a defect to fix
+  now.
+- **L132** (`internal/supervise/log_windows.go` and `supervise.go`,
+  `awaitReady`): a first-call `SetStdHandle` failure can pin inherited
+  handles (a rare OS-call failure); exit codes seen only inside
+  `awaitReady` can leave restart/exit counters stale until the next cycle
+  corrects them. Waits because neither ever surfaces a false claim to the
+  owner.
+- **L137** (`internal/supervise/supervise.go`): a double fault with no
+  `.prev` build retries forever on the 30-second backoff ceiling. Waits
+  because a reinstall is the only exit either way, and every logged line
+  stays factually accurate throughout (already tagged CARRY).
+- **L201 / L202** (`internal/platform/shell_linux_test.go`,
+  `procattr_unix.go`): test-hardening notes only — the tty-check half of a
+  test can pass headless without `Setsid`, and the Setsid-fails path has no
+  test. Waits because the session-id half of the same test is already a
+  reliable tripwire, and `procattr_unix.go` sets `Setsid: true`
+  unconditionally with no fallback branch to exercise.
+- **L228** (`internal/install/identity_unix_test.go`): no Windows twin for
+  this test file. Waits because `checkHubs` is plain `net/url` parsing, not
+  platform-dependent, so the payoff is low; a related one-line wording
+  regression (a lost "could not reach `<url>`:" prefix) is folded into the
+  same future pass rather than fixed alone.
+- **L264** (`internal/platform/mode.go`, `Supervised()`/`Mode()`): both
+  trust `os.Getenv` unconditionally. Waits because it shares a root cause
+  with the already-carried Task 10c Windows issue (env-controlled values
+  inherited by child processes) — the real fix touches every child-spawn
+  site at once, not this one function.
+- **L273** (`services/core/app/devices_ws.py`, `ingest_audit`): an
+  all-or-nothing shape pre-check on an audit frame. Waits because it is
+  plan-mandated as written, and confirmed unreachable from the real novad
+  agent — only a hand-crafted client could trigger it.
+- **L302** (`services/core/tests/test_migration_038.py`): a bundle of
+  test-precision gaps — primary-key column order unchecked, the CHECK
+  constraint's converse untested, the re-run test only re-reads rows, and
+  the conftest's table-listing order — plus one unrelated, pre-existing
+  pool-leak note on a failed TRUNCATE. Waits because all of it is test-only.
+- **L315** (`services/core/app/devices_ws.py`, `Hub.register`): a described
+  displacement race needs `register()` interrupted mid-body by another
+  coroutine, which asyncio's single-threaded, no-await-inside-`register()`
+  scheduling does not allow. Waits because "practically unreachable" holds
+  on direct inspection (already ruled CARRIED into Task 16).
+- **L317** (`services/core/app/devices_ws.py`): wording precision ("cannot"
+  versus a bare refusal) and one stale comment. Waits because the
+  `epoch: int = 0` defaults it also touches are explicitly brief-mandated,
+  not a bug.
+- **L331** (`services/core/app/devices_ws.py`, `Hub.register`): no dedicated
+  test for an equal-epoch replacement, plus a low-stakes `last_update: None`
+  dual-meaning note and a reader for `mode` duplicated three times. Waits
+  because equal-epoch replacement already behaves correctly as written —
+  these are refactor opportunities, not a live bug.
+- **L351 / L354 / L355** (`apps/novad/internal/facts/facts.go` device-facts
+  wording): mostly already fixed by Task 16b's own earlier rounds. What is
+  left: "absent" on a platform-unknown row still reads the non-Windows "no
+  sudo" wording, with no third branch for "we don't know the platform";
+  `unit["file"]`'s bare "no unit file" fallback skips the sibling
+  "unknown (reason)" treatment used elsewhere; "(sudo -n said: …)" may
+  mislabel the agent's own exec-layer error as sudo's own words; and "no
+  service the agent knows of" versus "started by hand" wording humility at
+  about three call sites. Waits for a dedicated wording-precision round.
+- **L363** (`services/core/tests/` auth-race test): coverage precision
+  notes only — the race test's injection point works only while the door
+  write follows `_record_auth_facts`, and the `/api/v1/devices/ws` route's
+  end-to-end wiring is untested. Waits because the ledger itself marks the
+  adjacent mutation-failure and asyncio-warning notes on the same line as
+  out of scope.
+- **L395** (`services/core/app/tools/setup.py` and `machines.py`): no
+  distinction between "revoked" and "never existed" in a refusal. Waits
+  because the refusal is already true (a revoked machine is no longer
+  paired) — this is a helpfulness miss, not a false claim.
+- **L423 / L429** (`services/core/app/agent_updates.py`): a cluster of
+  narrow, already-understood edge cases — a rolled-back build after a
+  confirmed read is never re-decided; `_last_command` is process memory, so
+  it loses state across a core restart; retrying is per-device rather than
+  per-agent; and a slow bootstrap shares its single 120-second budget
+  across steps. Waits because each is real but individually narrow and
+  rare; one sub-clause may already be resolved by Task 31's docs fix round.
+- **L444** (`services/core/app/live_facts.py`): folder lists can go stale
+  between reconnects, outside the existing probe-freshness ruling, and
+  `device_info` shows no progress during the refresh wait. Waits as a UX
+  nicety, not a correctness gap.
+- **L468** (`services/core/app/tools/machines.py`, `FixturePlant` /
+  `GatewayPlant`): four sub-parts — a false "hub" refusal beside a
+  hypothetical pre-D8 live row literally named "hub" (none exist today);
+  `FixturePlant.update_agent` never checks a declared update outcome
+  against the declared build; `_describe_agent` sniffs `device_facts`'s own
+  wording via `starts.startswith("unknown")`, a fragile coupling; and
+  `_build_words` is duplicated between `tools/machines.py` and
+  `tools/devices.py`, rendering the same fact two different ways. Waits
+  because none is a live bug today.
+- **L502** (`services/core/app/guards.py`): three sub-parts — no claim shape
+  yet catches "X is on the hub's build" after a `sent` outcome (a recall
+  gap that needs the usual timing-sweep care for a new regex); a true
+  correction after "current" does not explain that the build already ran
+  (wording quality on an already-true correction); and a persona name that
+  is a word inside a paired machine's name can misclassify a persona claim
+  as a machine claim (a narrow naming-collision edge case). Waits for its
+  own round with proper timing-sweep care.
+- **L531** (`services/core/app/evals/predicates.py`): a forward-looking note
+  only — `tool_succeeded_with` is compound but not regex-bearing, and no
+  predicate kind today is both. Waits because there is nothing to fix until
+  someone adds such a kind.
+- **L651** (`deploy/install_test.sh`, HA_J3/HA_J3A): both tests call
+  `install_hub_agent`/`run_hub_agent` inside `$(...)` command substitution,
+  so a `set -a`/`set +a` restore leak could never be observed by these two
+  tests regardless of whether the code is correct. Waits as debt for
+  whoever next touches `install_hub_agent`'s `set -a` handling — the code
+  itself is right, measured directly.
+- **L666** (core's reloaded setup card): stores a `walk` field that no code
+  in `apps/web/src/` reads. Waits because this is a product-decision fork
+  (teach the reload path to render it, or stop storing it), not a defect.
+- **L696** (`apps/web/src/pages/settings/devicesFormat.ts`,
+  `cancelledNote`): differs in punctuation and word order from core's
+  `tools/machines.py` `_cancelled_words`, though both independently convey
+  the same facts (same counts, same meaning). Waits to be reconciled the
+  next time either string is touched, since nothing here is false to the
+  owner.
+- **`writer_services()` has no one-shot filter** (`deploy/backup.sh`,
+  feeding `BK_RUN_STOPPED` and `$writers_list`): unlike MF3's
+  `BK_RUN_SERVICES`, this function derives its service list purely from
+  each volume's disposition (`include`/`move-only`), never from
+  `bk_cfg_without_one_shots`. It is dormant today only because agent-dist's
+  own volumes (`v4_agent_dist`, `v4_agent_build_cache`) are both annotated
+  `exclude-derived`/`exclude-ephemeral` in `deploy/docker-compose.yml`, so
+  this function's `include`/`move-only` switch never selects them. Carried
+  because if a future one-shot or build-profile job's volume is ever
+  annotated `include` or `move-only`, this reappears, undetected, in a
+  function MF3 never touched.
+
+### Dropped, with why
+
+- **L28** (`docs/plans/rebuild/hub-p0-measurements.md:492-493`): mislabels
+  which step the Go version sits under. Dropped: a dated, already-"Measured"
+  archival log entry that nobody acts on.
+- **L50** (`.github/workflows/rebuild-ci.yml`, two sites in the `novad`
+  job): the Go version this workflow computes could in principle disagree
+  with `agent_version.sh`. Dropped: plan-mandated as written, and CI
+  checkouts are always clean, so the two never actually disagree.
+- **L51** (`deploy/agent_version.sh:21`): a bare `git ... | cut -c1-12` with
+  no explicit check that `apps/novad` exists in HEAD. Dropped: plan-mandated
+  verbatim, and CI always has `apps/novad` in HEAD, so the failure path is
+  unreachable.
+- **L165** (Go daemon serve/swap): a microsecond-scale stale read of a
+  status that is about to become correct anyway. Dropped: the ledger's own
+  word for it, and nothing acts on the stale value.
+- **L192** (`internal/client/client.go`, `probeBudget`/`probeGrace`): fixed
+  source constants (45s/2s), not runtime-configurable. Dropped: even a
+  hypothetical bad value degrades to an explicit, honest timeout error,
+  never a hang or a false success.
+- **L224** (`internal/install/config.go`, `pair()`'s `Save`): a half pairing
+  (a config or a key, but no audit log) is overwritten rather than set
+  aside. Dropped: the ledger's own cross-reference to "(decision 4)" marks
+  this as an already-deliberate design choice, and the degenerate case has
+  no secret or audit trail to protect either way.
+- **L263** (Go install flow, PID checks): inherent to PID-based checks on
+  any OS. Dropped: the ledger's own word, and it needs a human already
+  hand-setting an internal control variable.
+- **L404** (`services/core/app/tools/setup.py`/`machines.py`,
+  `_paired_machine` singular — distinct from MF5's plural
+  `_paired_machines` in `chat.py`): already resolves through
+  `machines.plant()`. Dropped: an accepted efficiency cost of the plant
+  seam needed for eval-replay hermeticity, immaterial at this deployment's
+  scale.
+- **L697** (`apps/web/src/pages/settings/DevicesSection.tsx:406`,
+  `HUB_DOOR_TITLE`): not styled the way RoutingSection's precedent uses
+  `aria-label`. Dropped: RoutingSection's precedent is for dynamic action
+  descriptions on interactive buttons; this label is on a non-interactive
+  decorative badge — a different use case, redundant with its own visible
+  text and title but harmless.
+- **L700** (`apps/web/src/pages/settings/DevicesSection.test.tsx`): no test
+  pins Update hidden for `build_state: 'current'`. Dropped: Update's gate is
+  a single `=== 'behind'` predicate, and the existing "absent build_state"
+  test already exercises the identical negative branch — there is no
+  `'current'`-specific code path left to miss.
