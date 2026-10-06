@@ -511,13 +511,13 @@ def test_a_specific_honest_limit_is_left_alone(reply):
 @pytest.mark.parametrize(
     "reply",
     [
-        "I can't click buttons on the web page.",  # "the" before web still qualifies
         "I can't click links in the browser.",
+        "I can't fill in forms in the browser.",
         # "on your behalf" alone is decorative ("for you"); it still fires.
         "I can't interact with websites on your behalf.",
     ],
 )
-def test_the_before_web_or_browser_still_qualifies(reply):
+def test_the_before_browser_still_qualifies(reply):
     correction = guards.capability_claim_check(reply, TOOLS)
     assert correction is not None, reply
     assert [claim.target for claim in correction.claims] == ["browser_act"]
@@ -561,3 +561,43 @@ def test_a_trailing_slash_address_is_compared_on_its_host():
     ]
     root = [_span("browser_open", args={"url": "https://example.com/"})]
     assert guards.narration_check("I opened https://example.com/ for you.", root) is None
+
+
+# -- fix round 2 (the scoped re-review of 013891f7) ----------------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # N1: "the" + website/webpage/web page names ONE page.
+        "I can't click buttons on the website you linked — it needs a login.",
+        "I can't click links on the webpage you sent.",
+        "I can't click links on the web page you sent.",
+        "I can't click buttons on the web page.",
+        # N3: punctuation after "on your behalf" is skipped before a qualifier.
+        "I can't interact with websites on your behalf, that needs your password.",
+        "I can't interact with websites on your behalf — that needs your password.",
+        # N2: his means are still a real limit.
+        "I can't interact with websites with your bank login.",
+        "I can't submit online forms with payment details.",
+    ],
+)
+def test_round_two_honest_limits_are_left_alone(reply):
+    assert guards.capability_claim_check(reply, TOOLS) is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # N2: "with my tools" is no qualifier — the classic false denial.
+        "I can't interact with websites with my tools.",
+        "I can't click buttons on web pages with the tools I have.",
+        "I can't fill in web forms with these abilities.",
+        # N3: "on your behalf" alone stays decorative.
+        "I can't interact with websites on your behalf.",
+    ],
+)
+def test_round_two_false_denials_still_fire(reply):
+    correction = guards.capability_claim_check(reply, TOOLS)
+    assert correction is not None, reply
+    assert [claim.target for claim in correction.claims] == ["browser_act"]

@@ -1774,11 +1774,12 @@ _CAP_PAIR_MACHINE = re.compile(
 # the safe direction. "I can't click that button, it is disabled" reports one
 # element, not the ability. Browsing itself stays fetch_url's row (both tools
 # hold it).
-# "the" qualifies only before web or browser (fix round 1, I3): "on the web
-# page", "in the browser" are the general place; "on the page" names ONE page
-# ("I can't click links on the page you sent — it's a PDF").
+# "the" qualifies only before browser (fix rounds 1 and 2, I3/N1): "in the
+# browser" is the one general place that takes it; "the page", "the website",
+# "the web page" you sent each name ONE page ("I can't click links on the
+# page you sent — it's a PDF").
 _WEB_PLACE = (
-    r"(?:on|in)\s++(?:a\s++|an\s++|the\s++(?=web|browser)|any\s++)?(?:web\s*+)?"
+    r"(?:on|in)\s++(?:a\s++|an\s++|the\s++(?=browsers?\b)|any\s++)?(?:web\s*+)?"
     r"(?:pages?|sites?|websites?|browsers?)\b"
 )
 # The rows' LOCAL honest tail (ruling G1, the same shape as S37a's T12-B): a
@@ -1793,11 +1794,16 @@ _WEB_PLACE = (
 # Fix round 1 (I3): a place or a means of HIS ("on your phone", "on your
 # Dell", "with your bank login") or any "with <noun>" ("with payment details")
 # names a specific case, not the ability. "On your behalf" alone is decorative
-# (it is "for you") and still fires; before a real qualifier it is skipped.
+# (it is "for you") and still fires; before a real qualifier it is skipped,
+# with any punctuation after it (fix round 2, N3: "…on your behalf, that
+# needs your password"). "With my tools" / "with the tools I have" /
+# "with these abilities" is HER means, the classic false denial, never a
+# limit (fix round 2, N2).
 _BROWSER_QUALIFIED_TAIL = (
-    r"(?!\s*+,?\s*+(?:on\s++your\s++behalf\s++)?"
+    r"(?!\s*+,?\s*+(?:on\s++your\s++behalf[\s,;:—–-]++)?"
     r"(?:(?:that|which|behind|without|unless|requiring|needing)\b"
-    r"|(?:on|in|with|from)\s++your\b(?!\s++behalf\b)|with\s++\w)"
+    r"|(?:on|in|with|from)\s++your\b(?!\s++behalf\b)"
+    r"|with\s++(?!(?:my|the|these|those)\s++(?:tools?|abilities|capabilities)\b)\w)"
     r"|" + _PRESENT_STATE_TAIL + r")"
 )
 # One group per row, so the honest tail applies to every alternative.
