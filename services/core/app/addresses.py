@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from urllib.parse import SplitResult, urlsplit
 
-_SCHEMES = ("https://", "http://")
 # Characters that end a URL found inside free text: the engine's own prose
 # or a page's own words might quote or bracket one. Not exhaustive of every
 # character a URL may never legally contain — just the ones a sentence
@@ -112,36 +111,76 @@ def masked(value: str) -> str:
     return out
 
 
-def scrub(text: str) -> str:
-    """`text`, with every http(s) URL inside it reduced to its `shown` form.
+def _scheme_at(text: str, start: int) -> int:
+    """Where the first http(s) scheme at or after `start` begins, in any
+    case (S38 final review fix round 2, N2: `HTTPS://` and `Https://` used
+    to pass through whole), or -1. Finds `://` and compares the four or
+    five ASCII letters before it — never `text.lower()`, which can change a
+    string's length. Each `find` resumes past the last `://` it found, so a
+    run of `://` with no scheme before it is still read once."""
+    while True:
+        colon = text.find("://", start)
+        if colon == -1:
+            return -1
+        if colon - 5 >= start and _is_ascii_word(text[colon - 5 : colon], "https"):
+            return colon - 5
+        if colon - 4 >= start and _is_ascii_word(text[colon - 4 : colon], "http"):
+            return colon - 4
+        start = colon + 1
 
-    One pass: `next_at` remembers where each scheme's NEXT occurrence is,
-    and a scheme is re-searched only once `i` has moved past the position
-    remembered for it (`0 <= pos < i`) — never on every URL found, which is
-    the fix (see the module docstring). `i` only ever advances to the end of
-    a URL just consumed, so every character of `text` is examined by at
-    most one scheme's successful `find` and, once each, by a `find` that
-    comes up empty — linear overall, not by how many URLs it finds."""
+
+def _is_ascii_word(piece: str, word: str) -> bool:
+    return piece.isascii() and piece.lower() == word
+
+
+def _url_end(text: str, at: int) -> int:
+    end, n = at, len(text)
+    while end < n and not text[end].isspace() and text[end] not in _STOP_CHARS:
+        end += 1
+    return end
+
+
+def scrub(text: str) -> str:
+    """`text`, with every http(s) URL inside it — scheme in any case —
+    reduced to its `shown` form.
+
+    One pass: `_scheme_at` only ever searches forward from `i`, and `i`
+    only ever advances to the end of a URL just consumed, so every
+    character of `text` is examined a bounded number of times — linear
+    overall, not by how many URLs it finds (the fix the module docstring
+    describes; the per-scheme `next_at` bookkeeping that fix needed is gone
+    with the one `://` search that replaced the two scheme searches)."""
     if "://" not in text:
         return text
-    n = len(text)
-    next_at = {scheme: text.find(scheme) for scheme in _SCHEMES}
     out: list[str] = []
     i = 0
     while True:
-        for scheme, pos in next_at.items():
-            if 0 <= pos < i:
-                next_at[scheme] = text.find(scheme, i)
-        at = -1
-        for pos in next_at.values():
-            if pos != -1 and (at == -1 or pos < at):
-                at = pos
+        at = _scheme_at(text, i)
         if at == -1:
             out.append(text[i:])
             return "".join(out)
         out.append(text[i:at])
-        end = at
-        while end < n and not text[end].isspace() and text[end] not in _STOP_CHARS:
-            end += 1
+        end = _url_end(text, at)
         out.append(shown(text[at:end]) or text[at:end])
         i = end
+
+
+def scrub_bounded(text: str, limit: int) -> tuple[str, int]:
+    """At most the first `limit` characters of `text`, scrubbed, and how
+    many characters were left off (S38 final review fix round 2, B). A URL
+    is never split: when the last unbroken run of the head holds a scheme,
+    the head is cut back to just before it — a cut inside
+    `https://alice:hunter2pass@…` would otherwise leave `alice:hunter2pas`
+    with no `@` for the scrub to recognise. Reads O(limit) of `text`, never
+    the whole of it: a page's 4 MiB title costs what its first `limit`
+    characters cost."""
+    if len(text) <= limit:
+        return scrub(text), 0
+    head = text[:limit]
+    run = len(head)
+    while run > 0 and not head[run - 1].isspace() and head[run - 1] not in _STOP_CHARS:
+        run -= 1
+    split = _scheme_at(head, run)
+    if split != -1:
+        head = head[:split]
+    return scrub(head), len(text) - len(head)

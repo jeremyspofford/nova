@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 from app import addresses
 from app.browser import engine, files, reader
-from app.browser.page import Dialog, EngineAnswer, clip
+from app.browser.page import CLIP_CHARS, Dialog, EngineAnswer, clip
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 ACTIONS = ("click", "type", "select", "press", "accept", "dismiss")
@@ -48,9 +48,20 @@ _NEEDS_VALUE = {
 }
 _ANSWER_A_DIALOG = 'answer it with browser_act(action="accept") or browser_act(action="dismiss")'
 # A dialog's own message, as the engine passes it through: whole, up to the
-# 4 MiB an answer may carry. Clipped (fix round 1, m8) before it ever enters
-# a result — her own working text, never a second copy of the page.
+# 4 MiB an answer may carry. Bounded (fix round 1, m8; final review fix
+# round 2, B) before it ever enters a result — her own working text, never a
+# second copy of the page.
 _DIALOG_MESSAGE_MAX_CHARS = 2_000
+# A dialog's kind is the engine's word ("alert", "File chooser") — but the
+# engine writes the page's message raw, so a message can end its own bullet
+# and start another whose "kind" is the page's text (final review fix round
+# 2, N1). Shown kinds are bounded like any other page words, and only the
+# first few dialogs are listed at all.
+_DIALOG_KIND_MAX_CHARS = 40
+_DIALOGS_SHOWN = 3
+# A result lists this many downloads, then counts the rest (final review fix
+# round 2, N4); every one is still brought in and filed as a fact.
+_DOWNLOADS_SHOWN = 20
 
 
 def address(url: str | None) -> str | None:
@@ -73,25 +84,23 @@ def _shown(url: str | None) -> str:
     return clip(f"{kept}?…" if hidden else kept)
 
 
-def _said(text: str) -> str:
+def _said(text: str, limit: int = CLIP_CHARS) -> str:
     """Words a page or the engine chose — a title, a status text, the name
-    of what it acted on, its own error — as they reach a result, a fact or
-    a span: scrubbed of any address's secrets FIRST, then clipped (S38
-    final review, I1). A 200,000-character title came back whole before
-    this, in the result and in the span's facts."""
-    return clip(addresses.scrub(text))
+    of what it acted on, its own error, a dialog's message or kind — as
+    they reach a result, a fact or a span (S38 final review, I1; fix round
+    2, B): at most `limit` characters, never cut inside a URL, scrubbed of
+    any address's secrets, with the cut stated. The one helper: costs what
+    `limit` characters cost, never what the page's 4 MiB costs."""
+    head, left = addresses.scrub_bounded(text, limit)
+    return f"{head}…({left:,} more characters)" if left else head
 
 
 def _dialog_message(dialog: Dialog) -> str:
-    """A dialog's message, clipped (fix round 1 m8) then scrubbed (m1) — a
-    page chooses this text and the engine passes it through whole, and
-    clipping first means a scrub, linear or not, is never asked to read all
-    4 MiB a page could put here."""
-    text = dialog.message
-    if len(text) > _DIALOG_MESSAGE_MAX_CHARS:
-        cut = _DIALOG_MESSAGE_MAX_CHARS
-        text = f"{text[:cut]}… [cut off at {cut:,} characters]"
-    return addresses.scrub(text)
+    return _said(dialog.message, _DIALOG_MESSAGE_MAX_CHARS)
+
+
+def _dialog_kind(dialog: Dialog) -> str:
+    return _said(dialog.kind, _DIALOG_KIND_MAX_CHARS)
 
 
 def _how_to_answer(dialog: Dialog) -> str:
@@ -113,15 +122,23 @@ def _dialog_lines(answer: EngineAnswer) -> list[str]:
     never the blocking case, which `_dialog_block` raises before this is
     ever reached."""
     lines = []
-    for dialog in answer.dialogs:
+    for dialog in answer.dialogs[:_DIALOGS_SHOWN]:
         said = f': "{_dialog_message(dialog)}"' if dialog.message else ""
-        lines.append(f"The page opened {_a(dialog.kind)} dialog{said} — {_how_to_answer(dialog)}.")
+        lines.append(
+            f"The page opened {_a(_dialog_kind(dialog))} dialog{said} — {_how_to_answer(dialog)}."
+        )
+    more = len(answer.dialogs) - _DIALOGS_SHOWN
+    if more > 0:
+        lines.append(f"…and {more:,} more dialogs.")
     return lines
 
 
 def _blocked_by_dialog_message(dialog: Dialog) -> str:
     said = f' ("{_dialog_message(dialog)}")' if dialog.message else ""
-    return f"{_a(dialog.kind)} dialog is open on the page{said} — {_how_to_answer(dialog)} first"
+    return (
+        f"{_a(_dialog_kind(dialog))} dialog is open on the page{said} — "
+        f"{_how_to_answer(dialog)} first"
+    )
 
 
 def _dialog_block(answer: EngineAnswer, notes: list[str]) -> None:
@@ -255,6 +272,9 @@ async def _bring_downloads(ctx: ToolContext, answer: EngineAnswer) -> list[str]:
             # this says the engine's own is still there too, never a failure.
             line += f"; the engine's copy could not be removed: {brought.left_in_engine}"
         lines.append(f"{line}.")
+    more = len(lines) - _DOWNLOADS_SHOWN
+    if more > 0:
+        lines = [*lines[:_DOWNLOADS_SHOWN], f"…and {more:,} more downloads (each in downloads/)."]
     return lines
 
 
