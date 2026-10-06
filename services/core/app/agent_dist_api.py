@@ -5,13 +5,17 @@ one-liner on the card downloads from here before anything else exists. The
 binaries are public anyway (the repo is), so the paths are exact entries in
 identity.PUBLIC_PATHS, and the only guard they need is a rate limit.
 
-The limit is per client, as far as core can tell one: behind nginx that is
-the X-Real-IP nginx writes — its own $remote_addr, set over whatever the
-caller sent — believed only from web's fixed address (network.client_of, the
-rule door_of keeps). In practice it is the door a request came through: the
-hub's loopback port arrives from the subnet gateway, the tailnet from the
-sidecar. So one door spending its minute never locks the hub's own loopback
-out, and a header the caller wrote (X-Forwarded-For, or an X-Real-IP sent
+The limit is per client, as far as core can tell one — network.bucket_of,
+the key enroll's failure limit counts by too. Behind nginx that is the door a
+request came through, from the X-Real-IP nginx writes (its own $remote_addr,
+set over whatever the caller sent), believed only from web's fixed address
+(network.client_of, the rule door_of keeps): the hub's loopback port arrives
+from the subnet gateway, the tailnet from the sidecar. A visitor who came
+through a public relay — the owner's cloudflared tunnel, which shares the
+loopback door, or Tailscale Funnel — is counted apart from its door's own
+clients (S42b Task 26). So a stranger on the tunnel never spends ./install's
+minute, one door spending its minute never locks another out, and a header
+the caller wrote (X-Forwarded-For, or an X-Real-IP or relay mark sent
 straight to core) neither buys a fresh budget nor spends another client's.
 
 A download streams from the open file agent_dist checked (agent_dist.stream):
@@ -48,7 +52,7 @@ _HITS: dict[str, deque[float]] = {}
 
 def _client(request: Request) -> str:
     peer = request.client.host if request.client else None
-    return network.client_of(peer, request.headers.get("x-real-ip"))
+    return network.bucket_of(peer, request.headers)
 
 
 def _admit(client: str) -> int | None:

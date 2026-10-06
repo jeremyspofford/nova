@@ -13,14 +13,24 @@ Two consequences of that exception are handled here rather than assumed:
     entire machine, so if that route were public, enrollment being public would
     stop meaning anything. /{id}/repair-code is authed for the same reason: its
     code hands that machine's whole identity to whoever enrolls with it.
-  * /enroll is rate-limited per address, copying auth_api's login limiter
+  * /enroll is rate-limited per caller, copying auth_api's login limiter
     (5 failures / 15 minutes / 429). Only the CODE refusal counts as a failure
     — a name collision is an operator typing the same name twice, not somebody
     guessing, and locking them out for it would be a bug wearing a security
-    costume. Behind the :3000 nginx origin every request arrives from one
-    address, so the limiter degrades to a global one. That is stricter, not
-    weaker, and it is why X-Forwarded-For is NOT trusted here: a header the
-    caller sets is a bypass, not an identity.
+    costume. The caller is network.bucket_of's, the key the agent downloads
+    are counted by (S42b Task 26). Behind the :3000 nginx origin every
+    request's TCP peer is web, so the peer alone would be ONE bucket for
+    everyone — and since S42b carved enroll out of the gate, a stranger on
+    the owner's tunnel sending five bad codes every fifteen minutes would
+    keep pairing locked for every machine on every door. bucket_of reads the
+    door instead (nginx's X-Real-IP, believed only from web's fixed address)
+    and counts a visitor who came through a relay apart: that stranger still
+    gets 5 failures per 15 minutes, in the relayed bucket only, and the hub's
+    own loopback and the tailnet keep buckets of their own. A code is 8
+    characters from a 31-letter alphabet, so a handful of buckets times 5
+    tries is nothing. X-Forwarded-For is still never believed: nginx appends
+    to whatever the caller sent, so all but its last entry are the caller's
+    own words — a header the caller sets is a bypass, not an identity.
 
 There is no grants route. v4 makes no authorization decisions (owner ruling
 2026-09-03): a paired device runs whatever core signs, so the only things an
@@ -40,7 +50,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import agent_dist, db, devices, identity
+from app import agent_dist, db, devices, identity, network
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -49,7 +59,7 @@ logger = logging.getLogger("core")
 MAX_ENROLL_FAILURES = 5
 ENROLL_WINDOW_SECONDS = 15 * 60
 
-# Per-address failure timestamps. In-memory like auth_api's, and for the same
+# Failure timestamps per bucket (_caller). In-memory like auth_api's, and for the same
 # reason: one process, one household, and a restart clearing the window is
 # acceptable for a route an operator uses a handful of times a year.
 _ENROLL_FAILURES: dict[str, list[float]] = {}
@@ -71,10 +81,12 @@ class RenameBody(BaseModel):
 
 
 def _caller(request: Request) -> str:
-    """The address a failure is counted against. `request.client` can be absent
-    under some ASGI servers; unknown callers share one bucket rather than
-    getting an unmetered one."""
-    return request.client.host if request.client else "unknown"
+    """The bucket a failure is counted in: network.bucket_of's — the door,
+    with a visitor through a relay counted apart (module docstring).
+    `request.client` can be absent under some ASGI servers; unknown callers
+    share one bucket rather than getting an unmetered one."""
+    peer = request.client.host if request.client else None
+    return network.bucket_of(peer, request.headers)
 
 
 def _recent_failures(caller: str) -> list[float]:
@@ -123,7 +135,7 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
     if len(_recent_failures(caller)) >= MAX_ENROLL_FAILURES:
         raise HTTPException(
             status_code=429,
-            detail="too many failed enrollments from this address — try again in 15 minutes",
+            detail="too many failed enrollments came this way — try again in 15 minutes",
         )
 
     pool = await db.get_pool()

@@ -12,8 +12,9 @@ pins this file holds the ones a download path needs (S42b Task 18, security):
     stated 503, and a download is re-hashed as it streams, so a response that
     completes is the manifest's bytes;
   * the 30-a-minute limit is per client as nginx saw it (X-Real-IP, believed
-    only from web's fixed address), so a header cannot buy a new budget or
-    spend the hub's own loopback's;
+    only from web's fixed address), with a visitor through a relay counted
+    apart (network.bucket_of), so a header cannot buy a new budget or spend
+    the hub's own loopback's;
   * no reason names a host path, a user or a key — anyone can read them;
   * the golden manifest novad's Go suite reads is what core's signer makes
     today (tests/fixtures/gen_manifest_golden.py).
@@ -311,6 +312,26 @@ async def test_a_literal_dot_segment_reaches_no_file(dist, raw, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "raw",
+    [
+        b"/api/v1/devices/pairing-code/../../agent/manifest",
+        b"/api/v1/devices/pairing-code/%2e%2e/%2e%2e/agent/manifest",
+        b"/api/v1/devices/pairing-code/../enroll",
+    ],
+)
+async def test_a_path_nginx_resolves_into_a_carve_out_is_not_public_to_core(raw, monkeypatch):
+    """S42b Task 26 (R5): nginx resolves dot segments to pick a location, so
+    each of these lands in one of its gate carve-outs (`/api/v1/agent/`, `=
+    /api/v1/devices/enroll`) — and it forwards $request_uri, the target AS
+    SENT (gate_test.sh pins that half). Core is the backstop: it serves
+    without an identity exactly the paths in identity.PUBLIC_PATHS, so none
+    of these is one."""
+    monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
+    status, _body = await _raw_get(raw)
+    assert status == 401, (raw, status)
+
+
+@pytest.mark.parametrize(
     "name",
     [
         "..",
@@ -588,6 +609,44 @@ async def test_a_header_the_caller_wrote_never_picks_its_budget(dist, monkeypatc
         assert [await _status(forger, LOOPBACK_DOOR) for _ in range(2)] == [200, 200]
     async with _anon_client(WEB) as nginx:
         assert await _status(nginx, LOOPBACK_DOOR) == 200
+
+
+async def _download(client: httpx.AsyncClient, headers: dict[str, str]) -> httpx.Response:
+    return await client.get("/api/v1/agent/dist/novad-linux-amd64", headers=headers)
+
+
+async def test_relayed_visitors_spend_a_minute_of_their_own_never_the_hub_loopbacks(
+    dist, monkeypatch
+):
+    """S42b Task 26 (R2): a stranger on the owner's tunnel reaches web from
+    the hub's own loopback door, the door ./install uses. Counted by the door
+    alone, a stranger asking 30 times a minute would hold ./install's
+    download off for as long as it kept asking. A request that came through
+    a relay is counted apart (network.bucket_of): the 31st relayed request
+    in a minute is refused, and ./install is still served that minute."""
+    monkeypatch.setenv(network.WEB_ADDR_ENV, WEB)
+    monkeypatch.setenv(network.GATEWAY_ENV, LOOPBACK_DOOR)
+    monkeypatch.setenv(network.TAILSCALE_ADDR_ENV, TAILNET_DOOR)
+    monkeypatch.setattr(agent_dist_api, "_clock", lambda: 1000.0)  # one minute, throughout
+    tunnel = {"X-Real-IP": LOOPBACK_DOOR, "Cf-Connecting-IP": "203.0.113.9"}
+    async with _anon_client(WEB) as nginx:
+        rate = agent_dist_api.RATE_PER_MINUTE  # 30
+        served = [await _download(nginx, tunnel) for _ in range(rate)]
+        assert [r.status_code for r in served] == [200] * rate
+        refused = await _download(nginx, tunnel)
+        assert refused.status_code == 429
+        assert refused.headers["retry-after"] == "60"
+        # Another stranger on the tunnel: the same bucket — the header's value
+        # names nothing.
+        other = {"X-Real-IP": LOOPBACK_DOOR, "Cf-Connecting-IP": "203.0.113.10"}
+        assert (await _download(nginx, other)).status_code == 429
+        # ./install through web, the same minute: served.
+        assert (await _download(nginx, {"X-Real-IP": LOOPBACK_DOOR})).status_code == 200
+        # Funnel's strangers have a relayed bucket of their own (one per door).
+        assert (await _download(nginx, {"X-Real-IP": TAILNET_DOOR})).status_code == 200
+    # ./install straight to core's own port: served too.
+    async with _anon_client(LOOPBACK_DOOR) as install:
+        assert (await _download(install, {})).status_code == 200
 
 
 async def test_a_minute_later_the_client_is_served_again_and_nothing_is_kept(dist, monkeypatch):

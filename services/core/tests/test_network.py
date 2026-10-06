@@ -11,6 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from starlette.datastructures import Headers
 
 from app import network
 
@@ -168,3 +169,119 @@ def test_the_doors_follow_the_subnet_install_chose(monkeypatch):
     monkeypatch.setenv("NOVA_SUBNET_GATEWAY", "172.22.0.1")
     assert network.door_of("172.22.128.10", "172.22.0.1") == "host"
     assert network.door_of("172.18.128.10", "172.18.0.1") is None
+
+
+# -- S42b: the bucket a request is counted in (Task 26, R2) -------------------
+
+# RFC 5737: web at its fixed address; the two doors nginx's $remote_addr names
+# behind it (the hub's loopback port arrives from the subnet gateway, the
+# tailnet from the sidecar); and a peer that is neither — a container that
+# talks straight to core.
+WEB = "192.0.2.10"
+LOOPBACK = "198.51.100.1"
+SIDECAR = "198.51.100.20"
+STRANGER = "192.0.2.77"
+LOGIN = {"Tailscale-User-Login": "a@example.com"}
+
+
+@pytest.fixture
+def doors(monkeypatch):
+    monkeypatch.setenv(network.WEB_ADDR_ENV, WEB)
+    monkeypatch.setenv(network.GATEWAY_ENV, LOOPBACK)
+    monkeypatch.setenv(network.TAILSCALE_ADDR_ENV, SIDECAR)
+
+
+def _bucket(peer: str | None, headers: dict[str, str]) -> str:
+    # Starlette's own Headers, as a route reads them: case-insensitive.
+    return network.bucket_of(peer, Headers(headers=headers))
+
+
+@pytest.mark.parametrize(
+    "peer,headers,bucket",
+    [
+        # Through web from the hub's own loopback port (./install, a browser
+        # on the hub): the door, as before the split.
+        pytest.param(WEB, {"X-Real-IP": LOOPBACK}, LOOPBACK, id="loopback-through-web"),
+        # The owner's tunnel: cloudflared on the hub reaches web from the same
+        # door, carrying the Cf-Connecting-IP Cloudflare's edge set.
+        pytest.param(
+            WEB,
+            {"X-Real-IP": LOOPBACK, "Cf-Connecting-IP": "203.0.113.9"},
+            f"relayed via {LOOPBACK}",
+            id="tunnel",
+        ),
+        # Its VALUE names nothing: another visitor, the same bucket; even an
+        # empty one is there.
+        pytest.param(
+            WEB,
+            {"X-Real-IP": LOOPBACK, "Cf-Connecting-IP": "203.0.113.10"},
+            f"relayed via {LOOPBACK}",
+            id="tunnel-another-visitor",
+        ),
+        pytest.param(
+            WEB,
+            {"X-Real-IP": LOOPBACK, "Cf-Connecting-IP": ""},
+            f"relayed via {LOOPBACK}",
+            id="tunnel-empty-value",
+        ),
+        # Funnel: from the sidecar WITHOUT serve's login (a tagged node too).
+        pytest.param(WEB, {"X-Real-IP": SIDECAR}, f"relayed via {SIDECAR}", id="funnel"),
+        pytest.param(
+            WEB,
+            {"X-Real-IP": SIDECAR, "Tailscale-User-Login": " "},
+            f"relayed via {SIDECAR}",
+            id="funnel-blank-login",
+        ),
+        # A tailnet person: from the sidecar with serve's login — the
+        # tailnet door's own bucket.
+        pytest.param(WEB, {"X-Real-IP": SIDECAR, **LOGIN}, SIDECAR, id="tailnet-person"),
+        # A mark a client adds only moves it IN...
+        pytest.param(
+            WEB,
+            {"X-Real-IP": SIDECAR, **LOGIN, "Cf-Connecting-IP": "203.0.113.9"},
+            f"relayed via {SIDECAR}",
+            id="tailnet-person-wearing-the-mark",
+        ),
+        # ...and a login names a person only from the sidecar: through the
+        # loopback door it neither moves a client nor takes a visitor out.
+        pytest.param(WEB, {"X-Real-IP": LOOPBACK, **LOGIN}, LOOPBACK, id="login-off-the-sidecar"),
+        pytest.param(
+            WEB,
+            {"X-Real-IP": LOOPBACK, **LOGIN, "Cf-Connecting-IP": "203.0.113.9"},
+            f"relayed via {LOOPBACK}",
+            id="tunnel-visitor-forging-a-login",
+        ),
+        # A peer that is not web: every header counts for nothing.
+        pytest.param(STRANGER, {"Cf-Connecting-IP": "203.0.113.9"}, STRANGER, id="stranger-mark"),
+        pytest.param(STRANGER, {"X-Real-IP": LOOPBACK}, STRANGER, id="stranger-naming-loopback"),
+        pytest.param(STRANGER, {"X-Real-IP": SIDECAR}, STRANGER, id="stranger-naming-funnel"),
+        pytest.param(
+            STRANGER, {"X-Real-IP": SIDECAR, **LOGIN}, STRANGER, id="stranger-naming-a-person"
+        ),
+        pytest.param(STRANGER, LOGIN, STRANGER, id="stranger-login"),
+        # ./install straight to core's own port arrives from the gateway: its
+        # headers count for nothing either.
+        pytest.param(
+            LOOPBACK, {"Cf-Connecting-IP": "203.0.113.9"}, LOOPBACK, id="install-direct-mark"
+        ),
+        pytest.param(LOOPBACK, {"X-Real-IP": SIDECAR}, LOOPBACK, id="install-direct-naming"),
+        # No peer at all: one shared bucket, never an unmetered one.
+        pytest.param(None, {"Cf-Connecting-IP": "203.0.113.9"}, "unknown", id="no-peer"),
+    ],
+)
+def test_the_bucket_is_the_door_with_relayed_visitors_apart(doors, peer, headers, bucket):
+    assert _bucket(peer, headers) == bucket
+
+
+def test_a_relayed_bucket_is_never_an_unrelayed_clients(doors):
+    tunnel = _bucket(WEB, {"X-Real-IP": LOOPBACK, "Cf-Connecting-IP": "203.0.113.9"})
+    funnel = _bucket(WEB, {"X-Real-IP": SIDECAR})
+    unrelayed = {
+        _bucket(WEB, {"X-Real-IP": LOOPBACK}),  # ./install through web
+        _bucket(LOOPBACK, {}),  # ./install straight to core
+        _bucket(WEB, {"X-Real-IP": SIDECAR, **LOGIN}),  # a tailnet person
+    }
+    assert unrelayed == {LOOPBACK, SIDECAR}
+    assert tunnel not in unrelayed and funnel not in unrelayed
+    # One relayed bucket per door: the tunnel's strangers never spend funnel's.
+    assert tunnel != funnel

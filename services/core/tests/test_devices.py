@@ -27,10 +27,12 @@ from datetime import datetime
 
 import asyncpg
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app import devices, envelopes
 from app.identity import Person
-from tests.conftest import requires_db
+from app.main import app as core_app
+from tests.conftest import BASE_URL, requires_db
 
 pytestmark = requires_db
 
@@ -526,7 +528,7 @@ async def test_a_revoked_devices_burned_code_cannot_walk_back_in(pool):
 # ======================================================================
 
 
-async def _api_enrol(client, code: str, **overrides) -> object:
+async def _api_enrol(client, code: str, *, headers: dict | None = None, **overrides) -> object:
     body = {
         "code": code,
         "pubkey": PUBKEY_A,
@@ -535,7 +537,7 @@ async def _api_enrol(client, code: str, **overrides) -> object:
         "hostname": "thinkpad",
     }
     body.update(overrides)
-    return await client.post("/api/v1/devices/enroll", json=body)
+    return await client.post("/api/v1/devices/enroll", json=body, headers=headers or {})
 
 
 async def _api_code(owner_client) -> str:
@@ -679,6 +681,82 @@ async def test_a_successful_enrollment_clears_the_failure_window(owner_client, p
     # The window is clear, so the next mistake starts a fresh count instead of
     # tripping the limiter on the operator's second machine.
     assert (await _api_enrol(owner_client, "ZZZZZZZZ", name="two")).status_code == 403
+
+
+# S42b Task 26 (R3): behind nginx every caller's TCP peer is web, so a limit
+# keyed on that address was ONE bucket for everyone — and since enroll passes
+# the gate, a stranger on the owner's tunnel could keep pairing locked on
+# every door. The bucket is network.bucket_of's, the download limit's key:
+# the door, with a visitor through a relay counted apart. RFC 5737 addresses:
+# web at its fixed address, and the doors nginx's $remote_addr names.
+WEB = "192.0.2.10"
+LOOPBACK_DOOR = "198.51.100.1"
+TAILNET_DOOR = "198.51.100.20"
+TUNNEL = {"X-Real-IP": LOOPBACK_DOOR, "Cf-Connecting-IP": "203.0.113.9"}
+THROUGH_LOOPBACK = {"X-Real-IP": LOOPBACK_DOOR}
+TAILNET_PERSON = {"X-Real-IP": TAILNET_DOOR, "Tailscale-User-Login": "a@example.com"}
+FUNNEL = {"X-Real-IP": TAILNET_DOOR}
+
+
+@pytest.fixture
+def doors(monkeypatch):
+    from app import network
+
+    monkeypatch.setenv(network.WEB_ADDR_ENV, WEB)
+    monkeypatch.setenv(network.GATEWAY_ENV, LOOPBACK_DOOR)
+    monkeypatch.setenv(network.TAILSCALE_ADDR_ENV, TAILNET_DOOR)
+
+
+def _peer(address: str) -> AsyncClient:
+    """A client whose TCP peer is `address` — web's, for a request nginx
+    forwarded."""
+    return AsyncClient(
+        transport=ASGITransport(app=core_app, client=(address, 40000)), base_url=BASE_URL
+    )
+
+
+async def test_a_relayed_strangers_bad_codes_lock_only_the_relayed_bucket(
+    owner_client, pool, doors
+):
+    from app import devices_api
+
+    async with _peer(WEB) as nginx:
+        for _ in range(devices_api.MAX_ENROLL_FAILURES):
+            assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)).status_code == 403
+        locked = await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)
+        assert locked.status_code == 429
+        assert "too many" in locked.json()["error"]
+
+        # The same window, every other door: the request reaches
+        # devices.enroll — a wrong code is ITS refusal (403), never the
+        # limiter's 429 — and a good code pairs the machine.
+        for door in (THROUGH_LOOPBACK, TAILNET_PERSON, FUNNEL):
+            assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=door)).status_code == 403, door
+        paired = await _api_enrol(nginx, await _api_code(owner_client), headers=THROUGH_LOOPBACK)
+        assert paired.status_code == 200, paired.text
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 1
+    # ./install straight to core's own port (the gateway is its peer): not
+    # locked either.
+    async with _peer(LOOPBACK_DOOR) as install:
+        assert (await _api_enrol(install, "ZZZZZZZZ", name="two")).status_code == 403
+
+
+async def test_a_header_from_anyone_but_web_moves_no_enroll_failure(owner_client, pool, doors):
+    """A caller straight to core — any peer but web — is its own bucket,
+    whatever it writes: naming the loopback door spends none of the door's
+    budget, and wearing the relay mark neither moves its failures into the
+    relayed bucket nor lets it out of its own."""
+    from app import devices_api
+
+    async with _peer("192.0.2.77") as direct:
+        for i in range(devices_api.MAX_ENROLL_FAILURES):
+            headers = THROUGH_LOOPBACK if i % 2 else TUNNEL
+            assert (await _api_enrol(direct, "ZZZZZZZZ", headers=headers)).status_code == 403
+        for headers in (THROUGH_LOOPBACK, TUNNEL, TAILNET_PERSON):
+            assert (await _api_enrol(direct, "ZZZZZZZZ", headers=headers)).status_code == 429
+    async with _peer(WEB) as nginx:
+        for headers in (THROUGH_LOOPBACK, TUNNEL):
+            assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=headers)).status_code == 403
 
 
 # -- GET /devices ------------------------------------------------------
