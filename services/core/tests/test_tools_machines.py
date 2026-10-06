@@ -1184,3 +1184,78 @@ async def test_an_old_row_the_status_shows_backs_only_a_claim_that_names_its_mac
     named = guards.narration_check("I updated minipc's agent.", spans, names)
     assert named is not None and named.claims[0].target == "minipc"
     assert guards.narration_check("The dell's agent has been updated.", spans, names) is None
+
+
+# -- Task 32 Phase B round 2 ----------------------------------------------------
+#
+# L497: an agent whose line says it is on the hub's build, with no ledger row —
+# paired already on it — or with a row that says otherwise — put on it by hand
+# after a failed update — left no fact of that line, so "its agent is updated"
+# was corrected beside a true line she had just read. What the line states is
+# machine_update's "current": it backs the state, never an update she made.
+
+
+def _on_build(name, *, hub_version, last=None, hostname="PC-ONE"):
+    view = device_facts.agent_view(
+        name=name,
+        platform="windows",
+        hostname=hostname,
+        connected=True,
+        last_seen=AT,
+        facts=WINDOWS,
+        facts_at=AT,
+        hub_version=hub_version,
+        last_update=last,
+    )
+    return view
+
+
+async def test_an_agent_on_the_hubs_build_backs_its_state_whatever_its_ledger_holds(
+    mount_peers, _plant
+):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    fresh = _on_build("fresh", hub_version="0.2.0")  # WINDOWS reports agent 0.2.0
+    by_hand = _on_build("by_hand", hub_version="0.2.0", last=_last("rolled_back"))
+    behind = _on_build("behind", hub_version="0.9.9", last=_last("sent"))
+    _plant(agents=[fresh, by_hand, behind])
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert said.count("; on the hub's build;") == 2
+    rows = [fact for fact in sink if guards.is_update_fact(fact)]
+    current = {"outcome": "current", "version": "0.2.0", "confirmed": False}
+    assert rows == [
+        {"machine_update": "fresh", **current},
+        {
+            "machine_update": "by_hand",
+            "outcome": "rolled_back",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": False,
+        },
+        {"machine_update": "by_hand", **current},
+        {
+            "machine_update": "behind",
+            "outcome": "sent",
+            "version": "aaaaaaaaaaaa",
+            "confirmed": False,
+        },
+    ]
+    span = SimpleNamespace(kind="tool", name="machine_status", meta={"ok": True, "facts": sink})
+    names = ["fresh", "by_hand", "behind"]
+    for machine in ("fresh", "by_hand"):
+        assert guards.narration_check(f"{machine}'s agent is updated.", [span], names) is None
+        assert guards.narration_check(f"{machine} is on the hub's build.", [span], names) is None
+        # It backs the state, never an update she made.
+        mine = guards.narration_check(f"I updated {machine}'s agent.", [span], names)
+        assert mine is not None and mine.claims[0].target == machine
+    behind_said = guards.narration_check("behind's agent is updated.", [span], names)
+    assert behind_said is not None and behind_said.claims[0].target == "behind"
+
+
+async def test_an_unread_build_backs_nothing(mount_peers, _plant):
+    """No hub build to compare with is not "current": nothing is recorded."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_on_build("unknown", hub_version=None)])
+    sink: list[dict] = []
+    await _call("machine_status", {}, sink)
+    assert not any(guards.is_update_fact(fact) for fact in sink)
+

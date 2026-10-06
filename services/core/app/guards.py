@@ -1612,11 +1612,11 @@ class _UpdateRecord(NamedTuple):
     successful update of one of her specialist agents (_PERSONA_UPDATE_TOOLS).
     `confirmed` / `current`: every machine such a fact names, the update tool's
     and the rows a machine read showed (machine_status states each agent's
-    last ledger row, fix round 1, I3). `updated`: every machine this turn's
-    update tool answered for, whatever it answered; `stated`: every machine
-    any update fact names, whatever it says (Task 32: _update_read, and the
-    names a claim's word is read against when no paired name holds it,
-    _UpdateNames)."""
+    last ledger row, fix round 1, I3, and "current" for an agent on the hub's
+    build, Task 32, L497). `updated`: every machine this turn's update tool
+    answered for, whatever it answered; `stated`: every machine any update fact
+    names, whatever it says (Task 32: _update_read, and the names a claim's
+    word is read against when no paired name holds it, _UpdateNames)."""
 
     made: bool
     made_current: bool

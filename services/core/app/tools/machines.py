@@ -13,8 +13,9 @@ name checked against BOTH lists, which is why the backend may run it unasked
 the span — {"machine", "answering", "checked_now", "at"} — and each agent
 leaves {"device", "connected"}, the same shape a device tool leaves, plus —
 when the ledger holds one — its last update in machine_update's shape
-{"machine_update", "outcome", "version", "confirmed"} (S42b) — so what she then
-says about either is checkable against a record rather than a sentence. Run
+{"machine_update", "outcome", "version", "confirmed"} (S42b), and "current" in
+that shape when its line says it is on the hub's build (Task 32) — so what she
+then says about either is checkable against a record rather than a sentence. Run
 unasked (live_facts), its result reaches her cut short, and an agent's facts
 are kept only when its line was shown (device_line_shown).
 
@@ -306,11 +307,12 @@ def _describe_agents(
     on the span, the record a device tool leaves, so what she says about its
     connection is backed (guards._checked_a_device), and the last update its
     line states, so what she says about that machine is backed too (guards.
-    _update_backed; S42b Task 23 fix rounds 1-2) — on an unasked check, both
-    only for an agent whose line she was shown (device_line_shown). Under
-    each agent's line, indented, what she needs to act on it
-    (device_facts.acting_lines, the probe's time first) — as device_list
-    writes it."""
+    _update_backed; S42b Task 23 fix rounds 1-2) — and, when its line says it
+    is on the hub's build, that, as machine_update's "current" (Task 32, L497)
+    — on an unasked check, all only for an agent whose line she was shown
+    (device_line_shown). Under each agent's line, indented, what she needs to
+    act on it (device_facts.acting_lines, the probe's time first) — as
+    device_list writes it."""
     if error is not None:
         return [f"Nova's agents could not be read — {error}."]
     if not agents:
@@ -350,6 +352,24 @@ def _describe_agents(
                             "outcome": last["outcome"],
                             "version": last["version"],
                             "confirmed": last["outcome"] == "confirmed",
+                        }
+                    )
+                if agent["build"]["state"] == "current":
+                    # Its line says "on the hub's build" (_build_words), with or
+                    # without a ledger row: an agent paired already on it has
+                    # none, and one put on it by hand after a failed update has
+                    # a row that says otherwise. What the line states is
+                    # machine_update's "current" — its agent last reported the
+                    # hub's build — so it backs the state, never an update she
+                    # made (Task 32, L497: "minipc's agent is updated" beside
+                    # that line was corrected, the guard contradicting a true
+                    # line she had just read).
+                    ctx.facts_sink.append(
+                        {
+                            "machine_update": agent["name"],
+                            "outcome": "current",
+                            "version": agent["build"]["hub_version"],
+                            "confirmed": False,
                         }
                     )
     return lines
