@@ -97,8 +97,8 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherErrorOnWindows(t *testing.
 		ConfigFile: filepath.Join(home, "c", "config.json"), KeyFile: filepath.Join(home, "c", "key"),
 		AuditFile: filepath.Join(home, "s", "audit.jsonl"), Home: home,
 	}
-	if err := checkEnrolled(p); !errors.Is(err, errNotEnrolled) {
-		t.Fatalf("a missing config/key must report errNotEnrolled (exit 78), got %v", err)
+	if err := p.CheckEnrolled(); !errors.Is(err, config.ErrNotEnrolled) {
+		t.Fatalf("a missing config/key must report config.ErrNotEnrolled (exit 78), got %v", err)
 	}
 
 	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
@@ -106,8 +106,8 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherErrorOnWindows(t *testing.
 	}
 	p2 := p
 	p2.ConfigFile = filepath.Join(p.ConfigDir, "config<invalid.json") // ERROR_INVALID_NAME, never ErrNotExist
-	if err := checkEnrolled(p2); err == nil || errors.Is(err, errNotEnrolled) {
-		t.Fatalf("a real Lstat error (ERROR_INVALID_NAME) must not be reported as errNotEnrolled, got %v", err)
+	if err := p2.CheckEnrolled(); err == nil || errors.Is(err, config.ErrNotEnrolled) {
+		t.Fatalf("a real Lstat error (ERROR_INVALID_NAME) must not be reported as config.ErrNotEnrolled, got %v", err)
 	}
 
 	if err := os.WriteFile(p.ConfigFile, []byte("{}"), 0o600); err != nil {
@@ -116,7 +116,7 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherErrorOnWindows(t *testing.
 	if err := os.WriteFile(p.KeyFile, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkEnrolled(p); err != nil {
+	if err := p.CheckEnrolled(); err != nil {
 		t.Fatalf("both files present must report no error, got %v", err)
 	}
 }

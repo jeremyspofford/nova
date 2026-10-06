@@ -25,6 +25,14 @@ export class ApiError extends Error {
   }
 }
 
+/** A caught `unknown`'s one-line message (S42b K5: the ONE copy — several
+ *  pages each kept their own before this). An `ApiError`'s message is
+ *  already the server's own stated reason; this is just as happy with any
+ *  other thrown value. */
+export function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   let response: Response
   try {
@@ -331,6 +339,17 @@ export interface SetupCard {
   code?: string | null
   expires_at?: string | null
   code_shown?: boolean
+  /** S42b: which paired machine this card is for, and the OS it targets (a
+   *  WSL agent's card targets 'windows', never 'wsl' — setupSteps.defaultOs). */
+  machine?: string | null
+  for_os?: string | null
+  /** The hub build's version this card's commands were generated from. */
+  version?: string
+  /** The filled one-liners (Task 19) — never with a {CODE} slot: the chat
+   *  card carries them already filled, server-side. */
+  commands?: Record<string, string>
+  walks?: Record<string, string>
+  notes?: Record<string, string>
 }
 
 /** One `delegate_to_agent` call as the turn ledger recorded it (S12).
@@ -1184,6 +1203,26 @@ export async function* pullModel(
   }
 }
 
+// ── agent (services/core/app/agent_dist_api.py, S42b) ───────────────────
+
+/** The three one-liners' keys (S42b): Linux, macOS, Windows. */
+export type OsKey = 'linux' | 'macos' | 'windows'
+
+/**
+ * GET /api/v1/agent/manifest — public (S42b P18/P19): the hub's build and the
+ * one command per OS core generated, each with a {CODE} slot the page fills.
+ * It never carries a code. `commands` is null (with its reason) when there is
+ * no address to download from; no build at all is a 503 with the reason.
+ */
+export interface AgentManifest {
+  version: string
+  commands: Record<OsKey, string> | null
+  commands_reason: string | null
+  walks: Record<OsKey, string>
+  notes: Record<OsKey, string>
+}
+export const getAgentManifest = () => apiGet<AgentManifest>('/api/v1/agent/manifest')
+
 // ── devices (services/core/app/devices_api.py) ──────────────────────────
 
 /**
@@ -1218,6 +1257,16 @@ export interface Device {
   wsl: string | null
   agent_version: string | null
   facts_at: string | null
+  /** S42b: its socket came through the hub's own loopback door — the hub machine's agent. */
+  hub?: boolean
+  door?: 'host' | 'tailnet' | null
+  mode?: string | null
+  /** How its agent starts, in words ("by itself at sign-in (the Windows Run key)"). */
+  starts?: string
+  /** Against the hub's build: a hash has no order, so "behind" means "not the hub's build". */
+  build_state?: 'current' | 'behind' | 'unknown'
+  hub_version?: string | null
+  last_update?: { version: string; outcome: string; at: string | null; reason: string | null } | null
 }
 
 /** A freshly minted pairing code — shown ONCE (core stores only its hash). */
@@ -1234,6 +1283,10 @@ export async function listDevices(): Promise<Device[]> {
 /** POST /devices/pairing-code — the code is returned once and never again. */
 export const mintPairingCode = () =>
   apiSend<PairingCode>('/api/v1/devices/pairing-code', 'POST')
+
+/** POST /devices/{id}/repair-code — a code bound to this one machine (S42b decision 4). */
+export const mintRepairCode = (id: string) =>
+  apiSend<PairingCode>(`/api/v1/devices/${encodeURIComponent(id)}/repair-code`, 'POST')
 
 export async function renameDevice(id: string, name: string): Promise<Device> {
   const body = await apiSend<{ device: Device }>(
@@ -1261,6 +1314,91 @@ export interface NetworkAddress {
 }
 
 export const getNetworkAddress = () => apiGet<NetworkAddress>('/api/v1/network/address')
+
+/**
+ * What "update it now" came back with (S42b): `sent` is NOT confirmed — only
+ * the agent's reconnect on the new build confirms an update. `not_known_yet`
+ * is never a refusal: the gateway timed out, was unreachable, or the network
+ * dropped after the request left — core may still be running the update
+ * underneath it (S42b D4, carried from Task 26: through the owner's tunnel,
+ * Cloudflare gives up at 100s while an update may still be running).
+ */
+export interface UpdateOutcome {
+  outcome:
+    | 'current'
+    | 'sent'
+    | 'confirmed'
+    | 'rolled_back'
+    | 'not_confirmed'
+    | 'refused'
+    | 'cannot'
+    | 'not_known_yet'
+  version: string | null
+  from_version: string | null
+  reason: string | null
+  needs_card: boolean
+  /** How many commands were already running there when it was sent (S42b K9)
+   *  — null for a `not_known_yet` outcome built here, never a guessed 0. */
+  in_flight: number | null
+}
+
+// The statuses that mean the gateway itself never properly answered — a dead
+// or overloaded proxy, not core's own stated refusal (S42b D4). 524 is
+// Cloudflare's own "the origin took too long" status; 0 is what ApiError
+// carries when fetch itself threw.
+const GATEWAY_DOWN_STATUSES = new Set([502, 504, 524])
+
+const UNKNOWN_TAIL = "sent or not, not known yet — the machine's line will say"
+
+function notKnownYet(cause: string): UpdateOutcome {
+  return {
+    outcome: 'not_known_yet',
+    version: null,
+    from_version: null,
+    reason: `${cause}; ${UNKNOWN_TAIL}`,
+    needs_card: false,
+    in_flight: null,
+  }
+}
+
+// S42b K4: status 0 is ANY fetch rejection — offline, DNS, refused, TLS —
+// and most of those happen BEFORE the request leaves the browser. Claiming
+// "after the request was sent" states something this client cannot know;
+// the honest word is "may or may not".
+function gatewayDownCause(status: number): string {
+  return status === 0
+    ? 'the network failed — Nova may or may not have received it'
+    : `the gateway did not answer in time (status ${status})`
+}
+
+/**
+ * POST /devices/{id}/update. Never throws for a dead or slow gateway, or for
+ * a response that said ok but whose body never arrived or could not be
+ * parsed: each comes back as a TYPED `not_known_yet` outcome, not a generic
+ * thrown error — none of them is a refusal, since the update may have
+ * reached the agent anyway (S42b D4/K4). Every other failure (a real
+ * refusal, a 404, a bug) still throws, exactly as every other apiSend call
+ * does (S42b K10).
+ */
+export async function updateDevice(id: string): Promise<UpdateOutcome> {
+  let response: Response
+  try {
+    response = await request(`/api/v1/devices/${encodeURIComponent(id)}/update`, { method: 'POST' })
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 0 || GATEWAY_DOWN_STATUSES.has(err.status))) {
+      return notKnownYet(gatewayDownCause(err.status))
+    }
+    throw err
+  }
+  try {
+    return (await response.json()) as UpdateOutcome
+  } catch {
+    // The response arrived and said it was ok — core certainly got the
+    // request — but its body never came, or came back unreadable. The
+    // update may be running regardless (S42b K4).
+    return notKnownYet('the response arrived but its body could not be read')
+  }
+}
 
 // ── machines (services/core/app/machines_api.py, S40) ───────────────────
 

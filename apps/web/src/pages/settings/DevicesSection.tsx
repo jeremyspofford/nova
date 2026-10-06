@@ -2,15 +2,35 @@ import { useCallback, useEffect, useState } from 'react'
 import { Laptop, Plus, RefreshCw } from 'lucide-react'
 import { Badge, Button, EmptyState, Input, Section, Skeleton, StatusDot } from '../../components/ui'
 import {
+  getAgentManifest as apiGetAgentManifest,
   getNetworkAddress as apiGetNetworkAddress,
   listDevices as apiListDevices,
   mintPairingCode as apiMintPairingCode,
+  mintRepairCode as apiMintRepairCode,
   renameDevice as apiRenameDevice,
   revokeDevice as apiRevokeDevice,
+  updateDevice as apiUpdateDevice,
   type Device,
 } from '../../lib/api'
-import { deviceLiveness, deviceSubtitle, revokedToggleLabel, splitDevicesByRevoked, wslNote } from './devicesFormat'
+import {
+  deviceLiveness,
+  deviceSubtitle,
+  lastUpdateLine,
+  revokedToggleLabel,
+  splitDevicesByRevoked,
+  updateSaid,
+  wslNote,
+} from './devicesFormat'
 import { SetupModal } from './SetupModal'
+
+/** S42b E2 (Task 17/22's ruling, "the door is not identity"): anything that
+ *  reaches the hub machine's own loopback door comes in as `hub` — a relay
+ *  there (the owner's tunnel, an ssh -L) comes in the same way. So the
+ *  badge never claims identity on that alone: it reads "Hub's door", and
+ *  this is both its hover title and its accessible name. Core says the same
+ *  fact the same way (services/core/app/network.py's door_of). */
+const HUB_DOOR_TITLE =
+  "Came in through the hub machine's own door — a tunnel or ssh -L on the hub comes in the same way."
 
 /**
  * Settings → Devices (S5-T4): the machines Nova can act on. Each tile is a
@@ -23,8 +43,10 @@ import { SetupModal } from './SetupModal'
  *
  * Pairing is the whole of what a device is allowed: there is no grants editor
  * here because there is no grant (owner ruling 2026-09-03) — a paired device
- * does everything the user novad runs as can do, and the two controls that
- * remain are a name and Revoke, which ends the pairing.
+ * does everything the user novad runs as can do. The controls that remain are
+ * a name, Re-pair (mint a code bound to this one machine, S42b decision 4),
+ * Update (only when its agent is behind the hub's build) and Revoke, which
+ * ends the pairing — none of them is a grant.
  *
  * Revoked devices are hidden from the list by default (owner ruling
  * 2026-09-28) behind a "Show revoked (N)" toggle — display only; the API
@@ -45,6 +67,9 @@ interface DevicesApi {
   renameDevice: typeof apiRenameDevice
   revokeDevice: typeof apiRevokeDevice
   getNetworkAddress: typeof apiGetNetworkAddress
+  getAgentManifest: typeof apiGetAgentManifest
+  mintRepairCode: typeof apiMintRepairCode
+  updateDevice: typeof apiUpdateDevice
 }
 
 const DEFAULT_API: DevicesApi = {
@@ -53,6 +78,9 @@ const DEFAULT_API: DevicesApi = {
   renameDevice: apiRenameDevice,
   revokeDevice: apiRevokeDevice,
   getNetworkAddress: apiGetNetworkAddress,
+  getAgentManifest: apiGetAgentManifest,
+  mintRepairCode: apiMintRepairCode,
+  updateDevice: apiUpdateDevice,
 }
 
 const POLL_INTERVAL_MS = 15_000
@@ -72,6 +100,11 @@ export function DevicesSection({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pairingOpen, setPairingOpen] = useState(false)
   const [showRevoked, setShowRevoked] = useState(false)
+  // S42b decision 4: a code bound to ONE live machine, re-minted only when
+  // `repair.id` changes (SetupModal's effect keys on it) — never while the
+  // owner is sitting on the card typing it in, since nothing here re-sets
+  // this to an equal-but-new object on every poll tick.
+  const [repairing, setRepairing] = useState<{ id: string; name: string } | null>(null)
 
   const applyRows = useCallback((rows: Device[]) => {
     setDevices(rows)
@@ -116,10 +149,18 @@ export function DevicesSection({
     setDevices(prev => (prev ? prev.map(d => (d.id === updated.id ? updated : d)) : prev))
   }, [])
 
-  const closePairing = useCallback(() => {
+  // Re-pair (S42b decision 4): mint a code bound to THIS one machine rather
+  // than a fresh pairing — the same SetupModal, keyed differently.
+  const onRepair = useCallback((device: Device) => {
+    setRepairing({ id: device.id, name: device.name })
+  }, [])
+
+  const closeSetup = useCallback(() => {
     setPairingOpen(false)
-    // A freshly enrolled device shows up on the next list read — not by
-    // auto-polling for it, just by refetching once the modal closes.
+    setRepairing(null)
+    // A freshly enrolled (or re-paired) device shows up on the next list
+    // read — not by auto-polling for it, just by refetching once the modal
+    // closes.
     void refresh()
   }, [refresh])
 
@@ -167,7 +208,14 @@ export function DevicesSection({
           {showRevoked && (
             <div className="w-full divide-y divide-border-subtle">
               {revokedDevices.map(device => (
-                <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
+                <DeviceTile
+                  key={device.id}
+                  device={device}
+                  api={api}
+                  onUpdated={onDeviceUpdated}
+                  onRepair={onRepair}
+                  onRefresh={refresh}
+                />
               ))}
             </div>
           )}
@@ -198,17 +246,36 @@ export function DevicesSection({
           </div>
           <div className="divide-y divide-border-subtle">
             {liveDevices.map(device => (
-              <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
+              <DeviceTile
+                key={device.id}
+                device={device}
+                api={api}
+                onUpdated={onDeviceUpdated}
+                onRepair={onRepair}
+                onRefresh={refresh}
+              />
             ))}
             {showRevoked &&
               revokedDevices.map(device => (
-                <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
+                <DeviceTile
+                  key={device.id}
+                  device={device}
+                  api={api}
+                  onUpdated={onDeviceUpdated}
+                  onRepair={onRepair}
+                  onRefresh={refresh}
+                />
               ))}
           </div>
         </>
       )}
 
-      <SetupModal setup={pairingOpen ? 'add_machine' : null} onClose={closePairing} api={api} />
+      <SetupModal
+        setup={pairingOpen || repairing ? 'add_machine' : null}
+        repair={repairing}
+        onClose={closeSetup}
+        api={api}
+      />
     </Section>
   )
 }
@@ -219,10 +286,18 @@ function DeviceTile({
   device,
   api,
   onUpdated,
+  onRepair,
+  onRefresh,
 }: {
   device: Device
   api: DevicesApi
   onUpdated: (device: Device) => void
+  /** Opens the S47 setup modal re-pairing THIS machine (S42b decision 4). */
+  onRepair: (device: Device) => void
+  /** Re-reads the whole device list — what a `not_known_yet` update outcome
+   *  needs (S42b E4): whether it reached the agent is genuinely unknown
+   *  here, so the next poll's own facts are what can say more. */
+  onRefresh: () => void
 }) {
   const live = deviceLiveness(device)
   const revoked = live.state === 'revoked'
@@ -238,6 +313,10 @@ function DeviceTile({
   const [confirmingRevoke, setConfirmingRevoke] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const [revokeError, setRevokeError] = useState<string | null>(null)
+
+  // Update (S42b decision 2)
+  const [updating, setUpdating] = useState(false)
+  const [updateSaidText, setUpdateSaidText] = useState<string | null>(null)
 
   async function saveName() {
     const next = nameDraft.trim()
@@ -267,6 +346,26 @@ function DeviceTile({
     } finally {
       setRevoking(false)
       setConfirmingRevoke(false)
+    }
+  }
+
+  async function doUpdate() {
+    setUpdating(true)
+    setUpdateSaidText(null)
+    try {
+      const out = await api.updateDevice(device.id)
+      setUpdateSaidText(updateSaid(out))
+      // A cannot that names the owner's one step opens the re-pair card
+      // directly (P12: she names the step, never sends the card herself).
+      if (out.needs_card) onRepair(device)
+      // S42b E4: whether a `not_known_yet` update reached the agent is
+      // genuinely unknown here — re-read the list so the next poll's own
+      // facts (build_state, last_update) can say more than this reply can.
+      if (out.outcome === 'not_known_yet') onRefresh()
+    } catch (err) {
+      setUpdateSaidText(`Could not update: ${reasonOf(err)}`)
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -303,6 +402,11 @@ function DeviceTile({
             <span className={revoked ? 'font-medium text-content-tertiary line-through' : 'font-medium text-content-primary'}>
               {device.name}
             </span>
+            {device.hub && (
+              <span title={HUB_DOOR_TITLE} aria-label={HUB_DOOR_TITLE}>
+                <Badge size="sm" color="accent">Hub’s door</Badge>
+              </span>
+            )}
             {!revoked && (
               <Button size="sm" variant="ghost" onClick={() => { setNameDraft(device.name); setRenaming(true) }}>
                 Rename
@@ -317,6 +421,14 @@ function DeviceTile({
 
         {!revoked && (
           <span className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => onRepair(device)}>
+              Re-pair
+            </Button>
+            {device.build_state === 'behind' && (
+              <Button size="sm" variant="secondary" loading={updating} onClick={doUpdate}>
+                Update
+              </Button>
+            )}
             {confirmingRevoke ? (
               <>
                 <Button size="sm" variant="danger" loading={revoking} onClick={doRevoke}>
@@ -338,6 +450,11 @@ function DeviceTile({
       {renameError && <p className="mt-2 text-caption text-danger">Could not rename: {renameError}</p>}
       {revokeError && <p className="mt-2 text-caption text-danger">Could not revoke: {revokeError}</p>}
       {note && <p className="mt-2 text-caption text-content-secondary">{note}</p>}
+      {device.starts && <p className="mt-2 text-caption text-content-secondary">Starts {device.starts}</p>}
+      {device.last_update && (
+        <p className="mt-2 text-caption text-content-secondary">{lastUpdateLine(device.last_update)}</p>
+      )}
+      {updateSaidText && <p className="mt-2 text-caption text-content-secondary">{updateSaidText}</p>}
     </div>
   )
 }

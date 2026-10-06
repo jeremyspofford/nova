@@ -1,7 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { DevicesSection } from './DevicesSection'
-import type { Device, PairingCode } from '../../lib/api'
+import type { AgentManifest, Device, PairingCode, UpdateOutcome } from '../../lib/api'
+
+// S42b: the public manifest (Task 19/28) — the same shape publicPages.test.tsx
+// reads, so the pairing modal's filled command and the public /add page's
+// never drift apart.
+const MANIFEST: AgentManifest = {
+  version: 'aaaaaaaaaaaa',
+  commands: { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' },
+  commands_reason: null,
+  walks: { linux: 'Linux: walked', macos: 'macOS: not walked yet', windows: 'Windows: walked' },
+  notes: { linux: '', macos: '', windows: '' },
+}
 
 function device(overrides: Partial<Device> = {}): Device {
   return {
@@ -31,6 +42,9 @@ function renderSection(
     renameDevice: ReturnType<typeof vi.fn>
     revokeDevice: ReturnType<typeof vi.fn>
     getNetworkAddress: ReturnType<typeof vi.fn>
+    getAgentManifest: ReturnType<typeof vi.fn>
+    mintRepairCode: ReturnType<typeof vi.fn>
+    updateDevice: ReturnType<typeof vi.fn>
   }> = {},
   pollIntervalMs = 1_000_000,
 ) {
@@ -45,6 +59,21 @@ function renderSection(
     renameDevice: vi.fn(),
     revokeDevice: vi.fn(),
     getNetworkAddress: vi.fn(async () => ({ address: 'https://nova.fake-tailnet.ts.net', reason: null, read_at: new Date().toISOString() })),
+    getAgentManifest: vi.fn(async (): Promise<AgentManifest> => MANIFEST),
+    mintRepairCode: vi.fn(
+      async (): Promise<PairingCode> => ({
+        code: 'K7PQ9XYZ',
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      }),
+    ),
+    updateDevice: vi.fn(async () => ({
+      outcome: 'current',
+      version: null,
+      from_version: null,
+      reason: null,
+      needs_card: false,
+      in_flight: null,
+    })),
     ...api,
   }
   return { ...render(<DevicesSection api={full} pollIntervalMs={pollIntervalMs} />), api: full }
@@ -106,18 +135,174 @@ describe('DevicesSection', () => {
     expect(screen.queryByText(/last seen/i)).toBeNull()
   })
 
-  it('a paired device offers exactly rename and revoke — there is no grants control (no approvals)', async () => {
+  it('a paired device offers rename, re-pair and revoke (and Update when behind) — none of them is a grant (no approvals)', async () => {
     // Owner ruling 2026-09-03: pairing IS the authorization. The tile must not
     // grow a control that decides what a paired device may do — this is the
-    // line that reddens the day someone rebuilds a grants editor here.
+    // line that reddens the day someone rebuilds a grants editor here. The
+    // pin moves (S42b Task 29): Re-pair and Update join rename/revoke, and
+    // none of the four is a grant.
     renderSection({ listDevices: vi.fn(async () => [device({ last_seen: freshIso() })]) })
     await waitFor(() => screen.getByText('laptop'))
     const tile = screen.getByTestId('device-d-1')
     expect(within(tile).getByRole('button', { name: /rename/i })).toBeTruthy()
+    expect(within(tile).getByRole('button', { name: /^re-pair$/i })).toBeTruthy()
     expect(within(tile).getByRole('button', { name: /^revoke$/i })).toBeTruthy()
+    // build_state is absent (unknown) on this fixture — nothing to update to.
+    expect(within(tile).queryByRole('button', { name: /^update$/i })).toBeNull()
     expect(within(tile).queryByRole('button', { name: /grants/i })).toBeNull()
     expect(within(tile).queryByRole('checkbox')).toBeNull()
     expect(within(tile).queryByText(/filesystem root/i)).toBeNull()
+  })
+
+  it('the hub machine’s tile says Hub’s door (never bare "Hub"), its build and how it starts', async () => {
+    // S42b Task 29, carry E2 (the door is not identity): the badge must not
+    // assert identity on the door alone, so it is never the bare word "Hub".
+    renderSection({
+      listDevices: vi.fn(async () => [
+        device({
+          last_seen: freshIso(),
+          hub: true,
+          agent_version: 'bbbbbbbbbbbb',
+          build_state: 'behind',
+          hub_version: 'aaaaaaaaaaaa',
+          starts: 'by itself (a systemd user service)',
+        }),
+      ]),
+    })
+    const tile = await screen.findByTestId('device-d-1')
+    expect(within(tile).getByText('Hub’s door')).toBeTruthy()
+    // Pinned: the bare word "Hub" is never the badge's own text.
+    expect(within(tile).queryByText('Hub', { exact: true })).toBeNull()
+    expect(within(tile).getByText(/behind the hub’s build aaaaaaaaaaaa/)).toBeTruthy()
+    expect(within(tile).getByText('Starts by itself (a systemd user service)')).toBeTruthy()
+    // The badge's title is both its hover tooltip and its accessible name —
+    // the sentence core itself says for the same fact (network.py's door_of).
+    expect(within(tile).getByTitle(/Came in through the hub machine's own door/)).toBeTruthy()
+  })
+
+  it('a non-hub machine’s tile carries no Hub badge', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), hub: false })]),
+    })
+    const tile = await screen.findByTestId('device-d-1')
+    expect(within(tile).queryByText(/Hub/)).toBeNull()
+  })
+
+  it('Update says sent, not updated, until the agent reconnects', async () => {
+    const updateDevice = vi.fn(async () => ({
+      outcome: 'sent',
+      version: 'aaaaaaaaaaaa',
+      from_version: 'bbbbbbbbbbbb',
+      reason: null,
+      needs_card: false,
+      in_flight: 0,
+    }))
+    renderSection({
+      updateDevice,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })]),
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    expect(await screen.findByText('Sent aaaaaaaaaaaa — not confirmed until it reconnects on it.')).toBeTruthy()
+    expect(updateDevice).toHaveBeenCalledWith('d-1')
+  })
+
+  it('Update names how many running commands a restart there cancels (S42b E3)', async () => {
+    const updateDevice = vi.fn(async () => ({
+      outcome: 'sent',
+      version: 'aaaaaaaaaaaa',
+      from_version: 'bbbbbbbbbbbb',
+      reason: null,
+      needs_card: false,
+      in_flight: 2,
+    }))
+    renderSection({
+      updateDevice,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })]),
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    expect(await screen.findByText(/2 running commands there end cancelled/)).toBeTruthy()
+  })
+
+  it('an update that needs the owner opens the machine’s re-pair card', async () => {
+    const mintRepairCode = vi.fn(async () => ({ code: 'K7PQ9XYZ', expires_at: new Date(Date.now() + 600_000).toISOString() }))
+    const updateDevice = vi.fn(async () => ({
+      outcome: 'cannot',
+      version: 'aaaaaaaaaaaa',
+      from_version: null,
+      reason: "cannot: laptop's agent was started by hand",
+      needs_card: true,
+      in_flight: 0,
+    }))
+    renderSection({
+      updateDevice,
+      mintRepairCode,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })]),
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    expect(await screen.findByText('Re-pair laptop')).toBeTruthy()
+    expect(mintRepairCode).toHaveBeenCalledWith('d-1')
+    // S42b Task 32, L699: the "cannot" reason is rendered to the owner, not
+    // just acted on — nothing used to pin that it stays visible.
+    expect(await screen.findByText("cannot: laptop's agent was started by hand")).toBeTruthy()
+  })
+
+  it('clicking Update twice before it resolves calls the API once (S42b Task 32, L698)', async () => {
+    let resolveUpdate: (value: UpdateOutcome) => void = () => {}
+    const updateDevice = vi.fn(
+      () =>
+        new Promise<UpdateOutcome>(resolve => {
+          resolveUpdate = resolve
+        }),
+    )
+    renderSection({
+      updateDevice,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })]),
+    })
+    const button = await screen.findByRole('button', { name: 'Update' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(updateDevice).toHaveBeenCalledTimes(1)
+    resolveUpdate({
+      outcome: 'sent',
+      version: 'aaaaaaaaaaaa',
+      from_version: 'bbbbbbbbbbbb',
+      reason: null,
+      needs_card: false,
+      in_flight: 0,
+    })
+    await screen.findByText('Sent aaaaaaaaaaaa — not confirmed until it reconnects on it.')
+    expect(updateDevice).toHaveBeenCalledTimes(1)
+  })
+
+  it('clicking Re-pair directly opens that machine’s re-pair card, keyed on its id', async () => {
+    const mintRepairCode = vi.fn(async () => ({ code: 'K7PQ9XYZ', expires_at: new Date(Date.now() + 600_000).toISOString() }))
+    renderSection({
+      mintRepairCode,
+      listDevices: vi.fn(async () => [device({ last_seen: freshIso() })]),
+    })
+    fireEvent.click(await screen.findByRole('button', { name: /^re-pair$/i }))
+    expect(await screen.findByText('Re-pair laptop')).toBeTruthy()
+    expect(mintRepairCode).toHaveBeenCalledWith('d-1')
+  })
+
+  it('an update whose gateway timed out says not known yet — never "failed" — and re-reads the device list (S42b E4)', async () => {
+    const listDevices = vi.fn(async () => [device({ last_seen: freshIso(), build_state: 'behind', hub_version: 'aaaaaaaaaaaa' })])
+    const updateDevice = vi.fn(async () => ({
+      outcome: 'not_known_yet',
+      version: null,
+      from_version: null,
+      reason: "the gateway did not answer in time (status 502); sent or not, not known yet — the machine's line will say",
+      needs_card: false,
+      in_flight: null,
+    }))
+    renderSection({ updateDevice, listDevices })
+    await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    expect(await screen.findByText("Sent or not — not known yet; the machine's line will say")).toBeTruthy()
+    expect(screen.queryByText(/failed/i)).toBeNull()
+    expect(screen.queryByText(/could not update/i)).toBeNull()
+    // The list is re-read so the tile can pick up what actually happened.
+    await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2))
   })
 
   it('stops polling after unmount — the interval is cleared', async () => {
@@ -251,9 +436,9 @@ describe('DevicesSection', () => {
     const dialog = await screen.findByRole('dialog')
     // The code is shown big, formatted the way it is read aloud.
     expect(within(dialog).getByTestId('setup-code').textContent).toBe('K7PQ-9XYZ')
-    // The enroll command carries the DERIVED address, never window.location.
-    const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code K7PQ-9XYZ'
-    expect(within(dialog).getByText(content => content.includes(expected))).toBeTruthy()
+    // The Linux line, filled in the BROWSER (S42b) — never the retired
+    // novad-enroll one-liner core used to hand back already filled.
+    expect(await within(dialog).findByText('L --code K7PQ-9XYZ')).toBeTruthy()
   })
 
   it('shows what the agent reported, and the WSL note on an agent inside WSL', async () => {

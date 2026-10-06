@@ -60,6 +60,13 @@ const KIND_COLOR: Record<string, 'success' | 'danger' | 'accent' | 'neutral'> = 
   'device.enrolled': 'success',
   'device.revoked': 'danger',
   'device.audit_break': 'danger',
+  // S42b Task 29, carry E1: a re-pair (decision 4) rebinds a live device's
+  // row to a new key — its name, owner and history stay, the old key stops
+  // working and the new one takes over cleanly. That is a working machine
+  // restored, the same outcome enrolled reads as success for, not a neutral
+  // record — so it gets the same colour, never the no-colour-for-this-kind
+  // fallback above.
+  'device.repaired': 'success',
   // S37a: her MCP connections. A removal is the one that loses something.
   'mcp.server_connected': 'accent',
   'mcp.server_removed': 'danger',

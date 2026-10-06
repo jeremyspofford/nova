@@ -491,6 +491,8 @@ def test_the_real_file_itself_is_read_whole():
     fact = raw_compose_fact([(str(COMPOSE_FILE), REAL_TEXT)])
     assert fact["project"] == "nova"
     assert fact["volumes"] == [
+        "v4_agent_build_cache",
+        "v4_agent_dist",
         "v4_memdata",
         "v4_models",
         "v4_ollama",

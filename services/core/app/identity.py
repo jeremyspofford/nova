@@ -27,6 +27,8 @@ from dataclasses import dataclass
 import asyncpg
 from fastapi import HTTPException, Request
 from starlette.responses import Response
+from starlette.routing import get_route_path
+from starlette.types import Scope
 
 from app import db
 from app.auth import bearer_auth_middleware
@@ -35,18 +37,32 @@ COOKIE_NAME = "nova_session"
 SESSION_TTL_DAYS = 30
 SESSION_TTL_SECONDS = SESSION_TTL_DAYS * 24 * 60 * 60
 
-# The four routes that cannot require an identity: the wizard reads state and
-# mints one, and a daemon on a machine that has never talked to this instance
+# The eleven routes that cannot require an identity (their count is pinned in
+# tests/test_agent_dist.py, so this sentence cannot go stale unseen again —
+# Task 32, L376). Four are identity's own: the wizard reads state and mints
+# one, and a daemon on a machine that has never talked to this instance
 # enrolls with a pairing code as its only credential (minted by an
 # authenticated operator, shown once, stored hashed, single-use, ten-minute
 # TTL — and rate-limited in devices_api). Everything else under /api/v1 needs a
 # cookie or a bearer.
+#
+# The other seven, S42b (P19): Nova's agent is downloaded before a machine has
+# any identity — the card's one-liner fetches it first — so the manifest and
+# the six builds are public, exactly, and rate-limited (agent_dist_api). They
+# carry nothing secret: the repo is public, and the manifest is signed.
 PUBLIC_PATHS = frozenset(
     {
         "/api/v1/auth/state",
         "/api/v1/auth/register",
         "/api/v1/auth/login",
         "/api/v1/devices/enroll",
+        "/api/v1/agent/manifest",
+        "/api/v1/agent/dist/novad-linux-amd64",
+        "/api/v1/agent/dist/novad-linux-arm64",
+        "/api/v1/agent/dist/novad-darwin-amd64",
+        "/api/v1/agent/dist/novad-darwin-arm64",
+        "/api/v1/agent/dist/novad-windows-amd64.exe",
+        "/api/v1/agent/dist/novad-windows-arm64.exe",
     }
 )
 
@@ -176,8 +192,22 @@ async def _cookie_identity(token: str) -> Person | None:
         return None
 
 
+def is_public(scope: Scope) -> bool:
+    """Is this request for one of the exact PUBLIC_PATHS — read on the path
+    the ROUTER matches (Task 26 fix round 1, I3)?
+
+    Starlette's routes match get_route_path(scope): the decoded path, less
+    any root_path, whole. request.url.path is a URL REPARSED from that
+    decoded path, so a decoded `?` or `#` cuts it short and a decoded tab or
+    newline vanishes from it: `/api/v1/agent/manifest%3F/x` read as the
+    public manifest while the router matched — and found no route for — the
+    whole path. Matching the router's own path, through its own function,
+    means a request is public exactly when the route it reaches is."""
+    return get_route_path(scope) in PUBLIC_PATHS
+
+
 async def identity_middleware(request: Request, call_next):
-    if request.url.path == "/health/live":
+    if get_route_path(request.scope) == "/health/live":
         return await call_next(request)
 
     token = request.cookies.get(COOKIE_NAME)
@@ -188,7 +218,7 @@ async def identity_middleware(request: Request, call_next):
             request.state.auth_kind = "session"
             return await call_next(request)
 
-    if request.url.path in PUBLIC_PATHS:
+    if is_public(request.scope):
         request.state.auth_kind = "public"
         return await call_next(request)
 

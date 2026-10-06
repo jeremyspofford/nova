@@ -103,10 +103,10 @@ from app import (
     conversations,
     db,
     decisions,
-    devices,
     guards,
     identity,
     live_facts,
+    machines,
     markup_calls,
     model_speed,
     network,
@@ -2658,8 +2658,12 @@ def _queue_ingest(
         span.meta["queued"] = True
 
 
-async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
-    """Every LIVE paired device's name, from the registry itself.
+async def _paired_device_names(app) -> list[str]:
+    """Every paired machine's name in this turn's world, read through the
+    plant (machines.plant().paired_machines): the registry's LIVE rows — or,
+    inside an eval replay, the case's declared devices alone (S42b Task 24,
+    the replay-hermeticity ruling: a replay's state guard and update claims
+    read the machines its own listing shows, never the owner's real ones).
 
     Revoked rows are excluded: a revoked machine is not paired, so a claim about
     it is not a claim about anything this household has. Returns [] on ANY
@@ -2668,11 +2672,7 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
     becomes a correction).
     """
     try:
-        return [
-            device["name"]
-            for device in await devices.list_devices(pool)
-            if not device.get("revoked_at")
-        ]
+        return [machine["name"] for machine in await machines.plant().paired_machines(app)]
     except Exception:
         logger.exception(
             "device registry read failed; the state-claim guard stays silent this turn"
@@ -2714,15 +2714,20 @@ async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
     return refs
 
 
-async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
-    """Every LIVE paired device's name and the machine its agent reported
-    (devices.live_machines), for the said-not-done device claim: a call on
-    another agent of the same machine is a call on that machine (fix round 4,
-    R5). Read from the rows, never a list. None on ANY failure — no grouping
-    can then be read, and the guard stays silent for a claim that a call on
-    another device might back (a blip costs a sentence, never a false one)."""
+async def _paired_machines(app) -> dict[str, str | None] | None:
+    """Every paired device's name and the machine its agent reported, for the
+    said-not-done device claim: a call on another agent of the same machine is
+    a call on that machine (fix round 4, R5). Read through the plant
+    (machines.plant().machine_groups): the LIVE rows (devices.live_machines) —
+    or, inside an eval replay, the case's declared devices alone (Task 32,
+    MF5), the world its paired names come from (_paired_device_names): a
+    declared name that matches a real device's never picks up that real
+    machine. Read from the rows, never a list. None on ANY failure — no
+    grouping can then be read, and the guard stays silent for a claim that a
+    call on another device might back (a blip costs a sentence, never a false
+    one)."""
     try:
-        return await devices.live_machines(pool)
+        return await machines.plant().machine_groups(app)
     except Exception:
         logger.exception("device machine read failed; the device claim reads no grouping")
         return None
@@ -4302,7 +4307,9 @@ def _regen_rejected_by(
             "address_claim",
             lambda: guards.address_claim_check(corrected, user_message, origin, reason),
         ),
-        ("narration", lambda: guards.narration_check(corrected, turn.spans)),
+        # The paired names give an update claim its machine (S42b Task 23 fix
+        # round 1, I2) — the same live read the state guard below is judged by.
+        ("narration", lambda: guards.narration_check(corrected, turn.spans, device_names)),
         (
             "delegation_claim",
             lambda: guards.delegation_claim_check(
@@ -5446,13 +5453,14 @@ async def _run_turn(
         # {correction} frame, in order, so the live screen shows the
         # contradiction. Only the durable text is composed, once, below.
 
-        # The paired-device names, read LIVE from the registry — the fact the
+        # The paired-device names, read LIVE through the plant — the registry,
+        # or an eval replay's declared devices (S42b Task 24) — the fact the
         # state-claim guard is derived from. Never a list kept in the guard: a
         # household with nothing paired can make no claim about "the device",
         # and pairing a machine arms the check by itself. FAIL-OPEN to no names,
         # which makes the guard silent — a registry read that blips must never
         # turn an honest reply into a false correction.
-        device_names = await _paired_device_names(pool)
+        device_names = await _paired_device_names(app)
         # And the agents' names (S12), the same way — the fact the
         # delegation-claim guard is derived from. Read once here and threaded
         # into every redirect's vetting, exactly like device_names. The
@@ -5488,7 +5496,9 @@ async def _run_turn(
         )
 
         try:
-            correction = guards.narration_check(text, turn.spans)
+            # device_names (read above): the only words an update claim's
+            # machine can be — derived, never a list (S42b Task 23 fix round 1).
+            correction = guards.narration_check(text, turn.spans, device_names)
         except Exception:
             logger.exception("narration guard raised; shipping the reply uncorrected")
             correction = None
@@ -6384,9 +6394,11 @@ async def _run_turn(
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
-            machines = await _paired_machines(pool)
+            # Not `machines`: that is the module S42b reads the plant through,
+            # and a local of the same name would shadow it in all of _run_turn.
+            machine_groups = await _paired_machines(app)
             # The connected MCP servers, read HERE, after every redirect, like
-            # `machines` (fix round 1, item 1): read before the redirects, a
+            # `machine_groups` (fix round 1, item 1): read before the redirects, a
             # server a redirect's mcp_disconnect removed was still "connected".
             mcp_refs = await _mcp_server_refs(pool)
             reachable_refs = mcp_refs if "mcp_call" in persona.tool_names else []
@@ -6398,7 +6410,11 @@ async def _run_turn(
                 (
                     "device_completion",
                     lambda: guards.device_completion_check(
-                        said, turn.spans, persona.tool_names, device_names, machines=machines
+                        said,
+                        turn.spans,
+                        persona.tool_names,
+                        device_names,
+                        machines=machine_groups,
                     ),
                 ),
                 (
@@ -6491,6 +6507,19 @@ async def _run_turn(
             # replaced the prose, and its regeneration was vetted by both
             # rewrite guards.
             or (bool(rewrite_claims) and not prose_replaced)
+            # And an agent update claimed with nothing confirming it (S42b Task
+            # 23 fix round 1, I4): "I updated eval_laptop's agent" ingested
+            # beside its correction is how recall would hand a later turn an
+            # update that never took as a fact — the said-not-done lane keeps
+            # its device completions out of memory for the same reason. A
+            # confirmed update leaves no such claim, so that turn is knowledge;
+            # and a redirect that stood replaced the prose the claim was in
+            # (its regeneration was vetted by narration too).
+            or (
+                correction is not None
+                and not prose_replaced
+                and any(claim.kind == "updated_machine" for claim in correction.claims)
+            )
             or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what

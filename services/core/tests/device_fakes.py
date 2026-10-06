@@ -43,9 +43,12 @@ class FakeWSConn:
     the real adapter raises on WebSocketDisconnect.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, door: str | None = None) -> None:
         self.sent: list[dict] = []
         self.closed_code: int | None = None
+        # The door a real adapter derives from the peer; None is "unknown"
+        # (S42b P15) — most tests don't care which door and leave it unset.
+        self.door = door
         self._outbound: asyncio.Queue = asyncio.Queue()
         self._incoming: asyncio.Queue = asyncio.Queue()
 

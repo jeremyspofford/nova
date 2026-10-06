@@ -12,10 +12,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -445,5 +447,31 @@ func TestRepointNormalisesATrailingSlash(t *testing.T) {
 	}
 	if got := e.server(t); got != fc.srv.URL {
 		t.Errorf("config server = %q, want the URL without its trailing slash (%q)", got, fc.srv.URL)
+	}
+}
+
+// A repoint puts the proven address first and keeps the device's other
+// locators behind it — the loopback of the hub machine stays a fallback.
+func TestRepointPutsTheNewAddressFirstAndKeepsTheOthers(t *testing.T) {
+	e := newEnrolment(t, "https://nova.old.example")
+	cfg, priv, err := config.Load(e.paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Locators = []string{"http://127.0.0.1:3000", "https://nova.old.example"}
+	if err := config.Save(e.paths, cfg, priv); err != nil {
+		t.Fatal(err)
+	}
+	fc := newFakeCore(t, e.corePubHex, e.devPub, coreBehaviour{})
+	if err := repoint(e.paths, fc.srv.URL, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	back, _, err := config.Load(e.paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{fc.srv.URL, "http://127.0.0.1:3000", "https://nova.old.example"}
+	if !reflect.DeepEqual(back.Locators, want) || back.Server != fc.srv.URL {
+		t.Fatalf("locators %v, server %q; want %v and %q", back.Locators, back.Server, want, fc.srv.URL)
 	}
 }

@@ -15,7 +15,12 @@ import pytest
 
 from app import model_speed
 
-pytestmark = pytest.mark.asyncio
+# No module-level `pytestmark = pytest.mark.asyncio` here: pyproject.toml
+# sets `asyncio_mode = "auto"`, which already runs every `async def test_*`
+# below with no mark needed. A blanket mark additionally warned on this
+# file's sync tests ("marked with '@pytest.mark.asyncio' but it is not an
+# async function") — 12 warnings, one per TestTokPerS/TestSpeed case
+# (S42b Task 31, H15).
 
 
 class TestTokPerS:

@@ -3,6 +3,12 @@
 Every route but /health/live requires `Authorization: Bearer <SERVICE_TOKEN>`.
 Refuse-all-when-unset: if SERVICE_TOKEN is missing or empty, every
 non-health request gets 503 rather than silently running unauthenticated.
+
+/health/live is matched on the path the ROUTER matches — Starlette's own
+get_route_path, as core's identity.is_public matches PUBLIC_PATHS (S42b Task 26
+fix round 1, I3; Task 32, L601). request.url.path is a URL reparsed from the
+decoded path, so a decoded `?` or `#` cut it short and a decoded tab or newline
+vanished from it: `/health/live%3Fx` was exempted, then found no route.
 """
 from __future__ import annotations
 
@@ -11,13 +17,14 @@ import os
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import get_route_path
 
 TOKEN_UNSET_BODY = {"error": "service token unset — refusing all requests"}
 _BEARER_PREFIX = "Bearer "
 
 
 async def bearer_auth_middleware(request: Request, call_next):
-    if request.url.path == "/health/live":
+    if get_route_path(request.scope) == "/health/live":
         return await call_next(request)
 
     token = os.environ.get("SERVICE_TOKEN", "")

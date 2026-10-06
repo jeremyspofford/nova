@@ -6,20 +6,23 @@ reads as "no machines"."""
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import re
+import uuid
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app import machines
+from app import device_facts, machines
 from app.checks import stack
 from app.evals.cases import FixtureMachine
 from app.main import app as core_app
 from app.tools import machines as machine_tools
 from tests import fakes
+from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
 # The gateway pins its EngineView dataclass to this file
@@ -414,18 +417,267 @@ def test_both_card_readers_choose_through_the_one_helper():
 # -- S42a: the fixture plant overlays declared devices on the real agents ----
 
 
-async def test_a_fixture_plant_overlays_its_declared_devices_on_the_real_agents(monkeypatch):
+async def test_a_replays_agents_are_its_declared_devices_alone(monkeypatch):
+    """Pin moved (S42b Task 22, the replay-hermeticity ruling): a replay's
+    plant holds only the machines the case declared. It used to list the real
+    agents beside them — "real-pc", "eval_pc" — so she could see a real
+    machine the replay's own re-pair card then called unpaired. The real
+    agents are never even read now."""
+
     async def real_agents(self, app):
-        return [{"name": "real-pc"}, {"name": "eval_stale"}]
+        raise AssertionError("a replay read the real agents")
 
     monkeypatch.setattr(machines.GatewayPlant, "agents", real_agents)
     plant = machines.FixturePlant(
         {}, devices={"eval_pc": {"name": "eval_pc", "platform": "windows"}}
     )
     names = [a["name"] for a in await plant.agents(None)]
-    assert names == ["real-pc", "eval_pc"]  # a real eval_-named row is shadowed, never shown twice
+    assert names == ["eval_pc"]
+    assert await machines.FixturePlant({}).agents(None) == []
+
+
+async def test_a_replay_reports_no_knock_and_never_reads_the_real_ones(monkeypatch):
+    """device_list's knock section goes through the plant (hermeticity
+    ruling): a case can declare no revoked device, so a replay has none to
+    report — never the real table's."""
+    from app import devices
+
+    async def real_knocks(*_a, **_kw):
+        raise AssertionError("a replay read the real knocks")
+
+    monkeypatch.setattr(devices, "revoked_knocks", real_knocks)
+    plant = machines.FixturePlant(
+        {}, devices={"eval_pc": {"name": "eval_pc", "platform": "windows"}}
+    )
+    assert await plant.knocks(None) == []
 
 
 def test_a_fixture_device_must_carry_the_prefix():
     with pytest.raises(ValueError):
         machines.FixturePlant({}, devices={"real-pc": {"name": "real-pc"}})
+
+
+# -- S42b: the hub's build each agent is compared with (Task 18, ruling F11) --
+
+
+async def _paired_agent(pool, name: str, version: str) -> None:
+    from app import devices
+
+    minted = await devices.mint_pairing_code(pool, created_by=None)
+    enrolled = await devices.enroll(
+        pool,
+        code=minted["code"],
+        pubkey=hashlib.sha256(name.encode()).hexdigest(),
+        name=name,
+        platform="linux",
+        hostname=name.upper(),
+    )
+    await pool.execute(
+        "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1",
+        uuid.UUID(enrolled["device_id"]),
+        {"v": 2, "agent": {"version": version, "mode": "foreground"}},
+    )
+
+
+@requires_db
+async def test_the_real_plant_compares_each_agent_with_the_hubs_build(pool, monkeypatch):
+    from app import agent_dist
+
+    async def the_hubs_build() -> str:
+        return "aaaaaaaaaaaa"
+
+    monkeypatch.setattr(agent_dist, "version", the_hubs_build)
+    await _paired_agent(pool, "on-the-build", "aaaaaaaaaaaa")
+    await _paired_agent(pool, "on-another", "0a0a0a0a0a0a")
+    builds = {view["name"]: view["build"] for view in await machines.GatewayPlant().agents(None)}
+    assert builds == {
+        "on-the-build": {"state": "current", "hub_version": "aaaaaaaaaaaa"},
+        "on-another": {"state": "behind", "hub_version": "aaaaaaaaaaaa"},
+    }
+
+
+@requires_db
+async def test_a_replay_names_one_hub_build_and_never_reads_the_real_one(pool, monkeypatch):
+    """F11: no build is read during an eval. Every agent a replay lists is
+    compared with the fixture's hub build, the one FixturePlant.update_agent
+    (Task 22) answers too, so one replay never names two hub builds. Pin
+    moved (Task 22, the replay-hermeticity ruling): the real row paired here
+    is no longer listed beside the declared devices at all."""
+    from app import agent_dist
+
+    async def never_in_a_replay() -> str:
+        raise AssertionError("a replay read the hub's real build")
+
+    def never_current():
+        raise AssertionError("a replay read the hub's real build")
+
+    monkeypatch.setattr(agent_dist, "version", never_in_a_replay)
+    monkeypatch.setattr(agent_dist, "read", never_in_a_replay)
+    monkeypatch.setattr(agent_dist, "current", never_current)
+    await _paired_agent(pool, "real-pc", "0a0a0a0a0a0a")
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            # Views as FixtureDevice.as_view() makes them: no hub build known.
+            "eval_laptop": {
+                "name": "eval_laptop",
+                "agent_version": "0a0a0a0a0a0a",
+                "build": {"state": "unknown", "hub_version": None},
+            },
+            "eval_current": {
+                "name": "eval_current",
+                "agent_version": machines.FIXTURE_HUB_VERSION,
+                "build": {"state": "unknown", "hub_version": None},
+            },
+        },
+    )
+    builds = {view["name"]: view["build"] for view in await plant.agents(None)}
+    fixture = machines.FIXTURE_HUB_VERSION
+    assert builds == {
+        "eval_laptop": {"state": "behind", "hub_version": fixture},
+        "eval_current": {"state": "current", "hub_version": fixture},
+    }
+    assert {build["hub_version"] for build in builds.values()} == {await plant.hub_version()}
+    # The declaration itself is untouched: each listing is computed fresh.
+    assert plant._devices["eval_laptop"]["build"] == {"state": "unknown", "hub_version": None}
+
+
+# -- S42b Task 22: machine_update in a replay acts only on declared machines --
+
+
+async def test_a_replay_updates_only_a_declared_device_and_never_a_real_one():
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_laptop": {"name": "eval_laptop", "agent_version": "0a0a0a0a0a0a", "hub": False}
+        },
+        updates={"eval_laptop": "sent"},
+    )
+    out = await plant.update_agent(None, "eval_laptop", requested_by="nova")
+    assert out["outcome"] == "sent" and out["version"] == machines.FIXTURE_HUB_VERSION
+    assert out["from_version"] == "0a0a0a0a0a0a"
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await plant.update_agent(None, "dell", requested_by="nova")
+    # The replay's own listing (hermeticity ruling): a real machine's name is
+    # simply not a paired machine here, in the words a real hub uses.
+    assert str(exc.value) == (
+        "cannot: no paired machine named 'dell' — the paired machines are: eval_laptop"
+    )
+
+
+async def test_a_replay_answers_each_declared_outcome_and_sends_nothing(monkeypatch):
+    async def never(*_a, **_kw):
+        raise AssertionError("a replay reached the real update path")
+
+    from app import agent_updates
+
+    monkeypatch.setattr(agent_updates, "update_now", never)
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_a": {"name": "eval_a", "agent_version": None, "hub": True},
+            "eval_b": {"name": "eval_b", "agent_version": "0a0a0a0a0a0a"},
+        },
+        updates={"eval_a": "confirmed"},
+    )
+    a = await plant.update_agent(None, "eval_a", requested_by="nova")
+    b = await plant.update_agent(None, "eval_b", requested_by="nova")
+    assert (a["outcome"], a["hub"], a["from_version"]) == ("confirmed", True, None)
+    assert (b["outcome"], b["hub"]) == ("sent", False)  # "sent" when none is declared
+    assert a["in_flight"] == b["in_flight"] == 0
+
+
+async def test_a_replay_refuses_the_engines_name_naming_the_door_machines_it_declared():
+    """The door is not identity: 'hub' is the bundled engine's name, and the
+    refusal names each machine whose agent came in through the hub machine's
+    own door AS that — never as the hub machine."""
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_minipc": {"name": "eval_minipc", "hub": True},
+            "eval_laptop": {"name": "eval_laptop", "hub": False},
+        },
+    )
+    for asked in ("hub", " Hub "):
+        with pytest.raises(machines.UnknownMachine) as exc:
+            await plant.update_agent(None, asked, requested_by="nova")
+        said = str(exc.value)
+        assert said.startswith("cannot: ")
+        assert "is the bundled engine's name" in said
+        assert (
+            "One paired machine's agent came in through the hub machine's own door: eval_minipc."
+            in said
+        )
+        assert "eval_laptop" not in said
+
+
+def test_a_replay_declares_updates_only_for_its_devices_and_only_outcomes_it_can_say():
+    with pytest.raises(ValueError, match="eval_other"):
+        machines.FixturePlant(
+            {}, devices={"eval_a": {"name": "eval_a"}}, updates={"eval_other": "sent"}
+        )
+    with pytest.raises(ValueError, match="'cannot'"):
+        machines.FixturePlant(
+            {}, devices={"eval_a": {"name": "eval_a"}}, updates={"eval_a": "cannot"}
+        )
+
+
+# -- Task 32, MF5: the said-not-done grouping goes through the plant -----------
+
+
+def _declared_view(name: str, facts: dict | None) -> dict:
+    """A declared device's view, as cases.FixtureDevice.as_view builds one."""
+    return device_facts.agent_view(
+        name=name,
+        platform="windows",
+        hostname=name.upper(),
+        connected=True,
+        last_seen=None,
+        facts=None if facts is None else device_facts.validate_auth(facts),
+        facts_at=None,
+    )
+
+
+_NATIVE = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "run-key", "session_interactive": True},
+    "os": {"goos": "windows", "arch": "amd64", "version": "Windows 11 Pro", "wsl": None},
+    "hostname": "PC",
+    "machine_uid": "c" * 64,
+}
+_INSIDE_WSL = {
+    **_NATIVE,
+    "agent": {**_NATIVE["agent"], "mode": "systemd-user"},
+    "os": {"goos": "linux", "arch": "amd64", "version": "Ubuntu", "wsl": {"distro": "Ubuntu"}},
+}
+
+
+async def test_a_replays_machine_grouping_is_its_declared_devices_alone(monkeypatch):
+    """Each declared device stands alone, with no machine, unless its declared
+    facts name one — read by the live rows' own rule (device_facts.machine:
+    never inside WSL) — and the real rows are never read."""
+    from app import devices
+
+    async def real_rows(*_a, **_kw):
+        raise AssertionError("a replay read the real device registry")
+
+    monkeypatch.setattr(devices, "live_machines", real_rows)
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_pc": _declared_view("eval_pc", None),
+            "eval_win": _declared_view("eval_win", _NATIVE),
+            "eval_wsl": _declared_view("eval_wsl", _INSIDE_WSL),
+        },
+    )
+    assert await plant.machine_groups(None) == {
+        "eval_pc": None,
+        "eval_win": "c" * 64,
+        "eval_wsl": None,
+    }
+    assert await machines.FixturePlant({}).machine_groups(None) == {}
+    for facts in (None, _NATIVE, _INSIDE_WSL):
+        clean = None if facts is None else device_facts.validate_auth(facts)
+        assert device_facts.view_machine(_declared_view("eval_x", facts)) == (
+            device_facts.machine(clean)
+        )

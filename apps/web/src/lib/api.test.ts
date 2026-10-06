@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  ApiError,
   parsePullLine,
   pullModel,
   getActivity,
@@ -15,6 +16,7 @@ import {
   listSkills,
   listTools,
   updateAgent,
+  updateDevice,
   getMachines,
   setMachineServing,
   type PullLine,
@@ -299,6 +301,99 @@ describe('machines (S40): the routes and the bodies, verbatim', () => {
     expect(url).toBe('/api/v1/machines/hub%20box')
     expect(init?.method).toBe('PATCH')
     expect(JSON.parse(init?.body as string)).toEqual({ serving: false })
+  })
+})
+
+describe('updateDevice (S42b D4/K4, carried from Task 26): a dead or slow gateway is typed, never thrown', () => {
+  function stubStatus(status: number, body = '') {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status,
+        text: async () => body,
+      }) as unknown as Response),
+    )
+  }
+
+  it.each([502, 504, 524])('status %i comes back as not_known_yet, never thrown', async status => {
+    // Cloudflare's own error page — not JSON, exactly the body statedReason
+    // would otherwise just quote verbatim as if it were a real refusal.
+    stubStatus(status, '<html><body>Bad Gateway</body></html>')
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.version).toBeNull()
+    expect(outcome.from_version).toBeNull()
+    expect(outcome.needs_card).toBe(false)
+    expect(outcome.in_flight).toBeNull()
+    expect(outcome.reason).toContain('sent or not, not known yet')
+    expect(outcome.reason).not.toContain('<html>')
+  })
+
+  it('a network failure says "may or may not" — status 0 happens BEFORE sending too, so it never claims the request was sent (K4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network error')
+      }),
+    )
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.reason).toContain('may or may not have received it')
+    expect(outcome.reason).not.toContain('after the request was sent')
+  })
+
+  it('a 200 whose body cannot be read is not_known_yet too — core certainly got the request (K4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => {
+          throw new TypeError('network error')
+        },
+      }) as unknown as Response),
+    )
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.reason).toContain('its body could not be read')
+  })
+
+  it('a real refusal (404, unpaired device) is thrown verbatim, never absorbed into not_known_yet', async () => {
+    stubStatus(404, JSON.stringify({ error: 'no paired device with that id' }))
+    await expect(updateDevice('d-1')).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringContaining('no paired device with that id'),
+    })
+  })
+
+  it.each([500, 503])('status %i reads as itself — thrown with core’s own reason, never not_known_yet (K10)', async status => {
+    stubStatus(status, JSON.stringify({ error: `core said ${status}` }))
+    const err: unknown = await updateDevice('d-1').then(
+      v => v,
+      e => e,
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(status)
+    expect((err as ApiError).message).toContain(`core said ${status}`)
+  })
+
+  it('a real answer passes through verbatim, including in_flight (K9), to the fixed path, as a POST', async () => {
+    const body = { outcome: 'sent', version: 'abcdef123456', from_version: '111111111111', reason: null, needs_card: false, in_flight: 2 }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+    expect(await updateDevice('d 1')).toEqual(body)
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/v1/devices/d%201/update')
+    expect(init.method).toBe('POST')
   })
 })
 

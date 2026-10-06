@@ -16,6 +16,7 @@ read back only for reporting.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import json
 import uuid
@@ -25,7 +26,7 @@ import anyio
 import asyncpg
 import pytest
 
-from app import chat, machines, tools
+from app import chat, devices_ws, machines, scheduler, tools
 from app.evals import cases as cases_mod
 from app.evals import runner
 from app.evals.cases import (
@@ -1557,6 +1558,224 @@ async def test_the_fixture_code_can_never_enroll():
     assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
 
 
+async def test_the_fixture_mint_takes_a_repair_cards_keywords():
+    """S42b (Task 19): the seam is called (person, device_id=...) — a re-pair
+    card inside a case gets the fixture's code too, which can enroll nothing."""
+    minted = await runner._fixture_mint(None, device_id=uuid.uuid4())
+    from app import devices
+
+    assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
+
+
+# -- S42b fix round 1: a machine card in a replay reads nothing real ---------
+
+REPLAY_ORIGIN = "https://nova.fake-tailnet.ts.net"
+
+
+def _tailnet_status(tmp_path, monkeypatch) -> None:
+    status = tmp_path / "tailscale.json"
+    status.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "backend_state": "Running",
+                "dns_name": "nova.fake-tailnet.ts.net",
+                "serve_ok": True,
+                "https_cert": True,
+                "written_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+    )
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(status))
+
+
+def _card_case(*declared: FixtureDevice, cid: str) -> Case:
+    return Case(
+        id=cid,
+        suite="corpus",
+        suite_version=1,
+        message="add my machine",
+        contract=(PredicateSpec("tool_called", "show_setup_qr"),),
+        devices=tuple(declared),
+    )
+
+
+def _card_turn(arguments: dict) -> ScriptedGateway:
+    return ScriptedGateway(
+        rounds=(
+            (_call("show_setup_qr", "c1", arguments),),
+            (text("The card is in the chat."),),
+        )
+    )
+
+
+def _show_setup_qr_recorded(monkeypatch) -> list[dict]:
+    """show_setup_qr — its real schema and its REAL executor — run inside the
+    replayed turn, with what it sent, said or refused recorded, and the pairing
+    seam's keywords. While it runs, a read of the real devices table or of the
+    hub's real build is an alarm: a replay's card reads neither."""
+    from app import agent_dist, devices
+    from app.tools import setup as setup_tools
+
+    seen: list[dict] = []
+    inside = [False]
+
+    def alarm(module, name: str, what: str) -> None:
+        real = getattr(module, name)
+
+        async def guarded(*args, **kwargs):
+            if inside[0]:
+                raise AssertionError(f"a replay's machine card read {what}")
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, guarded)
+
+    alarm(devices, "rows_with_last_update", "the real devices table")
+    alarm(devices, "get_live_by_name", "the real devices table")
+    alarm(agent_dist, "read", "the hub's real agent build")
+
+    live = tools.REGISTRY["show_setup_qr"]
+
+    async def recording(args: dict, ctx: ToolContext) -> str:
+        cards: list = []
+        minted: list = []
+        mint = setup_tools.PAIRING.get()
+
+        async def seeing_mint(person, **kw) -> dict:
+            minted.append(kw)
+            return await mint(person, **kw)
+
+        token = setup_tools.PAIRING.set(seeing_mint)
+        inside[0] = True
+        try:
+            said = await setup_tools.show_setup_qr(
+                args, dataclasses.replace(ctx, card=cards.append)
+            )
+        except Exception as exc:
+            seen.append({"refused": str(exc), "cards": cards, "minted": minted})
+            raise
+        finally:
+            inside[0] = False
+            setup_tools.PAIRING.reset(token)
+        seen.append({"said": said, "cards": cards, "minted": minted, "mint": mint})
+        return said
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "show_setup_qr",
+        Tool(live.name, live.description, live.parameters, recording),
+    )
+    return seen
+
+
+async def test_a_replays_machine_card_needs_no_build_on_the_hub(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(a) A case's machine card is built from the replay's own build —
+    machines.FIXTURE_HUB_VERSION, the build its agents are compared with
+    (F11) — so a hub with no /dist at all still makes the case's card, and
+    the hub's real build is never read (an alarm here)."""
+    from app import agent_card, agent_dist
+
+    _tailnet_status(tmp_path, monkeypatch)
+    monkeypatch.setenv(agent_dist.DIST_DIR_ENV, str(tmp_path / "no-dist"))
+    seen = _show_setup_qr_recorded(monkeypatch)
+    mount_peers(gateway=_card_turn({"setup": "add_machine"}), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _card_case(cid="replay-card"), MODEL)
+
+    assert run.ungradeable is False, run.detail
+    [call] = seen
+    assert "said" in call, call
+    [card] = call["cards"]
+    fixture = await runner._fixture_build()
+    assert fixture.version == machines.FIXTURE_HUB_VERSION == card["version"]
+    assert card["code"] == "0000-0000" and call["mint"] is runner._fixture_mint
+    assert card["commands"] == agent_card.commands(fixture, origin=REPLAY_ORIGIN, code="0000-0000")
+
+
+async def test_a_replay_repairs_a_machine_the_case_declares(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(b) A re-pair card inside a replay resolves the machine through
+    machines.plant() — the case's declared device — reads no real row, and
+    binds nothing (the fixture's code, no device id)."""
+    _tailnet_status(tmp_path, monkeypatch)
+    seen = _show_setup_qr_recorded(monkeypatch)
+    case = _card_case(
+        FixtureDevice(name="eval_office_pc", platform="windows", hostname="OFFICE-PC"),
+        cid="replay-repair",
+    )
+    mount_peers(
+        gateway=_card_turn({"setup": "add_machine", "machine": "eval_office_pc"}),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is False, run.detail
+    [call] = seen
+    assert "said" in call, call
+    [card] = call["cards"]
+    assert card["machine"] == "eval_office_pc" and card["for_os"] == "windows"
+    assert card["version"] == machines.FIXTURE_HUB_VERSION
+    assert "re-pairs eval_office_pc" in call["said"]
+    assert call["minted"] == [{"device_id": None}]
+
+
+async def test_a_replays_refusal_never_names_a_real_machine(
+    pool, mount_peers, monkeypatch, tmp_path
+):
+    """(c) A real paired machine is not in a replay's world: asked for a
+    machine the case does not declare, the refusal lists the case's devices
+    alone — and the real machine itself cannot be re-paired from a replay."""
+    from tests.test_devices_ws import _enroll
+
+    _tailnet_status(tmp_path, monkeypatch)
+    await _enroll(pool, name="OFFICE-PC", platform="windows")
+    seen = _show_setup_qr_recorded(monkeypatch)
+    case = _card_case(
+        FixtureDevice(name="eval_travel_macbook", platform="darwin", hostname="TRAVEL-MACBOOK"),
+        cid="replay-refusal",
+    )
+    for asked in ("nope", "OFFICE-PC"):
+        mount_peers(
+            gateway=_card_turn({"setup": "add_machine", "machine": asked}),
+            memory=FakeMemory(),
+        )
+        run = await runner.run_case(app, pool, case, MODEL)
+        assert run.ungradeable is False, run.detail
+
+    nope, real = seen
+    for call in (nope, real):
+        assert call["cards"] == [] and call["minted"] == [], call
+        _, listing = call["refused"].split(" — ", 1)
+        assert listing.startswith("the paired machines are: eval_travel_macbook;"), call
+        assert "OFFICE-PC" not in listing
+    assert "OFFICE-PC" not in nope["refused"]
+
+
+async def test_every_case_reads_the_fixture_build_and_leaves_the_seam_as_it_was(
+    pool, mount_peers, monkeypatch
+):
+    """The build seam, beside the pairing seam: inside a case's turn it is
+    the fixture; after the case it is what it was before."""
+    from app.tools import setup as setup_tools
+
+    before = setup_tools.BUILD.get()
+    seen: list = []
+
+    async def peek(args: dict, ctx: ToolContext) -> str:
+        seen.append(setup_tools.BUILD.get())
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, peek)
+    mount_peers(gateway=_time_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _machine_case(), MODEL)
+
+    assert run.passed is True, run.detail
+    assert seen == [runner._fixture_build]
+    assert setup_tools.BUILD.get() is before
+
+
 async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monkeypatch):
     """A suite replays a case every run, and the repeated report reads
     several runs: a switch-off made in one replay must not be the world the
@@ -1587,7 +1806,7 @@ async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monke
 async def test_a_plant_that_cannot_be_built_is_ungradeable_and_leaves_none(
     pool, mount_peers, monkeypatch
 ):
-    def _broken(fixtures, devices=None):
+    def _broken(fixtures, devices=None, updates=None):
         raise RuntimeError("the plant would not build")
 
     monkeypatch.setattr(runner.machines, "FixturePlant", _broken)
@@ -1699,3 +1918,360 @@ async def test_the_fixture_plant_answers_for_a_cases_declared_devices(monkeypatc
         assert agent["name"] == "eval_pc" and agent["wsl"] == "Ubuntu-26.04"
     finally:
         machines.PLANT.reset(token)
+
+
+# -- S42b Task 24: a case device declares what machine_update answers --------
+
+
+def _device_case(*devices: dict) -> Case:
+    return cases_mod.case_from_dict(
+        {
+            "id": "d",
+            "suite": "s",
+            "suite_version": 1,
+            "message": "m",
+            "contract": [{"predicate": "tool_called", "arg": "machine_update"}],
+            "devices": list(devices),
+        }
+    )
+
+
+def test_a_case_device_declares_its_update_and_round_trips():
+    raw = {"name": "eval_laptop", "platform": "linux", "hostname": "EVAL-LAPTOP", "update": "sent"}
+    case = _device_case(raw)
+    [device] = case.devices
+    assert device.update == "sent"
+    assert case.as_json()["devices"] == [{**raw, "connected": True}]
+    # A device that declares none carries none, and its json says nothing.
+    [plain] = _device_case({"name": "eval_pc", "platform": "linux", "hostname": "PC"}).devices
+    assert plain.update is None and "update" not in plain.as_json()
+
+
+def test_a_case_devices_update_is_one_the_replays_plant_answers():
+    """One set, the plant's (machines.FIXTURE_UPDATE_OUTCOMES): every outcome
+    machine_update has words for loads, and nothing else does — not a cannot
+    (a cannot is a reason, and a declaration carries none), and not the
+    agent's own report of its update (device_facts.UPDATE_OUTCOMES, a
+    different set that shares the name UPDATE_OUTCOMES), refused at LOAD."""
+    for outcome in machines.FIXTURE_UPDATE_OUTCOMES:
+        [device] = _device_case(
+            {"name": "eval_laptop", "platform": "linux", "hostname": "L", "update": outcome}
+        ).devices
+        assert device.update == outcome
+    from app import device_facts
+
+    for wrong in ("cannot", "applied", *device_facts.UPDATE_OUTCOMES, "Sent", ""):
+        if wrong in machines.FIXTURE_UPDATE_OUTCOMES:
+            continue
+        with pytest.raises(CaseError, match="update must be one of"):
+            _device_case(
+                {"name": "eval_laptop", "platform": "linux", "hostname": "L", "update": wrong}
+            )
+    with pytest.raises(CaseError, match="update must be text"):
+        _device_case({"name": "eval_laptop", "platform": "linux", "hostname": "L", "update": True})
+
+
+async def test_the_overlay_hands_the_plant_each_declared_update():
+    """runner._install_fixture_plant passes each declared outcome to the plant:
+    machine_update answers it for that device — "sent" for one that declares
+    none — and nothing is sent anywhere."""
+    case = _device_case(
+        {"name": "eval_laptop", "platform": "linux", "hostname": "L", "update": "confirmed"},
+        {"name": "eval_pc", "platform": "linux", "hostname": "P"},
+    )
+    token = runner._install_fixture_plant(case)
+    try:
+        laptop = await machines.plant().update_agent(None, "eval_laptop", requested_by="nova")
+        pc = await machines.plant().update_agent(None, "eval_pc", requested_by="nova")
+    finally:
+        machines.PLANT.reset(token)
+    assert (laptop["outcome"], pc["outcome"]) == ("confirmed", "sent")
+    assert laptop["version"] == machines.FIXTURE_HUB_VERSION
+
+
+# -- S42b Task 24: no timer a replay sets can ever fire on the real system --
+
+
+def _timer_case() -> Case:
+    return Case(
+        id="sets-one-of-each-timer",
+        suite="corpus",
+        suite_version=1,
+        message="remind me to stretch on my laptop, remind me to drink water, check the news",
+        contract=(PredicateSpec("tool_succeeded", "create_timer"),),
+        devices=(FixtureDevice(name="eval_laptop", platform="linux", hostname="EVAL-LAPTOP"),),
+    )
+
+
+def _timers_turn() -> ScriptedGateway:
+    """One timer of each kind, each due in a minute — the soonest create_timer
+    takes: a reminder for the case's device, a reminder for every device, and
+    a scheduled turn."""
+    calls = (
+        {"text": "stretch", "in_minutes": 1, "device": "eval_laptop"},
+        {"text": "drink water", "in_minutes": 1},
+        {"text": "check the news", "kind": "scheduled", "in_minutes": 1},
+    )
+    return ScriptedGateway(
+        rounds=(
+            *((_call("create_timer", f"c{i}", args),) for i, args in enumerate(calls, start=1)),
+            (text("All three are set."),),
+        )
+    )
+
+
+def _the_real_reach(monkeypatch) -> list[str]:
+    """Everything a firing reaches on the real system, each made an alarm that
+    records it was touched and then raises: the hub (a command to an agent,
+    whether one is connected, the connected set a reminder with no device
+    notifies), the tool runner a reminder's device_notify goes through, and
+    a whole turn."""
+    touched: list[str] = []
+
+    def alarm(what: str, *, is_async: bool):
+        def sync(*args, **kwargs):
+            touched.append(what)
+            raise AssertionError(f"a replay's timer reached {what}")
+
+        async def coroutine(*args, **kwargs):
+            return sync()
+
+        return coroutine if is_async else sync
+
+    monkeypatch.setattr(devices_ws.Hub, "command", alarm("an agent", is_async=True))
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", alarm("a connection", is_async=False))
+    monkeypatch.setattr(
+        devices_ws.Hub, "connected_ids", alarm("every connected device", is_async=False)
+    )
+    monkeypatch.setattr(chat, "_run_tool", alarm("device_notify", is_async=True))
+    monkeypatch.setattr(chat, "_run_turn", alarm("a whole turn", is_async=True))
+    return touched
+
+
+async def test_no_timer_a_replay_sets_ever_fires_on_the_real_system(pool, mount_peers, monkeypatch):
+    """SAFETY (S42b Task 24). Inside a replay she sets a reminder for the
+    case's device, a reminder for every device and a scheduled turn, each due
+    in a minute — and the case's teardown never runs (a killed process; or
+    the minute passing before the case ends, which is the same rows, live).
+    Then the REAL scheduler ticks past all three, outside the replay as its
+    own task does, with the hub, the tool runner and the turn path made
+    alarms: nothing is notified, no turn runs, no firing exists.
+
+    The control renames their owner so it is no longer an eval person (the
+    scratch prefix dropped) and ticks again: each alarm is reached — so the
+    alarms were reachable, and it is the eval person, and only that, that
+    keeps the rows still."""
+
+    async def no_teardown(app, pool, person, ingest_date_before, turn):
+        return []
+
+    monkeypatch.setattr(runner, "_cleanup_scratch_person", no_teardown)
+    mount_peers(gateway=_timers_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _timer_case(), MODEL)
+    assert run.ungradeable is False and run.passed is True, run.detail
+
+    rows = await pool.fetch(
+        "SELECT t.kind, t.payload, p.id AS person_id, p.name FROM timers t "
+        "JOIN people p ON p.id = t.person_id ORDER BY t.created_at"
+    )
+    assert [(r["kind"], r["payload"].get("device")) for r in rows] == [
+        ("reminder", "eval_laptop"),
+        ("reminder", None),
+        ("scheduled", None),
+    ]
+    (scratch,) = {(r["person_id"], r["name"]) for r in rows}
+    assert scratch[1].startswith(runner.SCRATCH_PERSON_NAME)
+
+    touched = _the_real_reach(monkeypatch)
+    past_them_all = await pool.fetchval("SELECT now() + interval '1 day'")
+    assert await scheduler.tick_once(app, pool, now=past_them_all) == []
+    assert touched == []
+    assert await pool.fetchval("SELECT count(*) FROM timer_firings") == 0
+
+    # The control. A scheduled turn with no chat model is refused before any
+    # turn runs, so the model is set for it — the eval person is the only
+    # difference left.
+    await pool.execute("UPDATE people SET name = 'not-an-eval' WHERE id = $1", scratch[0])
+    await pool.execute("INSERT INTO settings (key, value) VALUES ('chat.model', $1::jsonb)", MODEL)
+    fired = await scheduler.tick_once(app, pool, now=past_them_all)
+    assert len(fired) == 3
+    assert sorted(touched) == ["a whole turn", "device_notify", "every connected device"]
+
+
+# -- S42b Task 24: a replay's paired names are its declared devices ---------
+
+
+def _registry_alarm(monkeypatch) -> list[str]:
+    """Every read of the real device registry, made an alarm that records it
+    was touched and then raises: a replay's world holds its declared devices
+    alone, so its turn reads none of these."""
+    from app import devices
+
+    touched: list[str] = []
+
+    def alarm(name: str):
+        async def read(*args, **kwargs):
+            touched.append(name)
+            raise AssertionError(f"an eval replay read the real device registry ({name})")
+
+        return read
+
+    for name in (
+        "list_devices",
+        "rows_with_last_update",
+        "get_live_by_name",
+        "get_live",
+        "get",
+        "revoked_knocks",
+        # The said-not-done grouping (Task 32, MF5): read through the plant,
+        # never the owner's rows, inside a replay.
+        "live_machines",
+    ):
+        monkeypatch.setattr(devices, name, alarm(name))
+    return touched
+
+
+def _update_turn(machine: str, reply: str) -> ScriptedGateway:
+    return ScriptedGateway(
+        rounds=((_call("machine_update", "c1", {"machine": machine}),), (text(reply),))
+    )
+
+
+async def _guard_meta(pool, run, name: str) -> dict | None:
+    return await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'guard' AND name = $2",
+        run.turn_id,
+        name,
+    )
+
+
+async def test_a_replays_update_claim_names_and_is_backed_by_its_declared_devices(
+    pool, mount_peers, monkeypatch
+):
+    """The update claim's machine is one of the replay's paired names — its
+    declared devices, read through the plant — never the real registry's
+    (Task 23's name slot; the Task 24 carry). eval_laptop's update is
+    declared confirmed:
+
+      * "I updated eval_laptop's agent." names eval_laptop, and the turn's
+        confirmed update of eval_laptop backs it;
+      * "I updated eval_pc's agent." names eval_pc — declared, never updated
+        — and is corrected FOR eval_pc. Read against the real registry's
+        names (none of them eval_pc), it named no machine, and this turn's
+        confirmed update of eval_laptop backed it: a false claim scored clean.
+
+    The real registry is never read during either replay."""
+    touched = _registry_alarm(monkeypatch)
+    case = Case(
+        id="replay-update-names",
+        suite="corpus",
+        suite_version=1,
+        message="update the agents on my machines now",
+        contract=(PredicateSpec("guard_absent", "narration"),),
+        devices=(
+            FixtureDevice(name="eval_laptop", platform="linux", hostname="L", update="confirmed"),
+            FixtureDevice(name="eval_pc", platform="linux", hostname="P"),
+        ),
+    )
+
+    mount_peers(
+        gateway=_update_turn("eval_laptop", "I updated eval_laptop's agent."), memory=FakeMemory()
+    )
+    backed = await runner.run_case(app, pool, case, MODEL)
+    assert backed.ungradeable is False and backed.passed is True, backed.detail
+
+    mount_peers(
+        gateway=_update_turn("eval_laptop", "I updated eval_pc's agent."), memory=FakeMemory()
+    )
+    named = await runner.run_case(app, pool, case, MODEL)
+    assert named.ungradeable is False and named.passed is False, named.detail
+    meta = await _guard_meta(pool, named, "narration")
+    assert meta["claims"] == [{"kind": "updated_machine", "target": "eval_pc"}]
+    assert "a machine named eval_pc" in named.detail["reply"]
+    assert touched == []
+
+
+async def test_a_replays_state_guard_reads_its_declared_devices_never_the_real_ones(
+    pool, mount_peers
+):
+    """The state guard's paired names in a replay are its declared devices
+    (the Task 24 carry): an unchecked "eval_laptop is offline" is a claim
+    about a paired machine of the replay's world, and fires; the same claim
+    about a machine paired on the real hub names nothing in that world, and
+    is silent. Read against the real registry it was the other way round."""
+    await pool.execute(
+        "INSERT INTO devices (name, platform, hostname, pubkey) VALUES ($1, 'linux', $1, $2)",
+        "realpc",
+        "b" * 64,
+    )
+    case = Case(
+        id="replay-state-names",
+        suite="corpus",
+        suite_version=1,
+        message="is my laptop up?",
+        contract=(PredicateSpec("guard_absent", "state_claim"),),
+        devices=(FixtureDevice(name="eval_laptop", platform="linux", hostname="L"),),
+    )
+    runs = {}
+    for name in ("eval_laptop", "realpc"):
+        mount_peers(
+            gateway=ScriptedGateway(rounds=((text(f"{name} is offline right now."),),)),
+            memory=FakeMemory(),
+        )
+        runs[name] = await runner.run_case(app, pool, case, MODEL)
+        assert runs[name].ungradeable is False, runs[name].detail
+    assert runs["eval_laptop"].passed is False
+    assert (await _guard_meta(pool, runs["eval_laptop"], "state_claim"))["detected"] is True
+    assert runs["realpc"].passed is True, runs["realpc"].detail
+
+
+# -- Task 32, MF5: a replay's device claim reads its own machine grouping -----
+
+
+async def test_a_replays_device_claim_never_reads_the_real_machine_grouping(pool, mount_peers):
+    """Two REAL rows, eval_pc and eval_box, report one machine; the case
+    declares two devices of the same names, neither on any machine. She
+    launches Notepad on eval_box — refused: a replay sends nothing — and says
+    it is open on eval_pc. Read through the plant, the replay's grouping
+    cannot tie eval_box to eval_pc, so the claim is silent, as for any device
+    whose machine cannot be read (fix round 4, R5). Read from the real rows,
+    eval_box's failed launch was on eval_pc's machine, and the turn got
+    "(device_launch_app failed: …)": a scored verdict hung on the owner's
+    registry."""
+    for name, key in (("eval_pc", "c" * 64), ("eval_box", "e" * 64)):
+        await pool.execute(
+            "INSERT INTO devices (name, platform, hostname, pubkey, facts, facts_at) "
+            "VALUES ($1, 'windows', $1, $2, $3, now())",
+            name,
+            key,
+            {"v": 2, "agent": {"version": "0.2.0", "mode": "foreground"}, "machine_uid": "d" * 64},
+        )
+    case = Case(
+        id="replay-device-grouping",
+        suite="corpus",
+        suite_version=1,
+        message="open notepad on eval_pc",
+        contract=(PredicateSpec("guard_absent", "device_completion"),),
+        devices=(
+            FixtureDevice(name="eval_pc", platform="windows", hostname="P"),
+            FixtureDevice(name="eval_box", platform="windows", hostname="B"),
+        ),
+    )
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (_call("device_launch_app", "c1", {"device": "eval_box", "app": "notepad"}),),
+                (text("Notepad is now open on your eval_pc."),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False and run.passed is True, run.detail
+    assert await _guard_meta(pool, run, "device_completion") is None
+    launch = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'tool' AND name = $2",
+        run.turn_id,
+        "device_launch_app",
+    )
+    assert launch is not None and launch["meta"]["ok"] is False  # refused: nothing was sent

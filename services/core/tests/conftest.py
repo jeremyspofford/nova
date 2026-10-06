@@ -52,6 +52,8 @@ _TABLES = (
     # timers. agents ↔ turns reference each other (turns.agent_id and
     # agents.created_turn_id), so no order satisfies both — the CASCADE on
     # the DROP and on the TRUNCATE is what makes the cycle a non-issue.
+    # S42b: agent_updates references devices, so it drops ahead of it.
+    "agent_updates",
     "agents",
     "device_audit",
     "devices",
@@ -124,16 +126,29 @@ async def pool(monkeypatch):
         await db.close_pool()
 
 
+@pytest.fixture(autouse=True)
+def _no_agent_build_unless_laid_out(tmp_path_factory, monkeypatch):
+    """Every test reads an EMPTY agent-dist directory unless it lays a build
+    out itself (test_agent_dist's `dist` fixture sets its own): unset, the
+    reader falls back to agent_dist.DEFAULT_DIST_DIR, the host's /dist, and a
+    listing test's verdict on "the hub's build" would be whatever build that
+    host happens to hold (Task 32, L376)."""
+    from app import agent_dist
+
+    monkeypatch.setenv(agent_dist.DIST_DIR_ENV, str(tmp_path_factory.mktemp("no-agent-build")))
+
+
 @pytest.fixture
 async def client(pool, monkeypatch):
     """ASGI client with the service bearer configured (the normal state)."""
     monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
-    from app import auth_api, devices_api
+    from app import agent_dist_api, auth_api, devices_api
 
-    # Both limiters are process-global by design (one household, one process),
+    # The limiters are process-global by design (one household, one process),
     # so a test that trips one would otherwise lock the next test out.
     auth_api._LOGIN_FAILURES.clear()
     devices_api._ENROLL_FAILURES.clear()
+    agent_dist_api._HITS.clear()
     async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as c:
         yield c
 

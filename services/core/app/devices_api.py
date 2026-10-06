@@ -1,4 +1,4 @@
-"""/api/v1/devices — mint a pairing code, enroll a machine, rename or revoke it.
+"""/api/v1/devices — mint a pairing code, enroll a machine, re-pair, rename or revoke it.
 
 Every route here is authenticated the way the rest of core is
 (identity.require_person — a session cookie or the service bearer) with ONE
@@ -11,15 +11,46 @@ Two consequences of that exception are handled here rather than assumed:
 
   * /pairing-code stays authed. Minting a code is the authorisation for an
     entire machine, so if that route were public, enrollment being public would
-    stop meaning anything.
-  * /enroll is rate-limited per address, copying auth_api's login limiter
+    stop meaning anything. /{id}/repair-code is authed for the same reason: its
+    code hands that machine's whole identity to whoever enrolls with it.
+  * /enroll is rate-limited per caller, copying auth_api's login limiter
     (5 failures / 15 minutes / 429). Only the CODE refusal counts as a failure
     — a name collision is an operator typing the same name twice, not somebody
     guessing, and locking them out for it would be a bug wearing a security
-    costume. Behind the :3000 nginx origin every request arrives from one
-    address, so the limiter degrades to a global one. That is stricter, not
-    weaker, and it is why X-Forwarded-For is NOT trusted here: a header the
-    caller sets is a bypass, not an identity.
+    costume. The caller is network.bucket_of's, the key the agent downloads
+    are counted by (S42b Task 26). Behind the :3000 nginx origin every
+    request's TCP peer is web, so the peer alone would be ONE bucket for
+    everyone — and since S42b carved enroll out of the gate, a stranger on
+    the owner's tunnel sending five bad codes every fifteen minutes would
+    keep pairing locked for every machine on every door. bucket_of reads the
+    door instead (nginx's X-Real-IP, believed only from web's fixed address)
+    and counts a visitor who came through a relay apart: that stranger still
+    gets 5 failures per 15 minutes, in the relayed bucket only, and the hub's
+    own loopback and the tailnet keep buckets of their own. A code is 8
+    characters from a 31-letter alphabet, so a handful of buckets times 5
+    tries is nothing. X-Forwarded-For is still never believed: nginx appends
+    to whatever the caller sent, so all but its last entry are the caller's
+    own words — a header the caller sets is a bypass, not an identity.
+
+    An attempt is counted in its bucket BEFORE the handler awaits anything
+    (Task 26 fix round 1, I1): checked, awaited and only then recorded, a
+    burst of fifty wrong codes from one bucket was all checked at once. So
+    the bound is five counted at a time — failures and attempts still in
+    flight — and the sixth gets 429. A wrong code (403) keeps its count as
+    the failure; a good code clears the bucket; anything else — a shape or
+    name refusal, a crash, a cancelled request — takes back exactly its own
+    count.
+
+    What a lock costs, for the relayed buckets especially: a bucket at five
+    is a refusal to pair from that door for up to 15 minutes, and anyone in
+    the same bucket can renew it — not only a shared budget. A stranger on
+    the owner's tunnel shares the tunnel's relayed bucket, and so does the
+    owner when he pairs through the tunnel; his way round is the tailnet or
+    the hub machine itself, whose buckets the stranger cannot reach. The
+    sidecar's relayed bucket holds funnel visitors and tagged tailnet nodes,
+    but deploy/tailscale/start.sh turns funnel OFF on every restart, so
+    unless the owner turns it on again only his own tagged nodes share that
+    bucket, and no stranger can renew a lock there.
 
 There is no grants route. v4 makes no authorization decisions (owner ruling
 2026-09-03): a paired device runs whatever core signs, so the only things an
@@ -29,16 +60,18 @@ Handlers do nothing devices.py does not already do. Refusals are its
 DeviceRefused, re-stated with the status it chose, so the reason the operator
 reads is the reason the database enforced.
 """
+
 from __future__ import annotations
 
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import db, devices, identity
+from app import agent_dist, db, devices, identity, network
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -47,10 +80,21 @@ logger = logging.getLogger("core")
 MAX_ENROLL_FAILURES = 5
 ENROLL_WINDOW_SECONDS = 15 * 60
 
-# Per-address failure timestamps. In-memory like auth_api's, and for the same
-# reason: one process, one household, and a restart clearing the window is
-# acceptable for a route an operator uses a handful of times a year.
-_ENROLL_FAILURES: dict[str, list[float]] = {}
+
+@dataclass(eq=False)
+class _Attempt:
+    """One enroll attempt counted in its bucket: an attempt in flight, or —
+    once its code was wrong — a failure. Compared by identity, so the one an
+    ending request takes back is exactly its own."""
+
+    at: float
+
+
+# The attempts counted per bucket (_caller): failures and attempts in flight,
+# ONE structure (fix round 1, I1). In-memory like auth_api's, and for the
+# same reason: one process, one household, and a restart clearing the window
+# is acceptable for a route an operator uses a handful of times a year.
+_ENROLL_FAILURES: dict[str, list[_Attempt]] = {}
 
 
 class EnrollBody(BaseModel):
@@ -69,20 +113,53 @@ class RenameBody(BaseModel):
 
 
 def _caller(request: Request) -> str:
-    """The address a failure is counted against. `request.client` can be absent
-    under some ASGI servers; unknown callers share one bucket rather than
-    getting an unmetered one."""
-    return request.client.host if request.client else "unknown"
+    """The bucket a failure is counted in: network.bucket_of's — the door,
+    with a visitor through a relay counted apart (module docstring).
+    `request.client` can be absent under some ASGI servers; unknown callers
+    share one bucket rather than getting an unmetered one."""
+    peer = request.client.host if request.client else None
+    return network.bucket_of(peer, request.headers)
 
 
-def _recent_failures(caller: str) -> list[float]:
+def _recent_failures(caller: str) -> list[_Attempt]:
+    """What `caller`'s bucket counts now: its failures and attempts in flight
+    inside the window, the older ones dropped."""
     cutoff = time.monotonic() - ENROLL_WINDOW_SECONDS
-    recent = [t for t in _ENROLL_FAILURES.get(caller, []) if t > cutoff]
+    recent = [a for a in _ENROLL_FAILURES.get(caller, []) if a.at > cutoff]
     if recent:
         _ENROLL_FAILURES[caller] = recent
     else:
         _ENROLL_FAILURES.pop(caller, None)
     return recent
+
+
+def _reserve(caller: str) -> _Attempt | None:
+    """Count this attempt in `caller`'s bucket now — or None when the bucket
+    already counts MAX_ENROLL_FAILURES. No await runs between the check and
+    the count, so no other request can be checked in between."""
+    if len(_recent_failures(caller)) >= MAX_ENROLL_FAILURES:
+        return None
+    attempt = _Attempt(time.monotonic())
+    _ENROLL_FAILURES.setdefault(caller, []).append(attempt)
+    return attempt
+
+
+def _keep(caller: str, attempt: _Attempt) -> None:
+    """A wrong code: the attempt stays counted, as the failure. Counted again
+    if a good code cleared the bucket while this one was in flight — the
+    failure came after the clear."""
+    bucket = _ENROLL_FAILURES.setdefault(caller, [])
+    if attempt not in bucket:
+        bucket.append(attempt)
+
+
+def _release(caller: str, attempt: _Attempt) -> None:
+    """Any other end: take back exactly this attempt's count."""
+    bucket = _ENROLL_FAILURES.get(caller)
+    if bucket is not None and attempt in bucket:
+        bucket.remove(attempt)
+        if not bucket:
+            del _ENROLL_FAILURES[caller]
 
 
 def _refuse(exc: devices.DeviceRefused) -> HTTPException:
@@ -98,18 +175,37 @@ async def mint_pairing_code(person: Person = Depends(identity.require_person)) -
     return await devices.mint_pairing_code(pool, created_by=person.id)
 
 
+@router.post("/{device_id}/repair-code")
+async def mint_repair_code(
+    device_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """A re-pair code for ONE machine (decision 4): single use, ten minutes,
+    shown once. The machine's command keeps a pairing Nova still knows and
+    leaves the code unused; it rebinds the row only when the old pairing is
+    gone."""
+    pool = await db.get_pool()
+    try:
+        minted = await devices.mint_pairing_code(pool, created_by=person.id, device_id=device_id)
+    except devices.DeviceRefused as exc:
+        raise _refuse(exc) from exc
+    return {**minted, "device": devices.device_spec(await devices.get(pool, device_id))}
+
+
 @router.post("/enroll")
 async def enroll(request: Request, body: EnrollBody) -> dict:
     """The one unauthenticated write in core (identity.PUBLIC_PATHS)."""
     caller = _caller(request)
-    if len(_recent_failures(caller)) >= MAX_ENROLL_FAILURES:
+    # Counted BEFORE the first await (module docstring; fix round 1, I1).
+    attempt = _reserve(caller)
+    if attempt is None:
         raise HTTPException(
             status_code=429,
-            detail="too many failed enrollments from this address — try again in 15 minutes",
+            detail="too many failed enrollments came this way — try again in 15 minutes",
         )
 
-    pool = await db.get_pool()
+    wrong_code = False
     try:
+        pool = await db.get_pool()
         result = await devices.enroll(
             pool,
             code=body.code,
@@ -119,24 +215,74 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
             hostname=body.hostname,
         )
     except devices.DeviceRefused as exc:
-        if exc.status_code == 403:
-            # A bad code is the only refusal that looks like guessing. Shape
-            # errors are refused BEFORE the code is even read, so this cannot
-            # be walked around by sending junk.
-            _ENROLL_FAILURES.setdefault(caller, []).append(time.monotonic())
+        # A bad code is the only refusal that looks like guessing. Shape
+        # errors are refused BEFORE the code is even read, so this cannot be
+        # walked around by sending junk.
+        wrong_code = exc.status_code == 403
         raise _refuse(exc) from exc
+    finally:
+        # A crash and a cancelled request end here too: never a phantom
+        # failure left behind.
+        if wrong_code:
+            _keep(caller, attempt)
+        else:
+            _release(caller, attempt)
 
-    _ENROLL_FAILURES.pop(caller, None)
-    logger.info("device enrolled: %s (%s)", result["name"], result["device_id"])
+    _ENROLL_FAILURES.pop(caller, None)  # a good code clears its bucket
+    logger.info(
+        "device %s: %s (%s)",
+        "re-paired" if result["repaired"] else "enrolled",
+        result["name"],
+        result["device_id"],
+    )
+    if result["repaired"]:
+        # The old key's socket, if one is still open, speaks for a key the row
+        # no longer holds: drop it now (its reconnect then fails the challenge).
+        # One that was still authenticating finds the new key when serve
+        # re-reads the row after joining the hub, and drops itself.
+        from app import devices_ws
+
+        await devices_ws.hub.disconnect(uuid.UUID(result["device_id"]), "re-paired")
     return result
 
 
 @router.get("")
 async def list_devices(_person: Person = Depends(identity.require_person)) -> dict:
     """Revoked devices included, marked as such: a machine that was revoked is
-    part of what the operator needs to see, not something to hide."""
+    part of what the operator needs to see, not something to hide. Each
+    device's build is compared with the hub's (S42b) — "unknown" when the hub
+    has no build to read."""
     pool = await db.get_pool()
-    return {"devices": await devices.list_devices(pool)}
+    return {"devices": await devices.list_devices(pool, hub_version=await agent_dist.version())}
+
+
+@router.post("/{device_id}/update")
+async def update_device(
+    device_id: uuid.UUID, _person: Person = Depends(identity.require_person)
+) -> dict:
+    """The tile's Update: send the hub's build now (decision 2's "update it
+    now"). The answer says what happened — sent, or a cannot with its one
+    step — and never "updated": only the agent's reconnect says that.
+    `in_flight` is how many commands were running there when it was sent,
+    which the agent's restart ends "cancelled" (F15: a count — the hub keeps
+    futures, not capability names), so the tile can say so."""
+    # Imported here: agent_updates imports devices_ws, which the REST surface
+    # never depends on at load time (the revoke route's rule).
+    from app import agent_updates
+
+    pool = await db.get_pool()
+    row = await devices.get_live(pool, device_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no paired device with that id")
+    o = await agent_updates.update_now(pool, name=row["name"], requested_by="owner", wait_s=0)
+    return {
+        "outcome": o.outcome,
+        "version": o.version,
+        "from_version": o.from_version,
+        "reason": o.reason,
+        "needs_card": o.needs_card,
+        "in_flight": o.in_flight,
+    }
 
 
 @router.patch("/{device_id}")

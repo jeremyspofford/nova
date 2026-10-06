@@ -21,8 +21,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -33,6 +36,7 @@ import (
 	"novad/internal/config"
 	"novad/internal/facts"
 	"novad/internal/platform"
+	"novad/internal/state"
 	"novad/internal/wire"
 )
 
@@ -56,6 +60,29 @@ const (
 	FactsEvery  = 10 * time.Minute
 	FactsMinGap = time.Minute
 )
+
+// ProbeBudget bounds one run of the slow probes (P29); each program they
+// run has 10 s of its own. ProbeGrace is how long before ProbeBudget runs
+// out the probe's own programs are cut, so they answer "gave no answer in
+// time" with that much to spare before reprobe stops waiting on the probe.
+// ProbeMaxAge spares a flapping link: a reconnect within it keeps the last
+// probe instead of running sudo and wsl.exe again.
+const (
+	ProbeBudget = 45 * time.Second
+	ProbeGrace  = 2 * time.Second
+	ProbeMaxAge = 10 * time.Minute
+)
+
+// probeExec runs the probes' real programs (`sudo -n true`, wsl.exe), with a
+// WaitDelay: a grandchild holding wsl.exe's pipes cannot hold a finished or
+// killed call open. Each program is bounded besides, whatever its kill does
+// (platform.Elevation, platform.RunWSL).
+var probeExec = platform.Exec{WaitDelay: 2 * time.Second}
+
+// probeRunner runs the probes' programs for every agent Configure sets up. A
+// variable so this package's tests replace it before any of them runs: no
+// test runs the real programs (S42b Task 10b).
+var probeRunner platform.Runner = probeExec
 
 // defaultBackoffs is the reconnect ladder. It resets after every session
 // that authenticated (Run).
@@ -91,14 +118,49 @@ func (f fatal) Unwrap() error { return f.err }
 // exits 78 so no supervisor restarts a daemon that can never get in.
 var ErrRevoked = errors.New("core says this device was revoked")
 
+// ErrRestartForUpdate is Run's return after daemon.update staged a build:
+// main exits 75 and the supervisor swaps it in.
+var ErrRestartForUpdate = errors.New("a new build is staged; restarting into it")
+
 // Agent holds the pinned identity and the local capability + audit surfaces.
 type Agent struct {
 	cfg   config.Config
 	priv  ed25519.PrivateKey
 	audit *audit.Log
 	deps  caps.Deps
-	wsURL string
 	logf  func(string, ...any)
+
+	// locators are this device's ordered ways to reach its Nova (S42b):
+	// config.Config.Hubs() at construction. current is the index into
+	// locators this agent is connected through now, or last was —
+	// Server() reads it, and connectOnce starts its next attempt there so
+	// a reconnect after a session that worked tries the same address
+	// first.
+	locators []string
+	current  atomic.Int32
+
+	// opts are what main hands the agent beyond its identity (S42b).
+	opts Options
+
+	// restart and sessionCancel are daemon.update's way out of serve (P7):
+	// handleCommand sets restart once the update's result and audit frames
+	// are written, then cancels the live session through sessionCancel — the
+	// current serveCtx's own cancel, stored fresh by serve on every
+	// connection — so serve returns, connectOnce and Run's loop unwind, and
+	// Run returns ErrRestartForUpdate for main to exit 75 on.
+	restart       atomic.Bool
+	sessionCancel atomic.Pointer[context.CancelFunc]
+
+	// workers are the goroutines a session starts (serve): each command's
+	// handler, the connect probe's frame, heartbeat and watchdog — all but
+	// the probe's own goroutine, which writes nothing (reprobe). Run waits
+	// for every one before it returns, so a command stopped mid-run still
+	// writes its outcome to the audit log, and nothing the agent started
+	// writes after Run has returned — to the audit log, a staged build, a
+	// file a command was writing. Before, a handler could still be appending
+	// its audit entry as main exited (or, in PR #106's windows-11-arm run, as
+	// a test's TempDir cleanup removed the state dir under it).
+	workers sync.WaitGroup
 
 	// verifier is built ONCE and reused across every reconnect, so its one-use
 	// seen-set spans the envelope validity window (TTL + skew) rather than a
@@ -113,6 +175,17 @@ type Agent struct {
 	gatherAuth  func(context.Context) (facts.Auth, []facts.Unreadable)
 	gatherFrame func([]facts.Unreadable) facts.Frame
 	now         func() time.Time
+
+	// probe runs the slow probes (P29). nil — tests, and every verb but
+	// run — probes nothing. probed is the last result, and probing says a
+	// probe started at connect is still running; both guarded by factsMu.
+	// probeBudget and probeGrace are ProbeBudget and ProbeGrace, fields so
+	// a test runs them fast.
+	probe       func(context.Context) facts.Probed
+	probed      *facts.Probed
+	probing     bool
+	probeBudget time.Duration
+	probeGrace  time.Duration
 
 	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
 	// platform call with no timeout of its own (macOS ioreg) must not burn
@@ -149,9 +222,14 @@ type Agent struct {
 
 // New assembles an agent from loaded custody. logf may be nil.
 func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, version string, logf func(string, ...any)) (*Agent, error) {
-	wsURL, err := WSURL(cfg.Server)
-	if err != nil {
-		return nil, err
+	locators := cfg.Hubs()
+	if len(locators) == 0 {
+		return nil, errors.New("this enrolment names no server — pair it again")
+	}
+	for _, loc := range locators {
+		if _, err := WSURL(loc); err != nil {
+			return nil, err
+		}
 	}
 	// Pin the command verifier at construction. A bad core pubkey is a config
 	// fault surfaced here at startup, not a mystery mid-run — and the one
@@ -163,28 +241,92 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Agent{
-		cfg:      cfg,
-		priv:     priv,
-		audit:    log,
-		deps:     caps.Deps{Home: home},
-		wsURL:    wsURL,
-		logf:     logf,
-		verifier: verifier,
-		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
-			return facts.GatherAuth(ctx, platform.Exec{}, version)
-		},
+	a := &Agent{
+		cfg:              cfg,
+		priv:             priv,
+		audit:            log,
+		deps:             caps.Deps{Home: home},
+		locators:         locators,
+		logf:             logf,
+		verifier:         verifier,
 		gatherFrame:      facts.GatherFrame,
 		now:              time.Now,
 		authGatherBudget: 5 * time.Second,
+		probeBudget:      ProbeBudget,
+		probeGrace:       ProbeGrace,
 		heartbeatEvery:   HeartbeatInterval,
 		pingTimeout:      PingTimeout,
 		factsEvery:       FactsEvery,
 		factsMinGap:      FactsMinGap,
 		backoffs:         defaultBackoffs,
 		watchdogEvery:    WatchdogEvery,
-	}, nil
+	}
+	// Set after the Agent exists, so it can read update.json through
+	// a.lastUpdate() — the last outcome daemon.update or supervise recorded.
+	a.gatherAuth = func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+		last, uerr := a.lastUpdate()
+		auth, unread := facts.GatherAuth(ctx, platform.Exec{}, version, last)
+		if uerr != nil {
+			// Fix round 1, I3: update.json existing but unreadable is a real
+			// fact-gathering failure, not "no update to report" — say so
+			// rather than silently making the update fact disappear.
+			unread = append(unread, facts.Unreadable{Item: "agent.update", Reason: uerr.Error()})
+		}
+		return auth, unread
+	}
+	return a, nil
 }
+
+// lastUpdate is update.json's last outcome. It returns (nil, nil) when
+// there is nothing to report — no StateDir configured, or the file was
+// never written (fs.ErrNotExist) — and (nil, err) for any OTHER read error,
+// so the caller can say the fact was unreadable rather than silently omit
+// it (fix round 1, I3: the plan's original "return nil either way" swallowed
+// a real error, e.g. update.json present but corrupt).
+func (a *Agent) lastUpdate() (*state.Update, error) {
+	if a.opts.StateDir == "" {
+		return nil, nil
+	}
+	var u state.Update
+	switch err := state.ReadJSON(filepath.Join(a.opts.StateDir, state.UpdateFile), &u); {
+	case err == nil:
+		return &u, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	default:
+		return nil, err
+	}
+}
+
+// Options are what main hands an Agent beyond its identity (S42b): where its
+// local status lives, whether a supervisor started it, the binary it runs
+// as, its config file, and a callback for each change of connection state.
+type Options struct {
+	StateDir   string
+	Supervised bool
+	Binary     string
+	Config     string
+	OnState    func(state, server string, err error)
+}
+
+// Configure sets the options, and the probes (P29) that say how this agent
+// runs — through probeRunner, with the binary and config file given here.
+// Call it before Run.
+func (a *Agent) Configure(o Options) {
+	a.opts = o
+	self := facts.Self{Binary: o.Binary, Config: o.Config}
+	r := probeRunner
+	a.probe = func(ctx context.Context) facts.Probed { return facts.Probe(ctx, r, self) }
+}
+
+func (a *Agent) state(st, server string, err error) {
+	if a.opts.OnState != nil {
+		a.opts.OnState(st, server, err)
+	}
+}
+
+// Server is the locator this agent is connected through now (or last was).
+func (a *Agent) Server() string { return a.locators[int(a.current.Load())%len(a.locators)] }
 
 // WSURL derives the socket URL from the enrollment server URL: http->ws,
 // https->wss, path /api/v1/devices/ws.
@@ -209,11 +351,30 @@ func WSURL(server string) (string, error) {
 }
 
 // Run connects, serves, and reconnects with a capped backoff until ctx is done
-// or a fatal condition is hit (a changed core key; a revoked device).
+// or a fatal condition is hit (a changed core key; a revoked device). It
+// returns only once every worker its sessions started is done (a.workers):
+// leaving, however it leaves, ends them through runCtx and waits for each.
 func (a *Agent) Run(ctx context.Context) error {
+	runCtx, stop := context.WithCancel(ctx)
+	defer a.workers.Wait()
+	defer stop()
 	attempt := 0
 	for {
-		authed, err := a.connectOnce(ctx)
+		if a.restart.Load() {
+			// Fix round 1, I2: caught here too, before dialing again, when
+			// restart was flagged during the reconnect backoff between
+			// sessions — e.g. a now-dead session's daemon.update finishing
+			// its download only after sessionCancel had already moved on to
+			// naming a DIFFERENT (or no) session.
+			return ErrRestartForUpdate
+		}
+		authed, err := a.connectOnce(runCtx)
+		if a.restart.Load() {
+			// daemon.update staged a build and ended the session itself
+			// (handleCommand, via sessionCancel) only after its result and
+			// audit frames were written: leave for the swap now.
+			return ErrRestartForUpdate
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -224,6 +385,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		if err != nil {
 			a.logf("connection ended: %v", err)
+			a.state(state.StateConnecting, "", err)
 		}
 		if authed {
 			// A session that authenticated proves the path works, so the next
@@ -243,14 +405,65 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// connectOnce dials, authenticates and serves one session. It reports whether
-// the session authenticated (Run's backoff reset reads it), and why it ended.
+// connectOnce tries each locator in order, starting with the one that last
+// worked, and serves the first session that authenticates. A locator that
+// answers with another Nova's key is skipped while another remains — the
+// loopback of a machine the hub moved away from — and is fatal only when
+// every locator did (the pinned key, never a URL, is the identity).
 func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
+	n := len(a.locators)
+	start := int(a.current.Load())
+	var lastErr error
+	mismatches := 0
+	for i := 0; i < n; i++ {
+		idx := (start + i) % n
+		authed, err := a.sessionAt(ctx, idx)
+		if authed || ctx.Err() != nil {
+			return authed, err
+		}
+		var f fatal
+		var km *KeyMismatch
+		if errors.As(err, &f) && errors.As(f.err, &km) && n > 1 {
+			mismatches++
+			a.logf("%s answered with another Nova's key — trying the next address", a.locators[idx])
+			// Unwrapped: a mismatch skipped here while another locator
+			// remains must never itself look fatal to Run's own
+			// errors.As(err, &fatal{}) check (controller ruling, preflight
+			// F1) — only the "every locator mismatched" case below is.
+			lastErr = f.err
+			continue
+		}
+		if errors.As(err, &f) {
+			return false, err
+		}
+		a.logf("%s: %v", a.locators[idx], err)
+		lastErr = err
+	}
+	if n > 1 && mismatches == n {
+		return false, fatal{fmt.Errorf("none of this device's %d addresses is the Nova it paired with: %w", n, lastErr)}
+	}
+	return false, lastErr
+}
+
+// sessionAt dials locator idx, authenticates, and serves one session. It
+// reports whether the session authenticated (Run's backoff reset reads it),
+// and why it ended. current is stored right after the handshake succeeds —
+// before serve, which runs for the life of the connection — so Server()
+// names the locator this agent is actually connected through for the whole
+// live session, not just the one connectOnce started dialing (controller
+// ruling, preflight F1).
+func (a *Agent) sessionAt(ctx context.Context, idx int) (bool, error) {
+	loc := a.locators[idx]
+	wsURL, err := WSURL(loc)
+	if err != nil {
+		return false, err
+	}
+	a.state(state.StateConnecting, loc, nil)
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	c, _, err := websocket.Dial(dialCtx, a.wsURL, nil)
+	c, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	cancel()
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", a.wsURL, err)
+		return false, fmt.Errorf("dial %s: %w", wsURL, err)
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(wsReadLimit)
@@ -258,7 +471,9 @@ func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
 	if err := a.handshake(ctx, c); err != nil {
 		return false, err
 	}
+	a.current.Store(int32(idx))
 	a.logf("authenticated; serving")
+	a.state(state.StateReady, loc, nil)
 	return true, a.serve(ctx, c)
 }
 
@@ -282,8 +497,11 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	coreKey, _ := frame["core_pubkey"].(string)
 
 	// TOFU: a changed core key is a refuse-and-exit, not a silent re-trust.
+	// *KeyMismatch (not a plain error) lets connectOnce tell "this locator
+	// is not our Nova" apart from any other fatal reason: with more than
+	// one locator configured, this one is skipped rather than ending Run.
 	if coreKey != a.cfg.CorePubKey {
-		return fatal{fmt.Errorf("core presented key %s but we pinned %s at enrollment", short(coreKey), short(a.cfg.CorePubKey))}
+		return fatal{&KeyMismatch{Presented: coreKey, Pinned: a.cfg.CorePubKey}}
 	}
 
 	nonce, err := hex.DecodeString(nonceHex)
@@ -368,10 +586,22 @@ func (a *Agent) replayAudit(ctx context.Context, c *websocket.Conn, lastSeqField
 // serve runs the heartbeat writer and the single reader. Commands are handled
 // in their own goroutines so the reader stays responsive (coder/websocket
 // needs a live reader to handle control frames) and a slow command cannot
-// block the heartbeat.
+// block the heartbeat. Every goroutine it starts is one of a.workers, which
+// Run waits for before it returns.
 func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	a.sessionCancel.Store(&cancel)
+	if a.restart.Load() {
+		// Fix round 1, I2: a restart flagged by an earlier, now-dead
+		// session's late-finishing daemon.update must not be lost just
+		// because sessionCancel no longer names that session — this NEW
+		// session refuses to serve anything, not even the facts frame,
+		// rather than trusting a stored cancel func to still point at
+		// whichever session needs ending. Run's own restart checks are what
+		// actually end the process.
+		return ErrRestartForUpdate
+	}
 
 	// The facts frame follows ready at once (r2-integration): core records
 	// the slower facts before the first command could need them. writeFacts
@@ -382,9 +612,19 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	if err := a.sendFacts(serveCtx, c); err != nil {
 		a.logf("facts frame not sent: %v", err)
 	}
+	// P29: the slow probes run off the reader's path — the frame above went
+	// out without them (or with the last ones kept), and when they run, a
+	// frame carrying them follows. They run on the agent's context, not this
+	// session's: a session that ends mid-probe neither cuts it short nor
+	// leaves the next connection to start another — its frames carry it.
+	a.workers.Go(func() {
+		if err := a.reprobe(ctx, c, false); err != nil && serveCtx.Err() == nil {
+			a.logf("probe frame not sent: %v", err)
+		}
+	})
 
-	go a.heartbeat(serveCtx, cancel, c)
-	go a.watchdog(serveCtx, cancel)
+	a.workers.Go(func() { a.heartbeat(serveCtx, cancel, c) })
+	a.workers.Go(func() { a.watchdog(serveCtx, cancel) })
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -396,7 +636,7 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 		}
 		switch t, _ := frame["type"].(string); t {
 		case wire.TypeCommand:
-			go a.handleCommand(serveCtx, c, frame)
+			a.workers.Go(func() { a.handleCommand(serveCtx, c, frame) })
 		default:
 			a.logf("ignoring unexpected frame type %q", t)
 		}
@@ -551,7 +791,8 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 	defer cancel()
 	// facts.refresh writes its frame on THIS connection, before its result.
 	deps := a.deps
-	deps.SendFacts = func(ctx context.Context) error { return a.sendFacts(ctx, c) }
+	deps.SendFacts = func(ctx context.Context) error { return a.reprobe(ctx, c, true) }
+	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
 	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
 	errStr := ""
@@ -566,6 +807,21 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 		ExitCode:   outcome.ExitCode,
 		Error:      errStr,
 	}, envelopeID, capability, summarize(capability, outcome), outcome.OK, outcome.ExitCode)
+
+	if outcome.OK && outcome.Restart {
+		// The result and its audit entry are written: now end the session
+		// so Run can return and main can exit 75 for the swap. A graceful
+		// close (fix round 1, Minor 5) — not the deferred CloseNow — tells
+		// core why the socket is going away. If this session already died
+		// for an unrelated reason before this finished, Close is a harmless
+		// no-op on the dead connection, and the NEXT session's own startup
+		// check (serve, I2) is what actually catches that case.
+		a.restart.Store(true)
+		_ = c.Close(websocket.StatusNormalClosure, "restarting into a new build")
+		if cf := a.sessionCancel.Load(); cf != nil {
+			(*cf)()
+		}
+	}
 }
 
 // emit sends the result, then appends the audit entry and sends it in a batch.
@@ -598,13 +854,99 @@ func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
 	return a.writeFacts(ctx, c, data)
 }
 
-// frameBytes gathers and encodes a facts frame. One over core's cap is an
-// error here — never sent to be refused over there.
+// reprobe runs the slow probes off every lock and sends a frame carrying
+// them. force (facts.refresh) always probes. At connect it does not when the
+// last probe is younger than ProbeMaxAge and answered in full — the frame
+// sent at ready already carried it — or when one started at an earlier
+// connection is still running: whichever connection is live when it
+// finishes carries it. A probe a program's bound cut (OutOfTime) is carried
+// but not kept across a reconnect: the next connection probes again.
+//
+// The probe is waited for at most probeBudget, whatever it does (S42b fix
+// round 1, I1): its programs are bounded probeGrace inside that, so they
+// answer "gave no answer in time" first; anything else that hangs is left
+// to finish on its own, nothing it answers later is kept, and probing
+// clears either way. So the probe's own goroutine is the one Run does not
+// wait for (workers): it may never return, and it writes nothing — its
+// answer goes to a channel no one reads once reprobe has gone.
+func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) error {
+	if a.probe == nil {
+		if force {
+			return a.sendFacts(ctx, c)
+		}
+		return nil
+	}
+	if !force {
+		a.factsMu.Lock()
+		kept := a.probed != nil && !a.probed.OutOfTime && a.now().Sub(a.probed.At) < ProbeMaxAge
+		skip := a.probing || kept
+		if !skip {
+			a.probing = true
+		}
+		a.factsMu.Unlock()
+		if skip {
+			return nil
+		}
+		defer func() {
+			a.factsMu.Lock()
+			a.probing = false
+			a.factsMu.Unlock()
+		}()
+	}
+	pctx, cancel := context.WithTimeout(ctx, a.probeBudget-a.probeGrace)
+	defer cancel()
+	answer := make(chan facts.Probed, 1) // buffered: a probe answering late never blocks
+	go func() { answer <- a.probe(pctx) }()
+	wait := time.NewTimer(a.probeBudget)
+	defer wait.Stop()
+	var p facts.Probed
+	select {
+	case p = <-answer:
+	case <-wait.C:
+		return fmt.Errorf("the probes gave no answer within %s", a.probeBudget)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.factsMu.Lock()
+	if a.probed == nil || !p.At.Before(a.probed.At) {
+		// A refresh and a connect probe can overlap: the later-started one
+		// is kept, whichever finishes last.
+		a.probed = &p
+	}
+	a.factsMu.Unlock()
+	return a.sendFacts(ctx, c)
+}
+
+// frameBytes gathers and encodes a facts frame — with the last probe's
+// findings, carried in every frame. Findings that would take the frame over
+// core's cap are left out and said so: they never stop every facts frame
+// (fix round 1). A frame over the cap even without them is an error here —
+// never sent to be refused over there.
 func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Lock()
 	carried := append([]facts.Unreadable(nil), a.authUnread...)
+	probed := a.probed
 	a.factsMu.Unlock()
-	data, err := json.Marshal(a.gatherFrame(carried))
+	frame := a.gatherFrame(carried)
+	if probed != nil {
+		full := frame
+		full.Unreadable = append([]facts.Unreadable(nil), frame.Unreadable...)
+		probed.ApplyTo(&full)
+		data, err := json.Marshal(full)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) <= facts.MaxFrameBytes {
+			return data, nil
+		}
+		frame.AddUnreadable(facts.Unreadable{Item: "probe", Reason: fmt.Sprintf(
+			"the probe's findings would make the frame %d bytes, over the %d-byte cap; they are left out",
+			len(data), facts.MaxFrameBytes)})
+	}
+	data, err := json.Marshal(frame)
 	if err != nil {
 		return nil, err
 	}

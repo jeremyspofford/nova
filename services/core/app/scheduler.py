@@ -60,6 +60,7 @@ from app import (
     tools,
     traces,
 )
+from app.evals import scratch
 from app.identity import Person
 
 logger = logging.getLogger("core")
@@ -114,14 +115,30 @@ class Outcome:
 async def tick_once(app, pool: asyncpg.Pool, *, now: datetime | None = None) -> list[uuid.UUID]:
     """Claim every due timer (up to CLAIM_LIMIT) in one transaction, then run
     each claimed firing outside it. Returns the firing ids this tick ran.
-    `now` defaults to the database clock; tests pass one."""
+    `now` defaults to the database clock; tests pass one.
+
+    The claim never takes a timer an EVAL person owns (S42b Task 24): an eval
+    replay's turn runs as its case's scratch person, so every timer a replay
+    sets is that person's row (create_timer writes ctx.person; an agent's
+    turn is refused before any write), and none of them is ever claimed —
+    neither while its case still runs nor after a teardown that never ran.
+    Firing one would reach the real system from a replay: a device_notify to
+    a real machine, a notification to every connected one, or a whole turn
+    against the real plant. The claim below is the only way from a row to a
+    firing (fire_now runs this tick), so the line holds for every firing.
+    "An eval person" is app/evals/scratch.py's one definition — a guest whose
+    name starts with the scratch prefix, the same SQL the runner's orphan
+    sweep deletes by — read from there, never restated. A leaf module, so
+    the scheduler does not load the eval harness to read it."""
     claimed: list[tuple[asyncpg.Record, uuid.UUID, datetime]] = []
     async with pool.acquire() as conn, conn.transaction():
         if now is None:
             now = await conn.fetchval("SELECT now()")
         rows = await conn.fetch(
             "SELECT * FROM timers WHERE paused_at IS NULL AND next_fire_at IS NOT NULL "
-            "AND next_fire_at <= $1 ORDER BY next_fire_at LIMIT $2 FOR UPDATE SKIP LOCKED",
+            "AND next_fire_at <= $1 AND NOT EXISTS (SELECT 1 FROM people p "
+            f"WHERE p.id = timers.person_id AND {scratch.is_scratch_person('p')}) "
+            "ORDER BY next_fire_at LIMIT $2 FOR UPDATE SKIP LOCKED",
             now,
             CLAIM_LIMIT,
         )

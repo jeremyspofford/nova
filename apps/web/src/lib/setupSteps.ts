@@ -10,6 +10,8 @@
  * has the page-by-page record.
  */
 import type { DevicePlatform } from './devicePlatform'
+export type { OsKey } from './api'
+import type { OsKey } from './api'
 
 export type SetupKind = 'install_pwa' | 'get_app' | 'add_machine' | 'add_model_server'
 export const SETUP_KINDS: readonly SetupKind[] = ['add_machine', 'add_model_server', 'install_pwa', 'get_app']
@@ -43,9 +45,16 @@ const PAGE: Record<SetupKind, string> = {
   add_model_server: '/add',
 }
 
+// S42b K13: the ONE normalisation formatCode and fillCode both build on —
+// so "fillCode is derived from the same cleanup formatCode does" is literally
+// true, not just true by construction twice.
+function clean(code: string): string {
+  return code.replace(/[\s-]/g, '').toUpperCase()
+}
+
 export function formatCode(code: string): string {
-  const clean = code.replace(/[\s-]/g, '').toUpperCase()
-  return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean
+  const c = clean(code)
+  return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c
 }
 
 /** The link a setup's QR code encodes. A machine code rides the fragment, which a browser never sends. */
@@ -54,8 +63,12 @@ export function setupLink(setup: SetupKind, address: string, code?: string | nul
   return isMachineSetup(setup) && code ? `${base}#${formatCode(code)}` : base
 }
 
-// The pairing alphabet (services/core/app/devices.py, PAIRING_CODE_ALPHABET): no 0, 1, I, L, O.
-const CODE = /(?:^|[^A-Z0-9])([2-9A-HJKMNP-Z]{4})-?([2-9A-HJKMNP-Z]{4})(?![A-Z0-9])/
+// The pairing alphabet (services/core/app/devices.py, PAIRING_CODE_ALPHABET): no
+// 0, 1, I, L, O. One constant so CODE and fillCode's S42b D3 check (below)
+// can never drift apart into two alphabets.
+const CODE_ALPHABET = '[2-9A-HJKMNP-Z]'
+const CODE = new RegExp(`(?:^|[^A-Z0-9])(${CODE_ALPHABET}{4})-?(${CODE_ALPHABET}{4})(?![A-Z0-9])`)
+const CANONICAL_CODE = new RegExp(`^${CODE_ALPHABET}{8}$`)
 
 export function parseCodeFragment(hash: string): string | null {
   let text: string
@@ -76,13 +89,10 @@ export const MODEL_SERVER_NOTE =
 export const NOVAD_README = 'https://github.com/jeremyspofford/nova/blob/main/apps/novad/README.md'
 
 export const AGENT_STEPS = {
-  install: {
-    text: 'Install Nova’s agent, novad, first: build it as its README says. A one-line installer replaces this step later.',
-    source: NOVAD_README,
-  },
-  enroll: 'Then run this on the machine:',
-  run: 'Then start it with novad run. The README shows how to keep it running as a user service.',
-  unsupported: 'Nova’s agent runs on Linux today. Windows and macOS arrive with S42a.',
+  command:
+    'On the machine you are adding, run this. It downloads Nova’s agent, checks it, installs it and starts it — by itself from then on:',
+  wsl: 'On a Windows PC, use the Windows line in PowerShell, not one inside WSL: Nova’s agent runs on Windows itself and reaches WSL through wsl.exe.',
+  noCommand: 'No command:',
   phone: 'Open this on the computer you’re adding.',
   phoneSelf: 'Adding this phone itself needs the Nova app, which doesn’t exist yet.',
 } as const
@@ -196,4 +206,70 @@ function installKey({ os, browser }: DevicePlatform): InstallKey | null {
 export function installSteps(platform: DevicePlatform): PlatformSteps[] {
   const key = installKey(platform)
   return key ? [INSTALL[key]] : Object.values(INSTALL)
+}
+
+export const OS_KEYS: readonly OsKey[] = ['linux', 'macos', 'windows']
+export const OS_LABELS: Record<OsKey, string> = { linux: 'Linux', macos: 'macOS', windows: 'Windows' }
+
+/**
+ * A one-liner with core's {CODE} slot filled — on this page, never sent
+ * anywhere. Fills only a value in the canonical pairing-code form: the same
+ * alphabet CODE reads above, the same shape formatCode produces — derived
+ * from CODE_ALPHABET rather than a second copy of it (S42b D3). The browser
+ * is the one place that fills this slot, so it is the one place that must
+ * refuse to fill it with anything else: core's own command guard
+ * (agent_card.py) checks every value IT interpolates, but it cannot see a
+ * fill done here. Anything that is not a canonical code leaves the {CODE}
+ * slot exactly as it was — visibly, conspicuously unfilled, never a line
+ * carrying an attacker's text into a shell someone is about to paste it
+ * into, and never a partly filled line.
+ */
+export function fillCode(command: string, code: string): string {
+  const c = clean(code)
+  if (!CANONICAL_CODE.test(c)) return command
+  return command.split('{CODE}').join(`${c.slice(0, 4)}-${c.slice(4)}`)
+}
+
+/** The one sentence a bad code earns, verbatim (S42b K3) — a line that still
+ *  carries `{CODE}` is never shown as if it were safe to copy and paste. */
+export const NOT_CANONICAL_REASON = "the pairing code is not in Nova's code format, so no command was filled"
+
+/** The one sentence a `commands` map missing an OS earns (S42b Task 32,
+ *  L680) — a malformed or partial manifest payload, never a thrown
+ *  TypeError: every line is filled or none are, with a stated reason. */
+export const MISSING_OS_REASON = "this device's setup commands are missing one of its operating systems, so nothing was filled"
+
+/**
+ * The ONE helper that fills every OS line with one code (S42b K3/K5) —
+ * AddPage and SetupModal both call this rather than each keeping their own
+ * copy. Either every line is filled (the code checked once, up front) or
+ * none are, with a stated reason — never a partial fill, and never a line
+ * silently left carrying `{CODE}`. `commands` null, or no code yet, is a
+ * quiet `{commands: null, reason: null}`: there is nothing wrong, there is
+ * just nothing to fill yet.
+ */
+export function fillCommands(
+  commands: Record<OsKey, string> | null,
+  code: string | null | undefined,
+): { commands: Record<OsKey, string> | null; reason: string | null } {
+  if (!commands || !code) return { commands: null, reason: null }
+  if (!OS_KEYS.every(key => typeof commands[key] === 'string' && commands[key].length > 0)) {
+    return { commands: null, reason: MISSING_OS_REASON }
+  }
+  const c = clean(code)
+  if (!CANONICAL_CODE.test(c)) return { commands: null, reason: NOT_CANONICAL_REASON }
+  const dashed = `${c.slice(0, 4)}-${c.slice(4)}`
+  const out = {} as Record<OsKey, string>
+  for (const key of OS_KEYS) out[key] = fillCode(commands[key], dashed)
+  return { commands: out, reason: null }
+}
+
+/** The tab a card opens on: the OS asked for (a WSL machine is a Windows PC),
+ *  else this browser's, else Linux. */
+export function defaultOs(platform: DevicePlatform, forOs?: string | null): OsKey {
+  if (forOs === 'wsl' || forOs === 'windows') return 'windows'
+  if (forOs === 'macos' || forOs === 'linux') return forOs
+  if (platform.os === 'windows') return 'windows'
+  if (platform.os === 'mac') return 'macos'
+  return 'linux'
 }

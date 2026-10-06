@@ -26,6 +26,24 @@ type Config struct {
 	Name       string `json:"name"`
 	Server     string `json:"server"`
 	CorePubKey string `json:"core_pubkey"` // pinned at enrollment; 64 hex
+
+	// Locators are this device's ways to reach its Nova, in order (S42b):
+	// the hub's own loopback first on the hub machine, then the tailnet
+	// origin. Each is only ever trusted through the core key pinned at
+	// enrolment. Empty in a config written before S42b.
+	Locators []string `json:"locators,omitempty"`
+}
+
+// Hubs are the locators to try, in order: Locators, else the one Server a
+// config from before S42b carries. A copy — callers may reorder it.
+func (c Config) Hubs() []string {
+	if len(c.Locators) > 0 {
+		return append([]string(nil), c.Locators...)
+	}
+	if c.Server != "" {
+		return []string{c.Server}
+	}
+	return nil
 }
 
 // Paths resolves the daemon's file locations per OS (platform.ConfigBase and
@@ -80,7 +98,35 @@ func (p Paths) Enrolled() bool {
 	return true
 }
 
-// Save writes the config and the private key with 0600 in a 0700 dir. The key
+// ErrNotEnrolled is CheckEnrolled's answer when the config or the key is
+// simply MISSING — never enrolled, or wiped after a revoke. Any OTHER error
+// CheckEnrolled returns is the real cause (permission, I/O, a config dir
+// that is itself unreadable) and must never be folded into "not enrolled":
+// pairing again cannot fix a real error, so `run` exits 1 on it, never 78,
+// and `install` stops instead of pairing over it.
+var ErrNotEnrolled = errors.New("not enrolled")
+
+// CheckEnrolled distinguishes confirmed-missing (ErrNotEnrolled) from every
+// other Lstat failure (returned as itself); nil means both files exist. It is
+// the one enrollment check `run` and `install` share (S42b). Enrolled is a
+// plain bool that `enroll` uses only to decide whether --force is needed;
+// these callers need the finer distinction because a real error and "pair
+// this machine" are not the same advice, and giving the wrong one hides the
+// real problem.
+func (p Paths) CheckEnrolled() error {
+	for _, f := range []string{p.ConfigFile, p.KeyFile} {
+		if _, err := os.Lstat(f); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return ErrNotEnrolled
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// Save writes the config and the private key with 0600 in a 0700 dir, each
+// replaced whole (writeFile0600), so a failed write never tears them. The key
 // is stored as its 32-byte seed (hex): ed25519.NewKeyFromSeed re-derives the
 // full private key, and a seed is all that ever needs to be secret.
 func Save(p Paths, cfg Config, priv ed25519.PrivateKey) error {
@@ -136,17 +182,47 @@ func Load(p Paths) (Config, ed25519.PrivateKey, error) {
 	return cfg, ed25519.NewKeyFromSeed(seed), nil
 }
 
+// writeAll writes body to f and syncs it to the disk; a test makes it fail
+// partway, as a crash or a full disk would.
+var writeAll = func(f *os.File, body []byte) error {
+	if _, err := f.Write(body); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// writeFile0600 replaces path with body whole (Task 32, L223): written and
+// synced to a temp file in the same directory — 0600 from its creation, and
+// under the custody DACL there on Windows — then renamed over path. A write
+// that fails or a crash leaves the old file exactly as it was, never a torn
+// config or key. The rename is retried briefly, as state.WriteJSON's is: on
+// Windows a reader holding the old file open refuses it for a moment.
 func writeFile0600(path string, body []byte) error {
-	// O_TRUNC so a shorter rewrite cannot leave a stale tail; 0600 explicit.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(body); err != nil {
-		f.Close()
+	name := tmp.Name()
+	if err := writeAll(tmp, body); err != nil {
+		tmp.Close()
+		os.Remove(name)
 		return err
 	}
-	return f.Close()
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	for i := 0; ; i++ {
+		err = os.Rename(name, path)
+		if err == nil || i == 9 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		os.Remove(name)
+	}
+	return err
 }
 
 // Wipe removes this device's identity after core revoked it: the config and
@@ -192,7 +268,40 @@ func Wipe(p Paths, now time.Time) (string, error) {
 // Windows, so reusing a name a previous wipe already claimed would silently
 // destroy that earlier audit log instead of keeping it.
 func setAsideName(auditFile string, now time.Time) (string, error) {
-	base := fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix())
+	return freeName(fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix()))
+}
+
+// SetAside moves an identity out of the way without deleting it — config,
+// key and audit log each renamed to "<file>.<tag>-<unix>[-N]", never
+// overwriting an earlier one — so a machine can pair again while the old
+// record stays on disk. Missing files are skipped; the new paths are
+// returned.
+func SetAside(p Paths, now time.Time, tag string) ([]string, error) {
+	var moved []string
+	var errs []error
+	for _, f := range []string{p.ConfigFile, p.KeyFile, p.AuditFile} {
+		if _, err := os.Lstat(f); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		dst, err := freeName(fmt.Sprintf("%s.%s-%d", f, tag, now.Unix()))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := os.Rename(f, dst); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		moved = append(moved, dst)
+	}
+	return moved, errors.Join(errs...)
+}
+
+// freeName is base, or base-1, base-2, … — the first that does not exist.
+func freeName(base string) (string, error) {
 	candidate := base
 	for n := 0; ; n++ {
 		if n > 0 {
@@ -201,7 +310,7 @@ func setAsideName(auditFile string, now time.Time) (string, error) {
 		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
 			return candidate, nil
 		} else if err != nil {
-			return "", fmt.Errorf("checking a set-aside name %s: %w", candidate, err)
+			return "", err
 		}
 	}
 }

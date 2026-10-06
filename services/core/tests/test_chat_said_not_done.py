@@ -255,6 +255,8 @@ def _claims_of_every_record() -> list[guards.DeviceCompletionClaim]:
             ("I sent a notification to your DELL-XPS-8950.", []),
             ("I saved the notes to your DELL-XPS-8950.", []),
             ("Firefox is now open on your PC.", []),
+            # (Task 32 Phase B round 3) a send of the hub's build is an install
+            ("I sent the hub's build to your DELL-XPS-8950.", []),
         )
     ]
     assert all(claim is not None for claim in claims)
@@ -278,6 +280,7 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
         "(No device_notify or device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_write_file or device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_launch_app or device_run call ran on your PC this turn.)",
+        "(No machine_update or device_run call ran on DELL-XPS-8950 this turn.)",
     ]
     for said in (WROTE_LAUNCH, *texts_):
         lowered = said.lower()
@@ -1461,6 +1464,49 @@ async def test_R5_the_machines_are_read_from_the_live_rows_never_a_revoked_one(p
     await _pair_reporting(pool, "gone", "windows", _facts(UID_DELL))
     await pool.execute("UPDATE devices SET revoked_at = now() WHERE name = 'gone'")
     assert await devices.live_machines(pool) == {DEVICE: UID_DELL, WSL: None, "old-box": None}
+
+
+# Task 32, MF5 — the grouping is read through the plant (machines.plant()
+# .machine_groups): the live rows, as R5 read them, outside a replay; inside
+# one, the case's declared devices alone, so a declared name that matches a
+# real row's never picks up that real machine.
+
+
+@requires_db
+async def test_MF5_outside_a_replay_the_grouping_is_still_the_live_rows(pool):
+    from app import devices
+
+    await _pair_reporting(pool, DEVICE, "windows", _facts(UID_DELL))
+    await _pair_reporting(pool, WSL, "linux", _facts(UID_BOX, wsl=True))
+    await _pair_reporting(pool, "old-box", "linux", None)
+    live = {DEVICE: UID_DELL, WSL: None, "old-box": None}
+    assert await devices.live_machines(pool) == live
+    assert await chat._paired_machines(None) == live
+
+
+@requires_db
+async def test_MF5_in_a_replay_a_declared_name_never_picks_up_the_real_machine(pool):
+    from app import device_facts, machines
+
+    await _pair_reporting(pool, "eval_pc", "windows", _facts(UID_DELL))
+    await _pair_reporting(pool, "eval_box", "windows", _facts(UID_DELL))
+    declared = {
+        name: device_facts.agent_view(
+            name=name,
+            platform="windows",
+            hostname=name,
+            connected=True,
+            last_seen=None,
+            facts=None,
+            facts_at=None,
+        )
+        for name in ("eval_pc", "eval_box")
+    }
+    token = machines.PLANT.set(machines.FixturePlant({}, devices=declared))
+    try:
+        assert await chat._paired_machines(None) == {"eval_pc": None, "eval_box": None}
+    finally:
+        machines.PLANT.reset(token)
 
 
 # R6 — emit what persists. A redirect whose own call RAN but whose report did not

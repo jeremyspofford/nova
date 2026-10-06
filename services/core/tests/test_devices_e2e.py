@@ -26,6 +26,7 @@ command and reads a file outside any folder anyone chose, on its first connect
 — that is the D1 consequence the owner accepted, pinned here so a gate cannot
 quietly grow back.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -155,26 +156,36 @@ async def test_the_device_daemon_walks_the_entire_dod(owner_client, pool):
 
     # (c) SIGNED READ — device_info on a fresh pairing: a real number crosses,
     # --------------- core-signed, and the fake verified the signature before
-    # it answered.
+    # it answered. device_info asks the agent to look again first (S42b Task
+    # 21: facts.refresh, then system.info) — two signed envelopes, each
+    # answered only by the device's own result.
     core_pubkey = await devices.core_public_key_hex(pool)
-    ans = asyncio.create_task(
-        device.answer_command(
+
+    async def answer_info():
+        refresh = await device.answer_command(
+            conn, ok=True, output="facts sent", summary="facts.refresh ok"
+        )
+        info = await device.answer_command(
             conn, ok=True, output="disk: 431 GiB free of 512 GiB", summary="system.info"
         )
-    )
+        return refresh, info
+
+    ans = asyncio.create_task(answer_info())
     info_result, info_ok = await tools.dispatch(
         "device_info", {"device": DEVICE_NAME}, _ctx(person)
     )
-    info_frame = await asyncio.wait_for(ans, 2)
+    refresh_frame, info_frame = await asyncio.wait_for(ans, 2)
     assert info_ok is True
     assert "431 GiB" in info_result
-    # The command frame carried a core-SIGNED envelope — asserted off the frame,
-    # not the reply.
-    assert info_frame["type"] == "command"
+    # The command frames carried core-SIGNED envelopes — asserted off the
+    # frames, not the reply.
+    assert [refresh_frame["type"], info_frame["type"]] == ["command", "command"]
+    assert refresh_frame["envelope"]["capability"] == "facts.refresh"
     assert info_frame["envelope"]["capability"] == "system.info"
     assert info_frame["envelope"]["device_id"] == str(device_id)
+    assert envelopes.verify(core_pubkey, refresh_frame["envelope"], refresh_frame["sig"])
     assert envelopes.verify(core_pubkey, info_frame["envelope"], info_frame["sig"])
-    assert len(_command_frames(conn)) == 1
+    assert len(_command_frames(conn)) == 2
 
     # (d) SIGNED FILE READ, ANYWHERE — /etc/hostname is outside every folder the
     # ------------------------------ old grants editor would have offered. There
@@ -191,7 +202,7 @@ async def test_the_device_daemon_walks_the_entire_dod(owner_client, pool):
     assert read_frame["envelope"]["capability"] == "fs.read"
     assert read_frame["envelope"]["args"]["path"] == "/etc/hostname"
     assert envelopes.verify(core_pubkey, read_frame["envelope"], read_frame["sig"])
-    assert len(_command_frames(conn)) == 2
+    assert len(_command_frames(conn)) == 3
 
     # (e) SIGNED SHELL RUN — device_run was the consent-tier tool. No card, no
     # ------------------- approval, no ledger row: one signed envelope crosses
@@ -208,14 +219,14 @@ async def test_the_device_daemon_walks_the_entire_dod(owner_client, pool):
     assert run_frame["envelope"]["capability"] == "shell.exec"
     assert run_frame["envelope"]["args"] == {"argv": ["echo", "hi"]}
     assert envelopes.verify(core_pubkey, run_frame["envelope"], run_frame["sig"])
-    assert len(_command_frames(conn)) == 3
+    assert len(_command_frames(conn)) == 4
     assert _kinds(await _events(pool)) == {governance.DEVICE_ENROLLED}
 
     # (f) AUDIT LEDGER — the device's own chain landed in device_audit in order,
     # ---------------- link by link, and the stored hashes are exactly the ones
     # the device believes it sent. Assert BEFORE revoke, while the socket lives.
     expected_entries = len(device.audit_log)
-    assert expected_entries == 3  # one per command that ran
+    assert expected_entries == 4  # one per command that ran
     stored = await _wait_for_audit_count(pool, device_id, expected_entries)
     assert stored == expected_entries, f"only {stored}/{expected_entries} audit entries stored"
     audit_rows = await pool.fetch(
@@ -225,7 +236,12 @@ async def test_the_device_daemon_walks_the_entire_dod(owner_client, pool):
     )
     assert [r["seq"] for r in audit_rows] == list(range(expected_entries))  # in order, no gaps
     assert [r["hash"] for r in audit_rows] == [e["hash"] for e in device.audit_log]  # link by link
-    assert [r["capability"] for r in audit_rows] == ["system.info", "fs.read", "shell.exec"]
+    assert [r["capability"] for r in audit_rows] == [
+        "facts.refresh",
+        "system.info",
+        "fs.read",
+        "shell.exec",
+    ]
     assert all(r["ok"] for r in audit_rows)
 
     # A deliberately broken chain is a LOUD device.audit_break naming the seq,
@@ -237,7 +253,8 @@ async def test_the_device_daemon_walks_the_entire_dod(owner_client, pool):
     )
     assert broke == {"stored": 0, "break": expected_entries}
     breaks = [
-        e for e in await _events(pool)
+        e
+        for e in await _events(pool)
         if e["kind"] == governance.DEVICE_AUDIT_BREAK and e["subject_ref"] == device_id
     ]
     assert len(breaks) == 1 and breaks[0]["meta"]["seq"] == expected_entries

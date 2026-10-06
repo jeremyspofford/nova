@@ -72,10 +72,11 @@ func TestAfterFailedWipeNamesOnlyWhatIsStillThere(t *testing.T) {
 // the same ENOTDIR-is-Windows-ErrNotExist reason as its sibling above. See
 // main_windows_test.go for the Windows-appropriate twin.
 //
-// Fix round 1, folded-in item: cmdRun's not-enrolled guard (checkEnrolled)
+// Fix round 1, folded-in item: cmdRun's not-enrolled guard
+// (config.Paths.CheckEnrolled since S42b Task 11, shared with install)
 // must only treat a CONFIRMED-missing config/key as "not enrolled" (exit
 // 78). Any other Lstat error is a real problem re-enrolling cannot fix, so
-// it must be returned as itself, never folded into errNotEnrolled. The
+// it must be returned as itself, never folded into config.ErrNotEnrolled. The
 // second case forces a real (ENOTDIR) error the same deterministic way as
 // TestAfterFailedWipeNamesOnlyWhatIsStillThere, rather than a permission bit
 // a root-run test would not observe.
@@ -86,8 +87,8 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherError(t *testing.T) {
 		ConfigFile: filepath.Join(home, "c", "config.json"), KeyFile: filepath.Join(home, "c", "key"),
 		AuditFile: filepath.Join(home, "s", "audit.jsonl"), Home: home,
 	}
-	if err := checkEnrolled(p); !errors.Is(err, errNotEnrolled) {
-		t.Fatalf("a missing config/key must report errNotEnrolled (exit 78), got %v", err)
+	if err := p.CheckEnrolled(); !errors.Is(err, config.ErrNotEnrolled) {
+		t.Fatalf("a missing config/key must report config.ErrNotEnrolled (exit 78), got %v", err)
 	}
 
 	notADir := filepath.Join(home, "not-a-dir")
@@ -96,8 +97,8 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherError(t *testing.T) {
 	}
 	p2 := p
 	p2.ConfigFile = filepath.Join(notADir, "config.json") // ENOTDIR, never ErrNotExist
-	if err := checkEnrolled(p2); err == nil || errors.Is(err, errNotEnrolled) {
-		t.Fatalf("a real Lstat error (ENOTDIR) must not be reported as errNotEnrolled, got %v", err)
+	if err := p2.CheckEnrolled(); err == nil || errors.Is(err, config.ErrNotEnrolled) {
+		t.Fatalf("a real Lstat error (ENOTDIR) must not be reported as config.ErrNotEnrolled, got %v", err)
 	}
 
 	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
@@ -109,7 +110,7 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherError(t *testing.T) {
 	if err := os.WriteFile(p.KeyFile, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkEnrolled(p); err != nil {
+	if err := p.CheckEnrolled(); err != nil {
 		t.Fatalf("both files present must report no error, got %v", err)
 	}
 }
