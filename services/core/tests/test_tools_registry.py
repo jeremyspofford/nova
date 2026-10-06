@@ -128,10 +128,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # never reaches her.
     #
     # Deliberate snapshot update (slice 42b, 2026-09-28): machine_update
-    # (tools/machines.py), so FORTY-THREE -> FORTY-FOUR. Nova keeps her agents
-    # on the hub's build, and the owner's "update it now". It sends; only the
-    # agent's reconnect confirms (P8), and nothing waits on the owner, which is
-    # why test_no_approvals stays green beside this. (The S37a lane also moves
+    # (tools/machines.py), so FORTY-FOUR -> FORTY-FIVE — on top of main's
+    # set_chat_model (2026-10-05, FORTY-THREE -> FORTY-FOUR), renumbered when
+    # main came into slice/s42b (Task 32). Nova keeps her agents on the hub's
+    # build, and the owner's "update it now". It sends; only the agent's
+    # reconnect confirms (P8), and nothing waits on the owner, which is why
+    # test_no_approvals stays green beside this. (The S37a lane also moves
     # this set; whichever lands second renumbers.)
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
@@ -165,6 +167,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "spend_report",
         # S10-2 (2026-09-08): the routing walk in words. TWENTY-FIVE -> TWENTY-SIX.
         "route_explain",
+        # 2026-10-05: her own pick of chat's first model — the one write the
+        # chat switcher, Models and Settings make (app/chat_pick.py). The owner
+        # asked her to put the Dell first and she could not; it was done for
+        # him by hand. One more registered tool: the count moves by one.
+        "set_chat_model",
         "create_timer",
         "list_timers",
         "cancel_timer",
@@ -212,7 +219,7 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "nova_address",
         "show_setup_qr",
         # S42b (2026-09-28): "update it now" — sent until the agent's
-        # reconnect confirms it (P8). FORTY-THREE -> FORTY-FOUR.
+        # reconnect confirms it (P8). FORTY-FOUR -> FORTY-FIVE.
         "machine_update",
     }
 

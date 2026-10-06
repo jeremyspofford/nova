@@ -24,6 +24,7 @@ from app.adapters import base
 from app.adapters.base import (
     COMPLETIONS_TIMEOUT,
     CONNECT_PHASE_ERRORS,
+    DECISIONS,
     MODELS_TIMEOUT,
     VERIFY_TIMEOUT,
     Listing,
@@ -230,6 +231,12 @@ def listing_capabilities(row: dict) -> tuple[dict, dict]:
         suitability["chat"] = _listed(True, "architecture.output_modalities lists text")
     elif isinstance(row.get("supported_parameters"), list) and row["supported_parameters"]:
         suitability["chat"] = _listed(True, "supported_parameters are stated (a chat model)")
+    # A decision model answers typed questions (decision-role spec §3) — a
+    # fact the row states, and the one thing it is suitable for.
+    if isinstance(output_modalities, list) and DECISIONS in output_modalities:
+        suitability["decisions"] = _listed(
+            True, "the listing says it outputs decisions (a decision model)"
+        )
     benchmarks = row.get("benchmarks") or {}
     for key, field in (
         ("coding", "coding_index"),
@@ -320,6 +327,12 @@ async def _remember_usage_support(row: dict, supported: bool) -> None:
 
 class OpenAIChat:
     name = "openai-chat"
+    # OpenRouter serves Jev's typed questions at {base}/systemone with the
+    # same key it serves chat with (decision-role spec §1), so an endpoint
+    # of this protocol MAY carry both; one that does not answers /systemone
+    # with a 404, and the decision walk passes that link over in the
+    # provider's own words (systemone.NotCarried), never walling it.
+    protocols = frozenset({"chat", "systemone"})
 
     def headers(self, row: dict) -> dict[str, str]:
         # `api-key-header` on this protocol is Azure's header name.
@@ -327,50 +340,75 @@ class OpenAIChat:
 
     async def list_models(self, app, row: dict) -> Listing:
         url = base_url_of(row)
-        if not url:
-            raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
+        listing = await base.fetch_listing(
+            app,
+            row,
+            url,
+            headers=self.headers(row),
+            normalize=normalize_models,
+            unavailable_note="this provider has no model listing; type a model id",
+        )
+        models = listing.models
+        note = None
+        # Only a listing that speaks the modality vocabulary can be asked for
+        # a modality; anything else is never asked.
+        if any("output_modalities" in model for model in models):
+            extra, note = await self._decision_models(
+                app, row, url, {model["id"] for model in models}
+            )
+            models = models + extra
+        return Listing(source=row["name"], models=models, fetched_at=listing.fetched_at, note=note)
+
+    async def _decision_models(
+        self, app, row: dict, url: str, listed: set[str]
+    ) -> tuple[list[dict], str | None]:
+        """The provider's DECISION models (decision-role spec §3). OpenRouter
+        lists a model that outputs `decisions` — Jev, Kev-4B — only when asked
+        for `?output_modalities=decisions`; its default listing is text
+        models. A failure here is a NOTE on the listing, never a failed
+        listing and never silence: the chat models it did list are still
+        true, and the page says the decision models are missing."""
         client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(row))
         try:
             async with client as c:
-                resp = await c.get("/models")
+                resp = await c.get("/models", params={"output_modalities": DECISIONS})
         except httpx.HTTPError as exc:
-            raise ProviderRefused(502, f"could not reach {url} — {reason(exc)}") from exc
-        if resp.status_code in (404, 405):
-            raise ListingUnavailable(
-                f"{url}/models answered {resp.status_code} — this provider has no model "
-                "listing; type a model id"
-            )
+            return [], f"its decision models could not be listed — {reason(exc)}"
         if resp.status_code != 200:
-            raise ProviderRefused(resp.status_code, refusal_detail(resp))
+            return [], (
+                f"its decision models could not be listed "
+                f"({resp.status_code}: {refusal_detail(resp)})"
+            )
         try:
-            body = resp.json()
-        except ValueError as exc:
-            raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
-        return Listing(source=row["name"], models=normalize_models(body, owned_by=row["name"]))
+            rows = normalize_models(resp.json(), owned_by=row["name"])
+        except (ValueError, ProviderRefused) as exc:
+            return [], f"its decision-model listing was unreadable — {exc}"
+        return [
+            model
+            for model in rows
+            if model["id"] not in listed and DECISIONS in (model.get("output_modalities") or [])
+        ], None
 
     async def _listing_is_public(self, app, row: dict) -> tuple[bool | None, str]:
         """(is the listing public?, what decided it).
 
-        Re-asks /models with a key that is certainly wrong. A 401/403 means
-        the listing REQUIRES the key — so the real key's 200 was the provider
-        accepting it. A 200 means the listing is public and proved nothing
-        about the key. Anything else (429, 5xx, a transport error) decides
-        NOTHING: it is returned as None with the words, never read as either
-        answer (a rate-limited second call used to paint 'Key verified').
+        Re-asks /models with a key that is certainly wrong (base.wrong_key_probe).
+        A 401/403 means the listing REQUIRES the key — so the real key's 200
+        was the provider accepting it. A 200 means the listing is public and
+        proved nothing about the key. Anything else (429, 5xx, a transport
+        error) decides NOTHING: it is returned as None with the words, never
+        read as either answer (a rate-limited second call used to paint 'Key
+        verified').
         """
-        probe_row = dict(row, api_key="nova-verify-this-key-is-wrong")
         url = base_url_of(row)
-        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(probe_row))
-        try:
-            async with client as c:
-                resp = await c.get("/models")
-        except httpx.HTTPError as exc:
-            return None, f"the wrong-key check could not reach {url}/models — {reason(exc)}"
-        if resp.status_code == 200:
+        bucket, status, detail = await base.wrong_key_probe(app, row, url, headers_for=self.headers)
+        if bucket == "public":
             return True, "the listing answered 200 to a wrong key"
-        if resp.status_code in (401, 403):
-            return False, f"the listing refused a wrong key ({resp.status_code})"
-        return None, f"the wrong-key check answered {resp.status_code} ({refusal_detail(resp)})"
+        if bucket == "protected":
+            return False, f"the listing refused a wrong key ({status})"
+        if status is None:
+            return None, f"the wrong-key check could not reach {url}/models — {detail}"
+        return None, f"the wrong-key check answered {status} ({detail})"
 
     async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str, bool]:
         """A 1-token completion through the SAME code path a turn uses —
@@ -425,7 +463,7 @@ class OpenAIChat:
                 note=f"{exc} — the key was not tested; the first chat turn will tell",
                 key_proven=None,
             )
-        note = f"{len(listing.models)} models listed"
+        note = listing.summary()
         if row.get("auth_shape") == "none":
             return VerifyResult(
                 listing="available", models=listing.models, note=note, key_proven=None

@@ -8,7 +8,7 @@ completions in the OpenAI shape core speaks — streamed or not.
 
 from __future__ import annotations
 
-from app.adapters import anthropic_messages, ollama, openai_chat
+from app.adapters import anthropic_messages, ollama, openai_chat, systemone
 from app.adapters.base import (
     Adapter,
     Listing,
@@ -23,6 +23,8 @@ _BY_NAME: dict[str, Adapter] = {
     "ollama": ollama.ADAPTER,
     "openai-chat": openai_chat.ADAPTER,
     "anthropic-messages": anthropic_messages.ADAPTER,
+    # A decision-model server (decision-role spec §1): typed questions only.
+    "systemone": systemone.ADAPTER,
 }
 
 

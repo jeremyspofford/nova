@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { CatalogRow } from '../../lib/api'
 import {
   EMPTY_FACETS,
+  SUITABILITY_KEYS,
   applyFacets,
   benchmarkScore,
   capabilityChips,
@@ -107,6 +108,13 @@ describe('catalogFormat — capability and suitability facets honour the basis',
     const on = applyFacets([LOCAL, CLOUD], { ...EMPTY_FACETS, suitability: 'coding', includeInferred: true })
     expect(on.rows.map(r => r.id)).toEqual([LOCAL.id, CLOUD.id])
     expect(applyFacets([LOCAL, CLOUD], { ...EMPTY_FACETS, suitability: 'chat' }).rows.map(r => r.id)).toEqual([LOCAL.id])
+  })
+
+  it('filters to decision models by their declared suitability', () => {
+    const jev = row({ id: 'openrouter:~typesafe/jev-latest', suitability: { decisions: { value: true, basis: 'declared', source: 'provider-listing' } } })
+    const gpt = row({ id: 'openrouter:openai/gpt-x', actions: ['use'] })
+    expect(SUITABILITY_KEYS).toContain('decisions')
+    expect(applyFacets([jev, gpt], { ...EMPTY_FACETS, suitability: 'decisions' }).rows).toEqual([jev])
   })
 })
 

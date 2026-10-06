@@ -17,7 +17,7 @@ import { DevicesSection } from './DevicesSection'
 import { AddToNovaSection } from './AddToNovaSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
-import { RoutingSection } from './RoutingSection'
+import { RoutingSection, decisionSwitchDefs } from './RoutingSection'
 import { ProactiveSection } from './ProactiveSection'
 import { SETTINGS_TABS, resolveTab } from './tabs'
 
@@ -67,8 +67,12 @@ export function SettingsPage() {
   const storedPreset = settings
     ? normalizePreset(settingValue(settings, 'appearance.default_preset', DEFAULT_PRESET)) ?? DEFAULT_PRESET
     : null
-  const chatModel =
-    chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
+  // What core STORED, once this page has read it: the chat store's value is
+  // a cache that moves only when a turn starts or a pick is made in this
+  // browser, so preferring it showed a pick made on another device — or
+  // never made at all — as the chat model (2026-10-05). Before the read
+  // lands, the cache is the best there is.
+  const chatModel = settings ? String(settingValue(settings, 'chat.model', '')) : (chatState.model ?? '')
   // S28: which model reads an image. Empty means she picks one herself, which
   // is the default and what she did before this became selectable.
   const visionModel = settings ? String(settingValue(settings, 'chat.vision_model', '')) : ''
@@ -106,11 +110,26 @@ export function SettingsPage() {
               : Number(maxNoticesDef.default),
         }
       : null
+  // The decision role's two switches (decision-role spec §6), off the same
+  // one settings fetch: drawn only when core lists both keys.
+  const decisionSwitches = settings ? decisionSwitchDefs(settings) : null
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
   const updateSettingValue = (key: string, value: unknown) => {
     setSettings(prev => (prev ? prev.map(s => (s.key === key ? { ...s, value } : s)) : prev))
+  }
+
+  /** chat.model has one writer, but three surfaces can move it — a pick on
+   * Models, a pick on Providers, and the Jev Router switch on Routing — and
+   * each needs the exact same pair of writes: the settings echo keeps this
+   * page's own state consistent with the write that just succeeded, and
+   * `setModel` is what actually makes the switch visible everywhere else
+   * (the Settings list's "Current" marker, the chat badge) with no message
+   * sent. One handler for all three, so the copies cannot again drift. */
+  const onChatModelChanged = (model: string) => {
+    updateSettingValue('chat.model', model)
+    setModel(model)
   }
 
   // Clears onboarding.completed and lets the app gate (App.tsx's Gate) pick
@@ -205,32 +224,27 @@ export function SettingsPage() {
             )}
             {tab === 'models' && (
               <>
-                {/* First: where the models run, before which one answers. */}
-                <MachinesSection />
+                {/* First: which model answers — chat's order is the question
+                    this tab is opened for. Then images and setup, who
+                    provides the models, and where they run. */}
+                <RoutingSection
+                  chatModel={chatModel}
+                  onChatModelChanged={onChatModelChanged}
+                  decisionSwitches={decisionSwitches}
+                  // The value CORE stored, handed straight back into the one
+                  // settings state this page renders from.
+                  onSettingChanged={updateSettingValue}
+                />
                 <ModelsSection
-              chatModel={chatModel}
-              visionModel={visionModel}
-              onModelChanged={model => {
-                // Both writes matter: the settings echo keeps this page's
-                // OWN state consistent with the PUT that just succeeded
-                // (harmless once `chatModel` above prefers chat-store, but
-                // cheap and correct), while `setModel` is what actually
-                // makes the switch visible — the Settings list's "Current"
-                // marker and the chat badge both re-render off it the
-                // instant this fires, with no message sent.
-                updateSettingValue('chat.model', model)
-                setModel(model)
-              }}
+                  visionModel={visionModel}
+                  onVisionChanged={model => updateSettingValue('chat.vision_model', model)}
                   onRerunSetup={handleRerunSetup}
                 />
                 <ProvidersSection
                   chatModel={chatModel}
-                  onModelChanged={model => {
-                    updateSettingValue('chat.model', model)
-                    setModel(model)
-                  }}
+                  onModelChanged={onChatModelChanged}
                 />
-                <RoutingSection chatModel={chatModel} />
+                <MachinesSection />
               </>
             )}
             {tab === 'behaviour' && (

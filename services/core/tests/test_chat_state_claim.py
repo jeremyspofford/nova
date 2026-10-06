@@ -314,6 +314,10 @@ async def test_hedged_and_past_phrasings_are_never_redirected(owner_client, pool
         mount_peers(gateway=gateway, memory=FakeMemory())
 
         sent = await _say(owner_client)
+        # The turn's fire-and-forget work must land before the next pass's
+        # TRUNCATE: a background read holding one table while the TRUNCATE
+        # holds another deadlocked CI run 36772325857 (2026-09-30).
+        await chat.drain_background()
 
         assert gateway.calls == 1, reply
         assert [s["name"] for s in await _guard_spans(pool)] == [], reply

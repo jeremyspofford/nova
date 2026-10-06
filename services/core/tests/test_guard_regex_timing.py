@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import guards
+from app import guards, tools
 
 BUDGET_S = 0.05
 
@@ -223,6 +223,11 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     if device is not None:
         found["_device_mention"] = device
     found["_not_run_pattern"] = guards._not_run_pattern(tuple(sorted(guards._machine_read_tools())))
+    # The said-not-done pair (2026-09-29): the written-call pattern over the
+    # WHOLE live registry — the alternation production runs — and the device
+    # anchor over a paired name and its words.
+    found["_written_call_pattern"] = guards._written_call_pattern(tuple(tools.tool_names()))
+    found["_device_anchor"] = guards._device_anchor(("DELL-XPS-8950",))
     return found
 
 
@@ -290,7 +295,9 @@ def test_the_sweep_now_reaches_the_new_capability_pattern():
 
 def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     """Pinned like test_tools_registry/test_eval_corpus (CLAUDE.md's
-    pinned-expectation-suite convention): 162 -> 221, +59. This catches the
+    pinned-expectation-suite convention): 162 -> 221, +59 at the amendment;
+    172 -> 233, +61 since the said-not-done pair, and 188 -> 249 since its fix
+    round 1 (2026-09-29, below). This catches the
     sweep silently losing reach (the count drops below 221) as sharply as it
     catches a change that inflates it for the wrong reason (a NEW id that
     was not really newly reachable, or a regression back to deduping by
@@ -316,20 +323,69 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
       = 59. Update this deliberately, in the same commit as whatever changes
     guards.py's container shapes, and say in the commit body why it moved.
 
-    S42b (Task 23, the update guards) moved all three, deliberately:
+    The said-not-done pair (2026-09-29) moved all three, deliberately:
+      10  new BARE module Patterns (`_EXAMPLE_INTRO`, `_ACTION_CLAIM`,
+          `_FIRST_PERSON_ACTION`, `_HEAD_ACTION`, `_APP_OBJECT`,
+          `_ANCHOR_BREAK`, `_SERVING_SUBJECT`, `_ACTION_NEGATION`,
+          `_ACTION_HEDGE`, `_ACTION_INTENT`). Both walks reach a bare
+          module Pattern, so the fossil grows too: 162 -> 172, 221 -> 231.
+       2  per-name builders added to the live walk only (the fossil is not
+          evolved): `_written_call_pattern`, `_device_anchor`. 231 -> 233, and
+          the difference 59 -> 61.
+
+    Its fix round 1 (2026-09-29) moved the two totals again, deliberately, and
+    not the difference: 16 new BARE module Patterns, reached by both walks —
+    `_RECAP_TIME`, `_LIST_ITEM`, the five `_WRITTEN_CALL_*` framings (LEAD,
+    NEGATION, HEDGE, PROPOSAL, PAST), `_SUBJECT_ACTION`, `_PRONOUN_OBJECT`,
+    `_STARTUP`, `_MD_LINK`, `_NOW_AFTER`, `_THEN_A_VERB`, `_RELAYED_THAT`,
+    `_CONTRACTION`, and `_BY_ANOTHER` (the same object as `_BY_OTHER` under a
+    second name, which this walk counts as its own id by design): 172 -> 188,
+    233 -> 249, the difference still 61.
+
+    Its fix round 2 (2026-09-29) moved them again, deliberately, and not the
+    difference: 9 new BARE module Patterns, reached by both walks — the
+    written-call framings `_WRITTEN_CALL_CONDITION`, `_WHETHER_VERB`,
+    `_WRITTEN_CALL_APPROVAL` and `_GERUND_START`, and the device-completion
+    cuts `_ACTION_CONDITION`, `_FRONTED_CONDITION`, `_CHANGE_MARK`,
+    `_OTHER_CAUSE` and `_NO_ANSWER` — less 1, `_BY_ANOTHER`, which
+    `_OTHER_CAUSE` replaced: 188 -> 196, 249 -> 257.
+
+    Its fix round 3 (2026-09-29) moved them again, deliberately, and not the
+    difference: 1 new BARE module Pattern, reached by both walks —
+    `_GERUND_NOT_HERS`, the heading / generic-object / warning cut on the
+    gerund fragment above a fence (the re-review's R1: "Running this formats
+    your C: drive:" above a `format C: /q` fence read as her lead): 196 -> 197,
+    257 -> 258.
+
+    Its fix round 4 (2026-09-30) moved them again, deliberately, and not the
+    difference: 3 new BARE module Patterns, reached by both walks —
+    `_DEVICE_TIMED_OUT` (R3: the device's own answer that its command timed
+    out, told apart from the hub's no-answer), `_INVITATION` and
+    `_REASON_CLAUSE_END` (R2: a quoted failure reason never invites a retry):
+    197 -> 200, 258 -> 261.
+
+    The linear-filenames fix (2026-10-05, hub:1's carry from S42b Task 23)
+    moved them again, deliberately, and not the difference: 1 new BARE module
+    Pattern, reached by both walks — `_FILENAME_IN`, a filename found inside
+    text, entered only at the front of its token (`_CONTENT_CLAIM` and
+    `_PASSIVE_CLAIM` changed shape, not count): 200 -> 201, 261 -> 262.
+
+    S42b (Task 23, the update guards) moved all three, deliberately — built
+    beside the pair and the linear-filenames fix, and measured again on the
+    merged file when main came into slice/s42b (Task 32):
        4  new BARE module Patterns, reached by both walks — `_UPDATED_MACHINE`
           and `_UPDATE_RECAP` (narration's update claim), `_NAME_WORD` (a word
           of a machine's name) and `_CAP_UPDATE_AGENTS` (the capability row):
-          162 -> 166, 221 -> 225.
+          201 -> 205, 262 -> 266.
        1  `_CAPABILITY_TOOLS` grew a 23rd `(Pattern, str)` pair — the same
           `_CAP_UPDATE_AGENTS` under a second id, reached by the live walk
           only (inserted before the S42a device_run row, which stays [-1]):
-          225 -> 226, and the difference 59 -> 60."""
+          266 -> 267, and the difference 61 -> 62."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 166, len(old)
-    assert len(new) == 226, len(new)
-    assert len(new) - len(old) == 60
+    assert len(old) == 205, len(old)
+    assert len(new) == 267, len(new)
+    assert len(new) - len(old) == 62
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -372,6 +428,39 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # times it. The padding sits after the HEAD, where the model number
         # and every boundary alternative walk the whitespace.
         "qr_object_then_spaces": "qr code for my phone" + pad + "x",
+        # The said-not-done pair (2026-09-29): padding after a tool's name
+        # (the spaces before a quote or a bracket), inside an opened call,
+        # after a copula, after her own action verb, inside a device anchor,
+        # and before an example's word.
+        "tool_name_then_spaces": "device_run" + pad + "x",
+        "tool_call_then_spaces": "device_run(" + pad + "x",
+        "copula_then_spaces": "Notepad is" + pad + "x",
+        "first_person_then_spaces": "I have" + pad + "x",
+        "anchor_then_spaces": "on your" + pad + "x",
+        "example_then_spaces": "for" + pad + "x",
+        # fix round 1: a negation walking to its verb, a lead, a recap time, a
+        # link, a relayed "that", and a subject walking to its verb.
+        "negation_then_spaces": "not" + pad + "run",
+        "lead_then_spaces": "I am" + pad + "running",
+        "recap_then_spaces": "at" + pad + "15:56",
+        "link_then_spaces": "[" + half + "](" + half + "x",
+        "relayed_then_spaces": "reports" + pad + "that",
+        "subject_then_spaces": "Notepad" + pad + "opened",
+        # fix round 2: an intent walking to its verb of doing, a condition, a
+        # "whether" verb before an "if", waiting for the go-ahead, a numbered
+        # gerund, "the moment", and a refusal walking to its "answer".
+        "intent_then_spaces": "I'll" + pad + "run",
+        "let_me_then_spaces": "let me" + pad + "check",
+        "condition_then_spaces": "as" + pad + "soon",
+        "whether_then_spaces": "check" + pad,
+        "approval_then_spaces": "say" + pad + "the",
+        "numbered_gerund": "1." + pad + "Launching",
+        "moment_then_spaces": "the" + pad + "moment",
+        "refusal_then_spaces": "did" + pad + "not",
+        # fix round 3: a gerund walking to its object, and a demonstrative
+        # walking to the verb that makes the gerund its subject.
+        "gerund_then_spaces": "Running" + pad + "this",
+        "demonstrative_then_spaces": "Running this" + pad + "formats",
     }
 
 
@@ -452,10 +541,11 @@ def test_the_sweep_reaches_the_in_use_and_line_patterns():
 # word boundary inside it. The brief's first form of the possessive branch was
 # exactly that: 0.28 ms at 200 characters, 14.7 ms at 1,500 and 238 ms at
 # 6,000 (measured), so 1,500 alone could not tell it from a linear one and the
-# third width is here. The run is NOT among the global sweep's inputs:
-# _FILENAME, _CONTENT_CLAIM and _PASSIVE_CLAIM are quadratic on it too (about
-# 90 ms at 1,500 — pre-existing, reported by Task 23), and turning them red is
-# not this change.
+# third width is here. The run is NOT among the global sweep's inputs: Task 23
+# found _CONTENT_CLAIM and _PASSIVE_CLAIM quadratic on it too (about 90 ms at
+# 1,500), and main's linear-filenames fix (#96) made them linear, with its own
+# runs (FILENAME_RUNS, below). Since that fix, the guards below read the run as
+# well.
 UPDATE_PATTERNS = ("_UPDATED_MACHINE", "_UPDATE_RECAP", "_NAME_WORD", "_CAP_UPDATE_AGENTS")
 
 
@@ -491,14 +581,13 @@ def test_the_update_patterns_walk_the_shapes_that_enter_them_in_milliseconds(pat
 @pytest.mark.parametrize("width", [200, 1500, 6000])
 def test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds(width):
     """Through the guards themselves: narration (the update claim) and the
-    capability guard (the update row), on every shape that is not the name
-    run — the run is _FILENAME's, above."""
+    capability guard (the update row), on every shape — the dotted and dashed
+    name runs too, now that narration enters a filename once per token (#96;
+    before it, narration took 171 ms on 1,500 characters of "a.")."""
     from app import tools
 
     available = tools.tool_names()
     for label, text in _update_shapes(width).items():
-        if "name_run" in label:
-            continue
         for check in (
             lambda text=text: guards.narration_check(text, []),
             lambda text=text: guards.capability_claim_check("I can't " + text, available),
@@ -602,3 +691,614 @@ def test_the_global_sweep_reaches_the_update_patterns():
         assert name in swept, name
     assert any(p is guards._CAP_UPDATE_AGENTS for p in swept.values())
     assert sum(p is guards._CAP_UPDATE_AGENTS for p in swept.values()) == 2
+
+
+def test_the_sweep_walks_the_said_not_done_legs():
+    """The pair's patterns only get past their first token on inputs that
+    reach it — a tool's name, an open call, a copula, her own verb, an anchor
+    — so the sweep carries padding after each, at both widths."""
+    swept = _every_pattern()
+    for name in (
+        "_written_call_pattern",
+        "_device_anchor",
+        "_ACTION_CLAIM",
+        "_APP_OBJECT",
+        "_WRITTEN_CALL_LEAD",
+        "_WRITTEN_CALL_CONDITION",
+        "_ACTION_CONDITION",
+        "_NO_ANSWER",
+        "_GERUND_NOT_HERS",
+    ):
+        assert name in swept, name
+    for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
+        for lead in (
+            "device_run",
+            "device_run(",
+            "Notepad is",
+            "I have",
+            "on your",
+            "I'll",
+            "let me",
+            "as",
+            "1.",
+            "did",
+            "Running",
+            "Running this",
+        ):
+            assert any(re.match(re.escape(lead) + r"\s{100,}", text) for text in inputs.values())
+
+
+# The WHOLE guards, not one pattern each: a reply is read line by line and
+# clause by clause, and every cut is found once per line or clause — guards run
+# in core's only event loop (one took 15.4 s on an honest reply).
+#
+# Each pin times one input at TWO sizes, a 4x step apart, and holds BOTH
+# (said-not-done final review, I-2):
+#
+#   * GROWTH: t(4n) / t(n) < GROWTH_LIMIT. Reading in linear time measures
+#     about x4 (every pin here measured x2.8 to x4.7, the top one under load
+#     from another process); a quadratic heads for x16. This is what catches an
+#     algorithm going wrong, on any runner: one 50 KB budget missed
+#     device_completion recounting a clause's quotation marks from its start
+#     for every claim in it, and a budget widened so a slower runner stopped
+#     flaking would have hidden that for good.
+#   * CAP: the larger input stays under an absolute cap with real headroom,
+#     BIG_INPUT_CAP_S per 50 KB, so a slower runner (CI runs this suite on
+#     every push) passes while a blow-up of the constant does not. Where these
+#     were set, the slowest 50 KB read took 85 ms (89 ms under load) and the
+#     slowest 200 KB one 344 ms (420 ms under load): the cap is 3.5x the
+#     unloaded figures. It was 100 ms per 50 KB, which left that read 15 ms.
+#
+# Each sample is looped until it lasts _SAMPLE_S, so a call of a few
+# microseconds is timed as reliably as one of 50 ms, and both sizes are looped
+# alike.
+_NAMES = tools.tool_names()
+GROWTH_LIMIT = 6.0
+BIG_INPUT_CAP_S = 0.3
+_SAMPLE_S = 0.002
+
+
+def _per_call(fn, loops: int, runs: int) -> float:
+    """Best-of-`runs` seconds per call of `fn`, each sample `loops` calls."""
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        for _ in range(loops):
+            fn()
+        best = min(best, (time.perf_counter() - start) / loops)
+    return best
+
+
+def _assert_linear(
+    label: str,
+    check,
+    build,
+    *,
+    small: int = 12_500,
+    large: int = 50_000,
+    cap_s: float | None = None,
+    runs: int = 3,
+) -> None:
+    """`check(build(n))` grows linearly from `small` to `large` (a 4x step)
+    and stays under its cap at `large` — BIG_INPUT_CAP_S per 50 KB unless a
+    cap is given. One warming call first: a per-name pattern is built once."""
+    assert large == 4 * small, "GROWTH_LIMIT is for a 4x step"
+    short, long = build(small), build(large)
+    check(short)
+    start = time.perf_counter()
+    check(short)
+    loops = max(1, int(_SAMPLE_S / max(time.perf_counter() - start, 1e-7)) + 1)
+    t_small = _per_call(lambda: check(short), loops, runs)
+    t_large = _per_call(lambda: check(long), loops, runs)
+    cap = cap_s if cap_s is not None else BIG_INPUT_CAP_S * large / 50_000
+    assert t_large < cap, (
+        f"{label}: {large:,} chars took {t_large * 1000:.1f} ms (cap {cap * 1000:.0f})"
+    )
+    growth = t_large / t_small
+    assert growth < GROWTH_LIMIT, (
+        f"{label}: x4 the input took x{growth:.1f} the time "
+        f"({t_small * 1000:.2f} -> {t_large * 1000:.2f} ms); linear is about x4"
+    )
+
+
+def _repeat(unit: str):
+    """`unit` repeated to exactly n characters."""
+    return lambda n: (unit * (n // len(unit) + 1))[:n]
+
+
+def _distinct(unit: str):
+    """`unit` with a different number in each copy, to n characters, so no
+    sentence repeats one read before."""
+
+    def build(n: int) -> str:
+        out: list[str] = []
+        size = index = 0
+        while size < n:
+            piece = unit.format(i=index)
+            out.append(piece)
+            size += len(piece)
+            index += 1
+        return "".join(out)[:n]
+
+    return build
+
+
+# Each shape at n characters; at 50 KB, the shape each pinned before.
+FIFTY_KB = [
+    ("written_names_and_spaces", _repeat("device_run " + " " * 40)),
+    ("written_names_then_quotes", _repeat('device_info "x" ')),
+    ("written_names_glued", _repeat("device_rundevice_info")),
+    ("written_open_parens", _repeat("device_run(" + " " * 30)),
+    ("written_fences", _repeat('```\ndevice_launch_app "DELL" "Teams"\n```\n')),
+    ("written_one_padded_line", lambda n: "device_info" + " " * n + '"x"'),
+    ("written_quotes", _repeat('"device_run" ')),
+    ("written_examples", _repeat('for example device_run(["ls"]) ')),
+    ("claims", _repeat("Notepad is now open on your DELL-XPS-8950 ")),
+    ("copulas", _repeat("it is now now now ")),
+    ("first_person", _repeat("I opened ")),
+    ("padded_copula", lambda n: "Notepad is" + " " * n + "open on your Dell"),
+    ("padded_anchor", lambda n: "Notepad is now open" + " " * n + "on your Dell"),
+    ("no_sentence_breaks", _repeat("I have just opened and started and ran ")),
+    ("anchors", _repeat("on your Dell to the PC ")),
+    ("capitalised_run", lambda n: "I opened " + "A" * n),
+    ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
+    ("stars", _repeat("**DELL-XPS-8950** ")),
+    # fix round 1's paths: a line of inline calls, one sentence of them, fenced
+    # calls under leads, a recap list, subject verbs, links, a dot run.
+    ("inline_calls_one_line", _repeat('Let me run `device_info "x"` now. ')),
+    ("inline_calls_one_sentence", _repeat('I\'ll run `device_info "x"` and ')),
+    ("fence_intros", _repeat('I\'ll check:\n```\ndevice_info "x"\n```\n')),
+    (
+        "recap_list",
+        lambda n: "Here's what I did today:\n" + _repeat("- I opened Notepad on your Dell\n")(n),
+    ),
+    ("subject_verbs", _repeat("Notepad opened on your Dell and ")),
+    ("links", _repeat("[DELL-XPS-8950](https://x.invalid/d) ")),
+    ("negated_calls", _repeat('I did not run `device_run ["x"]` and ')),
+    ("dots", lambda n: "." * n),
+    # fix round 2's paths. The reviewer's shape first (minor: 41 KB took 13.8 s):
+    # one long intro line, then fence after fence, each re-reading it.
+    (
+        "one_long_intro_many_fences",
+        lambda n: "I'll check " + "a" * (n * 2 // 5) + ":\n" + "```\n```\n" * (n * 3 // 20),
+    ),
+    (
+        "one_long_intro_fenced_calls",
+        lambda n: (
+            "I'll check "
+            + "b " * (n // 5)
+            + ":\n"
+            + _repeat('```\ndevice_info "x"\n```\n')(n * 3 // 5)
+        ),
+    ),
+    ("intros_and_fences", _repeat('I\'ll check it now:\n```\ndevice_info "x"\n```\n')),
+    ("gerund_intros", _repeat('Launching it via the shell.\n```\ndevice_run ["x"]\n```\n')),
+    (
+        "distinct_ruled_out_intros",
+        _distinct('I\'ll run this once you confirm {i}:\n```\ndevice_run ["x"]\n```\n'),
+    ),
+    (
+        "distinct_intros_and_follows",
+        _distinct('Launching item {i} via the shell.\n```\ndevice_run ["x"]\n```\nShall I {i}?\n'),
+    ),
+    ("one_long_follow", lambda n: '```\ndevice_info "x"\n```\n' + "Shall " + "d " * (n // 2) + "?"),
+    ("ifs", lambda n: 'I\'ll run `device_info "x"` ' + "if " * (n // 3)),
+    ("whether_ifs", lambda n: 'I\'ll run `device_info "x"` ' + "check if " * (n // 9)),
+    ("lead_adverbs", lambda n: "I'll " + "now just first " * (n // 15) + 'run `device_info "x"`'),
+    ("conditioned_claims", _repeat("Notepad is now open on your DELL-XPS-8950 when ")),
+    (
+        "fronted_conditions",
+        lambda n: "When " * (n // 5) + "Notepad is now open on your DELL-XPS-8950",
+    ),
+    ("platform_words", _repeat("Notepad is now open on your Windows PC and on your Mac ")),
+    # fix round 3's paths: gerund labels and warnings above fences, a heading
+    # above each, modal futures, and conditional list intros.
+    ("gerund_labels", _repeat('Launching an app:\n```\ndevice_run ["x"]\n```\n')),
+    ("gerund_warnings", _repeat('Running this formats it:\n```\ndevice_run ["x"]\n```\n')),
+    ("heading_fences", _repeat('### Running a command\n```\ndevice_run ["x"]\n```\n')),
+    ("modal_futures", _repeat("Notepad will have opened on your DELL-XPS-8950. ")),
+    ("conditional_lists", _repeat("If it works:\n- Notepad is now open on your DELL-XPS-8950\n")),
+]
+
+
+@pytest.mark.parametrize("label,build", FIFTY_KB, ids=[c[0] for c in FIFTY_KB])
+def test_the_said_not_done_guards_read_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"written_call {label}", lambda r: guards.written_call_check(r, [], _NAMES), build
+    )
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, [], _NAMES, ["DELL-XPS-8950"]),
+        build,
+    )
+
+
+def test_a_huge_command_record_is_read_in_linear_time():
+    """(fix rounds 2 and 3, C1) device_completion reads a FAILED device_run's
+    argv to choose which failure to state. A record is bounded where it is
+    written (chat's span caps), but the reading must not depend on that: an
+    argv of 50 KB, as a list of words, as one long command and as one word, is
+    read in linear time and under the cap."""
+    from types import SimpleNamespace
+
+    def failed_run(argv: list[str]) -> list:
+        return [
+            SimpleNamespace(
+                kind="tool",
+                name="device_run",
+                meta={
+                    "ok": False,
+                    "error": "Error: exit 1",
+                    "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"},
+                },
+            )
+        ]
+
+    for label, argv in (
+        ("a list of words", lambda n: ["x"] * (n // 2)),
+        ("one long command", lambda n: ["cmd", "/c", "start " + "x " * (n // 2)]),
+        ("one word", lambda n: ["a" * n]),
+    ):
+        _assert_linear(
+            label,
+            lambda spans: guards.device_completion_check(
+                "Notepad is now open on your DELL-XPS-8950.", spans, _NAMES, ["DELL-XPS-8950"]
+            ),
+            lambda n, argv=argv: failed_run(argv(n)),
+        )
+
+
+def _recorded(name: str, args: dict, *, ok: bool = True) -> object:
+    """A tool span exactly as chat records one: its arguments through the
+    same per-value and whole-record caps (`chat._span_arguments`)."""
+    import json
+    from types import SimpleNamespace
+
+    from app import chat
+
+    meta: dict = {"ok": ok, "args_redacted": chat._span_arguments(json.dumps(args))}
+    if not ok:
+        meta["error"] = "Error: DELL-XPS-8950: exit 1"
+    return SimpleNamespace(kind="tool", name=name, meta=meta)
+
+
+_LONG_COMMAND = ["powershell", "-NoProfile", "-Command"] + [
+    "Get-ChildItem C:\\Users\\owner\\Documents -Recurse | Where-Object {$_.Length -gt 1MB}"
+] * 7
+# 30 spans: the production cap on what one turn records (6 rounds of calls), as
+# the re-review measured it (scratchpad rr3/probe_timing2.py).
+_THIRTY_OK = [
+    *(
+        _recorded("device_run", {"device": "DELL-XPS-8950", "argv": _LONG_COMMAND})
+        for _ in range(29)
+    ),
+    _recorded("device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}),
+]
+_THIRTY_FAILED = [
+    _recorded("device_run", {"device": "DELL-XPS-8950", "argv": _LONG_COMMAND}, ok=False)
+    for _ in range(30)
+]
+# (fix round 4, R4) One successful call of another family beside the claims —
+# the re-review's shape (scratchpad rr4/probe_timing4.py: 98-129 ms) — alone,
+# among thirty recorded spans, and as thirty of its own.
+_ONE_SEARCH = [_recorded("web_search", {"query": "pixel"})]
+_ONE_SEARCH_IN_THIRTY = [
+    *_ONE_SEARCH,
+    *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
+]
+_THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range(30)]
+
+
+@pytest.mark.parametrize(
+    "label,build,spans",
+    [
+        (
+            "the same backed claim, over and over",
+            _repeat("Notepad is now open on your DELL-XPS-8950. "),
+            _THIRTY_OK,
+        ),
+        (
+            "distinct backed claims",
+            _distinct("App{i} is now open on your DELL-XPS-8950. "),
+            _THIRTY_OK,
+        ),
+        (
+            "distinct backed close claims",
+            _distinct("I closed App{i} on your DELL-XPS-8950. "),
+            _THIRTY_OK,
+        ),
+        (
+            "distinct claims on a machine word",
+            _distinct("App{i} is now open on your PC. "),
+            _THIRTY_OK,
+        ),
+        (
+            "claims over thirty failed commands",
+            _distinct("App{i} is now open on your DELL-XPS-8950. "),
+            _THIRTY_FAILED,
+        ),
+        (
+            "distinct negated claims",
+            _distinct("App{i} is not open on your DELL-XPS-8950. "),
+            _THIRTY_OK,
+        ),
+        # fix round 4, R4: claims naming no device, beside another tool's work
+        (
+            "distinct unanchored launches beside one search",
+            _distinct("I launched App{i}. "),
+            _ONE_SEARCH,
+        ),
+        (
+            "distinct unanchored launches beside one search in thirty spans",
+            _distinct("I launched App{i}. "),
+            _ONE_SEARCH_IN_THIRTY,
+        ),
+        (
+            "distinct unanchored launches beside thirty searches",
+            _distinct("I launched App{i}. "),
+            _THIRTY_SEARCHES,
+        ),
+        (
+            "distinct unanchored opens for you beside thirty searches",
+            _distinct("I opened App{i} for you. "),
+            _THIRTY_SEARCHES,
+        ),
+        (
+            "distinct unanchored pronouns beside thirty searches",
+            _distinct("I launched it. Item {i}. "),
+            _THIRTY_SEARCHES,
+        ),
+    ],
+)
+def test_the_pair_reads_50_kb_against_thirty_recorded_spans_in_linear_time(label, build, spans):
+    """(fix round 3, T5) The re-review's probe: 1,100 claims BACKED by a call —
+    every one read to the end — against 30 spans recorded as chat records them
+    took 96-105 ms. A claim a successful call silences is now dropped as soon
+    as its action and device are known, the record is read once per check,
+    each command's argv split once, and a sentence already read is not read
+    again."""
+    _assert_linear(
+        f"written_call {label}", lambda r: guards.written_call_check(r, spans, _NAMES), build
+    )
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, spans, _NAMES, ["DELL-XPS-8950"]),
+        build,
+    )
+
+
+# (final review, I-2) ONE clause with no terminator, its claims dropped one by
+# one — the reviewer's eight shapes (scratchpad snd-final/probe_timing_final.py).
+# Seven read every claim as far as the quotation test and drop it there or
+# after; the backticked one drops its claims before it (one in 50 KB reaches
+# it). Each claim used to count the clause's quotation marks from its start:
+# present passives took 25 ms at 12.5 KB, 155 ms at 50 KB and 1,520 ms at
+# 200 KB. Timed at 50 and 200 KB, because the recount only overtakes the
+# per-claim work past about 60 KB: from 12.5 to 50 KB it grew x6.2 at most, and
+# x5.5 for plain states — too close to linear's x4 to tell apart on a noisy
+# runner. From 50 to 200 KB the seven grew x6.6 to x9.8.
+LONG_CLAUSE = [
+    ("plain states", _repeat("Notepad is open on your DELL-XPS-8950 ")),
+    (
+        "quoted claims",
+        lambda n: '"' + _repeat("Notepad is now open on your DELL-XPS-8950 ")(n - 1),
+    ),
+    ("another actor", _repeat("the file was saved on your DELL-XPS-8950 by Windows Backup ")),
+    ("present passives", _repeat("Teams is launched on your DELL-XPS-8950 ")),
+    (
+        "backticked claims",
+        lambda n: "`" + _repeat("Notepad is now open on your DELL-XPS-8950 ")(n - 1),
+    ),
+    ("installed states", _repeat("Teams is installed on your DELL-XPS-8950 ")),
+    ("subjects then verbs", _repeat("Teams started on your DELL-XPS-8950 stays running ")),
+    ("serving subjects", _repeat("qwen3:8b is running now on your DELL-XPS-8950 ")),
+]
+
+
+@pytest.mark.parametrize("label,build", LONG_CLAUSE, ids=[c[0] for c in LONG_CLAUSE])
+def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
+    _assert_linear(
+        f"device_completion {label}",
+        lambda r: guards.device_completion_check(r, [], _NAMES, ["DELL-XPS-8950"]),
+        build,
+        small=50_000,
+        large=200_000,
+    )
+    _assert_linear(
+        f"written_call {label}",
+        lambda r: guards.written_call_check(r, [], _NAMES),
+        build,
+        small=50_000,
+        large=200_000,
+    )
+
+
+# -- _sentences() is linear (said-not-done fix round 1, M2) --------------------
+#
+# The shared sentence splitter re-scanned a run of terminators from every
+# position inside it when the run was not followed by whitespace: 10,000 dots
+# took 3.9 s and 20,000 took 15 s — and device_completion_check now runs it on
+# EVERY reply. The fix only skips positions that could never split; the
+# outputs must stay identical, so the pre-fix body is kept here as the oracle.
+
+
+def _sentences_before_the_fix(text: str) -> list[str]:
+    out: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        char = text[i]
+        if char == "\n":
+            out.append(text[start : i + 1])
+            start = i + 1
+        elif char in ".!?":
+            end = i
+            while end + 1 < n and text[end + 1] in ".!?":
+                end += 1
+            following = text[end + 1] if end + 1 < n else ""
+            if following == "" or following.isspace():
+                out.append(text[start : end + 1])
+                start = end + 1
+                i = end
+        i += 1
+    if start < n:
+        out.append(text[start:])
+    return out
+
+
+SENTENCE_ORACLE_INPUTS = [
+    "",
+    "One. Two! Three? Four",
+    "summary.md is at $4.50. Next.",
+    "Wait... what?! Really?!? yes.",
+    "a..b...c. d",
+    "...leading dots and trailing...",
+    "line one\nline two. still two\n\nfour!",
+    "no terminator at all",
+    "!!!",
+    "?.!x y.",
+    ".\n.\n. .",
+    "Version 1.70.2 shipped. v2.0!",
+    "…unicode ellipsis… then. done",
+    "x" * 50 + "." * 30 + "y" + "." * 5 + " z",
+    ". " * 20,
+    "a.b.c.d.e.f.g. h",
+]
+
+
+@pytest.mark.parametrize("text", SENTENCE_ORACLE_INPUTS)
+def test_sentences_splits_exactly_as_before(text):
+    assert guards._sentences(text) == _sentences_before_the_fix(text)
+
+
+@pytest.mark.parametrize("mark", [".", "!", "?"])
+def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
+    for label, build in (
+        ("a run, then a letter", lambda n: mark * n + "x"),
+        ("a letter, then a run", lambda n: "x" + mark * n),
+        ("runs of 999", lambda n: (mark * 999 + "y") * (n // 1_000)),
+    ):
+        _assert_linear(
+            f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
+        )
+
+
+# ---------------------------------------------------------------------------
+# A filename is entered once per token (hub:1's carry from S42b Task 23).
+#
+# `_CONTENT_CLAIM` and `_PASSIVE_CLAIM` began with `\b[\w./-]*`. Inside a long
+# dotted, dashed or slashed token every dot is a `\b`, and from each one the
+# greedy run walked to the token's end and back: narration_check took 171 ms
+# at 1,500 characters and 684 ms at 3,000 of "a." (S42b's measurement), on
+# core's one event loop. A filename found inside text now starts only at the
+# FRONT of a [\w./-] run. Any end a later start can reach, the front reaches
+# too, so the leftmost match is the one it always was; the pre-fix patterns
+# are kept here as the oracle.
+
+_FILENAME_RE_BEFORE = (
+    r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
+)
+_FILENAME_BEFORE = re.compile(r"\b" + _FILENAME_RE_BEFORE + r"\b", re.I)
+_CONTENT_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:now\s+|currently\s+)?"
+    r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
+    re.I,
+)
+_PASSIVE_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    r"(?P<verb>created|written|saved|updated|appended|added"
+    r"|read|opened|reviewed|checked|examined"
+    r"|deleted|removed|erased)\b",
+    re.I,
+)
+
+FILENAME_ORACLE_INPUTS = [
+    "",
+    "notes.md was read",
+    "./notes.md was read and ../a/b.md has been updated",
+    "-notes.md is saved, notes.md-old was read",
+    "report.md. was read",
+    "a.md.txt contains the following: x",
+    "x.md5 was read; .md was read",
+    "abc.def.md says: hi",
+    "C:\\Users\\eval\\config.yaml was read",
+    "README.MD HAS BEEN UPDATED",
+    "summary.html contains: <p>",
+    "a.b.c.d.e.f.g.yml has now been written",
+    "dir/sub-dir/file_name.toml is checked",
+    "v1.2.3 was read and 1.2.3.md was read",
+    "notes.md\twas read",
+    "notes.md   currently says 'x'",
+    "...notes.md was read",
+    "a/./b/../c.json was opened",
+    "x" * 40 + ".md was read",
+    ("a." * 40) + "md was read",
+    ("a-" * 40) + "x.md is read",
+]
+
+
+def _claim_triples_before(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    return [(m.group(1), m.group(0), m.groupdict().get("verb")) for m in pattern.finditer(text)]
+
+
+def _claim_triples_now(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    # The phrase as _claims_in records it: from the filename to the match end.
+    return [
+        (m.group(1), text[m.start(1) : m.end()], m.groupdict().get("verb"))
+        for m in pattern.finditer(text)
+    ]
+
+
+def _random_filename_texts(count: int = 3_000) -> list[str]:
+    """Seeded, so a failure is reproducible: runs of dots, dashes, slashes,
+    words, extensions and the claim verbs, glued in every order."""
+    import random
+
+    rng = random.Random(29)
+    alphabet = [
+        "a", "b", "Z9", "_", ".", "-", "/", " ", "\t", "md", "txt", "yaml", "yml",
+        "htm", "html", "md5", "x.md", "./", "../", "Report", "notes", ":", "'",
+        " was read", " has been updated", " is saved", " contains the following",
+        " says:", " now reads \"", " were deleted",
+    ]  # fmt: skip
+    return ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 24))) for _ in range(count)]
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM"])
+def test_the_claim_patterns_match_exactly_as_before(name):
+    before = {"_CONTENT_CLAIM": _CONTENT_CLAIM_BEFORE, "_PASSIVE_CLAIM": _PASSIVE_CLAIM_BEFORE}[
+        name
+    ]
+    now = getattr(guards, name)
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        assert _claim_triples_now(now, text) == _claim_triples_before(before, text), text
+
+
+def test_a_filename_is_found_inside_text_exactly_as_before():
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        before = _FILENAME_BEFORE.search(text)
+        now = guards._FILENAME_IN.search(text)
+        assert (now.group(1) if now else None) == (before.group(0) if before else None), text
+
+
+FILENAME_RUNS = [
+    ("dotted", _repeat("a.")),
+    ("dashed", _repeat("a-")),
+    ("slashed", _repeat("a/")),
+    ("dotted_words", _repeat("ab.cd.")),
+    ("a_claim_then_a_dotted_run", lambda n: "I ran " + _repeat("a.")(n)),
+    ("dotted_runs_with_a_verb_each", _repeat("a.a.a.a.a.a.a.a was read ")),
+]
+
+
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_narration_reads_a_long_dotted_or_dashed_token_in_linear_time(label, build):
+    _assert_linear(f"narration {label}", lambda text: guards.narration_check(text, []), build)
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM", "_FILENAME_IN"])
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_the_filename_patterns_enter_a_run_once(name, label, build):
+    pattern = getattr(guards, name)
+    _assert_linear(f"{name} {label}", lambda text: list(pattern.finditer(text)), build)

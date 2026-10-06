@@ -861,7 +861,7 @@ async def _listing_for(app, pool, row: dict) -> adapters.Listing:
             pool, name, "unknown", f"the last listing was refused ({exc.status}): {exc.detail}"
         )
         raise
-    await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
+    await providers.record_listing(pool, name, "available", listing.summary())
     # The listing's prices, kept: a chat call never fetches a listing to be priced.
     try:
         await usage.record_listing_prices(pool, row, listing.models)
@@ -1017,10 +1017,42 @@ async def delete_owner_price(request: Request) -> dict:
 async def get_routes(request: Request) -> dict:
     """Every role with a chain: the built-ins first (in their own order,
     a row or not), then every other routes row — a derived agent role —
-    by name. `builtin` says which is which; `reserved` is unchanged."""
+    by name. `builtin` says which is which; `reserved` is unchanged.
+
+    `?chat_model=` is chat.model — core's setting, which core passes here
+    (the gateway never reads core's settings) — and `?chat_model_roles=`
+    names, comma-separated, the roles whose turns send it as link 1. The
+    Jev Router switch reads it as link 1 of those roles and no other, in
+    front of the chain each walks: its own, or chat's when it has none."""
     pool = await db.get_pool()
     chains = await routing.chains(pool)
     walled = await routing.walls(pool)
+    kept = await routing.router_kept(pool)
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
+    chat_model = (request.query_params.get("chat_model") or "").strip() or None
+    walks_it = {
+        name.strip()
+        for name in (request.query_params.get("chat_model_roles") or "").split(",")
+        if name.strip()
+    }
+
+    def switch_state(role: str) -> dict | None:
+        """The Jev Router switch (decision-role spec §4): its state, DERIVED
+        from the chain the role's turns walk — its own, or chat's when it has
+        none (routing.role_state); None where it is not offered."""
+        if not routing.router_switchable(role):
+            return None
+        kept_link, kept_slot = kept.get(role, (None, None))
+        return routing.role_state(
+            role,
+            chains.get(role, []),
+            chains.get("chat", []),
+            by_name,
+            kept_link,
+            kept_slot,
+            chat_model if role in walks_it else None,
+        )
+
     derived = sorted(role for role in chains if role not in routing.BUILTIN_ROLES)
     return {
         "roles": [
@@ -1029,6 +1061,8 @@ async def get_routes(request: Request) -> dict:
                 "chain": chains.get(role, []),
                 "reserved": role in routing.RESERVED_ROLES,
                 "builtin": role in routing.BUILTIN_ROLES,
+                "protocol": routing.protocol_of(role),
+                "router": switch_state(role),
             }
             for role in (*routing.BUILTIN_ROLES, *derived)
         ],
@@ -1039,13 +1073,14 @@ async def get_routes(request: Request) -> dict:
 @router.put("/routes/{role}")
 async def put_route(role: str, request: Request) -> dict:
     """{chain: [provider:model, ...]} — validated against the live provider
-    names before anything is stored; a bad link is refused by name."""
+    ROWS before anything is stored: their names, and whether each one's
+    adapter carries the role's protocol; a bad link is refused by name."""
     body = await request.json() if await request.body() else {}
     pool = await db.get_pool()
-    names = {r["name"] for r in await providers.list_rows(pool)}
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
     try:
         chain = await routing.set_chain(
-            pool, role, body.get("chain") if isinstance(body, dict) else None, names
+            pool, role, body.get("chain") if isinstance(body, dict) else None, by_name
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1053,14 +1088,50 @@ async def put_route(role: str, request: Request) -> dict:
     return {"role": role, "chain": chain}
 
 
+@router.put("/routes/{role}/jev-router")
+async def put_jev_router(role: str, request: Request) -> dict:
+    """{on: bool, link?: <provider>:typesafe/jev-router, chat_model?: str} —
+    the Jev Router switch (decision-role spec §4), an edit to the role's
+    chain. The link is the caller's, read from the live catalogue;
+    `chat_model` is chat.model, which core passes for a role whose turns send
+    it as link 1 (absent, null or '' is no pick). An answer carrying
+    `chat_model` names what chat.model must become — core writes it. The
+    refusals are routing.set_router's own words."""
+    body = await request.json() if await request.body() else {}
+    if not isinstance(body, dict) or not isinstance(body.get("on"), bool):
+        raise HTTPException(status_code=400, detail="on (true or false) is required")
+    chat_model = body.get("chat_model")
+    if chat_model is not None and not isinstance(chat_model, str):
+        raise HTTPException(status_code=400, detail="chat_model must be a string")
+    pool = await db.get_pool()
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
+    try:
+        result = await routing.set_router(
+            pool, role, body["on"], body.get("link"), by_name, chat_model=chat_model
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("jev router %s: %s", role, result["router"])
+    return result
+
+
 @router.get("/route/explain")
 async def route_explain(request: Request) -> dict:
     """The walk a call with `?role=` (and optionally `?model=`, the explicit
     pick) would take right now: every link's live verdict and what would
-    serve. Reads only; nothing is called, nothing is charged."""
+    serve. Reads only; nothing is called, nothing is charged.
+
+    `?decision_kinds=` is what a decision call's X-Nova-Decision-Kinds says:
+    the kinds of decision model the owner allows (decision-role spec §6),
+    which core states from his switches. A link of another kind is judged
+    `kind_off`; absent allows every kind. It is refused, in words, on a role
+    that has no decision models."""
     role = request.query_params.get("role") or "chat"
     try:
         routing.validate_role(role)
+        kinds = routing.allowed_kinds(
+            role, request.query_params.get("decision_kinds"), "decision_kinds"
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await routing.explain(
@@ -1071,6 +1142,7 @@ async def route_explain(request: Request) -> dict:
         timezone=_timezone_of(request),
         fit_context=_fit_context,
         latest_probes=_latest_probes,
+        kinds=kinds,
     )
 
 
@@ -1103,7 +1175,8 @@ async def delete_route(role: str) -> dict:
 @router.get("/catalog")
 async def catalog_route(request: Request) -> dict:
     """Every model Nova can run or reach, in one row shape, every fact
-    labelled with its source and fetch time (app/catalog.py)."""
+    labelled with its source and fetch time (app/catalog.py). `?fresh=1`
+    dials every provider, a remembered outage included."""
     pool = await db.get_pool()
     return await catalog.build(
         request.app,
@@ -1111,6 +1184,7 @@ async def catalog_route(request: Request) -> dict:
         fit_context=_fit_context,
         listing_for=_listing_for,
         latest_probes=_latest_probes,
+        fresh=request.query_params.get("fresh") in {"1", "true"},
     )
 
 

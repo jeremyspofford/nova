@@ -134,6 +134,31 @@ class FailingTransport(httpx.AsyncBaseTransport):
         raise self.failure("simulated: no answer", request=request)
 
 
+class QueryFailingTransport(httpx.AsyncBaseTransport):
+    """Wraps a normal fake peer, but fails ONE query shape at the transport
+    level — FailingTransport's shape, a connection that never answers —
+    while every other request to the same host still reaches the fake
+    normally. For a peer whose second listing (OpenRouter's own
+    `?output_modalities=decisions`) is unreachable while its default
+    listing still answers."""
+
+    def __init__(
+        self,
+        fake_app,
+        *,
+        query: dict[str, str],
+        failure: type[httpx.TransportError] = httpx.ConnectError,
+    ) -> None:
+        self._inner = StreamingASGITransport(fake_app)
+        self._query = query
+        self._failure = failure
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if all(request.url.params.get(k) == v for k, v in self._query.items()):
+            raise self._failure("simulated: no answer", request=request)
+        return await self._inner.handle_async_request(request)
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -443,12 +468,37 @@ class FakeOpenAICompat:
     # What a WRONG key gets on /models when the listing is not public —
     # 401 normally; 429 models a provider that rate-limits the second call.
     models_wrong_key_status: int = 401
+    # The decision role (decision-role spec §1): typed questions at
+    # {prefix}/systemone with the same key as chat. OpenRouter states its own
+    # `usage.cost`; a Kev server states tokens and no cost (pass
+    # systemone_usage without it).
+    systemone_status: int = 200
+    systemone_answers: dict = field(
+        default_factory=lambda: {"acts": {"type": "noul", "noul": 0.91}}
+    )
+    systemone_usage: dict = field(
+        default_factory=lambda: {"input_tokens": 40, "output_tokens": 6, "cost": 0.00001}
+    )
+    # A 200 that is not an answer: these bytes instead of the JSON — what an
+    # error page from a proxy in front of the server looks like to a caller.
+    systemone_raw: bytes | None = None
+    # OpenRouter lists its decision models (Jev, Kev-4B) only when asked for
+    # them — GET /models?output_modalities=decisions; its default listing is
+    # text models (checked live 2026-09-28). None: this provider ignores the
+    # query and answers its one listing.
+    decisions_models_body: dict | None = None
+    decisions_models_status: int = 200
+    # A 200 that is not an answer to the decisions query — the same shape
+    # systemone_raw simulates for /systemone, here for the decisions
+    # listing: these bytes instead of JSON, always status 200.
+    decisions_models_raw: bytes | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
             routes=[
                 Route(f"{self.prefix}/models", self._models, methods=["GET"]),
                 Route(f"{self.prefix}/chat/completions", self._completions, methods=["POST"]),
+                Route(f"{self.prefix}/systemone", self._systemone, methods=["POST"]),
             ]
         )
 
@@ -463,10 +513,20 @@ class FakeOpenAICompat:
 
     async def _models(self, request):
         self._note(request)
-        self.seen.append((request.url.path, None))
+        # The query as it arrived (None when there was none), so a test can
+        # tell the decision-model listing from the default one.
+        self.seen.append((request.url.path, dict(request.query_params) or None))
         if not self.models_public and not self._key_ok(request):
             return JSONResponse(
                 {"error": {"message": "Invalid API key"}}, status_code=self.models_wrong_key_status
+            )
+        if request.query_params.get("output_modalities") == "decisions" and (
+            self.decisions_models_body is not None or self.decisions_models_raw is not None
+        ):
+            if self.decisions_models_raw is not None:
+                return Response(self.decisions_models_raw)
+            return JSONResponse(
+                self.decisions_models_body, status_code=self.decisions_models_status
             )
         return JSONResponse(self.models_body, status_code=self.models_status)
 
@@ -502,6 +562,31 @@ class FakeOpenAICompat:
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    async def _systemone(self, request):
+        raw = await request.body()
+        body = json.loads(raw) if raw else None
+        self._note(request)
+        self.seen.append((request.url.path, body))
+        if not self._key_ok(request):
+            return JSONResponse(
+                {"error": {"message": "User not found.", "code": 401}}, status_code=401
+            )
+        if self.systemone_status != 200:
+            return JSONResponse(
+                {"error": {"message": f"refused ({self.systemone_status})"}},
+                status_code=self.systemone_status,
+            )
+        if self.systemone_raw is not None:
+            return Response(self.systemone_raw)
+        return JSONResponse(
+            {
+                "model": (body or {}).get("model"),
+                "answers": self.systemone_answers,
+                "usage": self.systemone_usage,
+                "id": "sys-1",
+            }
+        )
 
     def _usage(self, body: dict) -> dict | None:
         if self.prompt_tokens is None or self.completion_tokens is None:

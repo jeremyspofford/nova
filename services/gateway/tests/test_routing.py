@@ -27,9 +27,10 @@ from tests.fakes import FailingTransport, FakeOllama, FakeOpenAICompat
 pytestmark = requires_db
 
 # validate_role's exact refusal (S12-2): names the rule and the offending name.
+# The decision role (decision-role spec §1) joined the built-ins after judge.
 BAD_ROLE_MESSAGE = (
-    "role must be a built-in (chat, scheduled, judge, coding, vision) or a lowercase "
-    "[a-z_] name of at most 32 chars — got 'Vibes-1'"
+    "role must be a built-in (chat, scheduled, judge, decisions, coding, vision) or a "
+    "lowercase [a-z_] name of at most 32 chars — got 'Vibes-1'"
 )
 
 
@@ -369,6 +370,36 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
     assert len(cloud.seen) == before
 
 
+async def test_a_wrong_protocol_link_does_not_block_the_standby(client, pool, local, mount_backend):
+    """chat.model can be a Kev link left behind by a misclick on a model list
+    — wrong_protocol on the chat endpoint. Its provider row is `local` (a Kev
+    box lives on the owner's own network), but it never served anything:
+    before the fix, has_local read that `local` anyway and skipped the
+    cross-tier standby outright, 503ing a turn a local engine could answer.
+    Here the chain's only cloud link is walled too, so only the Kev link and
+    the standby exist to serve."""
+    await pool.execute(
+        "INSERT INTO providers (name, adapter, base_url, auth_shape, local) "
+        "VALUES ('dell-kev', 'systemone', 'http://kev.test/v1', 'none', true)"
+    )
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    await routing.record_refusal(
+        pool, {"name": "openrouter"}, 402, "out of credit", model="remote-model"
+    )
+
+    resp = await _chat(client, "chat", model="dell-kev:kev-latest")
+
+    assert resp.status_code == 200
+    route = _route_chunk(resp.content)
+    assert route["standby"] is True and route["served_by"] == "hub:qwen3:8b"
+    assert (
+        "dell-kev:kev-latest: dell-kev answers typed questions — this role needs chat"
+        in route["reason"]
+    )
+    assert "walled for another" in route["reason"]
+
+
 async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, local, monkeypatch):
     local.tags = ()
     engines.clear_cache()
@@ -478,8 +509,22 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
     assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha", "agent_zed"]
     derived = [r for r in page if not r["builtin"]]
     assert derived == [
-        {"role": "agent_alpha", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
-        {"role": "agent_zed", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
+        {
+            "role": "agent_alpha",
+            "chain": ["hub:qwen3:4b"],
+            "reserved": False,
+            "builtin": False,
+            "protocol": "chat",
+            "router": {"on": False, "kept": None},
+        },
+        {
+            "role": "agent_zed",
+            "chain": ["hub:qwen3:4b"],
+            "reserved": False,
+            "builtin": False,
+            "protocol": "chat",
+            "router": {"on": False, "kept": None},
+        },
     ]
 
     # A built-in is never removed, row or not.
@@ -683,7 +728,7 @@ async def test_an_engine_that_cannot_be_reached_is_never_walled_and_the_next_lin
     client, pool, local, mount_backend, mount_transport
 ):
     """D21: a connect failure to an engine is not a wall. A wall outlives the
-    outage — a local model's wall is never cleared by a success — while the
+    outage — an engine's wall is never cleared by a success — while the
     engine's own observation is re-read on the next walk. The ledger still
     has the refusal row; the route says why the link was passed over; the
     next turn asks the engine again, once, even through a bare id."""
@@ -754,6 +799,23 @@ async def test_a_cloud_provider_that_cannot_be_reached_is_still_walled(
     assert [(w["provider"], w["model"], w["status"]) for w in walls] == [
         ("openrouter", "remote-model", 502)
     ]
+
+
+async def test_an_engines_wall_outlives_a_success_on_it(client, pool, local):
+    """D21: an ENGINE's wall is never cleared by a success — the walk clears a
+    wall on every other row it serves from, local or cloud — so it lapses on
+    its own ladder, and the engine's own observation is what the next walk
+    reads. Here the wall has lapsed and the engine answers; the row stays as
+    it was."""
+    await routing.record_refusal(pool, {"name": "hub"}, 503, "loading", model="qwen3:8b")
+    await pool.execute("UPDATE provider_walls SET walled_until = now() - interval '1 minute'")
+    before = [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")]
+
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")] == before
 
 
 async def test_an_unreachable_standby_is_tried_once_and_the_503_says_why(

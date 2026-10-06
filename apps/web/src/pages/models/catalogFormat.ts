@@ -18,6 +18,7 @@ export type CapabilityKey = (typeof CAPABILITY_KEYS)[number]
 
 export const SUITABILITY_KEYS = [
   'chat',
+  'decisions',
   'coding',
   'agentic',
   'intelligence',

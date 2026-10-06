@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory
 from tests.test_chat import _say, _set_model
@@ -50,6 +49,16 @@ async def _upload(client, conversation: str, name: str, body: bytes) -> str:
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["attachment"]["id"]
+
+
+async def _finished(pool) -> None:
+    """The turn that sent the picture FINISHED: it closed ok with the model's
+    reply stored. The payload alone was all a picture test checked, while
+    every turn that sent one died right after (2026-10-05: the images were
+    bound to `parts`, the name the reply accumulates under, and joining the
+    reply raised "sequence item 0: expected str instance, dict found")."""
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    assert await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'") == "ok"
 
 
 def _sent(gateway: FakeGateway) -> dict:
@@ -127,6 +136,7 @@ async def test_an_image_goes_to_a_model_that_can_see_and_the_swap_is_said(
     images = [part for part in content if part["type"] == "image_url"]
     assert len(images) == 1
     assert images[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    await _finished(pool)
 
 
 async def test_a_box_where_nothing_can_see_says_so_instead_of_describing_it(
@@ -445,6 +455,7 @@ async def test_an_image_beside_audio_still_reaches_a_model_that_can_see(
     assert isinstance(content, list)
     assert len([p for p in content if p["type"] == "image_url"]) == 1
     assert "cannot hear it" in content[0]["text"]
+    await _finished(pool)
 
 
 async def test_a_capability_reading_never_becomes_a_durable_belief(

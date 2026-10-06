@@ -375,6 +375,11 @@ def test_out_places_the_manifest_that_describes_what_it_placed(bundle, force, tm
     assert "MANIFEST.json" in done.stdout, "and it is named in what the run says it placed"
 
 
+def _without_mode(row):
+    kind, _mode, *rest = row.split(" ")
+    return " ".join([kind, "-", *rest])
+
+
 def test_the_tree_that_lands_has_the_modes_the_listing_recorded(bundle, tmp_path):
     """The fixture volume carries a 0664 note, a 0666 note and a 0775
     directory because a real markdown memory volume does. CPython's `data`
@@ -396,6 +401,12 @@ def test_the_tree_that_lands_has_the_modes_the_listing_recorded(bundle, tmp_path
             wrong.append(f"{rel}: in the listing, not on disk")
             continue
         got = disk_row(full)
+        if want.startswith("l "):
+            # A link's OWN mode is never set by the reader (no lchmod on
+            # Linux) and on macOS is the maker's umask — the rule the reader
+            # itself uses (nova_restore._checkable_columns). Its kind and owner
+            # are still compared here, and its target below.
+            got, want = _without_mode(got), _without_mode(want)
         if got != want:
             wrong.append(f"{rel}: on disk `{got}`, the listing recorded `{want}`")
     assert not wrong, "the extracted tree is not the tree the listing describes:\n" + "\n".join(
@@ -593,3 +604,27 @@ def test_as_root_it_sets_the_owner_and_says_it_did(tmp_path):
     # ran and compared all four columns without refusing.
     assert (tree / "people" / "example" / "a-note.md").is_file()
     assert os.readlink(tree / "people" / "current") == "example"
+
+
+# CI, 2026-09-30 (backup-macos): every restore on macOS failed verification on
+# `people/current: on disk it is \`l 0700 501 20\`, the listing recorded
+# \`l 0755 501 20\``. A symlink's own mode is set by the umask of whoever made
+# it, restore never sets it (chmod through a link re-modes its TARGET, and
+# Linux has no lchmod), and on Linux it is always 0777 — so the disk check was
+# comparing the extracting process's umask with the packing one's.
+@pytest.mark.parametrize("root", [False, True], ids=["unprivileged", "root"])
+def test_a_symlinks_own_mode_is_not_compared(monkeypatch, root):
+    monkeypatch.setattr(nr, "running_as_root", lambda: root)
+    assert nr._checkable_columns("l 0700 501 20") == nr._checkable_columns("l 0755 501 20")
+
+
+@pytest.mark.parametrize("root", [False, True], ids=["unprivileged", "root"])
+def test_a_files_and_a_directorys_mode_still_are(monkeypatch, root):
+    monkeypatch.setattr(nr, "running_as_root", lambda: root)
+    assert nr._checkable_columns("f 0600 501 20") != nr._checkable_columns("f 0644 501 20")
+    assert nr._checkable_columns("d 0700 501 20") != nr._checkable_columns("d 0755 501 20")
+
+
+def test_a_symlinks_owner_is_still_compared_when_root(monkeypatch):
+    monkeypatch.setattr(nr, "running_as_root", lambda: True)
+    assert nr._checkable_columns("l 0777 501 20") != nr._checkable_columns("l 0777 0 0")

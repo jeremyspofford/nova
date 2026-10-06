@@ -317,6 +317,10 @@ async def test_prose_that_merely_names_files_is_never_redirected(
         mount_peers(gateway=gateway, memory=FakeMemory())
 
         sent = await _say(owner_client)
+        # The turn's fire-and-forget work must land before the next pass's
+        # TRUNCATE: a background read holding one table while the TRUNCATE
+        # holds another deadlocked CI run 36772325857 (2026-09-30).
+        await chat.drain_background()
 
         assert gateway.calls == 1, reply
         assert [s["name"] for s in await _guard_spans(pool)] == [], reply
@@ -550,7 +554,11 @@ async def test_a_successful_state_redirect_skips_the_listing_guard_entirely(
     assert gateway.calls == 3
     assert [s["name"] for s in await _guard_spans(pool)] == ["state_claim"]
     assert await _stored(pool) == HONEST
-    assert _corrections(sent) == [chat.STATE_REDIRECT_NOTE]
+    # The redirect listed the workspace; it never read the device. "Checking the
+    # device now…" is shown only when the state guard's own re-check finds the
+    # device read (said-not-done final review, I-1), so the note here is the
+    # one that claims no check.
+    assert _corrections(sent) == [chat.STATE_REDIRECT_NOTE_NO_CALL]
 
 
 async def test_a_detector_error_fails_open_and_ships_the_reply(

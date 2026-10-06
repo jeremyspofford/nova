@@ -131,6 +131,12 @@ export type MessageRow = {
   attachments: Attachment[]
   /** S47: the setup QR cards this reply carries — live from the stream, or redrawn from the trace (never with a code). */
   cards: SetupCard[]
+  /** Set by a `correction` frame (said-not-done fix round 3, T6): the text
+   * that streams next starts a paragraph of its own rather than running on
+   * from the correction — a redirect's note is followed by the reply it
+   * introduces. Live-only, like `activity`: a stored row's corrections are
+   * already paragraphs of its text. */
+  paragraphNext?: boolean
 }
 
 export type ErrorRow = {
@@ -436,7 +442,22 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
 
     case 'delta':
       if (state.pendingId === null) return state
-      return withPending(state, row => ({ ...row, text: row.text + event.text }))
+      return withPending(state, row =>
+        row.paragraphNext
+          ? { ...row, text: `${row.text}\n\n${event.text}`, paragraphNext: false }
+          : { ...row, text: row.text + event.text },
+      )
+
+    // A line the backend adds to her reply (said-not-done fix round 3, T6):
+    // its own paragraph, exactly as core appends it to the stored reply
+    // ("\n\n" between them), so what streams live is what a reload shows.
+    case 'correction':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({
+        ...row,
+        text: row.text ? `${row.text}\n\n${event.text}` : event.text,
+        paragraphNext: true,
+      }))
 
     case 'thinking':
       if (state.pendingId === null) return state

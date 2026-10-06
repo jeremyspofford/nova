@@ -273,7 +273,9 @@ def _parse_arguments(arguments: object) -> tuple[dict | None, str | None]:
     return None, f"the arguments must be a JSON object, got {schema.json_type_name(arguments)}"
 
 
-async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str, bool]:
+async def dispatch(
+    name: str, arguments: object, ctx: ToolContext, *, reached: list[str] | None = None
+) -> tuple[str, bool]:
     """Run one tool call. Returns (result text for the model, ok).
 
     `ok` is decided mechanically here and never by reading the text back:
@@ -287,6 +289,16 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     impossible to run honestly (no such tool, arguments that do not match the
     schema) and the executor's own stated refusals, and each of those comes
     back as an `Error:` result the model can read.
+
+    `reached`, when given, records what this call DID: `name` is appended
+    once the executor has returned or raised, whatever it said — so a call
+    whose executor ran and failed is in it, and one refused above (no such
+    tool, arguments unreadable or off the schema) is not, because it returned
+    before any executor was reached. It is written after the fact and decides
+    nothing about this call. A caller that must say whether a tool RAN reads
+    it here, from the one place these rules live, never from a second copy of
+    them or from the result's words (said-not-done P6: a redirect's "doing it
+    now" is shown only beside a call that ran).
     """
     tool = REGISTRY.get(name)
     if tool is None:
@@ -336,4 +348,7 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
             result = f"{ERROR_PREFIX}{name} returned an empty result, so nothing was confirmed"
             ok = False
 
+    if reached is not None:
+        # Every path to this line went through the executor (see the docstring).
+        reached.append(name)
     return result, ok

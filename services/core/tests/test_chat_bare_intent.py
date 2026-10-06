@@ -255,7 +255,9 @@ async def test_the_redirect_budget_is_shared_with_consent_claim(owner_client, po
     assert not any(s["name"] == "deferral" for s in spans)
     stored = await _stored_reply(pool)
     assert stored == checked
-    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+    # The regeneration dispatched nothing, so the live note never says "doing
+    # it now" (said-not-done fix round 5, P6).
+    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE_NO_CALL]
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
@@ -374,5 +376,7 @@ async def test_an_overlapping_commitment_phrase_stays_with_deferral_only(
     assert spans[0]["meta"]["action"] == "web_search"
     assert spans[0]["meta"]["redirected"] is True
     assert await _stored_reply(pool) == corrected
-    assert _corrections(sent) == [chat.DEFERRAL_NOTE]
+    # The commitment redirect is text-only: it did nothing, and its note says
+    # so rather than "Doing that now" (said-not-done fix round 5, P6).
+    assert _corrections(sent) == [chat.DEFERRAL_NOTE_NO_CALL]
     assert await pool.fetchval("SELECT status FROM turns") == "ok"

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -34,6 +35,8 @@ from app.adapters import (
     ollama,
     openai_chat,
 )
+from app.adapters.base import CONNECT_PHASE_ERRORS, DECISIONS
+from app.cache import TTLCache
 from app.catalog_row import (  # noqa: F401 — the shared shape
     BASES,
     LIBRARY,
@@ -175,7 +178,13 @@ def local_row(
     row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx, size_bytes=fit_ctx["sizes"].get(name))
     # check_update: an installed model can be compared against its source
     # (POST /admin/catalog/drift) — the page derives the button from this.
-    row["actions"] = ["use", "probe", "check_update", "remove"]
+    # An embedding model completes nothing, so it is never offered as the
+    # chat model (2026-10-05: nomic-embed-text carried a Use button). Unread
+    # capabilities — a show that failed — are no denial.
+    embeds_only = caps.get("embedding", {}).get("value") and not caps.get("completion", {}).get(
+        "value"
+    )
+    row["actions"] = ([] if embeds_only else ["use"]) + ["probe", "check_update", "remove"]
     return row
 
 
@@ -270,12 +279,16 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
         facts["max_output_tokens"] = fact(model["max_output_tokens"], "declared", SOURCE_LISTING)
     pricing = model.get("pricing")
     if isinstance(pricing, dict):
-        if isinstance(pricing.get("prompt"), int | float):
-            facts["price_prompt"] = fact(float(pricing["prompt"]), "declared", SOURCE_LISTING)
-        if isinstance(pricing.get("completion"), int | float):
-            facts["price_completion"] = fact(
-                float(pricing["completion"]), "declared", SOURCE_LISTING
-            )
+        # A negative number is not a price: OpenRouter lists -1 on its router
+        # rows (auto, Jev Router, …) for "varies per request". Stated as a
+        # price it read "$-1,000,000 per 1M", sorted those rows as the
+        # cheapest and widened the Models table past a laptop's screen
+        # (2026-10-05). Absent is the honest fact — and what spend already
+        # does (openai_chat._is_price).
+        for key, fact_key in (("prompt", "price_prompt"), ("completion", "price_completion")):
+            value = pricing.get(key)
+            if isinstance(value, int | float) and math.isfinite(value) and value >= 0:
+                facts[fact_key] = fact(float(value), "declared", SOURCE_LISTING)
     if model.get("hugging_face_id"):
         facts["hugging_face_id"] = fact(model["hugging_face_id"], "declared", SOURCE_LISTING)
     if model.get("expiration_date"):
@@ -294,7 +307,18 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
     coding = _coding_inferred(model_id)
     if coding:
         _put_suitability(row["suitability"], "coding", coding)
-    row["actions"] = ["use"]
+    # A decision model answers typed questions and has no chat (decision-role
+    # spec §3): it is never offered as the chat model — `use` writes
+    # chat.model — and its place is the decisions chain on Settings → Routing.
+    row["actions"] = [] if DECISIONS in row["suitability"] else ["use"]
+    # A provider the owner marked local — a Kev box on his own machine — lists
+    # DECISION models that run THERE: its own listing says it serves them, so
+    # they are installed, not cloud rows. The same provider's CHAT rows (an
+    # openai-chat endpoint that also answers chat, OpenRouter's own shape)
+    # stay cloud, where the chat picker finds them.
+    if provider_row.get("local") and DECISIONS in row["suitability"]:
+        row["kind"] = "local"
+        row["installed"] = True
     return row
 
 
@@ -377,6 +401,21 @@ async def _remember_models(
 
 SHOW_DEADLINE_S = 15.0
 
+#: How long the catalogue remembers a provider nobody could reach (its
+#: connect phase failed) before dialing it again. Every page that reads the
+#: catalogue — Models, the chat picker, Settings, the vision picker — used to
+#: wait out the whole connect timeout on a machine that is off, on every read
+#: (2026-10-05: 10 s a read with the Dell asleep). A provider that ANSWERED,
+#: even with a refusal, is not remembered: it was fast, and a new key fixes it
+#: at once. `?fresh=1` (the Models page's Refresh) always dials.
+UNREACHABLE_TTL_S = 60.0
+UNREACHABLE = TTLCache(UNREACHABLE_TTL_S, max_entries=64)
+
+
+def clear() -> None:
+    """Forget every remembered outage (the tests' clean slate)."""
+    UNREACHABLE.clear()
+
 
 def _show_timed_out(names: list[str]) -> dict[str, dict]:
     note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s"
@@ -406,6 +445,7 @@ async def build(
     fit_context: Callable,
     listing_for: Callable,
     latest_probes: Callable,
+    fresh: bool = False,
 ) -> dict:
     """The whole catalogue. `fit_context(app, pool, engine_row)`,
     `listing_for(app, pool, row)` and `latest_probes(pool, names, *,
@@ -473,20 +513,33 @@ async def build(
     async def one(provider_row: dict) -> tuple[dict, list[dict]]:
         name = provider_row["name"]
         failed = {"key": name, "ok": False, "rows": 0, "fetched_at": fetched_at}
+        # Keyed by the address too: a provider moved to a new URL is a new
+        # dial, never the old address's outage.
+        outage_key = (name, providers.base_url_of(provider_row))
+        remembered = None if fresh else UNREACHABLE.get(outage_key)
+        if remembered is not None:
+            note, tried_at = remembered
+            # The words of the real attempt, stamped with when it was made.
+            return {**failed, "note": note, "fetched_at": tried_at, "cached": True}, []
         try:
             listing = await listing_for(app, pool, provider_row)
         except ListingUnavailable as exc:
             return {**failed, "note": str(exc)}, []
         except ProviderRefused as exc:
+            if isinstance(exc.__cause__, CONNECT_PHASE_ERRORS):
+                UNREACHABLE.put(outage_key, exc.detail, fetched_at)
             return {**failed, "note": exc.detail}, []
         except Exception as exc:  # a bug or a DB error: NAMED, never an anonymous "provider"
             logger.exception("catalogue: provider %s raised", name)
             return {**failed, "note": f"the listing raised — {adapters.reason(exc)}"}, []
-        return (
-            {"key": name, "ok": True, "rows": len(listing.models)}
-            | {"fetched_at": listing.fetched_at},
-            [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models],
-        )
+        # It answered: whatever outage was remembered is over, for every read
+        # after this one too — not only for the fresh read that found out.
+        UNREACHABLE.discard(outage_key)
+        source = {"key": name, "ok": True, "rows": len(listing.models)}
+        source["fetched_at"] = listing.fetched_at
+        if listing.note:
+            source["note"] = listing.note
+        return source, [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models]
 
     # A machine that runs models is an engine section, never a cloud listing.
     cloud_rows = [r for r in await providers.list_rows(pool) if not engines.is_engine(r)]

@@ -299,9 +299,9 @@ Both live in a new `services/core/app/tools/setup.py` and are registered in
   - sends the card, which carries the code;
   - the result names the expiry and **never the code**. For example: "Sent a
     pairing card to the chat: a QR code, a short link and a one-time code
-    that expires at 14:10, 10 minutes from now. The machine needs Nova's
-    agent (Linux today); the card shows the command. You do not have the
-    code — it is only on the card."
+    that expires in 10 minutes. The machine needs Nova's agent, novad
+    (Linux today); the card shows the command to run on it. You do not have
+    the code — it is only on the card."
   - `add_model_server` adds: "Serving its models needs the models role
     (S44), which is not built: today it pairs as a machine Nova controls."
 - **Facts:** `{"setup": …, "url": <the link, never with a code>, "expires_at":

@@ -15,6 +15,18 @@ states them) and X-Nova-Served-Runtime — and its ledger row keeps
 `served_on`. Not known is omitted, never guessed. An engine that could not
 be reached at all (adapters.ProviderUnreachable) is relayed like any
 refusal, and never walled.
+
+POST /v1/systemone (decision-role spec §1) is the decision role's route:
+typed questions, never a chat completion. It walks the `decisions` chain
+through the SAME loop as chat (walk_role) — walls, fallback, X-Nova-Route
+— and meters each call under the role (usage.observe_decision). A link
+that serves no typed questions — its endpoint has no /systemone (a 404 or
+405 there), or it answered 200 with a body that is not a JSON object — is
+passed over for the request in its own words and never walled: it is
+neither an account refusal nor an outage. A link whose kind the owner
+switched off in Settings (decision-role spec §6; X-Nova-Decision-Kinds names
+the kinds core allows, and no header allows every kind) is passed over
+before it is dialled, in words, and never walled either.
 """
 
 from __future__ import annotations
@@ -23,14 +35,15 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from app import adapters, compute_id, db, engines, providers, routing, usage
-from app.adapters import ListingUnavailable, ProviderRefused, ProviderUnreachable
+from app.adapters import ListingUnavailable, ProviderRefused, ProviderUnreachable, systemone
 
 router = APIRouter(tags=["data-plane"])
 logger = logging.getLogger("gateway")
@@ -39,6 +52,9 @@ SERVED_BY_HEADER = "X-Nova-Served-By"
 SERVED_ON_HEADER = "X-Nova-Served-On"
 SERVED_RUNTIME_HEADER = "X-Nova-Served-Runtime"
 ROUTE_HEADER = "X-Nova-Route"
+# The decision-model kinds a decision call allows, comma-separated
+# (routing.allowed_kinds): core states the owner's two switches on every call.
+KINDS_HEADER = "X-Nova-Decision-Kinds"
 # ollama's /api/ps is local and answers in milliseconds; bounded so a wedged
 # engine costs the stamp (omitted), never the reply (S40 ruling C2: 2 s).
 STAMP_TIMEOUT = httpx.Timeout(2.0)
@@ -49,15 +65,31 @@ STAMP_TIMEOUT = httpx.Timeout(2.0)
 STAMP_BUDGET_S = 2.0
 
 
-class EngineUnreachable(HTTPException):
+class PassedOver(HTTPException):
+    """A link passed over for the rest of THIS request, in its own words, and
+    never walled: walk_role states why in the route and tries the next link.
+    A caller that is not walking a chain gets its status and words like any
+    refusal."""
+
+
+class EngineUnreachable(PassedOver):
     """An engine that could not be reached at all (adapters.ProviderUnreachable),
     relayed with the same status and words as any refusal — a caller with no
-    role gets its stated 502. serve_by_role tells it apart for one reason: it
-    is never a wall (D21)."""
+    role gets its stated 502. The walk tells it apart for one reason: it is
+    never a wall (D21)."""
 
 
 def _served_by(row: dict, model: str) -> str:
     return providers.served_by(row, model)
+
+
+def _nothing_runnable(exc: routing.NothingRunnable) -> str:
+    """The 503's words: the walk's own sentence, then every link's verdict. A
+    chain with no links (the empty decisions chain) is the sentence alone —
+    never a dangling dash."""
+    if not exc.verdicts:
+        return str(exc)
+    return f"{exc} — " + "; ".join(f"{v['id']}: {v['reason']}" for v in exc.verdicts)
 
 
 @router.post("/v1/chat/completions")
@@ -75,6 +107,14 @@ async def chat_completions(request: Request) -> Response:
     requested = body.get("model") if isinstance(body.get("model"), str) else None
     attribution = usage.Attribution.from_headers(request.headers)
     if attribution.role:
+        if routing.protocol_of(attribution.role) != routing.CHAT:
+            # The endpoint decides the protocol (decision-role spec §1): the
+            # decisions chain holds decision models, which have no chat.
+            raise HTTPException(
+                status_code=400,
+                detail=f"the {attribution.role} role answers typed questions at POST "
+                "/v1/systemone — a chat completion cannot be served from its chain",
+            )
         return await serve_by_role(request, pool, attribution.role, requested, body, attribution)
     row, model = await providers.resolve(pool, requested)
     # No role: the explicit model, as before — but a capped provider is
@@ -97,18 +137,34 @@ async def chat_completions(request: Request) -> Response:
     return await serve_completion(request, pool, row, model, body, attribution)
 
 
-async def serve_by_role(
-    request: Request, pool, role: str, requested, body, attribution
+async def walk_role(
+    request: Request,
+    pool,
+    role: str,
+    requested: str | None,
+    attribution,
+    serve: Callable[[routing.Decision], Awaitable[Response]],
+    kinds: frozenset[str] | None = None,
 ) -> Response:
-    """Walk the role's chain (app/routing.py). A link that REFUSES before
-    streaming is recorded, walled, and the next runnable link is tried in
-    this same request — the reply then states the fallback (rail 20). An
-    engine that could not be REACHED is recorded and passed over the same
-    way, but never walled (D21)."""
+    """Walk the role's chain (app/routing.py) and serve from the first link
+    that can — the ONE loop both data-plane routes use, so walls and fallback
+    work identically for a chat completion and a decision (decision-role
+    spec §1). `serve(decision)` makes the call on the chosen link. A link that
+    REFUSES before answering is recorded, walled, and the next runnable link
+    is tried in this same request — the reply then states the fallback (rail
+    20). A link PASSED OVER (PassedOver: an engine that could not be REACHED,
+    D21, or a link that serves no typed questions) is recorded and the next
+    link tried the same way, but it is never walled. A link whose kind is not
+    among `kinds` is never chosen at all (routing.resolve judges it
+    `kind_off`), so it is neither dialled nor walled."""
     from app import admin  # the fit context and probe query /admin/suggest uses
 
     skip: set[str] = set()
-    unreachable: dict[str, str] = {}
+    # Each link passed over in this request, to its words — handed to resolve
+    # as `unreachable`, whose verdicts carry a link's own words (`skip` says
+    # only that it refused). The route and the 503 state the words, never
+    # the verdict's label.
+    passed: dict[str, str] = {}
     try:
         routing.validate_role(role)
     except ValueError as exc:
@@ -124,29 +180,19 @@ async def serve_by_role(
                 fit_context=admin._fit_context,
                 latest_probes=admin._latest_probes,
                 skip=skip,
-                unreachable=unreachable,
+                unreachable=passed,
+                kinds=kinds,
             )
         except routing.NothingRunnable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"{exc} — " + "; ".join(f"{v['id']}: {v['reason']}" for v in exc.verdicts),
-            ) from exc
+            raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
         link = f"{decision.row['name']}:{decision.model}"
         try:
-            response = await serve_completion(
-                request,
-                pool,
-                decision.row,
-                decision.model,
-                body,
-                attribution,
-                route=decision.as_route(),
-            )
-        except EngineUnreachable as exc:
-            # Never a wall (D21): passed over for the rest of this request
-            # only, in its own words. serve_completion already made the
-            # engine's observation be read again (ruling C11).
-            unreachable[link] = str(exc.detail)
+            response = await serve(decision)
+        except PassedOver as exc:
+            # Never a wall: passed over for the rest of this request only, in
+            # its own words. For an engine (D21), serve_completion already
+            # made its observation be read again (ruling C11).
+            passed[link] = str(exc.detail)
             continue
         except HTTPException as exc:
             if exc.status_code in routing.WALL_STATUSES or exc.status_code >= 500:
@@ -166,13 +212,37 @@ async def serve_by_role(
             )
             skip.add(link)
             continue
-        if response.status_code == 200 and not decision.row.get("local"):
+        if response.status_code == 200 and not engines.is_engine(decision.row):
+            # A clean answer clears the wall on every row but an engine's.
+            # An engine's wall is never cleared by a success; it lapses on
+            # its own ladder (D21). A local link that is not an engine — a
+            # decision server on the owner's own machine — recovers the way
+            # a cloud link does, or its strikes would only ever climb.
             await routing.note_success(pool, decision.row["name"], decision.model)
         response.headers[ROUTE_HEADER] = decision.header()
         return response
     raise HTTPException(
         status_code=503, detail=f"every link in the {role!r} chain refused this request"
     )
+
+
+async def serve_by_role(
+    request: Request, pool, role: str, requested, body, attribution
+) -> Response:
+    """A chat completion, walked through the role's chain (walk_role)."""
+
+    async def serve(decision: routing.Decision) -> Response:
+        return await serve_completion(
+            request,
+            pool,
+            decision.row,
+            decision.model,
+            body,
+            attribution,
+            route=decision.as_route(),
+        )
+
+    return await walk_role(request, pool, role, requested, attribution, serve)
 
 
 async def serve_completion(
@@ -245,6 +315,132 @@ async def serve_completion(
     for name, value in served.headers().items():
         response.headers[name] = value
     return response
+
+
+async def serve_systemone(
+    request: Request,
+    pool,
+    row: dict,
+    model: str,
+    body: dict,
+    attribution,
+    route: dict | None = None,
+) -> Response:
+    """One decision on `row`, METERED under the call's own attribution
+    (usage.observe_decision), with the provider's key from its own adapter's
+    auth rule. A call that got no answer at all is metered as a refusal and
+    raised with its status — the walk walls it and tries the next link, as
+    for chat. A link that serves no typed questions is metered the same way
+    and passed over, never walled: an endpoint with no /systemone
+    (systemone.NotCarried), or a 200 no answers can be read from — not a JSON
+    object, or one with no `answers` object (usage.UnreadableAnswer)."""
+    served_by = _served_by(row, model)
+    started = time.monotonic()
+
+    async def meter(status: int, content: bytes) -> Response:
+        return await usage.observe_decision(
+            pool,
+            status=status,
+            content=content,
+            row=row,
+            model=model,
+            served_by=served_by,
+            attribution=attribution,
+            started=started,
+            route=route,
+        )
+
+    try:
+        status, content = await systemone.call(
+            request.app, row, model, body, adapters.for_row(row).headers(row)
+        )
+    except ProviderRefused as exc:
+        # A decision's row like any other — its role and its turn, in the
+        # words it was refused with — never a probe row that carries neither.
+        await meter(exc.status, json.dumps({"error": exc.detail}).encode())
+        relay = PassedOver if isinstance(exc, systemone.NotCarried) else HTTPException
+        raise relay(
+            status_code=exc.status, detail=exc.detail, headers={SERVED_BY_HEADER: served_by}
+        ) from exc
+    try:
+        response = await meter(status, content)
+    except usage.UnreadableAnswer as exc:
+        # Metered, with its error. It is no answer, and says nothing about the
+        # key or the model's health: passed over like an endpoint with no
+        # /systemone — never walled, and never a success that clears a wall.
+        # The words say only what was checked: a proxy's page in front of a
+        # real decision server reads exactly like this.
+        raise PassedOver(
+            status_code=502,
+            detail=f"{row['name']} answered 200 at {providers.base_url_of(row)}/systemone "
+            f"but {exc.what}",
+            headers={SERVED_BY_HEADER: served_by},
+        ) from exc
+    response.headers[SERVED_BY_HEADER] = served_by
+    return response
+
+
+@router.post("/v1/systemone")
+async def systemone_decide(request: Request) -> Response:
+    """Typed questions for the decision role (decision-role spec §1).
+
+    The body is TypeSafe's `{state, questions}` and, optionally, `model` — a
+    `provider:model` pick that is link 1, exactly as chat's requested model,
+    so a measurement can name Jev or Kev without editing the owner's chain
+    (core sends none, so the decisions chain decides). It is forwarded
+    unchanged but for `model`, which becomes the winning link's own id, to
+    `{base_url}/systemone` with that provider's key. Only the decisions role
+    is served here, whatever the header says: the endpoint decides the
+    protocol. X-Nova-Decision-Kinds (KINDS_HEADER) names the kinds of
+    decision model the owner allows; a link of another kind — the requested
+    model included — is passed over, and no header allows every kind."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"request body is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    questions = body.get("questions")
+    if not isinstance(questions, dict) or not questions:
+        raise HTTPException(
+            status_code=400,
+            detail="questions must be a non-empty object — the typed questions a "
+            "decision model answers",
+        )
+    attribution = usage.Attribution.from_headers(request.headers)
+    if attribution.role and attribution.role != routing.DECISIONS_ROLE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"POST /v1/systemone serves the {routing.DECISIONS_ROLE} role — "
+            f"X-Nova-Role named {attribution.role!r}",
+        )
+    try:
+        kinds = routing.allowed_kinds(
+            routing.DECISIONS_ROLE, request.headers.get(KINDS_HEADER), KINDS_HEADER
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Metered under the role even when the caller sent no header.
+    attribution = replace(attribution, role=routing.DECISIONS_ROLE)
+    requested = body["model"] if isinstance(body.get("model"), str) and body["model"] else None
+    pool = await db.get_pool()
+
+    async def serve(decision: routing.Decision) -> Response:
+        return await serve_systemone(
+            request,
+            pool,
+            decision.row,
+            decision.model,
+            body,
+            attribution,
+            route=decision.as_route(),
+        )
+
+    return await walk_role(
+        request, pool, routing.DECISIONS_ROLE, requested, attribution, serve, kinds=kinds
+    )
 
 
 # ── where a reply ran (D10) ────────────────────────────────────────────────

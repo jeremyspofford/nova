@@ -607,6 +607,19 @@ def machine_uid(facts: dict | None) -> str | None:
     return uid if isinstance(uid, str) and _UID.match(uid) else None
 
 
+def machine(facts: dict | None) -> str | None:
+    """The machine this agent runs on, as its own facts identify it — what
+    "an agent of the same machine" is read by (the said-not-done device claim,
+    fix round 4, R5): its machine_uid, the key machine_status groups on. None
+    where that cannot be read: an agent that reported none (one that predates
+    S42a sends no facts), and an agent inside WSL, whose machine id is WSL's
+    OWN (app/checks/devices.py), so the Windows machine it runs on is not in
+    its facts."""
+    if in_wsl(facts) is not None:
+        return None
+    return machine_uid(facts)
+
+
 def os_label(facts: dict | None) -> str | None:
     version = (facts.get("os") or {}).get("version") if isinstance(facts, dict) else None
     return version if isinstance(version, str) and version else None

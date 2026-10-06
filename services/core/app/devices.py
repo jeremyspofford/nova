@@ -589,6 +589,16 @@ async def list_devices(pool: asyncpg.Pool, *, hub_version: str | None = None) ->
     ]
 
 
+async def live_machines(pool: asyncpg.Pool) -> dict[str, str | None]:
+    """Every LIVE device's name, and the machine its agent reported running on
+    (device_facts.machine: its machine_uid, None where that cannot be read) —
+    the grouping machine_status reads, from the same rows. The said-not-done
+    device claim reads it (fix round 4, R5): a call on another agent of the
+    same machine is a call on that machine."""
+    rows = await pool.fetch("SELECT name, facts FROM devices WHERE revoked_at IS NULL")
+    return {row["name"]: device_facts.machine(row["facts"]) for row in rows}
+
+
 async def _live_or_refuse(conn: asyncpg.Connection, device_id: uuid.UUID) -> asyncpg.Record:
     row = await conn.fetchrow("SELECT * FROM devices WHERE id = $1", device_id)
     if row is None:

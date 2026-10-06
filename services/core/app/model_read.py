@@ -292,7 +292,7 @@ async def complete(
                 "POST", "/v1/chat/completions", json=payload, headers=headers
             ) as response:
                 if response.status_code != 200:
-                    detail = (await response.aread()).decode(errors="replace")[:200]
+                    detail = peers.refusal_words((await response.aread()).decode(errors="replace"))
                     raise GatewayRefused(f"the gateway refused ({response.status_code}): {detail}")
                 async for line in response.aiter_lines():
                     line = line.strip()

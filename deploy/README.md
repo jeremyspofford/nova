@@ -85,6 +85,105 @@ Nothing here links a specific engine to a specific agent by that identity
 yet — that join is S44's. A machine with no models still shows up, through
 its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
 
+## Which model answers chat
+
+- **One order.** Chat walks the pick (`chat.model`, link 1) and then chat's chain of
+  fallbacks. Settings → Models → Routing shows them as one list, each model once; the
+  chat switcher shows the same list, and names the model answering right now when the
+  pick cannot (`qwen3:8b → gemini-3.8-flash`).
+- **A pick never drops a model.** "Use" on Models, a model picked in chat, "Use" under a
+  provider and "Make primary" in Routing all make the same write
+  (`PUT /api/v1/routes/chat/primary`): the picked model becomes link 1, and the one it
+  replaces becomes the first fallback. Remove a fallback in Routing when you no longer
+  want it. While Jev Router picks chat's cloud model, a pick is refused until the switch
+  is off. A pick lands at a reply's next round, so a reply already under way finishes
+  on the new pick (a reply carrying a picture keeps the model that checked it).
+- **She can make the pick herself.** Ask her in chat ("use the Dell first, then
+  OpenRouter"): her `set_chat_model` tool makes the same write and answers with chat's
+  order as stored; `route_explain` says which model would answer right now.
+- **The model list.** The Models page is the one list of models (install, compare,
+  probe, remove). The catalogue remembers a provider that could not be reached at all
+  for 60 seconds, so a machine that is off does not hold every page that reads the list;
+  the Models page's Refresh (`/admin/catalog?fresh=1`) dials every source again.
+
+## Decision models (Jev and Kev)
+
+Since the decision role (`docs/plans/rebuild/decision-role/spec.md`), before Nova
+answers a typed chat message, core asks the decisions role two things: which of her
+tools the message needs, and which recalled notes are still right for it. The answer
+can add one hint line to her turn — only when the tool fit and the gate are each at
+least 0.30 — and can narrow the recalled notes to the ones still judged current. She
+still decides, and every guard still judges what she writes.
+
+- **Where it is set.** The `decisions` routing role, in Settings → Routing, edited like
+  chat's chain. A link whose provider cannot answer typed questions is refused, by name;
+  the Routing picker itself offers the decisions role decision models only, so its chain
+  never holds a chat model:
+  - **Jev** (cloud): `openrouter:~typesafe/jev-latest`, through the existing `openrouter`
+    provider and its key. Models lists it under Cloud with a `decisions` tag. The step's
+    total cost (`cost_usd`) is on its `decisions` span, and the Spend page shows it
+    under the `decisions` role.
+  - **Kev** (your own machine): Providers → Add → the **Kev** preset — the `systemone`
+    adapter at `http://<host>:8009/v1`, ticked "Runs on my own machine", so it is never
+    priced or capped. The server is started by hand until the Kev engine exists, run
+    from a clone of [jaredpalmer/kev](https://github.com/jaredpalmer/kev):
+    `uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --host 0.0.0.0
+    --port 8009` — `--host 0.0.0.0` is what lets the gateway reach it. Kev is a local
+    decision model, and those are switched off until you turn them on (below).
+- **Local and cloud: two switches.** Beside the decisions chain in Settings → Routing:
+  **Local decision model** (alpha, off by default) and **Cloud decision model** (beta, on
+  by default). A link's kind is its provider's "Runs on my own machine" flag, never its
+  name. A link whose kind is switched off is passed over for that call — never dialled,
+  never walled — and the next link answers; the route says why
+  (`dell-kev:kev-latest: local decision models are switched off in Settings (alpha)`), and
+  so do "right now: … would answer" in Routing and Nova's `route_explain`. The chain's
+  order stays yours. Local is alpha because on a GPU shared with the chat model it rarely
+  answers in time: measured on 2026-09-29 with `dell:qwen3:8b` loaded, Kev-4B answered
+  within the 5 s budget on 1 of 90 corpus turns and 0 of 10 latency runs (1.8 s alone and
+  warm; Jev took 0.8 s). When it cannot answer in time, the step is skipped and the
+  message waits up to 5 s. Cloud is beta: the message and its recalled notes go to the
+  provider, at a small cost per message. With **both off**, the step does not run at all
+  — no call, no delay, no cost — and the turn's `decisions` span says so
+  (`outcome: "off"`). Core reads the switches for each turn that asks and names the kinds
+  allowed on each call (`X-Nova-Decision-Kinds`); a call with no such header allows every
+  kind.
+- **With no decision model** — an empty chain, which is how every install starts — nothing
+  changes: each turn runs exactly as before, and its trace says why.
+- **The budget.** The whole step has 5 seconds per turn (`decisions.TURN_BUDGET_S` in
+  core). A slow or unreachable decision model costs the hint, never the turn, and a
+  decision is applied whole or not at all. A decision server that cannot be reached, or
+  fails with a 5xx, is walled and the next link answers. That wall lapses on the outage
+  ladder (1 minute, then 5, then 30 while it keeps failing), and its first clean answer
+  after that resets the ladder. A refused key or a rate limit (401, 402, 403, 429) walls
+  the whole provider for an hour, then 6, then 24. "Try it again" in Settings → Routing
+  clears a wall at once.
+- **Where it does not run (yet).** Scheduled firings and agents' turns never ask. Neither
+  does a second message sent while she is still answering the first — it is queued, then
+  drained without the step once her turn ends. The eval runner's turns do run it,
+  because they measure the chat path.
+- **Reading it.** Each turn it ran on has one `decisions` span: the kinds allowed
+  (`kinds`), the hint, its fit and the gate, each note's scores and verdict by path (never
+  its text) when the notes were checked, who served, its cost (`cost_usd`), and — as the
+  span's duration — how long it took:
+  `SELECT meta, duration_ms FROM turn_spans WHERE turn_id = '<id>' AND kind = 'decisions';`
+- **The Jev Router switch.** Settings → Routing shows "Let Jev Router pick the cloud
+  model" on Chat, Scheduled tasks and each agent's role, read off what your turns
+  actually do: it shows on exactly when the first cloud model a turn would reach is Jev
+  Router. On, the role's first cloud link becomes `openrouter:typesafe/jev-router`,
+  which picks a model and reasoning effort per request, balancing quality, speed and
+  cost — you pay for the model it picks. Off puts the link it replaced back. Local links
+  keep their places: when chat's own pick is a cloud model, the switch puts Jev Router in
+  its place, and switching off puts the pick back. Scheduled tasks send chat's pick first
+  too, so while that pick is a cloud model their switch is chat's: use chat's switch, or,
+  when Jev Router is the pick because you chose it in chat, pick another model there. A
+  role with no chain of its own walks chat's chain, and its switch reads it there; to
+  switch it by itself, give it a chain of its own — an agent's role always needs one for
+  that, because its turns send no chat model. Switching a role off can empty its own
+  chain; it then walks chat's chain again, and the switch says so when Jev Router is on
+  there. With no chain and no chat model, chat answers with the gateway's default model,
+  and switching Jev Router on asks you to pick a chat model or give chat a chain first.
+  The model it picked is on the round's `llm_call` span as `upstream_model`.
+
 ## The hub machine's own agent
 
 `./install` ends by installing novad on the hub machine itself (S42b), so
@@ -328,6 +427,33 @@ control plane flaps). In this order:
 - Stop the sidecar and the tailnet URL goes dark; `127.0.0.1:3000` is
   unaffected. The other direction holds too: nothing but this sidecar (and
   an explicit tunnel or funnel) exposes the stack beyond loopback.
+
+## Adding devices and phones
+
+Since S47, ask Nova in chat to put herself on a device and she sends a QR card — a QR
+code, a short link and, for a machine, a one-time code. She never says the code out loud;
+it is only ever on the card. This comes from her `show_setup_qr` tool; `nova_address` is
+what she reads first to know her own address.
+
+- **A phone or tablet, as the PWA:** "How do I put you on my phone?" sends a card whose
+  link opens `/install` on that device — the add-to-home-screen steps for its own browser,
+  then sign in.
+- **The Nova app:** "Where do I download your app?" sends a card whose link opens `/app`.
+  There is no native app yet, so that page shows the same PWA install steps instead.
+- **A machine Nova controls:** "Add my laptop" sends a card with a one-time pairing code,
+  good for 10 minutes, and the one-line command for Nova's agent. The code rides in the
+  link's fragment, which a browser never sends anywhere — it reaches no server, proxy or
+  log, and never her own reply.
+- **A model server:** the same card as a machine, plus a note that serving its models
+  needs the models role (S44), not built yet — today it just pairs as a machine Nova
+  controls.
+
+**Step zero:** the phone and app cards say the other device must already be signed in to
+Tailscale on the same tailnet before the link works — Nova cannot check this, so the page
+loading there is the check. The machine and model-server cards don't carry that line.
+
+Every QR encodes the derived tailnet address (above), never `127.0.0.1` or a LAN address.
+With no address to give out, she says so and sends no card.
 
 ## Backup
 

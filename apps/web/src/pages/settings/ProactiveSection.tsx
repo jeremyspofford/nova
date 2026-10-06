@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { Radar } from 'lucide-react'
 import { Input, Section, Toggle } from '../../components/ui'
-import { putSetting as apiPutSetting, type SettingWritten } from '../../lib/api'
-import { InlineSave, type SaveMessage } from './shared'
+import { putSetting as apiPutSetting } from '../../lib/api'
+import { InlineSave, storedFrom, type SaveMessage } from './shared'
 
 /**
  * Settings → Proactive (S11): the three settings the proactive engine is
@@ -55,25 +55,6 @@ const MEANING =
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
-}
-
-/**
- * The stored value out of a settings write, or a refusal that says why it
- * cannot be shown as stored. There is deliberately no fallback to the value
- * that was sent: a write that cannot state what it stored has not been
- * verified, and rendering the typed value would report a success nobody
- * checked.
- */
-function storedFrom(written: SettingWritten, key: string): { value: unknown; note?: string } {
-  if (written === null || typeof written !== 'object' || !('value' in written)) {
-    throw new Error(
-      `the write of ${key} returned no stored value, so what is stored is unknown — reload the page`,
-    )
-  }
-  if (written.key !== key) {
-    throw new Error(`the write of ${key} answered about ${String(written.key)} instead`)
-  }
-  return { value: written.value, note: written.note }
 }
 
 /** A link that still renders as a link when the section is mounted outside a

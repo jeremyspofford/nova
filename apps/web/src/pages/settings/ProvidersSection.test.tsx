@@ -15,6 +15,7 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     preset: 'openrouter',
     builtin: false,
     is_default: false,
+    local: false,
     // RELATIVE to now, not a fixed instant (2026-09-12): the row's clause
     // switches from "N ago" to an absolute date once a check is old enough, so
     // a hardcoded date made this suite pass until the calendar caught up with
@@ -41,6 +42,7 @@ const HUB = provider({
   preset: null,
   builtin: true,
   is_default: true,
+  local: true,
   // Never verified through the registry — the gateway seeds it.
   verified_at: null,
   listing: 'unknown',
@@ -93,7 +95,7 @@ function renderSection(
     deleteProvider: ReturnType<typeof vi.fn>
     makeDefaultProvider: ReturnType<typeof vi.fn>
     getProviderModels: ReturnType<typeof vi.fn>
-    putSetting: ReturnType<typeof vi.fn>
+    setChatPrimary: ReturnType<typeof vi.fn>
   }> = {},
   chatModel = 'qwen3:8b',
 ) {
@@ -105,7 +107,8 @@ function renderSection(
     deleteProvider: vi.fn(async (name: string) => ({ deleted: name })),
     makeDefaultProvider: vi.fn(async (name: string) => provider({ name, is_default: true })),
     getProviderModels: vi.fn(async () => LISTING),
-    putSetting: vi.fn(async () => undefined),
+    // Echoes what core stores for a pick: the model, and chat's fallbacks.
+    setChatPrimary: vi.fn(async (model: string) => ({ chat_model: model, chain: [] })),
     ...api,
   }
   const onModelChanged = vi.fn()
@@ -178,11 +181,35 @@ describe('ProvidersSection', () => {
       adapter: 'openai-chat',
       base_url: 'https://openrouter.ai/api/v1',
       auth_shape: 'static-bearer',
+      local: false,
       api_key: 'sk-or-1',
       preset: 'openrouter',
       model_note: 'vendor/model ids',
     })
     await waitFor(() => expect(screen.queryByTestId('provider-form')).toBeNull())
+  })
+
+  it('offers "Add a provider" only once the presets have loaded, so the first preset is what opens', async () => {
+    // CI run 36719466510 (2026-09-30) opened the form as Custom with an empty
+    // Base URL: the button rendered before load() resolved, and its click read
+    // an empty preset list. A presets answer held back makes that race certain.
+    let release: (value: ProviderPreset[]) => void = () => {}
+    const slowPresets = vi.fn(
+      () =>
+        new Promise<ProviderPreset[]>(resolve => {
+          release = resolve
+        }),
+    )
+    renderSection({ getProviders: vi.fn(async () => [HUB]), getProviderPresets: slowPresets })
+    await waitFor(() => expect(slowPresets).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /add a provider/i })).toBeNull()
+    release(PRESETS)
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    expect((within(form).getByLabelText('Base URL') as HTMLInputElement).value).toBe(
+      'https://openrouter.ai/api/v1',
+    )
   })
 
   it('a refused verify shows the provider\'s reason and keeps the form open', async () => {
@@ -239,7 +266,7 @@ describe('ProvidersSection', () => {
 
     fireEvent.click(within(row).getByRole('button', { name: /use anthropic\/claude-sonnet-5/i }))
     await waitFor(() =>
-      expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:anthropic/claude-sonnet-5'),
+      expect(api.setChatPrimary).toHaveBeenCalledWith('openrouter:anthropic/claude-sonnet-5'),
     )
     expect(onModelChanged).toHaveBeenCalledWith('openrouter:anthropic/claude-sonnet-5')
   })
@@ -271,13 +298,13 @@ describe('ProvidersSection', () => {
     expect(screen.queryByText(/models from/)).toBeNull()
     fireEvent.change(screen.getByLabelText('Model id for azure'), { target: { value: 'gpt-5-deploy' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use' }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'azure:gpt-5-deploy'))
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('azure:gpt-5-deploy'))
     expect(onModelChanged).toHaveBeenCalledWith('azure:gpt-5-deploy')
   })
 
   it('a failed switch states the reason and does not report a change', async () => {
     const { api, onModelChanged } = renderSection({
-      putSetting: vi.fn(async () => {
+      setChatPrimary: vi.fn(async () => {
         throw new Error('the server refused (500)')
       }),
     })
@@ -285,7 +312,7 @@ describe('ProvidersSection', () => {
     fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
     await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-openai/gpt-x')).getByRole('button', { name: /use/i }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalled())
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('500'))
     expect(onModelChanged).not.toHaveBeenCalled()
   })
@@ -328,7 +355,7 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
     fireEvent.click(screen.getByTestId('toggle-models-hub'))
     await waitFor(() => expect(screen.getByTestId('model-qwen3:14b')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-qwen3:14b')).getByRole('button', { name: /use/i }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'hub:qwen3:14b'))
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('hub:qwen3:14b'))
     expect(onModelChanged).toHaveBeenCalledWith('hub:qwen3:14b')
   })
 
@@ -351,6 +378,26 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
 
 
 describe('ProvidersSection — the owner can see the verdict and find the models', () => {
+  it('a proven key a later listing refused is not drawn as a pass', async () => {
+    // 2026-10-05: Anthropic read "Key verified" in green beside "the last
+    // listing was refused (401): API key is invalid".
+    renderSection({
+      getProviders: vi.fn(async () => [
+        HUB,
+        provider({
+          key_proven: true,
+          listing: 'unknown',
+          listing_note: 'the last listing was refused (401): API key is invalid.',
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
+    const el = screen.getByTestId('provider-status-openrouter')
+    expect(el.className).not.toContain('text-success')
+    expect(el.textContent).toContain('before the refused listing below')
+    expect(screen.getByTestId('provider-listing-warning-openrouter').textContent).toContain('API key is invalid')
+  })
+
   it('a proven key reads "Key verified <when> — <how>", green, from the structured verdict', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
@@ -415,7 +462,10 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     }
   })
 
-  it('a refused listing is shown as a warning beside a still-true verdict', async () => {
+  it('a refused listing is shown as a warning, and the earlier verdict keeps its date but not its green', async () => {
+    // Was: the verdict stayed green beside the refusal, as a fact of its
+    // date. On the page that read as "fine" next to "API key is invalid"
+    // (2026-10-05), so the pass colour now needs the listing to agree.
     renderSection({
       getProviders: vi.fn(async () => [
         provider({
@@ -427,7 +477,9 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     })
     await waitFor(() => expect(screen.getByTestId('provider-listing-warning-openrouter')).toBeTruthy())
     expect(screen.getByTestId('provider-listing-warning-openrouter').textContent).toContain('key revoked')
-    expect(screen.getByTestId('provider-status-openrouter').className).toContain('text-success')
+    const verdict = screen.getByTestId('provider-status-openrouter')
+    expect(verdict.className).not.toContain('text-success')
+    expect(verdict.textContent).toMatch(/^Key verified .* — before the refused listing below$/)
   })
 
   it('after a listing fetch the row re-reads its server state', async () => {
@@ -579,5 +631,195 @@ describe('ProvidersSection — a listing refresh never touches another row\'s de
       expect(screen.getByTestId('provider-other').textContent).toContain('default for bare model ids'),
     )
     expect(screen.getByTestId('provider-openrouter').textContent).not.toContain('default for bare model ids')
+  })
+})
+
+
+describe('ProvidersSection — the Kev preset and decision-model servers', () => {
+  it('adds a Kev server from its preset as a local decision-model server', async () => {
+    const KEV: ProviderPreset = {
+      name: 'kev',
+      label: 'Kev decision-model server (your own machine)',
+      adapter: 'systemone',
+      base_url: 'http://{host}:8009/v1',
+      auth_shape: 'none',
+      local: true,
+      placeholders: ['host'],
+    }
+    const { api } = renderSection({
+      getProviders: vi.fn(async () => [HUB]),
+      getProviderPresets: vi.fn(async () => [...PRESETS, KEV]),
+      createProvider: vi.fn(async (p: { name: string }) => provider({ name: p.name, adapter: 'systemone', local: true })),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'kev' } })
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'dell-kev' } })
+    fireEvent.change(within(form).getByLabelText('host'), { target: { value: '100.122.40.93' } })
+    expect((within(form).getByLabelText(/Runs on my own machine/) as HTMLInputElement).checked).toBe(true)
+    expect(within(form).queryByLabelText('API key')).toBeNull()
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1))
+    expect(api.createProvider.mock.calls[0][0]).toEqual({
+      name: 'dell-kev',
+      adapter: 'systemone',
+      base_url: 'http://100.122.40.93:8009/v1',
+      auth_shape: 'none',
+      local: true,
+      preset: 'kev',
+    })
+  })
+
+  it('offers "Runs on my own machine" for a custom provider and the kev preset, never an https preset', async () => {
+    // Ticked on an internet provider, its calls would go unpriced and uncapped.
+    const KEV: ProviderPreset = {
+      name: 'kev',
+      label: 'Kev decision-model server (your own machine)',
+      adapter: 'systemone',
+      base_url: 'http://{host}:8009/v1',
+      auth_shape: 'none',
+      local: true,
+      placeholders: ['host'],
+    }
+    const { api } = renderSection({
+      getProviders: vi.fn(async () => [HUB]),
+      getProviderPresets: vi.fn(async () => [...PRESETS, KEV]),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    const tick = () => within(form).queryByLabelText(/Runs on my own machine/) as HTMLInputElement | null
+
+    // The form opens on the first preset: OpenRouter, at https://.
+    expect((within(form).getByLabelText('Preset') as HTMLSelectElement).value).toBe('openrouter')
+    expect(tick()).toBeNull()
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'kev' } })
+    expect(tick()?.checked).toBe(true)
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    expect(tick()?.checked).toBe(false)
+    fireEvent.click(tick()!)
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'openrouter' } })
+    expect(tick()).toBeNull()
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'sk-1' } })
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1))
+    expect(api.createProvider.mock.calls[0][0]).toEqual(expect.objectContaining({ name: 'openrouter', local: false }))
+  })
+
+  it('a custom provider is local only when the owner ticks it', async () => {
+    const { api } = renderSection({ getProviders: vi.fn(async () => [HUB]) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'lanbox' } })
+    fireEvent.change(within(form).getByLabelText('Base URL'), { target: { value: 'http://192.0.2.10:11434/v1' } })
+    fireEvent.change(within(form).getByLabelText('Auth'), { target: { value: 'none' } })
+    fireEvent.click(within(form).getByLabelText(/Runs on my own machine/))
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1))
+    expect(api.createProvider.mock.calls[0][0]).toEqual(expect.objectContaining({ name: 'lanbox', local: true }))
+  })
+
+  it('never offers a decision model as the chat model', async () => {
+    // Review focus 2: "Use" writes chat.model, and a decision model has no chat.
+    const withJev: ProviderListing = {
+      ...LISTING,
+      models: [...LISTING.models, { id: '~typesafe/jev-latest', owned_by: 'openrouter', name: 'TypeSafe: Jev Latest', output_modalities: ['decisions'] }],
+    }
+    renderSection({ getProviderModels: vi.fn(async () => withJev) })
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
+    await waitFor(() => expect(screen.getByTestId('model-~typesafe/jev-latest')).toBeTruthy())
+
+    const jev = screen.getByTestId('model-~typesafe/jev-latest')
+    expect(within(jev).queryByRole('button', { name: /use/i })).toBeNull()
+    expect(jev.textContent).toContain('decision model — add it under Routing → Decisions')
+    const sonnet = screen.getByTestId('model-anthropic/claude-sonnet-5')
+    expect(within(sonnet).getByRole('button', { name: /use anthropic\/claude-sonnet-5/i })).toBeTruthy()
+  })
+
+  it('a decision-model server offers no chat model at all, even typed', async () => {
+    const kev = provider({ name: 'dell-kev', adapter: 'systemone', base_url: 'http://100.122.40.93:8009/v1', auth_shape: 'none', api_key: null, local: true, preset: 'kev' })
+    renderSection({
+      getProviders: vi.fn(async () => [HUB, kev]),
+      getProviderModels: vi.fn(async () => { throw new Error('http://100.122.40.93:8009/v1/models answered 404 — this server has no model listing; type a model id') }),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-dell-kev')).toBeTruthy())
+    const row = screen.getByTestId('provider-dell-kev')
+    expect(row.textContent).toContain('Decision-model server (typed questions)')
+    expect(row.textContent).toContain('local')
+    fireEvent.click(screen.getByTestId('toggle-models-dell-kev'))
+    await waitFor(() => expect(screen.getByTestId('provider-models-dell-kev').textContent).toContain('A decision-model server has no chat model to pick'))
+    expect(within(screen.getByTestId('provider-models-dell-kev')).queryByRole('button', { name: /use/i })).toBeNull()
+  })
+
+  it('a decision-model server\'s listing summary never invites a chat "Use", even when a listing loads', async () => {
+    // The summary's "press Use" suffix never appears for a decision-model
+    // server, even once its listing loads; it has nothing chat can use.
+    const kev = provider({ name: 'dell-kev', adapter: 'systemone', base_url: 'http://100.122.40.93:8009/v1', auth_shape: 'none', api_key: null, local: true, preset: 'kev' })
+    renderSection({
+      getProviders: vi.fn(async () => [HUB, kev]),
+      getProviderModels: vi.fn(async () => ({
+        source: 'dell-kev',
+        fetched_at: '2026-09-29T00:00:00Z',
+        models: [{ id: 'kev-latest', owned_by: 'dell-kev' }],
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-dell-kev')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-dell-kev'))
+    const panel = await screen.findByTestId('provider-models-dell-kev')
+    await waitFor(() => expect(panel.textContent).toContain('1 models from dell-kev'))
+    expect(panel.textContent).not.toContain('press Use')
+    expect(within(panel).queryByRole('button', { name: /use/i })).toBeNull()
+  })
+
+  it('switching Protocol to systemone downgrades an Azure-shaped auth to a bearer key', async () => {
+    renderSection({ getProviders: vi.fn(async () => [HUB]) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    fireEvent.change(within(form).getByLabelText('Auth'), { target: { value: 'api-key-header' } })
+    expect((within(form).getByLabelText('Auth') as HTMLSelectElement).value).toBe('api-key-header')
+
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'systemone' } })
+    // Switch back to a protocol where the Azure-shaped option is valid again:
+    // if the downgrade really rewrote the draft (rather than merely hiding an
+    // option the select fell off of), the stale api-key-header choice does
+    // not reappear.
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'openai-chat' } })
+
+    expect((within(form).getByLabelText('Auth') as HTMLSelectElement).value).toBe('static-bearer')
+  })
+
+  it('the Auth select drops the Azure-shaped option for a decision-model server', async () => {
+    renderSection({ getProviders: vi.fn(async () => [HUB]) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'systemone' } })
+
+    const authOptions = Array.from(
+      (within(form).getByLabelText('Auth') as HTMLSelectElement).options,
+    ).map(o => o.value)
+    expect(authOptions).not.toContain('api-key-header')
+    expect(authOptions).toEqual(['static-bearer', 'none'])
+  })
+
+  it('the local badge shows only for a non-builtin local provider', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [HUB, provider({ local: true })]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    // hub is local too (the bundled engine), but builtin — no badge to state
+    // what is already true of every builtin row.
+    expect(screen.getByTestId('provider-hub').textContent).not.toContain('local')
+    expect(screen.getByTestId('provider-openrouter').textContent).toContain('local')
   })
 })

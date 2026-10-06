@@ -668,7 +668,9 @@ async def test_the_consent_redirect_spends_the_shared_budget_so_deferral_cannot(
     assert names == ["consent_claim"]  # deferral never redirected
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
     assert stored == checked
-    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+    # The regeneration dispatched nothing: its note says it is answering again,
+    # never "doing it now" (said-not-done fix round 5, P6).
+    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE_NO_CALL]
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
@@ -778,8 +780,14 @@ async def test_no_redirect_when_the_turn_already_ran_the_tool(
     assert spy.calls == [{"url": URL}]  # ONCE — never twice
     assert gateway.calls == 2  # no redirect round at all
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored == guards.CONSENT_CLAIM_CORRECTION
-    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+    # The tool RAN: the correction says so, derived from the spans — never
+    # "nothing has run" beside it (said-not-done fix round 5, P5).
+    ran = (
+        "Correction: there is no approval step — nothing is waiting on you. "
+        f"This turn, {AUTO_ACTION} ran."
+    )
+    assert stored == ran
+    assert _corrections(sent) == [ran]
 
     spans = await _guard_spans(pool)
     assert [s["name"] for s in spans] == ["consent_claim"]

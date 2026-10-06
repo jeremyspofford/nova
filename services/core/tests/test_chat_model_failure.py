@@ -74,20 +74,26 @@ async def _assistant_rows(pool) -> list[str]:
 
 
 class RaisingTransport(httpx.AsyncBaseTransport):
-    """Raises `make_exc(request)` on the `fail_on`th request; earlier requests
-    are handed to `inner` — so a scripted round can run its tools before the
-    transport dies under the next one."""
+    """Raises `make_exc(request)` on the `fail_on`th model round — the
+    `fail_on`th POST /v1/chat/completions — and on every round after it.
+    Earlier rounds, and every request that is not a round (a typed turn's
+    decision step at /v1/systemone, first), are handed to `inner`: a scripted
+    round can run its tools before the transport dies under the next one,
+    and nothing else the turn asks the gateway moves which request fails."""
 
-    def __init__(self, make_exc, *, inner=None, fail_on: int = 1) -> None:
+    ROUND = "/v1/chat/completions"
+
+    def __init__(self, make_exc, *, inner, fail_on: int = 1) -> None:
         self.make_exc = make_exc
         self.inner = inner
         self.fail_on = fail_on
-        self.calls = 0
+        self.rounds = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.calls += 1
-        if self.calls >= self.fail_on or self.inner is None:
-            raise self.make_exc(request)
+        if request.url.path == self.ROUND:
+            self.rounds += 1
+            if self.rounds >= self.fail_on:
+                raise self.make_exc(request)
         return await self.inner.handle_async_request(request)
 
 
@@ -135,8 +141,11 @@ async def test_a_read_timeout_persists_a_statement_naming_the_model_and_the_budg
     owner_client, pool, mount_peers
 ):
     memory = FakeMemory()
-    mount_peers(gateway=FakeGateway(), memory=memory)
-    _mount_gateway_transport(RaisingTransport(_read_timeout))
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway, memory=memory)
+    _mount_gateway_transport(
+        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(gateway.app))
+    )
     await _set_model(owner_client)
 
     sent = await _say(owner_client)
@@ -228,8 +237,11 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
 
 
 async def test_a_refused_connection_names_the_connection_failure(owner_client, pool, mount_peers):
-    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
-    _mount_gateway_transport(RaisingTransport(_connection_refused))
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    _mount_gateway_transport(
+        RaisingTransport(_connection_refused, inner=fakes.StreamingASGITransport(gateway.app))
+    )
     await _set_model(owner_client)
 
     sent = await _say(owner_client)
@@ -288,6 +300,35 @@ async def test_a_gateway_5xx_is_stated_with_its_status(owner_client, pool, mount
 
 
 # -- the empty stream (the measured shape) --------------------------------------
+
+
+async def test_a_refusal_naming_every_link_is_kept_to_its_last_link(
+    owner_client, pool, mount_peers
+):
+    # 2026-09-30: the gateway's 503 named all three links' verdicts, the old
+    # 400-character cut ended at "openrouter refus", and the next message
+    # asked exactly what had been cut — OpenRouter's 402, out of credits.
+    words = (
+        "no model in the 'chat' chain can serve right now — "
+        + "; ".join(
+            f"dell:qwen3:{n}b: dell:qwen3:{n}b refused (502): could not reach dell at "
+            "http://100.122.40.93:11435/v1 — ConnectTimeout — walled for another 30 min"
+            for n in (8, 27)
+        )
+        + "; openrouter:qwen/qwen3.8-27b: openrouter refused (402): This request requires "
+        "more credits, or fewer max_tokens"
+    )
+    assert len(words) > 400
+    mount_peers(gateway=FakeGateway(status=503, refusal_body={"error": words}), memory=FakeMemory())
+    await _set_model(owner_client)
+
+    await _say(owner_client)
+
+    (statement,) = await _assistant_rows(pool)
+    assert "the gateway refused the request (503)" in statement
+    assert "requires more credits, or fewer max_tokens" in statement
+    # The gateway's own words, not its JSON wrapping.
+    assert '{"error"' not in statement
 
 
 async def test_an_empty_stream_is_a_stated_round_failure_with_its_counted_facts(

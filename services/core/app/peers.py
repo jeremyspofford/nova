@@ -11,7 +11,9 @@ header, same parsing.
 
 from __future__ import annotations
 
+import json
 import os
+from urllib.parse import unquote
 
 import httpx
 from fastapi import FastAPI
@@ -55,6 +57,30 @@ def client(app: FastAPI, link: Link, timeout: httpx.Timeout) -> httpx.AsyncClien
     )
 
 
+#: How much of a gateway refusal a failed call keeps. The 503 for a chain
+#: with nothing runnable names every link's verdict, and the old 400-character
+#: cut ended in the LAST link — on 2026-09-30 exactly the reason he then asked
+#: about ("openrouter refus…": a 402, out of credits).
+REFUSAL_WORDS_MAX = 2000
+
+
+def refusal_words(body: str) -> str:
+    """The gateway's own words for a refusal: the JSON body's `error` — a
+    string, or an OpenAI-shaped `{"message": ...}` — when it carries one,
+    else the body as it came; capped, never cut short of the links it names."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        said = parsed.get("error")
+        if isinstance(said, dict):
+            said = said.get("message")
+        if isinstance(said, str) and said.strip():
+            body = said
+    return body[:REFUSAL_WORDS_MAX]
+
+
 def reason(exc: Exception) -> str:
     """A short, honest description of why a peer call failed."""
     text = str(exc).strip()
@@ -86,3 +112,21 @@ def attribution_headers(turn, purpose: str, role: str | None = None) -> dict[str
     if role:
         headers[HEADER_ROLE] = role
     return headers
+
+
+# ── X-Nova-Route: which link of a role's chain answered ─────────────────────
+#
+# The gateway stamps `role=…;link=N;reason=…` on every routed answer (S10-2);
+# `reason` is free text that can carry `;` and `=`, so the gateway
+# percent-quotes it. One reader, so chat's rounds and the decision role's
+# calls (decisions.py) can never decode the header two ways.
+
+
+def route_fields(header: str | None) -> dict[str, str]:
+    """The header's fields by name, `reason` already decoded; {} for none."""
+    if not header:
+        return {}
+    fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
+    if "reason" in fields:
+        fields["reason"] = unquote(fields["reason"])
+    return fields

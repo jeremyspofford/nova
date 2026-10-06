@@ -248,7 +248,7 @@ async def _command(
     args: dict,
     *,
     ctx: ToolContext | None = None,
-    timeout: float = COMMAND_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> dict:
     """Send one command through the hub, restating a DeviceRefused as the
     ToolFailure the model reads. Only a `result` frame gets here as a return.
@@ -264,7 +264,10 @@ async def _command(
     `_require_connected` cannot see: a device present at `_admit` time whose
     socket is gone by the time this actually sends (review N3). Passing None
     is fine — every caller in this module has a ctx, but the sink is optional
-    the same way `_require_connected`'s is."""
+    the same way `_require_connected`'s is.
+
+    `timeout` None is COMMAND_TIMEOUT_SECONDS, read HERE, at call time — never
+    bound as the default at import, which a patched constant would not reach."""
     if envelopes.contains_lone_surrogate(args):
         raise ToolFailure(
             "an argument contains an unpaired UTF-16 surrogate, which cannot be signed "
@@ -277,7 +280,7 @@ async def _command(
             name=row["name"],
             capability=capability,
             args=args,
-            timeout=timeout,
+            timeout=COMMAND_TIMEOUT_SECONDS if timeout is None else timeout,
             facts_sink=ctx.facts_sink if ctx is not None else None,
         )
     except devices.DeviceRefused as exc:
@@ -590,10 +593,31 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
     return f"Wrote {path} on {row['name']}."
 
 
+# What no agent's apps.launch result carries, on any OS: whether a window
+# appeared. Each agent reports what IT did — handed the request to the shell,
+# started a process — and "the visible window is the human's confirmation"
+# (docs/plans/rebuild/slice-05-carries.md). The result says so, every time, so
+# an accepted hand-off never reads as a running app.
+LAUNCH_UNCONFIRMED = "whether a window opened is not confirmed"
+
+
 async def device_launch_app(args: dict, ctx: ToolContext) -> str:
+    """The agent's OWN outcome words, never a sentence written here.
+
+    The owner's test, 2026-09-28 (turn fe7e3198): the Windows agent hands a
+    launch to explorer.exe, which proves only that the shell accepted it, and
+    it answered "asked Windows to launch brave". This returned "Launched brave
+    on DELL-XPS-8950." instead, she told him "Brave is now running", and he saw
+    no Brave. Each OS's words stay the agent's (apps_*.go), so nothing here is
+    written per OS; what is added is only what none of them says."""
     pool, row, _ = await _admit(args, ctx=ctx)
-    _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}, ctx=ctx), row)
-    return f"Launched {args['app']} on {row['name']}."
+    result = _require_ok(
+        await _command(pool, row, "apps.launch", {"app": args["app"]}, ctx=ctx), row
+    )
+    said = str(result.get("output") or "").strip()
+    if not said:
+        said = f"answered ok to launching {args['app']} and said nothing more"
+    return f"{row['name']}: {said} — {LAUNCH_UNCONFIRMED}."
 
 
 def _obj(properties: dict, required: list[str]) -> dict:

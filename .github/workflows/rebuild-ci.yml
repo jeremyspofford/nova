@@ -236,10 +236,15 @@ jobs:
       # leg already covers it — silence here would read as coverage, so it
       # is said instead).
       - run: /bin/bash ./deploy/install_test.sh
-      - run: /bin/bash ./deploy/backup_test.sh
+      # uv BEFORE backup_test.sh: its coverage block needs an interpreter that
+      # can import yaml (python3 with PyYAML, or `uv run --project
+      # deploy/backup`), and FAILS rather than pass vacuously without one. The
+      # macos-15 image's python3 has no PyYAML, so this leg failed on every
+      # run from CI's re-enable (2026-09-27) until 2026-09-30.
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.12"
+      - run: /bin/bash ./deploy/backup_test.sh
       - name: the suite's interpreter must be able to import yaml
         run: uv run --project deploy/backup python -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on', sys.version)"
       - run: uv run --project deploy/backup pytest -m "not live" deploy/backup/tests

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, onTestFinished, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './SettingsPage'
@@ -6,7 +6,17 @@ import { ChatProvider } from '../../stores/chat-store'
 import { ChatPage } from '../chat/ChatPage'
 import { AuthProvider } from '../../stores/auth-store'
 import { ThemeProvider } from '../../stores/theme-store'
-import { getSettings, type Conversation, type StoredMessage } from '../../lib/api'
+import {
+  explainRoute,
+  getCatalog,
+  getRoutes,
+  getSettings,
+  listAgents,
+  putSetting,
+  setChatPrimary,
+  type Conversation,
+  type StoredMessage,
+} from '../../lib/api'
 
 /**
  * Slice 2f Fix A, end to end: a switch made in Settings->Models has to be
@@ -61,6 +71,14 @@ vi.mock('../../lib/api', async importOriginal => {
     })),
     pullModel: vi.fn(),
     getMachines: vi.fn(async () => ({ machines: [] })),
+    // The one pick write: answers with what core stored.
+    setChatPrimary: vi.fn(async (model: string) => ({ chat_model: model, chain: ['qwen3:8b'] })),
+    // The Routing section's reads: the real calls unless a test says
+    // otherwise, so every other test here sees exactly what it saw before.
+    getRoutes: vi.fn(actual.getRoutes),
+    getCatalog: vi.fn(actual.getCatalog),
+    explainRoute: vi.fn(actual.explainRoute),
+    listAgents: vi.fn(actual.listAgents),
   }
 })
 
@@ -130,22 +148,45 @@ function renderApp(tab = 'models') {
   )
 }
 
-describe('Settings -> Models switch is visible in both the list and chat (Fix A)', () => {
-  it('marks the new model current in Settings AND updates the chat badge, with no message sent', async () => {
+describe('one pick, seen everywhere (Fix A, and 2026-10-05)', () => {
+  it('Make primary in Routing moves the chat badge too, with no message sent', async () => {
+    // The server's chat.model moves with the pick, as the real one does: the
+    // switcher reads the STORED pick and follows it.
+    let stored = 'qwen3:8b'
+    const settingsBefore = vi.mocked(getSettings).getMockImplementation()
+    const pickBefore = vi.mocked(setChatPrimary).getMockImplementation()
+    onTestFinished(() => {
+      vi.mocked(getSettings).mockImplementation(settingsBefore!)
+      vi.mocked(setChatPrimary).mockImplementation(pickBefore!)
+    })
+    vi.mocked(getSettings).mockImplementation(async () => [
+      { key: 'chat.model', type: 'str', default: '', description: '', value: stored },
+      { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'nova' },
+    ])
+    vi.mocked(setChatPrimary).mockImplementation(async (model: string) => {
+      stored = model
+      return { chat_model: model, chain: ['qwen3:8b'] }
+    })
+    vi.mocked(getRoutes).mockImplementation(async () => ({
+      roles: [{ role: 'chat', chain: ['hub:qwen3:14b'], reserved: false, builtin: true, protocol: 'chat' as const }],
+      walls: [],
+    }))
+    vi.mocked(explainRoute).mockImplementation(async role => ({ role, chain: [], would_serve: null, reason: null }))
+    vi.mocked(getCatalog).mockImplementation(async () => ({ fetched_at: 't', sources: [], rows: [] }))
+    vi.mocked(listAgents).mockImplementation(async () => [])
     renderApp()
 
-    // Pre-switch: qwen3:8b is current everywhere, no turn has run.
-    await waitFor(() => expect(screen.getByTestId('current-chat-model').textContent).toBe('qwen3:8b'))
+    // Pre-switch: qwen3:8b is the pick everywhere, no turn has run.
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-1').textContent).toContain('qwen3:8b'))
     await waitFor(() => expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:8b'))
 
-    const card14b = screen.getByTestId('model-card-qwen3:14b')
-    fireEvent.click(within(card14b).getByText('Use this model'))
+    fireEvent.click(screen.getByRole('button', { name: 'make primary chat hub:qwen3:14b' }))
 
-    // (a) Settings list: the switched model is marked current immediately.
-    await waitFor(() => expect(within(card14b).getByText('Current')).toBeDefined())
-    expect(screen.getByTestId('current-chat-model').textContent).toBe('qwen3:14b')
-
-    // (b) The chat badge updates too — no message was ever sent.
+    // The one pick write — never chat.model alone.
+    await waitFor(() => expect(setChatPrimary).toHaveBeenCalledWith('hub:qwen3:14b'))
+    expect(putSetting).not.toHaveBeenCalledWith('chat.model', expect.anything())
+    // Settings and the chat badge both follow it — no message was ever sent.
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-1').textContent).toContain('hub:qwen3:14b'))
     await waitFor(() => expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:14b'))
   })
 })
@@ -216,5 +257,61 @@ describe('SettingsPage — the proactive section', () => {
     await screen.findByText('Response quality')
     expect(screen.queryByLabelText('Daily digest at')).toBeNull()
     expect(screen.queryByTestId('proactive-meaning')).toBeNull()
+  })
+})
+
+/**
+ * The decision role's two switches (decision-role spec §6) are only
+ * switchable if the Routing section is handed them — off the same one
+ * settings fetch, and written back into it, the way every other section's
+ * settings are. A core that does not list the keys draws no switch.
+ */
+describe('SettingsPage — the decision switches', () => {
+  const WITH_SWITCHES = [
+    { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+    { key: 'decisions.local', type: 'bool', default: false, description: 'the local notice', value: false },
+    { key: 'decisions.cloud', type: 'bool', default: true, description: 'the cloud notice', value: true },
+  ] as const
+
+  function routingReads() {
+    vi.mocked(getRoutes).mockResolvedValue({
+      roles: [{ role: 'decisions', chain: [], reserved: false, builtin: true, protocol: 'systemone', router: null }],
+      walls: [],
+    })
+    vi.mocked(getCatalog).mockResolvedValue({ fetched_at: 't', sources: [], rows: [] })
+    vi.mocked(listAgents).mockResolvedValue([])
+    vi.mocked(explainRoute).mockResolvedValue({ role: 'decisions', chain: [], would_serve: null, reason: 'no chain' })
+  }
+
+  // Back to the real calls, so no other test here reads these answers.
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api')
+    vi.mocked(getRoutes).mockImplementation(actual.getRoutes)
+    vi.mocked(getCatalog).mockImplementation(actual.getCatalog)
+    vi.mocked(listAgents).mockImplementation(actual.listAgents)
+    vi.mocked(explainRoute).mockImplementation(actual.explainRoute)
+  })
+
+  it('draws them in Routing from the settings core listed, and a switch writes back into the page', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...WITH_SWITCHES])
+    routingReads()
+    renderApp('models')
+
+    const local = (await screen.findByRole('switch', { name: 'Local decision model' })) as HTMLInputElement
+    expect(local.checked).toBe(false)
+    expect((screen.getByRole('switch', { name: 'Cloud decision model' }) as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByText('the local notice')).toBeDefined()
+
+    fireEvent.click(local)
+    await waitFor(() => expect(putSetting).toHaveBeenCalledWith('decisions.local', true))
+    await waitFor(() => expect(local.checked).toBe(true))
+  })
+
+  it('draws no switch on a core that does not list the keys', async () => {
+    routingReads()
+    renderApp('models')
+
+    await screen.findByTestId('route-decisions')
+    expect(screen.queryByRole('switch', { name: 'Local decision model' })).toBeNull()
   })
 })

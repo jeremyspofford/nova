@@ -484,6 +484,10 @@ are marked below. Nothing about this is in the repo yet and nothing here has
 been measured on this stack — the numbers are the vendor's or third parties',
 cited so the next reader can check them.
 
+*(2026-09-28: it is being built — the decision role, [`decision-role/spec.md`](decision-role/spec.md),
+whose measurements on this stack supersede the vendor figures here where they measure
+the same thing.)*
+
 **What it is.** TypeSafe AI launched Jev on 2026-09-15 as the first "System
 One" model. It **does not generate text**. It takes a `state` plus typed
 questions and returns typed answers with probability distributions and
@@ -518,6 +522,13 @@ OpenRouter. It is not. OpenRouter lists `typesafe/jev-1.13` and
 `~typesafe/jev-latest` with a `text->decisions` modality and serves them in
 TypeSafe's request shape, not through chat completions. Nova's OpenRouter
 preset is `openai-chat`, so it cannot call Jev as it stands.
+
+*Corrected 2026-09-28:* the decision role adds `POST /v1/systemone` to the gateway. It
+forwards typed questions to any link whose adapter carries that protocol, so the
+existing `openrouter` provider — an `openai-chat` row — serves both chat and Jev with
+the same key, and a `systemone` adapter makes a Kev server a provider. OpenRouter lists
+Jev only when asked for `?output_modalities=decisions`; the gateway asks. The paragraph
+above describes the gateway before that.
 
 **Where it is weak.** TypeSafe's own
 [jaggedness page](https://docs.typesafe.ai/model-jaggedness/jev-1.13) lists

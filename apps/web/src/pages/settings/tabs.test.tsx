@@ -29,7 +29,7 @@ vi.mock('../../lib/api', async () => {
     listProviders: vi.fn(async () => []),
     getProviderPresets: vi.fn(async () => []),
     getProviderModels: vi.fn(async () => []),
-    getCatalog: vi.fn(async () => []),
+    getCatalog: vi.fn(async () => ({ fetched_at: 't', sources: [], rows: [] })),
     getRoutes: vi.fn(async () => ({ roles: [], walls: [] })),
     listAgents: vi.fn(async () => []),
     getMachines: vi.fn(async () => ({ machines: [] })),
@@ -118,11 +118,13 @@ describe('resolveTab', () => {
 })
 
 describe('the settings tabs', () => {
-  it('Machines is the first thing on the Models tab', async () => {
+  it('Routing — which model answers — is the first thing on the Models tab', async () => {
+    // 2026-10-05: chat's order is what this tab is opened for; it sat last,
+    // under the machines, a duplicate model list and the providers.
     renderAt('/settings/models')
-    await panel().findByText('Machines')
+    await panel().findByText('Routing')
     const headings = [...screen.getByTestId('settings-panel').querySelectorAll('h2')].map(h => h.textContent)
-    expect(headings[0]).toBe('Machines')
+    expect(headings[0]).toBe('Routing')
   })
 
   it('every tab in the strip is one the page can resolve', () => {

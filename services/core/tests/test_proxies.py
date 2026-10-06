@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from urllib.parse import parse_qs
+
 import httpx
 import pytest
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
-from app import proxies
+from app import chat_pick, proxies, settings_store
+from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
@@ -60,6 +67,8 @@ ROUTES = [
     ("DELETE", "/api/v1/routes/walls/openrouter", "/admin/routes/walls/openrouter", None),
     # S12-2: a role's chain row can be dropped (a stray agent role).
     ("DELETE", "/api/v1/routes/agent_coder", "/admin/routes/agent_coder", None),
+    # The decision role (spec §4): the Jev Router switch, an edit to a chain.
+    ("PUT", "/api/v1/routes/chat/jev-router", "/admin/routes/chat/jev-router", {"on": False}),
 ]
 
 
@@ -278,3 +287,812 @@ async def test_an_agent_role_with_no_agent_is_refused_before_the_gateway(owner_c
     resp = await owner_client.put("/api/v1/routes/chat", json={"chain": []})
     assert resp.status_code == 200
     assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": []})
+
+
+async def test_the_router_switch_on_an_agent_role_with_no_agent_is_refused_here(
+    owner_client, mount_peers
+):
+    """The same rule as PUT /routes/{role}: a typo'd agent role is refused where
+    the owner types it, by name, and the gateway is never asked."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put("/api/v1/routes/agent_nobody/jev-router", json={"on": False})
+
+    assert resp.status_code == 400
+    assert "no agent named 'nobody'" in resp.json()["error"]
+    assert gateway.seen == []
+
+
+# chat.model and the Jev Router switch (decision-role spec §4). The gateway
+# reads none of core's settings, yet chat.model is link 1 of every role whose
+# turns send it — Nova's own turn kinds — so core states it to the switch, and
+# writes it when the switch's answer says what it must become.
+CHAT_PICK = "openrouter:anthropic/claude-sonnet-5"
+ROUTER = "openrouter:typesafe/jev-router"
+
+
+async def _chat_model_is(owner_client, value: str) -> None:
+    resp = await owner_client.put("/api/v1/settings", json={"key": "chat.model", "value": value})
+    assert resp.status_code == 200
+
+
+async def _agent_coder(pool) -> None:
+    """A live agent `coder`, so `agent_coder` passes the no-such-agent check."""
+    await pool.execute(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page')"
+    )
+
+
+async def test_the_routes_page_is_read_with_chat_model_as_link_one_of_the_roles_that_send_it(
+    owner_client, mount_peers
+):
+    """GET /routes names chat.model and the roles whose turns send it — chat,
+    scheduled and beat, Nova's own turn kinds (an agent's turn sends no model)
+    — so each switch reads what those roles' turns actually reach. Neither is
+    sent while chat.model is empty."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    assert (await owner_client.get("/api/v1/routes")).status_code == 200
+    assert gateway.queries[-1] == b""
+
+    await _chat_model_is(owner_client, CHAT_PICK)
+    resp = await owner_client.get("/api/v1/routes")
+
+    assert resp.status_code == 200
+    sent = parse_qs(gateway.queries[-1].decode())
+    assert set(sent) == {"chat_model", "chat_model_roles"}
+    assert sent["chat_model"] == [CHAT_PICK]
+    (roles,) = sent["chat_model_roles"]
+    assert sorted(roles.split(",")) == ["beat", "chat", "scheduled"]
+
+
+@pytest.mark.parametrize("role", ["chat", "scheduled", "beat"])
+async def test_the_switch_is_told_chat_model_for_a_role_whose_turns_send_it(
+    owner_client, mount_peers, role
+):
+    gateway = FakeGateway(
+        admin_body={"role": role, "chain": [], "router": {"on": False, "kept": None}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put(f"/api/v1/routes/{role}/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == (
+        f"/admin/routes/{role}/jev-router",
+        {"on": False, "chat_model": CHAT_PICK},
+    )
+
+
+async def test_an_agent_roles_switch_is_never_told_chat_model(owner_client, mount_peers, pool):
+    """An agent's turn sends no model, so its chain's first link is its own:
+    chat.model is never stated for it, even while one is set."""
+    await _agent_coder(pool)
+    gateway = FakeGateway(
+        admin_body={"role": "agent_coder", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/agent_coder/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/agent_coder/jev-router", {"on": True})
+
+
+# chat_model is chat.model, a fact only core holds, and the gateway takes it as
+# core's: it would keep a client's value as the pick the router replaced and
+# hand it back on OFF as chat.model — a model chat.model never held. So a
+# client's chat_model never reaches the gateway, whatever the role.
+async def test_a_client_chat_model_never_reaches_the_gateway_for_an_agent_role(
+    owner_client, mount_peers, pool
+):
+    await _agent_coder(pool)
+    gateway = FakeGateway(
+        admin_body={"role": "agent_coder", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put(
+        "/api/v1/routes/agent_coder/jev-router", json={"on": True, "chat_model": CHAT_PICK}
+    )
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/agent_coder/jev-router", {"on": True})
+
+
+async def test_a_client_chat_model_never_reaches_the_gateway_while_chat_model_is_empty(
+    owner_client, mount_peers
+):
+    gateway = FakeGateway(
+        admin_body={"role": "chat", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put(
+        "/api/v1/routes/chat/jev-router", json={"on": True, "chat_model": "openrouter:x/y"}
+    )
+
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/chat/jev-router", {"on": True})
+
+
+async def test_an_agent_roles_switch_never_writes_chat_model(owner_client, mount_peers, pool):
+    """Only a role whose turns send chat.model can have its switch move it: an
+    agent role's answer that names one writes nothing."""
+    await _agent_coder(pool)
+    gateway = FakeGateway(
+        admin_body={
+            "role": "agent_coder",
+            "chain": [ROUTER],
+            "router": {"on": True, "kept": ""},
+            "chat_model": ROUTER,
+        }
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/agent_coder/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+
+
+async def test_the_switch_writes_chat_model_when_its_answer_names_it(
+    owner_client, mount_peers, pool
+):
+    """Chat's cloud link is chat.model: ON makes the router chat's model, and
+    the answer says so. Core writes it through the settings writer and hands
+    back the gateway's answer as it came."""
+    answer = {
+        "role": "chat",
+        "chain": ["hub:qwen3:8b"],
+        "router": {"on": True, "kept": CHAT_PICK},
+        "chat_model": ROUTER,
+    }
+    gateway = FakeGateway(admin_body=answer)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert resp.json() == answer
+    assert gateway.seen[-1] == (
+        "/admin/routes/chat/jev-router",
+        {"on": True, "chat_model": CHAT_PICK},
+    )
+    assert await settings_store.read_value(pool, "chat.model") == ROUTER
+
+
+async def test_an_empty_chat_model_in_the_answer_is_written_as_the_gateways_default(
+    owner_client, mount_peers, pool
+):
+    """OFF when the pick the router replaced names a provider that is gone:
+    the answer's chat_model is '' — the gateway's default — with a note saying
+    why. An empty string is a value to write, not the absence of one."""
+    answer = {
+        "role": "chat",
+        "chain": [],
+        "router": {"on": False, "kept": None},
+        "chat_model": "",
+        "note": (
+            f"the chat model Jev Router replaced, {CHAT_PICK}, names a provider that no longer "
+            "exists, so the chat model is cleared — pick one in chat"
+        ),
+    }
+    gateway = FakeGateway(admin_body=answer)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, ROUTER)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert resp.json() == answer
+    assert await settings_store.read_value(pool, "chat.model") == ""
+
+
+async def test_an_answer_that_names_no_chat_model_leaves_it_alone(owner_client, mount_peers, pool):
+    """A local chat model is not the cloud link, so the switch edits the
+    stored chain and its answer names no chat model: nothing is written."""
+    gateway = FakeGateway(
+        admin_body={"role": "chat", "chain": [ROUTER], "router": {"on": True, "kept": ""}}
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "hub:qwen3:8b")
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 200
+    assert await settings_store.read_value(pool, "chat.model") == "hub:qwen3:8b"
+
+
+async def test_a_chat_model_that_cannot_be_written_is_a_502_in_words(
+    owner_client, mount_peers, pool, monkeypatch
+):
+    """The gateway has switched, but for chat the switch IS chat.model — a
+    write that fails must never read as a 200. The gateway keeps the link it
+    needs to put back, so the switch still reads what the turns reach and can
+    be flipped again."""
+    gateway = FakeGateway(
+        admin_body={
+            "role": "chat",
+            "chain": [],
+            "router": {"on": True, "kept": CHAT_PICK},
+            "chat_model": ROUTER,
+        }
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    async def refused(body):
+        raise RuntimeError("the settings table is locked")
+
+    # The switch writes through the settings writer and nothing else, so this
+    # is the one write it can make.
+    monkeypatch.setattr(settings_store, "write_setting", refused)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == (
+        "the gateway switched Jev Router, but chat.model could not be written — "
+        "RuntimeError: the settings table is locked"
+    )
+    assert gateway.seen[-1][0] == "/admin/routes/chat/jev-router"
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+
+
+def _switched(gateway: FakeGateway, role: str = "chat") -> list[tuple[str, dict | None]]:
+    """Every switch request the gateway saw for `role`, in order."""
+    return [seen for seen in gateway.seen if seen[0] == f"/admin/routes/{role}/jev-router"]
+
+
+@dataclass
+class _SwitchAnswersInTurn(FakeGateway):
+    """A gateway whose switch answers each PUT with the next of
+    `switch_answers` — (status, body) — so a test can make the second one
+    differ from the first."""
+
+    switch_answers: list[tuple[int, dict]] = field(default_factory=list)
+
+    async def _admin(self, request):
+        if not request.url.path.endswith("/jev-router"):
+            return await super()._admin(request)
+        await self._record(request)
+        if not fakes._bearer_ok(request, fakes.GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        status, body = self.switch_answers.pop(0)
+        return JSONResponse(body, status_code=status)
+
+
+# An OFF on the chat model: the gateway names the pick chat.model must go back
+# to, and reads the switch off once it has.
+OFF_ANSWER = {
+    "role": "chat",
+    "chain": [],
+    "router": {"on": False, "kept": None},
+    "chat_model": CHAT_PICK,
+}
+
+
+async def test_once_an_offs_chat_model_is_written_the_off_is_asked_once_more(
+    owner_client, mount_peers, pool
+):
+    """The gateway keeps the pick until core has written it, so a failed write
+    can be retried. Once it is written, core asks the same OFF again: the
+    switch reads off now, and the gateway's OFF-while-off forgets the pick, so
+    a Jev Router picked by hand later never hands back a pick from this
+    switch. The owner gets the first answer, which names the chat model."""
+    gateway = FakeGateway(admin_body=OFF_ANSWER)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, ROUTER)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert resp.json() == OFF_ANSWER
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+    assert _switched(gateway) == [
+        ("/admin/routes/chat/jev-router", {"on": False, "chat_model": ROUTER}),
+        ("/admin/routes/chat/jev-router", {"on": False, "chat_model": CHAT_PICK}),
+    ]
+
+
+async def test_a_chat_model_that_cannot_be_written_never_asks_the_off_again(
+    owner_client, mount_peers, pool, monkeypatch
+):
+    """A failed write is the stated 502, and the OFF is not asked again: the
+    switch still reads on, the gateway still keeps the pick, and OFF can be
+    retried."""
+    gateway = FakeGateway(admin_body=OFF_ANSWER)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, ROUTER)
+
+    async def refused(body):
+        raise RuntimeError("the settings table is locked")
+
+    monkeypatch.setattr(settings_store, "write_setting", refused)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": False})
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == (
+        "the gateway switched Jev Router, but chat.model could not be written — "
+        "RuntimeError: the settings table is locked"
+    )
+    assert _switched(gateway) == [
+        ("/admin/routes/chat/jev-router", {"on": False, "chat_model": ROUTER}),
+    ]
+    assert await settings_store.read_value(pool, "chat.model") == ROUTER
+
+
+async def test_an_on_that_writes_the_chat_model_is_asked_once(owner_client, mount_peers, pool):
+    """ON puts the router in the chat model and keeps the pick it replaced:
+    that pick is not stale, so nothing is asked again."""
+    answer = {
+        "role": "chat",
+        "chain": [],
+        "router": {"on": True, "kept": CHAT_PICK},
+        "chat_model": ROUTER,
+    }
+    gateway = FakeGateway(admin_body=answer)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": True})
+
+    assert resp.status_code == 200 and resp.json() == answer
+    assert _switched(gateway) == [
+        ("/admin/routes/chat/jev-router", {"on": True, "chat_model": CHAT_PICK}),
+    ]
+
+
+async def test_an_off_asked_again_that_fails_is_said_in_the_answers_note(
+    owner_client, mount_peers, pool
+):
+    """The switch is off and chat.model is written, so the answer is still a
+    200 — but the gateway did not forget the pick it kept, and the note says
+    so, in the gateway's words, after any note of its own."""
+    gone = "the chat model Jev Router replaced, x, names a provider that no longer exists"
+    first = {**OFF_ANSWER, "note": gone}
+    gateway = _SwitchAnswersInTurn(
+        switch_answers=[(200, first), (500, {"error": "the routes table is locked"})]
+    )
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, ROUTER)
+
+    resp = await owner_client.put("/api/v1/routes/chat/jev-router", json={"on": False})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        **first,
+        "note": f"{gone}; chat.model is written, but asking the gateway to forget the model Jev "
+        "Router replaced failed — the routes table is locked",
+    }
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+    assert len(_switched(gateway)) == 2
+
+
+async def test_the_routes_page_never_forwards_a_browsers_chat_model(owner_client, mount_peers):
+    """chat.model and the roles whose turns send it are core's to state, as on
+    the switch: a browser's `chat_model` or `chat_model_roles` — spelled
+    plainly or percent-encoded — never reaches the gateway, whether core
+    states its own or has none to state. Every other parameter goes byte for
+    byte."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+    planted = (
+        "chat_model=openrouter%3Aevil&keep=a+b&chat_model_roles=agent_coder"
+        "&chat%5Fmodel=openrouter%3Aevil&chat_model_roles"
+    )
+
+    assert (await owner_client.get(f"/api/v1/routes?{planted}")).status_code == 200
+    assert gateway.queries[-1] == b"keep=a+b"
+
+    await _chat_model_is(owner_client, CHAT_PICK)
+    assert (await owner_client.get(f"/api/v1/routes?{planted}")).status_code == 200
+    query = gateway.queries[-1]
+    assert query.startswith(b"keep=a+b&")
+    sent = parse_qs(query.decode())
+    assert sent["chat_model"] == [CHAT_PICK]
+    (roles,) = sent["chat_model_roles"]
+    assert sorted(roles.split(",")) == ["beat", "chat", "scheduled"]
+
+
+async def test_the_switchs_refusal_comes_back_in_the_gateways_words(
+    owner_client, mount_peers, pool
+):
+    """Relayed as it came, and only a 200 writes chat.model: this refusal names
+    one, which the gateway's never do, so nothing but the status stops it."""
+    refusal = {
+        "error": (
+            f"scheduled's first link is the chat model, {CHAT_PICK}, a cloud model it shares "
+            "with chat — switch Jev Router on for chat"
+        ),
+        "chat_model": ROUTER,
+    }
+    gateway = FakeGateway(admin_status=400, admin_body=refusal)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, CHAT_PICK)
+
+    resp = await owner_client.put("/api/v1/routes/scheduled/jev-router", json={"on": True})
+
+    assert resp.status_code == 400
+    assert resp.json() == refusal
+    assert await settings_store.read_value(pool, "chat.model") == CHAT_PICK
+
+
+# The decision role's two switches (decision-role spec §6). The walk a
+# decision call takes follows them, and the gateway reads none of core's
+# settings — so explaining the decisions role states them, as a decision call
+# does, and no browser can state its own.
+
+
+async def _switch_is(owner_client, key: str, on: bool) -> None:
+    resp = await owner_client.put("/api/v1/settings", json={"key": key, "value": on})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_the_decisions_walk_is_explained_with_the_kinds_he_switched_on(
+    owner_client, mount_peers
+):
+    """So "right now: X would answer" names the link that would: local (alpha)
+    ships off and cloud (beta) on, and both off names none."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    assert (await owner_client.get("/api/v1/routes/explain?role=decisions")).status_code == 200
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds=cloud"
+
+    await _switch_is(owner_client, "decisions.local", True)
+    await owner_client.get("/api/v1/routes/explain?role=decisions")
+    assert parse_qs(gateway.queries[-1].decode())["decision_kinds"] == ["cloud,local"]
+
+    await _switch_is(owner_client, "decisions.local", False)
+    await _switch_is(owner_client, "decisions.cloud", False)
+    await owner_client.get("/api/v1/routes/explain?role=decisions")
+    assert gateway.queries[-1] == b"role=decisions&decision_kinds="
+
+
+async def test_explain_never_forwards_a_browsers_decision_kinds(owner_client, mount_peers):
+    """Only core states the switches — spelled plainly or percent-encoded, a
+    browser's copy is taken out for every role, and core adds its own only for
+    the decisions role. Every other parameter goes byte for byte."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+    planted = "decision_kinds=local&keep=a+b&decision%5Fkinds=local"
+
+    assert (
+        await owner_client.get(f"/api/v1/routes/explain?role=decisions&{planted}")
+    ).status_code == 200
+    assert gateway.queries[-1] == b"role=decisions&keep=a+b&decision_kinds=cloud"
+
+    await owner_client.get(f"/api/v1/routes/explain?role=chat&{planted}")
+    assert gateway.queries[-1] == b"role=chat&keep=a+b"
+
+
+# One write path for "chat answers with this model" (2026-10-05). The chat
+# picker, Models and Settings each wrote chat.model alone, so a pick replaced
+# link 1 and the model it replaced was in no chain at all: one pick in chat
+# dropped the Dell's model, and nothing anywhere showed it was gone.
+GEMINI = "openrouter:google/gemini-3.8-flash"
+GLM = "openrouter:z-ai/glm-5.3-flash"
+DELL = "dell:qwen3:8b"
+
+
+class RoutesGateway:
+    """The three gateway answers a pick reads and writes, shaped as the real
+    gateway shapes them:
+
+    * GET /admin/routes reads chat's Jev Router switch as ON only when core
+      states chat.model (`?chat_model=`), as routing.role_state does — a
+      switch holding the chat-model slot is invisible without it;
+    * PUT /admin/routes/chat refuses a link whose prefix names no registered
+      provider, in routing._clean_chain's words — a bare id included;
+    * GET /admin/providers lists the registered names and the default (hub);
+    * GET /admin/providers/{name}/models lists what each one serves.
+    """
+
+    def __init__(
+        self,
+        chain,
+        *,
+        router_when_stated=None,
+        names=("hub", "dell", "openrouter"),
+        listings=None,
+    ):
+        self.chain = list(chain)
+        self.router_when_stated = router_when_stated
+        self.names = names
+        self.listings = listings if listings is not None else {"hub": ["qwen3:8b"]}
+        self.puts: list[list[str]] = []
+        self.route_queries: list[dict] = []
+        self.app = Starlette(
+            routes=[
+                Route("/admin/routes", self._routes, methods=["GET"]),
+                Route("/admin/routes/chat", self._put, methods=["PUT"]),
+                Route("/admin/providers", self._providers, methods=["GET"]),
+                Route("/admin/providers/{name}/models", self._models, methods=["GET"]),
+            ]
+        )
+
+    async def _routes(self, request):
+        query = parse_qs(request.url.query)
+        self.route_queries.append(query)
+        stated = self.router_when_stated is not None and "chat_model" in query
+        router = self.router_when_stated if stated else {"on": False, "kept": None}
+        return JSONResponse(
+            {"roles": [{"role": "chat", "chain": self.chain, "router": router}], "walls": []}
+        )
+
+    async def _put(self, request):
+        chain = (await request.json())["chain"]
+        for link in chain:
+            if link.partition(":")[0] not in self.names:
+                return JSONResponse(
+                    {"error": f"link {link!r} does not name a registered provider"},
+                    status_code=400,
+                )
+        self.puts.append(chain)
+        self.chain = chain
+        return JSONResponse({"role": "chat", "chain": chain})
+
+    async def _providers(self, request):
+        return JSONResponse(
+            {"providers": [{"name": n, "is_default": n == "hub"} for n in self.names]}
+        )
+
+    async def _models(self, request):
+        listed = self.listings.get(request.path_params["name"], [])
+        return JSONResponse({"source": "x", "models": [{"id": m} for m in listed]})
+
+
+async def test_a_pick_becomes_link_one_and_the_pick_it_replaces_the_first_fallback(
+    owner_client, mount_peers, pool
+):
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GLM, "chain": [DELL, GEMINI]}
+    assert gateway.puts == [[DELL, GEMINI]]
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_fallback_picked_leaves_the_fallbacks_and_is_never_listed_twice(
+    owner_client, mount_peers, pool
+):
+    gateway = RoutesGateway([GEMINI, DELL])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, GEMINI)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": DELL})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": DELL, "chain": [GEMINI]}
+    assert gateway.puts == [[GEMINI]]
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+async def test_picking_the_current_pick_only_takes_its_repeat_out_of_the_fallbacks(
+    owner_client, mount_peers, pool
+):
+    # The live state that day: link 1 and link 2 were both Gemini.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, GEMINI)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GEMINI})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GEMINI, "chain": []}
+    assert gateway.puts == [[]]
+
+
+async def test_a_bare_pick_is_carried_as_the_default_providers_model(
+    owner_client, mount_peers, pool
+):
+    # Onboarding writes the curated slug bare (`qwen3:8b`): the gateway reads
+    # it as the DEFAULT provider's model and refuses it bare in a chain, so it
+    # is carried qualified — once that provider was seen to list it.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "qwen3:8b")
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GLM, "chain": ["hub:qwen3:8b", GEMINI]}
+    assert gateway.puts == [["hub:qwen3:8b", GEMINI]]
+
+
+async def test_a_bare_pick_already_a_fallback_is_one_link_not_two(owner_client, mount_peers):
+    gateway = RoutesGateway(["hub:qwen3:8b", GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "qwen3:8b")
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": GLM, "chain": ["hub:qwen3:8b", GEMINI]}
+    assert gateway.puts == []
+
+
+async def test_a_pick_whose_provider_is_gone_is_not_made_up_into_a_link(
+    owner_client, mount_peers, pool
+):
+    # `gone:old-model` reads exactly like a bare id once `gone` is removed; the
+    # default provider does not list it, so it is not carried as
+    # `hub:gone:old-model` — and the note says it was not kept.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "gone:old-model")
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chat_model"] == GLM and body["chain"] == [GEMINI]
+    assert body["note"] == (
+        "gone:old-model names no registered provider and is not a model hub lists, "
+        "so it was not kept as a fallback"
+    )
+    assert gateway.puts == []
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_refused_chain_says_the_fallbacks_are_unchanged_when_the_old_pick_is_one(
+    owner_client, mount_peers, pool
+):
+    # The old pick is already a fallback; a refused PUT leaves the stored
+    # chain — which still lists it — so the note must not say it was dropped.
+    gateway = RoutesGateway([GEMINI, DELL, "gone:x"])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chain"] == [GEMINI, DELL, "gone:x"]
+    assert body["note"].endswith("; the fallbacks are unchanged")
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_chain_that_cannot_be_stored_still_makes_the_pick_and_says_what_was_not_kept(
+    owner_client, mount_peers, pool
+):
+    # A fallback whose provider was removed since: every chain PUT is refused.
+    # A stale chain must never make every pick fail — the pick is made as it
+    # was before this write existed, and the answer says what was not kept.
+    gateway = RoutesGateway(["gone:old-model"])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chat_model"] == GLM and body["chain"] == ["gone:old-model"]
+    assert "does not name a registered provider" in body["note"]
+    assert f"{DELL} was not kept as a fallback" in body["note"]
+    assert gateway.puts == []
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+class WatchingRoutesGateway(RoutesGateway):
+    """Reads chat.model at the moment the chain is written."""
+
+    def __init__(self, chain, pool) -> None:
+        self.pool = pool
+        self.chat_model_at_put: list[str] = []
+        super().__init__(chain)
+
+    async def _put(self, request):
+        self.chat_model_at_put.append(await settings_store.read_value(self.pool, "chat.model"))
+        return await super()._put(request)
+
+
+async def test_a_pick_writes_chat_model_before_the_chain(owner_client, mount_peers, pool):
+    # A turn under way reads the pick at every call (chat._round_model).
+    # Between the two writes it must find the NEW pick ahead of the chain as
+    # it was; the other order hands it the old pick ahead of a chain already
+    # rewritten around it, which is that one model alone.
+    gateway = WatchingRoutesGateway([GEMINI], pool)
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    assert gateway.chat_model_at_put == [GLM]
+    assert gateway.puts == [[DELL, GEMINI]]
+
+
+async def test_a_chain_write_that_never_answers_still_makes_the_pick_and_says_so(
+    owner_client, mount_peers, pool, monkeypatch
+):
+    # chat.model is written first, so by the time the chain write fails the
+    # pick is made — "the pick did not run" would be false. The answer says
+    # what was not kept, as for a refused chain.
+    gateway = RoutesGateway([GEMINI])
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, DELL)
+    original = chat_pick._call
+
+    async def chain_write_times_out(app, method, path, **kwargs):
+        if method == "PUT":
+            raise chat_pick.PickFailed(
+                502, f"the gateway timed out — {path} did not answer within 5s"
+            )
+        return await original(app, method, path, **kwargs)
+
+    monkeypatch.setattr(chat_pick, "_call", chain_write_times_out)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": GLM})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chat_model"] == GLM and body["chain"] == [GEMINI]
+    assert body["note"] == (
+        "chat's fallbacks could not be saved — the gateway timed out — /admin/routes/chat "
+        f"did not answer within 5s; {DELL} was not kept as a fallback"
+    )
+    assert await settings_store.read_value(pool, "chat.model") == GLM
+
+
+async def test_a_pick_cannot_run_while_jev_router_holds_chats_cloud_link(
+    owner_client, mount_peers, pool
+):
+    # The switch in the chat-model slot is visible only when chat.model is
+    # stated on the read — the case the first version of this missed.
+    gateway = RoutesGateway([GEMINI], router_when_stated={"on": True, "kept": GLM})
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, "openrouter:typesafe/jev-router")
+
+    resp = await owner_client.put(
+        "/api/v1/routes/chat/primary?chat_model=steered", json={"model": DELL}
+    )
+
+    assert resp.status_code == 409
+    assert "Jev Router" in resp.json()["error"]
+    (query,) = gateway.route_queries
+    # core states its own chat.model; a caller's copy never reaches the gateway
+    assert query["chat_model"] == ["openrouter:typesafe/jev-router"]
+    assert gateway.puts == []
+    assert await settings_store.read_value(pool, "chat.model") == ("openrouter:typesafe/jev-router")
+
+
+async def test_a_router_picked_by_hand_is_replaced_like_any_pick(owner_client, mount_peers, pool):
+    # On, with nothing kept: the owner picked Jev Router in chat himself. The
+    # switch's OFF refuses that case ("pick a chat model in chat"), so a pick
+    # refusing it too would leave no way out.
+    router = "openrouter:typesafe/jev-router"
+    gateway = RoutesGateway([GEMINI], router_when_stated={"on": True, "kept": None})
+    mount_peers(gateway=gateway)
+    await _chat_model_is(owner_client, router)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json={"model": DELL})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"chat_model": DELL, "chain": [router, GEMINI]}
+    assert await settings_store.read_value(pool, "chat.model") == DELL
+
+
+@pytest.mark.parametrize("body", [{}, {"model": ""}, {"model": "  "}, {"model": 3}, ["x"]])
+async def test_a_pick_names_a_model(owner_client, mount_peers, body):
+    gateway = RoutesGateway([])
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put("/api/v1/routes/chat/primary", json=body)
+
+    assert resp.status_code == 400
+    assert gateway.route_queries == [] and gateway.puts == []

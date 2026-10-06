@@ -1,29 +1,51 @@
-"""Her routing tool: why a role's call goes where it goes (S10-2).
+"""Her routing tools: why a role's call goes where it goes (S10-2), and
+which model chat answers with first (2026-10-05).
 
-Reads the gateway's explain walk — the same one the Routing page shows —
-and says every link's verdict in words. Nothing is called, nothing is
-charged; a fallback reason is the gateway's own sentence, quoted.
+route_explain reads the gateway's explain walk — the same one the Routing
+page shows — and says every link's verdict in words. Nothing is called,
+nothing is charged; a fallback reason is the gateway's own sentence, quoted.
+The decision role's walk follows the owner's two decision switches
+(decision-role spec §6), so it is explained with them, read here.
+
+set_chat_model makes the one pick write the chat switcher, Models and
+Settings make (app/chat_pick.py): the model goes first and the one it
+replaces becomes the first fallback. The owner asked her to put the Dell
+first and she could not ("I can't edit the settings page myself") — the
+change was made for him by hand, which left her exactly as unable.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 import httpx
 
-from app import db, peers, settings_store
+from app import db, decisions, peers, settings_store
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 # No list of roles here (S12-2): the gateway is the one rule — built-ins plus
 # any agent's derived role `agent_<name>` — and its refusal is quoted below.
 EXPLAIN_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+# With both decision models switched off the step does not run at all, which
+# is the answer — not merely that no link in the chain can serve.
+STEP_OFF = (
+    "Answer: the decision step is switched off — both decision models, local and cloud, are "
+    "switched off in Settings, so no decision model is asked before a reply and it costs "
+    "nothing."
+)
 
 
-def describe(body: dict) -> str:
+def describe(body: dict, *, kinds: Collection[str] | None = None) -> str:
+    """The walk in words. `kinds` is the decision switches the walk was
+    explained with (the decision role only); empty says the step is off."""
     role = body.get("role")
     chain = body.get("chain") or []
     serve = body.get("would_serve")
     # The answer FIRST, in one sentence — a small model reads the top line
     # and stops; the walk below is the evidence.
-    if serve and serve.get("reason"):
+    if kinds is not None and not kinds:
+        lines = [STEP_OFF]
+    elif serve and serve.get("reason"):
         lines = [
             f"Answer: {serve.get('served_by')} serves the {role} role right now because it "
             f"{serve['reason']}."
@@ -47,6 +69,8 @@ def describe(body: dict) -> str:
             "switched_off": "skipped — its machine is switched off for models",
             "unknown": "skipped — no such provider",
             "refused": "refused this request",
+            "wrong_protocol": "skipped — it cannot answer this role",
+            "kind_off": "skipped — the owner switched this kind of decision model off",
         }.get(verdict, str(verdict))
         lines.append(
             f"  {v.get('link')}. {v.get('id')}: {state}" + (f" ({reason})" if reason else "")
@@ -58,16 +82,34 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
     role = str(args.get("role") or "chat").strip()
     params = {"role": role}
     model = str(args.get("model") or "")
-    if not model and role == "chat":
-        # The chat chain's link 1 is the model picked in chat — read here,
-        # never left for her to remember to pass (the first live walk asked
-        # without it and was told about the fallbacks alone).
+    # Function-local: a cold `import app.tools` must not load app.chat
+    # (tests/test_tools_agents.py).
+    from app import chat
+
+    if not model and role in chat.CHAT_MODEL_ROLES:
+        # Link 1 of every role whose turns send chat.model (chat, scheduled,
+        # beat) is the model picked in chat — read here, never left for her to
+        # remember to pass (the first live walk asked without it and was told
+        # about the fallbacks alone).
         try:
             model = str(await settings_store.read_value(await db.get_pool(), "chat.model") or "")
         except Exception:  # noqa: BLE001 — the walk still answers, about the chain
             model = ""
     if model:
         params["model"] = model
+    kinds: frozenset[str] | None = None
+    if role == decisions.ROLE:
+        # His two switches, read as a decision call reads them. A read that
+        # fails is said: a walk explained without them would name a link he
+        # switched off as the one that answers.
+        try:
+            kinds = await settings_store.decision_kinds(await db.get_pool())
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            raise ToolFailure(
+                "the decision switches in Settings could not be read, so the decisions walk "
+                f"cannot be explained — {peers.reason(exc)}"
+            ) from exc
+        params["decision_kinds"] = decisions.kinds_value(kinds)
     try:
         async with peers.client(ctx.app, peers.GATEWAY, EXPLAIN_TIMEOUT) as client:
             resp = await client.get("/admin/route/explain", params=params)
@@ -85,19 +127,55 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
         body = resp.json()
     except ValueError as exc:
         raise ToolFailure("the gateway's routing answer was not JSON") from exc
-    return describe(body)
+    return describe(body, kinds=kinds)
+
+
+async def set_chat_model(args: dict, ctx: ToolContext) -> str:
+    """The pick, and chat's order as STORED — the answer first, for a small
+    model that reads the top line and stops."""
+    # Function-local, like route_explain's import of app.chat.
+    from app import chat_pick
+
+    model = str(args.get("model") or "").strip()
+    if not model:
+        raise ToolFailure("name the model to put first: provider:model, e.g. dell:qwen3:8b")
+    try:
+        picked = await chat_pick.set_primary(ctx.app, model)
+    except chat_pick.PickFailed as exc:
+        raise ToolFailure(f"the pick did not run — {exc.detail}") from exc
+    order = [picked.chat_model, *picked.chain]
+    moved = picked.previous != picked.chat_model
+    lines = [
+        f"Answer: chat now answers with {picked.chat_model} first — stored and read back."
+        if moved
+        else f"Answer: {picked.chat_model} was already chat's first choice.",
+        "Chat's order now: " + "; ".join(f"{i}. {link}" for i, link in enumerate(order, 1)) + ".",
+    ]
+    if moved and picked.previous and not picked.note:
+        lines.append(f"{picked.previous}, the previous pick, is now the first fallback.")
+    if picked.note:
+        lines.append(f"Not kept: {picked.note}.")
+    lines.append(
+        "This changed the order only — whether each model can answer right now is "
+        "route_explain's to say."
+    )
+    return "\n".join(lines)
 
 
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="route_explain",
         description=(
-            "Why a call for a role (chat, scheduled, judge, or an agent's role agent_<name>) "
-            "goes to the model it goes to: "
+            "Why a call for a role (chat, scheduled, judge, decisions — the decision "
+            "model that reads each message before she answers — or an agent's role "
+            "agent_<name>) goes to the model it goes to: "
             "each link in the role's chain with its live verdict — would serve, over its "
-            "monthly cap, the provider refused recently (walled), not installed — and the "
-            "gateway's stated reason for any fallback. Use it to answer 'why did that come "
-            "from the local model' or 'which model will answer next'. Reads only."
+            "monthly cap, the provider refused recently (walled), not installed, cannot "
+            "answer this role, its kind of decision model switched off in Settings (local "
+            "and cloud each have a switch) — and the gateway's stated reason for any "
+            "fallback. Use it to "
+            "answer 'why did that come from the local model' or 'which model will answer "
+            "next'. Reads only."
         ),
         parameters={
             "type": "object",
@@ -105,8 +183,8 @@ TOOLS: tuple[Tool, ...] = (
                 "role": {
                     "type": "string",
                     "description": (
-                        "The role to explain (default chat): chat, scheduled, judge, or an "
-                        "agent's role agent_<name>."
+                        "The role to explain (default chat): chat, scheduled, judge, decisions, "
+                        "or an agent's role agent_<name>."
                     ),
                 },
                 "model": {
@@ -124,5 +202,33 @@ TOOLS: tuple[Tool, ...] = (
         # models"): a read of those machines for the state guard (S40b fix
         # wave C2).
         reads_machines=True,
+    ),
+    Tool(
+        name="set_chat_model",
+        description=(
+            "Choose the model chat answers with FIRST — the same pick the chat model "
+            "switcher and Settings make. The model it replaces becomes the first fallback, "
+            "so nothing is dropped, and a model already among the fallbacks moves to the "
+            "front. Use it when the owner asks to switch, prefer or put a model first for "
+            "chat. For an order such as 'the Dell first, then OpenRouter', pick the fallback "
+            "first and the first choice last: set_chat_model('openrouter:<model>') then "
+            "set_chat_model('dell:<model>'). Ids are provider:model, as route_explain and "
+            "model_catalog_search show them. Answers with chat's order as stored."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "provider:model to put first, e.g. dell:qwen3:8b or "
+                        "openrouter:google/gemini-3.8-flash"
+                    ),
+                },
+            },
+            "required": ["model"],
+            "additionalProperties": False,
+        },
+        executor=set_chat_model,
     ),
 )

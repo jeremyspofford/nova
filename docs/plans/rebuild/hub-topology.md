@@ -593,6 +593,12 @@ Rollback: `undo-move`, then bring the Dell stack back up.
 
 ### S47: thin clients
 
+**Status: SHIPPED 2026-09-26, walked 2026-09-30.** Plan:
+[`slice-47-setup-qr.md`](slice-47-setup-qr.md), close-out at its end; spec:
+[`s47/spec.md`](s47/spec.md). The shipped tools are `nova_address` and
+`show_setup_qr`; the `OpenElsewhere.tsx` sketch below is the earlier design,
+not what was built.
+
 - Tool `nova_address` (reads_only, AUTO_RUN; → 46).
 - `OpenElsewhere.tsx` per access mode:
   - a QR code of the **derived** origin, never loopback;

@@ -2724,3 +2724,216 @@ async def test_a_replay_never_sends_a_command_to_a_real_connected_agent(pool):
     result, ok = await asyncio.wait_for(run, 2)
     assert ok is True and result.startswith("dell ran ['ls']")
     await _close(conn, task)
+
+
+# -- device_launch_app says what the agent said, and no more -------------------
+#
+# The owner's test, 2026-09-28 23:56 (turn fe7e3198): the Windows agent hands a
+# launch to explorer.exe, which proves only that the shell ACCEPTED the
+# request, and it answered "asked Windows to launch brave". Core threw those
+# words away and wrote "Launched brave on DELL-XPS-8950.", and she told him
+# "Brave is now running". He saw no Brave. The result is now the agent's own
+# outcome words — every OS's, never a sentence core writes per OS — and says
+# what no agent's apps.launch result carries: whether a window opened.
+
+
+async def _launch_answered_with(
+    pool, output: str, *, platform: str = "windows", name: str = "DELL-XPS-8950"
+) -> str:
+    device_id, device, conn, task = await _connect(pool, name=name, platform=platform)
+    person = await _person(pool)
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["envelope"]["capability"] == "apps.launch"
+        conn.feed(device.result(frame["envelope"], ok=True, output=output, exit_code=0))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch(
+        "device_launch_app", {"device": name, "app": "brave"}, _ctx(person)
+    )
+    await asyncio.wait_for(ans, 2)
+    await _close(conn, task)
+    assert ok is True
+    return result
+
+
+async def test_a_windows_hand_off_is_reported_as_the_request_it_was(pool):
+    result = await _launch_answered_with(pool, "asked Windows to launch brave")
+    assert result == (
+        "DELL-XPS-8950: asked Windows to launch brave — whether a window opened is not confirmed."
+    )
+    assert "Launched" not in result
+
+
+async def test_every_os_keeps_its_own_words(pool):
+    """Linux's gtk-launch and macOS's `open -a` say "launched <app>"; the
+    Windows PATH fallback names the program it started. Core renders each as
+    the agent put it."""
+    for platform, said in (
+        ("linux", "launched brave-browser"),
+        ("darwin", "launched Brave Browser"),
+        ("windows", "launched C:\\Program Files\\BraveSoftware\\brave.exe"),
+    ):
+        name = f"box-{platform}"
+        result = await _launch_answered_with(pool, said, platform=platform, name=name)
+        assert result == f"{name}: {said} — whether a window opened is not confirmed.", platform
+
+
+async def test_an_agent_that_says_nothing_is_not_quoted_as_having_launched_it(pool):
+    result = await _launch_answered_with(pool, "   ")
+    assert result == (
+        "DELL-XPS-8950: answered ok to launching brave and said nothing more — whether a "
+        "window opened is not confirmed."
+    )
+
+
+# -- a launch SENT and never answered: its outcome is not known (said-not-done) --
+#
+# The device-completion guard's sentence (fix rounds 2 and 3, R-A and T3) says
+# "was sent but did not answer — whether it worked is not known" for exactly the
+# failures where the command left core and no result came back — never "it did
+# not open". It reads that off the failure's own words (guards._NO_ANSWER), so
+# the words are pinned HERE, produced by the real hub and the real tool: a hub
+# refusal reworded tomorrow turns this red instead of turning the sentence into
+# a guess. A refusal BEFORE sending ("not connected") is a plain failure.
+
+
+async def _launch_failure(pool, monkeypatch, how: str) -> str:
+    from app.tools import devices as device_tools
+
+    person = await _person(pool)
+    if how == "not connected":
+        await _enroll(pool, name="DELL-XPS-8950", platform="windows")
+        result, ok = await tools.dispatch(
+            "device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}, _ctx(person)
+        )
+        assert ok is False
+        return result
+    device_id, _device, conn, task = await _connect(pool, name="DELL-XPS-8950", platform="windows")
+    if how == "timeout":
+        monkeypatch.setattr(device_tools, "COMMAND_TIMEOUT_SECONDS", 0.05)
+    call = asyncio.create_task(
+        tools.dispatch(
+            "device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}, _ctx(person)
+        )
+    )
+    await asyncio.wait_for(conn.next_sent(), 2)  # the command left core
+    if how == "dropped":
+        devices_ws.hub.unregister(device_id, conn)
+    elif how == "closed":
+        await devices_ws.hub.disconnect(device_id, "revoked")
+    result, ok = await asyncio.wait_for(call, 2)
+    assert ok is False
+    if how != "closed":
+        await _close(conn, task)
+    else:
+        await asyncio.wait_for(task, 2)
+    return result
+
+
+@pytest.mark.parametrize("how", ["timeout", "dropped", "closed", "not connected"])
+async def test_a_launch_sent_and_never_answered_is_read_as_not_known(pool, monkeypatch, how):
+    from types import SimpleNamespace
+
+    from app import guards
+
+    error = await _launch_failure(pool, monkeypatch, how)
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_launch_app",
+        meta={
+            "ok": False,
+            "args_redacted": {"app": "notepad", "device": "DELL-XPS-8950"},
+            "error": error,
+        },
+    )
+    claim = guards.device_completion_check(
+        "Notepad is now open on your DELL-XPS-8950.",
+        [span],
+        tools.tool_names(),
+        {"DELL-XPS-8950": "windows"},
+    )
+    assert claim is not None, error
+    if how == "not connected":
+        assert claim.record.case == "failed", error
+        assert "not connected" in claim.text
+    else:
+        assert claim.record.case == "no_answer", error
+        assert claim.text == (
+            "(device_launch_app was sent but did not answer — whether it worked is not known.)"
+        )
+
+
+# -- the device ANSWERED that its command did not finish (said-not-done R3) -----
+#
+# Fix round 4 (2026-09-30): round 3 read every "timed out" as the hub's
+# no-answer, so a command the Dell RAN until its deadline and then answered
+# "timed out; partial output: …" (novad's internal/caps/shell.go) was stated as
+# "was sent but did not answer". The device answered: the sentence says it
+# timed out, and where. Its words are read from the agent's own source — never
+# a copy — and travel the real path: the device's result frame, the hub, the
+# tool's `_require_ok`, dispatch. A reworded agent turns this red.
+
+_SHELL_GO = Path(__file__).resolve().parents[3] / "apps/novad/internal/caps/shell.go"
+
+
+def _agent_refusal(starts: str) -> str:
+    """The format string novad's shell.exec fails with, beginning `starts`,
+    as the agent fills it (partial output in place of its verb)."""
+    import re
+
+    for m in re.finditer(r'fail\(\s*"((?:[^"\\]|\\.)*)"', _SHELL_GO.read_text()):
+        # Go's escapes (\n, \") decoded; its UTF-8 (the em dash) kept as is.
+        words = m.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+        if words.startswith(starts):
+            return words.replace("%s", "C:\\> start notepad\nsecond line")
+    raise AssertionError(f"shell.go has no refusal starting {starts!r}")
+
+
+@pytest.mark.parametrize(
+    "starts,case,text",
+    [
+        ("timed out", "timed_out", "(device_run timed out on DELL-XPS-8950.)"),
+        ("cancelled", "failed", "(device_run failed: cancelled before it finished.)"),
+    ],
+)
+async def test_a_run_the_device_answered_did_not_finish_is_read_as_its_answer(
+    pool, starts, case, text
+):
+    from types import SimpleNamespace
+
+    from app import guards
+
+    _device_id, device, conn, task = await _connect(pool, name="DELL-XPS-8950", platform="windows")
+    person = await _person(pool)
+    words = _agent_refusal(starts)
+    argv = ["cmd", "/c", "start", "notepad"]
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["envelope"]["capability"] == "shell.exec"
+        conn.feed(device.result(frame["envelope"], ok=False, exit_code=None, error=words))
+
+    answering = asyncio.create_task(answer())
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "DELL-XPS-8950", "argv": argv}, _ctx(person)
+    )
+    await asyncio.wait_for(answering, 2)
+    await _close(conn, task)
+    assert ok is False
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_run",
+        meta={
+            "ok": False,
+            "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"},
+            "error": result,
+        },
+    )
+    claim = guards.device_completion_check(
+        "Notepad is now open on your DELL-XPS-8950.", [span], tools.tool_names(), ["DELL-XPS-8950"]
+    )
+    assert claim is not None, result
+    assert claim.record.case == case, result
+    assert claim.text == text, result

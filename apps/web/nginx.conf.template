@@ -217,6 +217,19 @@ server {
     # be nginx's, which says nothing useful.
     client_max_body_size 100m;
 
+    # Compression (2026-10-05). It was off everywhere, so a phone on the
+    # tailnet fetched the ~890 KB app bundle and every API answer raw — the
+    # model catalogue alone is ~700 KB of JSON, and it went to a temp file on
+    # every read. Text compresses several times over. The streaming locations
+    # below (chat, pulls, a timer fired now) say `gzip off` themselves: gzip
+    # buffers, and a stream that waits for a buffer is not a stream.
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_types application/json application/javascript text/css text/plain image/svg+xml application/manifest+json;
+
     # Fail-closed 401s render this neutral static page instead of Nova's own
     # login or any hint of what's behind the gate. Status stays 401 (no `=`
     # override) so this is still machine-checkable, not just human-readable.

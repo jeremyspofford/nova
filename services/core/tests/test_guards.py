@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import chat, checks, guards
+from app import chat, checks, guards, traces
 
 # -- span stand-ins --------------------------------------------------------
 #
@@ -3673,7 +3673,7 @@ def test_a_judge_round_alone_does_not_count_as_having_served():
 
 @pytest.mark.parametrize("kind", ["chat", "eval"])
 def test_a_round_of_the_turns_own_kind_is_the_evidence_where_the_guard_is_armed(kind):
-    """A turn's own rounds are recorded under its KIND (chat._purpose_of), not
+    """A turn's own rounds are recorded under its KIND (traces.purpose_of), not
     under the word 'chat'. An eval replays chat's path with nothing injected
     (the kind tag is its only eval-ness), so its own rounds are the evidence
     there exactly as a chat round is in chat. Reading only 'chat' left every
@@ -3696,7 +3696,7 @@ def test_the_guard_is_armed_in_chat_and_in_the_eval_that_replays_it_and_nowhere_
     from app.evals import runner
 
     assert guards.STACK_CLAIM_KINDS == frozenset({"chat", runner.EVAL_TURN_KIND})
-    assert chat._purpose_of(SimpleNamespace(kind="chat")) in guards.STACK_CLAIM_KINDS
+    assert traces.purpose_of(SimpleNamespace(kind="chat")) in guards.STACK_CLAIM_KINDS
 
 
 # The S40 T7 review's probe (2026-09-19): three TRUE reports, each of which the
@@ -4347,3 +4347,38 @@ def test_no_offer_class_reads_his_message_for_an_update():
         user_message="update minipc's agent",
     )
     assert claim is None
+
+
+# -- one binding per name, module-wide -------------------------------------------
+#
+# The guards build patterns from shared fragments (_PRESENT_COPULA, _STATE_ADVERB,
+# …) at import and at call time, and a function reads a module name when it
+# RUNS. So a second top-level binding of a name silently replaces the first for
+# every reader, earlier in the file or later: said-not-done fix round 2 bound
+# `_PRESENT_COPULA` again as a frozenset, and the state guard, the observation
+# guard and the memory-outage guard stopped firing without an error. This is the
+# line that refuses the next one.
+
+
+def test_no_name_is_bound_twice_at_the_top_of_guards_or_chat():
+    import ast
+    from pathlib import Path
+
+    for module in (guards, chat):
+        tree = ast.parse(Path(module.__file__).read_text())
+        seen: dict[str, int] = {}
+        twice: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names = [node.name]
+            elif isinstance(node, ast.Assign):
+                names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names = [node.target.id]
+            else:
+                names = []
+            for name in names:
+                if name in seen:
+                    twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
+                seen[name] = node.lineno
+        assert not twice, f"{module.__name__}: bound twice: {twice}"

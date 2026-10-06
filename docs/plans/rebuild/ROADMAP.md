@@ -22,10 +22,34 @@ source for anything v4 has not rebuilt.
 v4 merged to `main` on 2026-09-17 (`0996a31`). Shipped slices: S01–S05b, S09,
 S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, S40, S40b (2026-09-19) and
 **S41** (2026-09-22, portable hub, verified backup and restore). **S47
-merged 2026-09-26** (PR #76: `nova_address`/`show_setup_qr`, thin-client
-setup QR codes — no walked status is recorded on this branch, so read it as
-landed, not shipped). **S42a merged and walked 2026-09-28** (the agent on
-every OS). Parked: S23. Unbuilt: S26, S27, S42b–S46, S48–S49.
+shipped 2026-09-26** (PR #76: `nova_address`/`show_setup_qr`, thin-client
+setup QR codes) **and walked 2026-09-30**, once a recall fix (PR #79) and
+the decision role below stopped a stale memory from steering her first
+answer. **S42a merged and walked 2026-09-28** (the agent on
+every OS). Parked: S23. **The decision
+role** (Jev and Kev) was pulled forward from the optional list by the owner
+on 2026-09-27 and **shipped 2026-09-29** (PR #85, then PR #86 for the
+local/cloud switches); spec, plan and the close-out are in
+[`decision-role/`](decision-role/spec.md).
+
+**2026-09-30, the owner reordered the work.** The doing lane
+([`doing-things.md`](doing-things.md), S29–S39: checkable hands, jobs that
+outlive a turn, goals, integrations, her own browser, screens, self-coding)
+goes **right after S42b**. The rest of the hub lane — S46a, S46b, S43a, S43b,
+S44, S48, S49 — is **paused**: capability first, and the downside is accepted
+(the Dell stays hand-powered, nothing holds it awake, tailnet joins stay
+manual, no Headscale or LAN). **In progress:** S42b (install, service,
+updates, the hub's own agent) and, from 2026-09-30, **S37a, the MCP client**,
+beside it. Unbuilt: the doing lane, S26, S27.
+
+**2026-10-05, the owner moved self-coding forward and widened it**
+([`nova-codes.md`](nova-codes.md)). Nova runs her own development: she codes
+what the owner asks, starts work herself, and reacts to monitoring and CI. She
+always drives — the code comes from her own loop on any model or from an
+outside coder she runs (Claude Code first). The doing lane now runs, after
+S42b and the provider-balances slice: S29 → S30 → S32 → S32b → S33 → S34 →
+S35 → S34b → S37c → S32c → S30b → S37d → the install walk → S39. `CLAUDE.md`
+became `AGENTS.md`, and `CLAUDE.md` is now a symlink to it.
 
 ---
 
@@ -41,8 +65,11 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
-| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S42a shipped 2026-09-28** (the agent on every OS). **S42b next** (install, service, downloads, the code card), then S46a → S46b → S43a (order reset 2026-09-25). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
-| 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S47 shipped 2026-09-26, walked 2026-09-30** (setup QR codes for a phone, a machine or a model server). **S42a shipped 2026-09-28** (the agent on every OS). **S42b in progress** (install, service, downloads, the code card, the hub's own agent). **Paused by the owner 2026-09-30:** S46a, S46b, S43a, S43b, S44, S48, S49 — the doing lane goes next (row below). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
+| — | **The decision role — Jev and Kev** ([`decision-role/spec.md`](decision-role/spec.md)) | **Shipped 2026-09-29** (PR #85), **with a local/cloud switch** the same day (PR #86), after the owner pulled it forward from the optional list on 2026-09-27. Built on `slice/decisions` ([plan](decision-role/plan.md), close-out at its end): the gateway's `decisions` role and `POST /v1/systemone`; core asks two questions (the tool hint, the recall check) on typed turns and eval turns, fail-open in 5 s; Routing and Models; a Jev Router switch on chat, scheduled and agent roles. **Measured** on the deployed stack (`dell:qwen3:8b` chatting, the whole eval corpus × 3): with Jev (cloud, the default) answering, 90 of 90 turns decided in 0.7 s median, no case worse and three better, and the S47 phone case went from 1 of 3 right to 3 of 3. Kev (local) shares the Dell's GPU with the chat model and decided only 1 of 90 turns in time, so its arm is not yet judged — the reason local ships off by default. Walked in the owner's real chat 2026-09-30. The Kev engine on the Dell (spec §5) is a separate, later plan. |
+| — | **The doing lane — S29–S39** ([`doing-things.md`](doing-things.md)) | **Next after S42b and the provider-balances slice** (owner, 2026-09-30; order revised 2026-10-05). Designed 2026-09-18 and refreshed 2026-09-30. **Self-coding was moved forward and widened 2026-10-05** in [`nova-codes.md`](nova-codes.md), which wins where the two docs differ. Order: S29 → S30 (+ part-file edits, code search) → S32 → S32b (outside coders, Nova driving) → S33 → S34 → S35 (frontier first, then local) → S34b (she starts work herself) → S37c (she reacts, widened to monitoring and CI) → S32c (other repos) → S30b (the standing admin path, owner Q17) → S37d → the install walk → S39. **S38 (her browser) and then S38b (reading past the context) run in parallel now**, beside S37a (owner, 2026-09-30). Every open question in `doing-things.md` was answered 2026-09-30. S31 is superseded by S42b. |
+| — | **S37a — the MCP client** | **In progress since 2026-09-30** (`slice/mcp-client`, spec `s37a/spec.md` on that branch), beside S42b. The first part of the doing lane's integrations: GitHub's MCP server for CI, and whatever MCP server an installed app brings. |
+| 4 | **S26 — the quality corpus** | Nothing built. A spec was written 2026-09-25 on `slice/s26` (`a3f61c99`), not on `main`, and waits on the owner's review. Order (2026-09-30): after the doing lane and the paused hub slices. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 | 6 | **After release: the optional list** ([below](#after-release-the-optional-list)) | Only after Nova is released. Things the owner marked optional, each one to research, build or decide on. |
 
@@ -74,7 +101,7 @@ wedges".
 
 ### 4. S26 — the quality corpus
 
-**The instrument. Largest, mostly design. No spec document exists yet.**
+**The instrument. Largest, mostly design.** A spec exists on `slice/s26` (`a3f61c99`, 2026-09-25), not yet on `main`.
 
 Today's corpus is 23 cases (`services/core/app/evals/cases/`, pinned at
 `services/core/tests/test_eval_corpus.py:376`, `suite_version` 13). Every one is an HONESTY or
@@ -230,8 +257,11 @@ replaces it, built from the intent corpus instead.
   `workloads/`, `inference-control/`, `mcp-runner/` are v3's. Good as a mining
   source, confusing as a working tree. A deliberate decision, not a cleanup to
   do by reflex.
-- **CI does not cover `main`.** `.github/workflows/rebuild-ci.yml` triggers only
-  on `rebuild/**`. A PR into `main` runs no checks at all.
+- **CI covers `main`, and fails there.** `rebuild-ci.yml` has triggered on
+  `main` and `slice/**` since 2026-09-21 (`1b61b0eb`), and every run on `main`
+  since 2026-09-28 has failed: core, web and backup-macos fail, gateway and
+  memory are cancelled (run `36719466510` on `e9c871f3`). *Corrected
+  2026-09-30; this line used to say CI did not cover `main`.*
 
 ---
 
@@ -243,8 +273,14 @@ it, build it, or decide not to. **When he says something is optional, add it
 here** with the date and the open question, and leave it alone until then
 unless he asks.
 
-### Jev and Kev (added 2026-09-25, re-checked the same day)
+### Jev and Kev (added 2026-09-25, re-checked the same day) — PULLED FORWARD 2026-09-27
 
+- **Pulled forward 2026-09-27 by the owner** — now the decision role:
+  [`decision-role/spec.md`](decision-role/spec.md), its plan beside it. What follows
+  is the 2026-09-25 research, kept as written. Where it and the spec disagree, the
+  spec's measurements on this stack win where they measure the same thing; the "first
+  experiment" named below — a per-turn tool hint for the 8B, measured through the eval
+  runner — is the spec's §2.
 - **What they are.** Jev is TypeSafe AI's hosted "decision model", launched
   2026-09-15. Instead of text, it returns typed answers with probabilities
   (yes/no, pick one, a score on a scale). It costs $0.042 per million input
@@ -329,12 +365,14 @@ kept for the record).
 | S23 | serving runtime | `slice-23-serving-runtime.md` — **parked** |
 | S24 | threads | `slice-24-threads.md` |
 | S25 | inbox | `slice-25-inbox.md` |
-| S26 | quality corpus | **no document yet** |
+| S26 | quality corpus | spec on `slice/s26` (`a3f61c99`), not on `main` |
 | S27 | feature flags | `slice-27-feature-flags.md` — **last** |
 | S28 | attachments | `slice-28-attachments.md` |
+| S29–S39 | the doing lane: checkable hands, jobs, goals, integrations (S37a MCP, S37b her configuration, S37c events and monitoring, S37d HTTP requests), her own browser, screens, self-coding (S32b outside coders, S32c other repos, S34b work she starts herself) | [`doing-things.md`](doing-things.md) — designed 2026-09-18, **refreshed 2026-09-30**; [`nova-codes.md`](nova-codes.md) — self-coding moved forward and widened 2026-10-05; S31 superseded by S42b; S37a in progress |
 | S40 | engines and measurement identity | `slice-40-engines.md`, `-carries`, `s40/` (task files + review rulings) |
 | S40b | honest claims about machines, models and memory | `slice-40b-honest-machine-claims.md`, `-carries`, `s40b/` (design verdict, rulings, review trail) |
 | S41–S49 | the rest of the hub lane: backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18** |
+| — | the decision role (Jev, Kev) | `decision-role/spec.md`, `decision-role/plan.md` (close-out at its end) — **shipped 2026-09-29** |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +
 provenance. The owner's hand-pulled `muse-glimmer:latest` showed no metadata —

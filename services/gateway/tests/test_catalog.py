@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -16,8 +17,16 @@ from starlette.routing import Route
 
 from app import admin, backends, catalog, engines, hf_hub, ollama_registry
 from app import curated as curated_mod
+from app.adapters.base import MODELS_TIMEOUT
+from app.cache import TTLCache
 from tests.conftest import requires_db
-from tests.fakes import FakeHFHub, FakeOllama, FakeOllamaRegistry, FakeOpenAICompat
+from tests.fakes import (
+    FailingTransport,
+    FakeHFHub,
+    FakeOllama,
+    FakeOllamaRegistry,
+    FakeOpenAICompat,
+)
 from tests.test_admin_suggest_fit import COMPUTE, IDLE_FREE_MB, _card
 from tests.test_hf_hub import SIBLINGS
 from tests.test_ollama_registry import CONFIG, CONFIG_DIGEST, MANIFEST, TOTAL
@@ -123,6 +132,25 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
     assert rows["hub:qwen3:8b"]["facts"]["params_b"]["value"] == 8.19
     assert rows["hub:qwen3:4b"]["facts"]["params_b"]["value"] == 4.02
     assert rows["hub:qwen3:4b"]["facts"]["family"]["value"] == "qwen3"
+
+
+async def test_an_embedding_model_is_never_offered_as_the_chat_model(
+    client, monkeypatch, mount_backend
+):
+    # 2026-10-05: nomic-embed-text carried a Use button on Models and in
+    # Settings — a pick that ends every turn, since it cannot complete.
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(tags=("qwen3:8b", "nomic-embed-text:latest"))
+    fake.show["nomic-embed-text:latest"] = {
+        **fake.show["nomic-embed-text:latest"],
+        "capabilities": ["embedding"],
+    }
+    mount_backend("http://ollama.test", fake.app)
+
+    rows = _rows_by_id((await client.get("/admin/catalog")).json())
+
+    assert rows["hub:nomic-embed-text:latest"]["actions"] == ["probe", "check_update", "remove"]
+    assert rows["hub:qwen3:8b"]["actions"] == ["use", "probe", "check_update", "remove"]
 
 
 async def test_uncurated_installed_models_still_list_with_an_honest_fit(client, local):
@@ -248,6 +276,32 @@ async def test_provider_rows_carry_declared_capabilities_and_third_party_benchma
     assert {s["key"]: s["rows"] for s in body["sources"]}["openrouter"] == 1
 
 
+async def test_a_router_rows_minus_one_is_no_price(client, local, mount_backend):
+    # OpenRouter lists -1 on router rows for "varies per request"; stated as a
+    # price it read "$-1,000,000 per 1M" and sorted them as the cheapest.
+    # 0 (a free model) is a price and stays.
+    fake, created = await _add_provider(
+        client,
+        mount_backend,
+        "or2",
+        models_body={
+            "object": "list",
+            "data": [
+                {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}},
+                {"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}},
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    rows = _rows_by_id((await client.get("/admin/catalog")).json())
+
+    auto = rows["or2:openrouter/auto"]["facts"]
+    assert "price_prompt" not in auto and "price_completion" not in auto
+    free = rows["or2:free/model"]["facts"]
+    assert free["price_prompt"]["value"] == 0.0 and free["price_completion"]["value"] == 0.0
+
+
 async def test_a_refusing_provider_is_a_stated_source_not_a_broken_page(
     client, local, mount_backend
 ):
@@ -266,6 +320,116 @@ async def test_a_refusing_provider_is_a_stated_source_not_a_broken_page(
     assert source["ok"] is False and "key revoked" in source["note"]
     assert "hub:qwen3:8b" in _rows_by_id(body)
     assert not any(r["provider"] == "flaky" for r in body["rows"])
+
+
+async def test_an_unreachable_provider_is_asked_once_a_minute_not_on_every_read(
+    client, local, mount_backend, mount_transport
+):
+    # 2026-10-05: with the Dell off, every page that reads the catalogue
+    # (Models, the chat picker, Settings, the vision picker) waited out the
+    # full connect timeout on it — 10 s a read, 20 s for the chat page.
+    fake, created = await _add_provider(
+        client, mount_backend, "dell", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    dead = FailingTransport(httpx.ConnectTimeout)
+    mount_transport("http://dell.test", dead)
+
+    first = {s["key"]: s for s in (await client.get("/admin/catalog")).json()["sources"]}["dell"]
+    second = {s["key"]: s for s in (await client.get("/admin/catalog")).json()["sources"]}["dell"]
+
+    assert first["ok"] is False and "could not reach" in first["note"]
+    assert len(dead.requests) == 1, "the second read must not dial the dead machine again"
+    # Remembered, and saying so: the same words, stamped with when the
+    # machine was really tried — never restamped as if it were tried now.
+    assert second == {**first, "cached": True}
+
+
+async def test_refresh_asks_an_unreachable_provider_again(
+    client, local, mount_backend, mount_transport
+):
+    fake, created = await _add_provider(
+        client, mount_backend, "dell", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    dead = FailingTransport(httpx.ConnectTimeout)
+    mount_transport("http://dell.test", dead)
+    await client.get("/admin/catalog")
+
+    fresh = {s["key"]: s for s in (await client.get("/admin/catalog?fresh=1")).json()["sources"]}[
+        "dell"
+    ]
+
+    assert len(dead.requests) == 2
+    assert fresh["ok"] is False and "cached" not in fresh
+
+
+async def test_a_remembered_outage_expires(
+    client, local, mount_backend, mount_transport, monkeypatch
+):
+    now = [1000.0]
+    monkeypatch.setattr(
+        catalog, "UNREACHABLE", TTLCache(catalog.UNREACHABLE_TTL_S, clock=lambda: now[0])
+    )
+    fake, created = await _add_provider(
+        client, mount_backend, "dell", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    dead = FailingTransport(httpx.ConnectTimeout)
+    mount_transport("http://dell.test", dead)
+    await client.get("/admin/catalog")
+
+    now[0] += catalog.UNREACHABLE_TTL_S
+    await client.get("/admin/catalog")
+
+    assert len(dead.requests) == 2
+
+
+async def test_a_machine_that_answers_again_is_not_served_from_the_old_outage(
+    client, local, mount_backend, mount_transport
+):
+    # Refresh finds the Dell back; the next ordinary read (a re-read after a
+    # probe, the chat picker) must not hand back the outage it remembered.
+    fake, created = await _add_provider(
+        client, mount_backend, "dell", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    mount_transport("http://dell.test", FailingTransport(httpx.ConnectTimeout))
+    await client.get("/admin/catalog")
+    mount_backend("http://dell.test", fake.app)
+    await client.get("/admin/catalog?fresh=1")
+
+    body = (await client.get("/admin/catalog")).json()
+
+    source = {s["key"]: s for s in body["sources"]}["dell"]
+    assert source["ok"] is True and "cached" not in source
+    assert any(r["provider"] == "dell" for r in body["rows"])
+
+
+async def test_a_refusal_is_not_remembered_as_an_outage(client, local, mount_backend):
+    # A provider that ANSWERED (a 401) is fast and may be fixed at any moment
+    # (a new key): only a machine nobody could reach is remembered.
+    fake, created = await _add_provider(
+        client, mount_backend, "flaky", models_body={"object": "list", "data": [{"id": "m"}]}
+    )
+    assert created.status_code == 200
+    fake.models_status = 401
+    fake.models_body = {"error": {"message": "key revoked"}}
+    await client.get("/admin/catalog")
+    fake.models_status = 200
+    fake.models_body = {"object": "list", "data": [{"id": "m"}]}
+
+    body = (await client.get("/admin/catalog")).json()
+
+    assert {s["key"]: s for s in body["sources"]}["flaky"]["ok"] is True
+    assert any(r["provider"] == "flaky" for r in body["rows"])
+
+
+def test_a_listing_never_waits_long_on_a_machine_that_is_off():
+    # A reachable host connects in well under a second, over the tailnet
+    # too; the old 10 s bound was every catalogue read's cost while the Dell
+    # was asleep.
+    assert MODELS_TIMEOUT.connect is not None and MODELS_TIMEOUT.connect <= 3.0
 
 
 async def test_a_provider_whose_listing_raises_is_named_in_its_source(

@@ -1,12 +1,7 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ContextGauge } from './ContextGauge'
-import { ModelSelector } from './ModelSelector'
-import {
-  getInstalledModels as apiGetInstalledModels,
-  getSuggestion as apiGetSuggestion,
-  putSetting as apiPutSetting,
-} from '../../lib/api'
+import { ModelSelector, type ModelSelectorApi } from './ModelSelector'
 
 /**
  * The compact control row that sits with the chat input (rendered just below it
@@ -24,12 +19,6 @@ import {
  * inject a fake catalog/switch; production leaves it defaulted.
  */
 
-interface ModelApi {
-  getInstalledModels: typeof apiGetInstalledModels
-  getSuggestion: typeof apiGetSuggestion
-  putSetting: typeof apiPutSetting
-}
-
 export function ChatControls({
   currentModel,
   onModelChanged,
@@ -40,7 +29,7 @@ export function ChatControls({
   currentModel: string
   onModelChanged: (model: string) => void
   clearChat: () => Promise<void>
-  modelApi?: ModelApi
+  modelApi?: ModelSelectorApi
   /** The gateway's prompt-token count for the last answered turn, or null
    *  (2026-09-16). null draws nothing — see ContextGauge. */
   promptTokens?: number | null
