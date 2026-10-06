@@ -6,6 +6,26 @@
 #                        own agent (built, checked, paired by environment)
 # ./install.sh update   stub — arrives in a later slice
 # bash 3.2 compatible (no associative arrays, no ${var,,}, no mapfile).
+
+# Bash, or nothing. Everything below is bash's, and the entry guard at the
+# foot of this file reads BASH_SOURCE, which only bash sets: under any other
+# shell it reads "executed" even when the file was sourced, and main runs.
+# Measured 2026-10-06 (S42b Task 27): sourced from zsh, this file ran
+# cmd_install's preflight against the live docker. So before anything else
+# runs, a shell that is not bash is told so in one line on stderr and goes no
+# further — `return` when it sourced the file (that shell lives on), `exit`
+# when it ran it. The one block in this file written for any POSIX shell.
+if [ -z "${BASH_VERSION:-}" ]; then
+  if [ -n "${ZSH_VERSION:-}" ]; then _nova_shell="zsh"
+  elif [ -n "${KSH_VERSION:-}" ]; then _nova_shell="ksh"
+  else _nova_shell="sh"; fi
+  printf '%s\n' "install.sh: cannot run under $_nova_shell — run ./install, or bash deploy/install.sh" >&2
+  unset _nova_shell
+  # In a file that was run, not sourced, `return` either ends it (dash,
+  # busybox, zsh) or fails, and then `exit` does: status 1 either way.
+  # shellcheck disable=SC2317
+  return 1 2>/dev/null || exit 1
+fi
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"

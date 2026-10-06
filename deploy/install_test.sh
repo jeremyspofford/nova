@@ -72,6 +72,88 @@ expect_case() {
   esac
 }
 
+# ── the entry guard: install.sh runs under bash, or not at all ─────────────
+# Sourced from a shell that is not bash, install.sh read "executed" off
+# BASH_SOURCE (only bash sets it) and ran main: from zsh, cmd_install's
+# preflight ran against the live docker (S42b Task 27). Its first lines now
+# refuse, one line on stderr — `return` when sourced, so the shell that
+# sourced it lives on, `exit` when run.
+#
+# These cases stay harmless if the guard is ever gone. They run a COPY in a
+# temp dir (nothing it writes can land in this checkout), with a PATH whose
+# first directory stubs every program that reaches outside (each records
+# that it was reached, and fails), and they hand the script an unknown verb,
+# so a main that is reached refuses the verb instead of installing — a fact
+# the bash control below shows is visible. Nothing reached outside, main
+# never reached: both asserted, not assumed.
+GUARD_T="$(mktemp -d)"
+mkdir -p "$GUARD_T/deploy" "$GUARD_T/stub"
+cp "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/subnet.sh" "$GUARD_T/deploy/"
+for GUARD_TOOL in docker curl wget git openssl sudo systemctl nvidia-smi lsof ss; do
+  cat > "$GUARD_T/stub/$GUARD_TOOL" <<EOF
+#!/bin/sh
+echo "$GUARD_TOOL \$*" >> "$GUARD_T/reached"
+exit 1
+EOF
+  chmod +x "$GUARD_T/stub/$GUARD_TOOL"
+done
+GUARD_PATH="$GUARD_T/stub:/usr/bin:/bin"
+GUARD_COPY="$GUARD_T/deploy/install.sh"
+GUARD_SAYS="— run ./install, or bash deploy/install.sh"
+GUARD_MAIN="ERROR: unknown subcommand: not-a-verb (expected: install, update, backup, restore, drill, undo-move)"
+# Runs "$@" under the guard PATH. Prints "<exit>|<stdout>|<stderr's line
+# count>|<stderr>|<what the stubs saw>", newlines as spaces — stderr's count
+# beside it, so "one line" is checked too.
+guard_run() {
+  local rc=0
+  : > "$GUARD_T/reached"
+  PATH="$GUARD_PATH" "$@" > "$GUARD_T/out" 2> "$GUARD_T/err" || rc=$?
+  printf '%s|%s|%s|%s|%s' "$rc" "$(tr '\n' ' ' < "$GUARD_T/out")" "$(grep -c '' < "$GUARD_T/err")" \
+    "$(tr '\n' ' ' < "$GUARD_T/err")" "$(tr '\n' ' ' < "$GUARD_T/reached")"
+}
+guard_is() { # $1 name  $2 got  $3 wanted
+  if [ "$2" = "$3" ]; then report 0 "$1"; else report 1 "$1" "got '$2', wanted '$3'"; fi
+}
+# A POSIX shell that is not bash: dash where there is one (Debian's /bin/sh;
+# /bin/dash on macOS), else a /bin/sh that is not bash (busybox).
+GUARD_SH="$(command -v dash || true)"
+if [ -z "$GUARD_SH" ] && [ "$(/bin/sh -c 'echo "${BASH_VERSION:-not bash}"' 2>/dev/null)" = "not bash" ]; then
+  GUARD_SH=/bin/sh
+fi
+GUARD_ZSH="$(command -v zsh || true)"
+
+if [ -n "$GUARD_SH" ]; then
+  guard_is "entry guard: sourced from sh ($GUARD_SH), it refuses in one line and returns — that shell lives on" \
+    "$(guard_run "$GUARD_SH" -c 'PATH="$2"; . "$1"; echo "back in the sourcing shell, status $?"' sh "$GUARD_COPY" "$GUARD_PATH")" \
+    "0|back in the sourcing shell, status 1 |1|install.sh: cannot run under sh $GUARD_SAYS |"
+  guard_is "entry guard: run by sh ($GUARD_SH), it refuses in one line and exits non-zero" \
+    "$(guard_run "$GUARD_SH" "$GUARD_COPY" not-a-verb)" \
+    "1||1|install.sh: cannot run under sh $GUARD_SAYS |"
+else
+  report 1 "entry guard: sourced from and run by sh" \
+    "no POSIX sh other than bash on this runner (no dash, and /bin/sh is bash) — the guard was NOT checked"
+fi
+if [ -n "$GUARD_ZSH" ]; then
+  guard_is "entry guard: sourced from zsh, it refuses in one line and returns — that shell lives on" \
+    "$(guard_run "$GUARD_ZSH" -f -c 'PATH="$2"; . "$1" not-a-verb; print -r -- "back in the sourcing shell, status $?"' zsh "$GUARD_COPY" "$GUARD_PATH")" \
+    "0|back in the sourcing shell, status 1 |1|install.sh: cannot run under zsh $GUARD_SAYS |"
+  guard_is "entry guard: run by zsh, it refuses in one line and exits non-zero" \
+    "$(guard_run "$GUARD_ZSH" -f "$GUARD_COPY" not-a-verb)" \
+    "1||1|install.sh: cannot run under zsh $GUARD_SAYS |"
+else
+  NOT_RUN="${NOT_RUN:-}${NOT_RUN:+; }the entry guard under zsh (2 cases: no zsh on this runner)"
+  printf 'NOT RUN the entry guard under zsh: there is no zsh on this runner, so its two cases did not run here (the sh cases did)\n'
+fi
+# bash itself: sourced, the file only defines (main is not run); run, main
+# answers — the control that shows "main was reached" would be seen above.
+guard_is "entry guard: sourced from bash, nothing is refused and main is not run" \
+  "$(guard_run "$BASH" -c 'PATH="$2"; . "$1"; echo "sourced, status $?"' bash "$GUARD_COPY" "$GUARD_PATH")" \
+  "0|sourced, status 0 |0||"
+guard_is "entry guard: run by bash, main is reached (it refuses the unknown verb)" \
+  "$(guard_run "$BASH" "$GUARD_COPY" not-a-verb)" \
+  "1||1|$GUARD_MAIN |"
+rm -rf "$GUARD_T"
+
 # ── a free port is the ordinary case ────────────────────────────────────────
 expect_case "free port: the bundled engine is used" \
   "$(run_decide "" 1 "")" 0 "free (bundled ollama will publish it)"
@@ -260,6 +342,12 @@ run_wiring() {
     HARDWARE_JSON="$tmp/hardware.json"
     # shellcheck disable=SC2034
     BUNDLED_INFERENCE="$1"
+    # The two seams that ask the machine: the real ones run `docker info` and
+    # nvidia-smi, and this suite runs neither (S42b Task 27, fix round 0: the
+    # real `docker info` was measured reached from here, twice a run). The
+    # profile this case is about depends on neither.
+    detect_gpu_runtime() { printf 'false'; }
+    detect_gpus_json() { printf '[]'; }
     detect_hardware >/dev/null 2>&1
     printf '%s|%s' "${COMPOSE_ARGS[*]}" "$HEALTH_CHECKED_SERVICES"
   )
@@ -2432,5 +2520,9 @@ else
   report 1 "install.ps1: says cannot, gives wsl --install, never exits 0" "see $PS1_FILE"
 fi
 
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+if [ -n "${NOT_RUN:-}" ]; then
+  printf '\n%d passed, %d failed — NOT RUN: %s\n' "$PASS" "$FAIL" "$NOT_RUN"
+else
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+fi
 [ "$FAIL" -eq 0 ]
