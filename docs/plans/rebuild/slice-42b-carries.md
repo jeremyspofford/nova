@@ -145,7 +145,7 @@ points at the step in `progress.md` that first raised it.
   all-or-nothing shape pre-check on an audit frame. Waits because it is
   plan-mandated as written, and confirmed unreachable from the real novad
   agent — only a hand-crafted client could trigger it.
-- **L302** (`services/core/tests/test_migration_038.py`): a bundle of
+- **L302** (`services/core/tests/test_migration_039.py`): a bundle of
   test-precision gaps — primary-key column order unchecked, the CHECK
   constraint's converse untested, the re-run test only re-reads rows, and
   the conftest's table-listing order — plus one unrelated, pre-existing

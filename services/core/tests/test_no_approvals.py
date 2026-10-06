@@ -136,6 +136,13 @@ def test_tool_carries_no_precheck_or_gate_field():
     # let "the Dell is online" stand. live_facts reads it AFTER the call to
     # decide which recorded facts she could have seen; nothing reads it to
     # refuse a call, and dispatch never does (below).
+    # 2026-10-05 (S37a Task 6, ruling X2-REVISED): `traced_as_origin` joins the
+    # set. It is a fact about the ARGUMENTS — which of a tool's own URL
+    # arguments must reach the trace as an origin only, because ha-mcp's
+    # secret is the path itself, with no token or header beside it to catch
+    # by. chat._span_arguments reads it AFTER the call was already made, to
+    # shape what gets WRITTEN to the trace; nothing reads it to decide
+    # whether the call may run, and dispatch never does (below).
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -147,6 +154,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "reports_spend",
         "reads_machines",
         "device_line_shown",
+        "traced_as_origin",
     }
 
 
@@ -175,6 +183,13 @@ def test_dispatch_never_reads_reads_only():
     # after a check ran, to keep the facts she was shown — never dispatch.
     assert "device_line_shown" not in names, (
         "dispatch reads Tool.device_line_shown — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+    # And for `traced_as_origin` (S37a Task 6, ruling X2-REVISED): chat's trace
+    # writer reads it after dispatch already ran the call, to shape what the
+    # span records — never dispatch, which decides nothing from it.
+    assert "traced_as_origin" not in names, (
+        "dispatch reads Tool.traced_as_origin — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

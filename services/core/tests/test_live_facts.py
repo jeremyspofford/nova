@@ -294,7 +294,7 @@ def test_a_live_source_with_no_arguments_is_read_as_an_empty_call():
 
 
 @pytest.mark.asyncio
-async def test_a_check_that_reads_something_stale_stops_the_turn_being_ingested():
+async def test_a_check_that_reads_something_stale_keeps_her_reply_out_of_memory():
     """The loop this closes, and it is not obvious.
 
     A note says device_info answers the VRAM question. The backend runs it,

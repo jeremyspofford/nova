@@ -1,8 +1,10 @@
 -- S42b (the hub lane): Nova's agent installs, re-pairs and updates itself.
--- The next free number after the production hotfix 037 (device_audit
--- exit_code -> bigint). Re-runnable: its test executes it a second time,
--- including against a database that already carries devices, device_audit
--- rows and pairing codes from before this migration existed.
+-- The next free number after S37a's 038_mcp_servers (#101), which reached
+-- main first: this was 038, the next after the production hotfix 037
+-- (device_audit exit_code -> bigint), until it was renumbered in Task 32.
+-- Re-runnable: its test executes it a second time, including against a
+-- database that already carries devices, device_audit rows and pairing codes
+-- from before this migration existed.
 
 -- Re-pair (decision 4): a code may be bound to one live device. Enrolling
 -- with it rebinds that row to the new key — name and history kept — instead

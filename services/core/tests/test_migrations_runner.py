@@ -1,6 +1,7 @@
 """Migrations runner: ordering/discovery logic (asyncpg-free) plus one
 live-Postgres integration test, skipped when no dockerized postgres is
 available for this run."""
+
 from __future__ import annotations
 
 import os
@@ -9,9 +10,11 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from app.main import MIGRATIONS_DIR
 from app.migrations_runner import (
     _CREATE_TRACKING_TABLE,
     MigrationOrderError,
+    _migration_number,
     discover_migrations,
     plan_pending,
     run_migrations,
@@ -30,6 +33,14 @@ def test_discover_migrations_numeric_order(tmp_path):
     _touch(tmp_path, "002_third.sql")
     files = discover_migrations(tmp_path)
     assert [f.name for f in files] == ["001_first.sql", "002_third.sql", "010_second.sql"]
+
+
+def test_migration_numbers_are_unique_in_services_core_migrations():
+    # plan_pending refuses only an unrecorded number BELOW the highest
+    # applied one — two files sharing a number both apply silently, in
+    # whatever order the filesystem hands them back (progress.md F14).
+    numbers = [_migration_number(f) for f in discover_migrations(MIGRATIONS_DIR)]
+    assert len(numbers) == len(set(numbers)), "duplicate migration number in core migrations"
 
 
 def test_plan_pending_empty_applied_returns_all(tmp_path):

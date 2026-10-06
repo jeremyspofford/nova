@@ -127,14 +127,27 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # address for another device, and the setup QR cards whose pairing code
     # never reaches her.
     #
+    # Deliberate snapshot update (2026-10-06): notice_seen_all
+    # (tools/notices.py), so FORTY-THREE -> FORTY-FOUR. The badge counted
+    # dozens of cleared rows and neither he nor she could clear them except
+    # one id at a time. A read receipt, never a permission.
+    #
+    # Deliberate snapshot update (2026-10-06): memory_forget
+    # (tools/memory_tools.py), so FORTY-FOUR -> FORTY-FIVE. She could save a
+    # note and never remove one: asked to forget something, the only way was
+    # a person editing her files by hand.
+    #
     # Deliberate snapshot update (slice 42b, 2026-09-28): machine_update
-    # (tools/machines.py), so FORTY-FOUR -> FORTY-FIVE — on top of main's
-    # set_chat_model (2026-10-05, FORTY-THREE -> FORTY-FOUR), renumbered when
-    # main came into slice/s42b (Task 32). Nova keeps her agents on the hub's
-    # build, and the owner's "update it now". It sends; only the agent's
-    # reconnect confirms (P8), and nothing waits on the owner, which is why
-    # test_no_approvals stays green beside this. (The S37a lane also moves
-    # this set; whichever lands second renumbers.)
+    # (tools/machines.py), so FIFTY -> FIFTY-ONE, renumbered each time main
+    # came into slice/s42b (Task 32). Main's set is FIFTY: the base's
+    # FORTY-THREE, set_chat_model (2026-10-05), notice_seen_all and
+    # memory_forget (above) and S37a's four MCP tools (below). Main's
+    # paragraphs for those each count from FORTY-THREE or FORTY-FOUR because
+    # they were written on parallel branches; the set itself is the count.
+    # Nova keeps her agents on the hub's build, and the owner's "update it
+    # now". It sends; only the agent's reconnect confirms (P8), and nothing
+    # waits on the owner, which is why test_no_approvals stays green beside
+    # this.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -142,6 +155,7 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "workspace_delete",
         "memory_search",
         "memory_save",
+        "memory_forget",
         "get_time",
         "fetch_url",
         "web_search",
@@ -210,6 +224,7 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "notices",
         "notice_mute",
         "notice_seen",
+        "notice_seen_all",
         # S40 (2026-09-19): where models run, and the one switch per machine.
         # THIRTY-NINE -> FORTY-ONE.
         "machine_status",
@@ -218,8 +233,16 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # QR cards (tools/setup.py). FORTY-ONE -> FORTY-THREE.
         "nova_address",
         "show_setup_qr",
+        # S37a (2026-09-30): her MCP client — connect, remove, look up, call.
+        # FORTY-THREE -> FORTY-SEVEN. The servers and their tools are rows;
+        # these four names are the whole of what the registry learns.
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_tools",
+        "mcp_call",
         # S42b (2026-09-28): "update it now" — sent until the agent's
-        # reconnect confirms it (P8). FORTY-FOUR -> FORTY-FIVE.
+        # reconnect confirms it (P8). FIFTY -> FIFTY-ONE, on top of main's
+        # notice_seen_all, memory_forget and the four MCP tools above.
         "machine_update",
     }
 
@@ -402,6 +425,28 @@ def test_the_tools_package_imports_on_its_own():
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(len(tools.REGISTRY))
+
+
+def test_the_app_imports_cold_too():
+    """Ruling F1 (S37a Task 8): `app.main` is uvicorn's own entry point, and
+    every test here reaches it only after conftest has already imported
+    `app.chat` first — so a module-level import cycle through
+    `app.mcp.servers` (which imports notices, then the checks, then agents,
+    then `app.tools`, which imports `app.mcp.servers` back inside its own
+    executors — `app/tools/mcp.py`'s module docstring) would crash THIS
+    import while every other test in the suite stayed green. Import it cold,
+    in its own subprocess, exactly as the sibling test above does for
+    `app.tools` alone."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 # -- S12: an agent's subset, an agent's folder (2026-09-08) ----------------
@@ -590,6 +635,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # show_setup_qr, is deliberately NOT here — it mints a code and sends
         # a card.
         "nova_address",
+        # S37a: looking up a server's tools changes nothing outside Nova (it
+        # may refresh the stored copy of the list). Its three twins change
+        # things and are deliberately NOT here.
+        "mcp_tools",
     }
 
 
@@ -617,5 +666,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "show_setup_qr",
         # S42b: it sends a build and restarts an agent.
         "machine_update",
+        "mcp_connect",
+        "mcp_disconnect",
+        "mcp_call",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

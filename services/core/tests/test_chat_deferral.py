@@ -365,9 +365,9 @@ async def test_an_offer_restating_the_instruction_redirects_with_tools_and_the_t
     assert sent[-1] == DONE
 
     # A turn that DID the work is ordinary knowledge — but a web search is an
-    # ephemeral read, so (like any fetch-only turn) it is not ingested.
+    # ephemeral read, so (like any fetch-only turn) only his words are kept.
     await chat.drain_background()
-    assert memory.ingests == []
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [chat.LIVE_READ_NOT_KEPT]
 
 
 async def test_an_offer_regen_that_still_offers_appends_the_honest_note(

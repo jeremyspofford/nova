@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 
 import httpx
 from fastapi import Request
@@ -36,6 +37,7 @@ from app.adapters.base import (
     positive_int,
     reason,
     refusal_detail,
+    refusal_words,
 )
 from app.providers import base_url_of
 
@@ -311,6 +313,29 @@ def strip_usage(body: dict) -> dict:
     return {k: v for k, v in body.items() if k not in _USAGE_FIELDS}
 
 
+# OpenRouter's credit refusal names the reply it CAN pay for: "You requested up
+# to 65536 tokens, but can only afford 4321." With no max_tokens it reserves the
+# model's whole output cap, so a low balance refused every turn outright
+# (09-25..09-30) while it could still afford a reply. The number is the
+# provider's own live statement, never a budget kept here.
+_AFFORDS = re.compile(r"can only afford (\d+)")
+
+
+def _affordable_tokens(status: int, content: bytes, body: dict) -> int | None:
+    """The max_tokens to ask for again, or None: a 402 that states a positive
+    affordable count below what this request asked for (or left unset)."""
+    if status != 402:
+        return None
+    found = _AFFORDS.search(refusal_words(content))
+    if found is None:
+        return None
+    affords = int(found.group(1))
+    asked = body.get("max_tokens")
+    if affords <= 0 or (isinstance(asked, int) and asked <= affords):
+        return None
+    return affords
+
+
 def _refuses_usage_fields(content: bytes) -> bool:
     text = content.decode(errors="replace").lower()
     return any(field in text for field in _USAGE_FIELDS)
@@ -523,7 +548,14 @@ class OpenAIChat:
         return await self._completions(request.app, row, model, body, engine=engine)
 
     async def _completions(
-        self, app, row: dict, model: str, body: dict, *, engine: bool = False
+        self,
+        app,
+        row: dict,
+        model: str,
+        body: dict,
+        *,
+        engine: bool = False,
+        within_credit: bool = False,
     ) -> Response:
         url = base_url_of(row)
         if not url:
@@ -560,7 +592,29 @@ class OpenAIChat:
                 # send this one again without it — once, never a loop.
                 await _remember_usage_support(row, False)
                 return await self._completions(
-                    app, dict(row, usage_supported=False), model, strip_usage(body), engine=engine
+                    app,
+                    dict(row, usage_supported=False),
+                    model,
+                    strip_usage(body),
+                    engine=engine,
+                    within_credit=within_credit,
+                )
+            affords = (
+                None if within_credit else _affordable_tokens(upstream.status_code, content, body)
+            )
+            if affords is not None:
+                # Asked again ONCE for the reply the credit covers — never a
+                # loop, and never above what the caller itself set.
+                logger.warning(
+                    "%s: the credit affords %d tokens; asking again within it", row["name"], affords
+                )
+                return await self._completions(
+                    app,
+                    row,
+                    model,
+                    dict(body, max_tokens=affords),
+                    engine=engine,
+                    within_credit=True,
                 )
             return Response(content=content, status_code=upstream.status_code, headers=headers)
         if asked_for_usage and row.get("usage_supported") is None:

@@ -86,6 +86,41 @@ describe('GovernancePage', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('500'))
   })
 
+  it('renders the tools an mcp.server_connected event left out, capped, with the overflow count', async () => {
+    // Fix round 1, item 2 (ruling T10-A): the governance ledger is the
+    // durable record of which tools a connect left out and why — this page
+    // is where that survives once the add form that first showed it closes.
+    const getGovernanceEvents = vi.fn(async () => [
+      event({
+        id: 'e-mcp',
+        kind: 'mcp.server_connected',
+        meta: {
+          name: 'github',
+          rejected: [
+            { name: 'bad_tool_1', reason: 'no description' },
+            { name: 'bad_tool_2', reason: 'args schema is not an object' },
+          ],
+          rejected_more: 5,
+        },
+      }),
+    ])
+    render(<GovernancePage api={{ getGovernanceEvents }} />)
+    await waitFor(() => expect(screen.getByText('bad_tool_1')).toBeTruthy())
+    expect(screen.getByText(/no description/)).toBeTruthy()
+    expect(screen.getByText('bad_tool_2')).toBeTruthy()
+    expect(screen.getByText(/args schema is not an object/)).toBeTruthy()
+    expect(screen.getByText(/and 5 more/)).toBeTruthy()
+  })
+
+  it('an mcp.server_connected event with nothing rejected renders no such list', async () => {
+    const getGovernanceEvents = vi.fn(async () => [
+      event({ id: 'e-mcp-2', kind: 'mcp.server_connected', meta: { name: 'github' } }),
+    ])
+    render(<GovernancePage api={{ getGovernanceEvents }} />)
+    await waitFor(() => expect(screen.getByText('mcp.server_connected')).toBeTruthy())
+    expect(screen.queryByTestId('governance-rejected-e-mcp-2')).toBeNull()
+  })
+
   it('loads another page, older, appended after the current rows', async () => {
     const first = Array.from({ length: 3 }, (_, i) => event({ id: `e-${i}` }))
     const second = [event({ id: 'e-old' })]

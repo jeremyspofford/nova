@@ -295,6 +295,57 @@ async def test_forget_deletes_and_recall_stops_returning_it(monkeypatch, tmp_pat
     assert not (tmp_path / "root" / "people" / "alice" / "topics" / "coffee.md").exists()
 
 
+async def test_forget_one_exchange_keeps_the_rest_of_the_journal(monkeypatch, tmp_path):
+    """A recall hit on a journal names ONE exchange ("...md#16:32"). Forgetting
+    it must take that exchange alone: deleting the file would lose the whole
+    day (hub:3 2026-10-06 had to cut a test entry out by hand)."""
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    day = datetime(2026, 10, 6, 18, 0, tzinfo=UTC)
+    store.append_journal("alice", "User: the inbox was noisy", when=day)
+    abs_path, _ = store.append_journal(
+        "alice", "User: my dentist appointment is the 21st", when=day + timedelta(minutes=1)
+    )
+    rel = "people/alice/journals/2026-10-06.md"
+
+    async with _client() as client:
+        await client.post("/recall", headers=_headers(), json={"query": "x", "person_id": "alice"})
+        resp = await client.post(
+            "/forget", headers=_headers(), json={"person_id": "alice", "path": f"{rel}#18:01"}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"path": f"{rel}#18:01", "deleted": True}
+        after = await client.post(
+            "/recall", headers=_headers(), json={"query": "dentist", "person_id": "alice"}
+        )
+        kept = await client.post(
+            "/recall", headers=_headers(), json={"query": "inbox noisy", "person_id": "alice"}
+        )
+    assert after.json()["hits"] == []
+    assert [h["path"] for h in kept.json()["hits"]] == [f"{rel}#18:00"]
+    on_disk = abs_path.read_text(encoding="utf-8")
+    assert "dentist" not in on_disk and "the inbox was noisy" in on_disk
+    assert on_disk.startswith("---\n")  # the frontmatter survives the rewrite
+
+
+async def test_forget_an_exchange_the_file_no_longer_holds_is_404(monkeypatch, tmp_path):
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    abs_path, _ = store.append_journal(
+        "alice", "User: hello", when=datetime(2026, 10, 6, 18, 0, tzinfo=UTC)
+    )
+    before = abs_path.read_text(encoding="utf-8")
+    async with _client() as client:
+        resp = await client.post(
+            "/forget",
+            headers=_headers(),
+            json={"person_id": "alice", "path": "people/alice/journals/2026-10-06.md#09:99"},
+        )
+    assert resp.status_code == 404
+    assert "09:99" in resp.text
+    assert abs_path.read_text(encoding="utf-8") == before
+
+
 async def test_forget_missing_file_404(monkeypatch, tmp_path):
     _auth(monkeypatch, tmp_path)
     async with _client() as client:

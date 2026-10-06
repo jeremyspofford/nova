@@ -660,6 +660,22 @@ async def mark_seen(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
     return await _update(pool, notice_id, "seen_at = COALESCE(seen_at, now())")
 
 
+async def mark_all_seen(pool: asyncpg.Pool) -> int:
+    """Record that he has read the whole Inbox, and say how many rows that was.
+
+    Exactly what the badge counts (`unseen_count`'s own predicate), so the
+    badge reads zero afterwards by construction rather than by the page's
+    arithmetic. Like `mark_seen` it writes the timestamp and nothing else: a
+    read stops no digest and lifts no mute, and a row read earlier keeps the
+    time he actually read it.
+    """
+    status = await pool.execute(
+        f"UPDATE notices SET seen_at = now() WHERE state = ANY($1::text[]) AND {_UNREAD}",
+        list(UNSEEN_STATES),
+    )
+    return int(status.split()[-1])
+
+
 async def set_muted(
     pool: asyncpg.Pool,
     notice_id: uuid.UUID,

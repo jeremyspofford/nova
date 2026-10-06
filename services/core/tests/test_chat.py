@@ -1154,7 +1154,7 @@ async def test_a_turn_whose_notes_name_no_check_opens_no_live_check_span(
     assert "Live checks" not in volatile
 
 
-async def test_a_live_check_of_something_that_goes_stale_stops_the_turn_being_ingested(
+async def test_a_live_check_of_something_that_goes_stale_keeps_her_reply_out_of_memory(
     pool, owner_client, mount_peers
 ):
     """The loop this closes, end to end, and it is not obvious.
@@ -1185,6 +1185,7 @@ async def test_a_live_check_of_something_that_goes_stale_stops_the_turn_being_in
     mount_peers(gateway=FakeGateway(deltas=("fine",)), memory=memory)
     await _say(owner_client, "how much VRAM?")
     assert tools.REGISTRY["device_list"].ephemeral  # the fact this rides on
-    assert memory.ingests == [], (
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [chat.LIVE_READ_NOT_KEPT], (
         "a check read a point-in-time answer, so her reply quoting it must not become a note"
     )
+    assert memory.ingests[0]["exchange"]["user"] == "how much VRAM?"

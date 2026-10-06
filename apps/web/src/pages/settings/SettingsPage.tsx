@@ -15,6 +15,7 @@ import { MachinesSection } from './MachinesSection'
 import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
 import { AddToNovaSection } from './AddToNovaSection'
+import { ConnectionsSection } from './ConnectionsSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection, decisionSwitchDefs } from './RoutingSection'
@@ -271,6 +272,7 @@ export function SettingsPage() {
                 <DevicesSection />
               </>
             )}
+            {tab === 'connections' && <ConnectionsSection />}
           </>
         )}
         {/* Signing out is not one of the five errands above, and hunting for

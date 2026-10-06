@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { ScrollText } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
@@ -33,6 +33,26 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** Ruling T10-A: `mcp.server_connected`'s event meta carries which tools a
+ * connect left out and why (at most 20, `app/mcp/servers.py`'s own cap) and
+ * how many more there were — this is the durable record of that, read
+ * generically off whatever event meta states it, never keyed to one kind
+ * name here, so it renders for any event that ever says the same thing. */
+function rejectedToolsOf(meta: Record<string, unknown>): { name: string; reason: string }[] {
+  if (!Array.isArray(meta.rejected)) return []
+  return meta.rejected.filter(
+    (item): item is { name: string; reason: string } =>
+      item !== null &&
+      typeof item === 'object' &&
+      typeof (item as { name?: unknown }).name === 'string' &&
+      typeof (item as { reason?: unknown }).reason === 'string',
+  )
+}
+
+function rejectedMoreOf(meta: Record<string, unknown>): number {
+  return typeof meta.rejected_more === 'number' && meta.rejected_more > 0 ? meta.rejected_more : 0
+}
+
 // The kinds core writes (services/core/app/governance.py). Anything else —
 // a kind a future slice adds before this map learns it — renders neutral
 // rather than being hidden or crashing the page.
@@ -47,6 +67,10 @@ const KIND_COLOR: Record<string, 'success' | 'danger' | 'accent' | 'neutral'> = 
   // record — so it gets the same colour, never the no-colour-for-this-kind
   // fallback above.
   'device.repaired': 'success',
+  // S37a: her MCP connections. A removal is the one that loses something.
+  'mcp.server_connected': 'accent',
+  'mcp.server_removed': 'danger',
+  'mcp.tools_changed': 'neutral',
 }
 
 export function GovernancePage({
@@ -141,21 +165,41 @@ export function GovernancePage({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {events.map(event => (
-                  <tr key={event.id} data-testid={`governance-row-${event.id}`}>
-                    <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
-                      {new Date(event.created_at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2.5 whitespace-nowrap">
-                      <Badge size="sm" color={KIND_COLOR[event.kind] ?? 'neutral'}>
-                        {event.kind}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
-                      {event.actor ?? <span className="text-content-tertiary">—</span>}
-                    </td>
-                  </tr>
-                ))}
+                {events.map(event => {
+                  const rejected = rejectedToolsOf(event.meta)
+                  const rejectedMore = rejectedMoreOf(event.meta)
+                  return (
+                    <Fragment key={event.id}>
+                      <tr data-testid={`governance-row-${event.id}`}>
+                        <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
+                          {new Date(event.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <Badge size="sm" color={KIND_COLOR[event.kind] ?? 'neutral'}>
+                            {event.kind}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
+                          {event.actor ?? <span className="text-content-tertiary">—</span>}
+                        </td>
+                      </tr>
+                      {rejected.length > 0 && (
+                        <tr data-testid={`governance-rejected-${event.id}`}>
+                          <td colSpan={3} className="px-4 pb-3 pt-0 text-micro text-content-tertiary">
+                            <ul className="space-y-0.5">
+                              {rejected.map(r => (
+                                <li key={r.name}>
+                                  <span className="font-mono text-content-secondary">{r.name}</span> — {r.reason}
+                                </li>
+                              ))}
+                              {rejectedMore > 0 && <li>and {rejectedMore} more</li>}
+                            </ul>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>

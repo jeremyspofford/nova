@@ -49,7 +49,7 @@ import ipaddress
 import re
 import shlex
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, NamedTuple
@@ -2183,6 +2183,20 @@ _CAP_UPDATE_AGENTS = re.compile(
     re.I,
 )
 
+# S37a fix round 1 (ruling T12-B, S38's G1 shape): the MCP rows' LOCAL honest
+# tail. A denial whose object is QUALIFIED by what follows it — "MCP servers
+# that run over stdio", "an MCP server without a URL", "MCP tools on a server
+# you haven't connected yet", "… right now" — is a true limit, never the
+# general ability, and capability_claim is REPLACE-class: a fire there stored
+# only "I can do that" in place of a true sentence. Only these two rows read
+# it, as only the S47 rows read _PRESENT_STATE_TAIL. Possessive runs and
+# literal alternatives, bounded by _PRESENT_STATE_TAIL's own window: linear.
+_MCP_QUALIFIED_TAIL = (
+    r"(?!\s*+,?\s*+(?:that|which|who|over|via|using|through|without|unless|requiring"
+    r"|needing|behind|on\s+(?:a|an|any|the|that|this|your)\s+server)\b"
+    r"|" + _PRESENT_STATE_TAIL + r")"
+)
+
 _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -2428,6 +2442,24 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.I,
         ),
         "device_run",
+    ),
+    # S37a: her MCP client, as GENERAL abilities — connecting to MCP servers,
+    # using MCP tools. Plural or indefinite nouns only, like every row here:
+    # "the MCP server" names one thing and is left alone. A NAMED server's
+    # denial is server_denial_check's, which reads the live server list.
+    (
+        re.compile(
+            r"\bconnect(?:ing)?\s+(?:to\s+)?(?:an?\s+|any\s+|new\s+)?mcp\s+servers?\b"
+            + _MCP_QUALIFIED_TAIL,
+            re.I,
+        ),
+        "mcp_connect",
+    ),
+    (
+        re.compile(
+            r"\buse\s+(?:an?\s+|any\s+)?mcp\s+(?:servers?|tools?)\b" + _MCP_QUALIFIED_TAIL, re.I
+        ),
+        "mcp_call",
     ),
 )
 
@@ -10569,13 +10601,14 @@ _MEMORY_RECALL_KIND = "memory_recall"
 # /export is a stated limit and failed saves are collected, and it still
 # returns ran=True — so in the turn memory really was down, the guard said
 # "this turn's memory_backfill call was answered by it". memory_search and
-# memory_save go through _call_memory, which raises on anything but a 200, so
-# their ok is memory's answer. Every tool memory_tools defines is on exactly
-# one side, and test_memory_claim_guard pins the partition against
-# memory_tools.TOOLS: a new memory tool turns it red rather than defaulting
-# into the evidence. A FAILED memory_* tool of either side still silences the
-# guard (the prefix): a failure is evidence the report may be true.
-_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save"})
+# memory_save (and memory_forget, 2026-10-06) go through _call_memory, which
+# raises on anything but a 200, so their ok is memory's answer. Every tool
+# memory_tools defines is on exactly one side, and test_memory_claim_guard pins
+# the partition against memory_tools.TOOLS: a new memory tool turns it red
+# rather than defaulting into the evidence. A FAILED memory_* tool of either
+# side still silences the guard (the prefix): a failure is evidence the report
+# may be true.
+_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save", "memory_forget"})
 _MEMORY_RAN_NOT_ANSWERED = frozenset({"memory_backfill"})
 
 _MEMORY_NOUN = (
@@ -10776,3 +10809,281 @@ def _memory_claim(match: re.Match[str], recall: Any, tool: str | None) -> Memory
         text=text,
         retrievers_missing=missing,
     )
+
+
+# -- the MCP server claims (S37a) ------------------------------------------------
+#
+# Two append-only checks over HER reply at the end of the turn, in the
+# said-not-done shape (fix round 3, 2026-09-29): a false fire costs one true
+# sentence, never an action. Both are DERIVED from the live list of connected
+# servers the turn read once (chat._mcp_server_refs), never a list kept here,
+# and neither reads the owner's message (ruling 2026-09-27).
+#
+#   * server_denial_check — "I can't access GitHub" while GitHub is connected.
+#     Silent when that server's last call failed (its row, or a failed mcp_*
+#     span for it this turn): then the sentence is true. Silent on a question,
+#     a hedge, a past attempt, and a denial qualified as a present state.
+#     "I can’t" (U+2019) is read as "I can't" (ruling F18).
+#   * server_claim_check — "I checked GitHub", "according to GitHub", "GitHub
+#     shows …" when no call to that server was ANSWERED this turn: an ok
+#     mcp_* span, or the server's own isError answer (ruling T7-E: the tool's
+#     answer, never a failing server). An ok live read whose arguments name
+#     the server backs it too (she fetched github.com), and a recap marked as
+#     earlier is left alone (plan decision P16). The sentence says only what
+#     the record shows (#90's T3): no call ran, or calls ran and none
+#     succeeded — never "no call ran" beside one that did.
+#
+# #90's rules hold for both (ruling F5): a turn whose delegation may have run
+# an agent is left alone (_a_delegation_ran — the agent's calls are on ITS
+# turn), and a call dispatch refused before its executor (`reached_executor`
+# False) reached nothing, so it is neither a failed call nor a call that ran.
+# The third, the persona's own toolset, is the caller's: chat hands
+# server_denial_check no servers unless the persona holds mcp_call.
+
+
+@dataclass(frozen=True)
+class McpServerRef:
+    """A connected MCP server as the guards see it: its connection name, the
+    words that name it in prose (lowercase), and whether its last call failed."""
+
+    name: str
+    words: tuple[str, ...]
+    failing: bool = False
+
+
+@dataclass(frozen=True)
+class ServerClaimFound:
+    """One MCP server claim: which server, the words that made it, and the one
+    sentence the turn appends."""
+
+    server: str
+    phrase: str
+    text: str
+
+
+_MCP_TOOL_NAMES = frozenset({"mcp_call", "mcp_tools", "mcp_connect"})
+# Read only to drop a server she REMOVED this turn (fix round 1, item 1): a
+# disconnect is not a call to the server, but the server is gone after it.
+_MCP_DISCONNECT = frozenset({"mcp_disconnect"})
+_SERVER_ACCESS = (
+    r"(?:access|reach|connect\s+to|use|query|get\s+(?:in)?to|talk\s+to|read\s+from|see)"
+)
+_SERVER_DETERMINER = r"(?:(?:my|your|the)\s+)?"
+_SERVER_READ_VERB = r"(?:checked|looked\s+(?:at|into)|queried|pulled|fetched|read|searched)"
+_SERVER_SAYS = r"(?:shows|says|reports|lists|confirms|indicates)"
+_SERVER_PRESENT_STATE = re.compile(
+    r"\b(?:right\s+now|at\s+the\s+moment|currently|for\s+now|at\s+present|today|until|unless"
+    r"|because|since|while|anymore|any\s+more)\b",
+    re.I,
+)
+_SERVER_EARLIER = re.compile(
+    r"\b(?:earlier|before|previously|yesterday|last\s+time|this\s+morning|a\s+while\s+ago)\b",
+    re.I,
+)
+
+
+# Fix round 1, M3: room for every server a household could connect. The
+# guards fetch each server's patterns once per reply, before the clauses;
+# looked up per clause past 128 servers, every lookup evicted the next one
+# and rebuilt it (34 s for a 5 KB reply).
+@lru_cache(maxsize=1024)
+def _server_patterns(
+    words: tuple[str, ...],
+) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """(after a denial lead, the name alone, a first-person read, an
+    attribution) for one server's words. Built per server set and cached, and
+    swept by tests/test_guard_regex_timing.py like the per-machine builders.
+    Every alternative is an escaped literal, so the patterns stay linear.
+
+    `after_lead` is only ever MATCHED at a lead's end, which follows a letter;
+    the lookbehind for a non-space and the possessive runs keep a search over
+    it linear too (ruling F2: the plain optional-whitespace form walked a run
+    of padding from each of its positions — 271 ms at 1,500 characters)."""
+    alt = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    name = rf"{_SERVER_DETERMINER}(?:{alt})\b"
+    after_lead = re.compile(rf"(?<!\s)\s*+(?:{_SERVER_ACCESS}\s++)?{name}", re.I)
+    named = re.compile(name, re.I)
+    read = re.compile(rf"\bI(?:['’]ve|\s+have)?\s+(?:just\s+)?{_SERVER_READ_VERB}\s+{name}", re.I)
+    said = re.compile(
+        rf"\b(?:according\s+to|per)\s+{name}|\b(?:{alt})(?:['’]s\s+\w+)?\s+{_SERVER_SAYS}\b",
+        re.I,
+    )
+    return after_lead, named, read, said
+
+
+def _mcp_spans(
+    spans: Sequence[Any], tool_names: frozenset[str] = _MCP_TOOL_NAMES
+) -> Iterator[tuple[Mapping[str, Any], set[str]]]:
+    """(meta, the servers it names) for each mcp_* span that REACHED its
+    executor — from its facts, and from its own arguments. A call dispatch
+    refused first (`reached_executor` False: unreadable arguments, no such
+    tool) reached nothing, so it says nothing about a server (ruling F5); an
+    absent key is "not recorded", never "not reached" (#90's M-2). A call
+    REFUSED before dispatch (`refused_*`: written as markup, a closed round)
+    never ran at all (fix round 1, M2 — chat._tool_outcomes' house rule)."""
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        if getattr(span, "name", None) not in tool_names:
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("reached_executor") is False:
+            continue
+        if any(str(key).startswith("refused_") for key in meta):
+            continue
+        named: set[str] = set()
+        for fact in meta.get("facts") or ():
+            if isinstance(fact, dict) and isinstance(fact.get("mcp_server"), str):
+                named.add(fact["mcp_server"])
+        args = meta.get("args_redacted")
+        if isinstance(args, dict):
+            for key in ("server", "name"):
+                if isinstance(args.get(key), str):
+                    named.add(args[key])
+        yield meta, named
+
+
+def _mcp_servers_in(spans: Sequence[Any], *, ok: bool) -> set[str]:
+    """The servers an mcp_* call that reached its executor named this turn,
+    among the calls whose `ok` is the one asked for."""
+    names: set[str] = set()
+    for meta, named in _mcp_spans(spans):
+        if bool(meta.get("ok")) is ok:
+            names |= named
+    return names
+
+
+def _mcp_servers_disconnected(spans: Sequence[Any]) -> set[str]:
+    """The servers an ok mcp_disconnect removed this turn (fix round 1, item 1).
+    Gone, whatever list the guards were handed: neither "X is connected" nor
+    "no call to X ran" can be said beside her removing it."""
+    names: set[str] = set()
+    for meta, named in _mcp_spans(spans, _MCP_DISCONNECT):
+        if meta.get("ok"):
+            names |= named
+    return names
+
+
+def _mcp_servers_answered(spans: Sequence[Any]) -> set[str]:
+    """The servers that ANSWERED a call this turn: an ok mcp_* call, or one
+    the server answered with its tool's own error. Dispatch records an isError
+    answer as a failed call, but it is the tool's answer, never a failing
+    server (ruling T7-E) — "GitHub says that run does not exist" relays it."""
+    answered: set[str] = set()
+    for meta, named in _mcp_spans(spans):
+        if meta.get("ok"):
+            answered |= named
+            continue
+        for fact in meta.get("facts") or ():
+            if (
+                isinstance(fact, dict)
+                and fact.get("is_error") is True
+                and isinstance(fact.get("mcp_server"), str)
+            ):
+                answered.add(fact["mcp_server"])
+    return answered
+
+
+def _live_read_arguments(spans: Sequence[Any]) -> str:
+    """The lowercased arguments of every ok live read this turn — a web fetch, a
+    search, a device read — to look for the words that name a server. Imported
+    inside the call because app.tools imports this module (_spend_tools' rule)."""
+    from app import tools
+
+    readers = set(tools.live_reading_tool_names())
+    parts = []
+    for span in spans:
+        meta = getattr(span, "meta", None) or {}
+        if (
+            getattr(span, "kind", None) == "tool"
+            and getattr(span, "name", None) in readers
+            and meta.get("ok")
+        ):
+            parts.append(str(meta.get("args_redacted")).lower())
+    return " ".join(parts)
+
+
+def server_denial_check(
+    reply_text: str, spans: Sequence[Any], servers: Sequence[McpServerRef]
+) -> ServerClaimFound | None:
+    """A first-person, present denial of a CONNECTED server — "I don't have
+    access to GitHub" — answered with one appended sentence. Pure;
+    precision-first: a denial the facts make true is left alone."""
+    if not reply_text or not reply_text.strip() or not servers:
+        return None
+    if _a_delegation_ran(spans):
+        return None  # the agent's calls are on its own turn (#90, ruling F5)
+    failed_now = _mcp_servers_in(spans, ok=False) | _mcp_servers_disconnected(spans)
+    # Whose denial would be false, decided once for the reply, not per clause,
+    # each with its patterns fetched once (M3).
+    candidates = [
+        (server, _server_patterns(server.words))
+        for server in servers
+        if not server.failing and server.name not in failed_now and server.words
+    ]
+    if not candidates:
+        return None
+    # Ruling F18: the lead family reads an apostrophe; "I can’t" is "I can't".
+    # One character for one, so every position is where it was.
+    text = reply_text.replace("\u2019", "'")
+    for clause, is_question in _clauses(text):
+        if is_question or _SERVER_PRESENT_STATE.search(clause):
+            continue
+        lead = _DENIAL_LEAD.search(clause)
+        trailing = _TRAILING_DENIAL.search(clause)
+        if lead is None and trailing is None:
+            continue
+        for server, (after_lead, named, _read, _said) in candidates:
+            hit = after_lead.match(clause, lead.end()) if lead is not None else None
+            if hit is None and trailing is not None:
+                hit = named.search(clause, 0, trailing.start())
+            if hit is None:
+                continue
+            return ServerClaimFound(
+                server=server.name,
+                phrase=clause.strip()[:120],
+                text=f"({server.name} is connected: mcp_call can reach it.)",
+            )
+    return None
+
+
+def server_claim_check(
+    reply_text: str, spans: Sequence[Any], servers: Sequence[McpServerRef]
+) -> ServerClaimFound | None:
+    """A first-person read of, or an attribution to, a connected server that
+    answered no call this turn — answered with one appended sentence that says
+    what the record shows. Pure."""
+    if not reply_text or not reply_text.strip() or not servers:
+        return None
+    if _a_delegation_ran(spans):
+        return None  # the agent's calls are on its own turn (#90, ruling F5)
+    answered = _mcp_servers_answered(spans) | _mcp_servers_disconnected(spans)
+    read_args = _live_read_arguments(spans)
+    # Which servers nothing backs, decided once for the reply, not per clause,
+    # each with its patterns fetched once (M3).
+    candidates = [
+        (server, _server_patterns(server.words))
+        for server in servers
+        if server.words
+        and server.name not in answered
+        and not any(word in read_args for word in server.words)
+    ]
+    if not candidates:
+        return None
+    ran = _mcp_servers_in(spans, ok=False)
+    for clause, is_question in _clauses(reply_text):
+        if is_question or _SERVER_EARLIER.search(clause):
+            continue
+        for server, (_lead, _named, read, said) in candidates:
+            found = read.search(clause) or said.search(clause)
+            if found is None:
+                continue
+            # A call that ran and failed is in the record: "no call ran" would
+            # be the guard's own false sentence beside it.
+            outcome = "succeeded" if server.name in ran else "ran"
+            return ServerClaimFound(
+                server=server.name,
+                phrase=found.group(0)[:120],
+                text=f"(No call to {server.name} {outcome} this turn.)",
+            )
+    return None

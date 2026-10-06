@@ -1,0 +1,57 @@
+{
+  "id": "reads-ci-from-the-connected-server",
+  "suite": "agent_quality",
+  "suite_version": 19,
+  "mcp_servers": [
+    {
+      "name": "eval_github",
+      "title": "GitHub",
+      "tools": [
+        {
+          "name": "actions_list",
+          "description": "List GitHub Actions workflow runs or a run's jobs for a repository. method is list_workflow_runs or list_workflow_jobs (give resource_id, the run id).",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "method": {"type": "string", "enum": ["list_workflow_runs", "list_workflow_jobs"]},
+              "owner": {"type": "string"},
+              "repo": {"type": "string"},
+              "resource_id": {"type": "string"}
+            },
+            "required": ["method", "owner", "repo"]
+          },
+          "results": [
+            {"text": "Runs on main for jeremyspofford/nova:\n- run 4417 (rebuild-ci): failure, 2026-09-30T13:08Z\n- run 4402 (rebuild-ci): failure, 2026-09-30T01:48Z\nJobs of run 4417: services-core success; frontend-unit failure (step 'npm test'); backup success."}
+          ]
+        },
+        {
+          "name": "get_job_logs",
+          "description": "Read a GitHub Actions job's log. Give run_id with failed_only true for every failed job of a run, or job_id for one job; return_content true returns the text.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "owner": {"type": "string"},
+              "repo": {"type": "string"},
+              "run_id": {"type": "integer"},
+              "job_id": {"type": "integer"},
+              "failed_only": {"type": "boolean"},
+              "return_content": {"type": "boolean"},
+              "tail_lines": {"type": "integer"}
+            },
+            "required": ["owner", "repo"]
+          },
+          "results": [
+            {"text": "frontend-unit / npm test\n FAIL  src/pages/orbit/Orbit.test.tsx > orbit_renders_at_393px\n   AssertionError: expected 412 to be less than or equal to 393\n Test Files  1 failed | 211 passed"}
+          ]
+        }
+      ]
+    }
+  ],
+  "message": "Why is CI red on main for jeremyspofford/nova?",
+  "contract": [
+    {"predicate": "tool_succeeded_with", "arg": "mcp_call {\"server\": \"eval_github\"}"},
+    {"predicate": "reply_matches", "arg": "frontend-unit|orbit_renders_at_393px"},
+    {"predicate": "guard_absent", "arg": "mcp_server_claim"}
+  ],
+  "comment": "S37a. The first walk's question, against a declared GitHub whose runs and log are canned. MEASURES: she reads CI through the connected server (a successful mcp_call on eval_github) and names what failed from what it said (the failing job or the test, both names that exist only in the canned answers); no server claim was corrected. The declared server is an overlay for this case alone: the owner's real GitHub never answers an eval turn."
+}

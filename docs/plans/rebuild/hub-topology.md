@@ -181,7 +181,8 @@ gates) → S40 → S41 → S42a → S42b → S43a → S43b → S44 → S45 (the 
   surface. It is deployed, walked in chat in her words, and its trace read by turn id. The web
   is checked at 393px, and a close-out plus carries are written.
 - **Numbering:** these are S40–S49. doing-things claims S29–S37 and S38+.
-- **Migrations:** core 035–038, gateway 009–010. Collisions with doing-things (core 035, the
+- **Migrations:** core 035–037 and 039 (S37a's `038_mcp_servers` reached main first, so S42b
+  renumbered to `039`), gateway 009–010. Collisions with doing-things (core 035, the
   `Dispatch` table, the auth-frame `build`, registry/suite pins) are settled by the rule
   "whichever lands second renumbers and re-bumps once".
 
@@ -376,7 +377,8 @@ carries in [slice-42a-carries.md](slice-42a-carries.md). Core 036 is used.
 **Status: Built (plan: [`s42b/plan.md`](s42b/plan.md)); walk pending.**
 Close-out: [`slice-42b-install-and-updates.md`](slice-42b-install-and-updates.md)
 (filled in at close-out); carries:
-[`slice-42b-carries.md`](slice-42b-carries.md). Core migration `038` is used.
+[`slice-42b-carries.md`](slice-42b-carries.md). Core migration `039` is used
+(`039_agent_lifecycle`; it was `038` until S37a's `038_mcp_servers` reached main first).
 
 Decisions the plan made where the spec was silent, one line each (amended
 where the build changed them — see `slice-42b-carries.md` for why):

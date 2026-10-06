@@ -155,6 +155,9 @@ NOT_AUTO_RUN = {
     # front of her that nobody in this turn asked for — and it would leave a
     # load_skill span, which the ledger counts as a use she chose to make.
     "load_skill": "a procedure is not a fact a note can be checked against",
+    # S37a: what a third party offers is its answer to give, and the server is
+    # whoever someone connected; the backend never calls a stranger unasked.
+    "mcp_tools": "the server is a third party someone connected; nothing runs against it unasked",
 }
 
 
@@ -392,13 +395,15 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
 def ephemeral(checked: list[Checked]) -> bool:
     """Did any check that RAN read something that goes stale?
 
-    The turn is not ingested into long-term memory when it did (`Tool.ephemeral`
-    — the same rule a call she made obeys). Without this the loop closes on
-    itself: a note says device_info answers the VRAM question, the backend runs
-    it, she quotes the figure, the exchange is ingested, and next month recall
-    returns HER SENTENCE asserting that figure as current — a fresh-looking
-    note with no live source, which is precisely the staleness the check was
-    added to kill, laundered through her own reply.
+    Her reply on that turn is not ingested into long-term memory when it did
+    (`Tool.ephemeral` — the same rule a call she made obeys); his words are
+    kept with a stated note in place of hers (chat.LIVE_READ_NOT_KEPT).
+    Without this the loop closes on itself: a note says device_info answers
+    the VRAM question, the backend runs it, she quotes the figure, the
+    exchange is ingested, and next month recall returns HER SENTENCE
+    asserting that figure as current — a fresh-looking note with no live
+    source, which is precisely the staleness the check was added to kill,
+    laundered through her own reply.
     """
     return any(
         check.ok and (tool := tools.REGISTRY.get(check.call.tool)) is not None and tool.ephemeral

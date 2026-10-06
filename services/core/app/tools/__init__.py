@@ -40,6 +40,7 @@ from app.tools import (
     devices,
     inference,
     machines,
+    mcp,
     memory_tools,
     models,
     notices,
@@ -117,6 +118,10 @@ REGISTRY: dict[str, Tool] = {
         # S47: Nova's address for another device, and the setup QR cards
         # (tools/setup.py). A card is UI-only; a pairing code never reaches her.
         *setup.TOOLS,
+        # S37a: her MCP client — four fixed tools over any connected server
+        # (tools/mcp.py). The servers and their tools are rows, never
+        # registrations: this set does not grow with them.
+        *mcp.TOOLS,
     )
 }
 

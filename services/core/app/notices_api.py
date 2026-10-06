@@ -192,6 +192,18 @@ async def list_digests(
     }
 
 
+@router.put("/seen")
+async def mark_all_seen(person: Person = Depends(identity.require_person)) -> dict:
+    """He read all of it: every row the badge counts gets its first read.
+
+    `marked` is the number the store wrote, and `unseen_count` is counted
+    AFTER, so the page shows the server's zero rather than assuming one.
+    Declared before `/{notice_id}` for the same reason `/digests` is."""
+    pool = await db.get_pool()
+    marked = await notices.mark_all_seen(pool)
+    return {"marked": marked, "unseen_count": await notices.unseen_count(pool)}
+
+
 @router.put("/{notice_id}/seen")
 async def mark_seen(
     notice_id: uuid.UUID, person: Person = Depends(identity.require_person)

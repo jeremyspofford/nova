@@ -33,6 +33,8 @@ vi.mock('../../lib/api', async () => {
     getRoutes: vi.fn(async () => ({ roles: [], walls: [] })),
     listAgents: vi.fn(async () => []),
     getMachines: vi.fn(async () => ({ machines: [] })),
+    listMcpServers: vi.fn(async () => []),
+    getMcpPresets: vi.fn(async () => []),
   }
 })
 
@@ -53,6 +55,7 @@ const SECTIONS_BY_TAB: Record<string, string[]> = {
   models: ['Machines', 'Models', 'Providers', 'Routing'],
   behaviour: ['Response quality'],
   devices: ['Add to Nova', 'Devices'],
+  connections: ['Connections'],
 }
 
 function renderAt(path: string) {

@@ -1,6 +1,8 @@
-"""Migration 038 (S42b): re-pair codes, audit epochs, the door, a revoked
+"""Migration 039 (S42b): re-pair codes, audit epochs, the door, a revoked
 agent's knocks, and the update ledger — each a column or constraint the slice
-reads, pinned here so a later migration cannot quietly drop one."""
+reads, pinned here so a later migration cannot quietly drop one. It was 038
+until S37a's 038_mcp_servers (#101) reached main first, and was renumbered
+(Task 32 Phase A2)."""
 
 from __future__ import annotations
 
@@ -12,12 +14,12 @@ import asyncpg
 import pytest
 
 from app.main import MIGRATIONS_DIR
-from app.migrations_runner import discover_migrations, run_migrations
+from app.migrations_runner import _migration_number, discover_migrations, run_migrations
 from tests.conftest import TEST_DSN, requires_db
 
 pytestmark = requires_db
 
-MIGRATION = Path(MIGRATIONS_DIR) / "038_agent_lifecycle.sql"
+MIGRATION = Path(MIGRATIONS_DIR) / "039_agent_lifecycle.sql"
 
 
 async def _columns(pool, table: str) -> set[str]:
@@ -99,7 +101,7 @@ async def test_an_open_attempt_has_no_outcome_time_and_a_decided_one_has_one(poo
         )
 
 
-# The constraints 038 drops and adds again: re-running it gives each a new oid,
+# The constraints 039 drops and adds again: re-running it gives each a new oid,
 # so their oids say whether a re-run happened, and whether it was kept.
 _REBUILT = ("devices_last_transport", "device_audit_pkey")
 
@@ -114,8 +116,8 @@ async def _rebuilt_oids(conn) -> dict[str, int]:
 
 
 async def test_the_migration_runs_twice(pool):
-    """038 runs again over the suite's schema — inside a transaction that is
-    rolled back (Task 32, L301). Applied for good, the re-run put back 038's
+    """039 runs again over the suite's schema — inside a transaction that is
+    rolled back (Task 32, L301). Applied for good, the re-run put back 039's
     own CHECK on devices.last_transport, and would narrow it again for every
     later test the day S43a/S48/S49 widen it."""
     async with pool.acquire() as conn:
@@ -136,23 +138,26 @@ async def test_the_migration_runs_twice(pool):
 def _scoped_dsn(schema: str) -> str:
     """TEST_DSN, but every unqualified name this connection creates or reads
     resolves inside `schema` — never `public`, where the rest of the suite's
-    (once 038 exists) already-migrated schema lives."""
+    (once 039 exists) already-migrated schema lives."""
     parts = urlsplit(TEST_DSN)
     query = dict(parse_qsl(parts.query))
     query["options"] = f"-csearch_path={schema}"
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 
-async def test_an_upgrade_with_existing_rows_keeps_them_and_038_reruns_clean(tmp_path):
+async def test_an_upgrade_with_existing_rows_keeps_them_and_039_reruns_clean(tmp_path):
     """The realistic deploy shape the tests above cannot reach: a database
-    already at 037, carrying a device, its audit chain and a pairing code
-    from before 038 existed. run_migrations takes a directory, not a target
-    number, so "migrate to 037" is staged honestly — by copying the real
-    files numbered <= 37 into their own directory and running the same
-    unmodified runner over it, never a parallel reimplementation and never
-    fake SQL. It runs inside its own schema (never `public`, which the rest
-    of the suite owns), so it cannot collide with any other test's tables."""
-    schema = "s42b_mig038_upgrade_test"
+    already at every migration before this one (on main, 038: S37a's
+    mcp_servers), carrying a device, its audit chain and a pairing code from
+    before 039 existed. run_migrations takes a directory, not a target
+    number, so "migrate to the one before" is staged honestly — by copying
+    the real files numbered below this migration's own number (read from
+    its filename, so a renumber moves it too) into their own directory and
+    running the same unmodified runner over it, never a parallel
+    reimplementation and never fake SQL. It runs inside its own schema
+    (never `public`, which the rest of the suite owns), so it cannot
+    collide with any other test's tables."""
+    schema = "s42b_mig039_upgrade_test"
     admin = await asyncpg.connect(TEST_DSN)
     try:
         await admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -161,18 +166,20 @@ async def test_an_upgrade_with_existing_rows_keeps_them_and_038_reruns_clean(tmp
         await admin.close()
     scoped = _scoped_dsn(schema)
     try:
-        staged = tmp_path / "upto037"
+        number = _migration_number(MIGRATION)
+        staged = tmp_path / f"below{number:03d}"
         staged.mkdir()
-        for f in discover_migrations(MIGRATION.parent):
-            if int(f.name.split("_", 1)[0]) <= 37:
-                (staged / f.name).symlink_to(f)
+        before = [f for f in discover_migrations(MIGRATION.parent) if _migration_number(f) < number]
+        assert before  # an upgrade needs something to upgrade from
+        for f in before:
+            (staged / f.name).symlink_to(f)
         await run_migrations(scoped, staged)
 
         conn = await asyncpg.connect(scoped)
         try:
             device_id = await conn.fetchval(
                 "INSERT INTO devices (name, platform, hostname, pubkey) "
-                "VALUES ('pre-038', 'linux', 'h', $1) RETURNING id",
+                "VALUES ('pre-039', 'linux', 'h', $1) RETURNING id",
                 "ab" * 32,
             )
             await conn.execute(
@@ -182,12 +189,12 @@ async def test_an_upgrade_with_existing_rows_keeps_them_and_038_reruns_clean(tmp
             )
             code_id = await conn.fetchval(
                 "INSERT INTO pairing_codes (code_hash, expires_at) "
-                "VALUES ('pre038hash', now() + interval '10 minutes') RETURNING id"
+                "VALUES ('pre039hash', now() + interval '10 minutes') RETURNING id"
             )
         finally:
             await conn.close()
 
-        # The real 038 file, same directory, same runner — the upgrade a
+        # The real 039 file, same directory, same runner — the upgrade a
         # live install actually performs: N-1 already applied, N lands.
         (staged / MIGRATION.name).symlink_to(MIGRATION)
         await run_migrations(scoped, staged)
@@ -240,7 +247,7 @@ async def test_an_upgrade_with_existing_rows_keeps_them_and_038_reruns_clean(tmp
             )
             other_device = await conn.fetchval(
                 "INSERT INTO devices (name, platform, hostname, pubkey) "
-                "VALUES ('post-038', 'linux', 'h', $1) RETURNING id",
+                "VALUES ('post-039', 'linux', 'h', $1) RETURNING id",
                 "cd" * 32,
             )
             with pytest.raises(asyncpg.UniqueViolationError):

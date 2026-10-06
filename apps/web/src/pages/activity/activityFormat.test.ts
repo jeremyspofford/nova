@@ -6,6 +6,7 @@ import {
   formatRelativeTime,
   workspacePathFrom,
   isWorkspacePathTool,
+  mcpCallLabel,
 } from './activityFormat'
 
 describe('statusBadge', () => {
@@ -137,5 +138,15 @@ describe('workspacePathFrom — the same polymorphic args_redacted quirk', () =>
   it('returns null for undefined/null args', () => {
     expect(workspacePathFrom(undefined)).toBeNull()
     expect(workspacePathFrom(null)).toBeNull()
+  })
+})
+
+describe('mcpCallLabel', () => {
+  it('names the server and the tool of an mcp_call span', () => {
+    expect(mcpCallLabel('mcp_call', { server: 'github', tool: 'get_job_logs', arguments: {} })).toBe('github · get_job_logs')
+  })
+  it('is null for any other span, or clipped arguments', () => {
+    expect(mcpCallLabel('fetch_url', { server: 'x', tool: 'y' })).toBeNull()
+    expect(mcpCallLabel('mcp_call', '{"server": "github", …')).toBeNull()
   })
 })

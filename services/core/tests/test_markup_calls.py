@@ -6,23 +6,25 @@ pinned: the first case is the EXACT block the owner's model emitted on
 2026-09-03 11:57, and the precision cases are the reason this can run over
 every round's text without ever mangling an honest reply.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from app import markup_calls
+from tests.test_guard_regex_timing import _assert_linear, _best_of
 
 # Verbatim from the trace — mangled namespace prefix and all ("atem" is the
 # model's corruption of "antml"). If this ever stops parsing, the defect that
 # put raw XML in front of the owner is back.
 OBSERVED = (
-    '<atem:function_calls>\n'
+    "<atem:function_calls>\n"
     '<atem:invoke name="device_run">\n'
     '<atem:parameter name="device">DELL-XPS-8950</atem:parameter>\n'
     '<atem:parameter name="argv">["find", "/home/jeremy", "-maxdepth", "2", '
     '"-type", "d", "-print"]</atem:parameter>\n'
-    '</atem:invoke>\n'
-    '</atem:function_calls>'
+    "</atem:invoke>\n"
+    "</atem:function_calls>"
 )
 
 
@@ -157,8 +159,7 @@ def test_a_stray_closing_tag_is_left_alone():
 
 def test_the_hermes_json_variant_is_recognised():
     scan = markup_calls.parse_markup_tool_calls(
-        'Checking.\n<tool_call>{"name": "web_search", "arguments": {"query": "nova"}}'
-        "</tool_call>"
+        'Checking.\n<tool_call>{"name": "web_search", "arguments": {"query": "nova"}}</tool_call>'
     )
     assert [c.name for c in scan.calls] == ["web_search"]
     assert scan.calls[0].arguments == {"query": "nova"}
@@ -173,7 +174,7 @@ def test_a_malformed_hermes_call_is_unparsed_not_guessed_at():
 
 def test_two_calls_in_one_block_stay_two_calls_in_order():
     scan = markup_calls.parse_markup_tool_calls(
-        '<a:function_calls>'
+        "<a:function_calls>"
         '<a:invoke name="first"><a:parameter name="k">1</a:parameter></a:invoke>'
         '<a:invoke name="second"><a:parameter name="k">2</a:parameter></a:invoke>'
         "</a:function_calls>"
@@ -207,8 +208,7 @@ def test_ordinary_text_is_returned_byte_for_byte(prose):
 
 def test_the_note_names_the_calls_it_found_and_deduplicates():
     assert markup_calls.no_tool_round_note(["device_run"]) == (
-        "[I tried to run device_run but had no tool round left — "
-        "ask again and I'll run it]"
+        "[I tried to run device_run but had no tool round left — ask again and I'll run it]"
     )
     assert "device_run, web_search" in markup_calls.no_tool_round_note(
         ["device_run", "web_search", "device_run"]
@@ -227,8 +227,7 @@ def test_the_note_names_the_calls_it_found_and_deduplicates():
 # and the text comes back byte for byte.
 
 FENCED = (
-    "Sure — here is what a call looks like:\n\n```xml\n" + OBSERVED + "\n```\n\n"
-    "That is the shape."
+    "Sure — here is what a call looks like:\n\n```xml\n" + OBSERVED + "\n```\n\nThat is the shape."
 )
 BLOCKQUOTED = "Like this:\n\n" + "\n".join(f"> {line}" for line in OBSERVED.splitlines())
 HERMES_FENCED = (
@@ -421,13 +420,13 @@ def test_a_long_run_of_complete_blocks_is_still_fast_and_still_correct():
 
 def _write_file_block(content: str) -> str:
     return (
-        '<atem:function_calls>\n'
+        "<atem:function_calls>\n"
         '<atem:invoke name="device_write_file">\n'
         '<atem:parameter name="device">DELL-XPS-8950</atem:parameter>\n'
         '<atem:parameter name="path">notes.txt</atem:parameter>\n'
         f'<atem:parameter name="content">{content}</atem:parameter>\n'
-        '</atem:invoke>\n'
-        '</atem:function_calls>'
+        "</atem:invoke>\n"
+        "</atem:function_calls>"
     )
 
 
@@ -510,34 +509,61 @@ def _far_closer_payload(n_openers: int) -> str:
     return unit * n_openers + "</atem:function_calls>"
 
 
+# G35 (2026-10-05): this pin used to assert a flat `elapsed < 0.1` at every
+# parametrized size, measured ONCE per case. The controller measured best-of-5
+# at 63-80 ms on this N150 with nothing else heavy running — a 1.25-1.6x
+# margin over the cap at BEST — and it failed three times under the shared
+# full-suite lock while another lane's tests ran. Reproduced here, best-of-5,
+# quiet, 2026-10-05: 33,000 openers 64.8-69.5 ms, 34,000 62.9-67.7 ms, 40,000
+# 62.9-65.1 ms, 100,000 65.7-68.4 ms — flat across a 3x range of openers, as
+# the window bound (`app.markup_calls._SCAN_WINDOW`) predicts: the regex only
+# ever reads the first _SCAN_WINDOW characters, so the cost is independent of
+# how much fake text follows it. _MANY_OPENERS_BUDGET_S is >=5x the worst of
+# those measured numbers (69.5 ms), not a guess, and each case now measures
+# best-of-5 itself (`_best_of`, reused from test_guard_regex_timing.py) so one
+# slow scheduler tick under contention can no longer fail it alone.
+_MANY_OPENERS_BUDGET_S = 0.4
+
+
 @pytest.mark.parametrize("n_openers", [33_000, 34_000, 40_000, 100_000])
 def test_many_fake_openers_ahead_of_one_far_closer_scans_fast(n_openers):
     """The exact repro from review: real total length (1.78 MiB - 5.4 MiB
     here) far exceeds the window, and the one real closer sits at the very
     end — outside it. Nothing in the window can complete a match, so nothing
     parses, but the scan itself must stay fast regardless of how large the
-    surrounding garbage grows."""
-    import time
-
+    surrounding garbage grows — measured best-of-5 (G35), never a single
+    sample, so transient contention cannot trip this alone."""
     text = _far_closer_payload(n_openers)
     assert len(text) > _SCAN_WINDOW  # the closer really is outside the window
-    # The best of three, as its sibling above takes it (Task 32 Phase C): the
-    # pin measures the scan, not the process around it. One sample flaked at
-    # 0.104 s in a full core run, with this scanner byte-identical to main's;
-    # alone it takes about 0.063 s. Without the window, ONE scan of the
-    # 33,000-opener payload took 313 s on the same machine, so a quadratic
-    # scan misses 0.1 s on all three (pytest-timeout ends it first).
-    elapsed = float("inf")
-    for _ in range(3):
-        started = time.perf_counter()
-        scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
-        elapsed = min(elapsed, time.perf_counter() - started)
-    assert elapsed < 0.1, f"took {elapsed:.3f}s for {n_openers} openers"
+    elapsed = _best_of(lambda: markup_calls.parse_markup_tool_calls(text, streamed=True), 5)
+    assert elapsed < _MANY_OPENERS_BUDGET_S, f"took {elapsed:.3f}s for {n_openers} openers"
     # Correctness for what IS in-window: the closer is outside it, so there is
     # nothing complete to read — no calls, and the text is flagged unparsed
     # rather than silently claimed clean.
+    scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
     assert scan.calls == ()
     assert scan.unparsed is True
+
+
+def test_many_fake_openers_scan_time_grows_linearly_not_quadratically():
+    """G35: the property the flat-budget pin above cannot see by itself — that
+    going 4x PAST the largest size it covers must not cost anywhere near 4x
+    the time, let alone the quadratic-or-worse blowup the window exists to
+    prevent (the original bug: 33,000 openers 1.8s, 34,000 8.3s, 40,000 47s,
+    with no window at all). Reuses test_guard_regex_timing's own
+    linear-growth helper (`_assert_linear`) rather than a second copy of its
+    math: 33,000 is this file's own smallest parametrized size; 132,000 (its
+    exact 4x step) is measured flat alongside it (~65-70 ms either end,
+    2026-10-05) because `_SCAN_WINDOW` bounds the scan's cost regardless of
+    how much fake text follows it."""
+    _assert_linear(
+        "many_fake_openers_far_closer",
+        lambda t: markup_calls.parse_markup_tool_calls(t, streamed=True),
+        _far_closer_payload,
+        small=33_000,
+        large=132_000,
+        cap_s=_MANY_OPENERS_BUDGET_S,
+    )
 
 
 def test_a_real_call_at_the_start_of_an_oversize_reply_is_still_stripped():
@@ -651,8 +677,7 @@ def test_a_free_invoke_with_no_wrapper_at_all_is_still_extracted():
     """The fix must not touch the ordinary case: an invoke with no preceding
     `<function_calls>` opener at all is exactly as free-standing as before."""
     text = (
-        'Sure.\n<a:invoke name="device_run">'
-        '<a:parameter name="k">1</a:parameter></a:invoke>\nDone.'
+        'Sure.\n<a:invoke name="device_run"><a:parameter name="k">1</a:parameter></a:invoke>\nDone.'
     )
     scan = markup_calls.parse_markup_tool_calls(text)
     assert [c.name for c in scan.calls] == ["device_run"]
@@ -699,9 +724,7 @@ def test_a_minimal_unclosed_mention_then_a_real_invoke_still_extracts_it():
     The stray opener mention is left standing as inert text — it names no
     tool, so there is nothing to say about it — but the real call after it
     is still recognised."""
-    text = "<function_calls>\n\n" + (
-        '<a:invoke name="device_run"></a:invoke>'
-    )
+    text = "<function_calls>\n\n" + ('<a:invoke name="device_run"></a:invoke>')
     scan = markup_calls.parse_markup_tool_calls(text)
     assert [c.name for c in scan.calls] == ["device_run"]
     assert "<a:invoke" not in scan.text
