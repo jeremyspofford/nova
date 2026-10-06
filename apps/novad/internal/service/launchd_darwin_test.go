@@ -68,6 +68,14 @@ func TestUninstallOfAPlistThatIsNotThereTriesNoStop(t *testing.T) {
 	}
 }
 
+// Task 32, L245: a LaunchAgent can schedule a delayed restart (a detached
+// kickstart), so it never refuses one up front.
+func TestALaunchAgentNeverRefusesARestartLaterUpFront(t *testing.T) {
+	if _, ok := New(config.Paths{}, &platform.FakeRunner{}).(RestartLaterRefuser); ok {
+		t.Fatal("a LaunchAgent can restart later; it must not refuse it up front")
+	}
+}
+
 func argvsDarwin(calls []platform.FakeCall) []string {
 	out := make([]string, len(calls))
 	for i, c := range calls {

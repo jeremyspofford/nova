@@ -19,6 +19,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/platform"
+	"novad/internal/service"
 	"novad/internal/state"
 )
 
@@ -210,12 +211,12 @@ func TestRestartLaterSchedulesTheRestartAndDoesNotClaimIt(t *testing.T) {
 
 // A restart that cannot be scheduled comes after the build was placed and the
 // service definition rewritten: the error says so, so the command running
-// this install is never read as "nothing changed" (on Windows the Run key
-// refuses a delayed restart).
+// this install is never read as "nothing changed" (systemd-run can fail to
+// schedule its timer; the Run key, which never can, is refused up front).
 func TestARestartThatCannotBeScheduledSaysTheBuildIsAlreadyInPlace(t *testing.T) {
 	o, svc, _ := installOpts(t)
 	o.RestartLater = true
-	svc.laterErr = errors.New("cannot: a Windows agent updates through its supervisor, never by a delayed restart")
+	svc.laterErr = errors.New("systemd-run: exit status 1: Failed to start transient timer unit")
 	err := Install(context.Background(), *o)
 	bin := filepath.Join(o.InstallDir, platform.BinaryName)
 	if err == nil || !errors.Is(err, svc.laterErr) || !strings.Contains(err.Error(), "installed "+bin+", but the restart could not be scheduled") ||
@@ -253,6 +254,50 @@ func TestAFailureAfterThePlaceSaysTheBuildIsAlreadyInPlace(t *testing.T) {
 				t.Fatal("the setup did not place the build")
 			}
 		})
+	}
+}
+
+// runKeyService is a fake Windows manager: like the Run key, it can never
+// schedule a delayed restart, and says so before anything is asked of it.
+type runKeyService struct{ fakeService }
+
+func (r *runKeyService) Mode() string { return service.ModeRunKey }
+func (r *runKeyService) RestartLaterRefusal() error {
+	return errors.New("cannot: a Windows agent updates through its supervisor, never by a delayed restart")
+}
+
+// Task 32, L245: where --restart-later can never succeed, it is refused
+// before anything is spent or changed: no hub is asked, no code is used, the
+// pairing is not rewritten, nothing is placed, registered or scheduled.
+func TestRestartLaterIsRefusedUpFrontWhereItCanNeverRun(t *testing.T) {
+	o, _, out := installOpts(t)
+	svc := &runKeyService{}
+	o.Service, o.RestartLater, o.Code = svc, true, "ABCD-2345"
+	asked := 0
+	o.Verify = func(context.Context, config.Config, ed25519.PrivateKey) error { asked++; return nil }
+	o.Enroll = func(context.Context, string, string, string, string, ed25519.PublicKey) (EnrollResult, error) {
+		asked++
+		return EnrollResult{}, errors.New("no enroll in this test")
+	}
+	cfgBefore, err := os.Stat(o.Paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = Install(context.Background(), *o)
+	if err == nil || err.Error() != svc.RestartLaterRefusal().Error() {
+		t.Fatalf("got %v, want the manager's own refusal", err)
+	}
+	if asked != 0 {
+		t.Fatalf("a hub was asked %d time(s)", asked)
+	}
+	if after, serr := os.Stat(o.Paths.ConfigFile); serr != nil || !after.ModTime().Equal(cfgBefore.ModTime()) {
+		t.Fatalf("the pairing was rewritten: %v", serr)
+	}
+	if _, serr := os.Stat(o.InstallDir); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("something was placed: %v", serr)
+	}
+	if svc.installed != "" || svc.later || svc.restarts != 0 || out.Len() != 0 {
+		t.Fatalf("something was registered, scheduled or said: %+v %q", svc.fakeService, out.String())
 	}
 }
 

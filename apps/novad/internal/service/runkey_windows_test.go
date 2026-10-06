@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 
@@ -39,6 +41,23 @@ func TestInstallWritesTheRunKeyAndReadsItBack(t *testing.T) {
 	}
 	if m.Installed() {
 		t.Fatal("the value is gone after Uninstall")
+	}
+}
+
+// Task 32, L245: the Run key says up front that it can never schedule a
+// delayed restart, and RestartLater answers with exactly that refusal.
+func TestTheRunKeyRefusesARestartLaterUpFront(t *testing.T) {
+	var m Manager = &runKey{paths: config.Paths{StateDir: t.TempDir()}, keyPath: RunKeyPath, value: RunKeyValue}
+	r, ok := m.(RestartLaterRefuser)
+	if !ok {
+		t.Fatal("the Run key must say up front that it cannot restart later")
+	}
+	refusal := r.RestartLaterRefusal()
+	if refusal == nil || !strings.HasPrefix(refusal.Error(), "cannot: ") {
+		t.Fatalf("refusal %v", refusal)
+	}
+	if err := m.RestartLater(context.Background(), time.Second); err == nil || err.Error() != refusal.Error() {
+		t.Fatalf("RestartLater = %v, want %v", err, refusal)
 	}
 }
 

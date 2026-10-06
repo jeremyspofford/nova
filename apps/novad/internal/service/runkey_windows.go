@@ -80,8 +80,16 @@ func (k *runKey) Restart(ctx context.Context) error {
 	return err
 }
 
-func (k *runKey) RestartLater(context.Context, time.Duration) error {
+var _ RestartLaterRefuser = (*runKey)(nil)
+
+// RestartLaterRefusal is what RestartLater always answers, asked up front
+// (RestartLaterRefuser).
+func (k *runKey) RestartLaterRefusal() error {
 	return errors.New("cannot: a Windows agent updates through its supervisor, never by a delayed restart")
+}
+
+func (k *runKey) RestartLater(context.Context, time.Duration) error {
+	return k.RestartLaterRefusal()
 }
 
 // Stop ends the pids the status files name, when they are still running a

@@ -49,6 +49,16 @@ type Manager interface {
 	BootStart(ctx context.Context) (bool, string, error)
 }
 
+// A RestartLaterRefuser is a Manager that can never schedule a delayed
+// restart (the Run key: on Windows an update goes through the supervisor).
+// RestartLaterRefusal is the error its RestartLater always returns, asked up
+// front so `install --restart-later` is refused before a pairing code is
+// spent or anything is placed (Task 32, L245). Only the manager that refuses
+// says so: the day it can restart later, it drops the method.
+type RestartLaterRefuser interface {
+	RestartLaterRefusal() error
+}
+
 // SystemdUnit is the user unit for bin. It restarts only on failure: supervise
 // exits 0 when the agent can never get in (P3). 78 stays named for an agent
 // from before S42b that a hand-written unit still runs directly.

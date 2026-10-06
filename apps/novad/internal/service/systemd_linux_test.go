@@ -99,6 +99,15 @@ func TestBootStartThatCannotTurnLingerOnSaysTheOneSudoLine(t *testing.T) {
 	}
 }
 
+// Task 32, L245: only a manager that can never restart later refuses it up
+// front. systemd can — core's P11 bootstrap depends on it — so it never says
+// it cannot.
+func TestSystemdNeverRefusesARestartLaterUpFront(t *testing.T) {
+	if _, ok := New(config.Paths{}, &platform.FakeRunner{}).(RestartLaterRefuser); ok {
+		t.Fatal("a systemd user unit can restart later; it must not refuse it up front")
+	}
+}
+
 // P11: an update run through the old agent's own hands restarts the unit
 // from OUTSIDE the agent's process tree — systemd-run's timer — so the
 // restart cannot kill the command that scheduled it before it answers.

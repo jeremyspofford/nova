@@ -11,6 +11,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/platform"
+	"novad/internal/service"
 	"novad/internal/state"
 )
 
@@ -62,6 +63,13 @@ func Install(ctx context.Context, o Options) error {
 	// pairing. Asking a hub again would open a second socket as the same
 	// device, and core would fail the very command running this install.
 	if o.RestartLater {
+		// A manager that can never schedule the restart says so before a code
+		// is spent, the pairing rewritten or anything placed (Task 32, L245).
+		if r, ok := o.Service.(service.RestartLaterRefuser); ok {
+			if err := r.RestartLaterRefusal(); err != nil {
+				return err
+			}
+		}
 		o.TrustPairing = true
 	}
 	if o.InWSL() {
