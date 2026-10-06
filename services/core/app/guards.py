@@ -9797,13 +9797,14 @@ _MEMORY_RECALL_KIND = "memory_recall"
 # /export is a stated limit and failed saves are collected, and it still
 # returns ran=True — so in the turn memory really was down, the guard said
 # "this turn's memory_backfill call was answered by it". memory_search and
-# memory_save go through _call_memory, which raises on anything but a 200, so
-# their ok is memory's answer. Every tool memory_tools defines is on exactly
-# one side, and test_memory_claim_guard pins the partition against
-# memory_tools.TOOLS: a new memory tool turns it red rather than defaulting
-# into the evidence. A FAILED memory_* tool of either side still silences the
-# guard (the prefix): a failure is evidence the report may be true.
-_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save"})
+# memory_save (and memory_forget, 2026-10-06) go through _call_memory, which
+# raises on anything but a 200, so their ok is memory's answer. Every tool
+# memory_tools defines is on exactly one side, and test_memory_claim_guard pins
+# the partition against memory_tools.TOOLS: a new memory tool turns it red
+# rather than defaulting into the evidence. A FAILED memory_* tool of either
+# side still silences the guard (the prefix): a failure is evidence the report
+# may be true.
+_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save", "memory_forget"})
 _MEMORY_RAN_NOT_ANSWERED = frozenset({"memory_backfill"})
 
 _MEMORY_NOUN = (

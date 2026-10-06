@@ -1,4 +1,4 @@
-"""The two memory tools — thin, authenticated calls to the memory service.
+"""The memory tools — thin, authenticated calls to the memory service.
 
 Neither tool takes an owner: the person is whoever the turn is being run
 for, taken from the context. A tool that could name its own scope would be
@@ -230,7 +230,12 @@ async def search(args: dict, ctx: ToolContext) -> str:
         title = hit.get("title") or hit.get("path") or "(untitled)"
         kind = hit.get("kind") or "note"
         snippet = _clip(str(hit.get("snippet") or ""))
-        lines.append(f"- {title} ({kind}): {snippet}" if snippet else f"- {title} ({kind})")
+        line = f"- {title} ({kind}): {snippet}" if snippet else f"- {title} ({kind})"
+        # The id memory cites the hit by — what memory_forget takes. Without
+        # it she could find a note and have no way to name it.
+        if hit.get("path"):
+            line += f" — id: {hit['path']}"
+        lines.append(line)
     if said and _reduced(body):
         # Hits found, but by half the search. Said on the found path too,
         # because "here are three notes" reads as "and there were only
@@ -284,6 +289,17 @@ async def save(args: dict, ctx: ToolContext) -> str:
     title = args["title"]
     path = await save_note(ctx, title=title, content=args["content"])
     return f"Saved {title!r} to memory at {path}."
+
+
+async def forget(args: dict, ctx: ToolContext) -> str:
+    """Delete one note, or one exchange out of a journal, by the id
+    memory_search printed. Memory verifies the deletion before it answers, and
+    this checks that it SAID so rather than reading any 200 as one."""
+    target = args["id"].strip()
+    body = await _call_memory(ctx, "/forget", {"person_id": _person_id(ctx), "path": target})
+    if not isinstance(body, dict) or body.get("deleted") is not True:
+        raise ToolFailure(f"memory answered without confirming the deletion: {body!r}"[:300])
+    return f"Forgot {body.get('path') or target}. It will not be recalled again."
 
 
 async def backfill(args: dict, ctx: ToolContext) -> str:
@@ -364,6 +380,28 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=save,
+    ),
+    Tool(
+        name="memory_forget",
+        description=(
+            "Delete one saved note, or one exchange from a past conversation, from this "
+            "person's long-term memory, so it is never recalled again. Takes the id "
+            "memory_search prints for the hit. Use it when he asks you to forget or remove "
+            "something you remember."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The hit's id, exactly as memory_search printed it.",
+                },
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        executor=forget,
     ),
     Tool(
         name="memory_backfill",

@@ -131,6 +131,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # (tools/notices.py), so FORTY-THREE -> FORTY-FOUR. The badge counted
     # dozens of cleared rows and neither he nor she could clear them except
     # one id at a time. A read receipt, never a permission.
+    #
+    # Deliberate snapshot update (2026-10-06): memory_forget
+    # (tools/memory_tools.py), so FORTY-FOUR -> FORTY-FIVE. She could save a
+    # note and never remove one: asked to forget something, the only way was
+    # a person editing her files by hand.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -138,6 +143,7 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "workspace_delete",
         "memory_search",
         "memory_save",
+        "memory_forget",
         "get_time",
         "fetch_url",
         "web_search",

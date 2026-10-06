@@ -246,6 +246,76 @@ async def test_a_failed_save_is_a_stated_error(memory_ctx):
     assert "500" in result
 
 
+# -- memory_forget ---------------------------------------------------------
+
+
+async def test_search_names_each_hit_by_the_id_forget_takes(memory_ctx):
+    """She cannot forget what she cannot name: each hit carries the id memory
+    cites it by — a note's path, or a journal exchange's path#HH:MM."""
+    memory = fakes.FakeMemory(
+        results=(
+            {
+                "title": "Dentist",
+                "kind": "topic",
+                "snippet": "the 21st",
+                "path": "people/x/topics/dentist.md",
+            },
+            {
+                "title": "Journal - 2026-10-06",
+                "kind": "journal",
+                "snippet": "the 21st",
+                "path": "people/x/journals/2026-10-06.md#18:01",
+            },
+        )
+    )
+    result, ok = await tools.dispatch("memory_search", {"query": "dentist"}, memory_ctx(memory))
+    assert ok is True
+    assert "id: people/x/topics/dentist.md" in result
+    assert "id: people/x/journals/2026-10-06.md#18:01" in result
+
+
+async def test_forget_deletes_by_id_for_the_turns_person_and_says_what_went(memory_ctx):
+    memory = fakes.FakeMemory(forget_status=200)
+    ctx = memory_ctx(memory)
+
+    result, ok = await tools.dispatch(
+        "memory_forget", {"id": "people/x/journals/2026-10-06.md#18:01"}, ctx
+    )
+    assert ok is True
+    assert "Forgot people/x/journals/2026-10-06.md#18:01" in result
+    assert memory.forgets == [
+        {"person_id": str(PERSON.id), "path": "people/x/journals/2026-10-06.md#18:01"}
+    ]
+
+
+async def test_forgetting_what_is_not_there_is_a_stated_error(memory_ctx):
+    ctx = memory_ctx(fakes.FakeMemory(forget_status=404))
+    result, ok = await tools.dispatch("memory_forget", {"id": "people/x/topics/gone.md"}, ctx)
+    assert ok is False
+    assert "404" in result
+
+
+async def test_a_forget_the_service_did_not_confirm_is_a_failure(memory_ctx):
+    """A 200 is not a deletion — memory has to say it verified one."""
+    memory = fakes.FakeMemory(forget_status=200, forget_body={"path": "people/x/topics/a.md"})
+    result, ok = await tools.dispatch(
+        "memory_forget", {"id": "people/x/topics/a.md"}, memory_ctx(memory)
+    )
+    assert ok is False
+    assert "without confirming" in result
+
+
+async def test_a_tool_cannot_choose_whose_memory_it_forgets(memory_ctx):
+    memory = fakes.FakeMemory(forget_status=200)
+    result, ok = await tools.dispatch(
+        "memory_forget",
+        {"id": "people/x/topics/a.md", "person_id": "somebody-else"},
+        memory_ctx(memory),
+    )
+    assert ok is False
+    assert memory.forgets == []
+
+
 # -- a note's live source, checked against the LIVE registry (S14-1) -------
 #
 # Owner ruling 2026-09-10: a fact a tool can look up ad hoc — a machine's
