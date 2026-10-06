@@ -305,11 +305,15 @@ v18 (S37a, 2026-09-30): four MCP cases —
   — the first to declare mcp_servers (an overlay on her connections for the
   case alone; the owner's servers never answer an eval turn). Their
   guard_absent args are mcp_server_claim and mcp_server_denial — Task 12's
-  names, not yet armed (no guard files under them until Task 12 lands), so
-  these four are VACUOUSLY green on the guard half until then; that is a
+  names, not yet armed when the cases landed (no guard filed under them), so
+  the four were VACUOUSLY green on the guard half until then; that was a
   known, explicit state, not a typo — test_no_corpus_guard_name_is_a_typo
-  below is what makes sure it stays that way and never silently becomes one.
+  below is what makes sure it never silently becomes one.
   suite_version 17 -> 18 for all THIRTY-FOUR cases; count pin 30 -> 34.
+  Armed by S37a Task 12 (2026-10-05), with no case edit: both guards run in
+  the said-not-done block over the case's declared servers
+  (tests/test_mcp_guards.py drives does-not-disown-a-connected-server both
+  ways).
 
 v19 (S38, 2026-10-05): three browser cases — reads-the-page-before-answering,
   reports-what-a-click-changed, reads-a-long-page-in-parts — each declaring
@@ -612,8 +616,11 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
 #                                    turn.span("guard", name), chat.py:3899 (tuple) / :3915 (span)
 #   * memory_claim                -- same APPEND-class tuple, chat.py:3900 (tuple) / :3915 (span)
 #   * written_call                -- the said-not-done dispatch tuple's own name, fed straight into
-#                                    turn.span("guard", name), chat.py:6059 (tuple) / :6077 (span)
-#   * device_completion            -- same said-not-done tuple, chat.py:6063 (tuple) / :6077 (span)
+#                                    turn.span("guard", name), chat.py:6102 (tuple) / :6128 (span)
+#   * device_completion            -- same said-not-done tuple, chat.py:6106 (tuple) / :6128 (span)
+#   * mcp_server_denial            -- same said-not-done tuple, chat.py:6112 (tuple) / :6128 (span)
+#                                    (S37a Task 12, ruling F16)
+#   * mcp_server_claim             -- same said-not-done tuple, chat.py:6116 (tuple) / :6128 (span)
 #   * observation, delivery_claim, novelty_claim -- beats.py's own `_guard(turn, name, check, …)`
 #       helper, which itself does turn.span("guard", name) (beats.py:2030); her proactive digest
 #       turns, called with these three literal names at beats.py:2322-2329.
@@ -627,12 +634,10 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
 # either in isolation is exactly how "bare_intent" looked like a span name
 # when it never filed one.
 #
-# mcp_server_claim and mcp_server_denial are Task 12's names (ruling F16) --
-# not yet filed by anything, so the four MCP cases' guard_absent half is
-# vacuously green until Task 12 lands (the module docstring's v18 entry says
-# so); they are listed here explicitly so a FUTURE typo against THEM is still
-# caught, rather than silently joining the same vacuous-pass class this test
-# exists to close.
+# mcp_server_claim and mcp_server_denial (ruling F16) were named here ahead of
+# the guards, in a set of their own, while nothing filed them and the four MCP
+# cases' guard_absent half was vacuously green. S37a Task 12 (2026-10-05)
+# armed both, so they are real names now, cited above like the rest.
 KNOWN_GUARD_NAMES_TODAY = frozenset(
     {
         # app/chat.py
@@ -651,23 +656,22 @@ KNOWN_GUARD_NAMES_TODAY = frozenset(
         "stack_claim",
         "written_call",
         "device_completion",
+        "mcp_server_denial",
+        "mcp_server_claim",
         # app/beats.py (her proactive digest turns)
         "observation",
         "delivery_claim",
         "novelty_claim",
     }
 )
-# Task 12 adds these (S37a plan, ruling F16) -- named here so a typo against
-# THEM is still caught even before anything files them.
-GUARD_NAMES_TASK_12_ADDS = frozenset({"mcp_server_claim", "mcp_server_denial"})
 
 
 def test_no_corpus_guard_name_is_a_typo():
     """Every guard_fired/guard_absent arg anywhere in the corpus must be a
-    guard name that is either real today or one Task 12 is known to add --
-    never a typo that would pass (guard_fired) or pass vacuously forever
-    (guard_absent) because nothing will ever file a span under it."""
-    known = KNOWN_GUARD_NAMES_TODAY | GUARD_NAMES_TASK_12_ADDS
+    guard name that is real today -- never a typo that would pass
+    (guard_fired) or pass vacuously forever (guard_absent) because nothing
+    will ever file a span under it."""
+    known = KNOWN_GUARD_NAMES_TODAY
     for case in cases_mod.load_cases():
         for spec in case.contract:
             if spec.predicate in ("guard_fired", "guard_absent"):

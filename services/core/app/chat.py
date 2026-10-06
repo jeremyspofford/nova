@@ -457,6 +457,13 @@ def _said_not_done_meta(name: str, claim: object) -> dict:
             "where": claim.where,
             "sentence": claim.text,
         }
+    if name in ("mcp_server_denial", "mcp_server_claim"):
+        return {
+            "detected": True,
+            "server": claim.server,
+            "phrase": claim.phrase,
+            "sentence": claim.text,
+        }
     return {
         "detected": True,
         "phrase": claim.phrase,
@@ -2474,6 +2481,40 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
             "device registry read failed; the state-claim guard stays silent this turn"
         )
         return []
+
+
+def _shaped_like_a_name(title: str) -> bool:
+    """Whether a server-reported title reads as a proper name in prose (fix
+    round 1, M1): two or more words ("Home Assistant"), or a capital after its
+    first letter ("GitHub"). A title of "the" or "Files" would make a common
+    word name the server — "I can't access files outside my workspace" read as
+    a denial of it — so such a server is named by its connection name alone."""
+    return len(title.split()) >= 2 or any(ch.isupper() for ch in title[1:])
+
+
+async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
+    """Every connected MCP server as the guards see it (S37a) — from the table,
+    or an eval case's overlay. FAIL-OPEN to none, which keeps both server
+    guards silent: a store read that blips must never turn an honest reply
+    into a false correction."""
+    try:
+        rows = await mcp_servers.list_servers(pool)
+    except Exception:
+        logger.exception("mcp server list failed; the MCP server guards stay silent this turn")
+        return []
+    refs: list[guards.McpServerRef] = []
+    for server in rows:
+        words = {server.name.lower(), server.name.replace("_", " ").replace("-", " ").lower()}
+        if server.title and len(server.title) <= 40 and _shaped_like_a_name(server.title):
+            words.add(server.title.lower())
+        refs.append(
+            guards.McpServerRef(
+                name=server.name,
+                words=tuple(sorted(w for w in words if len(w) >= 3)),
+                failing=server.failing,
+            )
+        )
+    return refs
 
 
 async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
@@ -6067,10 +6108,23 @@ async def _run_turn(
         # it ran (the calls are on the agent's turn) — and a device claim is
         # backed by a call on any agent of the same machine: the machine each
         # agent reported, read here from the live rows.
+        #
+        # S37a adds the MCP server pair in the same shape (guards.py, "the MCP
+        # server claims"): a connected server she says she cannot reach, and a
+        # reading she attributes to one that answered no call this turn — each
+        # over the servers read once, after every redirect (mcp_refs). The
+        # denial is judged only for a persona that holds mcp_call (ruling F5,
+        # the capability guard's persona rule): an agent given none truly
+        # cannot reach one.
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
             machines = await _paired_machines(pool)
+            # The connected MCP servers, read HERE, after every redirect, like
+            # `machines` (fix round 1, item 1): read before the redirects, a
+            # server a redirect's mcp_disconnect removed was still "connected".
+            mcp_refs = await _mcp_server_refs(pool)
+            reachable_refs = mcp_refs if "mcp_call" in persona.tool_names else []
             for name, check in (
                 (
                     "written_call",
@@ -6081,6 +6135,14 @@ async def _run_turn(
                     lambda: guards.device_completion_check(
                         said, turn.spans, persona.tool_names, device_names, machines=machines
                     ),
+                ),
+                (
+                    "mcp_server_denial",
+                    lambda: guards.server_denial_check(said, turn.spans, reachable_refs),
+                ),
+                (
+                    "mcp_server_claim",
+                    lambda: guards.server_claim_check(said, turn.spans, mcp_refs),
                 ),
             ):
                 try:
