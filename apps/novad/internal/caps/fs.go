@@ -19,6 +19,16 @@ var folderOf = platform.Folder
 // path under that folder as THIS machine names it (S42b P16) — so "my
 // desktop" is read on the device, never guessed by the model. Any other path
 // is returned as given: core already checked it is absolute for this OS.
+//
+// An @folder token is a LOCATOR, not a boundary (Task 32, L77b). fs.list,
+// fs.read and fs.write take any absolute path — core checks only its shape —
+// so a token reaches nothing an absolute path does not already reach, and v4
+// keeps no fs_roots or deny-roots (owner ruling 2026-09-03,
+// docs/plans/rebuild/no-approvals.md); a containment check here would be
+// exactly one. The lexical ".." check below is about what the words say: it
+// keeps "@desktop/../x" from being read, or reported, as a path inside the
+// desktop folder when it names one outside it. A symlink inside the folder
+// is followed like any other path, wherever it leads.
 func resolvePath(path string) (string, error) {
 	if !strings.HasPrefix(path, "@") {
 		return path, nil

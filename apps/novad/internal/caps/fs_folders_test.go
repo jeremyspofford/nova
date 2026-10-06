@@ -47,6 +47,25 @@ func TestAFolderTokenCannotClimbOutOfItsFolder(t *testing.T) {
 	}
 }
 
+// Task 32, L77b: an @folder token is a locator, not a boundary — v4 keeps no
+// fs_roots (owner ruling 2026-09-03). A symlink inside the folder is followed
+// like any other path; a containment check that refused it would be the
+// fs_root the ruling forbids, and this goes red the day one is built.
+func TestASymlinkInsideAFolderIsFollowedLikeAnyOtherPath(t *testing.T) {
+	desk, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "note.txt"), []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(desk, "link")); err != nil {
+		t.Skipf("this machine would not make a symlink here: %v", err)
+	}
+	withFolders(t, map[string]string{"desktop": desk})
+	out := Dispatch(context.Background(), "fs.read", map[string]any{"path": "@desktop/link/note.txt"}, Deps{})
+	if !out.OK || out.Output != "outside" {
+		t.Fatalf("a symlink inside the folder must be followed, got %+v", out)
+	}
+}
+
 func TestAnUnknownFolderTokenIsRefusedByName(t *testing.T) {
 	withFolders(t, map[string]string{})
 	out := Dispatch(context.Background(), "fs.list", map[string]any{"path": "@pictures"}, Deps{})
