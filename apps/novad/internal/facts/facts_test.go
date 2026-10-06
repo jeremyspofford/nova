@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"novad/internal/platform"
 	"novad/internal/state"
@@ -233,7 +234,7 @@ func TestAuthFactsCollapseControlCharactersInTheUpdateReason(t *testing.T) {
 	})
 	got := a.Agent.Update.Reason
 	for _, r := range got {
-		if r < 0x20 || r == 0x7f {
+		if isControl(r) {
 			t.Fatalf("a control character (%q) survived into the reported reason: %q", r, got)
 		}
 	}
@@ -242,5 +243,94 @@ func TestAuthFactsCollapseControlCharactersInTheUpdateReason(t *testing.T) {
 	}
 	if !strings.Contains(got, "boom") || !strings.Contains(got, "main.main()") {
 		t.Fatalf("collapsing must not delete the content, only the control characters, got %q", got)
+	}
+}
+
+// Task 32, MF2: the class the agent keeps out of a line is core's
+// LINE_BREAKS, class by class — C0, DEL, C1, U+2028 and U+2029. One that core
+// refuses and this let through dropped the WHOLE facts frame there. Each
+// class is caught three ways the agent uses it: isControl says so, line()
+// (every P29 field) collapses it to a space, and unfit() leaves a path that
+// holds it out. The characters just outside each class are kept as they are.
+func TestEveryCharacterCoreRefusesInALineIsCaughtClassByClass(t *testing.T) {
+	classes := []struct {
+		name    string
+		members []rune
+		outside []rune
+	}{
+		{"C0", []rune{0x00, '\t', '\n', '\r', 0x0b, 0x1b, 0x1f}, []rune{0x20, 'A'}},
+		{"DEL", []rune{0x7f}, []rune{0x7e}},
+		{"C1", []rune{0x80, 0x85, 0x9b, 0x9f}, []rune{0xa0, 0xe9}},
+		{"U+2028", []rune{0x2028}, []rune{0x2027}},
+		{"U+2029", []rune{0x2029}, []rune{0x202a, 0x2014}},
+	}
+	for _, c := range classes {
+		t.Run(c.name, func(t *testing.T) {
+			for _, r := range c.members {
+				s := "before" + string(r) + "after"
+				if !isControl(r) {
+					t.Fatalf("isControl(%U) = false, and core refuses it in a line", r)
+				}
+				if got := line(s); got != "before after" {
+					t.Fatalf("line(%q) = %q, want %q", s, got, "before after")
+				}
+				if got := said(s); strings.ContainsFunc(got, isControl) || !strings.HasPrefix(got, "before") {
+					t.Fatalf("said(%q) = %q, not one clean line", s, got)
+				}
+				if why := unfit("/home/sam/" + s); why != "path contains a control character or a line separator" {
+					t.Fatalf("unfit(%q) = %q", s, why)
+				}
+			}
+			for _, r := range c.outside {
+				s := "before" + string(r) + "after"
+				if isControl(r) {
+					t.Fatalf("isControl(%U) = true, and core keeps it in a line", r)
+				}
+				if got := line(s); got != s {
+					t.Fatalf("line(%q) = %q, want it unchanged", s, got)
+				}
+				if why := unfit("/home/sam/" + s); why != "" {
+					t.Fatalf("unfit(%q) = %q, want it to fit", s, why)
+				}
+			}
+		})
+	}
+}
+
+// isControl IS the lineBreaks table, at every code point: the Python side
+// (services/core/tests/test_device_facts.py) reads that table out of this
+// file and holds it to core's LINE_BREAKS, so a predicate that answered
+// anything but the table would drift from core again unseen.
+func TestIsControlIsTheLineBreaksTable(t *testing.T) {
+	inTable := func(r rune) bool {
+		for _, span := range lineBreaks {
+			if span[0] <= r && r <= span[1] {
+				return true
+			}
+		}
+		return false
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if isControl(r) != inTable(r) {
+			t.Fatalf("isControl(%U) = %v, and the lineBreaks table says %v", r, isControl(r), inTable(r))
+		}
+	}
+}
+
+// The auth frame's agent.update.reason is where one refused character costs
+// the most — core then records NONE of the auth-frame facts — so the C1 and
+// separator classes are pinned there too, on supervise's own words.
+func TestAuthFactsCollapseC1AndLineSeparatorsInTheUpdateReason(t *testing.T) {
+	r := &platform.FakeRunner{Outputs: map[string]string{
+		"/usr/sbin/ioreg": `"IOPlatformUUID" = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"`,
+	}}
+	a, _ := GatherAuth(context.Background(), r, "0123456789ab", &state.Update{
+		Version: "aaaaaaaaaaaa", Outcome: state.UpdateRolledBack,
+		Reason: "the new build did not connect\u0085its last error: panic: boom \u009b[0m",
+		At:     time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC),
+	})
+	want := "the new build did not connect its last error: panic: boom [0m"
+	if got := a.Agent.Update.Reason; got != want {
+		t.Fatalf("reason = %q, want %q", got, want)
 	}
 }

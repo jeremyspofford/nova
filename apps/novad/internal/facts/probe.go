@@ -336,13 +336,16 @@ func (p Probed) ApplyTo(f *Frame) {
 }
 
 // line is text read off the machine as core renders it inside a listing
-// line: control characters collapsed, clipped to the cap.
+// line: every character core refuses in a line collapsed (isControl), clipped
+// to the cap.
 func line(s string) string { return clip(collapseControl(s)) }
 
 // said is what a program said — an error, a refusal — as the ONE line core
-// renders into a listing line (S42b F3): its first line only, control
-// characters collapsed, clipped. Core refuses a control character, and one
-// refused field drops the whole frame.
+// renders into a listing line (S42b F3): what comes before its first CR or LF,
+// with every other character core refuses in a line — the rest of the C0
+// controls, DEL, the C1 controls, U+2028 and U+2029 (isControl) — collapsed
+// to a space, clipped. Core refuses any of them, and one refused field drops
+// the whole frame.
 func said(s string) string {
 	first := strings.TrimSpace(s)
 	if i := strings.IndexAny(first, "\r\n"); i >= 0 {
@@ -360,7 +363,7 @@ func unfit(p string) string {
 	case len(p) > maxText:
 		return fmt.Sprintf("path is %d bytes, over the %d limit", len(p), maxText)
 	case strings.ContainsFunc(p, isControl):
-		return "path contains a control character"
+		return "path contains a control character or a line separator"
 	}
 	return ""
 }

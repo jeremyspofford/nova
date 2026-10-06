@@ -195,11 +195,12 @@ func returnsWithin(t *testing.T, d time.Duration, call func()) {
 	}
 }
 
-// oneLine fails unless s could sit inside one listing line core renders:
-// no control character — core refuses one, and drops the whole frame.
+// oneLine fails unless s could sit inside one listing line core renders: no
+// character core refuses in a line (isControl, core's LINE_BREAKS) — core
+// refuses one, and drops the whole frame.
 func oneLine(t *testing.T, what, s string) {
 	t.Helper()
-	if strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+	if strings.ContainsFunc(s, isControl) {
 		t.Fatalf("%s %q is not one clean line", what, s)
 	}
 }

@@ -5,7 +5,9 @@ that pins the shapes both sides of the wire agree on."""
 from __future__ import annotations
 
 import copy
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -1736,3 +1738,38 @@ def test_the_probes_time_comes_before_every_line_it_dates():
 
 def test_a_frame_lands_on_no_stored_facts_as_itself():
     assert df.merge_frame(None, df.validate_frame(NEWER_PROBE)) == df.validate_frame(NEWER_PROBE)
+
+
+# -- Task 32, MF2: the agent keeps out of a line exactly what core refuses ------
+#
+# Core refuses a facts field that holds a LINE_BREAKS character, and drops the
+# WHOLE frame for it. The agent's own class (facts.go's isControl) was C0 and
+# DEL only, so a C1 control or U+2028 passed the agent and cost her every fact
+# the frame carried. The cross-language check is this one: it reads the
+# agent's class out of its source — the lineBreaks table, which
+# TestIsControlIsTheLineBreaksTable holds isControl to — and compares it with
+# LINE_BREAKS at every code point, so the two cannot drift again unseen.
+
+_FACTS_GO = Path(__file__).resolve().parents[3] / "apps/novad/internal/facts/facts.go"
+
+
+def _agent_line_breaks() -> set[int]:
+    """Every code point facts.go's lineBreaks table holds. Fails — never
+    answers an empty or partial class — when the table, or a row of it,
+    cannot be read."""
+    source = _FACTS_GO.read_text(encoding="utf-8")
+    table = re.search(r"^var lineBreaks = \[\.\.\.\]\[2\]rune\{\n(.*?)\n\}$", source, re.M | re.S)
+    assert table is not None, "facts.go has no lineBreaks table to read"
+    rows = [row for row in table.group(1).split("\n") if row.strip()]
+    spans = [re.fullmatch(r"\t\{(0x[0-9a-f]+), (0x[0-9a-f]+)\},", row) for row in rows]
+    assert rows and all(spans), f"a lineBreaks row this test cannot read: {rows}"
+    return {cp for m in spans for cp in range(int(m.group(1), 16), int(m.group(2), 16) + 1)}
+
+
+def test_the_agents_line_class_is_cores_at_every_code_point():
+    agent = _agent_line_breaks()
+    core = {cp for cp in range(0x110000) if df.LINE_BREAKS.match(chr(cp))}
+    assert agent == core, (
+        f"only the agent keeps out: {[hex(cp) for cp in sorted(agent - core)]}; "
+        f"only core refuses: {[hex(cp) for cp in sorted(core - agent)]}"
+    )

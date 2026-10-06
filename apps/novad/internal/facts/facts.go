@@ -302,12 +302,13 @@ func clip(s string) string {
 	return s[:cut]
 }
 
-// collapseControl replaces every control character (newlines, tabs, a
-// program's raw stderr, …) with a single space and squeezes the runs that
-// leaves, so text built from another program's output — supervise's
-// lastError, folded into a rolled-back/applied UpdateFact.Reason — still
-// reads as ONE line (cross-task, fix round 1: core's Task 16 refuses a
-// control character in this field outright).
+// collapseControl replaces every character core refuses in a line
+// (isControl: the control characters — newlines, tabs, a program's raw
+// stderr, … — and the line and paragraph separators) with a single space and
+// squeezes the runs that leaves, so text built from another program's output
+// — supervise's lastError, folded into a rolled-back/applied
+// UpdateFact.Reason — still reads as ONE line (cross-task, fix round 1:
+// core's Task 16 refuses such a character in this field outright).
 func collapseControl(s string) string {
 	var b strings.Builder
 	spaced := false
@@ -328,5 +329,30 @@ func collapseControl(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// isControl is a character core refuses in text it renders into a line.
-func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+// lineBreaks is the class of characters core refuses in text it renders into
+// a line, range by range: core's LINE_BREAKS (services/core/app/
+// device_facts.py) — the C0 controls (newline among them), DEL, the C1
+// controls (U+0085 NEL among them), and U+2028 LINE SEPARATOR and U+2029
+// PARAGRAPH SEPARATOR, which Python's str.splitlines() also splits on. A
+// character core refuses that this class let through drops the WHOLE facts
+// frame there — net, the MACs — and, in agent.update.reason, every auth-frame
+// fact (Task 32, MF2: it was C0 and DEL only). One class on both sides:
+// services/core/tests/test_device_facts.py reads this table and compares it
+// with LINE_BREAKS at every code point, and TestIsControlIsTheLineBreaksTable
+// holds isControl to it.
+var lineBreaks = [...][2]rune{
+	{0x00, 0x1f},
+	{0x7f, 0x9f},
+	{0x2028, 0x2029},
+}
+
+// isControl is a character core refuses in text it renders into a line: one
+// in lineBreaks.
+func isControl(r rune) bool {
+	for _, span := range lineBreaks {
+		if span[0] <= r && r <= span[1] {
+			return true
+		}
+	}
+	return false
+}
