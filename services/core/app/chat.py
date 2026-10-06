@@ -2466,6 +2466,15 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
         return []
 
 
+def _shaped_like_a_name(title: str) -> bool:
+    """Whether a server-reported title reads as a proper name in prose (fix
+    round 1, M1): two or more words ("Home Assistant"), or a capital after its
+    first letter ("GitHub"). A title of "the" or "Files" would make a common
+    word name the server — "I can't access files outside my workspace" read as
+    a denial of it — so such a server is named by its connection name alone."""
+    return len(title.split()) >= 2 or any(ch.isupper() for ch in title[1:])
+
+
 async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
     """Every connected MCP server as the guards see it (S37a) — from the table,
     or an eval case's overlay. FAIL-OPEN to none, which keeps both server
@@ -2479,7 +2488,7 @@ async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
     refs: list[guards.McpServerRef] = []
     for server in rows:
         words = {server.name.lower(), server.name.replace("_", " ").replace("-", " ").lower()}
-        if server.title and len(server.title) <= 40:
+        if server.title and len(server.title) <= 40 and _shaped_like_a_name(server.title):
             words.add(server.title.lower())
         refs.append(
             guards.McpServerRef(
@@ -5162,9 +5171,6 @@ async def _run_turn(
         # which makes the guard silent — a registry read that blips must never
         # turn an honest reply into a false correction.
         device_names = await _paired_device_names(pool)
-        # S37a: the connected MCP servers, the fact the two server guards are
-        # derived from — read once here, like device_names.
-        mcp_refs = await _mcp_server_refs(pool)
         # And the agents' names (S12), the same way — the fact the
         # delegation-claim guard is derived from. Read once here and threaded
         # into every redirect's vetting, exactly like device_names. The
@@ -6089,13 +6095,18 @@ async def _run_turn(
         # S37a adds the MCP server pair in the same shape (guards.py, "the MCP
         # server claims"): a connected server she says she cannot reach, and a
         # reading she attributes to one that answered no call this turn — each
-        # over the servers read once above (mcp_refs). The denial is judged
-        # only for a persona that holds mcp_call (ruling F5, the capability
-        # guard's persona rule): an agent given none truly cannot reach one.
+        # over the servers read once, after every redirect (mcp_refs). The
+        # denial is judged only for a persona that holds mcp_call (ruling F5,
+        # the capability guard's persona rule): an agent given none truly
+        # cannot reach one.
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
             machines = await _paired_machines(pool)
+            # The connected MCP servers, read HERE, after every redirect, like
+            # `machines` (fix round 1, item 1): read before the redirects, a
+            # server a redirect's mcp_disconnect removed was still "connected".
+            mcp_refs = await _mcp_server_refs(pool)
             reachable_refs = mcp_refs if "mcp_call" in persona.tool_names else []
             for name, check in (
                 (

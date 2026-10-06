@@ -565,3 +565,146 @@ async def test_the_eval_cases_guard_half_now_bites(pool, mount_peers):
 
     assert run.passed is True, run.detail
     assert await _guard_spans(pool, run.turn_id) == []
+
+
+# -- fix round 1 (review of 77260997) --------------------------------------------
+
+
+def _disconnect_span(server: str, *, ok: bool = True, reached: bool = True):
+    return _span(
+        "mcp_disconnect",
+        ok=ok,
+        args_redacted=chat._span_arguments({"name": server}, "mcp_disconnect"),
+        reached_executor=reached,
+    )
+
+
+def _refused_span(server: str):
+    """A call to `server` the model wrote as MARKUP, filed by the real refusal
+    (chat._refuse_call): ok=False, a refused_* flag, no reached_executor — it
+    never ran."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from app import traces
+
+    turn = traces.Turn(id=uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1",
+        name="mcp_call",
+        arguments=f'{{"server": "{server}", "tool": "actions_list", "arguments": {{}}}}',
+        from_markup=True,
+    )
+    chat._refuse_call(turn, call, "written as text", chat.MARKUP_AS_TEXT_FLAG)
+    [span] = turn.spans
+    assert span.meta["ok"] is False and span.meta[chat.MARKUP_AS_TEXT_FLAG] is True
+    assert "reached_executor" not in span.meta
+    return span
+
+
+def test_a_server_disconnected_this_turn_is_neither_connected_nor_unread():
+    """Item 1's second line: an ok mcp_disconnect this turn means the server is
+    gone, whatever list the guards were handed — "github is connected" beside
+    it is false."""
+    gone = [_disconnect_span("github")]
+    assert guards.server_denial_check("I don't have access to GitHub now.", gone, [GITHUB]) is None
+    assert guards.server_claim_check("GitHub shows the run failed.", gone, [GITHUB]) is None
+    # A disconnect that failed, or never reached its executor, removed nothing.
+    for kept in (
+        [_disconnect_span("github", ok=False)],
+        [_disconnect_span("github", reached=False)],
+    ):
+        found = guards.server_denial_check("I don't have access to GitHub now.", kept, [GITHUB])
+        assert found is not None and found.text == DENIED
+
+
+def test_a_refused_call_is_not_a_call_that_ran():
+    """M2: a call written as markup was refused and never dispatched — it is
+    neither a failed call (which would make the denial true) nor a call that
+    ran (which would make the claim say "succeeded")."""
+    refused = [_refused_span("github")]
+    denial = guards.server_denial_check("I can't reach GitHub.", refused, [GITHUB])
+    assert denial is not None and denial.text == DENIED
+    claim = guards.server_claim_check("GitHub shows the run failed.", refused, [GITHUB])
+    assert claim is not None and claim.text == NO_CALL
+
+
+@requires_db
+async def test_a_server_disconnected_in_a_redirect_is_not_said_to_be_connected(pool, mount_peers):
+    """Item 1, the reviewer's turn verbatim: the consent redirect ran
+    mcp_disconnect(github), and her true "I don't have access to GitHub now"
+    was stored with "(github is connected…)" appended — the servers had been
+    read before the redirects. They are read after every redirect now."""
+    owner = await _owner(pool)
+    await _connect(pool)
+    said = "Done. I don't have access to GitHub now."
+    gateway = ScriptedGateway(
+        rounds=(
+            (text("That needs your approval before I can disconnect GitHub."),),
+            (whole_call("c1", "mcp_disconnect", {"name": "github"}),),
+            (text(said),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    turn, frames = await _nova_turn(pool, owner, "disconnect github")
+
+    assert await pool.fetchval("SELECT count(*) FROM mcp_servers WHERE name = 'github'") == 0
+    tool_spans = [s for s in await _spans(pool, turn.id) if s["kind"] == "tool"]
+    assert [(s["name"], s["meta"]["ok"]) for s in tool_spans] == [("mcp_disconnect", True)]
+    reply = await _reply(pool, turn.id)
+    assert reply.endswith(said) and DENIED not in reply
+    assert DENIED not in _corrections(frames)
+    assert "mcp_server_denial" not in [s["name"] for s in await _guard_spans(pool, turn.id)]
+
+
+@requires_db
+async def test_a_true_qualified_limit_is_stored_as_she_said_it(pool, mount_peers):
+    """Item 2 through the turn, the reviewer's reply verbatim: the REPLACE-class
+    capability correction stored only "Correction: I can do that" in place of
+    a true sentence. The bare denial is still replaced."""
+    owner = await _owner(pool)
+    said = "I can't connect to MCP servers that run over stdio; I can only connect over HTTP."
+    mount_peers(gateway=ScriptedGateway(rounds=((text(said),),)), memory=FakeMemory())
+
+    turn, frames = await _nova_turn(
+        pool, owner, "connect the filesystem mcp server (it runs over stdio)"
+    )
+
+    assert await _reply(pool, turn.id) == said
+    assert await _guard_spans(pool, turn.id) == []
+    assert _corrections(frames) == []
+
+    bare = "I can't connect to MCP servers."
+    mount_peers(gateway=ScriptedGateway(rounds=((text(bare),),)), memory=FakeMemory())
+    turn, frames = await _nova_turn(pool, owner, "connect the github mcp server")
+    [guard] = await _guard_spans(pool, turn.id)
+    assert guard["name"] == "capability_claim"
+    assert "mcp_connect" in await _reply(pool, turn.id)
+
+
+@requires_db
+async def test_a_title_names_a_server_only_when_it_is_shaped_like_a_name(pool):
+    """M1: a server-reported title is a match word only with two or more words
+    or a capital after its first letter. "the" and "Files" would put a common
+    word on the server ("I can't access the web", "I can't access files
+    outside my workspace"); "GitHub" and "Home Assistant" are names."""
+    await _connect(pool, name="odd", title="the")
+    await _connect(pool, name="fs", title="Files")
+    await _connect(pool, name="gh", title="GitHub")
+    await _connect(pool, name="home", title="Home Assistant")
+
+    refs = {ref.name: ref for ref in await chat._mcp_server_refs(pool)}
+
+    assert refs["odd"].words == ("odd",)
+    assert refs["fs"].words == ()  # "fs" is under three letters, "Files" is no name
+    assert refs["gh"].words == ("github",)
+    assert refs["home"].words == ("home", "home assistant")
+    servers_ = list(refs.values())
+    for honest in (
+        "I can't access the web from here.",
+        "I can't access files outside my workspace.",
+    ):
+        assert guards.server_denial_check(honest, [], servers_) is None, honest
+    found = guards.server_denial_check("I can't reach Home Assistant.", [], servers_)
+    assert found is not None and found.server == "home"

@@ -1530,6 +1530,20 @@ _CAP_ON_A_PHONE = re.compile(
     re.I,
 )
 
+# S37a fix round 1 (ruling T12-B, S38's G1 shape): the MCP rows' LOCAL honest
+# tail. A denial whose object is QUALIFIED by what follows it — "MCP servers
+# that run over stdio", "an MCP server without a URL", "MCP tools on a server
+# you haven't connected yet", "… right now" — is a true limit, never the
+# general ability, and capability_claim is REPLACE-class: a fire there stored
+# only "I can do that" in place of a true sentence. Only these two rows read
+# it, as only the S47 rows read _PRESENT_STATE_TAIL. Possessive runs and
+# literal alternatives, bounded by _PRESENT_STATE_TAIL's own window: linear.
+_MCP_QUALIFIED_TAIL = (
+    r"(?!\s*+,?\s*+(?:that|which|who|over|via|using|through|without|unless|requiring"
+    r"|needing|behind|on\s+(?:a|an|any|the|that|this|your)\s+server)\b"
+    r"|" + _PRESENT_STATE_TAIL + r")"
+)
+
 _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -1779,11 +1793,18 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     # denial is server_denial_check's, which reads the live server list.
     (
         re.compile(
-            r"\bconnect(?:ing)?\s+(?:to\s+)?(?:an?\s+|any\s+|new\s+)?mcp\s+servers?\b", re.I
+            r"\bconnect(?:ing)?\s+(?:to\s+)?(?:an?\s+|any\s+|new\s+)?mcp\s+servers?\b"
+            + _MCP_QUALIFIED_TAIL,
+            re.I,
         ),
         "mcp_connect",
     ),
-    (re.compile(r"\buse\s+(?:an?\s+|any\s+)?mcp\s+(?:servers?|tools?)\b", re.I), "mcp_call"),
+    (
+        re.compile(
+            r"\buse\s+(?:an?\s+|any\s+)?mcp\s+(?:servers?|tools?)\b" + _MCP_QUALIFIED_TAIL, re.I
+        ),
+        "mcp_call",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -10049,6 +10070,9 @@ class ServerClaimFound:
 
 
 _MCP_TOOL_NAMES = frozenset({"mcp_call", "mcp_tools", "mcp_connect"})
+# Read only to drop a server she REMOVED this turn (fix round 1, item 1): a
+# disconnect is not a call to the server, but the server is gone after it.
+_MCP_DISCONNECT = frozenset({"mcp_disconnect"})
 _SERVER_ACCESS = (
     r"(?:access|reach|connect\s+to|use|query|get\s+(?:in)?to|talk\s+to|read\s+from|see)"
 )
@@ -10066,7 +10090,11 @@ _SERVER_EARLIER = re.compile(
 )
 
 
-@lru_cache(maxsize=128)
+# Fix round 1, M3: room for every server a household could connect. The
+# guards fetch each server's patterns once per reply, before the clauses;
+# looked up per clause past 128 servers, every lookup evicted the next one
+# and rebuilt it (34 s for a 5 KB reply).
+@lru_cache(maxsize=1024)
 def _server_patterns(
     words: tuple[str, ...],
 ) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
@@ -10091,19 +10119,25 @@ def _server_patterns(
     return after_lead, named, read, said
 
 
-def _mcp_spans(spans: Sequence[Any]) -> Iterator[tuple[Mapping[str, Any], set[str]]]:
+def _mcp_spans(
+    spans: Sequence[Any], tool_names: frozenset[str] = _MCP_TOOL_NAMES
+) -> Iterator[tuple[Mapping[str, Any], set[str]]]:
     """(meta, the servers it names) for each mcp_* span that REACHED its
     executor — from its facts, and from its own arguments. A call dispatch
     refused first (`reached_executor` False: unreadable arguments, no such
     tool) reached nothing, so it says nothing about a server (ruling F5); an
-    absent key is "not recorded", never "not reached" (#90's M-2)."""
+    absent key is "not recorded", never "not reached" (#90's M-2). A call
+    REFUSED before dispatch (`refused_*`: written as markup, a closed round)
+    never ran at all (fix round 1, M2 — chat._tool_outcomes' house rule)."""
     for span in spans:
         if getattr(span, "kind", None) != "tool":
             continue
-        if getattr(span, "name", None) not in _MCP_TOOL_NAMES:
+        if getattr(span, "name", None) not in tool_names:
             continue
         meta = getattr(span, "meta", None) or {}
         if meta.get("reached_executor") is False:
+            continue
+        if any(str(key).startswith("refused_") for key in meta):
             continue
         named: set[str] = set()
         for fact in meta.get("facts") or ():
@@ -10123,6 +10157,17 @@ def _mcp_servers_in(spans: Sequence[Any], *, ok: bool) -> set[str]:
     names: set[str] = set()
     for meta, named in _mcp_spans(spans):
         if bool(meta.get("ok")) is ok:
+            names |= named
+    return names
+
+
+def _mcp_servers_disconnected(spans: Sequence[Any]) -> set[str]:
+    """The servers an ok mcp_disconnect removed this turn (fix round 1, item 1).
+    Gone, whatever list the guards were handed: neither "X is connected" nor
+    "no call to X ran" can be said beside her removing it."""
+    names: set[str] = set()
+    for meta, named in _mcp_spans(spans, _MCP_DISCONNECT):
+        if meta.get("ok"):
             names |= named
     return names
 
@@ -10176,10 +10221,11 @@ def server_denial_check(
         return None
     if _a_delegation_ran(spans):
         return None  # the agent's calls are on its own turn (#90, ruling F5)
-    failed_now = _mcp_servers_in(spans, ok=False)
-    # Whose denial would be false, decided once for the reply, not per clause.
+    failed_now = _mcp_servers_in(spans, ok=False) | _mcp_servers_disconnected(spans)
+    # Whose denial would be false, decided once for the reply, not per clause,
+    # each with its patterns fetched once (M3).
     candidates = [
-        server
+        (server, _server_patterns(server.words))
         for server in servers
         if not server.failing and server.name not in failed_now and server.words
     ]
@@ -10195,8 +10241,7 @@ def server_denial_check(
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
-        for server in candidates:
-            after_lead, named, _read, _said = _server_patterns(server.words)
+        for server, (after_lead, named, _read, _said) in candidates:
             hit = after_lead.match(clause, lead.end()) if lead is not None else None
             if hit is None and trailing is not None:
                 hit = named.search(clause, 0, trailing.start())
@@ -10220,11 +10265,12 @@ def server_claim_check(
         return None
     if _a_delegation_ran(spans):
         return None  # the agent's calls are on its own turn (#90, ruling F5)
-    answered = _mcp_servers_answered(spans)
+    answered = _mcp_servers_answered(spans) | _mcp_servers_disconnected(spans)
     read_args = _live_read_arguments(spans)
-    # Which servers nothing backs, decided once for the reply, not per clause.
+    # Which servers nothing backs, decided once for the reply, not per clause,
+    # each with its patterns fetched once (M3).
     candidates = [
-        server
+        (server, _server_patterns(server.words))
         for server in servers
         if server.words
         and server.name not in answered
@@ -10236,8 +10282,7 @@ def server_claim_check(
     for clause, is_question in _clauses(reply_text):
         if is_question or _SERVER_EARLIER.search(clause):
             continue
-        for server in candidates:
-            _lead, _named, read, said = _server_patterns(server.words)
+        for server, (_lead, _named, read, said) in candidates:
             found = read.search(clause) or said.search(clause)
             if found is None:
                 continue

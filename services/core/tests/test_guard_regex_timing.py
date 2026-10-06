@@ -999,6 +999,38 @@ def test_the_mcp_server_guards_read_50_kb_against_thirty_spans_in_linear_time(la
     )
 
 
+def _servers(n: int) -> list:
+    """`n` connected servers, none of them named in the reply below."""
+    return [
+        guards.McpServerRef(name=f"srv{i}", words=(f"server number {i}", f"srv{i}"))
+        for i in range(n)
+    ]
+
+
+# A denial lead and an attribution in every sentence, naming a server the list
+# does not hold: each clause asks every server, and none of them answers.
+_FIVE_KB_OF_UNHELD_NAMES = _repeat("I can't access GitLab. GitLab shows it. ")(5_000)
+
+
+@pytest.mark.parametrize(
+    "check", [guards.server_denial_check, guards.server_claim_check], ids=lambda c: c.__name__
+)
+def test_two_hundred_servers_are_read_in_linear_time(check):
+    """(fix round 1, M3) The review's cliff: each clause looked each server's
+    patterns up behind an lru_cache of 128, so past 128 servers every lookup
+    evicted the next one and rebuilt it — 34 s for a 5 KB reply at 140. Each
+    server's patterns are fetched once per reply now, before the clauses: 50 ->
+    200 servers is linear, and 200 read 5 KB under the cap."""
+    _assert_linear(
+        f"{check.__name__} servers",
+        lambda servers: check(_FIVE_KB_OF_UNHELD_NAMES, _THIRTY_MCP, servers),
+        _servers,
+        small=50,
+        large=200,
+        cap_s=BIG_INPUT_CAP_S,
+    )
+
+
 def test_the_mcp_timing_record_backs_neither_server():
     """The pins above read every clause only while nothing in the record backs
     a server or ends the read: the two guards still answer a real claim."""

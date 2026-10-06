@@ -662,3 +662,51 @@ def test_the_mcp_corrections_are_clean_over_themselves():
         correction = guards.capability_claim_check(reply, ALL_TOOLS)
         assert correction is not None
         assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# Fix round 1 (review of 77260997, ruling T12-B — S38's G1 shape): a denial
+# QUALIFIED by what follows the object is a true limit, never the general
+# ability. capability_claim is REPLACE-class, so a fire here stored only
+# "Correction: I can do that" in place of a true sentence — the store refuses
+# anything but http(s). The first phrasing is the reviewer's, verbatim; the
+# rest cover each family it named (stdio, OAuth, no URL, a server not yet
+# connected) and each qualifier the local cut reads.
+MCP_QUALIFIED_LIMITS = [
+    "I can't connect to MCP servers that run over stdio; I can only connect over HTTP.",
+    "I can't connect to MCP servers which only speak stdio.",
+    "I can't connect to MCP servers that need OAuth to sign in.",
+    "I'm unable to connect to MCP servers requiring an OAuth login.",
+    "I can't connect to an MCP server without a URL.",
+    "I can't use MCP tools on a server you haven't connected yet.",
+    "I can't connect to MCP servers over a local socket.",
+    "I can't use MCP servers via the desktop app's config file.",
+    "I can't connect to MCP servers using client certificates.",
+    "I can't use MCP tools through a server that isn't connected.",
+    "I can't connect to MCP servers behind a login page.",
+    "I can't use MCP tools unless a server is connected.",
+    "I can't connect to MCP servers needing a browser sign-in.",
+    "I can't connect to MCP servers, which only run locally on your laptop.",
+    "I can't connect to new MCP servers right now: the network is down.",
+]
+
+
+@pytest.mark.parametrize("reply", MCP_QUALIFIED_LIMITS)
+def test_a_qualified_mcp_limit_is_honest(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        "a true qualified limit was replaced by 'I can do that' — the guard is the liar"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reply", "tool"),
+    [
+        ("I can't connect to MCP servers.", "mcp_connect"),
+        ("I'm not able to connect to new MCP servers.", "mcp_connect"),
+        ("Connecting to MCP servers isn't something I can do.", "mcp_connect"),
+        ("I can't use MCP tools.", "mcp_call"),
+        ("I'm unable to use any MCP servers, so I can't check CI.", "mcp_call"),
+    ],
+)
+def test_a_bare_mcp_denial_is_still_corrected(reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and tool in tgt(correction), reply
