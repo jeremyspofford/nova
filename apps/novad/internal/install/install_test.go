@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -453,6 +454,91 @@ func TestInstallSaysWhatItDidToThePairingWhenTheAgentThenNeverComesUp(t *testing
 	}
 	if strings.Contains(out.String(), "running:") {
 		t.Fatal("an agent that never came up must never be reported as running")
+	}
+}
+
+// Task 32, L247: a pairing code is a credential — shown only on the card,
+// never in a log line or a message (S47 §7). Whatever install does with it —
+// pairs, leaves it unused, is refused, meets a page that echoes the request,
+// fails after pairing — neither what it prints nor its error carries the
+// code. Where a test hub stands in, it checks the code was really sent, so
+// its absence from the words means something.
+func TestThePairingCodeNeverReachesInstallsWords(t *testing.T) {
+	const code = "ZQ7X-K4WP"
+	dead := func(context.Context, config.Config, ed25519.PrivateKey) error {
+		return &client.RefusedError{Server: "x", Reason: "revoked"}
+	}
+	paired := func(context.Context, string, string, string, string, ed25519.PublicKey) (EnrollResult, error) {
+		return EnrollResult{DeviceID: "d-new", Name: "laptop", CorePubKey: strings.Repeat(core, 32)}, nil
+	}
+	// hub answers status and body to an enroll, and records that it was sent
+	// the code; echo puts the request itself in the body.
+	hub := func(t *testing.T, status int, body string, echo bool) (string, *atomic.Bool) {
+		var sent atomic.Bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			req, _ := io.ReadAll(r.Body)
+			sent.Store(strings.Contains(string(req), code))
+			w.WriteHeader(status)
+			answer := body
+			if echo {
+				answer = "<html><pre>" + string(req) + "</pre></html>"
+			}
+			_, _ = io.WriteString(w, answer)
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL, &sent
+	}
+	for _, tc := range []struct {
+		name   string
+		setup  func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool
+		wantOK bool
+	}{
+		{"a fresh pairing that comes up", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			o.Verify, o.Enroll = dead, paired
+			svc.onRestart = agentCameUp(o.Paths, o.Version, state.StateReady, "")
+			return nil
+		}, true},
+		{"a kept pairing leaves the code unused", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			svc.onRestart = agentCameUp(o.Paths, o.Version, state.StateReady, "")
+			return nil
+		}, true},
+		{"restart-later keeps the pairing unasked", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			o.RestartLater = true
+			return nil
+		}, true},
+		{"the agent never comes up after pairing", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			o.Verify, o.Enroll = dead, paired
+			return nil
+		}, false},
+		{"the hub refuses the code", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			url, sent := hub(t, http.StatusForbidden, `{"error":"that pairing code is not usable — it is unknown, expired, or already used"}`, false)
+			o.Hubs, o.Verify, o.Enroll = []string{url}, dead, Enroll
+			return sent
+		}, false},
+		{"a page that echoes the request", func(t *testing.T, o *Options, svc *fakeService) *atomic.Bool {
+			url, sent := hub(t, http.StatusBadRequest, "", true)
+			o.Hubs, o.Verify, o.Enroll = []string{url}, dead, Enroll
+			return sent
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, svc, out := installOpts(t)
+			o.Code = code
+			sent := tc.setup(t, o, svc)
+			err := Install(context.Background(), *o)
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("the setup did not run as meant: %v\n%s", err, out.String())
+			}
+			if sent != nil && !sent.Load() {
+				t.Fatal("the setup never sent the code, so its absence proves nothing")
+			}
+			if strings.Contains(out.String(), code) {
+				t.Fatalf("the pairing code was printed:\n%s", out.String())
+			}
+			if err != nil && strings.Contains(err.Error(), code) {
+				t.Fatalf("the pairing code is in the error: %v", err)
+			}
+		})
 	}
 }
 
