@@ -180,10 +180,19 @@ yet (see the carries).
 
 ## Inside WSL
 
-Do not install novad there. `enroll` (and, through it, `install`) refuses:
+Do not install novad there. `enroll` and `install` each refuse on their
+own — two independent checks, in their own words, neither calling the
+other. `novad enroll` (`main.go`'s `enrollPreflight`):
 
 ```
 novad: cannot: on Windows, Nova's agent runs on Windows itself; run the Windows command (novad.exe enroll) in PowerShell, not this one inside WSL
+```
+
+`novad install` (`internal/install/install.go`'s own check, run before
+pairing or placing anything):
+
+```
+novad: cannot: on Windows, Nova's agent runs on Windows itself; run the Windows command in PowerShell, not this one inside WSL
 ```
 
 Pair the Windows machine instead — its agent reaches WSL through `wsl.exe`
