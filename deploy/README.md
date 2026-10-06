@@ -420,8 +420,10 @@ of them and how many more there were, and the same list is on the
 **Honesty checks.** If she says she cannot reach a server that is connected
 and whose last call did not fail, or credits a server with an answer when no
 call to it succeeded this turn, a sentence correcting her is appended to the
-reply — nothing is refused or redone, and she stays silent about it when the
-server really did answer.
+reply. Nothing is refused or redone, and nothing is appended when the server
+really did answer. Two kinds of reply are not checked: a denial she hedges as
+a present limit ("right now", "because", "unless", …), and any turn on which
+she handed work to an agent, so a false sentence of either kind stands.
 
 **Limits.** HTTP(S) servers only (no local stdio servers); a token or extra
 headers, no OAuth sign-in; tools only (no MCP resources or prompts); an image

@@ -217,7 +217,8 @@ connection name alone.
 - **`server_claim_check(reply, spans, servers)`**
   - Fires on a first-person past-tense read of a connected server ("I checked GitHub", "I looked
     at the GitHub run"), or an attribution ("according to GitHub", "GitHub shows"), for a server
-    that answered no call this turn — "answered" means an ok `mcp_call` span, OR a call whose own
+    that answered no call this turn — "answered" means an ok span from any of her MCP tools that named the server
+    this turn (`mcp_connect`, `mcp_tools` or `mcp_call`), OR a call whose own
     `isError` is true (the server's own answer, never a failing server, so it backs the claim and
     the guard stays silent) — and whose name isn't among the arguments of an ok live-read call
     this turn (a web fetch, a search: reading its own words is not reading the server). Also
