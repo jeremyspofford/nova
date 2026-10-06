@@ -212,9 +212,10 @@ TRICKS = [
     "/api/v1/agent/dist/current",
     "/api/v1/agent/dist/NOVAD-LINUX-AMD64",
     "/api/v1/agent/dist/novad-linux-amd64.exe",
-    # A decoded `?` or `#` makes the middleware's URL read as the exact public
-    # path, so these DO pass as public — and the route's own exact-name check
-    # is what refuses them.
+    # A decoded `?` or `#` made request.url.path read as the exact public
+    # path; identity now matches the path the router matches (Task 26 fix
+    # round 1, I3), so these are not public either — and the route's own
+    # exact-name check would still refuse them.
     "/api/v1/agent/dist/novad-linux-amd64%3F",
     "/api/v1/agent/dist/novad-linux-amd64%23x",
 ]
@@ -233,16 +234,19 @@ def _no_build_bytes(body: bytes, sentinel: bytes) -> None:
     assert b'"files"' not in body
 
 
-async def _raw_get(raw_path: bytes, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
-    """One GET straight into the ASGI app with the target exactly as a client
-    sent it: httpx removes dot segments before it sends, a raw client (and
-    nginx's $request_uri) does not. The scope is built the way uvicorn builds
-    it — `path` is the percent-decoded target, nothing normalized."""
+async def _raw_get(
+    raw_path: bytes, headers: dict[str, str] | None = None, *, method: str = "GET"
+) -> tuple[int, bytes]:
+    """One request (a GET unless `method` says) straight into the ASGI app
+    with the target exactly as a client sent it: httpx removes dot segments
+    before it sends, a raw client (and nginx's $request_uri) does not. The
+    scope is built the way uvicorn builds it — `path` is the percent-decoded
+    target, nothing normalized."""
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.4"},
         "http_version": "1.1",
-        "method": "GET",
+        "method": method,
         "scheme": "http",
         "path": unquote(raw_path.decode("ascii")),
         "raw_path": raw_path,
@@ -282,9 +286,8 @@ async def test_a_name_that_is_not_one_of_the_six_reaches_no_file(dist, path, mon
     sentinel = _sentinel(dist)
     async with _anon_client() as anon:
         resp = await anon.get(path)
-        # Not public (401), or public by the decoded-`?` quirk and refused by
-        # the route (404) — never a file.
-        assert resp.status_code in (401, 404), (path, resp.status_code)
+        # Not public: none of these is an exact public path to the router.
+        assert resp.status_code == 401, (path, resp.status_code)
         _no_build_bytes(resp.content, sentinel)
         resp = await anon.get(path, headers=BEARER)
         assert resp.status_code == 404, (path, resp.status_code, resp.text)
@@ -312,23 +315,47 @@ async def test_a_literal_dot_segment_reaches_no_file(dist, raw, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "raw",
+    "method,raw",
     [
-        b"/api/v1/devices/pairing-code/../../agent/manifest",
-        b"/api/v1/devices/pairing-code/%2e%2e/%2e%2e/agent/manifest",
-        b"/api/v1/devices/pairing-code/../enroll",
+        ("GET", b"/api/v1/devices/pairing-code/../../agent/manifest"),
+        ("GET", b"/api/v1/devices/pairing-code/%2e%2e/%2e%2e/agent/manifest"),
+        ("GET", b"/api/v1/devices/pairing-code/../enroll"),
+        # Fix round 1 (I3): a decoded `?` or `#` — or a tab, newline or
+        # return, which a URL parser drops — made request.url.path read as
+        # the exact public path while the router matched the whole path.
+        ("GET", b"/api/v1/agent/manifest%3F/x"),
+        ("GET", b"/api/v1/agent/manifest%23/x"),
+        ("GET", b"/api/v1/agent/dist/novad-linux-amd64%3Fx"),
+        ("GET", b"/api/v1/agent/mani%0Afest"),
+        ("GET", b"/api/v1/agent/mani%09fest"),
+        ("GET", b"/api/v1/agent/mani%0Dfest"),
+        ("POST", b"/api/v1/devices/enroll%3F/../enroll"),
+        ("PATCH", b"/api/v1/devices/enroll%3F/../enroll"),
     ],
 )
-async def test_a_path_nginx_resolves_into_a_carve_out_is_not_public_to_core(raw, monkeypatch):
-    """S42b Task 26 (R5): nginx resolves dot segments to pick a location, so
-    each of these lands in one of its gate carve-outs (`/api/v1/agent/`, `=
-    /api/v1/devices/enroll`) — and it forwards $request_uri, the target AS
-    SENT (gate_test.sh pins that half). Core is the backstop: it serves
-    without an identity exactly the paths in identity.PUBLIC_PATHS, so none
-    of these is one."""
+async def test_a_path_nginx_resolves_into_a_carve_out_is_not_public_to_core(
+    method, raw, monkeypatch
+):
+    """S42b Task 26 (R5): nginx resolves dot segments (and decodes `%3F` and
+    `%0A` into the path) to pick a location, so each of these lands in one of
+    its gate carve-outs (`/api/v1/agent/`, `= /api/v1/devices/enroll`) — and
+    it forwards $request_uri, the target AS SENT (gate_test.sh pins that
+    half). Core is the backstop: it serves without an identity exactly the
+    paths in identity.PUBLIC_PATHS, matched on the path its router matches,
+    so none of these is one."""
     monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
-    status, _body = await _raw_get(raw)
-    assert status == 401, (raw, status)
+    status, body = await _raw_get(raw, method=method)
+    assert status == 401, (method, raw, status, body)
+    assert b"bearer" in body  # identity's refusal, never a route's answer
+
+
+@pytest.mark.parametrize("path", sorted(identity.PUBLIC_PATHS))
+def test_every_public_path_is_still_public(path):
+    """I3's other half: matching on the router's path keeps each exact
+    public path public (the routes themselves are walked by their own tests:
+    auth, enroll, the manifest and the builds)."""
+    assert identity.is_public({"type": "http", "path": path, "root_path": ""})
+    assert not identity.is_public({"type": "http", "path": f"{path}?x", "root_path": ""})
 
 
 @pytest.mark.parametrize(

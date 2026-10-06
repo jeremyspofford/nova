@@ -27,6 +27,8 @@ from dataclasses import dataclass
 import asyncpg
 from fastapi import HTTPException, Request
 from starlette.responses import Response
+from starlette.routing import get_route_path
+from starlette.types import Scope
 
 from app import db
 from app.auth import bearer_auth_middleware
@@ -188,8 +190,22 @@ async def _cookie_identity(token: str) -> Person | None:
         return None
 
 
+def is_public(scope: Scope) -> bool:
+    """Is this request for one of the exact PUBLIC_PATHS — read on the path
+    the ROUTER matches (Task 26 fix round 1, I3)?
+
+    Starlette's routes match get_route_path(scope): the decoded path, less
+    any root_path, whole. request.url.path is a URL REPARSED from that
+    decoded path, so a decoded `?` or `#` cuts it short and a decoded tab or
+    newline vanishes from it: `/api/v1/agent/manifest%3F/x` read as the
+    public manifest while the router matched — and found no route for — the
+    whole path. Matching the router's own path, through its own function,
+    means a request is public exactly when the route it reaches is."""
+    return get_route_path(scope) in PUBLIC_PATHS
+
+
 async def identity_middleware(request: Request, call_next):
-    if request.url.path == "/health/live":
+    if get_route_path(request.scope) == "/health/live":
         return await call_next(request)
 
     token = request.cookies.get(COOKIE_NAME)
@@ -200,7 +216,7 @@ async def identity_middleware(request: Request, call_next):
             request.state.auth_kind = "session"
             return await call_next(request)
 
-    if request.url.path in PUBLIC_PATHS:
+    if is_public(request.scope):
         request.state.auth_kind = "public"
         return await call_next(request)
 
