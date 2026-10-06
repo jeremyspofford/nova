@@ -276,8 +276,8 @@ async def list_tools(endpoint: Endpoint, *, refresh: bool = False) -> ToolList:
         kind = result.get("resultType", "complete")
         if kind != "complete":
             raise ClientError(
-                f"{endpoint.name} answered tools/list with resultType {kind!r}, which that "
-                "method may not use",
+                f"{endpoint.name} answered tools/list with resultType {kind!r}, which "
+                "tools/list cannot return",
                 reachable=True,
             )
         for raw in result.get("tools") or []:
@@ -801,8 +801,16 @@ def _scrub_text(text: str, candidates: Sequence[str]) -> str:
     return text
 
 
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
 def _has_lone_surrogate(text: str) -> bool:
-    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+    # Runs on every decoded string, on core's event loop: a per-character
+    # Python loop blocked it 177 ms per 4 MiB (S37a final review m1). ASCII
+    # cannot hold a surrogate, and the regex scan runs at C speed otherwise.
+    if text.isascii():
+        return False
+    return _SURROGATE_RE.search(text) is not None
 
 
 def _replace_lone_surrogates(text: str) -> str:

@@ -1862,6 +1862,58 @@ def _origin_only(parsed: object, tool_name: str | None) -> object:
     return out
 
 
+def _carries_credentials(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s arguments can carry a credential or a secret address
+    (S37a final review I1) — derived from the tool itself, never a list kept
+    here: it declared `traced_as_origin`, or its schema names a
+    credential-shaped property (`_credential_key`) or a `headers` object."""
+    if tool is None:
+        return False
+    if tool.traced_as_origin:
+        return True
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(key, str)
+        and (_credential_key(key, header=False) or key.strip().lower() == "headers")
+        for key in properties
+    )
+
+
+def _off_schema_masked(parsed: object, tool: tools.Tool) -> object:
+    """For a tool that `_carries_credentials`: what did not arrive in the
+    shape its schema names is masked WHOLE, because masking by key and
+    reducing a declared URL to its origin both assume that shape.
+
+    - Not an object at all: masked whole.
+    - A key the schema does not name (matched case-sensitively, so `URL` is
+      not `url`, and `pat` is not `token`): its value masked whole.
+    - A `headers` value that is not an object, or that has a key the client
+      itself would refuse as a header name (`mcp_client._TCHAR`, the one
+      predicate — a whole `Authorization: Bearer …` line pasted as a NAME):
+      masked whole."""
+    if not isinstance(parsed, dict):
+        return _masked(parsed)
+    properties = tool.parameters.get("properties") or {}
+    out: dict = {}
+    for key, value in parsed.items():
+        if key not in properties:
+            out[key] = _masked(value)
+        elif (
+            key.strip().lower() == "headers"
+            and value is not None
+            and (
+                not isinstance(value, dict)
+                or not all(
+                    isinstance(name, str) and mcp_client._TCHAR.fullmatch(name) for name in value
+                )
+            )
+        ):
+            out[key] = _masked(value)
+        else:
+            out[key] = value
+    return out
+
+
 def _span_arguments(raw: object, tool_name: str | None = None) -> object:
     """What the model actually sent, recorded whether or not it parsed.
 
@@ -1869,7 +1921,16 @@ def _span_arguments(raw: object, tool_name: str | None = None) -> object:
     OWN arguments to a URL's origin before redaction (ruling X2-REVISED) —
     what `mcp_connect` (Task 7) needs, since ha-mcp's secret is the path
     itself, not a neighbouring token or header.
+
+    Arguments are recorded BEFORE dispatch validates them, so for a tool
+    whose arguments can carry a credential (`_carries_credentials`) text that
+    does not parse is recorded as its length only, and anything off its
+    schema is masked whole (`_off_schema_masked`) — a local model's missing
+    brace must not put a token or a secret path into turn_spans (S37a final
+    review I1).
     """
+    tool = tools.REGISTRY.get(tool_name) if tool_name is not None else None
+    guarded = _carries_credentials(tool)
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
@@ -1877,11 +1938,16 @@ def _span_arguments(raw: object, tool_name: str | None = None) -> object:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
+            if guarded:
+                return f"<unparsed: {len(raw)} chars>"
             # Unparseable arguments are exactly the case worth seeing in the
-            # trace, so the raw text is kept rather than dropped.
+            # trace, so the raw text is kept rather than dropped — for a tool
+            # whose arguments cannot carry a credential.
             parsed = raw
     else:
         parsed = raw
+    if guarded:
+        parsed = _off_schema_masked(parsed, tool)
     return _bounded(_redact(_origin_only(parsed, tool_name)))
 
 

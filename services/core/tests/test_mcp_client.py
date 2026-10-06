@@ -1015,3 +1015,39 @@ async def test_inputrequests_echoing_the_token_as_a_key_is_scrubbed():
         client.unplant(handle)
     assert token not in caught.value.reason
     assert "[redacted]" in caught.value.reason
+
+
+async def test_a_listing_that_is_not_complete_says_cannot_never_may_not():
+    """Final review I2: every refusal says what cannot happen, never what
+    may not."""
+
+    async def respond(sent):
+        payload = {"jsonrpc": "2.0", "id": sent.get("id"), "result": {"resultType": "input"}}
+        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+
+    handle = client.plant({ORIGIN: _Scripted("tools/list", respond)})
+    try:
+        with pytest.raises(client.ClientError) as caught:
+            await client.list_tools(client.Endpoint(name="srv", url=URL))
+    finally:
+        client.unplant(handle)
+    assert "which tools/list cannot return" in caught.value.reason
+    assert "may not" not in caught.value.reason
+
+
+def test_a_4_mib_ascii_string_is_checked_for_lone_surrogates_without_blocking():
+    """Final review m1: every decoded string is checked for lone surrogates
+    on core's event loop; a per-character Python loop cost 177 ms on one
+    4 MiB response. ASCII cannot hold a surrogate, so it is answered at C
+    speed."""
+    text = "x" * (4 * 1024 * 1024)
+    best = min(_timed(client._replace_lone_surrogates, text) for _ in range(3))
+    assert best < 0.02, f"{best * 1000:.1f} ms"
+    assert client._replace_lone_surrogates("a\ud800b") == "a�b"
+    assert client._replace_lone_surrogates("é\U0001f600") == "é\U0001f600"
+
+
+def _timed(fn, arg) -> float:
+    started = time.perf_counter()
+    fn(arg)
+    return time.perf_counter() - started

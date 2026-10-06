@@ -119,7 +119,7 @@ async def test_a_server_that_does_not_answer_is_not_saved(pool):
         # URL validation ruling (closes Tasks 2-3's deferred "repr raises on
         # a malformed port" and gives userinfo its own refusal): none of
         # these may reach the client at all.
-        ("github", "http://u:p@gh.mcp.invalid/mcp", {}, "username or password"),
+        ("github", "http://u:p@gh.mcp.invalid/mcp", {}, "cannot carry a username or password"),
         ("github", "http://gh.mcp.invalid:99999/mcp", {}, "not a number from 1 to 65535"),
         ("github", "http://gh.mcp.invalid:abc/mcp", {}, "not a number from 1 to 65535"),
         ("github", "http://gh.mcp.invalid:0/mcp", {}, "not a number from 1 to 65535"),
@@ -128,7 +128,12 @@ async def test_a_server_that_does_not_answer_is_not_saved(pool):
         # carries userinfo is never echoed via the scheme refusal's netloc
         # (the review's exact reproduction: this used to read "...address:
         # ftp://user:hunter2@gh.mcp.invalid").
-        ("github", "ftp://user:hunter2@gh.mcp.invalid/mcp", {}, "username or password"),
+        (
+            "github",
+            "ftp://user:hunter2@gh.mcp.invalid/mcp",
+            {},
+            "cannot carry a username or password",
+        ),
         # Review Minor 4: urlsplit itself raises ValueError for these two
         # (an unbalanced `[`, a bracketed value that is not an IP literal);
         # an embedded control character is stripped by urlsplit silently,
@@ -614,7 +619,27 @@ async def test_a_header_name_with_a_trailing_newline_is_refused(pool):
             added_by=servers.BY_OWNER,
             actor="jeremy",
         )
-    assert "is not an HTTP header name" in caught.value.reason
+    assert "a header name is not a valid HTTP token" in caught.value.reason
+
+
+async def test_a_bad_header_name_is_refused_by_its_length_never_echoed(pool):
+    """Final review I1: a header NAME can hold the credential itself (a
+    whole `Authorization: Bearer …` line pasted as a key). The refusal
+    reaches her tool result and the span's error, so it names only the
+    length, never the name."""
+    name = "Authorization: Bearer ghp_LEAKLEAKLEAK123"
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(
+            pool,
+            name="github",
+            url=URL,
+            headers={name: ""},
+            added_by=servers.BY_OWNER,
+            actor="jeremy",
+        )
+    assert "ghp_LEAKLEAKLEAK123" not in caught.value.reason
+    assert "Bearer" not in caught.value.reason
+    assert f"({len(name)} characters)" in caught.value.reason
 
 
 # ── fix round 1: ruling T5-E, deterministic races (events, never sleeps) ───

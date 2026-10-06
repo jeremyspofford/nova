@@ -418,7 +418,8 @@ def _validated(
     # Userinfo first (ruling T5-D), before the scheme is named in any way.
     if parts.username is not None or parts.password is not None:
         raise ServerError(
-            "that address may not carry a username or password; use the token field instead"
+            "an address cannot carry a username or password here; "
+            "put the credential in the token field"
         )
     if parts.scheme not in ("http", "https"):
         # Ruling D: not even the scheme word is echoed — it can itself be a
@@ -471,7 +472,15 @@ def _validated(
         # anchored at both ends (ruling M6: `_TCHAR`'s `$` matches before a
         # trailing newline, so `.fullmatch` is the single fix at every use).
         if not isinstance(key, str) or not client._TCHAR.fullmatch(key):
-            raise ServerError(f"{key!r} is not an HTTP header name")
+            # Never echoed (S37a final review I1): a NAME can hold the
+            # credential itself — a whole `Authorization: Bearer …` line
+            # pasted as a key — and this reason reaches her tool result and
+            # the span's error. Its length is all that is said.
+            size = len(key) if isinstance(key, str) else len(str(key))
+            raise ServerError(
+                f"a header name is not a valid HTTP token ({size} characters); "
+                "use a name such as X-Api-Key, with no spaces or colons"
+            )
         lowered = key.lower()
         if lowered in _CLIENT_HEADERS or (lowered == "authorization" and token is not None):
             raise ServerError(f"{key} is set by the client itself and cannot be given here")
