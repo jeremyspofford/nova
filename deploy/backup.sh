@@ -1126,19 +1126,67 @@ bk_cfg_network_name() {
   ' key="$1"
 }
 
-# Every profile any rendered service names. The render is taken with
-# --profile '*', so this is "every profile rendered" (§5.3 source.profiles).
-bk_cfg_profiles() {
+# ONE-SHOT JOBS (Task 32, MF3). A one-shot job is a service the render gives
+# no restart policy — no `restart:`, or `restart: "no"` — and puts only under
+# TOOL PROFILES, the profiles in which no service has one. Compose never keeps
+# such a service running: it does its job and exits by design. agent-dist
+# (S42b Task 25) is one: it builds Nova's agent and exits, and ./install runs
+# it with `run --rm` under its `build` profile. So the whole-project `up -d`
+# of undo-move and of a failed park enables every profile BUT the tool
+# profiles (bk_cfg_profile_flags), never `--profile '*'` — which started an
+# agent build on every undo-move and then waited 240 s for a job that had
+# already exited — and its read-back waits for every service BUT the one-shot
+# jobs. Read off the render, as every reader here is, never off a service's
+# name. A service under no profile is never a one-shot job: `up -d` starts it
+# whatever its policy, so it is always read back.
+#
+# $1 is `services` (every service but the one-shot jobs, in render order) or
+# `profiles` (every profile but the tool profiles, one per line, unsorted).
+bk_cfg_without_one_shots() {
   awk "$_CR_AWK_LIB"'
-    /^[A-Za-z_][A-Za-z0-9_-]*:/ { sect = cr_key($0); insvc = 0; sub_ = ""; next }
+    /^[A-Za-z_][A-Za-z0-9_-]*:/ { sect = cr_key($0); svc = ""; sub_ = ""; next }
     sect != "services" { next }
-    /^  [A-Za-z0-9._-]+:/ { insvc = 1; sub_ = ""; next }
-    !insvc { next }
-    /^    [A-Za-z0-9._-]+:/ { sub_ = cr_key($0); next }
-    sub_ == "profiles" && /^      - / {
-      line = $0; sub(/^      - /, "", line); print cr_unquote(line)
+    /^  [A-Za-z0-9._-]+:/ { svc = cr_key($0); order[++n] = svc; sub_ = ""; next }
+    svc == "" { next }
+    /^    [A-Za-z0-9._-]+:/ {
+      sub_ = cr_key($0)
+      if (sub_ == "restart" && cr_value($0, "restart") != "no") keeps[svc] = 1
+      next
     }
-  ' | sort -u
+    sub_ == "profiles" && /^      - / {
+      line = $0; sub(/^      - /, "", line); prof = cr_unquote(line)
+      under[svc, prof] = 1; profiled[svc] = 1; seen[prof] = 1
+      next
+    }
+    END {
+      # A profile any service with a restart policy is under is one the stack
+      # runs in; every service under such a profile is started by it.
+      for (k in under) { split(k, kp, SUBSEP); if (kp[1] in keeps) runs[kp[2]] = 1 }
+      for (k in under) { split(k, kp, SUBSEP); if (kp[2] in runs) started[kp[1]] = 1 }
+      if (what == "services") {
+        for (i = 1; i <= n; i++)
+          if (!(order[i] in profiled) || (order[i] in started)) print order[i]
+      } else {
+        for (p in seen) if (p in runs) print p
+      }
+    }
+  ' what="$1"
+}
+
+# Every profile the stack runs in: every profile a rendered service names but
+# a tool profile (bk_cfg_without_one_shots). The render is taken with
+# --profile '*', so this is "every profile rendered" less the one-shot jobs'
+# (§5.3 source.profiles).
+bk_cfg_profiles() {
+  bk_cfg_without_one_shots profiles | sort -u
+}
+
+# `--profile <p>` for every profile bk_cfg_profiles prints, as one line of
+# words: what a whole-project `up -d` here enables in place of `--profile '*'`.
+# A profile name is compose's own [a-zA-Z0-9][a-zA-Z0-9_.-]*, so the words need
+# no quoting; empty when the stack runs in no profile.
+bk_cfg_profile_flags() {
+  bk_cfg_profiles | awk '{ printf "%s--profile %s", (NR > 1 ? " " : ""), $0 }'
 }
 
 # Does service $1 write to postgres? shell-first M2, and it is not
@@ -1770,6 +1818,9 @@ BK_RUN_SCRATCH=""
 BK_RUN_PG_ID=""
 BK_RUN_MODE="routine"
 BK_RUN_SERVICES=""
+# `--profile <p>` for each profile BK_RUN_SERVICES run in (bk_cfg_profile_flags):
+# what the trap's whole-project `up -d` enables, never `--profile '*'`.
+BK_RUN_PROFILES=""
 # 1 while bk_park has stopped the WHOLE project and has not yet proven both
 # markers written. A park that fails in that window has stopped more than
 # step 7 did, so bringing back step 7's list alone would leave the rest down.
@@ -1836,14 +1887,17 @@ EOF
     # this host is NOT parked. Bring the whole project back — including the
     # tailnet sidecar, whose absence is the one that makes the machine
     # unreachable — and read every service back rather than trusting `up`.
-    if bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d >/dev/null 2>&1; then
+    # Every profile it runs in, never `--profile '*'`: that would start a
+    # one-shot job too (bk_cfg_without_one_shots), which is never read back.
+    # shellcheck disable=SC2086  # $BK_RUN_PROFILES is `--profile <p>` words by design
+    if bk_docker compose "${BK_COMPOSE_ARGS[@]}" $BK_RUN_PROFILES up -d >/dev/null 2>&1; then
       pending="$(bk_verify_running "$BK_RUN_SERVICES")"
       if [ -z "$pending" ]; then
         printf 'cleanup: this host is NOT parked, so the stack was restarted: %s\n' \
           "$(printf '%s\n' "$BK_RUN_SERVICES" | sed '/^$/d' | tr '\n' ' ' | sed 's/ $//')"
       else
         bk_fail "this host is NOT parked AND$pending did not come back. Start them by hand:
-       docker compose ${BK_COMPOSE_ARGS[*]} --profile '*' up -d
+       docker compose ${BK_COMPOSE_ARGS[*]} ${BK_RUN_PROFILES:+$BK_RUN_PROFILES }up -d
        If \`tailscale\` is in that list, this machine is off the tailnet until it is."
         failures=$((failures + 1))
       fi
@@ -1851,7 +1905,7 @@ EOF
       bk_fail "this host is NOT parked and \`docker compose up -d\` did not exit 0, so
        the whole stack — the tailnet sidecar included — is still stopped. Start it
        by hand:
-       docker compose ${BK_COMPOSE_ARGS[*]} --profile '*' up -d"
+       docker compose ${BK_COMPOSE_ARGS[*]} ${BK_RUN_PROFILES:+$BK_RUN_PROFILES }up -d"
       failures=$((failures + 1))
     fi
     BK_RUN_PARKING=0
@@ -2720,9 +2774,13 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
   facts="$stage/facts"
   render_facts "$stage" "$mode" || return 1
   bk_set_compose_args
-  # Every service this project declares, in every profile — what a `--move`
-  # stops, and therefore what a failed `--move` has to bring back.
-  BK_RUN_SERVICES="$(cfg_service_keys < "$facts/config.yaml")"
+  # Every service this project runs, in every profile it runs in — what a
+  # `--move` stops, and therefore what a failed `--move` has to bring back
+  # and read back: never a one-shot job, which does its work and exits
+  # (bk_cfg_without_one_shots; the park itself still stops and reads back
+  # every service, one-shot jobs included).
+  BK_RUN_SERVICES="$(bk_cfg_without_one_shots services < "$facts/config.yaml")"
+  BK_RUN_PROFILES="$(bk_cfg_profile_flags < "$facts/config.yaml")"
   if [ -z "$BK_RUN_SERVICES" ]; then
     bk_fail "the render names no service, so nothing here could say what a failed
        run would have to restart."
@@ -5881,7 +5939,7 @@ cmd_undo_move() {
 }
 
 bk_undo_move_run() {
-  local moved marker line bad key dns answer status rc svcs text err left
+  local moved marker line bad key dns answer status rc svcs profiles text err left
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -5988,7 +6046,7 @@ bk_undo_move_run() {
   printf 'the address flaps — stop it there first.\n'
   printf '\n'
   printf 'This will: remove %s, start every service of this\n' "$marker"
-  printf 'project, read each one back, and then remove %s.\n' "$moved"
+  printf 'project but a one-shot job, read each one back, and then remove %s.\n' "$moved"
   printf 'Type undo to do it, anything else to leave this machine parked: '
   answer=""
   IFS= read -r answer || answer=""
@@ -6023,7 +6081,11 @@ bk_undo_move_run() {
     return 1
   }
   rm -f "$err"
-  svcs="$(printf '%s' "$text" | cfg_service_keys)"
+  # Every service but a one-shot job, and every profile but a tool profile
+  # (bk_cfg_without_one_shots): a job that does its work and exits is never
+  # started here, and never waited for.
+  svcs="$(printf '%s' "$text" | bk_cfg_without_one_shots services)"
+  profiles="$(printf '%s' "$text" | bk_cfg_profile_flags)"
   if [ -z "$svcs" ]; then
     bk_fail "the compose render names no service, so nothing here can say what to
        start. Nothing was started; $moved is still in place."
@@ -6038,8 +6100,9 @@ bk_undo_move_run() {
        started; $moved is still in place."
     return 1
   fi
-  if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d >/dev/null 2>&1; then
-    bk_fail "\`docker compose --profile '*' up -d\` did not exit 0. This machine is
+  # shellcheck disable=SC2086  # $profiles is `--profile <p>` words by design
+  if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" $profiles up -d >/dev/null 2>&1; then
+    bk_fail "\`docker compose ${profiles:+$profiles }up -d\` did not exit 0. This machine is
        part-way back: $marker is gone and $moved is still in place, so \`./install\`
        still refuses here. Fix what compose reported and run \`./install undo-move\`
        again."

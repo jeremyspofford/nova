@@ -678,9 +678,11 @@ bringing this node up while the other is online will flap the node key, and
 acts only after you type `undo`.
 
 It then **brings this machine back**: `MOVED_TO` is removed first, because the
-sidecar refuses to start while it exists; the project is started; **every
-service is read back** rather than trusting that `up` returned 0; and
-`deploy/.moved` is removed only once that has passed. A run that cannot finish
+sidecar refuses to start while it exists; the project is started, every
+service of it but a one-shot job (`agent-dist`, the agent build `./install`
+runs by itself, which exits by design and is never started here); **every
+service it started is read back** rather than trusting that `up` returned 0;
+and `deploy/.moved` is removed only once that has passed. A run that cannot finish
 names the half-done state it is leaving and exits 4 — it never reports a
 recovery it did not verify.
 
