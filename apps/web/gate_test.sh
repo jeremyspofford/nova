@@ -18,7 +18,8 @@
 #
 # Since S42b it also pins the agent's carve-outs (`/api/v1/agent/` and
 # `/api/v1/devices/enroll` pass the gate; nothing beside them does, a dot
-# segment included), the update route's own location (still gated), and
+# segment included) and their body limits, the update route's own location
+# (still gated), and
 # that every proxied location forwards X-Real-IP as nginx's own $remote_addr
 # and Cf-Connecting-IP as sent — the facts core counts its rate limits by.
 #
@@ -48,6 +49,12 @@ SIDECAR_IP="10.99.0.50"
 OTHER_IP="10.99.0.60"
 # A device id for the update route's location (any one segment matches it).
 DEVICE_ID="00000000-0000-4000-8000-000000000001"
+# The two carve-outs' body limits in bytes: the enroll location's
+# client_max_body_size (8k — its derivation is in the template, at that
+# location) and the agent paths' (1k: they take no body). Pinned here, so
+# changing either number is a deliberate change to both files.
+ENROLL_BODY_MAX=8192
+AGENT_BODY_MAX=1024
 STUB_DIR=""
 PASS=0
 FAIL=0
@@ -101,6 +108,34 @@ client_headers() {
   local ip="$1" url="$2"; shift 2
   docker run --rm --network "$NET" --ip "$ip" --entrypoint wget "$IMAGE" \
     -S -T 5 -O /dev/null "$@" "$url" 2>&1
+}
+
+# $1 bytes of the letter $2.
+bytes_of() {
+  printf '%*s' "$1" '' | tr ' ' "$2"
+}
+
+# A JSON enroll body of exactly $1 bytes: the agent's five keys, the host
+# name padded to the size. nginx counts the bytes; it never parses them.
+enroll_body_of() {
+  local size="$1" head tail
+  head='{"code":"ZZZZZZZZ","hostname":"'
+  tail='","name":"probe","platform":"linux","pubkey":"'"$(bytes_of 64 a)"'"}'
+  printf '%s%s%s' "$head" "$(bytes_of $((size - ${#head} - ${#tail})) h)" "$tail"
+}
+
+# Sends the body $3 to $2 on $1 with the method $4, the request tagged
+# ?probe=$5 so the stub's own log can be searched for it; prints the status.
+send_body() {
+  local base="$1" path="$2" body="$3" method="$4" tag="$5"
+  printf '%s' "$body" | curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+    -H 'Content-Type: application/json' --data-binary @- "${base}${path}?probe=${tag}"
+}
+
+# Did the stub (core, in the forwarding block) receive the request tagged
+# $1? Its own access log says.
+stub_saw() {
+  docker logs "$STUB" 2>&1 | grep -q "probe=$1 "
 }
 
 wait_for_nginx() {
@@ -382,6 +417,45 @@ else
       report 0 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent"
     else
       report 1 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent" "$body"
+    fi
+  done
+
+  # The carve-outs' bodies (fix round 0, controller ruling): no cookie
+  # reaches them, so a body is held to what a real client sends. The agent's
+  # full-size enroll body — its five keys, a code typed with its separator, a
+  # 255-character host name, a 64-character name — and one of exactly
+  # ENROLL_BODY_MAX bytes reach core; one byte more is nginx's 413 and core
+  # never sees it. The agent's paths take no body at all. The over-limit
+  # requests go first, so the controls the stub logs after them make their
+  # absence from its log mean something.
+  full_enroll='{"code":"ZZZZ-ZZZZ","hostname":"'"$(bytes_of 255 h)"'","name":"'"$(bytes_of 64 n)"'","platform":"windows","pubkey":"'"$(bytes_of 64 a)"'"}'
+  over_enroll="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of $((ENROLL_BODY_MAX + 1)))" POST enroll-over)"
+  over_agent="$(send_body "$FWD_BASE" "/api/v1/agent/manifest" "$(bytes_of $((AGENT_BODY_MAX + 1)) x)" GET agent-over)"
+  full="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$full_enroll" POST enroll-full)"
+  at_max="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of "$ENROLL_BODY_MAX")" POST enroll-at-max)"
+  tries=20
+  until stub_saw enroll-at-max || [ "$tries" -eq 0 ]; do tries=$((tries - 1)); sleep 0.25; done
+  if [ "$full" = "200" ] && stub_saw enroll-full; then
+    report 0 "published port, no cookie: the agent's full-size enroll body (${#full_enroll} bytes) reaches core"
+  else
+    report 1 "published port, no cookie: the agent's full-size enroll body (${#full_enroll} bytes) reaches core" "got $full"
+  fi
+  if [ "$at_max" = "200" ] && stub_saw enroll-at-max; then
+    report 0 "published port, no cookie: an enroll body of exactly $ENROLL_BODY_MAX bytes reaches core"
+  else
+    report 1 "published port, no cookie: an enroll body of exactly $ENROLL_BODY_MAX bytes reaches core" "got $at_max"
+  fi
+  for probe in "enroll-over:$over_enroll:an enroll body of $((ENROLL_BODY_MAX + 1)) bytes" \
+      "agent-over:$over_agent:a $((AGENT_BODY_MAX + 1))-byte body on /api/v1/agent/manifest"; do
+    tag="${probe%%:*}"; rest="${probe#*:}"; code="${rest%%:*}"; what="${rest#*:}"
+    if ! stub_saw enroll-at-max; then
+      report 1 "published port, no cookie: $what -> 413, and core never sees it" \
+        "the stub's log never showed the control sent after it, so its absence there proves nothing"
+    elif [ "$code" = "413" ] && ! stub_saw "$tag"; then
+      report 0 "published port, no cookie: $what -> 413, and core never sees it"
+    else
+      report 1 "published port, no cookie: $what -> 413, and core never sees it" \
+        "got $code$(stub_saw "$tag" && printf ', and core received it')"
     fi
   done
 

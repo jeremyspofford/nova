@@ -476,8 +476,32 @@ server {
         proxy_buffering off;
         proxy_connect_timeout 5s;
         proxy_read_timeout 300s;
+        # The manifest and the builds are GETs: no request here carries a body.
+        client_max_body_size 1k;
     }
 
+    # The enroll body is held to 8k here, not the server's 100m: a stranger
+    # reaches this POST with no cookie, and core reads and parses a body
+    # before it can refuse one. 8k is derived from the largest body core
+    # ACCEPTS. devices_api.EnrollBody sets no max length on any field;
+    # devices.enroll checks each one after stripping it. Field by field:
+    #   * code: 8 characters once the whitespace and hyphens a person types
+    #     are dropped. Counted at 15, a separator between each.
+    #   * pubkey: 64 characters.
+    #   * name: 64 characters.
+    #   * platform: 7 ("windows", the longest).
+    #   * hostname: NO limit in core, so MEASURED instead: at most 255 bytes,
+    #     the most the agent's os.Hostname() can return (Darwin's
+    #     MAXHOSTNAMELEN 256 with its NUL; Linux's is 64, Windows's DNS host
+    #     name 63).
+    # With every character written as a JSON \u escape (6 bytes; 12 for each
+    # of the name's, taken outside the BMP so each is a surrogate pair) and
+    # the five keys around them: 2,875 bytes, the worst any client can send
+    # that core accepts. The agent's own encoder
+    # (install.Body, measured with Go 1.27.1) sends 460 bytes at those
+    # sizes and 2,055 at its worst. 8k leaves 5,317 bytes beyond 2,875 —
+    # room for the home-folder path a 2026-09-01..03 agent still adds as a
+    # sixth key, which core ignores. gate_test.sh pins 8k from both sides.
     location = /api/v1/devices/enroll {
         set $core_upstream http://core:8000;
         proxy_pass $core_upstream$request_uri;
@@ -492,6 +516,7 @@ server {
         proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
         proxy_connect_timeout 5s;
         proxy_read_timeout 60s;
+        client_max_body_size 8k;
     }
 
     # ── An update waits on the agent (S42b) ────────────────────────────────
