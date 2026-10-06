@@ -80,9 +80,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
 import math
+import os
 import re
 import time
 import uuid
@@ -954,6 +956,49 @@ def history_window(
     return kept
 
 
+# Her own repository (walk finding, turn 641f312e): asked "why is CI red on
+# main?" she spent every tool round hunting for WHICH repository is hers.
+# install.sh derives it from the checkout's origin (record_repository) and
+# compose hands it here. Both values land in a system prompt, so each is
+# shape-checked against GitHub's own characters — an owner is letters, digits
+# and hyphens; a repository adds dots and underscores — and a value that is
+# not that shape is no line plus a logged reason, never prompt text.
+REPO_ENV = "NOVA_REPO"
+REPO_BRANCH_ENV = "NOVA_REPO_BRANCH"
+_REPO_SHAPE = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+_BRANCH_SHAPE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}")
+
+
+@functools.cache
+def repository_line(repo: str, branch: str) -> str | None:
+    """The sentence naming her own repository, or None.
+
+    Cached on the values so a bad one is logged once per value, not once per
+    turn."""
+    if not repo:
+        return None
+    if not _REPO_SHAPE.fullmatch(repo) or repo.split("/", 1)[1] in (".", ".."):
+        logger.warning(
+            "%s=%r is not a GitHub owner/repo; her prompt names no repository", REPO_ENV, repo
+        )
+        return None
+    line = f"Your own source code is the GitHub repository {repo}"
+    if branch and (not _BRANCH_SHAPE.fullmatch(branch) or ".." in branch):
+        logger.warning(
+            "%s=%r is not a branch name; her prompt names the repository without it",
+            REPO_BRANCH_ENV,
+            branch,
+        )
+        branch = ""
+    return f"{line} (default branch {branch})." if branch else f"{line}."
+
+
+def _repository_sentence() -> str:
+    """Read live from the environment each prompt — derived, never a constant."""
+    line = repository_line(os.environ.get(REPO_ENV, ""), os.environ.get(REPO_BRANCH_ENV, ""))
+    return f" {line}" if line else ""
+
+
 def stable_system_prompt(
     model: str, tool_names: Sequence[str], *, agent_block: str | None = None
 ) -> str:
@@ -985,7 +1030,8 @@ def stable_system_prompt(
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
         f"This turn asks the gateway for {model or 'its default model'}; its routing decides "
         "which model actually answers. Be direct and concrete, "
-        "and say plainly when you do not know something.\n\n"
+        "and say plainly when you do not know something."
+        f"{_repository_sentence()}\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
         "When the user asks for something a tool can do, call the tool in THIS "
