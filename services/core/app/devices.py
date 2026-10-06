@@ -55,6 +55,12 @@ PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
 _PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_NAME_LENGTH = 64
+# The longest host name an agent reports: os.Hostname() returns at most 255
+# bytes on any OS the agent runs on (Darwin's MAXHOSTNAMELEN is 256 with its
+# NUL; Linux's is 64, a Windows DNS host name 63), and facts.hostname is held
+# to the same 255 (device_facts). The agent's name defaults to its hostname,
+# so enroll holds BOTH to it (Task 26 fix round 1, I2).
+MAX_HOSTNAME_LENGTH = 255
 
 # D8: `hub` is the bundled engine's name, and machine_status groups engines
 # and agents by name — a device called hub would read as the engine.
@@ -293,12 +299,38 @@ def _clean_name(name: str) -> str:
         raise DeviceRefused("a device needs a name — it is how you and Nova address the machine")
     if len(candidate) > _MAX_NAME_LENGTH:
         raise DeviceRefused(f"device name is longer than {_MAX_NAME_LENGTH} characters")
+    if device_facts.LINE_BREAKS.search(candidate):
+        # Every line that names a machine is one line (Task 26 fix round 1,
+        # I2): a rename and a named code are held to it, not only enroll.
+        raise DeviceRefused(
+            "a device name cannot hold a control character or a line separator — it is "
+            "shown on one line"
+        )
     if _reserved(candidate):
         raise DeviceRefused(
             f"a machine cannot be named {candidate!r} — that is the bundled engine's name "
             "(hub decision D8); name it after the machine itself"
         )
     return candidate
+
+
+def _sent_text(value: str, what: str) -> None:
+    """Enroll's free text as SENT — the hostname, rendered into
+    machine_status's `- machine <host>:` line, and the agent's name, which
+    defaults to it: at most MAX_HOSTNAME_LENGTH characters and one line
+    (device_facts.LINE_BREAKS, P29's predicate), or a stated cannot. A
+    hostname with a newline would write lines of its own into her tool
+    output. Counted on the value as sent, so surrounding whitespace is
+    bounded too; never echoed, since enroll answers anyone who reaches it."""
+    if len(value or "") > MAX_HOSTNAME_LENGTH:
+        raise DeviceRefused(
+            f"cannot enroll: the {what} is longer than {MAX_HOSTNAME_LENGTH} characters"
+        )
+    if device_facts.LINE_BREAKS.search(value or ""):
+        raise DeviceRefused(
+            f"cannot enroll: the {what} is not one line — it holds a control character or a "
+            "line separator"
+        )
 
 
 def _clean_platform(platform: str) -> str:
@@ -335,12 +367,16 @@ async def enroll(
     rebinds its one live row — name, owner and history kept, the audit epoch
     moved on — and says so (`repaired`). Any other code inserts a new row,
     named by the code when it carries a name and by the agent otherwise
-    (P14). The agent's name is checked only when it IS the name the row
-    takes: the card's command carries no --name, so the agent sends its
-    hostname, and that must never refuse a code that decides the name itself.
+    (P14). The agent's name is held to the NAME rules (64 characters, never
+    `hub`) only when it IS the name the row takes: the card's command carries
+    no --name, so the agent sends its hostname, and that must never refuse a
+    code that decides the name itself. On every path the name and the
+    hostname are free text the agent sent, held to its SHAPE: one line, at
+    most MAX_HOSTNAME_LENGTH (Task 26 fix round 1, I2).
 
-    Shape validation of the key and platform happens BEFORE the burn, so a
-    mistyped key does not cost the operator their code. Everything after the
+    Shape validation of the key, platform, hostname and name happens BEFORE
+    the burn, so a mistyped key does not cost the operator their code, and a
+    shape refusal is never a wrong code to devices_api. Everything after the
     burn shares one transaction with the governance event, so every refusal
     there — the agent's name, a name collision (caught from the partial unique
     index — a pre-SELECT would be a race), a machine revoked since its re-pair
@@ -351,8 +387,15 @@ async def enroll(
     would leave a device row whose machine can never verify a command and whose
     code is already spent. Order it before, and that failure costs nothing.
     """
+    # Shape refusals, ALL before the code is read (Task 26 fix round 1, I2):
+    # each is a 400 that spends no code and that devices_api never counts as
+    # a code failure (only the code's 403 is). The agent's free text is held
+    # here on every path — a code that names the machine, or re-pairs it,
+    # ignores the agent's name but never lets it through unbounded.
     clean_pubkey = _clean_pubkey(pubkey)
     clean_platform = _clean_platform(platform)
+    _sent_text(hostname, "hostname")
+    _sent_text(name, "name")
     clean_hostname = (hostname or "").strip() or "unknown"
     core_pubkey = await core_public_key_hex(pool)
 

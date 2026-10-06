@@ -32,6 +32,26 @@ Two consequences of that exception are handled here rather than assumed:
     to whatever the caller sent, so all but its last entry are the caller's
     own words — a header the caller sets is a bypass, not an identity.
 
+    An attempt is counted in its bucket BEFORE the handler awaits anything
+    (Task 26 fix round 1, I1): checked, awaited and only then recorded, a
+    burst of fifty wrong codes from one bucket was all checked at once. So
+    the bound is five counted at a time — failures and attempts still in
+    flight — and the sixth gets 429. A wrong code (403) keeps its count as
+    the failure; a good code clears the bucket; anything else — a shape or
+    name refusal, a crash, a cancelled request — takes back exactly its own
+    count.
+
+    What a lock costs, for the relayed buckets especially: a bucket at five
+    is a refusal to pair from that door for up to 15 minutes, and anyone in
+    the same bucket can renew it — not only a shared budget. A stranger on
+    the owner's tunnel shares the tunnel's relayed bucket, and so does the
+    owner when he pairs through the tunnel; his way round is the tailnet or
+    the hub machine itself, whose buckets the stranger cannot reach. The
+    sidecar's relayed bucket holds funnel visitors and tagged tailnet nodes,
+    but deploy/tailscale/start.sh turns funnel OFF on every restart, so
+    unless the owner turns it on again only his own tagged nodes share that
+    bucket, and no stranger can renew a lock there.
+
 There is no grants route. v4 makes no authorization decisions (owner ruling
 2026-09-03): a paired device runs whatever core signs, so the only things an
 operator edits here are a name and whether the pairing still stands.
@@ -46,6 +66,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -59,10 +80,21 @@ logger = logging.getLogger("core")
 MAX_ENROLL_FAILURES = 5
 ENROLL_WINDOW_SECONDS = 15 * 60
 
-# Failure timestamps per bucket (_caller). In-memory like auth_api's, and for the same
-# reason: one process, one household, and a restart clearing the window is
-# acceptable for a route an operator uses a handful of times a year.
-_ENROLL_FAILURES: dict[str, list[float]] = {}
+
+@dataclass(eq=False)
+class _Attempt:
+    """One enroll attempt counted in its bucket: an attempt in flight, or —
+    once its code was wrong — a failure. Compared by identity, so the one an
+    ending request takes back is exactly its own."""
+
+    at: float
+
+
+# The attempts counted per bucket (_caller): failures and attempts in flight,
+# ONE structure (fix round 1, I1). In-memory like auth_api's, and for the
+# same reason: one process, one household, and a restart clearing the window
+# is acceptable for a route an operator uses a handful of times a year.
+_ENROLL_FAILURES: dict[str, list[_Attempt]] = {}
 
 
 class EnrollBody(BaseModel):
@@ -89,14 +121,45 @@ def _caller(request: Request) -> str:
     return network.bucket_of(peer, request.headers)
 
 
-def _recent_failures(caller: str) -> list[float]:
+def _recent_failures(caller: str) -> list[_Attempt]:
+    """What `caller`'s bucket counts now: its failures and attempts in flight
+    inside the window, the older ones dropped."""
     cutoff = time.monotonic() - ENROLL_WINDOW_SECONDS
-    recent = [t for t in _ENROLL_FAILURES.get(caller, []) if t > cutoff]
+    recent = [a for a in _ENROLL_FAILURES.get(caller, []) if a.at > cutoff]
     if recent:
         _ENROLL_FAILURES[caller] = recent
     else:
         _ENROLL_FAILURES.pop(caller, None)
     return recent
+
+
+def _reserve(caller: str) -> _Attempt | None:
+    """Count this attempt in `caller`'s bucket now — or None when the bucket
+    already counts MAX_ENROLL_FAILURES. No await runs between the check and
+    the count, so no other request can be checked in between."""
+    if len(_recent_failures(caller)) >= MAX_ENROLL_FAILURES:
+        return None
+    attempt = _Attempt(time.monotonic())
+    _ENROLL_FAILURES.setdefault(caller, []).append(attempt)
+    return attempt
+
+
+def _keep(caller: str, attempt: _Attempt) -> None:
+    """A wrong code: the attempt stays counted, as the failure. Counted again
+    if a good code cleared the bucket while this one was in flight — the
+    failure came after the clear."""
+    bucket = _ENROLL_FAILURES.setdefault(caller, [])
+    if attempt not in bucket:
+        bucket.append(attempt)
+
+
+def _release(caller: str, attempt: _Attempt) -> None:
+    """Any other end: take back exactly this attempt's count."""
+    bucket = _ENROLL_FAILURES.get(caller)
+    if bucket is not None and attempt in bucket:
+        bucket.remove(attempt)
+        if not bucket:
+            del _ENROLL_FAILURES[caller]
 
 
 def _refuse(exc: devices.DeviceRefused) -> HTTPException:
@@ -132,14 +195,17 @@ async def mint_repair_code(
 async def enroll(request: Request, body: EnrollBody) -> dict:
     """The one unauthenticated write in core (identity.PUBLIC_PATHS)."""
     caller = _caller(request)
-    if len(_recent_failures(caller)) >= MAX_ENROLL_FAILURES:
+    # Counted BEFORE the first await (module docstring; fix round 1, I1).
+    attempt = _reserve(caller)
+    if attempt is None:
         raise HTTPException(
             status_code=429,
             detail="too many failed enrollments came this way — try again in 15 minutes",
         )
 
-    pool = await db.get_pool()
+    wrong_code = False
     try:
+        pool = await db.get_pool()
         result = await devices.enroll(
             pool,
             code=body.code,
@@ -149,14 +215,20 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
             hostname=body.hostname,
         )
     except devices.DeviceRefused as exc:
-        if exc.status_code == 403:
-            # A bad code is the only refusal that looks like guessing. Shape
-            # errors are refused BEFORE the code is even read, so this cannot
-            # be walked around by sending junk.
-            _ENROLL_FAILURES.setdefault(caller, []).append(time.monotonic())
+        # A bad code is the only refusal that looks like guessing. Shape
+        # errors are refused BEFORE the code is even read, so this cannot be
+        # walked around by sending junk.
+        wrong_code = exc.status_code == 403
         raise _refuse(exc) from exc
+    finally:
+        # A crash and a cancelled request end here too: never a phantom
+        # failure left behind.
+        if wrong_code:
+            _keep(caller, attempt)
+        else:
+            _release(caller, attempt)
 
-    _ENROLL_FAILURES.pop(caller, None)
+    _ENROLL_FAILURES.pop(caller, None)  # a good code clears its bucket
     logger.info(
         "device %s: %s (%s)",
         "re-paired" if result["repaired"] else "enrolled",

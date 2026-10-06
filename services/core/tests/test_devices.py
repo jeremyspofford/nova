@@ -335,6 +335,153 @@ async def test_revoking_frees_the_name_for_a_re_pairing(pool):
     assert second["device_id"] != first["device_id"]
 
 
+# Task 26 fix round 1 (I2): enroll's free text — the hostname, and the
+# agent's name, which defaults to the hostname — is one line and at most 255
+# characters on EVERY path, refused as a SHAPE before the code is read. The
+# hostname is rendered into machine_status's `- machine <host>:` line, and a
+# newline there writes lines of its own into her tool output.
+NOT_ONE_LINE = {
+    "newline": "box\nmachine",
+    "carriage return": "box\rmachine",
+    "tab": "box\tmachine",
+    "NUL": "box\x00machine",
+    "escape": "box\x1b[2Jmachine",
+    "DEL": "box\x7fmachine",
+    "C1 next line": "box\x85machine",
+    "C1 CSI": "box\x9bmachine",
+    "line separator": "box machine",
+    "paragraph separator": "box machine",
+}
+MAX_TEXT = 255
+HOST_255 = "h" * MAX_TEXT
+
+
+async def _code_stays_unspent_and_pairs(pool, code: str, *, name: str = "laptop") -> dict:
+    assert (
+        await pool.fetchval(
+            "SELECT used_at IS NULL FROM pairing_codes WHERE code_hash = $1",
+            devices.hash_code(code),
+        )
+        is True
+    )
+    return await devices.enroll(
+        pool, code=code, pubkey=PUBKEY_A, name=name, platform="linux", hostname="box"
+    )
+
+
+@pytest.mark.parametrize("hostname", [*NOT_ONE_LINE.values(), "h" * (MAX_TEXT + 1)])
+async def test_a_hostname_that_is_not_one_short_line_is_refused_before_the_code_is_read(
+    pool, hostname
+):
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+    with pytest.raises(devices.DeviceRefused) as caught:
+        await devices.enroll(
+            pool,
+            code=minted["code"],
+            pubkey=PUBKEY_A,
+            name="laptop",
+            platform="linux",
+            hostname=hostname,
+        )
+    assert caught.value.status_code == 400
+    assert caught.value.reason.startswith("cannot enroll: the hostname")
+    assert hostname not in caught.value.reason  # never echoed
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 0
+    assert (await _code_stays_unspent_and_pairs(pool, minted["code"]))["name"] == "laptop"
+
+
+@pytest.mark.parametrize("name", [*NOT_ONE_LINE.values(), "n" * (MAX_TEXT + 1)])
+async def test_a_name_that_is_not_one_short_line_is_refused_on_a_named_code_too(pool, name):
+    """A code that names the machine ignores the agent's name — and the name
+    is still held to its shape, before the code is read."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id, name="work-laptop")
+    with pytest.raises(devices.DeviceRefused) as caught:
+        await devices.enroll(
+            pool, code=minted["code"], pubkey=PUBKEY_A, name=name, platform="linux", hostname="box"
+        )
+    assert caught.value.status_code == 400
+    assert caught.value.reason.startswith("cannot enroll: the name")
+    assert await pool.fetchval("SELECT count(*) FROM devices") == 0
+    result = await _code_stays_unspent_and_pairs(pool, minted["code"])
+    assert result["name"] == "work-laptop"
+
+
+async def test_a_name_that_is_not_one_line_is_refused_on_a_repair_code_too(pool):
+    person = await _owner(pool)
+    first = await _enrolled(pool, person, name="pc")
+    minted = await devices.mint_pairing_code(
+        pool, created_by=person.id, device_id=uuid.UUID(first["device_id"])
+    )
+    with pytest.raises(devices.DeviceRefused) as caught:
+        await devices.enroll(
+            pool,
+            code=minted["code"],
+            pubkey=PUBKEY_B,
+            name="pc\nforged line",
+            platform="linux",
+            hostname="box",
+        )
+    assert caught.value.reason.startswith("cannot enroll: the name")
+    assert (
+        await pool.fetchval(
+            "SELECT used_at IS NULL FROM pairing_codes WHERE code_hash = $1",
+            devices.hash_code(minted["code"]),
+        )
+        is True
+    )
+
+
+async def test_the_agents_real_worst_case_still_enrolls(pool):
+    """The agent sends its hostname as its name unless told one (install's
+    pair, `novad enroll`), so its worst case is a 255-character hostname,
+    sent twice. A code that names the machine (./install's) pairs it."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id, name="mac")
+    result = await devices.enroll(
+        pool,
+        code=minted["code"],
+        pubkey=PUBKEY_A,
+        name=HOST_255,
+        platform="darwin",
+        hostname=HOST_255,
+    )
+    assert result["name"] == "mac"
+    row = await devices.get(pool, uuid.UUID(result["device_id"]))
+    assert row["hostname"] == HOST_255
+
+
+async def test_a_name_the_row_takes_is_still_held_to_the_name_rules(pool):
+    """The 255 bound is the agent's free text; the name a machine TAKES keeps
+    core's name rules (64 characters, never `hub`) — checked once the code
+    says the agent's name is the one taken, and rolled back with it."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+    with pytest.raises(devices.DeviceRefused, match="longer than 64"):
+        await devices.enroll(
+            pool,
+            code=minted["code"],
+            pubkey=PUBKEY_A,
+            name="n" * 65,
+            platform="linux",
+            hostname="h",
+        )
+    assert (await _code_stays_unspent_and_pairs(pool, minted["code"]))["name"] == "laptop"
+
+
+@pytest.mark.parametrize("name", list(NOT_ONE_LINE.values()))
+async def test_a_device_name_is_one_line_wherever_it_is_set(pool, name):
+    """The name rule itself (_clean_name): a rename and a named code are held
+    to one line too, not only enroll."""
+    person = await _owner(pool)
+    with pytest.raises(devices.DeviceRefused, match="one line"):
+        await devices.mint_pairing_code(pool, created_by=person.id, name=name)
+    device = await _enrolled(pool, person, name="laptop")
+    with pytest.raises(devices.DeviceRefused, match="one line"):
+        await devices.rename(pool, device_id=uuid.UUID(device["device_id"]), name=name)
+
+
 # -- lookups -----------------------------------------------------------
 
 
@@ -757,6 +904,159 @@ async def test_a_header_from_anyone_but_web_moves_no_enroll_failure(owner_client
     async with _peer(WEB) as nginx:
         for headers in (THROUGH_LOOPBACK, TUNNEL):
             assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=headers)).status_code == 403
+
+
+# Task 26 fix round 1 (I1): an attempt is counted in its bucket BEFORE the
+# handler awaits anything. Checked, then awaited, then recorded, a burst from
+# one bucket would all be checked while none was recorded yet.
+RELAYED = f"relayed via {LOOPBACK_DOOR}"
+
+
+def _counted(bucket: str) -> int:
+    from app import devices_api
+
+    return len(devices_api._ENROLL_FAILURES.get(bucket, []))
+
+
+async def _until(done, what: str) -> None:
+    for _ in range(500):
+        if done():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"never happened: {what}")
+
+
+async def test_a_burst_of_wrong_codes_reaches_enroll_at_most_five_times(client, doors, monkeypatch):
+    from app import devices_api
+
+    reached = 0
+    release = asyncio.Event()
+
+    async def held_wrong_code(_pool, **_kw):
+        nonlocal reached
+        reached += 1
+        await release.wait()
+        raise devices.DeviceRefused("that pairing code is not usable", status_code=403)
+
+    monkeypatch.setattr(devices, "enroll", held_wrong_code)
+    burst = 2 * devices_api.MAX_ENROLL_FAILURES
+    async with _peer(WEB) as nginx:
+        tasks = [
+            asyncio.create_task(_api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)) for _ in range(burst)
+        ]
+        try:
+            # Every request has either reached devices.enroll (held there) or
+            # been answered without it.
+            await _until(
+                lambda: reached + sum(t.done() for t in tasks) == burst,
+                "every request reached devices.enroll or was answered",
+            )
+            assert reached == devices_api.MAX_ENROLL_FAILURES
+            assert [t.result().status_code for t in tasks if t.done()] == [429] * (
+                burst - devices_api.MAX_ENROLL_FAILURES
+            )
+            assert _counted(RELAYED) == devices_api.MAX_ENROLL_FAILURES  # held, yet counted
+        finally:
+            release.set()
+            codes = sorted([(await t).status_code for t in tasks])
+        assert codes == [403] * 5 + [429] * 5
+        assert _counted(RELAYED) == devices_api.MAX_ENROLL_FAILURES
+        assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)).status_code == 429
+    assert reached == devices_api.MAX_ENROLL_FAILURES
+
+
+async def test_a_refusal_that_is_not_the_codes_leaves_the_count_where_it_was(
+    owner_client, pool, doors
+):
+    async with _peer(WEB) as nginx:
+        for _ in range(2):
+            assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)).status_code == 403
+        assert _counted(RELAYED) == 2
+        # Shape refusals, before the code is read: a key, and free text
+        # that is not one line (I2).
+        refused = [
+            await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL, pubkey="nope"),
+            await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL, hostname="box\nmachine"),
+            await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL, name="a" * 256),
+        ]
+        assert [r.status_code for r in refused] == [400, 400, 400]
+        # A refusal after the code is read: a name already taken (409).
+        first = await _api_enrol(nginx, await _api_code(owner_client), headers=THROUGH_LOOPBACK)
+        assert first.status_code == 200, first.text
+        taken = await _api_enrol(nginx, await _api_code(owner_client), headers=TUNNEL)
+        assert taken.status_code == 409, taken.text
+    assert _counted(RELAYED) == 2
+
+
+async def test_a_crashed_enroll_leaves_no_reservation(client, doors, monkeypatch):
+    async def crashes(_pool, **_kw):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(devices, "enroll", crashes)
+    async with _peer(WEB) as nginx:
+        with pytest.raises(RuntimeError, match="went away"):
+            await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)
+    assert _counted(RELAYED) == 0
+
+
+async def test_a_cancelled_enroll_leaves_no_reservation(client, doors, monkeypatch):
+    entered = asyncio.Event()
+
+    async def hangs(_pool, **_kw):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(devices, "enroll", hangs)
+    async with _peer(WEB) as nginx:
+        request = asyncio.create_task(_api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert _counted(RELAYED) == 1  # in flight, counted
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    await _until(lambda: _counted(RELAYED) == 0, "the cancelled attempt's reservation is gone")
+
+
+async def test_a_wrong_code_that_ends_after_a_good_one_still_counts(
+    owner_client, pool, doors, monkeypatch
+):
+    """A good code clears its bucket; a wrong code still in flight then is a
+    failure AFTER the clear, so it is counted, never lost with the clear."""
+    real_enroll = devices.enroll
+    held = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wrong_code_held(pool_, **kw):
+        if kw["code"] != "ZZZZZZZZ":
+            return await real_enroll(pool_, **kw)
+        held.set()
+        await release.wait()
+        raise devices.DeviceRefused("that pairing code is not usable", status_code=403)
+
+    monkeypatch.setattr(devices, "enroll", wrong_code_held)
+    async with _peer(WEB) as nginx:
+        wrong = asyncio.create_task(_api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL))
+        try:
+            await asyncio.wait_for(held.wait(), 5)
+            good = await _api_enrol(nginx, await _api_code(owner_client), headers=TUNNEL)
+            assert good.status_code == 200, good.text
+            assert _counted(RELAYED) == 0  # cleared, the wrong one with it
+        finally:
+            release.set()
+        assert (await wrong).status_code == 403
+    assert _counted(RELAYED) == 1
+
+
+async def test_a_good_code_clears_the_bucket_it_came_through(owner_client, pool, doors):
+    from app import devices_api
+
+    async with _peer(WEB) as nginx:
+        for _ in range(devices_api.MAX_ENROLL_FAILURES - 1):
+            assert (await _api_enrol(nginx, "ZZZZZZZZ", headers=TUNNEL)).status_code == 403
+        assert _counted(RELAYED) == devices_api.MAX_ENROLL_FAILURES - 1
+        paired = await _api_enrol(nginx, await _api_code(owner_client), headers=TUNNEL)
+        assert paired.status_code == 200, paired.text
+    assert RELAYED not in devices_api._ENROLL_FAILURES
 
 
 # -- GET /devices ------------------------------------------------------

@@ -108,7 +108,15 @@ _SUDO_NEEDS_MEASUREMENT: tuple[str, ...] = ("inline", "new_window", "input_off")
 _MAX_DISTROS = 8
 _MAX_PIDS = 8
 _PID_MAX = 2**31 - 1
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# What breaks one line wherever core renders text a machine sent: the C0
+# controls (newline among them), DEL, the C1 controls (U+0085 NEL among them)
+# and the line and paragraph separators str.splitlines() also splits on —
+# the class agent_updates' reason rule (_BREAKS) uses. ONE predicate: P29's
+# facts lines refuse a field it matches (_line), the unreadable reasons are
+# stripped of it (_sanitized_line), and enroll refuses a hostname or a name
+# it matches (devices._sent_text, Task 26 fix round 1, I2). Before that round
+# it was C0 and DEL only.
+LINE_BREAKS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 # S42b P29: Windows' sudo has run-modes (off/new_window/input_off/inline)
 # native sudo does not — this table is WINDOWS' words. A WSL distro's own
 # account, and a native Linux/macOS agent, never run "Windows sudo", so
@@ -227,8 +235,8 @@ def _line(value: object, where: str) -> str:
     that agent's connected fact) or let a crafted reason print a line that
     reads as another agent's."""
     text = _text(value, where)
-    if _CONTROL.search(text):
-        raise FactsRejected(f"{where} contains a control character")
+    if LINE_BREAKS.search(text):
+        raise FactsRejected(f"{where} contains a control character or a line separator")
     return text
 
 
@@ -395,10 +403,10 @@ def _sanitized_line(text: str) -> str:
     character refusal there — tightening it would throw out an existing
     fact over a byte that only matters once it reaches a line). Every
     `unreadable[].reason` this module interpolates into a sentence goes
-    through this one function first: control characters stripped, never
+    through this one function first: LINE_BREAKS stripped, never
     rejected, and the result bounded to `_MAX_TEXT` (Task 16b review, "F3,
     core side")."""
-    clean = _CONTROL.sub("", text)
+    clean = LINE_BREAKS.sub("", text)
     return clean if len(clean) <= _MAX_TEXT else clean[: _MAX_TEXT - 1] + "…"
 
 
