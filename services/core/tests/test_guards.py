@@ -4349,6 +4349,72 @@ def test_no_offer_class_reads_his_message_for_an_update():
     assert claim is None
 
 
+# -- Task 32 (Phase B round 2): the names an update claim is read by ----------
+#
+# L510: the paired names are read live, and a read that blips arrives empty —
+# chat fails open — as does a replay that declares no device. Every update
+# claim then named no machine, and needed this turn's own update to be backed,
+# so a true report backed by the row machine_status showed was corrected. A
+# word is now read against the machines the turn's update facts name, when no
+# paired name holds it.
+
+
+def test_with_no_paired_names_a_claim_is_read_by_the_machines_the_record_names():
+    """L510: machine_status showed eval_laptop's confirmed row; the paired
+    names did not arrive. Each reply was corrected as naming no machine."""
+    shown = [_status_span("eval_laptop", outcome="confirmed")]
+    for reply in (
+        "eval_laptop's agent has been updated.",
+        "I updated eval_laptop's agent.",
+        "I upgraded the agent on eval_laptop to the hub's build.",
+    ):
+        assert guards.narration_check(reply, shown, ()) is None, reply
+    # The record names its machine only for what it says: a row that is a send
+    # backs nothing, and the sentence names the machine the claim did.
+    sent = guards.narration_check(
+        "eval_laptop's agent has been updated.", [_status_span("eval_laptop", outcome="sent")], ()
+    )
+    assert sent is not None and targets(sent) == ["eval_laptop"]
+    assert "a machine named eval_laptop" in sent.text
+
+
+def test_a_word_the_record_does_not_name_still_names_no_machine():
+    """The fallback reads only machines the record names, so fix round 1's
+    words (I2) still name none — and the claim is still backed only by this
+    turn's own confirmed update."""
+    shown = [_status_span("minipc", outcome="confirmed")]
+    for reply in NOT_A_PAIRED_NAME:
+        correction = guards.narration_check(reply, shown, ())
+        assert correction is not None and targets(correction) == [None], reply
+        confirmed = [_update_span("minipc", outcome="confirmed")]
+        assert guards.narration_check(reply, confirmed, ()) is None, reply
+
+
+# L492c: a name slot is entered at the front of its token, so a list's "-" with
+# no space after it, or an ellipsis's dots, stayed on the name — which then
+# named no machine, and so needed this turn's own update to be backed.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "-eval_laptop's agent is updated.",
+        "...eval_laptop's agent has been updated.",
+    ],
+)
+def test_punctuation_against_the_front_of_a_name_is_not_part_of_it(reply):
+    shown = [_status_span("eval_laptop", outcome="confirmed")]
+    assert guards.narration_check(reply, shown, PAIRED) is None, reply
+    sent = guards.narration_check(reply, [_status_span("eval_laptop", outcome="sent")], PAIRED)
+    assert sent is not None and targets(sent) == ["eval_laptop"], reply
+
+
+def test_a_name_that_begins_with_a_dash_is_still_read_whole():
+    """The word as written is read first: a machine whose own name begins
+    with "-" is that machine, never the word without it."""
+    names = (*PAIRED, "-lab")
+    correction = guards.narration_check("-lab's agent is updated.", [other_span()], names)
+    assert correction is not None and targets(correction) == ["-lab"]
+
+
 # -- one binding per name, module-wide -------------------------------------------
 #
 # The guards build patterns from shared fragments (_PRESENT_COPULA, _STATE_ADVERB,

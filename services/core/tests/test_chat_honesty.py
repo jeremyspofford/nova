@@ -236,17 +236,20 @@ async def test_an_unconfirmed_update_claim_keeps_the_turn_out_of_memory(
         assert corrections == [] and stored == reply
         assert [ingest["exchange"]["assistant"] for ingest in memory.ingests] == [reply]
     else:
-        # Nothing is paired in this database, so the claim names no machine,
-        # and only this turn's machine_update could back it (fix round 2, N1).
+        # Nothing is paired in this database. Pin moved (Task 32, L510): the
+        # claim's word is read against the machine this turn's update facts
+        # name when no paired name holds it, so it names eval_laptop — before,
+        # it named no machine, and the sentence said only that no machine_update
+        # call confirmed an update (true too, and less exact).
         expected = (
-            "Correction: no machine_update call this turn confirmed an update — only the agent "
-            "reconnecting on the hub's build confirms one."
+            "Correction: nothing this turn confirmed an update of a machine named eval_laptop — "
+            "only the agent reconnecting on the hub's build confirms one."
         )
         assert corrections == [expected]
         assert stored == f"{reply}\n\n{expected}"
         guard = await _spans(pool, "guard")
         assert [g["name"] for g in guard] == ["narration"]
-        assert guard[0]["meta"]["claims"] == [{"kind": "updated_machine", "target": None}]
+        assert guard[0]["meta"]["claims"] == [{"kind": "updated_machine", "target": "eval_laptop"}]
         assert memory.ingests == []
 
 
