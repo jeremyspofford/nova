@@ -122,7 +122,7 @@ Each task's code shows these; they are here so a reviewer reads them once. Each 
   - P4 applies as "the last run that could speak for the tests decides", so a shell run after the last test run leaves the claim silent.
   - P5's one-correction rule asks device_completion's own reader (`_device_action_in`), clause by clause, for run and edit claims. Whether the tests passed stays narration's call.
 - **Task 6 — capability rows (P9).**
-  - **Linear first:** the capability guard is quadratic today (0.84 s at 12.5 KB, over 9 s at 50 KB; `_ABSENT_FROM_TOOLSET` 1.8 s at 50 KB). The task fixes that first: each clause's marks are found once, and the lookahead is bounded at 160 characters.
+  - **Linear first, shipped early:** the capability guard was quadratic (11.2 s at 50 KB, measured under the lock). PR #97 (2026-10-06) fixed it ahead of this slice: each clause's marks are found once, and the lookahead is bounded at 160 characters. Step 1 confirms it is on main.
   - **Precision cuts, all toward silence:** a non-device row followed by a machine is left to the device rows; a possessive place ("your laptop's system folders") is not a device place; a privilege ("as an administrator") is a scope.
   - S42a's row stays last; `_every_correction` gains `tools=`.
 - **Task 8 — no answer (P8).** The hub's no-answer refusals become `devices_ws._NoAnswer`. The timeout path is pinned at `Hub.command`, because S42b binds `_command`'s timeout when the module loads.
@@ -4750,11 +4750,8 @@ then `git -C ~/workspace/nova/.worktrees/s29 show --stat HEAD`.
 
 **Files:**
 - Modify: `services/core/app/guards.py`:
-  - the `bisect` import gains `bisect_left`;
-  - `_ABSENT_FROM_TOOLSET` is bounded;
   - `_SCOPE_QUALIFIER` gains privilege scope;
-  - new `_match_starts`, `_DenialMarks` and `_excused`;
-  - `_denial_tail` now reads the marks;
+  - new `_excused` (`_match_starts` and `_DenialMarks` are on main from PR #97);
   - new `_CAP_MACHINE_NOUN`, `_CAP_PLACE`, `_CAP_ON_MACHINE`, `_CAP_SYSTEM_INFO`, `_ON_A_MACHINE` and `_MACHINE_STATE_REASON`;
   - `_CAPABILITY_TOOLS` gets a new header comment and eight rows inserted before S42a's `device_run` row;
   - new `CAPABILITY_EXCUSED` and `DEVICE_CAPABILITY_CORRECTION`;
@@ -4787,212 +4784,11 @@ then `git -C ~/workspace/nova/.worktrees/s29 show --stat HEAD`.
 
 **Decision recorded here:** S42a's Windows/Mac `device_run` row is **not** folded into the new general row. Its verbs (access, reach, control) make a different claim, about a *class* of machine, and S42a's own MUST and MUST-NOT sets pin them. Two device_run rows still make one denial, because `seen` counts a tool once. The row also stays `[-1]`, which `test_the_sweep_now_reaches_the_new_capability_pattern` pins.
 
-- [ ] **Step 1: Write the failing test (cycle 1 — the guard reads each clause once).** Append to `services/core/tests/test_guard_regex_timing.py`:
+- [ ] **Step 1: Confirm cycle 1 is on main.** The capability guard's linear clause reading shipped early, as PR #97 (2026-10-06, at the owner's word). It added `_match_starts`, `_DenialMarks`, `_denial_tail(marks, phrase_end) -> int`, the 160-character `_ABSENT_FROM_TOOLSET` lookahead, and `test_the_capability_guard_reads_50_kb_in_linear_time` with `CAPABILITY_CAP_S = 0.45`. This task builds the rows on top of it.
+  `grep -n "class _DenialMarks\|def _denial_tail(marks" ~/workspace/nova/.worktrees/s29/services/core/app/guards.py`
+  Expected: two hits. **No hit: stop and report** — PR #97 has not merged, and cycle 2's code assumes it.
 
-```python
-# -- S29 Task 6: the capability guard reads each clause once --------------------
-#
-# capability_claim_check runs on every reply. Its per-phrase tail scan
-# (`_denial_tail`, then `_SCOPE_QUALIFIER` over that tail) re-read the rest of
-# the clause for EVERY capability phrase in it: one clause repeating a scoped
-# denial took 0.84 s at 12.5 KB and over 9 s at 50 KB when measured for S29, and
-# `_ABSENT_FROM_TOOLSET`'s lookahead walked to the clause's end from every
-# "there is no" (1.8 s at 50 KB). Each shape is a whole reply. The cap follows
-# BIG_INPUT_CAP_S's own rule — about 3.5x the slowest unloaded 50 KB read
-# measured for S29 (130 ms: a reply made of nothing but denials has every clause
-# read against every row of the table, 31 rows from Task 6 on).
-CAPABILITY_CAP_S = 0.45
-CAPABILITY_SHAPES = [
-    (
-        "one clause, scoped denials, the scope at its end",
-        lambda n: "I can't " + _repeat("read files and ")(n - 30) + " outside my workspace.",
-    ),
-    (
-        "one clause, one ability denied over and over",
-        lambda n: "I can't " + _repeat("read files and ")(n),
-    ),
-    ("sentences of bare denials", _repeat("I can't browse the web. ")),
-    ("sentences of scoped denials", _repeat("I can't write files outside my workspace. ")),
-    ("trailing denials", _repeat("Reading files isn't something I can do and ")),
-    ("there is no, and no toolset", _repeat("there is no ")),
-    (
-        "there is no, the toolset at its end",
-        lambda n: _repeat("there is no x ")(n - 16) + " in my toolset.",
-    ),
-]
-
-
-@pytest.mark.parametrize(
-    "label,build", CAPABILITY_SHAPES, ids=[c[0] for c in CAPABILITY_SHAPES]
-)
-def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
-    _assert_linear(
-        f"capability_claim {label}",
-        lambda r: guards.capability_claim_check(r, _NAMES),
-        build,
-        cap_s=CAPABILITY_CAP_S,
-    )
-```
-
-- [ ] **Step 2: Run it to make sure it fails.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k capability_guard_reads`
-  Expected: 2 failed, 5 passed. `one clause, scoped denials, the scope at its end` fails on the cap ("50,000 chars took …9,000 ms"), and so does `there is no, and no toolset` ("…1,800 ms", or growth near x16). The red run takes about a minute, because the quadratic is what it measures.
-
-- [ ] **Step 3: Implement (cycle 1).** In `services/core/app/guards.py`:
-
-  (a) Change the import `from bisect import bisect_right` to:
-
-```python
-from bisect import bisect_left, bisect_right
-```
-
-  (b) Replace `_ABSENT_FROM_TOOLSET` (keep the comment above it, and append the last paragraph shown):
-
-```python
-# "there is no <capability> in my toolbox" (S16, her sentence to the owner on
-# 2026-09-11). The lead family is first-person because a denial has to be ABOUT
-# her; this one is impersonal in grammar and self-referring in substance, so it
-# is admitted only when the clause also names her own toolset — the lookahead
-# is what keeps "there is no file at that path" out. Same lesson the trailing
-# family learned in S12: a denial does not stop being a denial for being said
-# about a possession rather than an ability.
-#
-# S29: the lookahead reads at most 160 characters. Unbounded, it walked to the
-# clause's end from EVERY "there is no" — 1.8 s at 50 KB of them, on core's only
-# event loop. Her own sentence has 18 between the two.
-_ABSENT_FROM_TOOLSET = re.compile(
-    r"\bthere\s++(?:is|are)\s++no\b"
-    r"(?=[^.?!\n]{0,160}?\bin\s++my\s++"
-    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b)",
-    re.I,
-)
-```
-
-  (c) Directly after `_SCOPE_QUALIFIER`, add:
-
-```python
-def _match_starts(pattern: re.Pattern[str], text: str) -> list[int]:
-    """Every position `pattern` matches at in `text`, in order — exactly the
-    starts `pattern.search(text, pos)` returns for some `pos` — found in ONE
-    left-to-right pass."""
-    starts: list[int] = []
-    found = pattern.search(text)
-    while found is not None:
-        starts.append(found.start())
-        found = pattern.search(text, found.start() + 1)
-    return starts
-
-
-class _DenialMarks:
-    """Where each pattern a denial is judged by matches in ONE clause, found
-    once per pattern per clause (S29). `_denial_tail` used to search the rest
-    of the clause again for every capability phrase in it, and the scope
-    qualifier then searched that tail: one clause repeating a scoped denial
-    ("I can't read files and read files and … outside my workspace") took
-    0.84 s at 12.5 KB and over 9 s at 50 KB, on core's only event loop.
-
-    A mark is where a match STARTS, so a scope word counts when it starts in a
-    denial's tail — what searching the tail found, except a scope word that
-    straddles the next denial's first word, which only silences (the miss
-    direction this family errs in)."""
-
-    __slots__ = ("_clause", "_starts")
-
-    def __init__(self, clause: str) -> None:
-        self._clause = clause
-        self._starts: dict[re.Pattern[str], list[int]] = {}
-
-    def first(self, pattern: re.Pattern[str], pos: int) -> int:
-        """Where `pattern` first matches at or after `pos` — the start
-        `pattern.search(clause, pos)` returns — or the clause's end."""
-        starts = self._starts.get(pattern)
-        if starts is None:
-            starts = self._starts[pattern] = _match_starts(pattern, self._clause)
-        i = bisect_left(starts, pos)
-        return starts[i] if i < len(starts) else len(self._clause)
-```
-
-  (d) Replace `_denial_tail` with:
-
-```python
-def _denial_tail(marks: _DenialMarks, phrase_end: int) -> int:
-    """Where the tail that belongs to THIS denial ends. The tail runs from
-    `phrase_end` (the end of its capability phrase) to here, and is where a
-    scope word may qualify it.
-
-    WHERE THE DENIAL ENDS, and why this is the right boundary. The outer unit
-    is already the clause: _clauses splits on sentence terminators, semicolons,
-    the contrastive conjunctions and ", then", so an "except" living in another
-    sentence or on the far side of a "but" is out of reach by construction. The
-    only thing left that can end a denial INSIDE one clause is another denial:
-    a second inability lead ("I can't write files AND I CAN'T work outside the
-    sandbox" — the "outside" belongs to the second denial, the first is a flat
-    false denial and must still be corrected) or a trailing denial form
-    ("reading files IS NOT IN MY TOOLSET" — the "not in my" is the denial
-    itself, not a scope on the capability). So the tail runs from the end of
-    the capability phrase to whichever of those starts first, or to the end of
-    the clause.
-
-    Nothing else is treated as a boundary — not a dash, not a comma, not a
-    coordinator — because the two measured false corrections lived exactly
-    there ("...to paths outside the workspace", "...there — /etc/nova/notes.md
-    is outside my workspace") and because a shared scope qualifier legitimately
-    trails a coordinated pair ("I can't create files or write files outside my
-    workspace"). The residual is a scope word in a coordinated POSITIVE
-    predicate ("I can't write files, and everything except the config is
-    stale"), which silences the guard: a MISS, which is the direction this
-    family always errs in (ruling S2d-R2 — a wrongly-corrected honest reply is
-    worse than a missed lie).
-
-    S29: read off the clause's marks (`_DenialMarks`), found once per clause,
-    never by searching the rest of the clause again for each phrase.
-    """
-    return min(marks.first(_DENIAL_LEAD, phrase_end), marks.first(_TRAILING_DENIAL, phrase_end))
-```
-
-  (e) In `capability_claim_check`, replace the clause loop, from `for clause, is_question in _clauses(reply_text):` down to its `break`, with:
-
-```python
-    for clause, is_question in _clauses(reply_text):
-        if is_question:
-            continue  # a question/offer asserts no inability
-        lead = _DENIAL_LEAD.search(clause) or _ABSENT_FROM_TOOLSET.search(clause)
-        trailing = _TRAILING_DENIAL.search(clause)
-        if lead is None and trailing is None:
-            continue
-        marks: _DenialMarks | None = None  # found when the first phrase needs them
-        for pattern, tool in _CAPABILITY_TOOLS:
-            if tool not in registered or tool in seen:
-                # No such tool -> the denial is HONEST; already seen -> counted.
-                continue
-            for m in pattern.finditer(clause):
-                # A LEAD form governs the capability that FOLLOWS it; the
-                # trailing form governs the capability BEFORE it. Requiring the
-                # phrase on the denial's own side keeps an unrelated capability
-                # verb elsewhere in the clause from being swept in.
-                after_lead = lead is not None and m.start() >= lead.end()
-                before_trailing = trailing is not None and m.end() <= trailing.start()
-                if not (after_lead or before_trailing):
-                    continue
-                if marks is None:
-                    marks = _DenialMarks(clause)
-                # A scope limit anywhere in this denial's own tail ("...files
-                # OUTSIDE my folder") is a true statement about containment,
-                # not a disowned capability. _denial_tail says where that tail ends.
-                if marks.first(_SCOPE_QUALIFIER, m.end()) < _denial_tail(marks, m.end()):
-                    continue
-                seen.add(tool)
-                denied.append((m.group(0).strip(), tool))
-                break
-```
-
-- [ ] **Step 4: Run the tests.**
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_guard_regex_timing.py -k capability_guard_reads`
-  Expected: 7 passed.
-  `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_capability_guard.py`
-  Expected: all passed, with no pin edited. This cycle changes no verdict.
-
-- [ ] **Step 5: Write the failing tests (cycle 2 — the rows).** Append to `services/core/tests/test_capability_guard.py`:
+- [ ] **Step 2: Write the failing tests (cycle 2 — the rows).** Append to `services/core/tests/test_capability_guard.py`:
 
 ```python
 # -- S29 (P9): web search and the device tools ---------------------------------
@@ -5274,7 +5070,7 @@ def test_the_sweep_reaches_every_capability_row_and_its_reasons():
 
   (Place the `CAPABILITY_SHAPES += [...]` block **between** the list and `test_the_capability_guard_reads_50_kb_in_linear_time`, so the parametrize decorator reads the whole list. Or fold the entries into the list literal; either is fine.)
 
-- [ ] **Step 6: Run them to make sure they fail.**
+- [ ] **Step 3: Run them to make sure they fail.**
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_capability_guard.py tests/test_guard_regex_timing.py -k "s29 or device_correction or mixed_denial or registered or covered_or_excused or failed_device_run or capability_row or capability_guard_reads"`
   Expected failures:
   - `AttributeError: module 'app.guards' has no attribute 'DEVICE_CAPABILITY_CORRECTION'` (and the same for `CAPABILITY_EXCUSED`);
@@ -5283,7 +5079,7 @@ def test_the_sweep_reaches_every_capability_row_and_its_reasons():
 
   The new timing shapes pass, since no row matches them yet.
 
-- [ ] **Step 7: Implement (cycle 2).** In `services/core/app/guards.py`:
+- [ ] **Step 4: Implement (cycle 2).** In `services/core/app/guards.py`:
 
   (a) Immediately above `_CAPABILITY_TOOLS: tuple[...] = (` (below S42b's `_CAP_UPDATE_AGENTS`), add:
 
@@ -5595,7 +5391,7 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
     with DEVICE_CAPABILITY_CORRECTION.
 ```
 
-- [ ] **Step 8: Move the pins this changes, deliberately.**
+- [ ] **Step 5: Move the pins this changes, deliberately.**
 
   (a) `services/core/tests/test_guards.py`, `_every_correction`: add one keyword argument to its `value.format(` call. It goes beside `tool="memory_search",`, S42b's `subject=…` and whatever Task 5 added for its own templates.
 
@@ -5626,16 +5422,16 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
 
   For example, 204/266/62 with no move by Tasks 1–5 becomes 206/276/70.
 
-- [ ] **Step 9: Run the tests.**
+- [ ] **Step 6: Run the tests.**
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh --heavy tests/test_capability_guard.py tests/test_guard_regex_timing.py`
   Expected: all passed. That includes every pre-existing MUST_FIRE / MUST_NOT_FIRE pin, the scope-limit list, `test_the_sweep_now_reaches_the_new_capability_pattern` (S42a's row is still `[-1]`) and S42b's `test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds`.
   Then the neighbours. They call `capability_claim_check` on their own texts, format every CORRECTION constant, or read `chat._failed_tool_names`:
   `bash ~/workspace/nova/.worktrees/s29/.superpowers/sdd/plan/ct.sh tests/test_guards.py tests/test_device_completion_guard.py tests/test_written_call_guard.py tests/test_setup_guards.py tests/test_consent_guard.py tests/test_state_guard.py tests/test_presented_listing_guard.py tests/test_memory_claim_guard.py tests/test_served_guard.py tests/test_chat_deferral.py tests/test_chat_said_not_done.py tests/test_chat_setup_guards.py tests/test_chat_agents.py tests/test_eval_corpus.py tests/test_tools_registry.py`
   Expected: all passed, 0 skipped.
 
-- [ ] **Step 10: Tools registered since this plan was drafted.** If Task 0 recorded tools added by the provider-balances slice, add each to a row or to CAPABILITY_EXCUSED with its reason. Do the same for any other tool Task 0 found registered beyond the 45 this task lists: MAIN's 44 plus S42b's machine_update. Re-run Step 9's first command until `test_every_registered_tool_is_covered_or_excused` is green.
+- [ ] **Step 7: Tools registered since this plan was drafted.** If Task 0 recorded tools added by the provider-balances slice, add each to a row or to CAPABILITY_EXCUSED with its reason. Do the same for any other tool Task 0 found registered beyond the 45 this task lists: MAIN's 44 plus S42b's machine_update. Re-run Step 6's first command until `test_every_registered_tool_is_covered_or_excused` is green.
 
-- [ ] **Step 11: Format, lint, commit.**
+- [ ] **Step 8: Format, lint, commit.**
   `(cd ~/workspace/nova/.worktrees/s29/services/core && uv run ruff format app/guards.py tests/test_capability_guard.py tests/test_guard_regex_timing.py tests/test_guards.py && uv run ruff check app/guards.py tests/test_capability_guard.py tests/test_guard_regex_timing.py tests/test_guards.py)`
   `git -C ~/workspace/nova/.worktrees/s29 add services/core/app/guards.py services/core/tests/test_capability_guard.py services/core/tests/test_guard_regex_timing.py services/core/tests/test_guards.py`
   `git -C ~/workspace/nova/.worktrees/s29 commit -F -` with:
