@@ -55,8 +55,15 @@ func CheckManifest(ctx context.Context, server, corePubHex, sum string) string {
 	}
 	version, _ := manifest["version"].(string)
 	files, _ := manifest["files"].(map[string]any)
-	entry, _ := files[runtime.GOOS+"-"+runtime.GOARCH].(map[string]any)
-	if want, _ := entry["sha256"].(string); want == sum {
+	here := runtime.GOOS + "-" + runtime.GOARCH
+	entry, _ := files[here].(map[string]any)
+	want, _ := entry["sha256"].(string)
+	if want == "" {
+		// No entry, or one with no sha256: nothing to compare with, and an
+		// empty sum must never match it (Task 32, L226).
+		return fmt.Sprintf("the hub's manifest for build %s names no %s build, so this binary cannot be compared with it", version, here)
+	}
+	if want == sum {
 		return "this binary is the hub's build " + version
 	}
 	return fmt.Sprintf("this binary is not the hub's build %s — Nova updates it when this machine is idle", version)
