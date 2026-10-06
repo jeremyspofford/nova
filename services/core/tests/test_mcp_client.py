@@ -1051,3 +1051,15 @@ def _timed(fn, arg) -> float:
     started = time.perf_counter()
     fn(arg)
     return time.perf_counter() - started
+
+
+async def test_an_unsafe_header_is_named_by_position_never_by_name():
+    """Ruling F-H1 (fix round 2): a valid header token can itself be the
+    credential, so the client's own refusal names a header by position."""
+    leak = "ghp_LEAKLEAKLEAK123"
+    endpoint = client.Endpoint(name="srv", url=URL, headers={"X-A": "ok", leak: "bad\nvalue"})
+    with pytest.raises(client.ClientError) as caught:
+        await client.list_tools(endpoint)
+    assert leak not in caught.value.reason
+    assert "header 2 of 2 has characters a header cannot carry" in caught.value.reason
+    assert caught.value.reachable is False

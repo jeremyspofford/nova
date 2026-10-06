@@ -210,17 +210,23 @@ def test_a_well_formed_connect_still_shows_what_is_safe():
         ),
         "mcp_connect",
     )
+    # Ruling F-H1 (fix round 2): no check can tell a header NAME from a
+    # credential (`ghp_…` is a valid header token), so a connect's headers
+    # are recorded as a count only. This used to pin the names; the owner
+    # still sees them on the Connections tab.
     assert recorded == {
         "name": "gh",
         "url": "http://gh.mcp.invalid",
         "token": f"<masked:{len(_TOKEN)} chars>",
-        "headers": {"X-Api-Key": f"<masked:{len(_HEADER)} chars>", "X-MCP-Toolsets": "actions"},
+        "headers": "<masked:2 headers>",
     }
 
 
 def test_an_unknown_key_is_masked_whole_and_case_sensitively():
     recorded = chat._span_arguments({"name": "gh", "URL": "http://gh.mcp.invalid/x"}, "mcp_connect")
-    assert recorded == {"name": "gh", "URL": "<masked:23 chars>"}
+    # Round 2 (ruling F-H1, N3): the off-schema KEY is recorded by position
+    # too, never by name — this pinned `"URL"` as the key in round 1.
+    assert recorded == {"name": "gh", "<key 1>": "<masked:23 chars>"}
 
 
 def test_a_tool_with_a_credential_parameter_is_guarded_without_declaring_origin(monkeypatch):
@@ -295,3 +301,160 @@ async def test_a_truncated_connect_through_the_chat_loop_stores_neither_secret(p
     for secret in (_TOKEN, _PATH):
         assert secret not in written
     assert spans[0]["meta"]["args_redacted"] == f"<unparsed: {len(raw)} chars>"
+
+
+# ── final review fix round 2: no name a caller chose reaches a span ─────────
+#
+# Ruling F-H1. N1: a declared URL argument that is not a string is masked
+# whole. N2: a connection name that fails the store's rule is masked. N3: an
+# off-schema KEY is recorded as `<key N>`. N4: headers are a count only. And
+# whatever was masked out of the arguments is scrubbed from the same span's
+# `result_head` and `error`. N5: a tool with a free-form object property
+# records unparsed text as its length.
+
+_ROUND_2_SHAPES = {
+    "N1 url as a list": {"name": "gh", "url": [f"http://gh.mcp.invalid/{_PATH}/mcp"]},
+    "N1 url as an object": {"name": "gh", "url": {"href": f"http://gh.mcp.invalid/{_PATH}/mcp"}},
+    "N2 token as the server name": {"name": _TOKEN, "url": "http://gh.mcp.invalid/mcp"},
+    "N3 token as a top-level key": {"name": "gh", "url": "http://gh.mcp.invalid/mcp", _TOKEN: "x"},
+    "N4 token as a header name": {
+        "name": "gh",
+        "url": "http://gh.mcp.invalid/mcp",
+        "headers": {_TOKEN: "v"},
+    },
+    "N4 secret under a plain header name": {
+        "name": "gh",
+        "url": "http://gh.mcp.invalid/mcp",
+        "headers": {"X-Hass-Access": _HEADER},
+    },
+}
+
+
+@pytest.mark.parametrize("args", _ROUND_2_SHAPES.values(), ids=list(_ROUND_2_SHAPES))
+@pytest.mark.parametrize("form", ["object", "json"])
+def test_round_2_shapes_never_reach_the_recorded_arguments(args, form):
+    raw = args if form == "object" else json.dumps(args)
+    written = json.dumps(chat._span_arguments(raw, "mcp_connect"))
+    for secret in (_TOKEN, _HEADER, _PATH):
+        assert secret not in written, written
+
+
+def test_a_declared_url_that_is_not_a_string_is_masked_whole():
+    value = {"href": f"http://gh.mcp.invalid/{_PATH}/mcp"}
+    recorded = chat._span_arguments({"name": "gh", "url": value}, "mcp_connect")
+    assert recorded["url"] == f"<masked:{len(json.dumps(value))} chars>"
+
+
+def test_a_name_that_fails_the_name_rule_is_masked_and_a_good_one_kept():
+    recorded = chat._span_arguments({"name": _TOKEN, "url": "http://x.invalid/m"}, "mcp_connect")
+    assert recorded["name"] == f"<masked:{len(_TOKEN)} chars>"
+    kept = chat._span_arguments({"name": "github", "url": "http://x.invalid/m"}, "mcp_connect")
+    assert kept["name"] == "github"
+
+
+def test_an_off_schema_key_is_recorded_by_position():
+    recorded = chat._span_arguments(
+        {"name": "gh", _TOKEN: "x", "url": "http://x.invalid/m", "pat": "y"}, "mcp_connect"
+    )
+    assert recorded == {
+        "name": "gh",
+        "<key 1>": "<masked:1 chars>",
+        "url": "http://x.invalid",
+        "<key 2>": "<masked:1 chars>",
+    }
+
+
+def test_headers_are_a_count_only():
+    recorded = chat._span_arguments(
+        {"name": "gh", "url": "http://x.invalid/m", "headers": {_TOKEN: "v", "X-A": "b"}},
+        "mcp_connect",
+    )
+    assert recorded["headers"] == "<masked:2 headers>"
+
+
+def test_what_was_masked_is_scrubbed_from_the_spans_own_text():
+    args = {"name": _TOKEN, "url": "http://gh.mcp.invalid/mcp", _HEADER: "x"}
+    recorded, scrub = chat._span_record(args, "mcp_connect")
+    assert _TOKEN not in json.dumps(recorded)
+    text = f"Error: unknown argument {_HEADER!r}; {_TOKEN!r} cannot be a server name"
+    cleaned = scrub(text)
+    assert _TOKEN not in cleaned and _HEADER not in cleaned
+    assert "<key 1>" in cleaned
+
+
+def test_the_scrub_leaves_short_ordinary_words_alone():
+    """Only a value at least as long as the client's credential floor is a
+    scrub candidate, so a masked `v` or `x` never rewrites the sentence."""
+    _recorded, scrub = chat._span_record(
+        {"name": "gh", "url": "http://x.invalid/m", "headers": {"X-A": "v"}, "zz": "x"},
+        "mcp_connect",
+    )
+    assert scrub("a value was given") == "a value was given"
+
+
+@pytest.mark.parametrize("tool", ["mcp_call", "run_skill", "create_timer"])
+def test_a_tool_with_a_free_form_object_records_unparsed_text_as_its_length(tool):
+    """N5: a free-form object (`mcp_call`'s `arguments`) can carry a third
+    party's credential the schema cannot name."""
+    raw = '{"server": "ha", "tool": "set", "arguments": {"token": "ghp_LEAKLEAKLEAK123"}'
+    assert chat._span_arguments(raw, tool) == f"<unparsed: {len(raw)} chars>"
+
+
+def _raw_call(name: str, arguments: str) -> dict:
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+
+_ROUND_2_TURNS = {
+    **_ROUND_2_SHAPES,
+    "the token as the header name AND the server name": {
+        "name": _TOKEN,
+        "url": "http://gh.mcp.invalid/mcp",
+        "headers": {_TOKEN: "v"},
+    },
+    "N5 mcp_call truncated": None,
+}
+
+
+@requires_db
+@pytest.mark.parametrize("label", list(_ROUND_2_TURNS))
+async def test_round_2_shapes_through_the_chat_loop_store_no_secret(pool, mount_peers, label):
+    """A real turn per shape: whatever dispatch, the store or the client
+    answered, the stored spans (args_redacted, result_head, error) hold no
+    secret. Read by turn id."""
+    owner = await _owner(pool)
+    if label.startswith("N5"):
+        name = "mcp_call"
+        raw = '{"server": "ha", "tool": "set", "arguments": {"token": "ghp_LEAKLEAKLEAK123"}'
+    else:
+        name, raw = "mcp_connect", json.dumps(_ROUND_2_TURNS[label])
+    gateway = ScriptedGateway(rounds=((_raw_call(name, raw),), (text("That did not work."),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    turn, _ = await _nova_turn(pool, owner, "connect github")
+    spans = [s for s in await _spans(pool, turn.id) if s["name"] == name]
+    assert spans and spans[0]["meta"]["ok"] is False
+    for span in spans:
+        for field in ("args_redacted", "result_head", "error"):
+            written = json.dumps(span["meta"].get(field))
+            for secret in (_TOKEN, _HEADER, _PATH):
+                assert secret not in written, (field, written)
+    stored = await pool.fetch("SELECT meta::text AS m FROM turn_spans WHERE turn_id = $1", turn.id)
+    everything = "\n".join(r["m"] for r in stored)
+    for secret in (_TOKEN, _HEADER, _PATH):
+        assert secret not in everything

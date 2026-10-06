@@ -715,20 +715,23 @@ def _safe_credential(value: str) -> bool:
 
 def _check_credentials(endpoint: Endpoint) -> None:
     """Refuse BEFORE sending anything when a credential cannot be a header
-    value, naming the header but never the value (ruling R2-2): httpx/h11
-    would otherwise quote a bad value verbatim in their own exception text —
-    e.g. a pasted token with a trailing newline — and `from exc` would carry
-    that into a traceback."""
+    value, naming the header by its position, never its name or value
+    (rulings R2-2, F-H1): httpx/h11 would otherwise quote a bad value
+    verbatim in their own exception text — e.g. a pasted token with a
+    trailing newline — and `from exc` would carry that into a traceback."""
     if endpoint.token and not _safe_credential(endpoint.token):
         raise ClientError(
             f"{endpoint.name}'s token has characters a header cannot carry; nothing was sent",
             reachable=False,
         )
-    for key in endpoint.headers:
+    names = list(endpoint.headers)
+    for position, key in enumerate(names, start=1):
         if not _safe_credential(endpoint.headers[key]):
+            # By position, never by name (ruling F-H1): a valid header token
+            # can itself be the credential.
             raise ClientError(
-                f"{endpoint.name}'s header {key!r} has characters a header cannot carry; "
-                "nothing was sent",
+                f"{endpoint.name}'s header {position} of {len(names)} has characters a header "
+                "cannot carry; nothing was sent",
                 reachable=False,
             )
 

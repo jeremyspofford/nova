@@ -640,6 +640,40 @@ async def test_a_bad_header_name_is_refused_by_its_length_never_echoed(pool):
     assert "ghp_LEAKLEAKLEAK123" not in caught.value.reason
     assert "Bearer" not in caught.value.reason
     assert f"({len(name)} characters)" in caught.value.reason
+    assert "header 1 of 1" in caught.value.reason
+
+
+# ── final review fix round 2 (ruling F-H1): no name a caller chose is echoed ─
+
+_LEAK = "ghp_LEAKLEAKLEAK123"
+
+
+async def test_a_token_given_as_the_server_name_is_refused_by_its_length(pool):
+    """N2: the refusal states the length, never the name."""
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(pool, name=_LEAK, url=URL, added_by=servers.BY_OWNER, actor="jeremy")
+    assert _LEAK not in caught.value.reason
+    assert f"({len(_LEAK)} characters)" in caught.value.reason
+    assert "cannot be a server name" in caught.value.reason
+
+
+@pytest.mark.parametrize(
+    ("headers", "why"),
+    [
+        ({"X-A": "ok", _LEAK: "two\nlines"}, "the value of header 2 of 2 must be one line"),
+        ({_LEAK: 5}, "the value of header 1 of 1 must be one line"),
+        ({"X-A": "ok", "Mcp-Method": "x"}, "header 2 of 2 is set by the client itself"),
+    ],
+)
+async def test_a_header_refusal_names_the_header_by_position(pool, headers, why):
+    """N4: a valid header token can itself be the credential, so no header
+    refusal names a header — only its position."""
+    with pytest.raises(servers.ServerError) as caught:
+        await servers.connect(
+            pool, name="github", url=URL, headers=headers, added_by=servers.BY_OWNER, actor="jeremy"
+        )
+    assert why in caught.value.reason
+    assert _LEAK not in caught.value.reason and "Mcp-Method" not in caught.value.reason
 
 
 # ── fix round 1: ruling T5-E, deterministic races (events, never sleeps) ───

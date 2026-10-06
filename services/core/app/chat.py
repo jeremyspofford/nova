@@ -1784,7 +1784,63 @@ def _masked(value: object) -> str:
     return f"<masked:{len(text)} chars>"
 
 
-def _redact(value: object, *, in_headers: bool = False) -> object:
+def _leaves(value: object) -> list[str]:
+    """Every string in `value` — its keys too — for `_SpanScrub`."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_leaves(key))
+            found.extend(_leaves(item))
+        return found
+    if isinstance(value, list | tuple):
+        return [leaf for item in value for leaf in _leaves(item)]
+    return []
+
+
+class _SpanScrub:
+    """What `_span_record` masked out of a call's arguments, and the callable
+    that scrubs the same strings out of that span's own `result_head` and
+    `error` (S37a final review, ruling F-H1). A refusal that echoes an
+    argument — dispatch's "unknown argument 'ghp_…'", a store's reason —
+    would otherwise carry into the trace exactly what the arguments masked.
+    Derived from what was masked on THIS call, never a list kept here. A
+    string shorter than the client's own credential floor is never a
+    candidate: masking a `v` must not rewrite every `v` in a sentence."""
+
+    def __init__(self) -> None:
+        self._pairs: dict[str, str] = {}
+
+    def add(self, value: object, replacement: str = "[masked]") -> None:
+        for leaf in _leaves(value):
+            if len(leaf) < mcp_client._MIN_CREDENTIAL_CHARS:
+                continue
+            for form in (leaf, repr(leaf)[1:-1], json.dumps(leaf)[1:-1]):
+                self._pairs.setdefault(form, replacement)
+
+    def __call__(self, text: str) -> str:
+        for secret in sorted(self._pairs, key=len, reverse=True):
+            if secret in text:
+                text = text.replace(secret, self._pairs[secret])
+        return text
+
+    def tree(self, value: object) -> object:
+        """The same scrub over every string in a JSON-shaped value — the
+        span's `facts`, where a refused connect still names what it was
+        given (`mcp_server`)."""
+        if not self._pairs:
+            return value
+        if isinstance(value, str):
+            return self(value)
+        if isinstance(value, dict):
+            return {self(k) if isinstance(k, str) else k: self.tree(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.tree(item) for item in value]
+        return value
+
+
+def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
     """Trace-sized arguments: the same shape, long strings cut to a head, and
     credentials masked (S37a, plan decision P14).
 
@@ -1806,13 +1862,17 @@ def _redact(value: object, *, in_headers: bool = False) -> object:
                 and _credential_key(key, header=in_headers)
             ):
                 out[key] = _masked(item)
+                if sink is not None:
+                    sink.add(item)
             else:
                 out[key] = _redact(
-                    item, in_headers=isinstance(key, str) and key.strip().lower() == "headers"
+                    item,
+                    in_headers=isinstance(key, str) and key.strip().lower() == "headers",
+                    sink=sink,
                 )
         return out
     if isinstance(value, list):
-        return [_redact(item) for item in value]
+        return [_redact(item, sink=sink) for item in value]
     if isinstance(value, str):
         return _clip(value, SPAN_ARG_HEAD_CHARS)
     return value
@@ -1843,7 +1903,7 @@ def _origin_or_masked(value: str) -> str:
     return _masked(value)
 
 
-def _origin_only(parsed: object, tool_name: str | None) -> object:
+def _origin_only(parsed: object, tool_name: str | None, sink: _SpanScrub | None = None) -> object:
     """Reduce every argument `tool_name` declared (`Tool.traced_as_origin`)
     to its URL's origin before anything else — including `_redact`'s own
     per-string clip — ever sees it (S37a, ruling X2-REVISED). No tool name, an
@@ -1859,6 +1919,14 @@ def _origin_only(parsed: object, tool_name: str | None) -> object:
         value = out.get(key)
         if isinstance(value, str):
             out[key] = _origin_or_masked(value)
+        elif value is not None and key in out:
+            # A list or an object (`{"href": ".../secret-path/mcp"}`) has no
+            # origin to read, so it is masked whole (final review N1).
+            out[key] = _masked(value)
+        else:
+            continue
+        if sink is not None and out[key] != value:
+            sink.add(value)
     return out
 
 
@@ -1879,67 +1947,106 @@ def _carries_credentials(tool: tools.Tool | None) -> bool:
     )
 
 
-def _off_schema_masked(parsed: object, tool: tools.Tool) -> object:
+def _has_free_form_object(tool: tools.Tool | None) -> bool:
+    """Whether `tool`'s schema has an object property that names none of its
+    own keys (`mcp_call`'s `arguments`, `run_skill`'s `inputs`): whatever a
+    third party's credential is called, it can sit in there (final review
+    N5). Read off the schema, never a list of tools."""
+    if tool is None:
+        return False
+    properties = tool.parameters.get("properties") or {}
+    return any(
+        isinstance(spec, dict) and spec.get("type") == "object" and not spec.get("properties")
+        for spec in properties.values()
+    )
+
+
+def _off_schema_masked(parsed: object, tool: tools.Tool, sink: _SpanScrub) -> object:
     """For a tool that `_carries_credentials`: what did not arrive in the
     shape its schema names is masked WHOLE, because masking by key and
-    reducing a declared URL to its origin both assume that shape.
+    reducing a declared URL to its origin both assume that shape. Ruling
+    F-H1: no name a caller chose reaches the span.
 
     - Not an object at all: masked whole.
     - A key the schema does not name (matched case-sensitively, so `URL` is
-      not `url`, and `pat` is not `token`): its value masked whole.
-    - A `headers` value that is not an object, or that has a key the client
-      itself would refuse as a header name (`mcp_client._TCHAR`, the one
-      predicate — a whole `Authorization: Bearer …` line pasted as a NAME):
-      masked whole."""
+      not `url`, and `pat` is not `token`): recorded as `<key N>` (its
+      position among this call's unknown keys), its value masked whole.
+    - A value whose property is declared a string but is not one: masked
+      whole (a `url` sent as a list or an object, N1).
+    - `headers`: a count only, `<masked:N headers>` — no check can tell a
+      header NAME from a credential (`ghp_…` is a valid header token), so
+      neither names nor values are recorded (N4). The owner sees the names
+      on the Connections tab.
+    - A connection tool's `name` (one that declares `traced_as_origin`) that
+      fails the store's one name rule (`mcp_servers.NAME_RE`, ruling F13):
+      masked, since the token pasted as a name is not a name (N2)."""
     if not isinstance(parsed, dict):
+        sink.add(parsed)
         return _masked(parsed)
     properties = tool.parameters.get("properties") or {}
     out: dict = {}
+    unknown = 0
     for key, value in parsed.items():
-        if key not in properties:
+        spec = properties.get(key)
+        if spec is None:
+            unknown += 1
+            label = f"<key {unknown}>"
+            sink.add(key, label)
+            sink.add(value)
+            out[label] = _masked(value)
+        elif value is None or key in tool.traced_as_origin:
+            # A declared URL argument is `_origin_only`'s, strings and
+            # non-strings alike (N1).
+            out[key] = value
+        elif key.strip().lower() == "headers":
+            sink.add(value)
+            out[key] = (
+                f"<masked:{len(value)} headers>" if isinstance(value, dict) else _masked(value)
+            )
+        elif isinstance(spec, dict) and spec.get("type") == "string" and not isinstance(value, str):
+            sink.add(value)
             out[key] = _masked(value)
         elif (
-            key.strip().lower() == "headers"
-            and value is not None
-            and (
-                not isinstance(value, dict)
-                or not all(
-                    isinstance(name, str) and mcp_client._TCHAR.fullmatch(name) for name in value
-                )
-            )
+            key == "name"
+            and tool.traced_as_origin
+            and not (isinstance(value, str) and mcp_servers.NAME_RE.fullmatch(value))
         ):
+            sink.add(value)
             out[key] = _masked(value)
         else:
             out[key] = value
     return out
 
 
-def _span_arguments(raw: object, tool_name: str | None = None) -> object:
-    """What the model actually sent, recorded whether or not it parsed.
+def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _SpanScrub]:
+    """What the model actually sent, recorded whether or not it parsed, and
+    the scrub for that span's own text (`_SpanScrub`).
 
     `tool_name`, when the registry holds it, lets a tool reduce one of its
     OWN arguments to a URL's origin before redaction (ruling X2-REVISED) —
     what `mcp_connect` (Task 7) needs, since ha-mcp's secret is the path
     itself, not a neighbouring token or header.
 
-    Arguments are recorded BEFORE dispatch validates them, so for a tool
-    whose arguments can carry a credential (`_carries_credentials`) text that
-    does not parse is recorded as its length only, and anything off its
-    schema is masked whole (`_off_schema_masked`) — a local model's missing
-    brace must not put a token or a secret path into turn_spans (S37a final
-    review I1).
+    Arguments are recorded BEFORE dispatch validates them. So for a tool
+    whose arguments can carry a credential (`_carries_credentials`), or that
+    takes a free-form object (`_has_free_form_object`), text that does not
+    parse is recorded as its length only; and for the first kind anything
+    off its schema is masked whole (`_off_schema_masked`) — a local model's
+    missing brace must not put a token or a secret path into turn_spans (S37a
+    final review I1, N1-N5).
     """
+    sink = _SpanScrub()
     tool = tools.REGISTRY.get(tool_name) if tool_name is not None else None
     guarded = _carries_credentials(tool)
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
-            return {}
+            return {}, sink
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            if guarded:
-                return f"<unparsed: {len(raw)} chars>"
+            if guarded or _has_free_form_object(tool):
+                return f"<unparsed: {len(raw)} chars>", sink
             # Unparseable arguments are exactly the case worth seeing in the
             # trace, so the raw text is kept rather than dropped — for a tool
             # whose arguments cannot carry a credential.
@@ -1947,8 +2054,13 @@ def _span_arguments(raw: object, tool_name: str | None = None) -> object:
     else:
         parsed = raw
     if guarded:
-        parsed = _off_schema_masked(parsed, tool)
-    return _bounded(_redact(_origin_only(parsed, tool_name)))
+        parsed = _off_schema_masked(parsed, tool, sink)
+    return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+def _span_arguments(raw: object, tool_name: str | None = None) -> object:
+    """`_span_record`'s recorded arguments alone."""
+    return _span_record(raw, tool_name)[0]
 
 
 def _bounded(redacted: object) -> object:
@@ -2790,7 +2902,7 @@ async def _run_tool(
     """
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
             # read off the wire. It still goes through schema validation — the
@@ -2817,13 +2929,14 @@ async def _run_tool(
         # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
             # Exactly what THIS call settled — the sink is append-only for the
             # turn, so the slice beyond the mark is this call's own contribution.
-            span.meta["facts"] = list(facts[facts_before:])
+            span.meta["facts"] = scrub.tree(list(facts[facts_before:]))
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     return result, ok
 
 
@@ -2854,7 +2967,7 @@ async def _run_script_step(
     a run of eight calls should move the bubble, not sit silent.
     """
     with turn.span("tool", name) as span:
-        span.meta["args_redacted"] = _span_arguments(args, name)
+        span.meta["args_redacted"], scrub = _span_record(args, name)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
@@ -2863,9 +2976,10 @@ async def _run_script_step(
         span.meta["result_head"] = NEVER_RETURNED
         result, ok = await tools.dispatch(name, args, tool_ctx)
         span.meta["ok"] = ok
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = head
         if not ok:
-            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+            span.meta["error"] = head
     emit(_activity_frame(name, "ok" if ok else "error", result))
     return result, ok
 
@@ -3021,10 +3135,10 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         if fact not in reason:
             reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta[flag] = True
         if call.from_markup:
             span.meta["parsed_from_markup"] = True
@@ -3068,10 +3182,10 @@ def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[s
     with the subset-scoped sentence. Returns that stated result."""
     reason = unknown_tool_refusal(call.name, subset)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"] = _span_arguments(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         span.meta["ok"] = False
-        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["reason"] = "unknown_tool"
     return reason
 
