@@ -292,6 +292,39 @@ func TestInstallSaysThePairingItSetAsideWhenPairingThenFails(t *testing.T) {
 	}
 }
 
+// Task 32, L225 + L243: a set-aside that fails partway has still moved what
+// it moved. Those files are set aside on disk whatever happens next, so
+// Install says them on its error path — never dropped with the error. The
+// audit log's name sits at the 255-byte limit, so no set-aside name can
+// exist beside it: SetAside moves the config and the key, then fails.
+func TestInstallSaysWhatAPartialSetAsideMoved(t *testing.T) {
+	o, svc, out := installOpts(t)
+	o.Paths.AuditFile = filepath.Join(o.Paths.StateDir, strings.Repeat("a", 250))
+	if err := os.WriteFile(o.Paths.AuditFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o.Code = "ABCD-2345"
+	o.Now = func() time.Time { return time.Unix(1_790_000_000, 0) }
+	o.Verify = func(context.Context, config.Config, ed25519.PrivateKey) error {
+		return &client.RefusedError{Server: "x", Reason: "revoked"}
+	}
+	err := Install(context.Background(), *o)
+	if err == nil || !strings.Contains(err.Error(), "setting the old pairing aside") {
+		t.Fatalf("got %v", err)
+	}
+	for _, moved := range []string{o.Paths.ConfigFile + ".replaced-1790000000", o.Paths.KeyFile + ".replaced-1790000000"} {
+		if _, serr := os.Stat(moved); serr != nil {
+			t.Fatalf("the setup did not move %s: %v", moved, serr)
+		}
+		if !strings.Contains(out.String(), moved) {
+			t.Errorf("%s was set aside and not said:\n%s", moved, out.String())
+		}
+	}
+	if svc.installed != "" {
+		t.Fatalf("nothing is registered after a failed set-aside: %+v", svc)
+	}
+}
+
 // The same holds for every step after identity: a pairing made or set aside
 // is on disk whether or not the agent then comes up.
 func TestInstallSaysWhatItDidToThePairingWhenTheAgentThenNeverComesUp(t *testing.T) {

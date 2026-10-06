@@ -154,7 +154,7 @@ func (o *Options) identity(ctx context.Context) (config.Config, []string, error)
 		}
 		moved, err := config.SetAside(o.Paths, o.Now(), "replaced")
 		if err != nil {
-			return config.Config{}, nil, fmt.Errorf("setting the old pairing aside: %w", err)
+			return config.Config{}, partly(notes, moved), fmt.Errorf("setting the old pairing aside: %w", err)
 		}
 		notes = append(notes, fmt.Sprintf("set the old pairing aside (%s) — Nova no longer knew it", strings.Join(moved, ", ")))
 	} else {
@@ -171,7 +171,7 @@ func (o *Options) identity(ctx context.Context) (config.Config, []string, error)
 		if _, err := os.Lstat(o.Paths.AuditFile); !errors.Is(err, fs.ErrNotExist) {
 			moved, err := config.SetAside(o.Paths, o.Now(), "orphaned")
 			if err != nil {
-				return config.Config{}, nil, fmt.Errorf("cannot pair: the old audit log could not be set aside: %w", err)
+				return config.Config{}, partly(notes, moved), fmt.Errorf("cannot pair: the old audit log could not be set aside: %w", err)
 			}
 			if len(moved) > 0 {
 				notes = append(notes, "set an old audit log aside ("+strings.Join(moved, ", ")+")")
@@ -183,6 +183,17 @@ func (o *Options) identity(ctx context.Context) (config.Config, []string, error)
 		return config.Config{}, notes, err
 	}
 	return cfg, append(notes, note), nil
+}
+
+// partly adds to notes what a set-aside that failed partway did move: those
+// files are aside on disk whatever happens next, so they are said — Install
+// prints the notes on its error path too — never dropped with the error
+// (Task 32, L225 + L243).
+func partly(notes, moved []string) []string {
+	if len(moved) == 0 {
+		return notes
+	}
+	return append(notes, "set aside before that failed: "+strings.Join(moved, ", "))
 }
 
 // keep saves the pairing this machine already has, with hubs as its

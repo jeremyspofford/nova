@@ -236,6 +236,39 @@ func TestAnOrphanedAuditLogThatCannotBeSetAsideStopsThePairing(t *testing.T) {
 	}
 }
 
+// Task 32, L225 + L243: the orphaned-audit-log set-aside says what it moved
+// before it failed, too. A stray key with no config is not a pairing, so it
+// goes aside with the old log; the log's name leaves no room for a set-aside
+// name, so the key moves and the log does not.
+func TestAnOrphanSetAsideThatFailsPartwaySaysWhatItMoved(t *testing.T) {
+	p := paths(t)
+	p.AuditFile = filepath.Join(p.StateDir, strings.Repeat("a", 250))
+	for _, dir := range []string{p.StateDir, p.ConfigDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(p.AuditFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.KeyFile, []byte(strings.Repeat(core, 32)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o, calls := opts(t, p, nil, okEnroll(false))
+	o.Code = "ABCD-2345"
+	_, notes, err := o.identity(context.Background())
+	if err == nil || !strings.HasPrefix(err.Error(), "cannot pair: the old audit log could not be set aside") || len(*calls) != 0 {
+		t.Fatalf("err %v calls %+v", err, *calls)
+	}
+	moved := p.KeyFile + ".orphaned-1790000000"
+	if _, serr := os.Stat(moved); serr != nil {
+		t.Fatalf("the setup did not move the key: %v", serr)
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), moved) {
+		t.Fatalf("%s was set aside and not said: %v", moved, notes)
+	}
+}
+
 // A pairing that names no address was asked of no hub, so nothing proves it
 // dead: it is never set aside on that, and install says what it needs.
 func TestAPairingThatNamesNoAddressIsNeverSetAside(t *testing.T) {
