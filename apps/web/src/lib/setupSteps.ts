@@ -234,6 +234,11 @@ export function fillCode(command: string, code: string): string {
  *  carries `{CODE}` is never shown as if it were safe to copy and paste. */
 export const NOT_CANONICAL_REASON = "the pairing code is not in Nova's code format, so no command was filled"
 
+/** The one sentence a `commands` map missing an OS earns (S42b Task 32,
+ *  L680) — a malformed or partial manifest payload, never a thrown
+ *  TypeError: every line is filled or none are, with a stated reason. */
+export const MISSING_OS_REASON = "this device's setup commands are missing one of its operating systems, so nothing was filled"
+
 /**
  * The ONE helper that fills every OS line with one code (S42b K3/K5) —
  * AddPage and SetupModal both call this rather than each keeping their own
@@ -248,6 +253,9 @@ export function fillCommands(
   code: string | null | undefined,
 ): { commands: Record<OsKey, string> | null; reason: string | null } {
   if (!commands || !code) return { commands: null, reason: null }
+  if (!OS_KEYS.every(key => typeof commands[key] === 'string' && commands[key].length > 0)) {
+    return { commands: null, reason: MISSING_OS_REASON }
+  }
   const c = clean(code)
   if (!CANONICAL_CODE.test(c)) return { commands: null, reason: NOT_CANONICAL_REASON }
   const dashed = `${c.slice(0, 4)}-${c.slice(4)}`

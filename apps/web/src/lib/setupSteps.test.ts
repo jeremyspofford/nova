@@ -5,6 +5,7 @@ import {
   fillCommands,
   formatCode,
   installSteps,
+  MISSING_OS_REASON,
   NOT_CANONICAL_REASON,
   OS_KEYS,
   parseCodeFragment,
@@ -142,5 +143,14 @@ describe('fillCommands — the one helper that fills every OS line (S42b K3/K5)'
     expect(fillCommands(null, 'ABCD2345')).toEqual({ commands: null, reason: null })
     expect(fillCommands(COMMANDS, null)).toEqual({ commands: null, reason: null })
     expect(fillCommands(COMMANDS, undefined)).toEqual({ commands: null, reason: null })
+  })
+
+  it('a commands map missing an OS key states a reason instead of throwing (S42b Task 32, L680)', () => {
+    const partial = { linux: 'L --code {CODE}', macos: 'M --code {CODE}' } as unknown as Record<
+      (typeof OS_KEYS)[number],
+      string
+    >
+    const result = fillCommands(partial, 'ABCD2345')
+    expect(result).toEqual({ commands: null, reason: MISSING_OS_REASON })
   })
 })
