@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { GovernancePage } from './GovernancePage'
 import type { GovernanceEvent } from '../../lib/api'
 
@@ -54,6 +54,28 @@ describe('GovernancePage', () => {
     const getGovernanceEvents = vi.fn(async () => [event({ id: 'e-9', kind: 'future.kind' })])
     render(<GovernancePage api={{ getGovernanceEvents }} />)
     await waitFor(() => expect(screen.getByText('future.kind')).toBeTruthy())
+  })
+
+  // S42b Task 29, carry E1 (Task 15/16): a re-pair (decision 4) rebinds a
+  // live device's row to a new key — core writes device.repaired beside
+  // device.enrolled and device.revoked (governance.py). This page is a
+  // record of what happened, never a decision, so the assertion here is
+  // only that the kind renders, verbatim, with SOME colour of its own
+  // rather than falling through to the no-colour-for-this-kind default.
+  it('device.repaired renders verbatim, with its own colour (not the no-colour fallback)', async () => {
+    const getGovernanceEvents = vi.fn(async () => [
+      event({ id: 'e-10', kind: 'device.repaired' }),
+      event({ id: 'e-9', kind: 'future.kind' }),
+    ])
+    render(<GovernancePage api={{ getGovernanceEvents }} />)
+    await waitFor(() => expect(screen.getByText('device.repaired')).toBeTruthy())
+    const repairedRow = screen.getByTestId('governance-row-e-10')
+    const unknownRow = screen.getByTestId('governance-row-e-9')
+    const repairedBadge = within(repairedRow).getByText('device.repaired')
+    const unknownBadge = within(unknownRow).getByText('future.kind')
+    // Pinned apart, not just rendered: device.repaired must not share the
+    // unstyled fallback a kind this page has never heard of gets.
+    expect(repairedBadge.className).not.toBe(unknownBadge.className)
   })
 
   it('a failed load states the reason', async () => {
