@@ -521,9 +521,17 @@ def test_many_fake_openers_ahead_of_one_far_closer_scans_fast(n_openers):
 
     text = _far_closer_payload(n_openers)
     assert len(text) > _SCAN_WINDOW  # the closer really is outside the window
-    started = time.perf_counter()
-    scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
-    elapsed = time.perf_counter() - started
+    # The best of three, as its sibling above takes it (Task 32 Phase C): the
+    # pin measures the scan, not the process around it. One sample flaked at
+    # 0.104 s in a full core run, with this scanner byte-identical to main's;
+    # alone it takes about 0.063 s. Without the window, ONE scan of the
+    # 33,000-opener payload took 313 s on the same machine, so a quadratic
+    # scan misses 0.1 s on all three (pytest-timeout ends it first).
+    elapsed = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
+        elapsed = min(elapsed, time.perf_counter() - started)
     assert elapsed < 0.1, f"took {elapsed:.3f}s for {n_openers} openers"
     # Correctness for what IS in-window: the closer is outside it, so there is
     # nothing complete to read — no calls, and the text is flagged unparsed
