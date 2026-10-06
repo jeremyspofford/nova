@@ -437,6 +437,7 @@ def test_the_answering_memory_tools_are_every_memory_tool_but_the_backfill():
 _ANSWER_ARGS = {
     "memory_search": {"query": "coffee"},
     "memory_save": {"title": "A", "content": "b"},
+    "memory_forget": {"id": "people/x/journals/2026-10-06.md"},
 }
 
 
@@ -478,10 +479,11 @@ async def test_an_answering_tool_is_ok_only_when_memory_answered(name, memory_li
     assert set(_ANSWER_ARGS) == guards._MEMORY_ANSWER_TOOLS
     _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(None))
     assert ok is False
-    refusing = fakes.FakeMemory(recall_status=500, save_status=500)
+    refusing = fakes.FakeMemory(recall_status=500, save_status=500, forget_status=500)
     _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(refusing))
     assert ok is False
-    _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(fakes.FakeMemory()))
+    answering = fakes.FakeMemory(forget_status=200)
+    _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(answering))
     assert ok is True
 
 

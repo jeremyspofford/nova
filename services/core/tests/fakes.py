@@ -552,6 +552,9 @@ class FakeMemory:
     save_status: int = 200
     save_body: dict | None = None
     forget_status: int | None = None
+    # When set, /forget answers 200 with exactly this body instead of the
+    # confirmation — a service that did not say it verified the deletion.
+    forget_body: dict | None = None
     recalls: list[dict] = field(default_factory=list)
     ingests: list[dict] = field(default_factory=list)
     saves: list[dict] = field(default_factory=list)
@@ -644,6 +647,8 @@ class FakeMemory:
         if status != 200:
             return JSONResponse({"error": "no such memory file"}, status_code=status)
         self.journal_paths.discard(path)
+        if self.forget_body is not None:
+            return JSONResponse(self.forget_body)
         return JSONResponse({"path": path, "deleted": True})
 
 
