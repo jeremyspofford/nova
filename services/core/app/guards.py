@@ -49,7 +49,7 @@ import ipaddress
 import re
 import shlex
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, NamedTuple
@@ -1773,6 +1773,17 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "device_run",
     ),
+    # S37a: her MCP client, as GENERAL abilities — connecting to MCP servers,
+    # using MCP tools. Plural or indefinite nouns only, like every row here:
+    # "the MCP server" names one thing and is left alone. A NAMED server's
+    # denial is server_denial_check's, which reads the live server list.
+    (
+        re.compile(
+            r"\bconnect(?:ing)?\s+(?:to\s+)?(?:an?\s+|any\s+|new\s+)?mcp\s+servers?\b", re.I
+        ),
+        "mcp_connect",
+    ),
+    (re.compile(r"\buse\s+(?:an?\s+|any\s+)?mcp\s+(?:servers?|tools?)\b", re.I), "mcp_call"),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -1824,16 +1835,40 @@ _NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+
 # "there is no <capability> in my toolbox" (S16, her sentence to the owner on
 # 2026-09-11). The lead family is first-person because a denial has to be ABOUT
 # her; this one is impersonal in grammar and self-referring in substance, so it
-# is admitted only when the clause also names her own toolset — the lookahead
-# is what keeps "there is no file at that path" out. Same lesson the trailing
-# family learned in S12: a denial does not stop being a denial for being said
-# about a possession rather than an ability.
-_ABSENT_FROM_TOOLSET = re.compile(
-    r"\bthere\s+(?:is|are)\s+no\b"
-    r"(?=[^.?!\n]*\bin\s+my\s+"
-    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b)",
+# is admitted only when the clause also names her own toolset before the next
+# . ? ! or line break — that is what keeps "there is no file at that path" out
+# (_absent_from_toolset). Same lesson the trailing family learned in S12: a
+# denial does not stop being a denial for being said about a possession rather
+# than an ability.
+_ABSENT_FROM_TOOLSET = re.compile(r"\bthere\s+(?:is|are)\s+no\b", re.I)
+_IN_MY_TOOLSET = re.compile(
+    r"\bin\s+my\s+"
+    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b",
     re.I,
 )
+_STRETCH_END = re.compile(r"[.?!\n]")
+
+
+def _absent_from_toolset(clause: str) -> re.Match[str] | None:
+    """The first "there is no" in `clause` that her own toolset follows before
+    the next . ? ! or line break — the impersonal denial lead.
+
+    S37a Task 12 (X1): this was one pattern whose lookahead read on to the
+    toolset words from EVERY "there is no", so a clause of them that never
+    named the toolset was read once per occurrence — 1.3 s at 50 KB, x16 for
+    4x the input. Each stretch is now read once: a later "there is no" in the
+    same stretch sees less of it than the first one did, so when the first
+    finds no toolset words after it, none of the others can either."""
+    pos = 0
+    while (lead := _ABSENT_FROM_TOOLSET.search(clause, pos)) is not None:
+        stop = _STRETCH_END.search(clause, lead.end())
+        end = stop.start() if stop is not None else len(clause)
+        if _IN_MY_TOOLSET.search(clause, lead.end(), end) is not None:
+            return lead
+        pos = end
+    return None
+
+
 _TRAILING_DENIAL = re.compile(
     _NOT_COPULA + r"\s+(?:"
     r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
@@ -1859,9 +1894,9 @@ _TRAILING_DENIAL = re.compile(
 # 11 honest phrasings: 9 silent, 2 corrected into "I can do that" — "I can't
 # write files to paths outside the workspace" and "I can't write files there —
 # /etc/nova/notes.md is outside my workspace". The window is gone; the scope
-# word is now found anywhere in the DENIAL'S OWN TAIL (_denial_tail).
-_SCOPE_QUALIFIER = re.compile(
-    r"\b(?:"
+# word is now found anywhere in the DENIAL'S OWN TAIL (_DenialTails).
+_SCOPE_WORDS = (
+    r"(?:"
     r"outside|beyond|elsewhere|externally"
     r"|(?:anywhere|any\s+place)\s+(?:else|other|except|but)"
     r"|(?:other\s+than|except|besides|apart\s+from)\b"
@@ -1869,13 +1904,31 @@ _SCOPE_QUALIFIER = re.compile(
     r"|on\s+(?:the\s+)?(?:web|internet)"
     r"|(?:in|on|for|of)\s+(?:someone|somebody|another|other|the\s+other)"
     r"|not\s+in\s+(?:my|this)\b"
-    r")",
-    re.I,
+    r")"
 )
+_SCOPE_QUALIFIER = re.compile(r"\b" + _SCOPE_WORDS, re.I)
+# The same words at a tail's very first character, where the tail began as a
+# string of its own: there `\b` read the tail's start, which is a boundary
+# before any letter — even when the capability phrase ended inside a word.
+_SCOPE_AT_TAIL_START = re.compile(_SCOPE_WORDS, re.I)
 
 
-def _denial_tail(clause: str, phrase_end: int) -> str:
-    """The text that belongs to THIS denial — where a scope word may qualify it.
+def _match_starts(pattern: re.Pattern[str], text: str) -> list[int]:
+    """Every index at which `pattern` can match in `text`, in order — the
+    overlapping ones too, so it holds exactly the starts `pattern.search(text,
+    pos)` can return. One pass: each search resumes one past the start it
+    found, so no position is tried twice."""
+    starts: list[int] = []
+    pos = 0
+    while (found := pattern.search(text, pos)) is not None:
+        starts.append(found.start())
+        pos = found.start() + 1
+    return starts
+
+
+class _DenialTails:
+    """The tail that belongs to each denial in ONE clause — where a scope word
+    may qualify it — read once for the clause (S37a Task 12, ruling X1).
 
     WHERE THE DENIAL ENDS, and why this is the right boundary. The outer unit
     is already the clause: _clauses splits on sentence terminators, semicolons,
@@ -1900,13 +1953,47 @@ def _denial_tail(clause: str, phrase_end: int) -> str:
     stale"), which silences the guard: a MISS, which is the direction this
     family always errs in (ruling S2d-R2 — a wrongly-corrected honest reply is
     worse than a missed lie).
+
+    READ ONCE PER CLAUSE (X1). Each phrase used to find its tail with two
+    searches to the end of the clause, copy it out and search the copy — per
+    phrase, governed or not: 14.5 s at 50 KB, x16 for 4x the input. Now every
+    place a denial starts and every scope word is found once, the first time a
+    governed phrase asks, and each phrase is answered with a bisect. The
+    verdicts are the copy-and-search ones exactly: a scope word strictly inside
+    the tail is matched in place, which reads the same characters, ending at
+    the tail's end as the copy did; one at the tail's very first character is
+    matched without the `\\b` the copy's own start supplied
+    (_SCOPE_AT_TAIL_START). tests/test_guard_regex_timing.py keeps the old body
+    as the oracle.
     """
-    end = len(clause)
-    for pattern in (_DENIAL_LEAD, _TRAILING_DENIAL):
-        nxt = pattern.search(clause, phrase_end)
-        if nxt is not None:
-            end = min(end, nxt.start())
-    return clause[phrase_end:end]
+
+    __slots__ = ("_clause", "_ends", "_scopes")
+
+    def __init__(self, clause: str) -> None:
+        self._clause = clause
+        self._ends = sorted(
+            {*_match_starts(_DENIAL_LEAD, clause), *_match_starts(_TRAILING_DENIAL, clause)}
+        )
+        self._scopes = _match_starts(_SCOPE_QUALIFIER, clause)
+
+    def scoped(self, phrase_end: int) -> bool:
+        """Whether a scope word sits in the tail of the denied phrase that ends
+        at `phrase_end` — the tail running to the next denial, or the clause's
+        end."""
+        clause, ends, scopes = self._clause, self._ends, self._scopes
+        at = bisect_left(ends, phrase_end)
+        end = ends[at] if at < len(ends) else len(clause)
+        if _SCOPE_AT_TAIL_START.match(clause, phrase_end, end) is not None:
+            return True
+        # A scope word can start inside the tail and run past its end only
+        # where the next denial begins inside it ("not in MY capabilities
+        # don't include"), so at most a few are passed over here.
+        at = bisect_right(scopes, phrase_end)
+        while at < len(scopes) and scopes[at] < end:
+            if _SCOPE_QUALIFIER.match(clause, scopes[at], end) is not None:
+                return True
+            at += 1
+        return False
 
 
 def _capability_correction_text(tools_named: Sequence[str]) -> str:
@@ -1937,10 +2024,11 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue  # a question/offer asserts no inability
-        lead = _DENIAL_LEAD.search(clause) or _ABSENT_FROM_TOOLSET.search(clause)
+        lead = _DENIAL_LEAD.search(clause) or _absent_from_toolset(clause)
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
+        tails: _DenialTails | None = None  # read on the first governed phrase
         for pattern, tool in _CAPABILITY_TOOLS:
             if tool not in registered or tool in seen:
                 # No such tool -> the denial is HONEST; already seen -> counted.
@@ -1952,12 +2040,15 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
+                if not (after_lead or before_trailing):
+                    continue  # no denial governs it, so nothing can deny it
                 # A scope limit anywhere in this denial's own tail ("...files
                 # OUTSIDE my folder", "...files to paths OUTSIDE the
                 # workspace") is a true statement about containment, not a
-                # disowned capability. _denial_tail says where that tail ends.
-                scoped = _SCOPE_QUALIFIER.search(_denial_tail(clause, m.end()))
-                if (after_lead or before_trailing) and scoped is None:
+                # disowned capability. _DenialTails says where that tail ends.
+                if tails is None:
+                    tails = _DenialTails(clause)
+                if not tails.scoped(m.end()):
                     seen.add(tool)
                     denied.append((m.group(0).strip(), tool))
                     break
@@ -9905,3 +9996,257 @@ def _memory_claim(match: re.Match[str], recall: Any, tool: str | None) -> Memory
         text=text,
         retrievers_missing=missing,
     )
+
+
+# -- the MCP server claims (S37a) ------------------------------------------------
+#
+# Two append-only checks over HER reply at the end of the turn, in the
+# said-not-done shape (fix round 3, 2026-09-29): a false fire costs one true
+# sentence, never an action. Both are DERIVED from the live list of connected
+# servers the turn read once (chat._mcp_server_refs), never a list kept here,
+# and neither reads the owner's message (ruling 2026-09-27).
+#
+#   * server_denial_check — "I can't access GitHub" while GitHub is connected.
+#     Silent when that server's last call failed (its row, or a failed mcp_*
+#     span for it this turn): then the sentence is true. Silent on a question,
+#     a hedge, a past attempt, and a denial qualified as a present state.
+#     "I can’t" (U+2019) is read as "I can't" (ruling F18).
+#   * server_claim_check — "I checked GitHub", "according to GitHub", "GitHub
+#     shows …" when no call to that server was ANSWERED this turn: an ok
+#     mcp_* span, or the server's own isError answer (ruling T7-E: the tool's
+#     answer, never a failing server). An ok live read whose arguments name
+#     the server backs it too (she fetched github.com), and a recap marked as
+#     earlier is left alone (plan decision P16). The sentence says only what
+#     the record shows (#90's T3): no call ran, or calls ran and none
+#     succeeded — never "no call ran" beside one that did.
+#
+# #90's rules hold for both (ruling F5): a turn whose delegation may have run
+# an agent is left alone (_a_delegation_ran — the agent's calls are on ITS
+# turn), and a call dispatch refused before its executor (`reached_executor`
+# False) reached nothing, so it is neither a failed call nor a call that ran.
+# The third, the persona's own toolset, is the caller's: chat hands
+# server_denial_check no servers unless the persona holds mcp_call.
+
+
+@dataclass(frozen=True)
+class McpServerRef:
+    """A connected MCP server as the guards see it: its connection name, the
+    words that name it in prose (lowercase), and whether its last call failed."""
+
+    name: str
+    words: tuple[str, ...]
+    failing: bool = False
+
+
+@dataclass(frozen=True)
+class ServerClaimFound:
+    """One MCP server claim: which server, the words that made it, and the one
+    sentence the turn appends."""
+
+    server: str
+    phrase: str
+    text: str
+
+
+_MCP_TOOL_NAMES = frozenset({"mcp_call", "mcp_tools", "mcp_connect"})
+_SERVER_ACCESS = (
+    r"(?:access|reach|connect\s+to|use|query|get\s+(?:in)?to|talk\s+to|read\s+from|see)"
+)
+_SERVER_DETERMINER = r"(?:(?:my|your|the)\s+)?"
+_SERVER_READ_VERB = r"(?:checked|looked\s+(?:at|into)|queried|pulled|fetched|read|searched)"
+_SERVER_SAYS = r"(?:shows|says|reports|lists|confirms|indicates)"
+_SERVER_PRESENT_STATE = re.compile(
+    r"\b(?:right\s+now|at\s+the\s+moment|currently|for\s+now|at\s+present|today|until|unless"
+    r"|because|since|while|anymore|any\s+more)\b",
+    re.I,
+)
+_SERVER_EARLIER = re.compile(
+    r"\b(?:earlier|before|previously|yesterday|last\s+time|this\s+morning|a\s+while\s+ago)\b",
+    re.I,
+)
+
+
+@lru_cache(maxsize=128)
+def _server_patterns(
+    words: tuple[str, ...],
+) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """(after a denial lead, the name alone, a first-person read, an
+    attribution) for one server's words. Built per server set and cached, and
+    swept by tests/test_guard_regex_timing.py like the per-machine builders.
+    Every alternative is an escaped literal, so the patterns stay linear.
+
+    `after_lead` is only ever MATCHED at a lead's end, which follows a letter;
+    the lookbehind for a non-space and the possessive runs keep a search over
+    it linear too (ruling F2: the plain optional-whitespace form walked a run
+    of padding from each of its positions — 271 ms at 1,500 characters)."""
+    alt = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    name = rf"{_SERVER_DETERMINER}(?:{alt})\b"
+    after_lead = re.compile(rf"(?<!\s)\s*+(?:{_SERVER_ACCESS}\s++)?{name}", re.I)
+    named = re.compile(name, re.I)
+    read = re.compile(rf"\bI(?:['’]ve|\s+have)?\s+(?:just\s+)?{_SERVER_READ_VERB}\s+{name}", re.I)
+    said = re.compile(
+        rf"\b(?:according\s+to|per)\s+{name}|\b(?:{alt})(?:['’]s\s+\w+)?\s+{_SERVER_SAYS}\b",
+        re.I,
+    )
+    return after_lead, named, read, said
+
+
+def _mcp_spans(spans: Sequence[Any]) -> Iterator[tuple[Mapping[str, Any], set[str]]]:
+    """(meta, the servers it names) for each mcp_* span that REACHED its
+    executor — from its facts, and from its own arguments. A call dispatch
+    refused first (`reached_executor` False: unreadable arguments, no such
+    tool) reached nothing, so it says nothing about a server (ruling F5); an
+    absent key is "not recorded", never "not reached" (#90's M-2)."""
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        if getattr(span, "name", None) not in _MCP_TOOL_NAMES:
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("reached_executor") is False:
+            continue
+        named: set[str] = set()
+        for fact in meta.get("facts") or ():
+            if isinstance(fact, dict) and isinstance(fact.get("mcp_server"), str):
+                named.add(fact["mcp_server"])
+        args = meta.get("args_redacted")
+        if isinstance(args, dict):
+            for key in ("server", "name"):
+                if isinstance(args.get(key), str):
+                    named.add(args[key])
+        yield meta, named
+
+
+def _mcp_servers_in(spans: Sequence[Any], *, ok: bool) -> set[str]:
+    """The servers an mcp_* call that reached its executor named this turn,
+    among the calls whose `ok` is the one asked for."""
+    names: set[str] = set()
+    for meta, named in _mcp_spans(spans):
+        if bool(meta.get("ok")) is ok:
+            names |= named
+    return names
+
+
+def _mcp_servers_answered(spans: Sequence[Any]) -> set[str]:
+    """The servers that ANSWERED a call this turn: an ok mcp_* call, or one
+    the server answered with its tool's own error. Dispatch records an isError
+    answer as a failed call, but it is the tool's answer, never a failing
+    server (ruling T7-E) — "GitHub says that run does not exist" relays it."""
+    answered: set[str] = set()
+    for meta, named in _mcp_spans(spans):
+        if meta.get("ok"):
+            answered |= named
+            continue
+        for fact in meta.get("facts") or ():
+            if (
+                isinstance(fact, dict)
+                and fact.get("is_error") is True
+                and isinstance(fact.get("mcp_server"), str)
+            ):
+                answered.add(fact["mcp_server"])
+    return answered
+
+
+def _live_read_arguments(spans: Sequence[Any]) -> str:
+    """The lowercased arguments of every ok live read this turn — a web fetch, a
+    search, a device read — to look for the words that name a server. Imported
+    inside the call because app.tools imports this module (_spend_tools' rule)."""
+    from app import tools
+
+    readers = set(tools.live_reading_tool_names())
+    parts = []
+    for span in spans:
+        meta = getattr(span, "meta", None) or {}
+        if (
+            getattr(span, "kind", None) == "tool"
+            and getattr(span, "name", None) in readers
+            and meta.get("ok")
+        ):
+            parts.append(str(meta.get("args_redacted")).lower())
+    return " ".join(parts)
+
+
+def server_denial_check(
+    reply_text: str, spans: Sequence[Any], servers: Sequence[McpServerRef]
+) -> ServerClaimFound | None:
+    """A first-person, present denial of a CONNECTED server — "I don't have
+    access to GitHub" — answered with one appended sentence. Pure;
+    precision-first: a denial the facts make true is left alone."""
+    if not reply_text or not reply_text.strip() or not servers:
+        return None
+    if _a_delegation_ran(spans):
+        return None  # the agent's calls are on its own turn (#90, ruling F5)
+    failed_now = _mcp_servers_in(spans, ok=False)
+    # Whose denial would be false, decided once for the reply, not per clause.
+    candidates = [
+        server
+        for server in servers
+        if not server.failing and server.name not in failed_now and server.words
+    ]
+    if not candidates:
+        return None
+    # Ruling F18: the lead family reads an apostrophe; "I can’t" is "I can't".
+    # One character for one, so every position is where it was.
+    text = reply_text.replace("\u2019", "'")
+    for clause, is_question in _clauses(text):
+        if is_question or _SERVER_PRESENT_STATE.search(clause):
+            continue
+        lead = _DENIAL_LEAD.search(clause)
+        trailing = _TRAILING_DENIAL.search(clause)
+        if lead is None and trailing is None:
+            continue
+        for server in candidates:
+            after_lead, named, _read, _said = _server_patterns(server.words)
+            hit = after_lead.match(clause, lead.end()) if lead is not None else None
+            if hit is None and trailing is not None:
+                hit = named.search(clause, 0, trailing.start())
+            if hit is None:
+                continue
+            return ServerClaimFound(
+                server=server.name,
+                phrase=clause.strip()[:120],
+                text=f"({server.name} is connected: mcp_call can reach it.)",
+            )
+    return None
+
+
+def server_claim_check(
+    reply_text: str, spans: Sequence[Any], servers: Sequence[McpServerRef]
+) -> ServerClaimFound | None:
+    """A first-person read of, or an attribution to, a connected server that
+    answered no call this turn — answered with one appended sentence that says
+    what the record shows. Pure."""
+    if not reply_text or not reply_text.strip() or not servers:
+        return None
+    if _a_delegation_ran(spans):
+        return None  # the agent's calls are on its own turn (#90, ruling F5)
+    answered = _mcp_servers_answered(spans)
+    read_args = _live_read_arguments(spans)
+    # Which servers nothing backs, decided once for the reply, not per clause.
+    candidates = [
+        server
+        for server in servers
+        if server.words
+        and server.name not in answered
+        and not any(word in read_args for word in server.words)
+    ]
+    if not candidates:
+        return None
+    ran = _mcp_servers_in(spans, ok=False)
+    for clause, is_question in _clauses(reply_text):
+        if is_question or _SERVER_EARLIER.search(clause):
+            continue
+        for server in candidates:
+            _lead, _named, read, said = _server_patterns(server.words)
+            found = read.search(clause) or said.search(clause)
+            if found is None:
+                continue
+            # A call that ran and failed is in the record: "no call ran" would
+            # be the guard's own false sentence beside it.
+            outcome = "succeeded" if server.name in ran else "ran"
+            return ServerClaimFound(
+                server=server.name,
+                phrase=found.group(0)[:120],
+                text=f"(No call to {server.name} {outcome} this turn.)",
+            )
+    return None

@@ -443,7 +443,7 @@ def test_the_agent_corrections_are_clean_over_themselves():
 # eleven that day: 9 silent, 2 corrected into "Correction: I can do that — I
 # have a tool for it (workspace_write_file)", i.e. the guard telling the owner
 # she can write anywhere. The two that were wrong are #2 and #3 and they are
-# pinned here by name; the window is gone (guards._denial_tail) and all
+# pinned here by name; the window is gone (guards._DenialTails) and all
 # eleven now measure silent. This list IS the re-measurement — a phrasing
 # added here is a phrasing someone checked.
 @pytest.mark.parametrize(
@@ -629,3 +629,36 @@ def test_a_machine_denial_is_false_only_while_machine_status_is_registered():
     assert fired is not None and tgt(fired) == ["machine_status"]
     without = [name for name in ALL_TOOLS if name != "machine_status"]
     assert guards.capability_claim_check(denial, without) is None
+
+
+# -- her MCP client (S37a) ---------------------------------------------------
+#
+# Connecting to MCP servers and using MCP tools are GENERAL abilities, held
+# the moment mcp_connect and mcp_call are registered. Plural or indefinite
+# nouns only, like every row: "the MCP server" names one thing, and a NAMED
+# server's denial ("I can't access GitHub") is server_denial_check's, which
+# reads the live server list (test_mcp_guards.py).
+
+
+def test_the_mcp_abilities_are_hers_while_the_tools_are_registered():
+    correction = guards.capability_claim_check("I can't connect to MCP servers.", ALL_TOOLS)
+    assert correction is not None and "mcp_connect" in correction.text
+    correction = guards.capability_claim_check("I'm unable to use MCP tools.", ALL_TOOLS)
+    assert correction is not None and "mcp_call" in correction.text
+    assert (
+        guards.capability_claim_check("I can't connect to the MCP server right now.", ALL_TOOLS)
+        is None
+    )
+
+
+def test_the_mcp_denials_are_honest_without_the_tools():
+    without = [name for name in ALL_TOOLS if name not in ("mcp_connect", "mcp_call")]
+    assert guards.capability_claim_check("I can't connect to MCP servers.", without) is None
+    assert guards.capability_claim_check("I'm unable to use MCP tools.", without) is None
+
+
+def test_the_mcp_corrections_are_clean_over_themselves():
+    for reply in ("I can't connect to MCP servers.", "I'm unable to use MCP tools."):
+        correction = guards.capability_claim_check(reply, ALL_TOOLS)
+        assert correction is not None
+        assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
