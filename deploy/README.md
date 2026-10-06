@@ -85,6 +85,74 @@ Nothing here links a specific engine to a specific agent by that identity
 yet — that join is S44's. A machine with no models still shows up, through
 its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
 
+## The hub machine's own agent
+
+`./install` ends by installing novad on the hub machine itself (S42b), so
+the hub shows up in Devices like any other machine Nova controls — see
+`apps/novad/README.md` for what the agent does once paired.
+
+1. It builds `agent-dist` from the **committed** `apps/novad` tree
+   (`git archive HEAD apps/novad`, stamped with that tree's own version).
+   This step runs against the stack that is already up — after the health
+   table and the inference-compute check — so a dirty `apps/novad` tree is
+   refused there, by `deploy/agent_version.sh`, with its own stated reason
+   ("apps/novad has uncommitted changes — commit them first"), never
+   earlier in preflight. `./install` fails and names it; the stack itself
+   is left running.
+2. It downloads the build through this machine's own loopback door
+   (`http://127.0.0.1:3000`) and runs `novad install --if-missing`.
+3. A running agent is left exactly as it is (`--if-missing`): keeping it on
+   the hub's build afterward is Nova's job (see "Updates" in
+   `apps/novad/README.md`), not `./install`'s.
+4. A machine with no pairing gets one: `./install` mints a pairing code
+   through `devices_cli`, named after this machine —
+   `NOVA_HUB_AGENT_NAME=<name> ./install` to choose the name yourself, else
+   the hostname, lowercased. The name can never be `hub`: that is the
+   bundled engine's own name (decision D8), and `./install` refuses before
+   pairing rather than silently picking another one. The code travels to
+   `novad install` only through the environment, never a command line or a
+   log line.
+5. Its hubs, in order: this machine's own loopback first, then the tailnet
+   address when the tailnet is on.
+
+**The door is not identity.** Anything that reaches the hub machine's own
+loopback port counts as having come in through its door — the owner's own
+tunnel or an `ssh -L` on the hub arrives the same way. So the tile for an
+agent paired this way never claims to BE the hub: it reads **"Hub's
+door"**, both as its badge and as that badge's hover title. Core says the
+same fact the same way (`services/core/app/network.py`'s `door_of`).
+
+**Rate limits are per door too, not global** (Task 26). The agent
+downloads (`/api/v1/agent/dist/...`, which `./install` and every OS card
+use) are limited to 30 a minute per door — the hub's own loopback, the
+tailnet, and any other address core sees — so traffic through one door can
+never hold up `./install` or a pairing walk through another. Enroll has its
+own, tighter limit: 5 wrong codes per 15 minutes per bucket, counted before
+an attempt even finishes, so a burst cannot spend more than 5 at once. A
+visitor arriving through a relay (the owner's own tunnel, or funnel) is
+counted apart from that door's own traffic, per door, never against the
+hub's own loopback or the tailnet.
+
+A WSL hub installs nothing here: `./install` detects it is running inside
+WSL and instead prints the Windows card's one-line command, with a fresh
+code, to run in PowerShell on that same PC — Nova's agent runs on Windows
+itself, never inside WSL.
+
+**A native Windows machine (no WSL yet)** has no `./install` to run at all:
+the hub itself needs WSL. `install.ps1` at the repo root states exactly
+that and gives the one step (`wsl --install`), then exits. PowerShell's
+default execution policy blocks a `.ps1` file before it can even print its
+own words, so run it as `powershell -ExecutionPolicy Bypass -File
+.\install.ps1` — or just read the one step above instead of running it.
+
+**The two volumes.** `agent-dist`'s build profile (`--profile build`, never
+started by a plain `up`) writes into `v4_agent_dist` — the six builds and
+the manifest core serves and signs — and caches Go's build and module
+state in `v4_agent_build_cache`. Neither is backed up: `./install` rebuilds
+`v4_agent_dist` from the same committed tree, byte for byte, and
+`v4_agent_build_cache` only makes that rebuild faster — losing it costs
+time, nothing else.
+
 ## Tailnet access
 
 One durable HTTPS origin on your tailnet — `https://<node>.<tailnet>.ts.net`

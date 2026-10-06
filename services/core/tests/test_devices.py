@@ -786,7 +786,7 @@ async def test_enroll_ignores_a_home_dir_an_older_daemon_still_sends(owner_clien
     """The field died with the grants editor (2026-09-03). A daemon built before
     that still posts it; the body model has no extra='forbid', so it is dropped
     on the floor — never a 422 that stops last week's binary from pairing."""
-    resp = await _api_enrol(owner_client, await _api_code(owner_client), home_dir="/home/jeremy")
+    resp = await _api_enrol(owner_client, await _api_code(owner_client), home_dir="/home/sam")
     assert resp.status_code == 200, resp.text
     (device,) = (await owner_client.get("/api/v1/devices")).json()["devices"]
     assert "home_dir" not in device

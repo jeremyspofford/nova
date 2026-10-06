@@ -63,7 +63,7 @@ v4's project is also `nova`. So `docker compose up` would adopt `nova-postgres-1
 
 **Owner ruling 2026-09-21:** that stack is to be **deleted, containers and volumes**, by an installer that names what it found first (`hub-topology.md` decision 16, `s41/rulings.md`).
 
-**Carried out the same day**, widened by the owner to "all old nova stacks, nova-ai-platform included": projects `nova`, `docker` and `project` were archived to `/home/jeremy/nova-old-stacks-archive` (21 MB, checksums verified by the operator) and then removed — 13 containers, 6 volumes, 3 networks, 7 images — with `minecraft` left running and `jobhunter` untouched. **172.18/16 is therefore free on that machine now**, and the only subnets left are 172.17 and 172.19.
+**Carried out the same day**, widened by the owner to "all old nova stacks, nova-ai-platform included": projects `nova`, `docker` and `project` were archived to `~/nova-old-stacks-archive` (21 MB, checksums verified by the operator) and then removed — 13 containers, 6 volumes, 3 networks, 7 images — with `minecraft` left running and `jobhunter` untouched. **172.18/16 is therefore free on that machine now**, and the only subnets left are 172.17 and 172.19.
 
 ### Correction, measured 2026-09-21: a `nova_` name does NOT mean the `nova` project
 
@@ -76,15 +76,15 @@ The line above previously listed `nova_pgdata` and `nova_redis_data` as that sta
 | `nova_pgdata` | **docker** | 75.77 MB |
 | `nova_redis_data` | **docker** | 264 B |
 
-Project `docker` is `/home/jeremy/repos/nova-ai-platform/infra/docker/docker-compose.yml`, and it also owns containers **named** `nova-redis` and `nova-postgres`. A deletion that selected by the name prefix `nova` — the obvious implementation — would destroy 75.8 MB belonging to a different project of his. **Selection must be by the `com.docker.compose.project` label, never by name.** `s41/map-minipc-measured.md` carries the full reading, and it is a pinned test in S41.
+Project `docker` is `~/repos/nova-ai-platform/infra/docker/docker-compose.yml`, and it also owns containers **named** `nova-redis` and `nova-postgres`. A deletion that selected by the name prefix `nova` — the obvious implementation — would destroy 75.8 MB belonging to a different project of his. **Selection must be by the `com.docker.compose.project` label, never by name.** `s41/map-minipc-measured.md` carries the full reading, and it is a pinned test in S41.
 
-**And the old project's compose file is a directory.** `/home/jeremy/workspace/nova/docker-compose.yml` on the mini PC is a root-owned empty **directory** (the single-file bind-mount failure mode), so `docker compose -f … down -v` cannot remove that stack. Removal must be `docker rm` plus `docker volume rm`, selected by label. There is no v4 checkout on that machine and `/home/jeremy/workspace/nova` there is not a git repository.
+**And the old project's compose file is a directory.** `~/workspace/nova/docker-compose.yml` on the mini PC is a root-owned empty **directory** (the single-file bind-mount failure mode), so `docker compose -f … down -v` cannot remove that stack. Removal must be `docker rm` plus `docker volume rm`, selected by label. There is no v4 checkout on that machine and `~/workspace/nova` there is not a git repository.
 
 ### Host facts for S41's encrypted bundle (measured 2026-09-21)
 
 bash **5.2.21**, OpenSSL **3.0.13**, GNU tar **1.35**, GNU coreutils **9.4** (`sha256sum`, `md5sum`), `shasum` 6.04, python3 **3.12.3**, gpg **2.4.4**, zstd **1.5.5**; **`age` is not installed**. Docker **29.8.0**, compose **v5.5.1**. Disk: 351 GB free of 460 GB.
 
-Docker subnets in use on that host: **172.17, 172.18, 172.19, 172.20, 172.21** — all `linkdown` but allocated, so `decide_subnet` must land at 172.22/16 or beyond. Wi-Fi `wlo1`, 192.168.0.245/24, default via 192.168.0.1.
+Docker subnets in use on that host: **172.17, 172.18, 172.19, 172.20, 172.21** — all `linkdown` but allocated, so `decide_subnet` must land at 172.22/16 or beyond. Wi-Fi `wlo1`, 192.0.2.245/24 (redacted; RFC 5737), default via 192.0.2.1.
 
 Other stacks on the machine that S41 must never touch: `minecraft` (**running**), `jobhunter`, `docker` (nova-ai-platform), `project`.
 
@@ -390,8 +390,8 @@ docker run --rm --network=<net> redis:7-alpine wget -q -T 3 -O /dev/null http://
 | default `bridge` | `172.17.0.1` (gateway) | **refused** | **reached** |
 | `nova_default` | `172.18.0.1` (gateway) | **refused** | **reached** |
 | `--add-host=…:host-gateway` | `host.docker.internal` → `172.17.0.1` | **refused** | **reached** |
-| default `bridge` | `100.71.168.83` (tailnet) | **refused** | **reached** |
-| default `bridge` | `192.168.0.245` (LAN) | **refused** | **reached** |
+| default `bridge` | `<TAILNET-IP>` (tailnet) | **refused** | **reached** |
+| default `bridge` | `192.0.2.245` (LAN, redacted; RFC 5737) | **refused** | **reached** |
 | `--network=host` | `127.0.0.1` | **reached** | — |
 
 And from the **live `nova-gateway-1`** container, which is the one that
@@ -501,8 +501,8 @@ sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
 
 Task 25 pins `golang:1.27.1@<that digest>`.
 
-**Step 2, cold/warm build vs CI.** `origin/main` was `9724e203004d` (full
-40-char sha `9724e203004d9fadd02446ecd588137d57365268`) at measurement time.
+**Step 2, cold/warm build vs CI.** `origin/main` was `<BUILD-HASH>` (full
+40-char sha redacted) at measurement time.
 That commit's `rebuild-ci` run reported an overall conclusion of
 **failure** — from unrelated jobs (`web`, `services (core)`,
 `backup-macos`) — but its `novad` job, which builds and uploads the
@@ -510,14 +510,14 @@ comparison artifact, **passed**, so that commit's artifact was used as-is;
 no newer main commit was needed. The same tree was cross-compiled to all
 six targets (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
 `windows/amd64`, `windows/arm64`) inside the pinned image, stamped
-`-X main.version=9724e203004d` to match CI exactly:
+`-X main.version=<BUILD-HASH>` to match CI exactly:
 
 | Pass | Wall time |
 |---|---|
 | Cold (`GOCACHE`/`GOMODCACHE` emptied first) | 88 s |
 | Warm | 2 s |
 
-All six `sha256sum`s matched CI's `novad-9724e203004d9fadd02446ecd588137d57365268`
+All six `sha256sum`s matched CI's `novad-<BUILD-HASH>`
 artifact, file for file: **IDENTICAL** (the hashes themselves are not
 recorded here — this file is public).
 

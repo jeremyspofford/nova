@@ -373,23 +373,51 @@ carries in [slice-42a-carries.md](slice-42a-carries.md). Core 036 is used.
 
 ### S42b: install, service, downloads, the code card
 
-- **Agent:** `internal/service` (systemd user unit plus linger, plist, Run key); verbs `install` (idempotent upgrade), `uninstall`, `supervise`.
-- **Deploy:**
-  - an `agent-dist` builder and the `v4_agent_dist` volume;
-  - nginx gate carve-outs, pinned in `gate_test.sh`;
-  - `install.sh` installs the hub-host agent (transport `host`);
-  - `install.ps1` stub: a Windows hub without WSL is told "cannot" plus `wsl --install`.
-- **Core:**
-  - new `agent_dist.py` (signed manifest; public paths, rate-limited);
-  - `machines.add_code` builds a per-OS card (POSIX `sh`, and PowerShell 5.1), each verifying the sha256 before running;
-  - `deploy/platform-walks.json` plus its test.
-- **Tool** (→ 42): `machine_add_code(name?, for_os?)`. The code reaches only the card, never her context.
-- **Guards:** `credential_claim` at both guard sites; the `_SETUP_MACHINE` offer class.
-- **Eval** (suite 16): `adds-a-mac-through-the-card`. She must say it has not been walked.
-- **Walk:**
-  1. "Set up your agent on my mini PC" → the Linux tab → the hash verifies → the unit and linger are installed.
-  2. The Dell gets the PowerShell card with no admin; the Run key survives a sign-out.
-  3. "Add my MacBook" → she says it has not been walked.
+**Status: Built (plan: [`s42b/plan.md`](s42b/plan.md)); walk pending.**
+Close-out: [`slice-42b-install-and-updates.md`](slice-42b-install-and-updates.md)
+(filled in at close-out); carries:
+[`slice-42b-carries.md`](slice-42b-carries.md). Core migration `038` is used.
+
+Decisions the plan made where the spec was silent, one line each (amended
+where the build changed them — see `slice-42b-carries.md` for why):
+
+| # | Decision |
+|---|---|
+| P1 | Binary per OS: `~/.local/bin/novad`; `%LocalAppData%\Programs\Nova\novad.exe`; `~/Library/Application Support/Nova/novad`. The S42c admin-only copies (`platform.AdminInstallDir`) are declared, nothing installs there. |
+| P2 | The version stamp is 12 hex of the `apps/novad` tree everywhere (CI, README, agent-dist); `deploy/agent_version.sh` refuses a dirty `apps/novad` — checked after the stack is up, not in preflight. |
+| P3 | "Can never get in" stays final under every service manager: the agent's exit 78 makes `supervise` itself exit 0 and log why; every unit restarts only on failure. |
+| P4 | The agent learns its mode from `supervise --mode <m>`, which sets `NOVA_AGENT_MODE`/`NOVA_SUPERVISOR_PID` for its child; a hand-started agent reports `foreground`. |
+| P5 | `run` writes `agent-status.json` (`connecting → ready → stopped`); `install` waits up to 60 s for `ready` as its own version before reporting success; one copy per identity via `run.lock`/`supervise.lock`. |
+| P6 | The Windows launcher: the Run key starts `supervise --mode run-key`, which relaunches itself detached and exits; the child runs in a kill-on-close job object, logging to `novad.log`. |
+| P7 | The update's mechanics: capability `daemon.update` (`version, sha256, path`); the agent refuses unless supervised; it stages the build and exits 75 only after its result and audit frames are written; `supervise` swaps it, waits up to 120 s for `ready`, else reverts. |
+| P8 | "Confirmed" in core means only the device's own next authenticated connection reporting the sent version; the other outcomes are `rolled_back`, `not_confirmed` (10 minutes, neither) and `refused`; `machine_update` waits up to 120 s for one. |
+| P9 | One `agent_updates` row with outcome `sent` at a time, mechanically — a unique partial index; her tool, the tile and the job all hit it. |
+| P10 | Idle = connected, no command in flight, none sent in 5 minutes. The `agent_updates` job runs every 15 minutes, the hub's own agent first, then by name; a build that failed anywhere is never sent again automatically. |
+| P11 | An agent that predates `daemon.update` (answers `unknown capability "daemon.update"`) is updated through its own `shell.exec`, composed by core; every other old agent gets a stated cannot plus the one command. |
+| P12 | A hand-started (`foreground`) agent states cannot and names the one step — close the window, run the setup card's command again; `install` upgrades it in place and leaves an unused pairing alone. |
+| P13 | Re-pair (decision 4): a code bound to one device row; enrolling with it rebinds the key, clears facts, bumps the audit epoch, keeps name and history. No retired-key table yet (a carry). |
+| P14 | A code may carry the machine's name; `hub` is refused as a device name everywhere (D8); `devices_cli mint --name N` mints a re-pair code when a live device already has that name. |
+| P15 | The badge's door: core records `devices.last_transport` from the direct peer and nginx's `X-Real-IP`, trusted only from web's fixed address. The tile reads **"Hub's door"**, derived on read — the door is not identity. |
+| P16 | The agent reports `folders {home, desktop, documents, downloads}` as the OS names them, never guessed; the fs tools accept `@desktop`, etc., resolved on the agent. |
+| P17 | `device_list` states an unavailable hands role's reason (an agent inside WSL: "cannot: this machine's Windows agent owns it") plus its build and door. |
+| P18 | One generator of the per-OS commands: core's `agent_card.py`. The public manifest carries them with a `{CODE}` slot; the chat card carries them filled. |
+| P19 | The public surface is seven exact paths. The rate limit is **per door** — the hub's loopback, the tailnet, any other address core sees — 30 downloads a minute each, with a relayed visitor (`Cf-Connecting-IP`, or funnel) counted apart, per door. Enroll's own limit is 5 wrong codes per 15 minutes per bucket, counted before the handler awaits. |
+| P20 | `code_claim` reused unchanged; a wrong hash is refused on the machine, before anything runs. |
+| P21 | `uninstall` stops and removes the service and the binaries; keeps the identity by default; `--forget` sets it aside. No self-revoke yet (a carry). |
+| P22 | The walk ledger lives at `services/core/app/platform_walks.json` (inside core's own build context). |
+| P23 | `./install` builds agent-dist, pairs this machine through its own loopback door, leaves a running agent alone, and prints the Windows line on a WSL hub. |
+| P24 | Two eval cases: `adds-a-mac-and-says-it-is-not-walked` and `says-sent-until-the-agent-reconnects`. |
+| P25 | "Update it now" sends even while a command is running there; its result names the **count** of in-flight commands that will end cancelled, not each by name — the hub keeps futures, not capability names. |
+| P26 | Linux linger: `install` runs `loginctl enable-linger` without sudo and reads it back; if it stays off, the card names the one `sudo loginctl enable-linger <user>` line. |
+| P27 | A frame core cannot store never ends the session — each frame type has its own guard; a value that cannot be stored is a `device.audit_break` naming why. |
+| P28 | A revoked agent's own knock is checked against its revoked key before core answers, and a verified knock is recorded; `device_list` says whether it is still knocking. |
+| P29 | Four new facts fields (`service`, `elevation`, `wsl_distros`, `probed_at`), probed by the agent at connect and on `facts.refresh` only, rendered by core into sentences — never a prompt list. No eval case yet: a declared device is read-only to the device tools (a carry). |
+| P30 | Children the agent starts for her get no terminal and empty input, on Linux and macOS (`Setsid`, stdin at EOF). The Windows half is not built yet — a carry, pending the owner's Dell reading. |
+| P31 | Retiring the old WSL agent in the walk is the owner's words alone; S42b gives her the facts to act on it (P29), and the evals score whether she does. |
+
+See `slice-42b-carries.md` for what each of these still owes, and
+`slice-42b-install-and-updates.md` for the walk, the eval and the gates once
+Task 32 runs them.
 
 ### S43a: Tailscale by login link
 

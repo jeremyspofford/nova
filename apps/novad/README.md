@@ -58,37 +58,124 @@ Re-enrolling is deliberate — it refuses to overwrite an existing enrollment
 without `--force`. A spent, expired, or wrong code is surfaced verbatim from
 the server.
 
-## Install per OS (manual until S42b adds the installers and service modes)
+## Install
 
-**Linux:** the systemd user unit and linger, as today:
+Settings → Devices → "Pair a device" gives one command per OS (POSIX `sh`
+for Linux and macOS; one line of PowerShell 5.1 for Windows). Pasted into a
+shell, it downloads the hub's build for this machine to a fresh temp
+directory, checks its sha256 against the signed manifest **before anything
+runs**, runs `novad install` with the code already in it, and deletes the
+download whatever happened — nothing is left in Downloads. Inside WSL the
+card instead prints the Windows line: see "Inside WSL", below.
+
+`novad install` itself:
 
 ```sh
-install -Dm755 novad ~/.local/bin/novad
-novad enroll --server https://your-nova-host --code A1B2C3D4 [--name laptop]
-mkdir -p ~/.config/systemd/user
-cp novad.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now novad
-sudo loginctl enable-linger "$USER"   # survives logout
+novad install [--hub <url>]... [--code <code>] [--name <name>] [--if-missing] [--restart-later]
 ```
 
-The unit now carries `RestartPreventExitStatus=78`: once core revokes this
-device, systemd stops it instead of restarting it every 5 s forever (see
-Revoked, below).
+- `--hub` is Nova's address; repeat it for fallbacks, in order (the card's
+  command already carries them).
+- `--code` is a pairing code, needed only when this machine has no pairing
+  Nova still knows. It can also travel as `NOVA_PAIRING_CODE` in the
+  environment instead of `--code` — never on the command line, which `ps`
+  shows to every other user, and never printed; `install` unsets the
+  variable as soon as it reads it, so nothing this process starts (a
+  supervisor, a command run for her) can inherit it.
+- `--name` is the machine's name (default: the card's, else the hostname).
+- `--if-missing` leaves an agent that is already installed and running
+  exactly as it is.
+- `--restart-later` schedules the service restart instead of waiting for
+  it, and keeps this machine's pairing without asking Nova — used when Nova
+  installs through an existing agent's own `shell.exec` (an S42a agent that
+  answers `unknown capability "daemon.update"`; see Updates, below).
 
-**Windows:** in PowerShell,
+Where the binary goes (P1): Linux `~/.local/bin/novad`; macOS
+`~/Library/Application Support/Nova/novad`; Windows
+`%LocalAppData%\Programs\Nova\novad.exe`. The service each OS gets (P3–P6):
+a systemd user unit plus linger on Linux; one LaunchAgent (`nova.novad`) on
+macOS; the HKCU Run value "Nova agent" on Windows. Each one starts `novad
+supervise --mode <systemd-user|launch-agent|run-key>` — the parent on every
+OS, started by the service definition, never meant to be run by hand.
 
-```powershell
-.\novad.exe enroll --server https://nova.<tailnet>.ts.net --code <CODE>
-.\novad.exe run
-```
+**"Installed" means the new agent's own status said `ready`, as this
+version — never that the command merely exited 0 (P5).** `install` waits up
+to 60 s for that before it reports success, and names what the status last
+said when it did not arrive in time.
 
-SmartScreen may ask once ("More info" → "Run anyway"); the binary is unsigned
-for now (owner decision 12). There is no Windows service mode yet — leave the
-window open, or start it yourself at logon; the Run-key launcher and `novad
-supervise` are S42b.
+Exit codes:
 
-**Inside WSL:** do not install novad there. `enroll` refuses:
+| Code | Means |
+|---|---|
+| 0 | ok, or a clean stop |
+| 1 | an error (its words are on stderr) |
+| 2 | bad usage |
+| 3 | `install` needs a pairing code — this machine has none Nova still knows |
+| 75 | `run` staged an update; its supervisor swaps it in (see Updates) |
+| 78 | not enrolled, or revoked — final; restarting cannot help |
+
+`novad uninstall [--forget]` (P21) stops and removes the service and every
+staged build (`.prev`, `.new`, `.failed`, anything moved aside). The
+pairing is kept by default, so a later `novad install` reuses it;
+`--forget` sets it aside instead. Either way it never claims the device is
+unpaired on Nova's side — only a revoke in Settings → Devices does that.
+
+`novad supervise --mode <systemd-user|launch-agent|run-key>` is what each
+service definition's command line runs; it is not meant to be started by
+hand — see "Running interactively", below, for what running the agent
+itself by hand changes.
+
+**Walk status (S42b).** Installing, the three service modes, updates and
+re-pair are built and tested in CI on Linux, macOS and Windows, not walked,
+until Task 32's walk dates a native one. macOS stays unwalked beyond that
+either way, by owner decision 11 (the owner's only Mac is his work device).
+
+## Updates
+
+The hub's own build is the desired state for every agent. Nova sends it one
+idle machine at a time — the hub's own agent first, then the rest — never a
+build that failed anywhere, and never to a machine already tried with it.
+"Idle" means connected, with no command in flight and none sent to it in
+the last five minutes.
+
+On the wire this is the `daemon.update` capability: the agent downloads the
+build the signed command names, checks its sha256, and stages it as
+`novad.new` beside the running binary — only while it is running supervised
+by its service; a hand-started agent states *cannot* (see "Running
+interactively"). It then exits **75** so its supervisor can swap the build
+in: `supervise` renames the running binary to `.prev`, starts the staged
+one, and waits up to 120 s for it to report `ready` as the new version —
+past that, or if it cannot even start, `supervise` puts `.prev` back and
+records why, instead of looping on a build that cannot run.
+
+**Nothing confirms an update except this device's own next authenticated
+connection reporting the new version.** Until then, Nova's side says "sent,
+not confirmed" — never "updated". An agent whose service predates S42b (a
+hand-written systemd unit that answers `unknown capability
+"daemon.update"`) is updated instead through its own `shell.exec`: core
+composes the download, the sha256 check and `install --restart-later`
+itself, and says so in the result.
+
+## Re-pair
+
+A pairing code is normally for a machine with no pairing yet. "Re-pair" on
+a device's tile in Settings → Devices instead mints a code bound to that
+one device id (decision 4). Running the card's command, or `novad install
+--code <code>`, on that same machine then does one of two things: while
+Nova still knows the machine's current pairing, the command just keeps it
+and the code goes unused (it expires either way); only once Nova no longer
+recognizes the old pairing does the code get spent, rebinding the device's
+key while its name and history are kept.
+
+Re-pairing ends the old key's session on core's side, but nothing reaches
+out and stops whatever still holds that key running elsewhere: an old agent
+left running after a re-pair keeps retrying and failing with "signature did
+not verify" until it is stopped by hand — there is no retired-key table
+yet (see the carries).
+
+## Inside WSL
+
+Do not install novad there. `enroll` (and, through it, `install`) refuses:
 
 ```
 novad: cannot: on Windows, Nova's agent runs on Windows itself; run the Windows command (novad.exe enroll) in PowerShell, not this one inside WSL
@@ -96,17 +183,8 @@ novad: cannot: on Windows, Nova's agent runs on Windows itself; run the Windows 
 
 Pair the Windows machine instead — its agent reaches WSL through `wsl.exe`
 and `\\wsl.localhost` (see "What it can do", below), so nothing inside WSL
-needs its own agent.
-
-**macOS:**
-
-```sh
-./novad enroll --server https://your-nova-host --code A1B2C3D4 [--name laptop]
-./novad run
-```
-
-Unwalked. A LaunchAgent comes with S42b; for now, run it from a terminal, or
-launch it yourself at login.
+needs its own agent. `./install` on a WSL hub prints the Windows line
+rather than installing anything on that machine (see `deploy/README.md`).
 
 ## Custody
 
@@ -135,7 +213,7 @@ is the URL:
 ```sh
 novad repoint --server https://nova.new-host.example --check   # prove it
 novad repoint --server https://nova.new-host.example           # then write it
-systemctl --user restart novad                                 # Linux; on macOS/Windows, restart the running `novad run` yourself until S42b's service mode
+systemctl --user restart novad                                 # Linux; macOS/Windows: stop the running agent and let its service start it again (see Install)
 ```
 
 `repoint` opens the device socket at the new URL and completes the **whole**
@@ -177,6 +255,15 @@ novad run
 `system.info`, `fs.*`, `shell.exec` and `facts.refresh` need none of this and
 work headless on every OS.
 
+**A `novad run` started this way reports its mode as `foreground`** (see
+Facts, below) — never `systemd-user`, `launch-agent` or `run-key` — and
+that is not cosmetic: `daemon.update` states *cannot* on a `foreground`
+agent, since nothing but whoever started it by hand would be there to
+restart it into a new build (P12). Nova can act on an agent only once a
+service owns it; hand-starting `novad run` is for the pairing walk and
+desktop-only capabilities, not how an agent is meant to run day to day —
+`novad install` is.
+
 `novad status` prints the enrollment, the pinned core-key fingerprint, the
 last audit seq, and a reachability probe of the server. It reports
 "reachable" only when the HTTP server answers, and it never claims
@@ -211,6 +298,16 @@ the audit. WSL is reached the same way, through the Windows agent:
 `["wsl.exe","-d","<distro>","--",…]` (`WSL_UTF8=1` is set on the child so
 `wsl.exe`'s own output is UTF-8, not the OEM code page — other Windows
 console programs still print in the OEM code page; see the carries).
+
+**On Linux and macOS, every child a command starts gets no terminal and
+empty input (P30):** it leads its own session (`Setsid`), so there is no
+controlling terminal for it to ask on, and its stdin is already at
+EOF — a program that would prompt (`sudo`, `ssh`) fails at once in its own
+words instead of hanging to the timeout waiting for someone who is not
+there. **Windows does not have this yet:** a child novad starts there still
+runs with whatever console and stdin novad itself has, so a program that
+prompts can still hang until the timeout; closing that gap waits on a
+further reading of what Windows actually does here (see the carries).
 
 A timeout, or the connection to Nova dropping mid-command, kills the
 **whole** process group (Unix — `SIGKILL` on the group, falling back to the
