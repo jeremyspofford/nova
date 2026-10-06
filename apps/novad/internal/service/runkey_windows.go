@@ -111,26 +111,29 @@ func (k *runKey) Stop(context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Uninstall stops any running instance (best effort: even when a process
-// would not stop, the autostart definition itself should still come out) and
-// removes the Run value. Only "the key does not exist" is treated as
+// Uninstall stops any running instance and removes the Run value (Manager).
+// Even when a process would not stop, the autostart definition still comes
+// out — and the stop's failure is returned (stopErr), never swallowed: the
+// agent may still be running (Task 32, L90). Stop reads the pids the status
+// files name, so with nothing recorded it is quiet, and it runs whether or
+// not the value is there. Only "the key does not exist" is treated as
 // nothing to do — any other error opening it (permissions, a malformed path,
 // …) is a real problem and is returned, never silently read as "already
 // uninstalled".
-func (k *runKey) Uninstall(ctx context.Context) error {
-	_ = k.Stop(ctx)
+func (k *runKey) Uninstall(ctx context.Context) (stopErr, err error) {
+	stopErr = k.Stop(ctx)
 	key, err := registry.OpenKey(registry.CURRENT_USER, k.keyPath, registry.SET_VALUE)
 	if err != nil {
 		if errors.Is(err, registry.ErrNotExist) {
-			return nil // no key, no value
+			return stopErr, nil // no key, no value
 		}
-		return err
+		return stopErr, err
 	}
 	defer key.Close()
 	if err := key.DeleteValue(k.value); err != nil && !errors.Is(err, registry.ErrNotExist) {
-		return err
+		return stopErr, err
 	}
-	return nil
+	return stopErr, nil
 }
 
 func (k *runKey) BootStart(context.Context) (bool, string, error) {

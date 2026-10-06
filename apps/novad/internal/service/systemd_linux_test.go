@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,37 @@ func TestInstallWritesTheUnitAndRestartRunsTheThreeCommandsInOrder(t *testing.T)
 	want := []string{"systemctl --user daemon-reload", "systemctl --user enable novad.service", "systemctl --user restart novad.service"}
 	if got := argvs(r.Calls); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("ran %v, want %v", got, want)
+	}
+}
+
+// Task 32, L90: a stop that fails is returned on its own — the agent may
+// still be running — and the unit file still comes out, so an agent that
+// would not stop does not also start again at the next login.
+func TestUninstallReturnsAStopThatFailedAndStillRemovesTheUnit(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := New(config.Paths{}, &platform.FakeRunner{}).Install("/opt/nova/novad"); err != nil {
+		t.Fatal(err)
+	}
+	m := New(config.Paths{}, &platform.FakeRunner{Errs: map[string]error{"systemctl": errors.New("Failed to connect to bus")}})
+	stopErr, _ := m.Uninstall(context.Background())
+	if stopErr == nil || !strings.Contains(stopErr.Error(), "disable --now novad.service") {
+		t.Fatalf("the failed stop must be returned, got %v", stopErr)
+	}
+	if m.Installed() {
+		t.Fatal("the unit file must come out even when the stop failed")
+	}
+}
+
+// A unit file that is not there is nothing to stop: no stop is tried, so
+// systemctl's "does not exist" is never reported as a stop that failed.
+func TestUninstallOfAUnitThatIsNotThereTriesNoStop(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	r := &platform.FakeRunner{Outputs: map[string]string{"systemctl": ""}}
+	if stopErr, err := New(config.Paths{}, r).Uninstall(context.Background()); stopErr != nil || err != nil {
+		t.Fatalf("stop %v, removal %v", stopErr, err)
+	}
+	if got := strings.Join(argvs(r.Calls), "|"); got != "systemctl --user daemon-reload" {
+		t.Fatalf("ran %s", got)
 	}
 }
 

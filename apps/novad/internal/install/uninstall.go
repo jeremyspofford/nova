@@ -30,8 +30,9 @@ type UninstallOptions struct {
 // supervise's .prev, .new and .failed, a copy place left as .installing, and
 // every build moved aside as .old-<nanos>. It says each thing it removed and
 // each file it had to leave, with the reason — never a removal it did not
-// do. The pairing is kept (a reinstall reuses it) unless Forget sets it
-// aside. It never claims the device is unpaired: that is a revoke, in
+// do — and that the agent is offline only when this run stopped its service
+// and removed it. The pairing is kept (a reinstall reuses it) unless Forget
+// sets it aside. It never claims the device is unpaired: that is a revoke, in
 // Settings → Devices (P21).
 func Uninstall(ctx context.Context, o UninstallOptions) error {
 	if o.Now == nil {
@@ -45,12 +46,21 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 	}
 	var errs []error
 	registered := o.Service.Installed()
-	if err := o.Service.Uninstall(ctx); err != nil {
+	stopErr, err := o.Service.Uninstall(ctx)
+	if stopErr != nil {
+		errs = append(errs, fmt.Errorf("stopping the agent: %w — it may still be running", stopErr))
+	}
+	removed := false
+	switch {
+	case err != nil:
 		errs = append(errs, fmt.Errorf("removing the service: %w", err))
-	} else if o.Service.Installed() {
+	case o.Service.Installed():
 		errs = append(errs, fmt.Errorf("removing the service: %s is still registered", o.Service.Describe()))
-	} else if registered {
-		fmt.Fprintf(o.Out, "removed:    the service (%s)\n", o.Service.Mode())
+	default:
+		removed = true
+		if registered {
+			fmt.Fprintf(o.Out, "removed:    the service (%s)\n", o.Service.Mode())
+		}
 	}
 
 	// The builds moved aside earlier go first, so a file moved aside below
@@ -100,14 +110,26 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 			fmt.Fprintf(o.Out, "set aside:  %s\n", strings.Join(moved, ", "))
 		}
 	}
+	// "Offline from now on" is what this run did (Task 32, L90 + L242): it
+	// stopped the service that was registered and removed it, read back. A
+	// stop that failed may have left the agent running; with no service
+	// registered, nothing was stopped here; a definition still there starts
+	// the agent again at the next sign-in.
+	how := ""
+	switch {
+	case stopErr != nil:
+		how = ", and its agent may still be running"
+	case registered && removed:
+		how = " (offline from now on)"
+	}
 	switch {
 	case !hasPairing:
 		// Never paired, or wiped after a revoke: Settings may show it revoked.
 		fmt.Fprintln(o.Out, "no pairing is on this machine — if Settings → Devices shows it as paired, revoke it there")
 	case o.Forget:
-		fmt.Fprintf(o.Out, "Nova still lists %s as paired (offline from now on) — revoke it in Settings → Devices\n", name)
+		fmt.Fprintf(o.Out, "Nova still lists %s as paired%s — revoke it in Settings → Devices\n", name, how)
 	default:
-		fmt.Fprintf(o.Out, "Nova still lists %s as paired (offline from now on) — revoke it in Settings → Devices, or run novad install to bring it back\n", name)
+		fmt.Fprintf(o.Out, "Nova still lists %s as paired%s — revoke it in Settings → Devices, or run novad install to bring it back\n", name, how)
 	}
 	return errors.Join(errs...)
 }

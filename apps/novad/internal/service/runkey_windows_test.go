@@ -34,8 +34,8 @@ func TestInstallWritesTheRunKeyAndReadsItBack(t *testing.T) {
 	if !m.Installed() {
 		t.Fatal("Installed after Install")
 	}
-	if err := m.Uninstall(nil); err != nil {
-		t.Fatal(err)
+	if stopErr, err := m.Uninstall(nil); stopErr != nil || err != nil {
+		t.Fatalf("stop %v, removal %v", stopErr, err)
 	}
 	if m.Installed() {
 		t.Fatal("the value is gone after Uninstall")
@@ -50,7 +50,7 @@ func TestInstallWritesTheRunKeyAndReadsItBack(t *testing.T) {
 // provoke a genuine Win32 registry failure.
 func TestUninstallReturnsARealErrorInsteadOfSwallowingIt(t *testing.T) {
 	m := &runKey{paths: config.Paths{StateDir: t.TempDir()}, keyPath: "Software\x00Nova", value: RunKeyValue}
-	err := m.Uninstall(context.Background())
+	_, err := m.Uninstall(context.Background())
 	if err == nil {
 		t.Fatal("a real OpenKey error must be returned, not swallowed as \"no key\"")
 	}
@@ -64,7 +64,7 @@ func TestUninstallReturnsARealErrorInsteadOfSwallowingIt(t *testing.T) {
 func TestUninstallOnAKeyThatWasNeverCreatedIsFine(t *testing.T) {
 	scratch := fmt.Sprintf(`Software\NovaTest\NeverCreated-%d`, os.Getpid())
 	m := &runKey{paths: config.Paths{StateDir: t.TempDir()}, keyPath: scratch, value: RunKeyValue}
-	if err := m.Uninstall(context.Background()); err != nil {
-		t.Fatalf("a key that was never created must be fine, got %v", err)
+	if stopErr, err := m.Uninstall(context.Background()); stopErr != nil || err != nil {
+		t.Fatalf("a key that was never created must be fine, got stop %v, removal %v", stopErr, err)
 	}
 }

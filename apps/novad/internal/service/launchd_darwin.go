@@ -68,12 +68,17 @@ func (l *launchd) Stop(ctx context.Context) error {
 	return err
 }
 
-func (l *launchd) Uninstall(ctx context.Context) error {
-	_ = l.Stop(ctx)
-	if err := os.Remove(l.plistPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+// Uninstall boots the agent out, then removes the plist (Manager). A plist
+// that is not there is nothing to stop — launchctl would only say it has no
+// such service — so no bootout is tried, and none is reported as failed.
+func (l *launchd) Uninstall(ctx context.Context) (stopErr, err error) {
+	if l.Installed() {
+		stopErr = l.Stop(ctx)
 	}
-	return nil
+	if err := os.Remove(l.plistPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return stopErr, err
+	}
+	return stopErr, nil
 }
 
 func (l *launchd) BootStart(context.Context) (bool, string, error) {

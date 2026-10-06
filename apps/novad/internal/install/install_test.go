@@ -31,6 +31,8 @@ type fakeService struct {
 	stays bool
 	// laterErr is what RestartLater answers.
 	laterErr error
+	// stopErr is what Uninstall says of its stop: the definition still goes.
+	stopErr error
 }
 
 func (f *fakeService) Mode() string             { return "systemd-user" }
@@ -45,11 +47,11 @@ func (f *fakeService) RestartLater(context.Context, time.Duration) error {
 	return nil
 }
 func (f *fakeService) Stop(context.Context) error { return nil }
-func (f *fakeService) Uninstall(context.Context) error {
+func (f *fakeService) Uninstall(context.Context) (stopErr, err error) {
 	if !f.stays {
 		f.installed = ""
 	}
-	return nil
+	return f.stopErr, nil
 }
 func (f *fakeService) BootStart(context.Context) (bool, string, error) {
 	return true, "starts at boot (linger is on)", nil
@@ -499,6 +501,61 @@ func TestUninstallReadsTheServiceBackBeforeSayingItIsRemoved(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "removed:    the service") {
 		t.Fatalf("a service still registered was reported removed:\n%s", out.String())
+	}
+}
+
+// Task 32, L90 + L242: a stop that failed is said — the agent may still be
+// running — and "(offline from now on)" is not. The definition still comes
+// out, read back and said, so an agent that would not stop does not also
+// start again at the next sign-in.
+func TestUninstallNeverSaysOfflineAfterAStopThatFailed(t *testing.T) {
+	p := paths(t)
+	enrolled(t, p, "http://127.0.0.1:3000")
+	dir := t.TempDir()
+	stopErr := errors.New("systemctl --user disable --now novad.service: exit status 1: Failed to connect to bus")
+	var out bytes.Buffer
+	err := Uninstall(context.Background(), UninstallOptions{Paths: p, InstallDir: dir,
+		Service: &fakeService{installed: filepath.Join(dir, platform.BinaryName), stopErr: stopErr}, Now: time.Now, Out: &out})
+	if err == nil || !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "may still be running") {
+		t.Fatalf("a stop that failed must be returned, saying the agent may still be running: %v", err)
+	}
+	if strings.Contains(out.String(), "offline from now on") {
+		t.Fatalf("offline was claimed after a stop that failed:\n%s", out.String())
+	}
+	for _, want := range []string{"removed:    the service (systemd-user)\n", `Nova still lists "laptop" as paired, and its agent may still be running`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+// "(offline from now on)" is what this run did: it stopped a service that was
+// registered and removed it. With no service, nothing was stopped here; with
+// the definition still there, the service starts again at the next sign-in.
+func TestUninstallSaysOfflineOnlyWhenItStoppedAndRemovedTheService(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		svc     func(bin string) *fakeService
+		offline bool
+	}{
+		{"stopped and removed", func(bin string) *fakeService { return &fakeService{installed: bin} }, true},
+		{"no service was registered", func(string) *fakeService { return &fakeService{} }, false},
+		{"the definition is still there", func(bin string) *fakeService { return &fakeService{installed: bin, stays: true} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := paths(t)
+			enrolled(t, p, "http://127.0.0.1:3000")
+			dir := t.TempDir()
+			var out bytes.Buffer
+			_ = Uninstall(context.Background(), UninstallOptions{Paths: p, InstallDir: dir,
+				Service: tc.svc(filepath.Join(dir, platform.BinaryName)), Now: time.Now, Out: &out})
+			if got := strings.Contains(out.String(), "(offline from now on)"); got != tc.offline {
+				t.Fatalf("offline said = %v, want %v:\n%s", got, tc.offline, out.String())
+			}
+			if !strings.Contains(out.String(), `Nova still lists "laptop" as paired`) {
+				t.Fatalf("the pairing line is missing:\n%s", out.String())
+			}
+		})
 	}
 }
 

@@ -38,7 +38,12 @@ type Manager interface {
 	// for an install run through the old agent's own hands (P11).
 	RestartLater(ctx context.Context, after time.Duration) error
 	Stop(ctx context.Context) error
-	Uninstall(ctx context.Context) error
+	// Uninstall stops the agent, then removes the definition — even when the
+	// stop failed, so an agent that would not stop does not also start again
+	// at the next sign-in. stopErr is the stop's failure: the agent may still
+	// be running, and nothing may say it is offline (Task 32, L90). err is the
+	// removal's.
+	Uninstall(ctx context.Context) (stopErr, err error)
 	// BootStart reports whether the agent starts before anyone logs in, and
 	// a sentence saying so (Linux linger; the others start at sign-in).
 	BootStart(ctx context.Context) (bool, string, error)

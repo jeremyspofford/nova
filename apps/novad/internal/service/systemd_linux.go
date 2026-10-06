@@ -80,12 +80,17 @@ func (s *systemd) RestartLater(ctx context.Context, after time.Duration) error {
 
 func (s *systemd) Stop(ctx context.Context) error { return s.systemctl(ctx, "stop", UnitName) }
 
-func (s *systemd) Uninstall(ctx context.Context) error {
-	_ = s.systemctl(ctx, "disable", "--now", UnitName)
-	if err := os.Remove(s.unitPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+// Uninstall disables and stops the unit, then removes it (Manager). A unit
+// file that is not there is nothing to stop — systemctl would only say it
+// does not exist — so no stop is tried, and none is reported as failed.
+func (s *systemd) Uninstall(ctx context.Context) (stopErr, err error) {
+	if s.Installed() {
+		stopErr = s.systemctl(ctx, "disable", "--now", UnitName)
 	}
-	return s.systemctl(ctx, "daemon-reload")
+	if err := os.Remove(s.unitPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return stopErr, err
+	}
+	return stopErr, s.systemctl(ctx, "daemon-reload")
 }
 
 // BootStart turns linger on without sudo when the session allows it (an
