@@ -27,6 +27,8 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -918,6 +920,45 @@ async def test_the_hub_machines_command_tries_its_loopback_then_the_tailnet(
         assert f"install --hub http://127.0.0.1:3000 --hub {NOVA} --code {{CODE}}" in command, (
             os_key
         )
+
+
+_READER_OPENS = "manifest_reader() {\n  cat <<'PY'\n"
+
+
+def _install_manifest_reader() -> str:
+    """The program ./install hands core's Python to read the served manifest
+    (deploy/install.sh, manifest_reader): the text of its one heredoc."""
+    script = (Path(__file__).resolve().parents[3] / "deploy" / "install.sh").read_text()
+    start = script.index(_READER_OPENS) + len(_READER_OPENS)
+    return script[start : script.index("\nPY\n}", start)]
+
+
+@requires_db
+async def test_installs_reader_reads_the_manifest_core_really_serves(
+    client, dist, monkeypatch, tmp_path
+):
+    """./install reads the served manifest with a JSON parser, never a pattern
+    over its text (S42b Task 27, C3). Its cases feed that reader manifests
+    written by hand; this feeds it the body this route really sends, so a key
+    it reads that core renames or moves goes red here, not on a hub."""
+    _tailnet(tmp_path, monkeypatch)
+    raw = (await client.get("/api/v1/agent/manifest?origin=loopback")).content
+    program = _install_manifest_reader()
+
+    def read(*ask: str) -> tuple[int, str]:
+        done = subprocess.run(
+            [sys.executable, "-c", program, *ask], input=raw, capture_output=True, timeout=30
+        )
+        return done.returncode, done.stdout.decode().rstrip("\n")
+
+    assert read("version") == (0, VERSION)
+    files = _manifest_of(dist)["files"]
+    for goos, arch in agent_dist.TARGETS:
+        key, name = agent_dist.file_key(goos, arch), agent_dist.file_name(goos, arch)
+        assert read("sha256", key, name) == (0, files[key]["sha256"]), key
+    windows = json.loads(raw)["commands"]["windows"]
+    assert "--hub http://127.0.0.1:3000" in windows and "{CODE}" in windows
+    assert read("windows") == (0, windows)
 
 
 @requires_db
