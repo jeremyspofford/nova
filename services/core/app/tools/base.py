@@ -132,7 +132,8 @@ class Tool:
     parameters: dict  # JSON Schema, advertised verbatim and validated against
     executor: Callable[[dict, ToolContext], Awaitable[str]]
     # A live, point-in-time READ whose result goes stale (a web fetch, a clock).
-    # The turn loop does not ingest such a turn into long-term memory: recalling
+    # The turn loop keeps her reply on such a turn out of long-term memory (his
+    # words are still kept, chat.LIVE_READ_NOT_KEPT stands in for hers): recalling
     # a cached fetch later and serving it as "the latest" is a lie the model
     # cannot see through — it re-narrates the stale snapshot instead of fetching
     # again. Durable, reversible writes (files, memory_save) are NOT ephemeral.
