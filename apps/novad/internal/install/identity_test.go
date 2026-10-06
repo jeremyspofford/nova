@@ -204,6 +204,43 @@ func TestPlainHTTPIsOnlyForThisMachinesLoopback(t *testing.T) {
 	}
 }
 
+// Task 32, L227: an https address must name a host.
+func TestAnHTTPSAddressMustNameAHost(t *testing.T) {
+	for _, bad := range []string{"https:///api", "https://", "https://:443"} {
+		if err := checkHubs([]string{bad}); err == nil {
+			t.Errorf("%q was accepted — it names no host", bad)
+		}
+	}
+}
+
+// ...and the addresses a pairing on disk names are held to D6 as --hub's
+// are. With no --hub, a config from before S42b whose Server is plain http to
+// another machine is refused before anything is dialed — with or without
+// TrustPairing — and the pairing stays as it is.
+func TestAPairingsOwnAddressesAreHeldToTheSameRule(t *testing.T) {
+	for _, trust := range []bool{false, true} {
+		p := paths(t)
+		_, priv, _ := ed25519.GenerateKey(rand.Reader)
+		if err := config.Save(p, config.Config{DeviceID: "d-old", Name: "laptop", Server: "http://192.0.2.10:3000", CorePubKey: strings.Repeat(core, 32)}, priv); err != nil {
+			t.Fatal(err)
+		}
+		o, calls := opts(t, p, nil, okEnroll(false))
+		dialed := 0
+		o.Verify = func(context.Context, config.Config, ed25519.PrivateKey) error { dialed++; return nil }
+		o.Hubs, o.Code, o.TrustPairing = nil, "ABCD-2345", trust
+		_, _, err := o.identity(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "http://192.0.2.10:3000 must be https") {
+			t.Fatalf("trust %v: got %v", trust, err)
+		}
+		if dialed != 0 || len(*calls) != 0 {
+			t.Fatalf("trust %v: a refused address was dialed (%d verify, %d enroll)", trust, dialed, len(*calls))
+		}
+		if back, _, err := config.Load(p); err != nil || back.DeviceID != "d-old" || len(back.Locators) != 0 {
+			t.Fatalf("trust %v: the pairing changed: %+v, %v", trust, back, err)
+		}
+	}
+}
+
 // F14 (controller ruling): an old audit log that cannot be set aside stops a
 // fresh pairing before the code is spent — pairing on top of it would replay
 // the old chain under the new device's id, and a swallowed failure would

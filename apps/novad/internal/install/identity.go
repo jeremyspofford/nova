@@ -52,8 +52,10 @@ type Options struct {
 	Out          io.Writer
 }
 
-// checkHubs holds each address to D6: verified TLS, or plain http only to
-// this machine's own loopback.
+// checkHubs holds each address to D6: verified TLS to a named host, or plain
+// http only to this machine's own loopback. It holds --hub's addresses and,
+// with no --hub, the ones the pairing on disk names (identity; Task 32,
+// L227).
 func checkHubs(hubs []string) error {
 	for _, h := range hubs {
 		u, err := url.Parse(h)
@@ -62,6 +64,9 @@ func checkHubs(hubs []string) error {
 		}
 		switch u.Scheme {
 		case "https":
+			if u.Hostname() == "" {
+				return fmt.Errorf("%s names no host", h)
+			}
 		case "http":
 			host := u.Hostname()
 			if host != "127.0.0.1" && host != "localhost" && host != "::1" {
@@ -129,6 +134,11 @@ func (o *Options) identity(ctx context.Context) (config.Config, []string, error)
 		}
 		if len(hubs) == 0 {
 			hubs = cfg.Hubs()
+			// The pairing's own addresses are held to D6 as --hub's are: a
+			// config from before S42b may name plain http to another machine.
+			if err := checkHubs(hubs); err != nil {
+				return config.Config{}, nil, fmt.Errorf("this machine's pairing names an address install cannot use: %w — run install with --hub <Nova's address> (the card's command has it)", err)
+			}
 		}
 		if len(hubs) == 0 {
 			// Asked of no hub, the pairing is proven neither alive nor dead —
