@@ -492,6 +492,11 @@ class FakeOpenAICompat:
     # systemone_raw simulates for /systemone, here for the decisions
     # listing: these bytes instead of JSON, always status 200.
     decisions_models_raw: bytes | None = None
+    # OpenRouter's credit check (seen live 2026-09-25..30): with no max_tokens
+    # it reserves the model's whole output cap, and a key whose credit covers
+    # fewer tokens is answered 402 in these words. None: credit is unlimited.
+    affords_tokens: int | None = None
+    asks_up_to: int = 65536
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -542,6 +547,23 @@ class FakeOpenAICompat:
         if self.completions_status != 200:
             return JSONResponse({"error": "refused"}, status_code=self.completions_status)
         body = body or {}
+        if self.affords_tokens is not None:
+            asked = body.get("max_tokens") or self.asks_up_to
+            if asked > self.affords_tokens:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": (
+                                "This request requires more credits, or fewer max_tokens. You "
+                                f"requested up to {asked} tokens, but can only afford "
+                                f"{self.affords_tokens}. To increase, visit "
+                                "https://openrouter.ai/settings/credits and add more credits"
+                            ),
+                            "code": 402,
+                        }
+                    },
+                    status_code=402,
+                )
         if self.rejects_usage_fields and ("stream_options" in body or "usage" in body):
             return JSONResponse(
                 {"error": {"message": "Unrecognized request argument supplied: stream_options"}},
