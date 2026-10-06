@@ -2185,7 +2185,16 @@ run_hub_agent() {
     . "$SCRIPT_DIR/install.sh"
     set +e
     HUB_T="$(mktemp -d)"
+    # The run's own TMPDIR: whatever install_hub_agent leaves there is listed
+    # in the calls field as LEFT:, so every exact calls check also asserts
+    # that no download folder stays behind.
+    mkdir "$HUB_T/tmp"
+    export TMPDIR="$HUB_T/tmp"
     NOVAD_FIRST="$1"; SERVED="$2"; IN_WSL="$3"; HOST_NAME="$4"
+    # The fake also reads its own environment: a variable called code or
+    # minted there, or the code anywhere but NOVA_PAIRING_CODE, is a leak,
+    # listed in the calls field as LEAK: — so every exact calls check asserts
+    # none (J3).
     cat > "$HUB_T/fake-novad" <<EOF
 #!/bin/sh
 case "\${NOVA_PAIRING_CODE:-}" in
@@ -2193,6 +2202,11 @@ case "\${NOVA_PAIRING_CODE:-}" in
   "$HA_CODE") env=minted ;;
   *) env=other ;;
 esac
+leak=""
+if env | grep -q '^code='; then leak="\$leak code"; fi
+if env | grep -q '^minted='; then leak="\$leak minted"; fi
+if env | grep -v '^NOVA_PAIRING_CODE=' | grep -qF '$HA_CODE'; then leak="\$leak the-code-elsewhere"; fi
+if [ -n "\$leak" ]; then echo "LEAK:\$leak" >> "$HUB_T/calls"; fi
 printf 'argv=%s env=%s\n' "\$*" "\$env" >> "$HUB_T/novad"
 n=\$(wc -l < "$HUB_T/novad")
 if [ "\$n" -eq 1 ]; then exit $NOVAD_FIRST; fi
@@ -2206,6 +2220,9 @@ EOF
     HA_DIST_SCRIPT=200
     HA_DNS=""
     HA_TRACE=0
+    # A Retry-After line to send as it stands on every 429 (an HTTP-date, an
+    # empty value), in place of the script's STATUS:SECONDS one.
+    HA_RA_LINE=""
     agent_version_of() { printf 'aaaaaaaaaaaa'; }
     build_agent_dist() { printf 'built %s\n' "$1" >> "$HUB_T/calls"; }
     hub_request() { # $1 path  $2 body file  $3 header file  $4 seconds
@@ -2224,7 +2241,8 @@ EOF
       case "$tok" in *:*) after="${tok#*:}" ;; esac
       {
         printf 'HTTP/1.1 %s Stub\r\n' "$status"
-        [ -z "$after" ] || printf 'Retry-After: %s\r\n' "$after"
+        if [ -n "$HA_RA_LINE" ] && [ "$status" = 429 ]; then printf '%s\r\n' "$HA_RA_LINE"
+        elif [ -n "$after" ]; then printf 'Retry-After: %s\r\n' "$after"; fi
         printf '\r\n'
       } > "$3"
       if [ "$status" = 200 ]; then
@@ -2246,18 +2264,23 @@ EOF
     tailnet_dns_name() { [ -n "$HA_DNS" ] || return 1; printf '%s' "$HA_DNS"; }
     unset NOVA_HUB_AGENT_NAME NOVA_PAIRING_CODE
     if [ -n "${5:-}" ]; then eval "$5"; fi
+    # `exec 2>&1` holds for the subshell's whole life, so what its EXIT trap
+    # says (hub_cleanup) is captured too, not printed past the result.
     if [ "$HA_TRACE" = 1 ]; then
-      err="$( { set -e; set -x; install_hub_agent; } 2>&1 )"; code=$?
+      err="$(exec 2>&1; set -e; set -x; install_hub_agent)"; code=$?
     else
-      err="$(set -e; install_hub_agent 2>&1)"; code=$?
+      err="$(exec 2>&1; set -e; install_hub_agent)"; code=$?
     fi
+    left="$(ls -A "$HUB_T/tmp" 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$left" ]; then printf 'LEFT: %s\n' "$left" >> "$HUB_T/calls"; fi
     # 2>/dev/null BEFORE the input: a file a case never wrote is "nothing
     # happened", and the shell says so on the stderr in force when it opens it.
+    # The run's folder reads as <HUB_T> in the output, the same on every machine.
     printf '%s|%s|%s|%s|%s' "$code" \
       "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/calls")" \
       "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/gets")" \
       "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/novad")" \
-      "$(printf '%s' "$err" | tr '\n' ' ')"
+      "$(printf '%s' "$err" | sed "s#$HUB_T#<HUB_T>#g" | tr '\n' ' ')"
     rm -rf "$HUB_T"
   )
 }
@@ -2341,6 +2364,21 @@ ha_never "set -x: the pairing code is in no trace line" "$HA_TRACED"
 # run's: only the code ./install minted reaches the agent.
 HA_STRAY="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'export NOVA_PAIRING_CODE=STRAY-CODE')"
 ha_is "a stray NOVA_PAIRING_CODE reaches neither run; the minted one reaches the second" "$HA_STRAY" 4 \
+  "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+
+# J3 (review): neither the code nor the mint's answer reaches a child's
+# environment. An exported code or minted stays exported under bash's
+# `local`, and with `export -n` on the local alone the stray copy it shadows
+# is what children get (measured under 5.2.21 and 3.2.57). The fake novad
+# reads its own environment on both runs; a leak shows as LEAK: in calls.
+HA_J3="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'export code=stray-code minted=stray-minted')"
+ha_is "code and minted exported by the environment: no run sees either, stray or real" "$HA_J3" 2 \
+  "built aaaaaaaaaaaa mint minipc "
+ha_is "code and minted exported by the environment: the code reaches novad by NOVA_PAIRING_CODE alone" \
+  "$HA_J3" 4 "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+HA_J3A="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'set -a')"
+ha_is "set -a (allexport): no run sees code or minted" "$HA_J3A" 2 "built aaaaaaaaaaaa mint minipc "
+ha_is "set -a (allexport): the code reaches novad by NOVA_PAIRING_CODE alone" "$HA_J3A" 4 \
   "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
 
 # C1: never `hub`. A machine whose name resolves to it — any case, any
@@ -2468,6 +2506,50 @@ ha_has "a 503: core's words" "$HA_503" 5 "the stub answered 503"
 HA_DOWN="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'hub_request() { printf 000; return 7; }')"
 ha_is "nothing answering the loopback door: refused" "$HA_DOWN" 1 1
 ha_has "nothing answering the loopback door: says curl's exit" "$HA_DOWN" 5 "curl exit 7"
+# J2 (review): Retry-After is read in base 10 — "08" and "09" are 8 and 9 s,
+# never bash's "value too great for base", and "010" is 10 s wherever it is
+# counted — and one that is there but cannot be read is said as exactly
+# that, never as no Retry-After.
+HA_RA08="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:08 200"')"
+ha_is "Retry-After 08: installs" "$HA_RA08" 1 0
+ha_is "Retry-After 08: waits 8 s" "$HA_RA08" 2 "built aaaaaaaaaaaa slept 8 "
+HA_RA09="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:09 200"')"
+ha_is "Retry-After 09: waits 9 s" "$HA_RA09" 2 "built aaaaaaaaaaaa slept 9 "
+HA_RA010="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:010 200"')"
+ha_is "Retry-After 010: waits 10 s" "$HA_RA010" 2 "built aaaaaaaaaaaa slept 10 "
+HA_RA010B="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_WAIT_MAX_S=9; HA_MANIFEST_SCRIPT="429:010"')"
+ha_is "Retry-After 010 against a 9 s bound: counted as 10, so it does not wait" "$HA_RA010B" 2 \
+  "built aaaaaaaaaaaa "
+ha_final "Retry-After 010 against a 9 s bound: it ENDS with the 429, asking 10 s" "$HA_RA010B" \
+  "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 1 ask(s) and 0 s of waiting, and its Retry-After asks 10 s more"
+HA_RADATE="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429; HA_RA_LINE="Retry-After: Wed, 21 Oct 2015 07:28:00 GMT"')"
+ha_is "an HTTP-date Retry-After: no wait is guessed" "$HA_RADATE" 2 "built aaaaaaaaaaaa "
+ha_final "an HTTP-date Retry-After: it ENDS saying it could not read it, and what it was" "$HA_RADATE" \
+  "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with a Retry-After it could not read (Wed, 21 Oct 2015 07:28:00 GMT)"
+HA_RAEMPTY="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429; HA_RA_LINE="Retry-After: "')"
+ha_is "an empty Retry-After: no wait is guessed" "$HA_RAEMPTY" 2 "built aaaaaaaaaaaa "
+ha_final "an empty Retry-After: it ENDS saying it could not read it — never that there was none" "$HA_RAEMPTY" \
+  "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with a Retry-After it could not read (empty)"
+# retry_after_of alone, on each form: the seconds (exit 0); nothing (exit 1,
+# no Retry-After); or the value as it came (exit 2, unreadable).
+ra_of() { # $1 a Retry-After line ("" = none) → "<exit>:<printed>"
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    f="$(mktemp)"
+    { printf 'HTTP/1.1 429 Stub\r\n'; [ -z "$1" ] || printf '%s\r\n' "$1"; printf '\r\n'; } > "$f"
+    out="$(retry_after_of "$f")"; rc=$?
+    rm -f "$f"
+    printf '%s:%s' "$rc" "$out"
+  )
+}
+for RA_ROW in "Retry-After: 7|0:7" "Retry-After: 08|0:8" "Retry-After: 010|0:10" \
+  "Retry-After: 000|0:0" "retry-after:   12  |0:12" "Retry-After: 999999|0:999999" \
+  "Retry-After: 1234567|2:1234567" "Retry-After: -3|2:-3" "Retry-After: 1.5|2:1.5" \
+  "Retry-After: |2:" "|1:"; do
+  expect_str "retry_after_of: [${RA_ROW%%|*}] → ${RA_ROW#*|}" "$(ra_of "${RA_ROW%%|*}")" "${RA_ROW#*|}"
+done
 # The bounds themselves are finite and small: never waits forever.
 HA_BOUNDS="$( ( . "$SCRIPT_DIR/install.sh"; printf '%s %s' "$HUB_ASK_TRIES" "$HUB_WAIT_MAX_S" ) )"
 case "$HA_BOUNDS" in
@@ -2502,6 +2584,97 @@ HA_RELAY_LINES="$(grep -niE 'cf-connecting-ip|tailscale-user-|x-forwarded-for|x-
 expect_str "the door: no line of install.sh that runs sends a relay's header (Cf-Connecting-IP or the like)" \
   "$HA_RELAY_LINES" ""
 
+# J4 (review): the real seams the cases above stub, their commands pinned.
+# docker, git and uname are recorders here — functions in the subshell that
+# sources the real install.sh — so a typo in any seam's command turns its
+# line red, and nothing reaches the real docker.
+SEAM_MINT="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    docker() { printf '%s\n' "$@"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml --profile inference)
+    hub_mint office-box < /dev/null | tr '\n' ' '
+  )
+)"
+expect_str "the real hub_mint: devices_cli mint --name, in core, through this run's compose files" \
+  "$SEAM_MINT" \
+  "compose -f /fixture/deploy/docker-compose.yml --profile inference exec -T core python -m app.devices_cli mint --name office-box "
+SEAM_PY="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    docker() { printf '%s\n' "$@"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml)
+    hub_python -c 'print(1)' version < /dev/null | tr '\n' ' '
+  )
+)"
+expect_str "the real hub_python: core's own python, given the program and its ask" "$SEAM_PY" \
+  "compose -f /fixture/deploy/docker-compose.yml exec -T core python -c print(1) version "
+SEAM_BUILD="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    t="$(mktemp -d)"
+    git() { printf '%s\n' "$@" > "$t/git"; printf 'TAR-BYTES'; }
+    docker() { printf '%s\n' "$@" > "$t/docker"; cat > "$t/stdin"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml)
+    # shellcheck disable=SC2034
+    REPO_ROOT=/fixture
+    build_agent_dist aaaaaaaaaaaa
+    printf 'git: %s| docker: %s| piped: %s' "$(tr '\n' ' ' < "$t/git")" "$(tr '\n' ' ' < "$t/docker")" \
+      "$(cat "$t/stdin")"
+    rm -rf "$t"
+  )
+)"
+expect_str "the real build_agent_dist: HEAD's apps/novad archived and piped into agent-dist" "$SEAM_BUILD" \
+  "git: -C /fixture archive --format=tar HEAD apps/novad | docker: compose -f /fixture/deploy/docker-compose.yml --profile build run --rm -T agent-dist aaaaaaaaaaaa | piped: TAR-BYTES"
+seam_os_arch() { # $1 what uname -s says  $2 what uname -m says → "<exit>:<printed>"
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    UN_S="$1"; UN_M="$2"
+    uname() { case "$1" in -s) printf '%s\n' "$UN_S" ;; -m) printf '%s\n' "$UN_M" ;; *) return 1 ;; esac; }
+    out="$(hub_os_arch)"; rc=$?
+    printf '%s:%s' "$rc" "$out"
+  )
+}
+while read -r OA_S OA_M OA_WANT; do
+  expect_str "the real hub_os_arch: $OA_S $OA_M → ${OA_WANT#*:}" "$(seam_os_arch "$OA_S" "$OA_M")" "$OA_WANT"
+done <<'OAEOF'
+Linux x86_64 0:linux amd64
+Linux amd64 0:linux amd64
+Linux aarch64 0:linux arm64
+Linux arm64 0:linux arm64
+Darwin x86_64 0:darwin amd64
+Darwin amd64 0:darwin amd64
+Darwin aarch64 0:darwin arm64
+Darwin arm64 0:darwin arm64
+FreeBSD amd64 1:
+Linux riscv64 1:
+OAEOF
+seam_wsl() { # $1 the kernel's osrelease ("" = no such file) → wsl | not wsl
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    t="$(mktemp -d)"
+    if [ -n "$1" ]; then printf '%s\n' "$1" > "$t/osrelease"; fi
+    # shellcheck disable=SC2034
+    WSL_OSRELEASE="$t/osrelease"
+    if running_in_wsl; then printf 'wsl'; else printf 'not wsl'; fi
+    rm -rf "$t"
+  )
+}
+expect_str "the real running_in_wsl: a WSL2 kernel" "$(seam_wsl 6.6.87.2-microsoft-standard-WSL2)" "wsl"
+expect_str "the real running_in_wsl: a WSL1 kernel" "$(seam_wsl 4.4.0-19041-Microsoft)" "wsl"
+expect_str "the real running_in_wsl: a kernel that is not WSL's" "$(seam_wsl 6.8.0-45-generic)" "not wsl"
+expect_str "the real running_in_wsl: no osrelease at all (macOS)" "$(seam_wsl "")" "not wsl"
+
 HA_TN="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'TAILNET_ENABLED=1; HA_DNS=nova.fake-tailnet.ts.net')"
 ha_is "tailnet on: its name is the agent's second hub, the loopback door first" "$HA_TN" 4 \
   "argv=install --if-missing --hub http://127.0.0.1:3000 --hub https://nova.fake-tailnet.ts.net env=none argv=install --hub http://127.0.0.1:3000 --hub https://nova.fake-tailnet.ts.net env=minted "
@@ -2524,6 +2697,66 @@ HA_NOCODE="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'hub_mint() { printf "{\"expi
 ha_is "a mint that prints no code: refused" "$HA_NOCODE" 1 1
 ha_is "a mint that prints no code: no second run" "$HA_NOCODE" 4 "$LOOP_ARGV"
 ha_has "a mint that prints no code: said" "$HA_NOCODE" 5 "the mint returned no code"
+
+# J5 (review): a tool that fails is said, never a bare errexit. mktemp and
+# chmod each end with a stated cannot; a sha256 that could not be computed is
+# said as that, never as "not the manifest's" — a claim about the bytes,
+# made only of a checksum that was computed.
+HA_NOTMP="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'mktemp() { echo "mktemp: cannot create directory: Read-only file system" >&2; return 1; }')"
+ha_is "mktemp failing: refused" "$HA_NOTMP" 1 1
+ha_is "mktemp failing: nothing fetched" "$HA_NOTMP" 3 ""
+ha_final "mktemp failing: it ENDS with a stated cannot naming mktemp and the folder" "$HA_NOTMP" \
+  "ERROR: the hub's agent: cannot make a folder to download it into under <HUB_T>/tmp (mktemp failed; its words are above) — nothing was downloaded"
+HA_NOCHMOD="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'chmod() { return 1; }')"
+ha_is "chmod failing: refused, no download left behind" "$HA_NOCHMOD" 2 "built aaaaaaaaaaaa "
+ha_is "chmod failing: nothing ran" "$HA_NOCHMOD" 4 ""
+ha_final "chmod failing: it ENDS with a stated cannot naming chmod" "$HA_NOCHMOD" \
+  "ERROR: the hub's agent: cannot make the download runnable (chmod failed; its words are above) — nothing was run"
+HA_NOSUM="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'sha256sum() { return 127; }; shasum() { return 127; }')"
+ha_is "neither sha256 tool runs: refused" "$HA_NOSUM" 1 1
+ha_is "neither sha256 tool runs: nothing ran" "$HA_NOSUM" 4 ""
+ha_final "neither sha256 tool runs: it ENDS saying exactly that" "$HA_NOSUM" \
+  "ERROR: the hub's agent: cannot check the download: neither sha256sum nor shasum could compute its sha256 here — nothing was run"
+ha_lacks "neither sha256 tool runs: never says the sha256 is not the manifest's" "$HA_NOSUM" 5 \
+  "is not the manifest's"
+SEAM_SUM="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    f="$(mktemp)"
+    printf 'x' > "$f"
+    # shellcheck disable=SC2123
+    PATH=/nonexistent
+    out="$(sha256_of "$f")"; rc=$?
+    /bin/rm -f "$f"
+    printf '%s:%s' "$rc" "$out"
+  )
+)"
+expect_str "sha256_of with neither tool on PATH: non-zero, printing nothing" "$SEAM_SUM" "1:"
+
+# J6 (review): 126 is the shell refusing to run the download. When a script
+# put in the same folder is refused too, the folder is named and the way out
+# given (TMPDIR); when the folder does run programs, that is said instead —
+# a binary that is not this machine's gives 126 as well.
+HA_NOEXEC="$(run_hub_agent 126 aaaaaaaaaaaa 0 minipc 'hub_dir_runs() { return 1; }')"
+ha_is "novad exits 126 in a folder that runs nothing: refused" "$HA_NOEXEC" 1 1
+ha_is "novad exits 126 in a folder that runs nothing: no download left behind" "$HA_NOEXEC" 2 \
+  "built aaaaaaaaaaaa "
+ha_final "novad exits 126 in a folder that runs nothing: names the folder and the TMPDIR way out" \
+  "$HA_NOEXEC" \
+  "ERROR: the hub's agent: <HUB_T>/tmp does not allow running programs (novad install exited 126, and a test script there was refused too, as on a noexec mount) — run ./install again with TMPDIR set to a folder that does, e.g. mkdir -p ~/.cache && TMPDIR=~/.cache ./install — the stack is up"
+HA_126="$(run_hub_agent 126 aaaaaaaaaaaa 0 minipc)"
+ha_final "novad exits 126 where programs do run (the real check): not blamed on the folder" "$HA_126" \
+  "ERROR: the hub's agent: the download could not be run (novad install exited 126; the shell's words are above), though <HUB_T>/tmp does run programs — a test script there ran — the stack is up"
+ha_is "novad exits 126 where programs do run: no download left behind" "$HA_126" 2 "built aaaaaaaaaaaa "
+
+# The EXIT trap: a run that ends where nothing expected it to still leaves
+# no download folder behind (calls would carry LEFT: otherwise).
+HA_ABORT="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'running_in_wsl() { exit 9; }')"
+ha_is "a run cut short by something unforeseen: ends as it did" "$HA_ABORT" 1 9
+ha_is "a run cut short by something unforeseen: no download folder left behind" "$HA_ABORT" 2 \
+  "built aaaaaaaaaaaa "
 
 # ── install.ps1 (D20): a Windows hub is told cannot, and the one step ────────
 # Its parse is CI's (pwsh). What a shell can hold it to: Windows PowerShell

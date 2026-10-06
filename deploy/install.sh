@@ -1440,11 +1440,24 @@ hub_sleep() { sleep "$1"; }
 # brought up healthy — the interpreter hub_mint runs in too. Input on stdin.
 hub_python() { docker compose "${COMPOSE_ARGS[@]}" exec -T core python "$@"; }
 hub_mint() { docker compose "${COMPOSE_ARGS[@]}" exec -T core python -m app.devices_cli mint --name "$1"; }
-running_in_wsl() { grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
+# WSL's kernels name themselves (microsoft-standard-WSL2; WSL1's Microsoft).
+WSL_OSRELEASE=/proc/sys/kernel/osrelease
+running_in_wsl() { grep -qi microsoft "$WSL_OSRELEASE" 2>/dev/null; }
 hub_hostname() { hostname -s 2>/dev/null || hostname; }
+# The sha256 of the file $1: sha256sum's, else shasum's (macOS). Non-zero,
+# printing nothing, when neither can run — a checksum never computed is
+# never compared, so it can never read as "not the manifest's".
 sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
-  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+  local out
+  out="$(sha256sum "$1" 2>/dev/null)" || out="$(shasum -a 256 "$1" 2>/dev/null)" || return 1
+  printf '%s' "${out%% *}"
+}
+# Can a program run from the folder $1? A two-line script is put there and
+# run: a folder on a noexec mount refuses it with 126, as it refused the agent.
+hub_dir_runs() {
+  printf '#!/bin/sh\nexit 0\n' > "$1/runs-here" 2>/dev/null \
+    && chmod 0755 "$1/runs-here" 2>/dev/null \
+    && "$1/runs-here" >/dev/null 2>&1
 }
 hub_os_arch() {
   local os arch
@@ -1518,15 +1531,21 @@ hub_why() {
 }
 
 # The seconds a response's Retry-After asks for, from the header file $1, in
-# the delta-seconds form core sends (Task 18), up to six digits; empty when
-# there is none in that form.
+# the delta-seconds form core sends (Task 18): one to six digits, read in
+# base 10 — "08" is 8, never octal, and "010" is 10 wherever it is counted.
+# Exit 1, printing nothing, when there is no Retry-After. Exit 2 when there
+# is one this cannot read (an HTTP-date, a sign, an empty value), printing
+# it as it came: trimmed, printable ASCII only, cut at 64.
 retry_after_of() {
   tr -d '\r' 2>/dev/null < "$1" | awk '
     tolower(substr($0, 1, 12)) == "retry-after:" {
+      found = 1
       v = substr($0, 13); gsub(/^[ \t]+|[ \t]+$/, "", v)
-      if (v ~ /^[0-9]+$/ && length(v) <= 6) print v
+      if (v ~ /^[0-9]+$/ && length(v) <= 6) { print v + 0; readable = 1 }
+      else { gsub(/[^ -~]/, "", v); print substr(v, 1, 64) }
       exit
-    }'
+    }
+    END { exit (found ? (readable ? 0 : 2) : 1) }'
 }
 
 # A body that was not the 200 asked for, fit for one line of output: core's
@@ -1563,10 +1582,12 @@ hub_fetch() {
       429) ;;
       *) hub_fail "the hub's agent: core answered HTTP $status for $what at $HUB_LOOPBACK$path: $(hub_body_excerpt "$out")" ;;
     esac
-    after="$(retry_after_of "$out.headers")"
-    if [ -z "$after" ]; then
-      hub_fail "the hub's agent: core answered 429 Too Many Requests for $what, with no Retry-After to wait for — run ./install again in a minute"
-    fi
+    rc=0; after="$(retry_after_of "$out.headers")" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) hub_fail "the hub's agent: core answered 429 Too Many Requests for $what, with no Retry-After to wait for — run ./install again in a minute" ;;
+      *) hub_fail "the hub's agent: core answered 429 Too Many Requests for $what, with a Retry-After it could not read (${after:-empty}) — run ./install again in a minute" ;;
+    esac
     if [ "$ask" -ge "$HUB_ASK_TRIES" ] || [ $((waited + after)) -gt "$HUB_WAIT_MAX_S" ]; then
       hub_fail "the hub's agent: core still answers 429 Too Many Requests for $what after $ask ask(s) and ${waited} s of waiting, and its Retry-After asks ${after} s more (./install asks at most $HUB_ASK_TRIES times and waits at most $HUB_WAIT_MAX_S s) — run ./install again in a minute"
     fi
@@ -1587,15 +1608,34 @@ hub_agent_name() {
   lowercase "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+# The download folder goes however the run ends: hub_fail removes it on every
+# stated failure, and this, set as the EXIT trap, on anything unforeseen — so
+# no run leaves an agent binary behind in $TMPDIR.
+hub_cleanup() {
+  if [ -n "$HUB_TMP" ]; then rm -rf "$HUB_TMP"; HUB_TMP=""; fi
+}
+
 install_hub_agent() {
-  local version served os_arch os arch file want line dns rc name minted code xtrace=0
+  # The code, and the mint's answer that holds it, live in `code` and
+  # `minted`, and neither may reach a child's environment. A name the
+  # environment exported stays exported under `local`, and the copy it
+  # shadows is still handed to children (measured under bash 5.2.21 and
+  # 3.2.57): so both names stop being exported here — the inherited ones
+  # before `local`, the locals after it — and `set -a` is off while they
+  # hold anything. Neither name is exported again by this run.
+  export -n code minted
+  local version served os_arch os arch file want got line dns rc name minted code xtrace=0 allexport=0 hub_dir
+  export -n code minted
   # Only a code this run mints ever reaches the agent: one already in
   # ./install's own environment is not this run's to pass on.
   unset NOVA_PAIRING_CODE
   version="$(agent_version_of)" || die "the hub's agent: its version could not be read (above) — nothing was built"
   log "Building Nova's agent $version for six systems (agent-dist)..."
   build_agent_dist "$version" >&2 || die "the hub's agent: agent-dist did not build $version (its words are above)"
-  HUB_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nova-agent.XXXXXX")"
+  hub_dir="${TMPDIR:-/tmp}"
+  HUB_TMP="$(mktemp -d "$hub_dir/nova-agent.XXXXXX")" \
+    || die "the hub's agent: cannot make a folder to download it into under $hub_dir (mktemp failed; its words are above) — nothing was downloaded"
+  trap hub_cleanup EXIT
   # One manifest, read as the machine running the stack (?origin=loopback,
   # F9): for the build it names and, on a WSL hub, the Windows line.
   hub_fetch "/api/v1/agent/manifest?origin=loopback" "$HUB_TMP/manifest.json" 30 "the agent manifest"
@@ -1624,9 +1664,18 @@ install_hub_agent() {
   want="$(manifest_field sha256 "$os-$arch" "$file" < "$HUB_TMP/manifest.json" 2> "$HUB_TMP/why")" \
     || hub_fail "the hub's agent: $(hub_why)"
   hub_fetch "/api/v1/agent/dist/$file" "$HUB_TMP/novad" 300 "$file"
-  [ "$(sha256_of "$HUB_TMP/novad")" = "$want" ] \
+  # A mismatch is a claim about the bytes, so it is made only of a sha256
+  # that was computed: 64 hex characters, or no claim at all.
+  got="$(sha256_of "$HUB_TMP/novad")" || got=""
+  case "$got" in
+    "" | *[!0123456789abcdef]*) got="" ;;
+  esac
+  [ "${#got}" -eq 64 ] \
+    || hub_fail "the hub's agent: cannot check the download: neither sha256sum nor shasum could compute its sha256 here — nothing was run"
+  [ "$got" = "$want" ] \
     || hub_fail "the hub's agent: the download's sha256 is not the manifest's — nothing was run"
-  chmod 0755 "$HUB_TMP/novad"
+  chmod 0755 "$HUB_TMP/novad" \
+    || hub_fail "the hub's agent: cannot make the download runnable (chmod failed; its words are above) — nothing was run"
   # Its hubs in order: this machine's loopback door first — so its tile says
   # Hub — then the tailnet name, when the tailnet is on.
   set -- --hub "$HUB_LOOPBACK"
@@ -1644,9 +1693,11 @@ install_hub_agent() {
       hub_fail "this machine's agent cannot be named 'hub' — that is the bundled engine's name (hub decision D8); name it after the machine: NOVA_HUB_AGENT_NAME=<a name> ./install"
     fi
     log "Pairing this machine's agent as '$name' (a code minted for it, handed over in its environment)..."
-    # No trace from the mint until the code is gone: `bash -x` would print
-    # the mint's answer and the line that hands the code over.
+    # No trace and no export from the mint until the code is gone: `bash -x`
+    # would print the mint's answer and the line that hands the code over,
+    # and `set -a` would export both to every child.
     case "$-" in *x*) xtrace=1; { set +x; } 2>/dev/null ;; esac
+    case "$-" in *a*) allexport=1; set +a ;; esac
     minted="$(hub_mint "$name")" \
       || hub_fail "the hub's agent: a pairing code could not be minted (devices_cli's words are above)"
     code="$(printf '%s\n' "$minted" | sed -n 's/.*"code": *"\([^"]*\)".*/\1/p' | head -n 1)"
@@ -1658,7 +1709,18 @@ install_hub_agent() {
     # unsets it before anything it starts could inherit it.
     rc=0; NOVA_PAIRING_CODE="$code" "$HUB_TMP/novad" install "$@" >&2 || rc=$?
     code=""
+    if [ "$allexport" -eq 1 ]; then set -a; fi
     if [ "$xtrace" -eq 1 ]; then set -x; fi
+  fi
+  # 126: the shell found the download and could not run it. That is said as
+  # a folder that does not allow running programs only when it is one — a
+  # script put in the same folder is refused too. A binary that is not this
+  # machine's gives 126 as well, and is not the folder's fault.
+  if [ "$rc" -eq 126 ]; then
+    if hub_dir_runs "$HUB_TMP"; then
+      hub_fail "the hub's agent: the download could not be run (novad install exited 126; the shell's words are above), though $hub_dir does run programs — a test script there ran — the stack is up"
+    fi
+    hub_fail "the hub's agent: $hub_dir does not allow running programs (novad install exited 126, and a test script there was refused too, as on a noexec mount) — run ./install again with TMPDIR set to a folder that does, e.g. mkdir -p ~/.cache && TMPDIR=~/.cache ./install — the stack is up"
   fi
   rm -rf "$HUB_TMP"; HUB_TMP=""
   [ "$rc" -eq 0 ] \
