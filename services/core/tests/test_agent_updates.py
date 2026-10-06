@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -346,6 +348,43 @@ async def test_the_update_route_answers_with_the_outcome(owner_client, pool):
     assert resp.status_code == 200
     body = resp.json()
     assert body["outcome"] == "cannot" and "not connected" in body["reason"]
+
+
+# The update route's own location at the one origin (S42b Task 26, R4).
+UPDATE_LOCATION = "location ~ ^/api/v1/devices/[^/]+/update$ {"
+# What the read timeout must leave beyond the agent's longest bound: the
+# route's own reads and writes around the wait.
+UPDATE_HEADROOM_S = 30
+
+
+def test_nginx_outwaits_the_update_routes_longest_answer():
+    """The tile's Update answers once the agent has: the daemon.update command,
+    and — for an S42a agent that answers it does not know daemon.update — the
+    bootstrap after it, each bounded by COMMAND_TIMEOUT_S. So the route can
+    wait twice that on the agent. nginx's generic /api/ location reads for
+    60 s and would 504 an update that was SENT, so the route has a location
+    of its own; this reads its number from the conf, and raising the constant
+    without the conf goes red."""
+    conf = Path(__file__).resolve().parents[3] / "apps/web/nginx.conf.template"
+    assert conf.exists(), f"{conf} moved — this rule is now vacuous"
+    text = conf.read_text()
+    # A directive line, never a comment that quotes it.
+    opened = re.search(rf"^\s*{re.escape(UPDATE_LOCATION)}$", text, re.MULTILINE)
+    assert opened, (
+        "nginx has no location of its own for the update route, so /api/'s 60 s read "
+        "timeout 504s an update that was sent"
+    )
+    block = text[opened.end() : text.index("}", opened.end())]
+    found = re.findall(r"^\s*proxy_read_timeout\s+(\d+)([smh]?);", block, re.MULTILINE)
+    assert len(found) == 1, f"the update route's location sets proxy_read_timeout {found!r}"
+    amount, unit = found[0]
+    seconds = int(amount) * {"": 1, "s": 1, "m": 60, "h": 3600}[unit]
+    longest = 2 * agent_updates.COMMAND_TIMEOUT_S
+    assert seconds >= longest + UPDATE_HEADROOM_S, (
+        f"nginx reads the update route for {seconds} s, and the route can wait "
+        f"{longest:g} s on the agent ({agent_updates.COMMAND_TIMEOUT_S:g} s for the command, "
+        f"the same again for a bootstrap) — raise its proxy_read_timeout"
+    )
 
 
 # -- re-pair and epochs (controller rulings) -------------------------------------
