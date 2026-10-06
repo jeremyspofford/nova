@@ -953,3 +953,164 @@ async def test_an_unparseable_urls_token_never_reaches_the_result_or_the_span(wo
     assert "abc123" not in result, result
     meta = json.dumps([span.meta for span in turn.spans], default=str)
     assert "abc123" not in meta, meta
+
+
+# ── S38 final review, I1: text a page chooses is bounded ────────────────────
+#
+# The reviewer's probes (fake engine through browser_open): a 200,000-
+# character title came back whole in the result AND the span's facts; three
+# 100 KB headings made a 300,218-character browser_open; a 100 KB reason
+# phrase made a 100,107-character failure. Built directly, not from a
+# capture: no captured page is hostile in this way.
+
+# browser_open's whole result, whatever a page chooses: a clipped address
+# and title (300 each, plus the stated cut), the outline's 6,000-character
+# budget with its separators, and her own fixed lines. Well under one part.
+OPEN_RESULT_MAX = 8_000
+# The longest a clipped string can be: 300 characters (page.CLIP_CHARS,
+# pinned here as a number) and the stated cut.
+CLIPPED_MAX = 300 + len("…(9,999,999 more characters)")
+
+
+def _page_answer(title: str, url: str = "https://example.com/a") -> str:
+    return f"### Page\n- Page URL: {url}\n- Page Title: {title}"
+
+
+def _strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list | tuple):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _hostile_open() -> tuple[fake.FakeTool, fake.FakeTool]:
+    title = "T" * 200_000
+    big = "word " * 20_000
+    snapshot = (
+        _page_answer(title)
+        + "\n### Snapshot\n```yaml\n"
+        + "\n".join(f'- heading "{big}" [level=1] [ref=e{i}]' for i in range(1, 31))
+        + "\n```"
+    )
+    return (
+        fake.FakeTool(
+            "browser_navigate", results=({"text": _page_answer(title), "is_error": False},)
+        ),
+        fake.FakeTool("browser_snapshot", results=({"text": snapshot, "is_error": False},)),
+    )
+
+
+async def test_a_huge_title_and_headings_never_make_open_return_the_page(world):
+    ctx, _, _, facts = world
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1", name="browser_open", arguments=json.dumps({"url": "https://example.com/a"})
+    )
+    with fake_engine(*_hostile_open()):
+        result, ok = await chat._run_tool(turn, ctx, call)
+    assert ok, result[:500]
+    assert len(result) <= OPEN_RESULT_MAX, len(result)
+    first = result.splitlines()[0]
+    assert first.startswith('Opened https://example.com/a — "TTT')
+    assert first.endswith('…(199,700 more characters)".')
+    assert "(and 4 more)" in result  # the outline's budget, counted
+    assert facts[-1]["title"] == "T" * 300 + "…(199,700 more characters)"
+    assert page_module.CLIP_CHARS == 300
+    for span in turn.spans:
+        for text in _strings(span.meta.get("facts")):
+            assert len(text) <= CLIPPED_MAX, len(text)
+        assert len(json.dumps(span.meta, default=str)) < 4_000
+
+
+async def test_a_huge_reason_phrase_is_cut_in_the_failure_and_the_span(world):
+    ctx, _, _, facts = world
+    answer = _page_answer("e", "https://example.com/x") + "\n- HTTP status: 404 " + "N" * 100_000
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1", name="browser_open", arguments=json.dumps({"url": "https://example.com/x"})
+    )
+    navigate = fake.FakeTool("browser_navigate", results=({"text": answer, "is_error": False},))
+    with fake_engine(navigate):
+        result, ok = await chat._run_tool(turn, ctx, call)
+    assert not ok
+    assert len(result) < 1_000, len(result)
+    assert "answered 404 NNN" in result and "…(99,700 more characters)" in result
+    assert facts[-1]["status"] == 404
+
+
+async def test_a_huge_engine_error_is_cut(world):
+    ctx = world[0]
+    refusal = fake.FakeTool(
+        "browser_navigate_back",
+        results=({"text": "### Error\nError: " + "E" * 100_000, "is_error": True},),
+    )
+    with fake_engine(refusal):
+        with pytest.raises(ToolFailure) as caught:
+            await browser.browser_back({}, ctx)
+    assert len(str(caught.value)) < 1_000
+    assert str(caught.value).endswith("more characters)")
+
+
+async def test_a_huge_acted_on_name_is_cut(world):
+    ctx = world[0]
+    name = "N" * 100_000
+    click = fake.FakeTool(
+        "browser_click",
+        results=(
+            {
+                "text": (
+                    "### Ran Playwright code\n```js\n"
+                    f"await page.getByRole('link', {{ name: '{name}' }}).click();\n```\n"
+                    + _page_answer("Next")
+                ),
+                "is_error": False,
+            },
+        ),
+    )
+    with fake_engine(click):
+        result = await browser.browser_act({"action": "click", "ref": "e1"}, ctx)
+    first = result.splitlines()[0]
+    assert first.startswith("Clicked ") and len(first) <= len("Clicked .") + CLIPPED_MAX + 20
+    assert "more characters)" in first
+
+
+async def test_a_huge_reported_download_path_is_cut_in_the_line_she_reads(world):
+    ctx = world[0]
+    long_name = "d" * 100_000
+    click = fake.FakeTool(
+        "browser_click",
+        results=(
+            {
+                "text": f'### Events\n- Downloaded file {long_name} to "/output/{long_name}"',
+                "is_error": False,
+            },
+        ),
+    )
+    with fake_engine(click):
+        result = await browser.browser_act({"action": "click", "ref": "e1"}, ctx)
+    line = next(line for line in result.splitlines() if "download" in line.lower())
+    assert len(line) < 1_000, len(line)
+
+
+# ── ruling G17 (final review, m1): an answer over 4 MiB is the client's refusal
+
+
+async def test_an_engine_answer_over_4_mib_is_stopped_and_said(world):
+    """The fake engine answers browser_snapshot with 4 MiB + 1 KB of text; S37a's
+    client stops reading at its MAX_RESPONSE_BYTES and browser_read states the
+    client's own reason (no monkeypatch: the real bound, the real client)."""
+    ctx = world[0]
+    huge = (
+        _page_answer("big")
+        + "\n### Snapshot\n```yaml\n- text: "
+        + "x" * (client.MAX_RESPONSE_BYTES + 1024)
+        + "\n```"
+    )
+    snapshot = fake.FakeTool("browser_snapshot", results=({"text": huge, "is_error": False},))
+    with fake_engine(snapshot):
+        result, ok = await tools.dispatch("browser_read", {}, ctx)
+    assert not ok
+    assert result == "Error: browser streamed more than 4 MiB for one answer; stopped reading"

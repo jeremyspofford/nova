@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 from app import addresses
 from app.browser import engine, files, reader
-from app.browser.page import Dialog, EngineAnswer
+from app.browser.page import Dialog, EngineAnswer, clip
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 ACTIONS = ("click", "type", "select", "press", "accept", "dismiss")
@@ -64,12 +64,22 @@ def address(url: str | None) -> str | None:
 
 def _shown(url: str | None) -> str:
     """An address as she reads it: the fact's form, with a mark where a
-    query or fragment was left out."""
+    query or fragment was left out, clipped (S38 final review, I1) — a page
+    can redirect to a path as long as it likes."""
     if not url:
         return "the page"
     kept = address(url) or url
     hidden = "?" in url or "#" in url
-    return f"{kept}?…" if hidden else kept
+    return clip(f"{kept}?…" if hidden else kept)
+
+
+def _said(text: str) -> str:
+    """Words a page or the engine chose — a title, a status text, the name
+    of what it acted on, its own error — as they reach a result, a fact or
+    a span: scrubbed of any address's secrets FIRST, then clipped (S38
+    final review, I1). A 200,000-character title came back whole before
+    this, in the result and in the span's facts."""
+    return clip(addresses.scrub(text))
 
 
 def _dialog_message(dialog: Dialog) -> str:
@@ -150,14 +160,14 @@ def _page_fact(ctx: ToolContext, answer: EngineAnswer) -> None:
             {
                 "browser": "page",
                 "url": address(answer.url),
-                "title": addresses.scrub(answer.title) if answer.title else None,
+                "title": _said(answer.title) if answer.title else None,
                 "status": answer.status,
             },
         )
 
 
 def _where(answer: EngineAnswer, fallback: str | None = None) -> str:
-    title = f' — "{addresses.scrub(answer.title)}"' if answer.title else ""
+    title = f' — "{_said(answer.title)}"' if answer.title else ""
     return f"{_shown(answer.url or fallback)}{title}"
 
 
@@ -267,7 +277,7 @@ async def _call(tool: str, arguments: dict, ctx: ToolContext) -> EngineAnswer:
     except engine.EngineError as exc:
         if exc.reachable is not None:
             _fact(ctx, {"browser": "engine", "reachable": exc.reachable})
-        raise ToolFailure(addresses.scrub(exc.reason)) from exc
+        raise ToolFailure(_said(exc.reason)) from exc
 
 
 # ── browser_open ────────────────────────────────────────────────────────────
@@ -313,10 +323,10 @@ async def browser_open(args: dict, ctx: ToolContext) -> str:
         notes += await _bring_downloads(ctx, snap)
     _dialog_block(opened, notes)
     if opened.error:
-        raise _fail(f"{_shown(url)} did not open: {addresses.scrub(opened.error)}", notes)
+        raise _fail(f"{_shown(url)} did not open: {_said(opened.error)}", notes)
     if opened.status is not None and opened.status >= 400:
         _page_fact(ctx, opened)
-        status = f"{opened.status} {addresses.scrub(opened.status_text)}".rstrip()
+        status = f"{opened.status} {_said(opened.status_text)}".rstrip()
         raise _fail(
             f"{_shown(opened.url or url)} answered {status} — the browser now shows the "
             "site's error page; browser_read can read it",
@@ -330,8 +340,7 @@ async def browser_open(args: dict, ctx: ToolContext) -> str:
     if snap.error:
         _page_fact(ctx, opened)
         raise _fail(
-            f"{_shown(opened.url or url)} opened, and could not be read: "
-            f"{addresses.scrub(snap.error)}",
+            f"{_shown(opened.url or url)} opened, and could not be read: {_said(snap.error)}",
             notes,
         )
     if snap.snapshot is None:
@@ -370,7 +379,7 @@ async def browser_read(args: dict, ctx: ToolContext) -> str:
     notes = await _bring_downloads(ctx, snap)  # G10 + the Task 2 carry: outside the lock
     _dialog_block(snap, notes)
     if snap.error:
-        raise _fail(f"the page could not be read: {addresses.scrub(snap.error)}", notes)
+        raise _fail(f"the page could not be read: {_said(snap.error)}", notes)
     if snap.snapshot is None:
         raise _fail("the engine returned no snapshot of the page", notes)  # fix round 1, m10
     _page_fact(ctx, snap)
@@ -432,9 +441,7 @@ def _did(action: str, answer: EngineAnswer, ref: str, value: str | None) -> str:
     # fix round 1, m1: `acted_on` is the PAGE's own accessible name for
     # whatever the engine's code targeted — a link named with its own
     # token-bearing URL is a page's words, exactly like a dialog message.
-    target = (
-        addresses.scrub(answer.acted_on) if answer.acted_on else (f"[{ref}]" if ref else "the page")
-    )
+    target = _said(answer.acted_on) if answer.acted_on else (f"[{ref}]" if ref else "the page")
     if action == "click":
         return f"Clicked {target}"
     if action == "type":
@@ -493,7 +500,7 @@ async def browser_act(args: dict, ctx: ToolContext) -> str:
                 "does; read the page again (browser_read) and use a new ref",
                 notes,
             )
-        raise _fail(f"the engine refused: {addresses.scrub(answer.error)}", notes)
+        raise _fail(f"the engine refused: {_said(answer.error)}", notes)
     _page_fact(ctx, answer)
     lines = [f"{_did(action, answer, ref, value)}."]
     if answer.url:
@@ -514,7 +521,7 @@ async def browser_back(args: dict, ctx: ToolContext) -> str:
     notes = await _bring_downloads(ctx, answer)  # G10 + the Task 2 carry: outside the lock
     _dialog_block(answer, notes)
     if answer.error:
-        raise _fail(f"could not go back: {addresses.scrub(answer.error)}", notes)
+        raise _fail(f"could not go back: {_said(answer.error)}", notes)
     _page_fact(ctx, answer)
     if not answer.url:
         return "\n".join(["Went back; the engine reported no page.", *notes])
@@ -530,7 +537,7 @@ async def browser_screenshot(args: dict, ctx: ToolContext) -> str:
     notes = await _bring_downloads(ctx, answer)  # G10 + the Task 2 carry: outside the lock
     _dialog_block(answer, notes)
     if answer.error:
-        raise _fail(f"no screenshot was taken: {addresses.scrub(answer.error)}", notes)
+        raise _fail(f"no screenshot was taken: {_said(answer.error)}", notes)
     if not answer.files:
         raise _fail("the engine took no screenshot file it could name", notes)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

@@ -20,6 +20,23 @@ from dataclasses import dataclass
 # docker-compose.yml). A path outside it is never taken from an answer.
 ENGINE_OUTPUT = "/output/"
 
+# How much of one string a page or the engine chose — a title, a status
+# text, an element's name, an error, a path it reported — ever reaches a
+# result, a fact or a span (S38 final review, I1). A page can set a 200,000-
+# character title; she is promised an outline, never the whole page.
+CLIP_CHARS = 300
+
+
+def clip(text: str, limit: int = CLIP_CHARS) -> str:
+    """`text`, cut to `limit` characters with the cut stated, or whole when
+    it fits. Callers scrub an address out FIRST, then clip: a cut made
+    before the scrub can split a URL's user info from its `@` and leave the
+    scrub nothing it recognises."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}…({len(text) - limit:,} more characters)"
+
+
 # The engine writes each section at most once, in this order (coreBundle.js
 # _build / renderTabMarkdown). A page's own words can hold a "### "-looking
 # line (a dialog message, a typed value); it is never mistaken for a real

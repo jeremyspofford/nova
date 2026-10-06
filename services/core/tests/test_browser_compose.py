@@ -5,8 +5,10 @@ Dockerfiles, so a hand edit that drops a measured flag goes red here."""
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -51,9 +53,23 @@ def test_the_image_is_the_pinned_digest_and_only_adds_the_two_folders():
     assert not any(line.startswith(("ENTRYPOINT", "CMD", "EXPOSE", "VOLUME")) for line in lines)
 
 
+def _exposures(service: dict) -> list[str]:
+    """Every way `service` could put the engine (no login of its own, and
+    run-any-code tools) somewhere other than the stack's own network
+    (final review, m2): a host port, a network mode of any kind (`host`
+    shares the host's), exposed ports, or a network other than the stack's
+    default."""
+    found = [key for key in ("ports", "network_mode", "expose") if key in service]
+    networks = service.get("networks")
+    if networks is not None:
+        names = networks if isinstance(networks, list) else list(networks)
+        found += [f"networks: {name}" for name in names if name != "default"]
+    return found
+
+
 def test_the_engine_publishes_no_port_and_is_built_from_its_folder():
     browser = _service("browser")
-    assert "ports" not in browser
+    assert _exposures(browser) == []
     assert browser["build"]["context"] == "./browser"
     assert browser.get("init") is True
     assert browser["restart"] == "unless-stopped"
@@ -117,3 +133,28 @@ def test_core_sees_the_engine_output_and_knows_where_the_engine_is():
 def test_core_image_creates_the_output_mount_point_for_appuser():
     dockerfile = (ROOT / "services" / "core" / "Dockerfile").read_text()
     assert "mkdir -p /data/workspace /data/browser-output && chown -R appuser /data" in dockerfile
+
+
+@pytest.mark.parametrize(
+    "edit,named",
+    [
+        ({"ports": ["127.0.0.1:8931:8931"]}, "ports"),
+        ({"network_mode": "host"}, "network_mode"),
+        ({"network_mode": "service:tailscale"}, "network_mode"),
+        ({"expose": ["8931"]}, "expose"),
+        ({"networks": ["default", "lan"]}, "networks: lan"),
+        ({"networks": {"default": {}, "outside": {"aliases": ["b"]}}}, "networks: outside"),
+    ],
+)
+def test_every_way_to_expose_the_engine_is_refused(edit, named):
+    """Each shape pinned against a mutated copy of the real compose file's
+    browser service, so the check above cannot pass by never looking."""
+    mutated = copy.deepcopy(_service("browser"))
+    mutated.update(edit)
+    assert named in _exposures(mutated)
+
+
+def test_the_engine_on_the_stacks_own_network_only_is_not_an_exposure():
+    mutated = copy.deepcopy(_service("browser"))
+    mutated["networks"] = {"default": {}}
+    assert _exposures(mutated) == []

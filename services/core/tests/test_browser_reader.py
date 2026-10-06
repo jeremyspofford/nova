@@ -764,3 +764,46 @@ def test_fix_round_2s_loops_stay_linear_on_hostile_input():
         reader.search(read, "zebra-quartz")
         took = time.perf_counter() - start
         assert took < 2.0, f"{label}: {took:.2f} s"
+
+
+# ── S38 final review, I1: a page's headings are bounded in the outline ──────
+
+
+def _headings_page(count: int, chars: int) -> reader.Page:
+    snapshot = "\n".join(
+        f'- heading "{chr(65 + i % 26) * chars}" [level=1] [ref=e{i}]' for i in range(1, count + 1)
+    )
+    return reader.read(snapshot)
+
+
+def test_each_heading_in_the_outline_is_cut_and_says_how_much_was_cut():
+    """The reviewer's probe: three 100 KB headings made a 300,218-character
+    browser_open for a page that reads as 15 parts."""
+    outline = reader.outline(_headings_page(3, 100_000))
+    assert outline.more_headings == 0
+    for heading in outline.headings:
+        # 200 per heading (reader.MAX_HEADING_CHARS), pinned as a number.
+        assert heading == heading[0] * 200 + "…(99,800 more characters)"
+
+
+def test_the_outline_stops_at_its_budget_and_counts_the_rest():
+    outline = reader.outline(_headings_page(30, 100_000))
+    shown = sum(len(heading) for heading in outline.headings)
+    assert shown <= 6_000  # reader.MAX_OUTLINE_CHARS, pinned as a number
+    # 225 characters per cut heading: 26 fit in 6,000, the 27th would not.
+    assert len(outline.headings) == 26
+    assert outline.more_headings == 4
+
+
+def test_short_headings_are_untouched_by_the_cut():
+    outline = reader.outline(_headings_page(31, 12))
+    assert outline.headings[0] == "B" * 12
+    assert (len(outline.headings), outline.more_headings) == (30, 1)
+
+
+def test_a_search_names_the_heading_above_a_match_cut():
+    read = reader.read(f'- heading "{"H" * 100_000}" [level=1] [ref=e1]\n- text: zebra')
+    (match,), total = reader.search(read, "zebra")
+    assert total == 1
+    assert match.heading is not None
+    assert match.heading == "# " + "H" * 198 + "…(99,802 more characters)"

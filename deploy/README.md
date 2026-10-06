@@ -413,7 +413,9 @@ it. Signing her in somewhere signs her browser in until you sign it out.
 - CAPTCHAs, emailed codes and DRM video stop her. She sees the page's own
   words, but nothing yet checks that she tells you she was stopped.
 - One browser reaches everything you can reach: the internet, your LAN, the
-  tailnet and the stack's own network. Core, gateway and memory still need
+  stack's own network, and tailnet addresses when this machine itself is on
+  the tailnet (the `tailscale` sidecar runs userspace networking, so it gives
+  the other containers no route of its own). Core, gateway and memory still need
   their service token on every route; Ollama and SearXNG answer anything on
   the stack's network, the browser included. A page can try to steer her;
   what she does is recorded, never blocked.
@@ -428,6 +430,10 @@ it. Signing her in somewhere signs her browser in until you sign it out.
   has not been seen working yet.
 - A download over 1 GiB is refused, and the browser's copy is removed;
   nothing lands in her workspace.
+- An answer from the browser over 4 MiB (a page so large its text alone
+  passes that) is stopped there, and the call fails saying so: "browser
+  streamed more than 4 MiB for one answer; stopped reading". She cannot read
+  that page.
 - Tabs, drag and drop and file uploads are not built yet.
 
 **Moving the engine to a new version.** Change `FROM` in

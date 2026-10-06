@@ -31,7 +31,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.browser.page import ENGINE_OUTPUT
+from app.browser.page import ENGINE_OUTPUT, clip
 from app.tools.base import ToolFailure
 from app.tools.workspace import _resolve_within
 
@@ -151,11 +151,14 @@ def source_of(engine_path: str, output_dir: Path) -> Path:
     what keeps a directory link planted in the engine's own volume from
     ever being walked into."""
     if not engine_path.startswith(ENGINE_OUTPUT):
-        raise HandoffError(f"the engine named {engine_path!r}, which is not in its output folder")
+        raise HandoffError(
+            f"the engine named {clip(engine_path)!r}, which is not in its output folder"
+        )
     rel = engine_path[len(ENGINE_OUTPUT) :]
     if not rel or "\x00" in rel or "/" in rel or rel in (".", ".."):
         raise HandoffError(
-            f"the engine named {engine_path!r}, which is not one flat file in its output folder"
+            f"the engine named {clip(engine_path)!r}, which is not one flat file in its "
+            "output folder"
         )
     return output_dir / rel
 
@@ -173,13 +176,13 @@ def _checked_open(source: Path, lstat_info: os.stat_result) -> int:
     try:
         fd = os.open(source, flags)
     except OSError as exc:
-        raise HandoffError(f"could not open {source.name}: {exc.strerror or exc}") from exc
+        raise HandoffError(f"could not open {clip(source.name)}: {exc.strerror or exc}") from exc
     try:
         fstat = os.fstat(fd)
     except OSError as exc:
         os.close(fd)
         raise HandoffError(
-            f"could not check {source.name} after opening it: {exc.strerror or exc}"
+            f"could not check {clip(source.name)} after opening it: {exc.strerror or exc}"
         ) from exc
     if (
         not stat.S_ISREG(fstat.st_mode)
@@ -188,7 +191,7 @@ def _checked_open(source: Path, lstat_info: os.stat_result) -> int:
     ):
         os.close(fd)
         raise HandoffError(
-            f"the engine's {source.name} changed underneath this check; nothing was kept"
+            f"the engine's {clip(source.name)} changed underneath this check; nothing was kept"
         )
     return fd
 
@@ -274,7 +277,9 @@ def bring_in(
     except HandoffError:
         raise
     except OSError as exc:
-        raise HandoffError(f"could not bring in {engine_path}: {exc.strerror or exc}") from None
+        raise HandoffError(
+            f"could not bring in {clip(engine_path)}: {exc.strerror or exc}"
+        ) from None
 
 
 def _bring_in(
@@ -293,37 +298,39 @@ def _bring_in(
     try:
         info = os.lstat(source)
     except FileNotFoundError:
-        raise HandoffError(f"the engine reported {engine_path}, and it is not there") from None
+        raise HandoffError(
+            f"the engine reported {clip(engine_path)}, and it is not there"
+        ) from None
     except OSError as exc:
         raise HandoffError(
-            f"could not check {source.name} in the engine's folder: {exc.strerror or exc}"
+            f"could not check {clip(source.name)} in the engine's folder: {exc.strerror or exc}"
         ) from exc
     if stat.S_ISDIR(info.st_mode):
         raise HandoffError(
-            f"the engine reported {engine_path}, which is a directory, not a file; "
+            f"the engine reported {clip(engine_path)}, which is a directory, not a file; "
             "it was left where it was"
         )
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         reason = _remove(source)
         if reason is not None:
             raise HandoffError(
-                f"the engine reported {engine_path}, which is not a plain file, and it "
+                f"the engine reported {clip(engine_path)}, which is not a plain file, and it "
                 f"could not be removed: {reason}"
             )
         raise HandoffError(
-            f"the engine reported {engine_path}, which is not a plain file; it was removed"
+            f"the engine reported {clip(engine_path)}, which is not a plain file; it was removed"
         )
     if info.st_size > MAX_BRING_BYTES:
         reason = _remove(source)
         if reason is not None:
             raise HandoffError(
-                f"{source.name} is {info.st_size:,} bytes, over the 1 GiB a download may bring "
-                f"into the workspace; it was not copied, and the engine's copy could not be "
+                f"{clip(source.name)} is {info.st_size:,} bytes; a download can bring in at most "
+                f"1 GiB, so this one was not copied, and the engine's copy could not be "
                 f"removed: {reason}"
             )
         raise HandoffError(
-            f"{source.name} is {info.st_size:,} bytes, over the 1 GiB a download may bring into "
-            "the workspace; it was not copied, and the engine's copy was removed"
+            f"{clip(source.name)} is {info.st_size:,} bytes; a download can bring in at most "
+            "1 GiB, so this one was not copied, and the engine's copy was removed"
         )
 
     # Opened and checked FIRST, before anything in the workspace is
@@ -376,11 +383,13 @@ def _bring_in(
                 os.close(tmp_fd)
             if copied != info.st_size or extra:
                 raise HandoffError(
-                    f"the copy of {source.name} did not match the engine's file; nothing was kept"
+                    f"the copy of {clip(source.name)} did not match the engine's file; "
+                    "nothing was kept"
                 )
             if _sha256(Path(tmp_name)) != digest.hexdigest() or os.path.getsize(tmp_name) != copied:
                 raise HandoffError(
-                    f"the copy of {source.name} did not match the engine's file; nothing was kept"
+                    f"the copy of {clip(source.name)} did not match the engine's file; "
+                    "nothing was kept"
                 )
             destination = _publish(tmp_name, destination_dir, wanted)
         except OSError as exc:

@@ -112,22 +112,51 @@ def test_a_long_cjk_name_is_brought_in_end_to_end(dirs):
     assert not (output / "x.pdf").exists()
 
 
+_NOT_IN_FOLDER = "which is not in its output folder"
+_NOT_FLAT = "which is not one flat file in its output folder"
+
+
 @pytest.mark.parametrize(
-    "engine_path",
+    "engine_path,said",
     [
-        "/etc/passwd",
-        "/output/",
-        "/output/../etc/passwd",
-        "/output/a/../../x",
-        "/output/./x",
-        "/outputx",
+        # Final review m3: these two are refused by the "/output/" prefix check
+        # ALONE — every file each one could be read as is created below, so
+        # without that check they would be found and copied in, never "not
+        # there" (which is how this test passed vacuously before).
+        ("/etc/passwd", _NOT_IN_FOLDER),
+        ("/outputreport.bin", _NOT_IN_FOLDER),
+        ("/output/", _NOT_FLAT),
+        ("/output/../etc/passwd", _NOT_FLAT),
+        ("/output/a/../../x", _NOT_FLAT),
+        ("/output/./x", _NOT_FLAT),
+        ("/outputx", _NOT_IN_FOLDER),
     ],
 )
-def test_an_engine_path_outside_its_folder_is_refused(dirs, engine_path):
+def test_an_engine_path_outside_its_folder_is_refused(dirs, tmp_path, engine_path, said):
     output, workspace = dirs
-    with pytest.raises(files.HandoffError):
+    (output / "a").mkdir()
+    planted = [
+        # what the path names outside the engine's folder...
+        tmp_path / "etc" / "passwd",
+        tmp_path / "x",
+        output / "x",
+        # ...and what it would be read as INSIDE it, past a prefix check that
+        # only stripped the prefix's length: "/etc/passwd"[8:] is "swd".
+        output / engine_path[len("/output/") :]
+        if engine_path[len("/output/") :] not in ("", "/", ".")
+        and "/" not in engine_path[len("/output/") :]
+        else None,
+    ]
+    planted = [path for path in planted if path is not None]
+    for path in planted:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not hers")
+    with pytest.raises(files.HandoffError) as caught:
         files.bring_in(engine_path, output_dir=output, workspace_root=workspace, folder="downloads")
+    assert str(caught.value) == f"the engine named {engine_path!r}, {said}"
     assert not (workspace / "downloads").exists()
+    for path in planted:
+        assert path.read_bytes() == b"not hers", path
 
 
 def test_a_nested_engine_path_is_refused_without_following_the_link(dirs, tmp_path):
@@ -240,10 +269,15 @@ def test_a_file_over_the_cap_is_stated_not_copied_and_removed(dirs, monkeypatch)
     output, workspace = dirs
     monkeypatch.setattr(files, "MAX_BRING_BYTES", 10)
     _put(output, "big.bin", b"x" * 11)
-    with pytest.raises(files.HandoffError, match="over the 1 GiB"):
+    with pytest.raises(files.HandoffError) as caught:
         files.bring_in(
             "/output/big.bin", output_dir=output, workspace_root=workspace, folder="downloads"
         )
+    # Final review m4: what a download CAN bring in, never what it "may".
+    assert str(caught.value) == (
+        "big.bin is 11 bytes; a download can bring in at most 1 GiB, so this one was not "
+        "copied, and the engine's copy was removed"
+    )
     assert not (output / "big.bin").exists()
     assert not (workspace / "downloads").exists()
 

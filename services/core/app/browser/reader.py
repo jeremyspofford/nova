@@ -30,12 +30,20 @@ import bisect
 import json
 from dataclasses import dataclass, field
 
+from app.browser.page import clip
+
 DEFAULT_PART_CHARS = 24_000
 MIN_PART_CHARS = 2_000
 MAX_PART_CHARS = 200_000
 MAX_MATCHES = 40
 MAX_MATCH_CHARS = 300
 MAX_OUTLINE_HEADINGS = 30
+# A page chooses its headings' text: one can put its whole article in an h1
+# (S38 final review, I1 — three 100 KB headings made a 300,218-character
+# browser_open). Each heading is cut to this, and the outline stops adding
+# headings once their text would pass the budget; the rest are counted.
+MAX_HEADING_CHARS = 200
+MAX_OUTLINE_CHARS = 6_000
 # A page chooses how deep its tree goes, and the walk below is recursive: a
 # node deeper than this is read as a sibling at this depth, so no page can
 # exhaust the interpreter's stack (a 5,000-deep snapshot raised RecursionError
@@ -162,15 +170,25 @@ def render(snapshot: str) -> list[Line]:
 
 
 def outline(page: Page) -> Outline:
-    headings = [line.text.lstrip("#").strip() for line in page.lines if line.heading]
+    found = [line.text for line in page.lines if line.heading]
+    headings: list[str] = []
+    used = 0
+    for text in found:
+        if len(headings) == MAX_OUTLINE_HEADINGS:
+            break
+        shown = clip(text.lstrip("#").strip(), MAX_HEADING_CHARS)
+        if used + len(shown) > MAX_OUTLINE_CHARS:
+            break
+        headings.append(shown)
+        used += len(shown)
     links = buttons = fields = 0
     for line in page.lines:
         links += line.text.count("] link ")
         buttons += line.text.count("] button ")
         fields += sum(line.text.count(f"] {role}") for role in FIELDS)
     return Outline(
-        headings=tuple(headings[:MAX_OUTLINE_HEADINGS]),
-        more_headings=max(0, len(headings) - MAX_OUTLINE_HEADINGS),
+        headings=tuple(headings),
+        more_headings=len(found) - len(headings),
         links=links,
         buttons=buttons,
         fields=fields,
@@ -191,7 +209,7 @@ def search(page: Page, query: str) -> tuple[list[Match], int]:
     heading: str | None = None
     for index, line in enumerate(page.lines):
         if line.heading:
-            heading = line.text
+            heading = clip(line.text, MAX_HEADING_CHARS)  # I1: a page chooses it
         folded = line.text.casefold()
         if all(word in folded for word in words):
             total += 1
