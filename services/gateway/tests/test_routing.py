@@ -835,3 +835,23 @@ async def test_an_unreachable_standby_is_tried_once_and_the_503_says_why(
     assert "hub:qwen3:8b: standby: could not reach hub" in error
     assert refused.requests == [("POST", "/v1/chat/completions")]
     assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+async def test_a_402_wall_keeps_the_providers_sentence_not_a_head_of_its_json(
+    client, pool, local, mount_backend
+):
+    """The wall reason is what the Inbox and the 503 quote. It used to be the
+    first 200 chars of the raw body, which cut OpenRouter's 402 just before
+    the number it can afford — the one fact he needed (09-30)."""
+    await _cloud(
+        client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1", affords_tokens=0)
+    )
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.status_code == 200
+    walls = (await client.get("/admin/routes")).json()["walls"]
+    assert "refused (402)" in walls[0]["reason"]
+    assert "can only afford 0" in walls[0]["reason"]
+    assert '{"error"' not in walls[0]["reason"]

@@ -44,6 +44,7 @@ from fastapi.responses import Response
 
 from app import adapters, compute_id, db, engines, providers, routing, usage
 from app.adapters import ListingUnavailable, ProviderRefused, ProviderUnreachable, systemone
+from app.adapters.base import refusal_words
 
 router = APIRouter(tags=["data-plane"])
 logger = logging.getLogger("gateway")
@@ -206,7 +207,7 @@ async def walk_role(
             detail = ""
             body_bytes = getattr(response, "body", b"")
             if body_bytes:
-                detail = body_bytes.decode(errors="replace")[:200]
+                detail = refusal_words(body_bytes)
             await routing.record_refusal(
                 pool, decision.row, response.status_code, detail, model=decision.model
             )
