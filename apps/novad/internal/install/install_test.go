@@ -151,6 +151,27 @@ func TestInstallFailsWhenTheAgentNeverReportsReady(t *testing.T) {
 	}
 }
 
+// Task 32, L246: when install's own time runs out before WaitReady does —
+// identity()'s retries can eat most of the five minutes — the error still
+// says what the agent last said, as the WaitReady branch does, never a bare
+// "context deadline exceeded".
+func TestAnInstallWhoseOwnTimeRunsOutSaysWhatTheAgentLastSaid(t *testing.T) {
+	o, svc, _ := installOpts(t)
+	o.WaitReady = time.Minute
+	svc.onRestart = agentCameUp(o.Paths, "aaaaaaaaaaaa", state.StateConnecting, "dial tcp 127.0.0.1:3000: connect: connection refused")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := Install(ctx, *o)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want the context's end carried", err)
+	}
+	for _, want := range []string{"installed and started", `it last said "connecting": dial tcp 127.0.0.1:3000: connect: connection refused`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+}
+
 // Review focus 4: a copy started by hand holds the identity — say whose.
 func TestInstallNamesAnotherCopyHoldingTheIdentity(t *testing.T) {
 	o, svc, _ := installOpts(t)

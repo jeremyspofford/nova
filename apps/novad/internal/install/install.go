@@ -178,24 +178,32 @@ func (o *Options) awaitReady(ctx context.Context, started time.Time) (state.Agen
 			}
 		}
 		if !o.Now().Before(deadline) {
-			why := "it has not written a status"
-			if last.PID != 0 {
-				why = fmt.Sprintf("it last said %q", last.State)
-				if last.Version != o.Version {
-					why += " as build " + last.Version
-				}
-				if last.Error != "" {
-					why += ": " + last.Error
-				}
-			}
-			return last, fmt.Errorf("installed and started, but the agent did not connect within %s — %s", o.WaitReady, why)
+			return last, fmt.Errorf("installed and started, but the agent did not connect within %s — %s", o.WaitReady, o.lastSaid(last))
 		}
 		select {
 		case <-ctx.Done():
-			return last, ctx.Err()
+			// install's own time can run out first — identity()'s retries may
+			// have used most of it — and that end says as much (Task 32, L246).
+			return last, fmt.Errorf("installed and started, but the wait ended (%w) before the agent connected — %s", ctx.Err(), o.lastSaid(last))
 		case <-time.After(o.PollEvery):
 		}
 	}
+}
+
+// lastSaid is what the new agent's status last said, for an error that ends
+// the wait: its state, its build when that is not this one, its last error.
+func (o *Options) lastSaid(last state.AgentStatus) string {
+	if last.PID == 0 {
+		return "it has not written a status"
+	}
+	why := fmt.Sprintf("it last said %q", last.State)
+	if last.Version != o.Version {
+		why += " as build " + last.Version
+	}
+	if last.Error != "" {
+		why += ": " + last.Error
+	}
+	return why
 }
 
 func (o *Options) report(bin, sum string, cfg config.Config, st state.AgentStatus, bootNote string, bootErr error, notes []string, build string) {
