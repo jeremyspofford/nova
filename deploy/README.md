@@ -32,6 +32,20 @@ command line REPLACES the `.env` list rather than adding to it — so after
 installing, prefer `docker compose up -d` with no flag, or re-run
 `./install`.
 
+**Her own repository.** The installer runs from the checkout, so it reads
+the checkout's own `origin` remote and writes `NOVA_REPO` (`owner/repo`) and,
+when `origin/HEAD` names one, `NOVA_REPO_BRANCH` to `deploy/.env`. Compose
+hands both to core, which adds one sentence to her prompt ("Your own source
+code is the GitHub repository owner/repo (default branch main).") — so a
+question like "why is CI red on main?" goes straight to GitHub instead of a
+hunt for which repository is hers. Only github.com remotes count (https,
+`ssh://` or `git@github.com:`, with or without `.git`); with no `origin`, or
+one that is not GitHub, nothing is written, the installer says so in one
+line, and a value an earlier run wrote is blanked. Core shape-checks both
+values and drops the sentence, with a logged reason, on anything that is not
+a GitHub `owner/repo`. To refresh it on a running install: re-run
+`./install` (core is recreated because its environment changed).
+
 **The deploy rule (2026-09-04).** Run compose from this directory — `cd
 deploy && docker compose …`, or `docker compose --project-directory deploy …`
 from the repo root — and never with a bare `-f deploy/docker-compose.yml`.

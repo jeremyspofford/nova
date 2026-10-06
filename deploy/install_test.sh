@@ -2085,6 +2085,97 @@ expect_tn "foreign: nothing foreign ⇒ one line and no offer" "$FG_CLEAN" 0 3 "
 expect_tn_lacks "foreign: nothing foreign ⇒ no refusal block" "$FG_CLEAN" 3 "REFUSED"
 expect_str "foreign: nothing foreign ⇒ nothing removed" "$(tn_field "$FG_CLEAN" 2)" ""
 
+# ── record_repository: she is told which GitHub repository is her own ───────
+# Walk finding (turn 641f312e): asked "why is CI red on main?", she spent all
+# six tool rounds hunting for WHICH repository is hers. The installer runs
+# from the checkout, so the checkout's own `origin` is the answer — derived,
+# never typed in. A real throwaway git repo per case, real `git`, real
+# set_env_value; only REPO_ROOT and ENV_FILE are pointed at a temp dir.
+#   $1 origin url ("" = no origin)   $2 default branch for origin/HEAD ("" = none)
+#   $3 initial .env body
+# Prints "<exit>|<.env with ;>|<stderr>".
+run_repo() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${3:-}" > "$ENV_FILE"
+    git init -q "$REPO_ROOT"
+    if [ -n "$1" ]; then git -C "$REPO_ROOT" remote add origin "$1"; fi
+    if [ -n "$2" ]; then
+      git -C "$REPO_ROOT" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+      git -C "$REPO_ROOT" update-ref "refs/remotes/origin/$2" HEAD
+      git -C "$REPO_ROOT" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$2"
+    fi
+    err="$( ( set -e; record_repository ) 2>&1 )"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+RP_HTTPS="$(run_repo https://github.com/jeremyspofford/nova main 'A=1\n')"
+expect_tn "repo: https remote gives owner/repo" "$RP_HTTPS" 0 2 "NOVA_REPO=jeremyspofford/nova;"
+expect_tn "repo: the default branch is written" "$RP_HTTPS" 0 2 "NOVA_REPO_BRANCH=main;"
+expect_tn "repo: other keys untouched" "$RP_HTTPS" 0 2 "A=1;"
+expect_tn "repo: says what it wrote" "$RP_HTTPS" 0 3 "jeremyspofford/nova"
+expect_tn "repo: https with .git is stripped" \
+  "$(run_repo https://github.com/o-1/r.x_y.git main '')" 0 2 "NOVA_REPO=o-1/r.x_y;"
+RP_SSH="$(run_repo git@github.com:jeremyspofford/nova.git trunk '')"
+expect_tn "repo: ssh git@github.com:o/r.git gives owner/repo" "$RP_SSH" 0 2 "NOVA_REPO=jeremyspofford/nova;"
+expect_tn "repo: the branch is origin/HEAD's, not assumed main" "$RP_SSH" 0 2 "NOVA_REPO_BRANCH=trunk;"
+expect_tn "repo: ssh:// form too" \
+  "$(run_repo ssh://git@github.com/o/r.git main '')" 0 2 "NOVA_REPO=o/r;"
+RP_NOHEAD="$(run_repo https://github.com/o/r '' '')"
+expect_tn "repo: no origin/HEAD still writes the repo" "$RP_NOHEAD" 0 2 "NOVA_REPO=o/r;"
+expect_tn_lacks "repo: no origin/HEAD writes no branch" "$RP_NOHEAD" 2 "NOVA_REPO_BRANCH"
+RP_GITLAB="$(run_repo git@gitlab.com:o/r.git main 'A=1\n')"
+expect_tn "repo: a non-GitHub remote writes nothing" "$RP_GITLAB" 0 2 "A=1;"
+expect_tn_lacks "repo: a non-GitHub remote writes no NOVA_REPO" "$RP_GITLAB" 2 "NOVA_REPO"
+expect_tn "repo: a non-GitHub remote says so" "$RP_GITLAB" 0 3 "not a GitHub repository"
+RP_LOOKALIKE="$(run_repo https://github.com.evil.example/o/r main '')"
+expect_tn_lacks "repo: a github.com look-alike host writes nothing" "$RP_LOOKALIKE" 2 "NOVA_REPO"
+RP_NONE="$(run_repo '' '' 'A=1\n')"
+expect_tn_lacks "repo: no origin writes nothing" "$RP_NONE" 2 "NOVA_REPO"
+expect_tn "repo: no origin says so" "$RP_NONE" 0 3 "no git remote"
+# A stale value from an earlier install is a guess once the remote stops
+# answering for it: blanked, never left standing.
+RP_STALE="$(run_repo '' '' 'NOVA_REPO=old/one\nNOVA_REPO_BRANCH=main\n')"
+expect_tn "repo: a stale NOVA_REPO is blanked when there is no remote" "$RP_STALE" 0 2 "NOVA_REPO=;"
+expect_tn "repo: a stale NOVA_REPO_BRANCH is blanked too" "$RP_STALE" 0 2 "NOVA_REPO_BRANCH=;"
+RP_SAME="$(run_repo https://github.com/o/r main 'NOVA_REPO=o/r\nNOVA_REPO_BRANCH=main\n')"
+expect_str "repo: a re-run leaves exactly one NOVA_REPO line" \
+  "$(tn_field "$RP_SAME" 2 | tr ';' '\n' | grep -c '^NOVA_REPO=')" "1"
+# cmd_install reaches it (delete the call and this goes red).
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit} f&&/^  record_repository$/{found=1} END{exit !found}' \
+  "$SCRIPT_DIR/install.sh"; then
+  report 0 "repo: cmd_install calls record_repository"
+else
+  report 1 "repo: cmd_install calls record_repository" "no call in cmd_install"
+fi
+# Both keys are declared for the backup (an undeclared .env key refuses every
+# backup by name) and handed to core by compose.
+RP_MISSING=""
+for RP_KEY in NOVA_REPO NOVA_REPO_BRANCH; do
+  grep -q "^  *${RP_KEY}: \${${RP_KEY}:-}" "$SCRIPT_DIR/docker-compose.yml" \
+    || RP_MISSING="$RP_MISSING docker-compose.yml:$RP_KEY"
+  awk -v k="$RP_KEY" '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    $0 ~ ("^(# )?" k "=") { if (d) ok = 1 }
+    { d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example" || RP_MISSING="$RP_MISSING .env.example:$RP_KEY"
+done
+if [ -z "$RP_MISSING" ]; then
+  report 0 "repo: both keys are passed to core and declared in .env.example"
+else
+  report 1 "repo: both keys are passed to core and declared in .env.example" "missing:$RP_MISSING"
+fi
+
 # ── tripwire: the five keys decide_subnet writes have to MEAN something ─────
 # It writes NOVA_SUBNET, NOVA_SUBNET_RANGE, NOVA_SUBNET_GATEWAY, NOVA_WEB_ADDR
 # and NOVA_TAILSCALE_ADDR. Two of those are already read by

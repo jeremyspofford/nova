@@ -2121,6 +2121,77 @@ record_compose_profiles() {
   fi
 }
 
+# ---- her own repository ----------------------------------------------------
+#
+# Walk finding (turn 641f312e): asked "why is CI red on main?" with GitHub's
+# MCP server connected, she spent every tool round hunting for WHICH
+# repository is hers and never asked GitHub. The installer runs from the
+# checkout, so the checkout's own `origin` IS the answer — derived here,
+# never typed in, and handed to core (NOVA_REPO, NOVA_REPO_BRANCH), which
+# states it in her prompt.
+
+# owner/repo from a github.com remote URL, or exit 1. https, ssh:// and the
+# scp-like git@github.com:o/r form, with or without .git. The host must be
+# exactly github.com (a look-alike such as github.com.example is not), and
+# both halves must be GitHub's own characters — core shape-checks again,
+# since the value ends up in a prompt.
+github_repo_from_url() {
+  local url="$1" path
+  case "$url" in
+    https://github.com/*) path="${url#https://github.com/}" ;;
+    https://*@github.com/*) path="${url#https://*@github.com/}" ;;
+    ssh://git@github.com/*) path="${url#ssh://git@github.com/}" ;;
+    git@github.com:*) path="${url#git@github.com:}" ;;
+    *) return 1 ;;
+  esac
+  path="${path%/}"
+  path="${path%.git}"
+  printf '%s' "$path" | grep -Eq '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' || return 1
+  case "${path#*/}" in . | ..) return 1 ;; esac
+  printf '%s' "$path"
+}
+
+# Writes NOVA_REPO, and NOVA_REPO_BRANCH when origin/HEAD names one. No
+# origin, or one that is not GitHub: nothing written, one line saying so —
+# and a value an earlier install wrote is blanked, because once the remote
+# no longer answers for it, keeping it would be a guess.
+record_repository() {
+  local url repo="" branch="" why=""
+  url="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null)" || url=""
+  if [ -z "$url" ]; then
+    why="no git remote named origin in $REPO_ROOT"
+  elif ! repo="$(github_repo_from_url "$url")"; then
+    repo=""
+    why="origin ($url) is not a GitHub repository"
+  fi
+  if [ -z "$repo" ]; then
+    log "repository: $why — NOVA_REPO not written; Nova is not told which repository is hers"
+    local key
+    for key in NOVA_REPO NOVA_REPO_BRANCH; do
+      if [ -n "$(get_env_value "$key")" ]; then
+        set_env_value "$key" ""
+        log "            (cleared the $key an earlier install wrote)"
+      fi
+    done
+    return 0
+  fi
+  branch="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || branch=""
+  branch="${branch#origin/}"
+  if ! printf '%s' "$branch" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+    branch=""
+  fi
+  [ "$(get_env_value NOVA_REPO)" = "$repo" ] || set_env_value NOVA_REPO "$repo"
+  if [ -n "$branch" ]; then
+    [ "$(get_env_value NOVA_REPO_BRANCH)" = "$branch" ] || set_env_value NOVA_REPO_BRANCH "$branch"
+    log "repository: NOVA_REPO=$repo, NOVA_REPO_BRANCH=$branch (from this checkout's origin)"
+  else
+    if [ -n "$(get_env_value NOVA_REPO_BRANCH)" ]; then
+      set_env_value NOVA_REPO_BRANCH ""
+    fi
+    log "repository: NOVA_REPO=$repo (from this checkout's origin); origin/HEAD names no default branch, so none is written"
+  fi
+}
+
 # ---- bring-up + status ----------------------------------------------------
 
 compose_up() {
@@ -2206,6 +2277,8 @@ cmd_install() {
   # exactly this run's set — and a refusal above leaves .env as it was.
   record_compose_files
   record_compose_profiles
+  # Before compose_up, so the core container this run creates reads it.
+  record_repository
   compose_up
   wait_for_health || true
   print_status
