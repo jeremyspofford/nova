@@ -747,6 +747,29 @@ class MemoryStore:
     def delete(self, abs_path: Path) -> None:
         abs_path.unlink()
 
+    def delete_entry(self, abs_path: Path, fragment: str) -> bool:
+        """Cut ONE exchange out of a journal, and CHECK that it is gone.
+
+        False when the file holds no exchange by that name — a fact the
+        caller states, never a neighbouring exchange quietly cut instead.
+        The rest of the file is kept byte for byte: frontmatter, every other
+        exchange, and their order. A journal left with no exchanges at all
+        is deleted, so an empty day does not linger as a file.
+        """
+        meta, body = _parse(abs_path.read_text(encoding="utf-8"))
+        entry = find_entry(body, fragment)
+        if entry is None:
+            return False
+        kept = body[: entry.start] + body[entry.end :]
+        if not split_entries(kept) and not kept.strip():
+            abs_path.unlink()
+            return True
+        _atomic_write(abs_path, _render(meta, kept))
+        _check_meta, check_body = _parse(abs_path.read_text(encoding="utf-8"))
+        if check_body != kept:
+            raise OSError(f"{self.rel_path(abs_path)} was rewritten but does not read back")
+        return True
+
     # -- export --------------------------------------------------------------
 
     def export_tar_gz(self, person_id: str) -> bytes:

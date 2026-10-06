@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+from app import chat
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory
 from tests.test_chat import _say, _set_model
@@ -498,7 +499,9 @@ async def test_a_capability_reading_never_becomes_a_durable_belief(
     assert status == 200
     # The swap happened and was said — and none of it was written down.
     assert "gemma4:12b" in _sent(gateway)["model"]
-    assert memory.ingests == [], "a momentary capability reading was ingested as knowledge"
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [chat.LIVE_READ_NOT_KEPT], (
+        "a momentary capability reading was ingested as knowledge"
+    )
 
 
 async def test_an_ordinary_attachment_turn_is_still_remembered(

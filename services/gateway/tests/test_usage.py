@@ -584,3 +584,43 @@ async def test_the_admin_probe_is_a_ledger_row_too(client, pool, local):
     rows = await _rows(pool)
     assert [r["kind"] for r in rows] == ["probe"] and rows[0]["purpose"] == "probe"
     assert rows[0]["prompt_tokens"] == 12 and rows[0]["local"] is True
+
+
+async def test_a_402_that_states_what_the_credit_affords_is_retried_once_within_it(
+    client, pool, mount_backend, local
+):
+    """OpenRouter reserves the model's whole output cap when no max_tokens is
+    named, so a low balance refused every chat turn outright (09-25..09-30)
+    while it could still pay for a reply. The provider states the number it
+    can afford; the call is sent once more asking for exactly that."""
+    fake = FakeOpenAICompat(accepts_key="sk-1", affords_tokens=4321)
+    await _cloud(client, mount_backend, fake)
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "openrouter:remote-model", "messages": [], "stream": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "ok" in resp.text
+    calls = [b for p, b in fake.seen if p.endswith("/chat/completions")]
+    assert len(calls) == 2
+    assert "max_tokens" not in calls[0]
+    assert calls[1]["max_tokens"] == 4321
+
+
+async def test_a_callers_own_max_tokens_is_never_raised_by_the_retry(
+    client, pool, mount_backend, local
+):
+    fake = FakeOpenAICompat(accepts_key="sk-1", affords_tokens=4321)
+    await _cloud(client, mount_backend, fake)
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "openrouter:remote-model",
+            "messages": [],
+            "stream": True,
+            "max_tokens": 100,
+        },
+    )
+    assert resp.status_code == 200
+    calls = [b for p, b in fake.seen if p.endswith("/chat/completions")]
+    assert [c["max_tokens"] for c in calls] == [100]

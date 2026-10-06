@@ -113,6 +113,7 @@ async def test_every_route_needs_an_identity(client):
     nid = uuid.uuid4()
     assert (await client.get("/api/v1/notices")).status_code == 401
     assert (await client.put(f"/api/v1/notices/{nid}/seen")).status_code == 401
+    assert (await client.put("/api/v1/notices/seen")).status_code == 401
     mute = await client.put(f"/api/v1/notices/{nid}/mute", json={"muted": True})
     assert mute.status_code == 401
 
@@ -505,3 +506,17 @@ async def test_digests_is_a_route_and_not_read_as_a_notice_id(owner_client):
 
     assert resp.status_code == 200, resp.text
     assert "digests" in resp.json()
+
+
+async def test_marking_all_seen_clears_the_badge_and_says_how_many(owner_client, pool):
+    await _record(pool)
+    await _record(pool, key="k2", facts={"a": 1})
+    assert (await _listing(owner_client))["unseen_count"] == 2
+
+    resp = await owner_client.put("/api/v1/notices/seen")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"marked": 2, "unseen_count": 0}
+    assert (await _listing(owner_client))["unseen_count"] == 0
+
+    again = await owner_client.put("/api/v1/notices/seen")
+    assert again.json() == {"marked": 0, "unseen_count": 0}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
@@ -227,9 +228,20 @@ def bearer_or_header(row: dict, *, header_name: str) -> dict[str, str]:
 def refusal_detail(resp: httpx.Response) -> str:
     """The provider's own words for a non-2xx, bounded — never a made-up
     reason and never a full page of HTML."""
-    text = resp.text.strip()
+    return refusal_words(resp.content) or resp.reason_phrase or f"HTTP {resp.status_code}"
+
+
+def refusal_words(content: bytes) -> str:
+    """A refusal body's own sentence: the JSON `error` (a string, or an
+    OpenAI-shaped `{"message": ...}`) or top-level `message` when it carries
+    one, else the body as it came — bounded either way. "" for an empty body.
+
+    Read from the BYTES so a relayed response (already read, no httpx object)
+    is quoted the same way: a wall reason that is the head of the raw JSON
+    cut OpenRouter's 402 just before the number it can afford (09-30)."""
+    text = content.decode(errors="replace").strip()
     try:
-        body = resp.json()
+        body = json.loads(text) if text else None
     except ValueError:
         body = None
     if isinstance(body, dict):
@@ -240,7 +252,7 @@ def refusal_detail(resp: httpx.Response) -> str:
             return err[:400]
         if body.get("message"):
             return str(body["message"])[:400]
-    return text[:400] or resp.reason_phrase or f"HTTP {resp.status_code}"
+    return text[:400]
 
 
 async def fetch_listing(

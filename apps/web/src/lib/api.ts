@@ -1623,6 +1623,13 @@ export async function markNoticeSeen(id: string): Promise<void> {
   await request(`/api/v1/notices/${encodeURIComponent(id)}/seen`, { method: 'PUT' })
 }
 
+/** PUT /notices/seen — the read receipt for every unread row at once. The
+ * same receipt as `markNoticeSeen`, so it silences nothing and stops no
+ * digest; the caller re-reads the listing for the server's new count. */
+export async function markAllNoticesSeen(): Promise<void> {
+  await request('/api/v1/notices/seen', { method: 'PUT' })
+}
+
 /**
  * POST /notices/{id}/thread — open (or re-open) the room off the message
  * that delivered this notice (S25.2.4), and answer with the conversation to

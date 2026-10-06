@@ -22,6 +22,7 @@ function fakeApi(page: () => NoticeListing = () => listing([])) {
   return {
     listNotices: vi.fn(async (_opts: { limit?: number; muted?: boolean } = {}) => page()),
     markNoticeSeen: vi.fn(async () => {}),
+    markAllNoticesSeen: vi.fn(async () => {}),
     listNoticeDigests: vi.fn(
       async (): Promise<{ digests: NoticeDigest[]; not_told_yet: Notice[] }> => ({
         digests: [],
@@ -209,6 +210,42 @@ describe('InboxPage — the record of what she noticed', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('503'))
     expect(screen.queryByText(/nothing noticed yet/i)).toBeNull()
     expect(screen.queryByTestId('inbox-skeleton')).toBeNull()
+  })
+})
+
+describe('InboxPage — mark all read', () => {
+  it("reads the whole inbox in one click and shows the server's new count", async () => {
+    let cleared = false
+    const api = fakeApi(() =>
+      listing([noticeFixture({ id: 'n1' }), noticeFixture({ id: 'n2' })], cleared ? 0 : 2),
+    )
+    api.markAllNoticesSeen = vi.fn(async () => {
+      cleared = true
+    })
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark all read' }))
+
+    await waitFor(() => expect(api.markAllNoticesSeen).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(api.listNotices).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Nothing here is unread.')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull()
+  })
+
+  it('is not offered when nothing is unread', async () => {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1' })], 0)))
+    await screen.findByTestId('notice-row-n1')
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull()
+  })
+
+  it("states a refusal in core's words and keeps the count", async () => {
+    const api = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 1))
+    api.markAllNoticesSeen = vi.fn(async () => {
+      throw new Error('core is down')
+    })
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark all read' }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/core is down/)
+    expect(screen.getByTestId('unseen-count').textContent).toMatch(/1 unread/)
   })
 })
 

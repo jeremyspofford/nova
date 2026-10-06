@@ -1088,8 +1088,12 @@ def _search_caveat(reports: tuple[RetrieverReport, ...]) -> str | None:
 async def forget(req: ForgetRequest) -> dict:
     ctx = _context()
     store, index = ctx.store, ctx.index
+    # A recall hit on a journal names ONE exchange ("...md#16:32"), and that
+    # exchange is what is forgotten — the rest of the day stays. A bare path
+    # is a whole file, as before.
+    path, _hash, fragment = req.path.partition("#")
     try:
-        resolved = store.resolve_in_person(req.person_id, req.path)
+        resolved = store.resolve_in_person(req.person_id, path)
     except PathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -1097,6 +1101,20 @@ async def forget(req: ForgetRequest) -> dict:
         raise HTTPException(status_code=404, detail="no such memory file")
 
     canonical = store.rel_path(resolved)
+    if fragment:
+        if not store.delete_entry(resolved, fragment):
+            raise HTTPException(
+                status_code=404,
+                detail=f"{canonical} holds no exchange named {fragment!r} — nothing was forgotten",
+            )
+        if resolved.exists():
+            # Re-indexing the rewritten file retires the cut exchange's unit
+            # (_index_document drops units no longer in the file).
+            _index_document(index, store.read(resolved))
+        else:
+            index.remove(canonical)
+        return {"path": f"{canonical}#{fragment}", "deleted": True}
+
     store.delete(resolved)
     if resolved.exists():
         raise HTTPException(status_code=500, detail="forget did not verify deletion")

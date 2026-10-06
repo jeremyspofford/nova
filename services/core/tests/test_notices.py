@@ -573,6 +573,40 @@ async def test_unseen_count_counts_what_he_has_not_read(pool):
     assert {n.id for n in await notices.deliverable(pool)} == {raised.id, read.id}
 
 
+async def test_mark_all_seen_reads_every_unread_row_and_keeps_earlier_reads(pool):
+    """One click for the whole Inbox. It stamps only rows with no read yet, so
+    a row read earlier keeps the time he actually read it, and it touches the
+    timestamp alone: state and mutes stay where they were."""
+    first, _ = await notices.record(
+        pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    second, _ = await notices.record(
+        pool, _finding(key="k2", facts={"a": 1}), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    earlier, _ = await notices.record(
+        pool, _finding(key="k3", facts={"a": 2}), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    hushed, _ = await notices.record(
+        pool, _finding(key="k4", facts={"a": 3}), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    await notices.mark_delivered(pool, second.id, delivery={"chat": {"ok": True}})
+    read_before = (await notices.mark_seen(pool, earlier.id)).seen_at
+    await notices.set_muted(pool, hushed.id, True)
+
+    assert await notices.mark_all_seen(pool) == 2
+    assert await notices.unseen_count(pool) == 0
+
+    rows = {r["id"]: r for r in await pool.fetch("SELECT id, state, seen_at FROM notices")}
+    assert rows[first.id]["seen_at"] is not None and rows[first.id]["state"] == notices.RAISED
+    assert rows[second.id]["state"] == notices.DELIVERED
+    assert rows[earlier.id]["seen_at"] == read_before
+    assert rows[hushed.id]["state"] == notices.MUTED
+    # Still owed: a read receipt stops no digest (S25.1.3).
+    assert first.id in {n.id for n in await notices.deliverable(pool)}
+
+    assert await notices.mark_all_seen(pool) == 0
+
+
 # -- facts the column can actually hold -----------------------------------------
 
 
