@@ -390,7 +390,7 @@ checked byte for byte before the browser's copy is removed. Nothing asks you
 first.
 
 **The browser agent.** An agent named `browser` ships with her browser tools,
-web search and her workspace. On Settings → Models → Routing, **Agent ·
+web search, `fetch_url` and her workspace. On Settings → Models → Routing, **Agent ·
 browser** picks the model it runs on: a cloud model for heavy browsing, or a
 local one. Until you set one, it runs on the chat chain. She hands it a
 browsing job ("have your browser agent read …"), it reads in a context of its
@@ -410,7 +410,8 @@ lives in the `v4_browser_profile` volume, and the encrypted backup carries
 it. Signing her in somewhere signs her browser in until you sign it out.
 
 **Known limits.**
-- CAPTCHAs, emailed codes and DRM video stop her. She says so.
+- CAPTCHAs, emailed codes and DRM video stop her. She sees the page's own
+  words, but nothing yet checks that she tells you she was stopped.
 - One browser reaches everything you can reach: the internet, your LAN, the
   tailnet and the stack's own network. Core, gateway and memory still need
   their service token on every route; Ollama and SearXNG answer anything on
@@ -425,6 +426,8 @@ it. Signing her in somewhere signs her browser in until you sign it out.
   page it saw.
 - Dismissing a file-chooser dialog uses the engine's documented cancel, which
   has not been seen working yet.
+- A download over 1 GiB is refused, and the browser's copy is removed;
+  nothing lands in her workspace.
 - Tabs, drag and drop and file uploads are not built yet.
 
 **Moving the engine to a new version.** Change `FROM` in
