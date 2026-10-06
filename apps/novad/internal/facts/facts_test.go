@@ -55,6 +55,21 @@ func TestAuthFactsDescribeThisAgentInFiveKeysUnderTheCap(t *testing.T) {
 	}
 }
 
+// No test here reads this host's folders or interfaces: each hands
+// GatherFrame its own (withFolders, withIfaces), and one that hands in none
+// reads these, which answer the same on every machine. PR #106's CI: three
+// tests handed in interfaces but not folders, so GatherFrame read the host's
+// XDG user-dirs — a desktop has the file, CI's runner has none — and an exact
+// list of what could not be read gained three folders there alone.
+func init() {
+	readFolder = func(name string) (string, error) {
+		return "", errors.New("this test handed GatherFrame no " + name + " folder")
+	}
+	readIfaces = func() ([]ifaceInfo, error) {
+		return nil, errors.New("this test handed GatherFrame no interfaces")
+	}
+}
+
 func withIfaces(t *testing.T, ifs []ifaceInfo, err error) {
 	t.Helper()
 	old := readIfaces
@@ -62,7 +77,31 @@ func withIfaces(t *testing.T, ifs []ifaceInfo, err error) {
 	t.Cleanup(func() { readIfaces = old })
 }
 
+// withFolders hands GatherFrame these folders; any other known name is one
+// this machine does not name (caps' withFolders is the same seam).
+func withFolders(t *testing.T, folders map[string]string) {
+	t.Helper()
+	old := readFolder
+	readFolder = func(name string) (string, error) {
+		if p, ok := folders[name]; ok {
+			return p, nil
+		}
+		return "", errors.New("this machine names no " + name + " folder")
+	}
+	t.Cleanup(func() { readFolder = old })
+}
+
+// everyFolder names each known folder, as a desktop does.
+func everyFolder() map[string]string {
+	folders := map[string]string{}
+	for _, name := range platform.FolderNames {
+		folders[name] = "/home/sam/" + name
+	}
+	return folders
+}
+
 func TestAFrameListsInterfacesSkipsLoopbackAndSaysWhatItCouldNotRead(t *testing.T) {
+	withFolders(t, everyFolder())
 	withIfaces(t, []ifaceInfo{
 		{Name: "lo", Loopback: true, Up: true, CIDRs: []string{"127.0.0.1/8"}},
 		{Name: "wlp2s0", MAC: "aa:bb:cc:dd:ee:ff", Up: true, CIDRs: []string{"192.0.2.10/24"}},
@@ -95,6 +134,7 @@ func TestAFrameWithTooManyInterfacesIsCappedAndSaysSo(t *testing.T) {
 			CIDRs: []string{"10.0.0.1/24", "10.0.1.1/24", "10.0.2.1/24", "10.0.3.1/24", "10.0.4.1/24",
 				"10.0.5.1/24", "10.0.6.1/24", "10.0.7.1/24", "10.0.8.1/24"}})
 	}
+	withFolders(t, everyFolder())
 	withIfaces(t, many, nil)
 	f := GatherFrame(nil)
 	if len(f.Net.Ifaces) != 32 || len(f.Net.Ifaces[0].IPv4CIDR) != 8 {
@@ -111,6 +151,7 @@ func TestAFrameWithTooManyInterfacesIsCappedAndSaysSo(t *testing.T) {
 }
 
 func TestAnInterfaceListThatCannotBeReadIsSaidNeverEmpty(t *testing.T) {
+	withFolders(t, everyFolder())
 	withIfaces(t, nil, errors.New("netlink refused"))
 	f := GatherFrame(nil)
 	data, _ := json.Marshal(f)
