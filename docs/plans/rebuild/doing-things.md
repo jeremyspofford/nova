@@ -443,6 +443,12 @@ elevated winget install succeeds from a signed-in session with no UAC
 prompt; uninstalling the path on one machine makes the next elevated call a
 stated "no admin path on <machine>".
 *Waits on:* S30 (jobs, because an install outlives a turn).
+*Moved 2026-10-06 (owner):* S30b now runs right after the provider-balances
+slice, ahead of S46a ([`s46a/spec.md`](s46a/spec.md) §11) and of S30. Its
+elevated `device_run` runs inside a turn; an install that outlives a turn waits
+for S30's jobs, so the htop and winget proofs above are short installs. On
+Windows the path must be a service, not a scheduled task: S46a suspends
+BitLocker from its pre-shutdown handler.
 
 **S32 — Build identity and her landing step (L).** `NOVA_BUILD_SHA` and a
 per-service content hash baked into all four images, reported on `/status`

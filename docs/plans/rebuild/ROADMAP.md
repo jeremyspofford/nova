@@ -51,6 +51,21 @@ S42b and the provider-balances slice: S29 → S30 → S32 → S32b → S33 → S
 S35 → S34b → S37c → S32c → S30b → S37d → the install walk → S39. `CLAUDE.md`
 became `AGENTS.md`, and `CLAUDE.md` is now a symlink to it.
 
+**2026-10-06, the owner un-paused machine setup and made wake part of every
+agent's install** ([`s46a/spec.md`](s46a/spec.md), amended). After the Dell
+could not be woken (v1 had woken it through an Ethernet port that now has no
+link, and the Dell stays on Wi-Fi), he asked for wake to be set up "as much as
+possible" whenever an agent is installed on a device that can be woken, with
+the user walked through their own model's steps, the BIOS included, where Nova
+cannot make the change. The order after S42b is now: provider balances →
+**S30b** (the standing admin path, moved ahead) → **S46a** (machine setup:
+wake at install on every device that can be woken; firmware settings changed
+where the maker allows it, walked through where it does not) → **S46c** (new:
+a dedicated guide agent that walks the user through those steps by the phone's
+camera, one photo per step or live video, on a local model where one can do
+it) → the doing lane from S29, without S30b. S46b (wake in chat) and the rest
+of the hub lane stay paused.
+
 ---
 
 ## The order of work
