@@ -1,13 +1,19 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// openProcess is windows.OpenProcess; a test makes it fail.
+var openProcess = windows.OpenProcess
+
+// listedImage is listImage; a test answers it.
+var listedImage = listImage
 
 // ProcessAlive is whether pid names a running process. pid <= 0 never names a
 // single process this package tracks (0 is the System Idle Process; Windows
@@ -52,7 +58,30 @@ func imageIsNovad(h windows.Handle) bool {
 	if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) != nil {
 		return false
 	}
-	return strings.HasPrefix(strings.ToLower(filepath.Base(windows.UTF16ToString(buf[:n]))), "novad")
+	return isNovadImage(windows.UTF16ToString(buf[:n]))
+}
+
+// listImage is the image file name the process list gives pid, or
+// errNotListed when no process holds it. A snapshot of the list needs no
+// access to the process itself, so it answers for a pid OpenProcess was
+// denied.
+func listImage(pid int) (string, error) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return "", fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
+	}
+	defer windows.CloseHandle(snap)
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		if e.ProcessID == uint32(pid) {
+			return windows.UTF16ToString(e.ExeFile[:]), nil
+		}
+	}
+	if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return "", errNotListed
+	}
+	return "", fmt.Errorf("reading the process list: %w", err)
 }
 
 // Terminate ends pid. pid <= 0 is refused, for the same reason
@@ -86,16 +115,20 @@ func Terminate(pid int) error {
 //
 // A pid that is already gone, or that Windows has reused for something other
 // than novad, is left alone and reported as fine (nil, not an error) — it is
-// not this caller's process to end. Only a genuine novad process that fails
+// not this caller's process to end. Gone is what the OS says — OpenProcess's
+// ERROR_INVALID_PARAMETER, its answer for a pid no process holds, or the
+// process list — never an open that merely failed: a pid it was denied is
+// looked up in the list, and one still running novad is an error (unopened,
+// Task 32, L100). Only a genuine novad process that cannot be opened, fails
 // to terminate, or does not exit within timeout, is an error. pid <= 0 is
 // refused, as Terminate refuses it.
 func TerminateNovad(pid int, timeout time.Duration) error {
 	if pid <= 0 {
 		return fmt.Errorf("refusing to terminate pid %d", pid)
 	}
-	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(pid))
+	h, err := openProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
-		return nil // already gone
+		return unopened(pid, err, errors.Is(err, windows.ERROR_INVALID_PARAMETER), listedImage)
 	}
 	defer windows.CloseHandle(h)
 	if !imageIsNovad(h) {
