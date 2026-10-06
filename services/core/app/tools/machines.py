@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from app import device_facts, machines
+from app import agent_updates, device_facts, machines
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -231,14 +231,15 @@ def _last_update_words(last: dict) -> str:
 
     A `refused` attempt is a machine that could not take the build — its
     agent said no, or a bootstrap step failed — said in machine_update's
-    words, "cannot take it", never as the ledger's token (fix round 1)."""
+    words, "cannot take it", never as the ledger's token (fix round 1). A
+    reason stored as a cannot ("cannot: …", agent_updates' own refusals) says
+    its "cannot" once, as the update job's words do (_sent_words; Task 32,
+    L477)."""
     outcome = last["outcome"]
     at = last["at"] or "an unknown time"
     if outcome == "refused":
-        return (
-            f"last update: {last['version']} at {at} — cannot take it: "
-            f"{last.get('reason') or 'no reason was given'}"
-        )
+        reason = (last.get("reason") or "no reason was given").removeprefix("cannot: ")
+        return f"last update: {last['version']} at {at} — cannot take it: {reason}"
     said = f"last update: {last['version']} {_OUTCOME_WORDS.get(outcome, outcome)} at {at}"
     if outcome == "sent":
         said += ", not confirmed"
@@ -524,7 +525,10 @@ async def machine_update(args: dict, ctx: ToolContext) -> str:
     if outcome == "cannot":
         # P12: the one step is named in the reason; no card is sent from here.
         raise ToolFailure(out["reason"] or "cannot: no reason was given")
-    reason = out["reason"]
+    # A reason the ledger stored as a cannot says its "cannot" once: "minipc
+    # cannot take the hub's build …: cannot: …" said it twice (Task 32, L477;
+    # the update job's _sent_words strips it the same way).
+    reason = (out["reason"] or "").removeprefix("cannot: ")
     if outcome == "rolled_back":
         reason = f" — {reason}" if reason else ""
     elif not reason:
@@ -606,13 +610,28 @@ MACHINE_CONFIGURE = Tool(
     executor=machine_configure,
 )
 
+
+def _bound_words(seconds: float) -> str:
+    """One of the update's bounds as her description says it: "2 minutes",
+    "1 minute", "90 seconds"."""
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    return f"{seconds:g} second{'' if seconds == 1 else 's'}"
+
+
+# Both bounds are read off agent_updates, the numbers the update waits on: the
+# send's (COMMAND_TIMEOUT_S, its agent's download and stage) and the reconnect's
+# (WAIT_S). Typed here, a change to either would leave her told the old one
+# (Task 32, L477 — derived, never hardcoded).
 MACHINE_UPDATE = Tool(
     name="machine_update",
     description=(
         "Update Nova's agent on a paired machine to the hub's build now — the owner's \"update "
         "it now\". Nova already keeps her agents on the hub's build by herself, one idle machine "
         "at a time every 15 minutes, so this is for now. It sends the build — the agent has up "
-        "to 2 minutes to download and stage it — then waits up to 2 minutes more for the agent "
+        f"to {_bound_words(agent_updates.COMMAND_TIMEOUT_S)} to download and stage it — then "
+        f"waits up to {_bound_words(agent_updates.WAIT_S)} more for the agent "
         "to reconnect on it, saying so while it waits. The result says current (its agent last "
         "reported the hub's build), sent (not confirmed yet), confirmed (the agent reconnected "
         "on the new build), rolled back (the new build did not come up, so its supervisor put "

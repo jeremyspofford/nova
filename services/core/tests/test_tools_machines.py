@@ -1259,3 +1259,73 @@ async def test_an_unread_build_backs_nothing(mount_peers, _plant):
     await _call("machine_status", {}, sink)
     assert not any(guards.is_update_fact(fact) for fact in sink)
 
+
+# L477 (a): a reason the ledger stored as a cannot ("cannot: …", the update
+# code's own refusals) was said with its "cannot" twice — "cannot take it:
+# cannot: …" — on her tool's answer and on machine_status's line.
+
+
+async def test_a_stored_cannot_says_its_cannot_once_on_the_update_and_the_line(
+    mount_peers, _plant, _updating_plant, monkeypatch
+):
+    reader = machines.plant
+    _updating_plant(_updating("refused", reason="cannot: the download failed"))
+    said = await _call("machine_update", {"machine": "eval_laptop"})
+    assert said == "eval_laptop cannot take the hub's build aaaaaaaaaaaa: the download failed."
+    assert said.count("cannot") == 1
+    monkeypatch.setattr(machines, "plant", reader)
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    view = _view("PC-ONE", "windows", WINDOWS)
+    view.update(last_update={**_last("refused"), "reason": "cannot: the download failed"})
+    _plant(agents=[view])
+    line = next(
+        line
+        for line in (await _call("machine_status", {})).splitlines()
+        if line.startswith("  agent PC-ONE (")
+    )
+    last = line.split("; last update: ", 1)[1]
+    assert last == f"aaaaaaaaaaaa at {AT.isoformat()} — cannot take it: the download failed."
+    assert last.count("cannot") == 1
+
+
+# L477 (c): the update's two bounds in her tool's description are read off the
+# numbers the update waits on (agent_updates.COMMAND_TIMEOUT_S, WAIT_S), never
+# typed beside them — derived, never hardcoded.
+
+
+def test_the_bounds_in_words():
+    assert [machines_tool._bound_words(s) for s in (120, 60, 90, 180, 1, 30.5)] == [
+        "2 minutes",
+        "1 minute",
+        "90 seconds",
+        "3 minutes",
+        "1 second",
+        "30.5 seconds",
+    ]
+
+
+def test_machine_updates_description_says_the_bounds_the_update_waits_on():
+    """Imported cold with both numbers changed: the description says the new
+    ones. A subprocess, because the description is built at import."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = (
+        "from app import agent_updates\n"
+        "agent_updates.COMMAND_TIMEOUT_S = 90\n"
+        "agent_updates.WAIT_S = 180\n"
+        "from app import tools\n"
+        "print(tools.REGISTRY['machine_update'].description)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
+    said = proc.stdout
+    assert "the agent has up to 90 seconds to download and stage it" in said
+    assert "waits up to 3 minutes more for the agent to reconnect on it" in said
+    assert "2 minutes" not in said
