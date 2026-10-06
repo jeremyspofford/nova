@@ -4,10 +4,25 @@ import { AddToNovaSection } from './AddToNovaSection'
 
 const ADDRESS = { address: 'https://nova.fake-tailnet.ts.net', reason: null, read_at: '2026-09-25T14:00:00Z' }
 
+// S42b: the public manifest (Task 19/28) the modal reads alongside the
+// address/code calls, every tile's pairing modal now makes.
+const MANIFEST = {
+  version: 'aaaaaaaaaaaa',
+  commands: { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' },
+  commands_reason: null,
+  walks: { linux: 'Linux: walked', macos: 'macOS: not walked yet', windows: 'Windows: walked' },
+  notes: { linux: '', macos: '', windows: '' },
+}
+
 function renderSection(over: Record<string, unknown> = {}) {
   const api = {
     getNetworkAddress: vi.fn(async () => ADDRESS),
     mintPairingCode: vi.fn(async () => ({
+      code: 'ABCD2345',
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    })),
+    getAgentManifest: vi.fn(async () => MANIFEST),
+    mintRepairCode: vi.fn(async () => ({
       code: 'ABCD2345',
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     })),

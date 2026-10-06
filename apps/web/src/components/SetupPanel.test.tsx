@@ -7,6 +7,14 @@ const EXPIRES = '2026-09-25T14:10:00Z'
 const BEFORE = () => new Date('2026-09-25T14:05:00Z')
 const AFTER = () => new Date('2026-09-25T14:11:00Z')
 
+const COMMANDS = {
+  linux: `curl -fsSL ${ADDRESS}/api/v1/agent/dist/novad-linux-amd64 … install --hub ${ADDRESS} --code ABCD-2345`,
+  macos: `curl -fsSL ${ADDRESS}/api/v1/agent/dist/novad-darwin-arm64 … install --hub ${ADDRESS} --code ABCD-2345`,
+  windows: `curl.exe -fsSL -o $f "${ADDRESS}/api/v1/agent/dist/novad-windows-amd64.exe"; … --code ABCD-2345`,
+}
+const WALKS = { linux: 'Linux: walked 2026-09-01 (S5)', macos: 'macOS: not walked yet', windows: 'Windows: walked 2026-09-28 (S42a, by hand)' }
+const NOTES = { linux: '', macos: '', windows: 'Nova’s agent is unsigned for now.' }
+
 describe('SetupPanel', () => {
   it('encodes the derived address, never the origin this page was opened at (Review Focus 1)', () => {
     render(<SetupPanel setup="install_pwa" address={ADDRESS} fallbackOrigin="http://127.0.0.1:3000" />)
@@ -17,7 +25,7 @@ describe('SetupPanel', () => {
     expect(screen.getByText(/signed in to the same tailnet/)).toBeTruthy()
   })
 
-  it('an add_machine setup uses the derived address for the QR and the command, never the loopback fallback (Review Focus 1)', () => {
+  it('an add_machine setup uses the derived address for the QR, never the loopback fallback — the command is whatever core generated (Review Focus 1)', () => {
     render(
       <SetupPanel
         setup="add_machine"
@@ -26,12 +34,13 @@ describe('SetupPanel', () => {
         expiresAt={EXPIRES}
         clock={BEFORE}
         fallbackOrigin="http://127.0.0.1:3000"
+        commands={COMMANDS}
       />,
     )
     const label = screen.getByRole('img').getAttribute('aria-label')
     expect(label).toBe(`QR code for ${ADDRESS}/add#ABCD-2345`)
     expect(label).not.toContain('127.0.0.1')
-    expect(screen.getByText(`novad enroll --server ${ADDRESS} --code ABCD-2345`)).toBeTruthy()
+    expect(screen.getByText(COMMANDS.linux)).toBeTruthy()
     expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull()
   })
 
@@ -41,21 +50,30 @@ describe('SetupPanel', () => {
     expect(screen.queryByRole('img')).toBeNull()
   })
 
-  it('a machine setup shows the QR, the code and the command, all on the derived address', () => {
-    render(<SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={BEFORE} />)
+  it('a machine setup shows the QR, the code and the per-OS command, all on the derived address', () => {
+    render(
+      <SetupPanel
+        setup="add_machine"
+        address={ADDRESS}
+        code="ABCD2345"
+        expiresAt={EXPIRES}
+        clock={BEFORE}
+        commands={COMMANDS}
+      />,
+    )
     expect(screen.getByRole('img').getAttribute('aria-label')).toBe(`QR code for ${ADDRESS}/add#ABCD-2345`)
     expect(screen.getByTestId('setup-code').textContent).toBe('ABCD-2345')
-    expect(screen.getByText(`novad enroll --server ${ADDRESS} --code ABCD-2345`)).toBeTruthy()
+    expect(screen.getByText(COMMANDS.linux)).toBeTruthy()
     expect(screen.getByText(/5:00 left/)).toBeTruthy()
   })
 
   it('an expired code draws nothing to scan and offers a new one', () => {
     const onNewCode = vi.fn()
     render(
-      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={AFTER} onNewCode={onNewCode} />,
+      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={AFTER} onNewCode={onNewCode} commands={COMMANDS} />,
     )
     expect(screen.queryByRole('img')).toBeNull()
-    expect(screen.queryByText(/novad enroll/)).toBeNull()
+    expect(screen.queryByText(COMMANDS.linux)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'New code' }))
     expect(onNewCode).toHaveBeenCalledTimes(1)
   })
@@ -80,11 +98,11 @@ describe('SetupPanel', () => {
   })
 
   it('a reloaded machine card has no code, no QR and no command (Review Focus 4)', () => {
-    render(<SetupPanel setup="add_machine" address={ADDRESS} code={null} expiresAt={EXPIRES} clock={BEFORE} />)
+    render(<SetupPanel setup="add_machine" address={ADDRESS} code={null} expiresAt={EXPIRES} clock={BEFORE} commands={COMMANDS} />)
     expect(screen.getByTestId('setup-shown-once').textContent).toContain('shown once and expires')
     expect(screen.queryByRole('img')).toBeNull()
     expect(screen.queryByTestId('setup-code')).toBeNull()
-    expect(screen.queryByText(/novad enroll/)).toBeNull()
+    expect(screen.queryByText(COMMANDS.linux)).toBeNull()
   })
 
   it('a model server says what is not built yet', () => {
@@ -98,11 +116,53 @@ describe('SetupPanel', () => {
     expect(screen.getByText(/no Nova app yet/)).toBeTruthy()
   })
 
-  it('with no address, a machine setup still gives the command for a machine that reaches this page', () => {
+  it('with no address, a machine setup still gives the per-OS command — fallbackOrigin only affects the QR-less wording now', () => {
     render(
-      <SetupPanel setup="add_machine" address={null} reason="no status" code="ABCD2345" expiresAt={EXPIRES} clock={BEFORE} fallbackOrigin="http://127.0.0.1:3000" />,
+      <SetupPanel
+        setup="add_machine"
+        address={null}
+        reason="no status"
+        code="ABCD2345"
+        expiresAt={EXPIRES}
+        clock={BEFORE}
+        fallbackOrigin="http://127.0.0.1:3000"
+        commands={COMMANDS}
+      />,
     )
     expect(screen.queryByRole('img')).toBeNull()
-    expect(screen.getByText('novad enroll --server http://127.0.0.1:3000 --code ABCD-2345')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('This page is open directly at http://127.0.0.1:3000.')
+    expect(screen.getByText(COMMANDS.linux)).toBeTruthy()
+  })
+
+  it('a live machine card shows one command per OS, opening on the asked-for one, with its walk and note', () => {
+    render(
+      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={BEFORE}
+        commands={COMMANDS} walks={WALKS} notes={NOTES} forOs="wsl" />,
+    )
+    expect(screen.getByText(COMMANDS.windows)).toBeTruthy()
+    expect(screen.getByText('Windows: walked 2026-09-28 (S42a, by hand)')).toBeTruthy()
+    expect(screen.getByText('Nova’s agent is unsigned for now.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'macOS' }))
+    expect(screen.getByText(COMMANDS.macos)).toBeTruthy()
+    expect(screen.getByText('macOS: not walked yet')).toBeTruthy()
+    expect(screen.queryByText(/build it as its README says/)).toBeNull()
+  })
+
+  it('no command is said, with the reason, when core could not make one', () => {
+    render(
+      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={BEFORE}
+        commands={null} commandsReason="the hub has no agent build yet" />,
+    )
+    expect(screen.getByRole('alert').textContent).toContain('No command: the hub has no agent build yet')
+  })
+
+  it('an expired or reloaded card shows no command at all (Review Focus 4)', () => {
+    const { unmount } = render(
+      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={AFTER} commands={COMMANDS} />,
+    )
+    expect(screen.queryByText(COMMANDS.linux)).toBeNull()
+    unmount()
+    render(<SetupPanel setup="add_machine" address={ADDRESS} code={null} expiresAt={EXPIRES} clock={BEFORE} commands={COMMANDS} />)
+    expect(screen.queryByText(COMMANDS.linux)).toBeNull()
   })
 })

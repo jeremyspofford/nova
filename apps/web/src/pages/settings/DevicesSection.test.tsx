@@ -1,7 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { DevicesSection } from './DevicesSection'
-import type { Device, PairingCode } from '../../lib/api'
+import type { AgentManifest, Device, PairingCode } from '../../lib/api'
+
+// S42b: the public manifest (Task 19/28) — the same shape publicPages.test.tsx
+// reads, so the pairing modal's filled command and the public /add page's
+// never drift apart.
+const MANIFEST: AgentManifest = {
+  version: 'aaaaaaaaaaaa',
+  commands: { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' },
+  commands_reason: null,
+  walks: { linux: 'Linux: walked', macos: 'macOS: not walked yet', windows: 'Windows: walked' },
+  notes: { linux: '', macos: '', windows: '' },
+}
 
 function device(overrides: Partial<Device> = {}): Device {
   return {
@@ -31,6 +42,8 @@ function renderSection(
     renameDevice: ReturnType<typeof vi.fn>
     revokeDevice: ReturnType<typeof vi.fn>
     getNetworkAddress: ReturnType<typeof vi.fn>
+    getAgentManifest: ReturnType<typeof vi.fn>
+    mintRepairCode: ReturnType<typeof vi.fn>
   }> = {},
   pollIntervalMs = 1_000_000,
 ) {
@@ -45,6 +58,13 @@ function renderSection(
     renameDevice: vi.fn(),
     revokeDevice: vi.fn(),
     getNetworkAddress: vi.fn(async () => ({ address: 'https://nova.fake-tailnet.ts.net', reason: null, read_at: new Date().toISOString() })),
+    getAgentManifest: vi.fn(async (): Promise<AgentManifest> => MANIFEST),
+    mintRepairCode: vi.fn(
+      async (): Promise<PairingCode> => ({
+        code: 'K7PQ9XYZ',
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      }),
+    ),
     ...api,
   }
   return { ...render(<DevicesSection api={full} pollIntervalMs={pollIntervalMs} />), api: full }
@@ -251,9 +271,9 @@ describe('DevicesSection', () => {
     const dialog = await screen.findByRole('dialog')
     // The code is shown big, formatted the way it is read aloud.
     expect(within(dialog).getByTestId('setup-code').textContent).toBe('K7PQ-9XYZ')
-    // The enroll command carries the DERIVED address, never window.location.
-    const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code K7PQ-9XYZ'
-    expect(within(dialog).getByText(content => content.includes(expected))).toBeTruthy()
+    // The Linux line, filled in the BROWSER (S42b) — never the retired
+    // novad-enroll one-liner core used to hand back already filled.
+    expect(await within(dialog).findByText('L --code K7PQ-9XYZ')).toBeTruthy()
   })
 
   it('shows what the agent reported, and the WSL note on an agent inside WSL', async () => {

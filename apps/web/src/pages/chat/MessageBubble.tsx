@@ -473,6 +473,11 @@ export const MessageBubble = memo(function MessageBubble({
                     address={card.address}
                     code={card.code ?? null}
                     expiresAt={card.expires_at ?? null}
+                    commands={card.commands}
+                    walks={card.walks}
+                    notes={card.notes}
+                    forOs={card.for_os}
+                    machine={card.machine}
                   />
                 </div>
               ) : (

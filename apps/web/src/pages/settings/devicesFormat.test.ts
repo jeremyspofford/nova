@@ -3,7 +3,6 @@ import {
   ONLINE_THRESHOLD_SECONDS,
   deviceLiveness,
   deviceSubtitle,
-  enrollCommand,
   revokedToggleLabel,
   splitDevicesByRevoked,
   wslNote,
@@ -74,14 +73,6 @@ describe('deviceLiveness — DERIVED from last_seen, never from `connected`', ()
     // is last_seen only — a never-seen device stays "never".
     const live = deviceLiveness(device({ last_seen: null, connected: true }), NOW)
     expect(live.state).toBe('never')
-  })
-})
-
-describe('enrollCommand', () => {
-  it('is the exact T3 CLI one-liner, with the origin and the code', () => {
-    expect(enrollCommand('https://nova.example', 'A1B2C3D4')).toBe(
-      'novad enroll --server https://nova.example --code A1B2C3D4',
-    )
   })
 })
 

@@ -48,15 +48,6 @@ export function deviceLiveness(device: Device, now: Date = new Date()): Liveness
 }
 
 /**
- * The enroll one-liner shown in the pairing modal (controller ruling R-pre2,
- * reconciled against T3's CLI: `novad enroll --server <url> --code <code>`).
- * `origin` is window.location.origin — the same single origin the phone uses.
- */
-export function enrollCommand(origin: string, code: string): string {
-  return `novad enroll --server ${origin} --code ${code}`
-}
-
-/**
  * The tile's second line: the OS the agent REPORTED (its facts, S42a) when it
  * did, else the platform it enrolled with — then the hostname and, when known,
  * the agent's version. Read from facts, never guessed from a name.

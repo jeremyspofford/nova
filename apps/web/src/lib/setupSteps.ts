@@ -10,6 +10,8 @@
  * has the page-by-page record.
  */
 import type { DevicePlatform } from './devicePlatform'
+export type { OsKey } from './api'
+import type { OsKey } from './api'
 
 export type SetupKind = 'install_pwa' | 'get_app' | 'add_machine' | 'add_model_server'
 export const SETUP_KINDS: readonly SetupKind[] = ['add_machine', 'add_model_server', 'install_pwa', 'get_app']
@@ -54,8 +56,12 @@ export function setupLink(setup: SetupKind, address: string, code?: string | nul
   return isMachineSetup(setup) && code ? `${base}#${formatCode(code)}` : base
 }
 
-// The pairing alphabet (services/core/app/devices.py, PAIRING_CODE_ALPHABET): no 0, 1, I, L, O.
-const CODE = /(?:^|[^A-Z0-9])([2-9A-HJKMNP-Z]{4})-?([2-9A-HJKMNP-Z]{4})(?![A-Z0-9])/
+// The pairing alphabet (services/core/app/devices.py, PAIRING_CODE_ALPHABET): no
+// 0, 1, I, L, O. One constant so CODE and fillCode's S42b D3 check (below)
+// can never drift apart into two alphabets.
+const CODE_ALPHABET = '[2-9A-HJKMNP-Z]'
+const CODE = new RegExp(`(?:^|[^A-Z0-9])(${CODE_ALPHABET}{4})-?(${CODE_ALPHABET}{4})(?![A-Z0-9])`)
+const CANONICAL_CODE = new RegExp(`^${CODE_ALPHABET}{8}$`)
 
 export function parseCodeFragment(hash: string): string | null {
   let text: string
@@ -76,13 +82,10 @@ export const MODEL_SERVER_NOTE =
 export const NOVAD_README = 'https://github.com/jeremyspofford/nova/blob/main/apps/novad/README.md'
 
 export const AGENT_STEPS = {
-  install: {
-    text: 'Install Nova’s agent, novad, first: build it as its README says. A one-line installer replaces this step later.',
-    source: NOVAD_README,
-  },
-  enroll: 'Then run this on the machine:',
-  run: 'Then start it with novad run. The README shows how to keep it running as a user service.',
-  unsupported: 'Nova’s agent runs on Linux today. Windows and macOS arrive with S42a.',
+  command:
+    'On the machine you are adding, run this. It downloads Nova’s agent, checks it, installs it and starts it — by itself from then on:',
+  wsl: 'On a Windows PC, use the Windows line in PowerShell, not one inside WSL: Nova’s agent runs on Windows itself and reaches WSL through wsl.exe.',
+  noCommand: 'No command:',
   phone: 'Open this on the computer you’re adding.',
   phoneSelf: 'Adding this phone itself needs the Nova app, which doesn’t exist yet.',
 } as const
@@ -196,4 +199,36 @@ function installKey({ os, browser }: DevicePlatform): InstallKey | null {
 export function installSteps(platform: DevicePlatform): PlatformSteps[] {
   const key = installKey(platform)
   return key ? [INSTALL[key]] : Object.values(INSTALL)
+}
+
+export const OS_KEYS: readonly OsKey[] = ['linux', 'macos', 'windows']
+export const OS_LABELS: Record<OsKey, string> = { linux: 'Linux', macos: 'macOS', windows: 'Windows' }
+
+/**
+ * A one-liner with core's {CODE} slot filled — on this page, never sent
+ * anywhere. Fills only a value in the canonical pairing-code form: the same
+ * alphabet CODE reads above, the same shape formatCode produces — derived
+ * from CODE_ALPHABET rather than a second copy of it (S42b D3). The browser
+ * is the one place that fills this slot, so it is the one place that must
+ * refuse to fill it with anything else: core's own command guard
+ * (agent_card.py) checks every value IT interpolates, but it cannot see a
+ * fill done here. Anything that is not a canonical code leaves the {CODE}
+ * slot exactly as it was — visibly, conspicuously unfilled, never a line
+ * carrying an attacker's text into a shell someone is about to paste it
+ * into, and never a partly filled line.
+ */
+export function fillCode(command: string, code: string): string {
+  const clean = code.replace(/[\s-]/g, '').toUpperCase()
+  if (!CANONICAL_CODE.test(clean)) return command
+  return command.split('{CODE}').join(`${clean.slice(0, 4)}-${clean.slice(4)}`)
+}
+
+/** The tab a card opens on: the OS asked for (a WSL machine is a Windows PC),
+ *  else this browser's, else Linux. */
+export function defaultOs(platform: DevicePlatform, forOs?: string | null): OsKey {
+  if (forOs === 'wsl' || forOs === 'windows') return 'windows'
+  if (forOs === 'macos' || forOs === 'linux') return forOs
+  if (platform.os === 'windows') return 'windows'
+  if (platform.os === 'mac') return 'macos'
+  return 'linux'
 }

@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { Laptop, Plus, RefreshCw } from 'lucide-react'
 import { Badge, Button, EmptyState, Input, Section, Skeleton, StatusDot } from '../../components/ui'
 import {
+  getAgentManifest as apiGetAgentManifest,
   getNetworkAddress as apiGetNetworkAddress,
   listDevices as apiListDevices,
   mintPairingCode as apiMintPairingCode,
+  mintRepairCode as apiMintRepairCode,
   renameDevice as apiRenameDevice,
   revokeDevice as apiRevokeDevice,
   type Device,
@@ -45,6 +47,8 @@ interface DevicesApi {
   renameDevice: typeof apiRenameDevice
   revokeDevice: typeof apiRevokeDevice
   getNetworkAddress: typeof apiGetNetworkAddress
+  getAgentManifest: typeof apiGetAgentManifest
+  mintRepairCode: typeof apiMintRepairCode
 }
 
 const DEFAULT_API: DevicesApi = {
@@ -53,6 +57,8 @@ const DEFAULT_API: DevicesApi = {
   renameDevice: apiRenameDevice,
   revokeDevice: apiRevokeDevice,
   getNetworkAddress: apiGetNetworkAddress,
+  getAgentManifest: apiGetAgentManifest,
+  mintRepairCode: apiMintRepairCode,
 }
 
 const POLL_INTERVAL_MS = 15_000

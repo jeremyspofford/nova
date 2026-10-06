@@ -189,6 +189,25 @@ describe('createSseParser', () => {
     expect(events.map(e => e.type)).toEqual(['error'])
   })
 
+  it('keeps a machine card’s commands, walks, notes and the OS it opens on', () => {
+    const card = {
+      kind: 'setup_qr',
+      setup: 'add_machine',
+      address: 'https://n',
+      url: 'https://n/add#ABCD-2345',
+      code: 'ABCD-2345',
+      expires_at: '2026-09-28T12:10:00Z',
+      machine: 'dell',
+      for_os: 'windows',
+      version: 'aaaaaaaaaaaa',
+      commands: { linux: 'l', macos: 'm', windows: 'w' },
+      walks: { linux: 'L', macos: 'M', windows: 'W' },
+      notes: { linux: '', macos: '', windows: 'n' },
+    }
+    const [event] = parseAll([`data: {"card":${JSON.stringify(card)}}\n\n`])
+    expect(event).toEqual({ type: 'card', card })
+  })
+
   it('turns a usage frame into a usage event, defaulting what the server left out', () => {
     expect(
       parseAll([

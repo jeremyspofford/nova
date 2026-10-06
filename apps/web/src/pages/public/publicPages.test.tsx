@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ThemeProvider } from '../../stores/theme-store'
 import { InstallPage } from './InstallPage'
 import { AppPage } from './AppPage'
@@ -12,6 +12,17 @@ const ANDROID = { os: 'android', browser: 'chrome', phone: true } as const
 const LINUX = { os: 'linux', browser: 'chrome', phone: false } as const
 const WINDOWS = { os: 'windows', browser: 'chrome', phone: false } as const
 const UNKNOWN = { os: 'unknown', browser: 'other', phone: false } as const
+
+// S42b: the public manifest (Task 19/28) — the one-liners with a {CODE} slot
+// /add fills in the browser, never sends anywhere. Same shape the chat card
+// and Settings read.
+const MANIFEST = {
+  version: 'aaaaaaaaaaaa',
+  commands: { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' },
+  commands_reason: null,
+  walks: { linux: 'Linux: walked', macos: 'macOS: not walked yet', windows: 'Windows: walked' },
+  notes: { linux: '', macos: '', windows: '' },
+}
 
 // PublicShell draws the brand mark from the live palette (useTheme), exactly
 // as Sidebar and Login do — in the real app App.tsx's ThemeProvider is always
@@ -78,10 +89,25 @@ describe('AppPage', () => {
 })
 
 describe('AddPage', () => {
-  it('reads a lowercase code from the link and shows it the way it is read (Review Focus 2)', () => {
-    renderPage(<AddPage platform={LINUX} hash="#abcd2345" origin={ORIGIN} share={undefined} />)
+  it('reads a lowercase code from the link and shows it the way it is read, filling the Linux line (Review Focus 2)', async () => {
+    const getManifest = vi.fn(async () => MANIFEST)
+    renderPage(<AddPage platform={LINUX} hash="#abcd2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
     expect(screen.getByTestId('add-code').textContent).toBe('ABCD-2345')
-    expect(screen.getByText(`novad enroll --server ${ORIGIN} --code ABCD-2345`)).toBeTruthy()
+    expect(await screen.findByText('L --code ABCD-2345')).toBeTruthy()
+  })
+  it('makes one request, the public manifest, and fills the code in on the page (P18)', async () => {
+    const getManifest = vi.fn(async () => MANIFEST)
+    renderPage(<AddPage platform={WINDOWS} hash="#abcd2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
+    expect(await screen.findByText('W --code ABCD-2345')).toBeTruthy()
+    expect(getManifest).toHaveBeenCalledTimes(1)
+    expect(getManifest.mock.calls[0]).toEqual([]) // the code never leaves the page
+  })
+  it('says why there is no command when the hub has no build', async () => {
+    const getManifest = vi.fn(async () => {
+      throw new Error('the hub has no agent build yet')
+    })
+    renderPage(<AddPage platform={LINUX} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
+    expect((await screen.findByRole('alert')).textContent).toContain('the hub has no agent build yet')
   })
   it('a bare "#" carries no code either, and asks the same friendly way (Review Focus 2)', () => {
     renderPage(<AddPage platform={LINUX} hash="#" origin={ORIGIN} share={undefined} />)
@@ -89,22 +115,23 @@ describe('AddPage', () => {
     expect(screen.queryByText(/That link carries no code Nova can read/)).toBeNull()
     expect(screen.getByLabelText('The code Nova showed you')).toBeTruthy()
   })
-  it('asks for the code when the link carries none, and never calls the server', () => {
-    const fetchSpy = vi.fn()
-    vi.stubGlobal('fetch', fetchSpy)
-    renderPage(<AddPage platform={LINUX} hash="" origin={ORIGIN} share={undefined} />)
+  it('typing the code reaches the server only once it forms a real code, and then exactly once', async () => {
+    const getManifest = vi.fn(async () => MANIFEST)
+    renderPage(<AddPage platform={LINUX} hash="" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
+    expect(getManifest).not.toHaveBeenCalled()
     fireEvent.change(screen.getByLabelText('The code Nova showed you'), { target: { value: 'k7pq9xyz' } })
     expect(screen.getByTestId('add-code').textContent).toBe('K7PQ-9XYZ')
-    expect(fetchSpy).not.toHaveBeenCalled()
+    await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1))
   })
   it('on a phone: open it on the computer, with Share only where sharing exists (Review Focus 5)', () => {
     const share = vi.fn(async () => {})
-    const { unmount } = renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} />)
+    const getManifest = vi.fn(async () => MANIFEST)
+    const { unmount } = renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} getManifest={getManifest} />)
     expect(screen.getByText('Open this on the computer you’re adding.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Share this link/ }))
     expect(share).toHaveBeenCalledWith({ title: 'Add a machine to Nova', url: `${ORIGIN}/add#ABCD-2345` })
     unmount()
-    renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={undefined} />)
+    renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={undefined} getManifest={getManifest} />)
     expect(screen.queryByRole('button', { name: /Share/ })).toBeNull()
   })
   it('a cancelled share leaves no unhandled rejection, and the page stays as it was', async () => {
@@ -118,6 +145,7 @@ describe('AddPage', () => {
       calledWith = data
       return Promise.reject(abort)
     }
+    const getManifest = vi.fn(async () => MANIFEST)
     const rejections: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => rejections.push(reason)
     // jsdom's own 'unhandledrejection' window event never fires for a plain
@@ -126,7 +154,7 @@ describe('AddPage', () => {
     // sees this, so this listens there directly.
     nodeProcess.on('unhandledRejection', onUnhandledRejection)
     try {
-      renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} />)
+      renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} getManifest={getManifest} />)
       fireEvent.click(screen.getByRole('button', { name: /Share this link/ }))
       // Flushes past the microtask the rejection settles on. If nothing in
       // AddPage catches it, it surfaces here as an unhandled rejection —
@@ -138,9 +166,5 @@ describe('AddPage', () => {
     expect(calledWith).toEqual({ title: 'Add a machine to Nova', url: `${ORIGIN}/add#ABCD-2345` })
     expect(rejections).toEqual([])
     expect(screen.getByRole('button', { name: /Share this link/ })).toBeTruthy()
-  })
-  it('on Windows, says the agent is Linux-only today', () => {
-    renderPage(<AddPage platform={WINDOWS} hash="#ABCD-2345" origin={ORIGIN} share={undefined} />)
-    expect(screen.getByText('Nova’s agent runs on Linux today. Windows and macOS arrive with S42a.')).toBeTruthy()
   })
 })

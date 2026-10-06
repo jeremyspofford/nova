@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Share2 } from 'lucide-react'
 import { Button, Input } from '../../components/ui'
-import { CopyLine } from '../../components/SetupPanel'
+import { AgentCommands } from '../../components/SetupPanel'
 import { currentPlatform, type DevicePlatform } from '../../lib/devicePlatform'
-import { AGENT_STEPS, NOVAD_README, parseCodeFragment } from '../../lib/setupSteps'
-import { enrollCommand } from '../settings/devicesFormat'
+import { getAgentManifest as apiGetAgentManifest, type AgentManifest, type OsKey } from '../../lib/api'
+import { AGENT_STEPS, fillCode, OS_KEYS, parseCodeFragment } from '../../lib/setupSteps'
 import { PublicShell } from './PublicShell'
 
 type Share = (data: { title: string; url: string }) => Promise<void>
@@ -14,29 +14,72 @@ function browserShare(): Share | undefined {
   return navigator.share.bind(navigator)
 }
 
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+type ManifestState =
+  | { status: 'loading' }
+  | { status: 'ready'; manifest: AgentManifest }
+  | { status: 'error'; reason: string }
+
+/** Every OS line filled with this one code — null until the manifest is in
+ *  and there is something to fill. Filled in the BROWSER (S42b D3): fillCode
+ *  itself refuses anything but a canonical code. */
+function fillCommands(commands: Record<OsKey, string> | null, code: string | null): Record<OsKey, string> | null {
+  if (!commands || !code) return null
+  const out = {} as Record<OsKey, string>
+  for (const key of OS_KEYS) out[key] = fillCode(commands[key], code)
+  return out
+}
+
 /**
- * /add (S47): the page a machine setup's QR code opens. The code rides the URL
- * fragment and is never sent anywhere: this page makes no request, so it cannot
- * be used to test whether a guessed code is real. It picks its steps from the
- * device that opened it — the command on a computer, "open this on the
- * computer" (and Share, where the browser can) on a phone.
+ * /add (S47, S42b): the page a machine setup's QR code opens. The code rides
+ * the URL fragment and is never sent anywhere. It makes ONE request, and
+ * only once a code is on the page: the public manifest (the one-liners with
+ * a {CODE} slot), which never carries the code — the code is filled in here
+ * and never sent anywhere. It picks its steps from the device that opened
+ * it — the command on a computer, "open this on the computer" (and Share,
+ * where the browser can) on a phone.
  */
 export function AddPage({
   platform = currentPlatform(),
   hash = window.location.hash,
   origin = window.location.origin,
   share = browserShare(),
+  getManifest = apiGetAgentManifest,
 }: {
   platform?: DevicePlatform
   hash?: string
   origin?: string
   share?: Share
+  getManifest?: () => Promise<AgentManifest>
 }) {
   const [typed, setTyped] = useState('')
   const fromLink = parseCodeFragment(hash)
   const code = fromLink ?? parseCodeFragment(typed)
   const link = code ? `${origin}/add#${code}` : null
-  const agentUnsupported = platform.os === 'windows' || platform.os === 'mac'
+
+  const [manifestState, setManifestState] = useState<ManifestState>({ status: 'loading' })
+  useEffect(() => {
+    if (code === null) return
+    let live = true
+    setManifestState({ status: 'loading' })
+    getManifest()
+      .then(manifest => {
+        if (live) setManifestState({ status: 'ready', manifest })
+      })
+      .catch(err => {
+        if (live) setManifestState({ status: 'error', reason: reasonOf(err) })
+      })
+    return () => {
+      live = false
+    }
+  }, [code, getManifest])
+
+  const filled =
+    manifestState.status === 'ready' ? fillCommands(manifestState.manifest.commands, code) : null
+
   return (
     <PublicShell title="Add a machine to Nova">
       {code === null ? (
@@ -84,20 +127,13 @@ export function AddPage({
               <p>{AGENT_STEPS.phoneSelf}</p>
             </div>
           )}
-          {agentUnsupported && <p>{AGENT_STEPS.unsupported}</p>}
-          <ol className="list-decimal space-y-3 pl-5">
-            <li>
-              {AGENT_STEPS.install.text}{' '}
-              <a className="text-accent underline" href={NOVAD_README} target="_blank" rel="noreferrer">
-                novad’s README
-              </a>
-            </li>
-            <li className="space-y-1">
-              <p>{AGENT_STEPS.enroll}</p>
-              <CopyLine value={enrollCommand(origin, code)} label="the command" />
-            </li>
-            <li>{AGENT_STEPS.run}</li>
-          </ol>
+          <AgentCommands
+            commands={filled}
+            reason={manifestState.status === 'error' ? manifestState.reason : null}
+            walks={manifestState.status === 'ready' ? manifestState.manifest.walks : null}
+            notes={manifestState.status === 'ready' ? manifestState.manifest.notes : null}
+            platform={platform}
+          />
         </>
       )}
     </PublicShell>

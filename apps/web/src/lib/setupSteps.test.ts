@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCode, installSteps, parseCodeFragment, setupLink } from './setupSteps'
+import { defaultOs, fillCode, formatCode, installSteps, OS_KEYS, parseCodeFragment, setupLink } from './setupSteps'
 
 const ADDRESS = 'https://nova.fake-tailnet.ts.net'
 
@@ -55,5 +55,60 @@ describe('installSteps', () => {
     expect(installSteps({ os: 'android', browser: 'firefox', phone: true }).map(s => s.label)).toEqual([
       'Android, another browser',
     ])
+  })
+})
+
+describe('the one-liners (S42b P18)', () => {
+  it('fills the code slot core left, dashed, and nothing else', () => {
+    expect(fillCode('curl … && "$d/novad" install --hub https://x --code {CODE}', 'abcd2345')).toBe(
+      'curl … && "$d/novad" install --hub https://x --code ABCD-2345',
+    )
+    expect(fillCode('no slot here', 'ABCD2345')).toBe('no slot here')
+  })
+  it('opens on the OS that was asked for, else the one this browser runs, else Linux', () => {
+    expect(OS_KEYS).toEqual(['linux', 'macos', 'windows'])
+    expect(defaultOs({ os: 'linux', browser: 'chrome', phone: false }, 'wsl')).toBe('windows')
+    expect(defaultOs({ os: 'mac', browser: 'safari', phone: false })).toBe('macos')
+    expect(defaultOs({ os: 'windows', browser: 'edge', phone: false })).toBe('windows')
+    expect(defaultOs({ os: 'ios', browser: 'safari', phone: true })).toBe('linux')
+  })
+})
+
+describe('fillCode — never fills anything but a canonical pairing code (S42b D3)', () => {
+  const LINE = 'install --code {CODE}'
+
+  it('refuses a value carrying shell injection, whatever shape it takes', () => {
+    expect(fillCode(LINE, 'ABCD-2345"; rm -rf ~; "')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345$(rm -rf ~)')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345`rm -rf ~`')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345\nrm -rf ~')).toBe(LINE)
+    for (const bad of [
+      'ABCD-2345"; rm -rf ~; "',
+      'ABCD2345$(rm -rf ~)',
+      'ABCD2345`rm -rf ~`',
+      'ABCD2345\nrm -rf ~',
+    ]) {
+      expect(fillCode(LINE, bad)).not.toContain('rm')
+      expect(fillCode(LINE, bad)).not.toContain('$(')
+      expect(fillCode(LINE, bad)).not.toContain('`')
+    }
+  })
+
+  it('a lower-case code with no dash is filled in its canonical form', () => {
+    expect(fillCode(LINE, 'abcd2345')).toBe('install --code ABCD-2345')
+  })
+
+  it('a real code from each source (the /add fragment, already dashed; the mint response, undashed) fills all three OS lines', () => {
+    const commands = {
+      linux: 'L --code {CODE}',
+      macos: 'M --code {CODE}',
+      windows: 'W --code {CODE}',
+    }
+    for (const code of ['ABCD-2345', 'K7PQ9XYZ']) {
+      const dashed = code.includes('-') ? code : `${code.slice(0, 4)}-${code.slice(4)}`
+      expect(fillCode(commands.linux, code)).toBe(`L --code ${dashed}`)
+      expect(fillCode(commands.macos, code)).toBe(`M --code ${dashed}`)
+      expect(fillCode(commands.windows, code)).toBe(`W --code ${dashed}`)
+    }
   })
 })

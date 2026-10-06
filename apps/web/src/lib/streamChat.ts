@@ -281,6 +281,15 @@ function frameToEvent(payload: string): StreamEvent | null {
       const card: SetupCard = { kind: 'setup_qr', setup: c.setup, address: c.address, url: c.url }
       if (typeof c.code === 'string') card.code = c.code
       if (typeof c.expires_at === 'string') card.expires_at = c.expires_at
+      for (const key of ['machine', 'for_os', 'version'] as const) {
+        if (typeof c[key] === 'string') card[key] = c[key] as string
+      }
+      for (const key of ['commands', 'walks', 'notes'] as const) {
+        const value = c[key]
+        if (value !== null && typeof value === 'object' && Object.values(value).every(v => typeof v === 'string')) {
+          card[key] = value as Record<string, string>
+        }
+      }
       return { type: 'card', card }
     }
   }
