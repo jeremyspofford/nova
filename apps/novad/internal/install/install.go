@@ -87,8 +87,10 @@ func Install(ctx context.Context, o Options) error {
 	if err != nil {
 		return o.failed(notes, err)
 	}
+	// From here on the new build is in place whatever fails: each failure
+	// says so, so none is read as "nothing changed" (Task 32, L244).
 	if err := o.Service.Install(bin); err != nil {
-		return o.failed(notes, fmt.Errorf("registering %s: %w", o.Service.Describe(), err))
+		return o.failed(notes, fmt.Errorf("placed %s (build %s), but registering %s failed: %w", bin, o.Version, o.Service.Describe(), err))
 	}
 	if o.RestartLater {
 		if err := o.Service.RestartLater(ctx, restartDelay); err != nil {
@@ -103,7 +105,7 @@ func Install(ctx context.Context, o Options) error {
 	}
 	started := o.Now()
 	if err := o.Service.Restart(ctx); err != nil {
-		return o.failed(notes, fmt.Errorf("starting %s: %w", o.Service.Describe(), err))
+		return o.failed(notes, fmt.Errorf("placed %s (build %s) and registered %s, but starting it failed: %w", bin, o.Version, o.Service.Describe(), err))
 	}
 	_, bootNote, bootErr := o.Service.BootStart(ctx)
 	st, err := o.awaitReady(ctx, started)

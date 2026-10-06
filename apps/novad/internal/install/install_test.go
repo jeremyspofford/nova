@@ -33,12 +33,20 @@ type fakeService struct {
 	laterErr error
 	// stopErr is what Uninstall says of its stop: the definition still goes.
 	stopErr error
+	// installErr and restartErr are what Install and Restart answer.
+	installErr, restartErr error
 }
 
-func (f *fakeService) Mode() string             { return "systemd-user" }
-func (f *fakeService) Describe() string         { return "a fake service" }
-func (f *fakeService) Installed() bool          { return f.installed != "" }
-func (f *fakeService) Install(bin string) error { f.installed = bin; return nil }
+func (f *fakeService) Mode() string     { return "systemd-user" }
+func (f *fakeService) Describe() string { return "a fake service" }
+func (f *fakeService) Installed() bool  { return f.installed != "" }
+func (f *fakeService) Install(bin string) error {
+	if f.installErr != nil {
+		return f.installErr
+	}
+	f.installed = bin
+	return nil
+}
 func (f *fakeService) RestartLater(context.Context, time.Duration) error {
 	if f.laterErr != nil {
 		return f.laterErr
@@ -58,6 +66,9 @@ func (f *fakeService) BootStart(context.Context) (bool, string, error) {
 }
 func (f *fakeService) Restart(context.Context) error {
 	f.restarts++
+	if f.restartErr != nil {
+		return f.restartErr
+	}
 	if f.onRestart != nil {
 		f.onRestart()
 	}
@@ -213,6 +224,35 @@ func TestARestartThatCannotBeScheduledSaysTheBuildIsAlreadyInPlace(t *testing.T)
 	}
 	if mustRead(t, bin) != "build" || svc.installed != bin {
 		t.Fatalf("the setup did not place the build and register it: service %+v", svc)
+	}
+}
+
+// Task 32, L244: once place() ran, the new build IS in place whatever fails
+// after it. Registering and starting say so, as the restart-later failure
+// does, so neither is ever read as "nothing changed".
+func TestAFailureAfterThePlaceSaysTheBuildIsAlreadyInPlace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*fakeService)
+		says string
+	}{
+		{"registering", func(f *fakeService) { f.installErr = errors.New("the unit directory is read-only") },
+			", but registering a fake service failed: the unit directory is read-only"},
+		{"starting", func(f *fakeService) { f.restartErr = errors.New("Failed to connect to bus") },
+			" and registered a fake service, but starting it failed: Failed to connect to bus"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, svc, _ := installOpts(t)
+			tc.set(svc)
+			err := Install(context.Background(), *o)
+			bin := filepath.Join(o.InstallDir, platform.BinaryName)
+			if err == nil || !strings.Contains(err.Error(), "placed "+bin+" (build aaaaaaaaaaaa)"+tc.says) {
+				t.Fatalf("got %v", err)
+			}
+			if mustRead(t, bin) != "build" {
+				t.Fatal("the setup did not place the build")
+			}
+		})
 	}
 }
 
