@@ -97,6 +97,12 @@ jobs:
             exit 1
           fi
           CODE_SLOT=$(uv run python -c "from app import agent_card; print(agent_card.CODE_SLOT)")
+          # Task 32, L731: this step's whole job is to be a tripwire for a
+          # slot that silently stopped carrying the code. An empty
+          # CODE_SLOT would make the grep below a vacuous pass (every line
+          # "contains" an empty string), reporting ok on a card that no
+          # longer fills anything.
+          [ -n "$CODE_SLOT" ] || { echo "FAIL: agent_card.CODE_SLOT read as empty"; exit 1; }
           if ! grep -qF '/api/v1/agent/dist/novad-windows' /tmp/windows-line.txt; then
             echo "FAIL: the line has no agent download path (/api/v1/agent/dist/novad-windows)"
             exit 1
