@@ -365,6 +365,19 @@ _FILENAME_RE = (
     r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
 )
 _FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
+# Where a filename found INSIDE text can start: the front of a [\w./-] run,
+# past any leading "./", "../" or "-" (which \b skipped too) — never at a later
+# dot, dash or slash inside the run. \b allowed every one, and from each the
+# greedy run walked to the token's end and back, so a long dotted or dashed
+# token was quadratic: narration_check took 684 ms at 3,000 characters of "a."
+# (S42b Task 23's measurement), on core's one event loop. Any end a later start
+# can reach, the front reaches too, so the leftmost match is exactly what it
+# was. The filename is group 1; the leading punctuation is not part of it. The
+# pre-fix patterns are the oracle in tests/test_guard_regex_timing.py.
+# `_FILENAME` itself stays for .match/.fullmatch on one token, which are
+# anchored and so linear.
+_FILE_RUN_FRONT = r"(?<![\w./-])[./-]*+"
+_FILENAME_IN = re.compile(_FILE_RUN_FRONT + r"(" + _FILENAME_RE + r")\b", re.I)
 _URL = re.compile(r"https?://[^\s)>\]]+", re.I)
 # Sentence punctuation the URL/whitespace regex glues onto the end of a token.
 # A URL captured mid-sentence ("…/data." or "…/data,") must be trimmed to its
@@ -384,7 +397,7 @@ def _strip_trailing_punct(text: str) -> str:
 # contains/lists/shows are deliberately NOT enough. An in-chat draft that names
 # no file token is never a claim either.
 _CONTENT_CLAIM = re.compile(
-    r"\b(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
+    _FILE_RUN_FRONT + r"(" + _FILENAME_RE + r")\b\s+(?:now\s+|currently\s+)?"
     r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
     re.I,
 )
@@ -396,7 +409,10 @@ _CONTENT_CLAIM = re.compile(
 # "overwritten" was dropped precisely because "overwrite" is not a recognised
 # active verb, so the two branches cannot disagree about what counts.
 _PASSIVE_CLAIM = re.compile(
-    r"\b(" + _FILENAME_RE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    _FILE_RUN_FRONT
+    + r"("
+    + _FILENAME_RE
+    + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
     r"(?P<verb>created|written|saved|updated|appended|added"
     r"|read|opened|reviewed|checked|examined"
     r"|deleted|removed|erased)\b",
@@ -1037,11 +1053,12 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             kind = "deleted_file"
         else:
             kind = "wrote_file"
-        claims.append((kind, pm.group(1), pm.group(0)))
+        # The phrase runs from the filename, not from any "./" before it.
+        claims.append((kind, pm.group(1), clause[pm.start(1) : pm.end()]))
 
     # content DUMP: "<file> contains the following / says:", filename-as-subject.
     for cm in _CONTENT_CLAIM.finditer(clause):
-        claims.append(("file_contents", cm.group(1), cm.group(0)))
+        claims.append(("file_contents", cm.group(1), clause[cm.start(1) : cm.end()]))
 
     # a spend figure with no ledger read behind it (target: the clause).
     sm = _STATED_SPEND.search(clause)
@@ -1856,40 +1873,20 @@ _NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+
 # "there is no <capability> in my toolbox" (S16, her sentence to the owner on
 # 2026-09-11). The lead family is first-person because a denial has to be ABOUT
 # her; this one is impersonal in grammar and self-referring in substance, so it
-# is admitted only when the clause also names her own toolset before the next
-# . ? ! or line break — that is what keeps "there is no file at that path" out
-# (_absent_from_toolset). Same lesson the trailing family learned in S12: a
-# denial does not stop being a denial for being said about a possession rather
-# than an ability.
-_ABSENT_FROM_TOOLSET = re.compile(r"\bthere\s+(?:is|are)\s+no\b", re.I)
-_IN_MY_TOOLSET = re.compile(
-    r"\bin\s+my\s+"
-    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b",
+# is admitted only when the clause also names her own toolset — the lookahead
+# is what keeps "there is no file at that path" out. Same lesson the trailing
+# family learned in S12: a denial does not stop being a denial for being said
+# about a possession rather than an ability.
+#
+# 2026-10-06: the lookahead reads at most 160 characters. Unbounded, it walked
+# to the clause's end from EVERY "there is no" — 1.6 s at 50 KB of them, on
+# core's only event loop. Her own sentence has 18 between the two.
+_ABSENT_FROM_TOOLSET = re.compile(
+    r"\bthere\s++(?:is|are)\s++no\b"
+    r"(?=[^.?!\n]{0,160}?\bin\s++my\s++"
+    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b)",
     re.I,
 )
-_STRETCH_END = re.compile(r"[.?!\n]")
-
-
-def _absent_from_toolset(clause: str) -> re.Match[str] | None:
-    """The first "there is no" in `clause` that her own toolset follows before
-    the next . ? ! or line break — the impersonal denial lead.
-
-    S37a Task 12 (X1): this was one pattern whose lookahead read on to the
-    toolset words from EVERY "there is no", so a clause of them that never
-    named the toolset was read once per occurrence — 1.3 s at 50 KB, x16 for
-    4x the input. Each stretch is now read once: a later "there is no" in the
-    same stretch sees less of it than the first one did, so when the first
-    finds no toolset words after it, none of the others can either."""
-    pos = 0
-    while (lead := _ABSENT_FROM_TOOLSET.search(clause, pos)) is not None:
-        stop = _STRETCH_END.search(clause, lead.end())
-        end = stop.start() if stop is not None else len(clause)
-        if _IN_MY_TOOLSET.search(clause, lead.end(), end) is not None:
-            return lead
-        pos = end
-    return None
-
-
 _TRAILING_DENIAL = re.compile(
     _NOT_COPULA + r"\s+(?:"
     r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
@@ -1915,9 +1912,9 @@ _TRAILING_DENIAL = re.compile(
 # 11 honest phrasings: 9 silent, 2 corrected into "I can do that" — "I can't
 # write files to paths outside the workspace" and "I can't write files there —
 # /etc/nova/notes.md is outside my workspace". The window is gone; the scope
-# word is now found anywhere in the DENIAL'S OWN TAIL (_DenialTails).
-_SCOPE_WORDS = (
-    r"(?:"
+# word is now found anywhere in the DENIAL'S OWN TAIL (_denial_tail).
+_SCOPE_QUALIFIER = re.compile(
+    r"\b(?:"
     r"outside|beyond|elsewhere|externally"
     r"|(?:anywhere|any\s+place)\s+(?:else|other|except|but)"
     r"|(?:other\s+than|except|besides|apart\s+from)\b"
@@ -1925,31 +1922,56 @@ _SCOPE_WORDS = (
     r"|on\s+(?:the\s+)?(?:web|internet)"
     r"|(?:in|on|for|of)\s+(?:someone|somebody|another|other|the\s+other)"
     r"|not\s+in\s+(?:my|this)\b"
-    r")"
+    r")",
+    re.I,
 )
-_SCOPE_QUALIFIER = re.compile(r"\b" + _SCOPE_WORDS, re.I)
-# The same words at a tail's very first character, where the tail began as a
-# string of its own: there `\b` read the tail's start, which is a boundary
-# before any letter — even when the capability phrase ended inside a word.
-_SCOPE_AT_TAIL_START = re.compile(_SCOPE_WORDS, re.I)
 
 
 def _match_starts(pattern: re.Pattern[str], text: str) -> list[int]:
-    """Every index at which `pattern` can match in `text`, in order — the
-    overlapping ones too, so it holds exactly the starts `pattern.search(text,
-    pos)` can return. One pass: each search resumes one past the start it
-    found, so no position is tried twice."""
+    """Every position `pattern` matches at in `text`, in order — exactly the
+    starts `pattern.search(text, pos)` returns for some `pos` — found in ONE
+    left-to-right pass."""
     starts: list[int] = []
-    pos = 0
-    while (found := pattern.search(text, pos)) is not None:
+    found = pattern.search(text)
+    while found is not None:
         starts.append(found.start())
-        pos = found.start() + 1
+        found = pattern.search(text, found.start() + 1)
     return starts
 
 
-class _DenialTails:
-    """The tail that belongs to each denial in ONE clause — where a scope word
-    may qualify it — read once for the clause (S37a Task 12, ruling X1).
+class _DenialMarks:
+    """Where each pattern a denial is judged by matches in ONE clause, found
+    once per pattern per clause (2026-10-06). `_denial_tail` used to search the
+    rest of the clause again for every capability phrase in it, and the scope
+    qualifier then searched that tail: one clause repeating a scoped denial
+    ("I can't read files and read files and … outside my workspace") took
+    0.84 s at 12.5 KB and over 9 s at 50 KB, on core's only event loop.
+
+    A mark is where a match STARTS, so a scope word counts when it starts in a
+    denial's tail — what searching the tail found, except a scope word that
+    straddles the next denial's first word, which only silences (the miss
+    direction this family errs in)."""
+
+    __slots__ = ("_clause", "_starts")
+
+    def __init__(self, clause: str) -> None:
+        self._clause = clause
+        self._starts: dict[re.Pattern[str], list[int]] = {}
+
+    def first(self, pattern: re.Pattern[str], pos: int) -> int:
+        """Where `pattern` first matches at or after `pos` — the start
+        `pattern.search(clause, pos)` returns — or the clause's end."""
+        starts = self._starts.get(pattern)
+        if starts is None:
+            starts = self._starts[pattern] = _match_starts(pattern, self._clause)
+        i = bisect_left(starts, pos)
+        return starts[i] if i < len(starts) else len(self._clause)
+
+
+def _denial_tail(marks: _DenialMarks, phrase_end: int) -> int:
+    """Where the tail that belongs to THIS denial ends. The tail runs from
+    `phrase_end` (the end of its capability phrase) to here, and is where a
+    scope word may qualify it.
 
     WHERE THE DENIAL ENDS, and why this is the right boundary. The outer unit
     is already the clause: _clauses splits on sentence terminators, semicolons,
@@ -1975,46 +1997,10 @@ class _DenialTails:
     family always errs in (ruling S2d-R2 — a wrongly-corrected honest reply is
     worse than a missed lie).
 
-    READ ONCE PER CLAUSE (X1). Each phrase used to find its tail with two
-    searches to the end of the clause, copy it out and search the copy — per
-    phrase, governed or not: 14.5 s at 50 KB, x16 for 4x the input. Now every
-    place a denial starts and every scope word is found once, the first time a
-    governed phrase asks, and each phrase is answered with a bisect. The
-    verdicts are the copy-and-search ones exactly: a scope word strictly inside
-    the tail is matched in place, which reads the same characters, ending at
-    the tail's end as the copy did; one at the tail's very first character is
-    matched without the `\\b` the copy's own start supplied
-    (_SCOPE_AT_TAIL_START). tests/test_guard_regex_timing.py keeps the old body
-    as the oracle.
+    2026-10-06: read off the clause's marks (`_DenialMarks`), found once per
+    clause, never by searching the rest of the clause again for each phrase.
     """
-
-    __slots__ = ("_clause", "_ends", "_scopes")
-
-    def __init__(self, clause: str) -> None:
-        self._clause = clause
-        self._ends = sorted(
-            {*_match_starts(_DENIAL_LEAD, clause), *_match_starts(_TRAILING_DENIAL, clause)}
-        )
-        self._scopes = _match_starts(_SCOPE_QUALIFIER, clause)
-
-    def scoped(self, phrase_end: int) -> bool:
-        """Whether a scope word sits in the tail of the denied phrase that ends
-        at `phrase_end` — the tail running to the next denial, or the clause's
-        end."""
-        clause, ends, scopes = self._clause, self._ends, self._scopes
-        at = bisect_left(ends, phrase_end)
-        end = ends[at] if at < len(ends) else len(clause)
-        if _SCOPE_AT_TAIL_START.match(clause, phrase_end, end) is not None:
-            return True
-        # A scope word can start inside the tail and run past its end only
-        # where the next denial begins inside it ("not in MY capabilities
-        # don't include"), so at most a few are passed over here.
-        at = bisect_right(scopes, phrase_end)
-        while at < len(scopes) and scopes[at] < end:
-            if _SCOPE_QUALIFIER.match(clause, scopes[at], end) is not None:
-                return True
-            at += 1
-        return False
+    return min(marks.first(_DENIAL_LEAD, phrase_end), marks.first(_TRAILING_DENIAL, phrase_end))
 
 
 def _capability_correction_text(tools_named: Sequence[str]) -> str:
@@ -2045,11 +2031,11 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue  # a question/offer asserts no inability
-        lead = _DENIAL_LEAD.search(clause) or _absent_from_toolset(clause)
+        lead = _DENIAL_LEAD.search(clause) or _ABSENT_FROM_TOOLSET.search(clause)
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
-        tails: _DenialTails | None = None  # read on the first governed phrase
+        marks: _DenialMarks | None = None  # found when the first phrase needs them
         for pattern, tool in _CAPABILITY_TOOLS:
             if tool not in registered or tool in seen:
                 # No such tool -> the denial is HONEST; already seen -> counted.
@@ -2062,17 +2048,18 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
                 if not (after_lead or before_trailing):
-                    continue  # no denial governs it, so nothing can deny it
+                    continue
+                if marks is None:
+                    marks = _DenialMarks(clause)
                 # A scope limit anywhere in this denial's own tail ("...files
                 # OUTSIDE my folder", "...files to paths OUTSIDE the
                 # workspace") is a true statement about containment, not a
-                # disowned capability. _DenialTails says where that tail ends.
-                if tails is None:
-                    tails = _DenialTails(clause)
-                if not tails.scoped(m.end()):
-                    seen.add(tool)
-                    denied.append((m.group(0).strip(), tool))
-                    break
+                # disowned capability. _denial_tail says where that tail ends.
+                if marks.first(_SCOPE_QUALIFIER, m.end()) < _denial_tail(marks, m.end()):
+                    continue
+                seen.add(tool)
+                denied.append((m.group(0).strip(), tool))
+                break
     if not denied:
         return None
     tools_named = [tool for _phrase, tool in denied]
@@ -5942,9 +5929,9 @@ def _covers(target: str, record: str) -> bool:
 def _same_file(target: str, path: str) -> bool:
     """A write names the claimed file: its filename when she named one
     ("report-final.txt"), else the words she named it by ("the notes")."""
-    named = _FILENAME.search(target)
+    named = _FILENAME_IN.search(target)
     if named is not None:
-        wanted = named.group(0).lower().replace("\\", "/")
+        wanted = named.group(1).lower().replace("\\", "/")
         held = path.lower().replace("\\", "/")
         return held == wanted or held.endswith("/" + wanted.rsplit("/", 1)[-1])
     return _covers(target, path)
@@ -5997,7 +5984,7 @@ def _run_performs(words: list[str], action: str, target: str, device: str | None
         return False
     if program in _MACHINE_PROGRAMS:
         return _covers(target, device or "")
-    if action == "write" and _FILENAME.search(target) is not None:
+    if action == "write" and _FILENAME_IN.search(target) is not None:
         return any(_same_file(target, word) for word in words[1:])
     return _covers(target, named)
 

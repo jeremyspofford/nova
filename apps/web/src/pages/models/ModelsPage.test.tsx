@@ -78,7 +78,7 @@ async function* lines(items: PullLine[]) {
 }
 
 function renderPage(
-  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings' | 'checkDrift' | 'removeModel', ReturnType<typeof vi.fn>>> = {},
+  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings' | 'checkDrift' | 'removeModel' | 'setChatPrimary' | 'getRoutes', ReturnType<typeof vi.fn>>> = {},
 ) {
   const full = {
     getCatalog: vi.fn(async () => CATALOG),
@@ -112,6 +112,8 @@ function renderPage(
     ),
     putSetting: vi.fn(async () => undefined),
     getSettings: vi.fn(async () => SETTINGS),
+    setChatPrimary: vi.fn(async (model: string) => ({ chat_model: model, chain: ['hub:qwen3:8b'] })),
+    getRoutes: vi.fn(async () => ({ roles: [{ role: 'chat', chain: [], reserved: false }], walls: [] })),
     removeModel: vi.fn(async () => ({ removed: 'qwen3:8b', verified: true, installed_now: 0 })),
     checkDrift: vi.fn(async () => ({
       model: 'qwen3:8b',
@@ -145,11 +147,11 @@ describe('ModelsPage', () => {
     expect(chips).toContain('anthropic · 0 · the listing was refused (401): invalid x-api-key')
   })
 
-  it('opens on Installed, tabs carry counts, and the current model is marked', async () => {
+  it('opens on Installed, tabs carry counts, and the chat model is marked primary', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     expect(screen.queryByText('GPT X')).toBeNull()
-    expect(screen.getByText('current')).toBeTruthy()
+    expect(screen.getByText('primary')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
     await waitFor(() => expect(screen.getByText('GPT X')).toBeTruthy())
     expect(screen.getByText('$10 / $50 per 1M')).toBeTruthy()
@@ -179,14 +181,18 @@ describe('ModelsPage', () => {
     expect(screen.queryByText('GPT X')).toBeNull()
   })
 
-  it('Use writes the provider-qualified id and marks the row current only after the PUT', async () => {
+  it('Use makes the row primary through the one pick write, and the old pick a fallback', async () => {
     const { api } = renderPage()
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' }))
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:openai/gpt-x'))
-    await waitFor(() => expect(screen.getByText('current')).toBeTruthy())
+    await waitFor(() => expect(api.setChatPrimary).toHaveBeenCalledWith('openrouter:openai/gpt-x'))
+    // Never chat.model alone: that write is what dropped the replaced model.
+    expect(api.putSetting).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText('primary')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    await waitFor(() => expect(screen.getByText('fallback')).toBeTruthy())
   })
 
   it('a Hugging Face search appends hub rows and Pull offers the repo quants with the default marked', async () => {
@@ -297,14 +303,14 @@ describe('ModelsPage', () => {
   })
 
   it('Use that the server rejects leaves the row uncurrent and states the reason', async () => {
-    const { api } = renderPage({ putSetting: vi.fn(async () => { throw new Error('settings write refused (503)') }) })
+    const { api } = renderPage({ setChatPrimary: vi.fn(async () => { throw new Error('settings write refused (503)') }) })
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' }))
     await waitFor(() => expect(screen.getAllByRole('alert').some(a => a.textContent?.includes('settings write refused (503)'))).toBe(true))
-    expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:openai/gpt-x')
-    expect(screen.queryByText('current')).toBeNull()
+    expect(api.setChatPrimary).toHaveBeenCalledWith('openrouter:openai/gpt-x')
+    expect(screen.queryByText('primary')).toBeNull()
     expect(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' })).toBeTruthy()
   })
 
@@ -532,5 +538,56 @@ describe('ModelsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'benchmark charts' }))
     await waitFor(() => expect(screen.getByTestId('benchmark-charts')).toBeTruthy())
     expect(screen.getByTestId('bench-coding-openrouter:openai/gpt-x').style.height).toBe('69%')
+  })
+})
+
+describe('ModelsPage at a desktop width', () => {
+  /** jsdom answers every media query "no" — a phone. These tests ask for a
+   * desktop, where the page draws its table. */
+  function desktop() {
+    const real = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('min-width'),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    return () => {
+      window.matchMedia = real
+    }
+  }
+
+  it('draws a table whose columns fit a laptop: strengths in one column, no Fit or Suitability column', async () => {
+    const restore = desktop()
+    try {
+      renderPage()
+      await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+      const headers = screen.getAllByRole('columnheader').map(h => h.textContent?.trim()).filter(Boolean)
+      expect(headers).toEqual(['Model', 'Size', 'Context', 'Price', 'Strengths', 'Benchmarks'])
+      expect(screen.queryByTestId('model-cards')).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
+  it('draws the first 100 rows and offers the rest on request', async () => {
+    const restore = desktop()
+    try {
+      const many = Array.from({ length: 130 }, (_, i) => row({ id: `openrouter:vendor/model-${i}`, actions: ['use'] }))
+      renderPage({ getCatalog: vi.fn(async () => ({ ...CATALOG, rows: [...CATALOG.rows, ...many] })) })
+      await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+      fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
+      await waitFor(() => expect(screen.getByRole('button', { name: /Show all/ })).toBeTruthy())
+      expect(screen.getAllByRole('row').length - 1).toBe(100)
+      fireEvent.click(screen.getByRole('button', { name: /Show all/ }))
+      await waitFor(() => expect(screen.getAllByRole('row').length - 1).toBeGreaterThan(100))
+      expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
+    } finally {
+      restore()
+    }
   })
 })

@@ -11,6 +11,7 @@ header, same parsing.
 
 from __future__ import annotations
 
+import json
 import os
 from urllib.parse import unquote
 
@@ -54,6 +55,30 @@ def client(app: FastAPI, link: Link, timeout: httpx.Timeout) -> httpx.AsyncClien
         timeout=timeout,
         transport=transports.get(url),
     )
+
+
+#: How much of a gateway refusal a failed call keeps. The 503 for a chain
+#: with nothing runnable names every link's verdict, and the old 400-character
+#: cut ended in the LAST link — on 2026-09-30 exactly the reason he then asked
+#: about ("openrouter refus…": a 402, out of credits).
+REFUSAL_WORDS_MAX = 2000
+
+
+def refusal_words(body: str) -> str:
+    """The gateway's own words for a refusal: the JSON body's `error` — a
+    string, or an OpenAI-shaped `{"message": ...}` — when it carries one,
+    else the body as it came; capped, never cut short of the links it names."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        said = parsed.get("error")
+        if isinstance(said, dict):
+            said = said.get("message")
+        if isinstance(said, str) and said.strip():
+            body = said
+    return body[:REFUSAL_WORDS_MAX]
 
 
 def reason(exc: Exception) -> str:

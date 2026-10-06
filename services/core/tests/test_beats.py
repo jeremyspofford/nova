@@ -204,6 +204,33 @@ async def test_seeding_leaves_an_existing_row_alone(pool):
     assert len(await _beat_rows(pool)) == len(beats.BEATS)
 
 
+async def test_a_beat_paused_for_a_handler_this_core_has_is_resumed_at_start(pool, caplog):
+    """2026-09-11 a core without the distil runner fired the distil beat, and
+    the refusal paused it: "no beat named 'distil' — the beats are watch,
+    digest". Every core since has the runner and the row stayed paused for
+    weeks, with the hourly check saying so to no one. That pause was a fact
+    about old code, not the operator's: a start that has the handler lifts
+    exactly that pause, and only that one."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    distil = (await _beat_rows(pool))["distil"]
+    await timers.pause(pool, distil["id"], reason=beats.no_runner_reason("distil"))
+
+    with caplog.at_level(logging.INFO, logger="core"):
+        await beats.ensure_beats(pool)
+
+    again = await timers.get(pool, distil["id"])
+    assert again["paused_at"] is None and again["paused_reason"] is None
+    assert again["next_fire_at"] is not None
+    assert any("resumed beat 'distil'" in r.getMessage() for r in caplog.records)
+
+
+async def test_the_refusal_and_the_resume_read_the_same_words(pool):
+    # The pause is matched by the words the refusal wrote, so both are spelled
+    # once: a reworded refusal can never leave the resume matching nothing.
+    assert beats.no_runner_reason("nonesuch").startswith("no beat named 'nonesuch'")
+
+
 async def test_the_digest_hour_comes_from_the_setting_when_it_is_there(pool):
     await _owner(pool)
     await _setting(pool, beats.DIGEST_AT_KEY, "21:30")

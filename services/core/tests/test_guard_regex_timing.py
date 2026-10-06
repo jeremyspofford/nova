@@ -21,7 +21,6 @@ pattern shipped under the budget at 200 characters and took 3 s at 1,500.
 
 from __future__ import annotations
 
-import functools
 import re
 import time
 from types import SimpleNamespace
@@ -371,24 +370,28 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     `_REASON_CLAUSE_END` (R2: a quoted failure reason never invites a retry):
     197 -> 200, 258 -> 261.
 
-    S37a Task 12 (2026-10-05) moved all three, deliberately: 200 -> 205,
-    261 -> 272, the difference 61 -> 67.
-       5  new BARE module Patterns, reached by both walks: the MCP server
-          guards' `_SERVER_PRESENT_STATE` and `_SERVER_EARLIER`, and ruling
-          X1's three — `_IN_MY_TOOLSET` and `_STRETCH_END` (the impersonal
-          lead's lookahead, now read once per stretch; `_ABSENT_FROM_TOOLSET`
-          keeps its id as the lookahead-free head) and `_SCOPE_AT_TAIL_START`
-          (the scope words at a tail's first character, without the `\\b`).
+    The linear-filenames fix (2026-10-05, hub:1's carry from S42b Task 23)
+    moved them again, deliberately, and not the difference: 1 new BARE module
+    Pattern, reached by both walks — `_FILENAME_IN`, a filename found inside
+    text, entered only at the front of its token (`_CONTENT_CLAIM` and
+    `_PASSIVE_CLAIM` changed shape, not count): 200 -> 201, 261 -> 262.
+
+    S37a Task 12 (2026-10-05) moved all three, deliberately: 201 -> 203,
+    262 -> 270, the difference 61 -> 67.
+       2  new BARE module Patterns, reached by both walks: the MCP server
+          guards' `_SERVER_PRESENT_STATE` and `_SERVER_EARLIER`.
        4  the per-server builder in the live walk only (the fossil is not
           evolved): `_server_patterns[0..3]`.
        2  `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, the mcp_connect and
           mcp_call rows, reached through the container in the live walk only.
-    The plan expected +2/+8/+6 for the server guards; X1's three bare
-    patterns, ruled after the plan was written, are the rest."""
+    Ruling X1's own linear rewrite of capability_claim_check added three more
+    bare patterns (`_IN_MY_TOOLSET`, `_STRETCH_END`, `_SCOPE_AT_TAIL_START`);
+    merging main (2026-10-06) kept #97's rewrite of the same function
+    instead, which adds none, so those three are gone."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 205, len(old)
-    assert len(new) == 272, len(new)
+    assert len(old) == 203, len(old)
+    assert len(new) == 270, len(new)
     assert len(new) - len(old) == 67
 
 
@@ -1101,6 +1104,11 @@ def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
 # stretch from every "there is no": 1.3 s at 50 KB, x16. A clause is now read
 # once for each; the verdicts must not move, so the pre-fix body is kept below
 # as the oracle, as _sentences' is.
+#
+# Merging main (2026-10-06): main's #97 rewrote the same function the same
+# day (hub:1's lane) and the merge kept #97's code, so these shapes now pin
+# #97's reading of a clause, and the oracle below is the pre-fix body with
+# #97's three differences stated in it — see its docstring.
 CAPABILITY_FIFTY_KB = [
     ("phrases then a lead", lambda n: _repeat("read files ")(n - 9) + " I can't."),
     (
@@ -1132,22 +1140,11 @@ CAPABILITY_FIFTY_KB = [
 @pytest.mark.parametrize(
     "label,build", CAPABILITY_FIFTY_KB, ids=[c[0] for c in CAPABILITY_FIFTY_KB]
 )
-def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
+def test_the_capability_guard_reads_the_x1_shapes_in_linear_time(label, build):
     _assert_linear(
         f"capability_claim {label}",
         lambda r: guards.capability_claim_check(r, _NAMES),
         build,
-    )
-
-
-@functools.cache
-def _absent_from_toolset_before_the_fix() -> re.Pattern[str]:
-    """The impersonal lead before X1: ONE pattern whose lookahead read on to
-    the toolset words from every "there is no". Rebuilt from the live halves,
-    so the oracle follows the live word list and differs only in how it reads."""
-    return re.compile(
-        guards._ABSENT_FROM_TOOLSET.pattern + r"(?=[^.?!\n]*" + guards._IN_MY_TOOLSET.pattern + ")",
-        re.I,
     )
 
 
@@ -1160,9 +1157,27 @@ def _denial_tail_before_the_fix(clause: str, phrase_end: int) -> str:
     return clause[phrase_end:end]
 
 
+def _scoped_as_97_reads_it(clause: str, phrase_end: int) -> bool:
+    """A scope word STARTS in the denial's tail and matches in the clause
+    itself (#97's `_DenialMarks`), where the pre-fix body searched a copy of
+    the tail. Reading the clause, not a copy, differs in two places: a scope
+    word that runs past the tail's end into the next denial counts (silences
+    — #97's stated difference, the miss direction; none in the merge's
+    fuzz), and a scope word GLUED to the phrase's
+    last letter ("fetch URLsbesides") does not, because `\\b` now reads the
+    letter before it where the copy's own start was a boundary (fires — 35
+    of the merge's 324,852 fuzzed pairs, every one a glued word; S37a's X1
+    matched the copy there and the merge kept #97's reading)."""
+    tail = _denial_tail_before_the_fix(clause, phrase_end)
+    found = guards._SCOPE_QUALIFIER.search(clause, phrase_end)
+    return found is not None and found.start() < phrase_end + len(tail)
+
+
 def _capability_claim_check_before_the_fix(reply_text: str, available_tools) -> object:
-    """capability_claim_check's body before X1, verbatim but for the two
-    helpers above: the oracle the linear one must agree with on every reply."""
+    """capability_claim_check's body before X1 and #97, verbatim but for the
+    helpers above and the impersonal lead, which is #97's bounded pattern
+    (its lookahead reads at most 160 characters — #97's other stated
+    difference): the oracle the linear one must agree with on every reply."""
     if not reply_text or not reply_text.strip():
         return None
     registered = frozenset(available_tools)
@@ -1171,9 +1186,7 @@ def _capability_claim_check_before_the_fix(reply_text: str, available_tools) -> 
     for clause, is_question in guards._clauses(reply_text):
         if is_question:
             continue
-        lead = guards._DENIAL_LEAD.search(clause) or _absent_from_toolset_before_the_fix().search(
-            clause
-        )
+        lead = guards._DENIAL_LEAD.search(clause) or guards._ABSENT_FROM_TOOLSET.search(clause)
         trailing = guards._TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
@@ -1183,10 +1196,8 @@ def _capability_claim_check_before_the_fix(reply_text: str, available_tools) -> 
             for m in pattern.finditer(clause):
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
-                scoped = guards._SCOPE_QUALIFIER.search(
-                    _denial_tail_before_the_fix(clause, m.end())
-                )
-                if (after_lead or before_trailing) and scoped is None:
+                scoped = _scoped_as_97_reads_it(clause, m.end())
+                if (after_lead or before_trailing) and not scoped:
                     seen.add(tool)
                     denied.append((m.group(0).strip(), tool))
                     break
@@ -1246,8 +1257,8 @@ def _capability_replies() -> list[str]:
     return replies
 
 
-def test_the_capability_guard_judges_every_reply_exactly_as_before():
-    """X1 is a speed fix: every verdict stays what the pre-fix body says —
+def test_the_capability_guard_judges_every_reply_as_its_oracle_does():
+    """A speed fix: every verdict stays what the oracle body says —
     the guard's own corpus, the timing shapes, and 3,000 seeded replies drawn
     from every form the guard reads, against the whole registry, a registry
     without fetch_url, and none."""
@@ -1331,3 +1342,166 @@ def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
         _assert_linear(
             f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
         )
+
+
+# ---------------------------------------------------------------------------
+# A filename is entered once per token (hub:1's carry from S42b Task 23).
+#
+# `_CONTENT_CLAIM` and `_PASSIVE_CLAIM` began with `\b[\w./-]*`. Inside a long
+# dotted, dashed or slashed token every dot is a `\b`, and from each one the
+# greedy run walked to the token's end and back: narration_check took 171 ms
+# at 1,500 characters and 684 ms at 3,000 of "a." (S42b's measurement), on
+# core's one event loop. A filename found inside text now starts only at the
+# FRONT of a [\w./-] run. Any end a later start can reach, the front reaches
+# too, so the leftmost match is the one it always was; the pre-fix patterns
+# are kept here as the oracle.
+
+_FILENAME_RE_BEFORE = (
+    r"[\w./-]*[\w-]\.(?:md|txt|json|csv|ya?ml|py|js|ts|html?|pdf|log|ini|toml|xml|sh|cfg|conf)"
+)
+_FILENAME_BEFORE = re.compile(r"\b" + _FILENAME_RE_BEFORE + r"\b", re.I)
+_CONTENT_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:now\s+|currently\s+)?"
+    r"(?:contains?\s+the\s+following|(?:contains?|says?|reads?|shows?)\s*[:\"'`])",
+    re.I,
+)
+_PASSIVE_CLAIM_BEFORE = re.compile(
+    r"\b(" + _FILENAME_RE_BEFORE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    r"(?P<verb>created|written|saved|updated|appended|added"
+    r"|read|opened|reviewed|checked|examined"
+    r"|deleted|removed|erased)\b",
+    re.I,
+)
+
+FILENAME_ORACLE_INPUTS = [
+    "",
+    "notes.md was read",
+    "./notes.md was read and ../a/b.md has been updated",
+    "-notes.md is saved, notes.md-old was read",
+    "report.md. was read",
+    "a.md.txt contains the following: x",
+    "x.md5 was read; .md was read",
+    "abc.def.md says: hi",
+    "C:\\Users\\eval\\config.yaml was read",
+    "README.MD HAS BEEN UPDATED",
+    "summary.html contains: <p>",
+    "a.b.c.d.e.f.g.yml has now been written",
+    "dir/sub-dir/file_name.toml is checked",
+    "v1.2.3 was read and 1.2.3.md was read",
+    "notes.md\twas read",
+    "notes.md   currently says 'x'",
+    "...notes.md was read",
+    "a/./b/../c.json was opened",
+    "x" * 40 + ".md was read",
+    ("a." * 40) + "md was read",
+    ("a-" * 40) + "x.md is read",
+]
+
+
+def _claim_triples_before(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    return [(m.group(1), m.group(0), m.groupdict().get("verb")) for m in pattern.finditer(text)]
+
+
+def _claim_triples_now(pattern: re.Pattern[str], text: str) -> list[tuple]:
+    # The phrase as _claims_in records it: from the filename to the match end.
+    return [
+        (m.group(1), text[m.start(1) : m.end()], m.groupdict().get("verb"))
+        for m in pattern.finditer(text)
+    ]
+
+
+def _random_filename_texts(count: int = 3_000) -> list[str]:
+    """Seeded, so a failure is reproducible: runs of dots, dashes, slashes,
+    words, extensions and the claim verbs, glued in every order."""
+    import random
+
+    rng = random.Random(29)
+    alphabet = [
+        "a", "b", "Z9", "_", ".", "-", "/", " ", "\t", "md", "txt", "yaml", "yml",
+        "htm", "html", "md5", "x.md", "./", "../", "Report", "notes", ":", "'",
+        " was read", " has been updated", " is saved", " contains the following",
+        " says:", " now reads \"", " were deleted",
+    ]  # fmt: skip
+    return ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 24))) for _ in range(count)]
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM"])
+def test_the_claim_patterns_match_exactly_as_before(name):
+    before = {"_CONTENT_CLAIM": _CONTENT_CLAIM_BEFORE, "_PASSIVE_CLAIM": _PASSIVE_CLAIM_BEFORE}[
+        name
+    ]
+    now = getattr(guards, name)
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        assert _claim_triples_now(now, text) == _claim_triples_before(before, text), text
+
+
+def test_a_filename_is_found_inside_text_exactly_as_before():
+    for text in FILENAME_ORACLE_INPUTS + _random_filename_texts():
+        before = _FILENAME_BEFORE.search(text)
+        now = guards._FILENAME_IN.search(text)
+        assert (now.group(1) if now else None) == (before.group(0) if before else None), text
+
+
+FILENAME_RUNS = [
+    ("dotted", _repeat("a.")),
+    ("dashed", _repeat("a-")),
+    ("slashed", _repeat("a/")),
+    ("dotted_words", _repeat("ab.cd.")),
+    ("a_claim_then_a_dotted_run", lambda n: "I ran " + _repeat("a.")(n)),
+    ("dotted_runs_with_a_verb_each", _repeat("a.a.a.a.a.a.a.a was read ")),
+]
+
+
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_narration_reads_a_long_dotted_or_dashed_token_in_linear_time(label, build):
+    _assert_linear(f"narration {label}", lambda text: guards.narration_check(text, []), build)
+
+
+@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM", "_FILENAME_IN"])
+@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+def test_the_filename_patterns_enter_a_run_once(name, label, build):
+    pattern = getattr(guards, name)
+    _assert_linear(f"{name} {label}", lambda text: list(pattern.finditer(text)), build)
+
+
+# ---------------------------------------------------------------------------
+# The capability guard reads each clause once (found while planning S29).
+#
+# capability_claim_check runs on every reply. Its per-phrase tail scan
+# (`_denial_tail`, then `_SCOPE_QUALIFIER` over that tail) re-read the rest of
+# the clause for EVERY capability phrase in it: one clause repeating a scoped
+# denial took 0.84 s at 12.5 KB and over 9 s at 50 KB, and
+# `_ABSENT_FROM_TOOLSET`'s lookahead walked to the clause's end from every
+# "there is no" (1.8 s at 50 KB) — on core's only event loop. Each shape is a
+# whole reply. The cap follows BIG_INPUT_CAP_S's own rule: a reply made of
+# nothing but denials has every clause read against every row of the table,
+# so it is the slowest honest-to-measure shape.
+CAPABILITY_CAP_S = 0.45
+CAPABILITY_SHAPES = [
+    (
+        "one clause, scoped denials, the scope at its end",
+        lambda n: "I can't " + _repeat("read files and ")(n - 30) + " outside my workspace.",
+    ),
+    (
+        "one clause, one ability denied over and over",
+        lambda n: "I can't " + _repeat("read files and ")(n),
+    ),
+    ("sentences of bare denials", _repeat("I can't browse the web. ")),
+    ("sentences of scoped denials", _repeat("I can't write files outside my workspace. ")),
+    ("trailing denials", _repeat("Reading files isn't something I can do and ")),
+    ("there is no, and no toolset", _repeat("there is no ")),
+    (
+        "there is no, the toolset at its end",
+        lambda n: _repeat("there is no x ")(n - 16) + " in my toolset.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,build", CAPABILITY_SHAPES, ids=[c[0] for c in CAPABILITY_SHAPES])
+def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"capability_claim {label}",
+        lambda r: guards.capability_claim_check(r, _NAMES),
+        build,
+        cap_s=CAPABILITY_CAP_S,
+    )

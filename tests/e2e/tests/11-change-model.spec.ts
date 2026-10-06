@@ -1,5 +1,10 @@
 /**
- * Scenario 11 — change the chat model from Settings, mid-session, no restart.
+ * Scenario 11 — change the chat model from Models, mid-session, no restart.
+ *
+ * MOVED 2026-10-05 from Settings -> Models' own model cards, which are gone
+ * (the Models page is the one model list; a pick there is the same pick
+ * write the chat switcher and Settings -> Routing make). Still not run: the
+ * e2e job is off in CI, see .github/workflows/rebuild-ci.yml.
  *
  * AUTHORED IN S2e-T4, NOT YET RUN. The brief for this task is explicit that
  * the running stack (project `nova`) is the pre-T1 build — the Models
@@ -23,12 +28,12 @@
  * (ModelsSection.tsx's handlePull) had no browser coverage before this.
  */
 import { expect, test } from '@playwright/test'
-import { modelCard, sendMessage } from '../lib/app'
+import { modelRow, sendMessage } from '../lib/app'
 import { config } from '../lib/env'
 
 test.use({ storageState: config.storageStatePath })
 
-test('change model: Settings switch reaches the next turn without a restart', async ({
+test('change model: a pick on Models reaches the next turn without a restart', async ({
   page,
 }) => {
   test.setTimeout(config.pullTimeoutMs + config.replyTimeoutMs + 3 * 60 * 1000)
@@ -39,42 +44,34 @@ test('change model: Settings switch reaches the next turn without a restart', as
     'NOVA_E2E_SECOND_MODEL must differ from NOVA_E2E_MODEL — switching to the model already ' +
       'current would prove nothing about the switch.',
   ).not.toBe(config.model)
+  const installed = `hub:${target}`
+  const library = `library:${target}`
 
-  await page.goto('/settings')
+  await page.goto('/models')
   await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible()
-  await expect(page.getByTestId('current-chat-model')).toHaveText(config.model)
 
   // ── get the target model installed, however it currently stands ─────────
-  const card = modelCard(page, target)
-  await expect(
-    card,
-    `${target} is not offered in Settings -> Models — set NOVA_E2E_SECOND_MODEL to a slug ` +
-      "this host's curated catalog actually lists",
-  ).toBeVisible()
-
-  const pullButton = card.getByRole('button', { name: 'Pull' })
-  if (await pullButton.count()) {
-    await pullButton.click()
-    const done = card.getByText('Installed — pick "Use this model" above.')
-    const failed = card.getByRole('alert')
-    await expect(done.or(failed).first()).toBeVisible({ timeout: config.pullTimeoutMs })
-    if (await failed.count()) {
-      throw new Error(`pulling ${target} from Settings failed: ${(await failed.first().innerText()).trim()}`)
+  await page.getByRole('button', { name: /^All/ }).click()
+  const pull = page.getByRole('button', { name: `pull ${library}` })
+  if (await pull.count()) {
+    await pull.click()
+    const panel = page.getByTestId('pull-panel')
+    await expect(panel.getByText(/installed|failed|refused|error/i).first()).toBeVisible({
+      timeout: config.pullTimeoutMs,
+    })
+    const said = (await panel.innerText()).trim()
+    if (!/installed/.test(said) || /failed|refused|error/i.test(said)) {
+      throw new Error(`pulling ${target} from Models failed: ${said}`)
     }
   }
 
-  // ── switch: the card offers "Use this model" only once installed ────────
-  const useButton = card.getByRole('button', { name: 'Use this model' })
-  await expect(useButton).toBeVisible()
-  await useButton.click()
-
-  // The switch is a plain settings write with no loading gate on the text
-  // itself, so this is the write's own completion, not a guess at timing.
-  await expect(page.getByTestId('current-chat-model')).toHaveText(target)
-  await expect(card.getByText('Current', { exact: true })).toBeVisible()
+  // ── switch: Use on the installed row makes it chat's primary ─────────────
+  await page.getByRole('button', { name: /^Installed/ }).click()
+  await page.getByRole('button', { name: `use ${installed}` }).click()
+  await expect(modelRow(page, installed).getByText('primary', { exact: true })).toBeVisible()
 
   // ── the point of the scenario: a turn sent AFTER the switch, same session,
-  // no reload, no restart — the header must name the NEW model ────────────
+  // no reload, no restart — the switcher must name the NEW model ──────────
   //
   // Through the sidebar link, not page.goto(). A full navigation would
   // re-fetch everything from scratch, including the setting this scenario

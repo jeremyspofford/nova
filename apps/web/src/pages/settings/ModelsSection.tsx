@@ -1,45 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
-import { AlertTriangle, Check, Cloud, Cpu, Download, Info, RefreshCw, Server } from 'lucide-react'
-import {
-  Badge,
-  Button,
-  DataList,
-  ModelFitNotice,
-  ProgressBar,
-  Section,
-  Skeleton,
-} from '../../components/ui'
+import { AlertTriangle, Cloud, Cpu, Info, RefreshCw, Server } from 'lucide-react'
+import { Button, DataList, Section, Skeleton } from '../../components/ui'
 import {
   getBackend as apiGetBackend,
-  getInstalledModels as apiGetInstalledModels,
-  getSuggestion as apiGetSuggestion,
-  pullModel as apiPullModel,
   putSetting as apiPutSetting,
   visionModels as apiVisionModels,
   type BackendConfig,
   type EngineKind,
-  type PullLine,
-  type Suggestion,
 } from '../../lib/api'
-import {
-  ACCURACY_DISCLAIMER,
-  ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
-} from '../../lib/modelDisclaimer'
-import {
-  applyPullLine,
-  formatBytes,
-  initialPullState,
-  settlePull,
-  type PullState,
-} from '../../lib/pullStream'
-import {
-  bareLocalModel,
-  isSmallerTier,
-  mergeModels,
-  qualifyLocalModel,
-  type MergedModel,
-} from './modelsFormat'
+import { ACCURACY_DISCLAIMER } from '../../lib/modelDisclaimer'
 
 /**
  * `api` is a dependency-injection seam, the same idiom as ActivityPage's and
@@ -47,21 +17,15 @@ import {
  * swaps in fakes without reaching for module mocking.
  */
 interface ModelsApi {
-  getInstalledModels: typeof apiGetInstalledModels
-  getSuggestion: typeof apiGetSuggestion
   getBackend: typeof apiGetBackend
   putSetting: typeof apiPutSetting
   visionModels: typeof apiVisionModels
-  pullModel: typeof apiPullModel
 }
 
 const DEFAULT_API: ModelsApi = {
-  getInstalledModels: apiGetInstalledModels,
-  getSuggestion: apiGetSuggestion,
   getBackend: apiGetBackend,
   putSetting: apiPutSetting,
   visionModels: apiVisionModels,
-  pullModel: apiPullModel,
 }
 
 const ENGINE_ICONS: Record<EngineKind, typeof Cpu> = {
@@ -111,168 +75,43 @@ function ErrorLine({ reason }: { reason: string }) {
   )
 }
 
-function ModelCard({
-  model,
-  switching,
-  pull,
-  pullBlocked,
-  onSelect,
-  onPull,
-}: {
-  model: MergedModel
-  switching: boolean
-  pull: PullState | null
-  /** Another model's pull is in flight — ollama pulls one at a time, and
-   * starting a second here would silently abort it (see handlePull). */
-  pullBlocked: boolean
-  onSelect: () => void
-  onPull: () => void
-}) {
-  const pulling = pull !== null && !pull.done && !pull.error
-  const percent =
-    pull && pull.total > 0 ? Math.min(100, Math.round((pull.completed / pull.total) * 100)) : null
-
-  return (
-    <div
-      data-testid={`model-card-${model.slug}`}
-      className="rounded-lg border border-border-subtle p-3 space-y-2"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-compact font-medium text-content-primary truncate">{model.label}</p>
-          <p className="font-mono text-micro text-content-tertiary truncate">{model.slug}</p>
-          {model.note && <p className="text-caption text-content-secondary mt-1">{model.note}</p>}
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {model.isCurrent && (
-            <Badge color="accent" size="sm">
-              Current
-            </Badge>
-          )}
-          {!model.isCurrent && model.installed && (
-            <Badge color="success" size="sm">
-              Installed
-            </Badge>
-          )}
-          {!model.isCurrent && !model.installed && (
-            <Badge color="neutral" size="sm">
-              Available to pull
-            </Badge>
-          )}
-          {model.minVramGb !== null && (
-            <Badge color="neutral" size="sm">
-              {model.minVramGb} GB VRAM
-            </Badge>
-          )}
-        </div>
-      </div>
-
-      <ModelFitNotice fit={model.fit} />
-
-      {!model.isCurrent && model.installed && (
-        <Button size="sm" variant="secondary" loading={switching} onClick={onSelect}>
-          Use this model
-        </Button>
-      )}
-
-      {/* isCurrent excluded here too: the model the operator is actually
-          chatting with must never render as pullable just because
-          installed-detection came back false for it (a failed
-          getInstalledModels call, or a slug the gateway's list doesn't
-          happen to name) — chat.model already proves it is in use. */}
-      {!model.isCurrent && !model.installed && !pulling && !pull?.done && (
-        <Button
-          size="sm"
-          variant="outline"
-          icon={<Download size={12} />}
-          disabled={pullBlocked}
-          title={pullBlocked ? 'Another download is already in progress' : undefined}
-          onClick={onPull}
-        >
-          Pull
-        </Button>
-      )}
-
-      {pull && (
-        <div className="space-y-1.5 pt-1">
-          {pull.preflight && (
-            <p className="text-caption text-content-tertiary">{pull.preflight}</p>
-          )}
-          {pulling && (
-            <>
-              <div className="flex items-center gap-2 text-caption text-content-primary">
-                <span className="truncate">{pull.status}</span>
-              </div>
-              <ProgressBar
-                size="sm"
-                value={percent ?? undefined}
-                variant={percent === null ? 'indeterminate' : 'determinate'}
-              />
-              {pull.total > 0 && (
-                <p className="text-micro text-content-tertiary">
-                  {formatBytes(pull.completed)} of {formatBytes(pull.total)}
-                  {percent === null ? '' : ` (${percent}%)`}
-                </p>
-              )}
-            </>
-          )}
-          {pull.done && (
-            <div className="flex items-center gap-2 text-caption text-success">
-              <Check size={13} />
-              <span>Installed — pick "Use this model" above.</span>
-            </div>
-          )}
-          {pull.error && <ErrorLine reason={pull.error} />}
-        </div>
-      )}
-    </div>
-  )
-}
-
 /**
- * Settings -> Models: the operator's only non-curl way to see and change
- * what Nova is running on. Reads three existing endpoints (chat.model is
- * passed in from SettingsPage, which already polls settings), merges
- * installed and curated into one list (modelsFormat.ts), and wires the
- * existing pull-progress and backend surfaces — no new backend concepts,
- * see docs/plans/rebuild/slice-02e-model-surface.md T1.
+ * Settings -> Models -> "Models": what is set here and nowhere else — which
+ * model reads an image, the engine setup chose and how to re-run setup.
+ *
+ * It used to carry a second model list with its own Use and Pull (S2e), and
+ * a "current chat model" line: the Models page lists every model and pulls
+ * them, and Routing below is where chat's order is set, so the copies went
+ * (2026-10-05, owner: reduce the duplicated model pages).
  */
 export function ModelsSection({
-  chatModel,
   visionModel = '',
-  onModelChanged,
+  onVisionChanged,
   onRerunSetup,
   api = DEFAULT_API,
 }: {
-  chatModel: string
   /** S28: which model answers a turn carrying an image, when the chat model
    * cannot see one. Empty means she picks a capable one herself. */
   visionModel?: string
-  onModelChanged: (model: string) => void
+  /** What core stored for chat.vision_model — never the chat model: handing
+   * it to the chat model's handler made the page and the chat badge name
+   * the image model as the chat model until a reload. */
+  onVisionChanged: (model: string) => void
   onRerunSetup: () => Promise<void>
   api?: ModelsApi
 }) {
   // A Link needs a Router; this section is also rendered bare in its own
   // tests and the gallery, where a plain anchor is the honest fallback.
   const inRouter = useInRouterContext()
-  const [installed, setInstalled] = useState<string[] | null>(null)
-  const [installedError, setInstalledError] = useState<string | null>(null)
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
-  const [suggestionError, setSuggestionError] = useState<string | null>(null)
   // S28: installed models that can actually SEE, from core — the same list
   // the turn picks within, so this picker cannot offer one she would decline.
   const [seers, setSeers] = useState<string[] | null>(null)
   const [seersReason, setSeersReason] = useState<string | null>(null)
   const [savingVision, setSavingVision] = useState(false)
+  const [visionError, setVisionError] = useState<string | null>(null)
   const [backend, setBackend] = useState<BackendConfig | null>(null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
-
-  const [switching, setSwitching] = useState<string | null>(null)
-  const [switchError, setSwitchError] = useState<string | null>(null)
-
-  const [pull, setPull] = useState<PullState | null>(null)
-  const pullAbort = useRef<AbortController | null>(null)
 
   const [rerunning, setRerunning] = useState(false)
   const [rerunError, setRerunError] = useState<string | null>(null)
@@ -280,14 +119,6 @@ export function ModelsSection({
   useEffect(() => {
     let cancelled = false
     Promise.allSettled([
-      api.getInstalledModels().then(
-        list => !cancelled && setInstalled(list),
-        err => !cancelled && setInstalledError(reasonOf(err)),
-      ),
-      api.getSuggestion().then(
-        s => !cancelled && setSuggestion(s),
-        err => !cancelled && setSuggestionError(reasonOf(err)),
-      ),
       api.getBackend().then(
         b => !cancelled && setBackend(b),
         err => !cancelled && setBackendError(reasonOf(err)),
@@ -320,59 +151,6 @@ export function ModelsSection({
     }
   }, [api])
 
-  useEffect(() => () => pullAbort.current?.abort(), [])
-
-  const handleSelect = async (slug: string) => {
-    setSwitchError(null)
-    setSwitching(slug)
-    try {
-      await api.putSetting('chat.model', qualifyLocalModel(slug))
-      onModelChanged(qualifyLocalModel(slug))
-    } catch (err) {
-      setSwitchError(reasonOf(err))
-    } finally {
-      setSwitching(null)
-    }
-  }
-
-  const handlePull = (slug: string) => {
-    // Mechanical, not just the disabled button: ollama pulls one model at a
-    // time, so a second start here would silently abort the first rather
-    // than queue behind it.
-    if (pull !== null && !pull.done && !pull.error && pull.target !== slug) return
-    pullAbort.current?.abort()
-    const controller = new AbortController()
-    pullAbort.current = controller
-    setPull(initialPullState(slug))
-
-    void (async () => {
-      // The shared reducer (lib/pullStream) owns every rule: an error line
-      // wins, success is only the literal line, a quiet end is a stated
-      // failure. This loop only feeds it and reads the settled result.
-      let state = initialPullState(slug)
-      const publish = (next: PullState) => {
-        state = next
-        setPull(p => (p && p.target === slug ? next : p))
-      }
-      try {
-        for await (const line of api.pullModel(slug, controller.signal)) {
-          if (controller.signal.aborted) return
-          publish(applyPullLine(state, line))
-          if (line.error) break
-        }
-      } catch (err) {
-        if (controller.signal.aborted) return
-        publish({ ...state, error: reasonOf(err) })
-      }
-      if (controller.signal.aborted) return
-      const settled = settlePull(state)
-      publish(settled)
-      if (settled.done) {
-        setInstalled(prev => (prev ? Array.from(new Set([...prev, slug])) : [slug]))
-      }
-    })()
-  }
-
   const handleRerun = async () => {
     setRerunError(null)
     setRerunning(true)
@@ -386,11 +164,6 @@ export function ModelsSection({
       setRerunning(false)
     }
   }
-
-  const merged = mergeModels(chatModel, installed, suggestion?.models ?? null)
-  // Derived from the catalog's own params_b, never a hardcoded model list —
-  // see modelsFormat.isSmallerTier.
-  const currentIsSmaller = isSmallerTier(merged, chatModel)
 
   const backendItems = backend
     ? [
@@ -419,26 +192,22 @@ export function ModelsSection({
       ]
     : []
 
+  const modelsLink = inRouter ? (
+    <Link to="/models" className="text-accent hover:underline">
+      Models
+    </Link>
+  ) : (
+    <a href="/models" className="text-accent hover:underline">
+      Models
+    </a>
+  )
+
   return (
-    <Section
-      icon={Cpu}
-      title="Models"
-      description="What Nova answers with, and how to change it."
-    >
+    <Section icon={Cpu} title="Models" description="Which model reads images, and the engine setup chose.">
       {!loaded ? (
-        <Skeleton lines={5} />
+        <Skeleton lines={4} />
       ) : (
         <>
-          <div>
-            <p className="text-caption text-content-tertiary mb-1">Current chat model</p>
-            <p
-              data-testid="current-chat-model"
-              className="text-compact font-mono font-medium text-content-primary"
-            >
-              {chatModel ? bareLocalModel(chatModel) : 'not set'}
-            </p>
-          </div>
-
           {/* WHICH MODEL LOOKS AT A PICTURE (S28, owner's call).
               The chat model usually cannot: on this box qwen3:8b has tools
               and thinking and no vision at all. So a turn carrying an image
@@ -467,13 +236,14 @@ export function ModelsSection({
                   onChange={async e => {
                     const picked = e.target.value
                     setSavingVision(true)
+                    setVisionError(null)
                     try {
                       const written = await api.putSetting('chat.vision_model', picked)
-                      onModelChanged(String(written.value ?? picked))
-                    } catch {
-                      // The page re-reads settings on its own poll; a failed
-                      // write simply leaves the old value showing rather
-                      // than a choice that did not take looking like it did.
+                      onVisionChanged(String(written.value ?? picked))
+                    } catch (err) {
+                      // The old value stays showing, and why the new one did
+                      // not take is said — a refused pick never looks taken.
+                      setVisionError(reasonOf(err))
                     } finally {
                       setSavingVision(false)
                     }
@@ -492,79 +262,30 @@ export function ModelsSection({
                     ? `Images go to ${visionModel}. She says so in the reply when a turn moves.`
                     : 'She picks one of these when you send an image, and says which in the reply.'}
                 </p>
+                {visionError && <ErrorLine reason={`Could not save the image model: ${visionError}`} />}
               </>
             )}
           </div>
 
           <p className="text-caption text-content-tertiary" data-testid="models-catalog-link">
-            Browse every model Nova can run or reach, pull from Hugging Face, and pick by size,
-            price or capability in{' '}
-            {inRouter ? (
-              <Link to="/models" className="text-accent hover:underline">
-                Models
-              </Link>
-            ) : (
-              <a href="/models" className="text-accent hover:underline">
-                Models
-              </a>
-            )}
-            .
+            Which model chat answers with, and what it falls back to, is set under Routing below. Browse
+            every model Nova can run or reach, pull one, or compare them in {modelsLink}.
           </p>
           {/* Honest, qualitative accuracy disclaimer (S3 walk-fix round 12) —
-              no invented number, just the trade-off stated plainly. Emphasized
-              (info -> warning tone, one extra sentence) when the model in use
-              right now is on the smaller end of the catalog; the base note
-              always shows regardless, since the trade-off is true of every
-              small/local model, not just the current pick. */}
+              no invented number, just the trade-off stated plainly. The chat
+              switcher carries the short form, warmer when the pick is on the
+              smaller end of what is on offer. */}
           <div
             data-testid="model-accuracy-disclaimer"
             role="note"
-            className={
-              'flex items-start gap-2 rounded-sm border px-3 py-2 text-caption ' +
-              (currentIsSmaller
-                ? 'border-warning/30 bg-warning-dim text-content-primary'
-                : 'border-info/30 bg-info-dim text-content-secondary')
-            }
+            className="flex items-start gap-2 rounded-sm border border-info/30 bg-info-dim px-3 py-2 text-caption text-content-secondary"
           >
             <Info size={14} className="shrink-0 mt-0.5" />
-            <span>
-              {ACCURACY_DISCLAIMER}
-              {currentIsSmaller && ` ${ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER}`}
-            </span>
-          </div>
-
-          {installedError && (
-            <ErrorLine
-              reason={`Could not confirm which models are installed — showing the curated catalog only: ${installedError}`}
-            />
-          )}
-          {suggestionError && (
-            <ErrorLine reason={`Could not load the curated catalog: ${suggestionError}`} />
-          )}
-          {switchError && <ErrorLine reason={switchError} />}
-
-          <div className="space-y-2">
-            {merged.length === 0 ? (
-              <p className="text-caption text-content-tertiary">No models to show yet.</p>
-            ) : (
-              merged.map(model => (
-                <ModelCard
-                  key={model.slug}
-                  model={model}
-                  switching={switching === model.slug}
-                  pull={pull?.target === model.slug ? pull : null}
-                  pullBlocked={
-                    pull !== null && !pull.done && !pull.error && pull.target !== model.slug
-                  }
-                  onSelect={() => handleSelect(model.slug)}
-                  onPull={() => handlePull(model.slug)}
-                />
-              ))
-            )}
+            <span>{ACCURACY_DISCLAIMER}</span>
           </div>
 
           <div className="border-t border-border-subtle pt-4 space-y-3">
-            <p className="text-caption font-medium text-content-secondary">Active backend</p>
+            <p className="text-caption font-medium text-content-secondary">Engine setup chose</p>
             {backendError ? (
               <ErrorLine reason={`Could not read the active backend: ${backendError}`} />
             ) : (

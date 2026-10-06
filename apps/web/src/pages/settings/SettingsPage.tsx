@@ -68,8 +68,12 @@ export function SettingsPage() {
   const storedPreset = settings
     ? normalizePreset(settingValue(settings, 'appearance.default_preset', DEFAULT_PRESET)) ?? DEFAULT_PRESET
     : null
-  const chatModel =
-    chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
+  // What core STORED, once this page has read it: the chat store's value is
+  // a cache that moves only when a turn starts or a pick is made in this
+  // browser, so preferring it showed a pick made on another device — or
+  // never made at all — as the chat model (2026-10-05). Before the read
+  // lands, the cache is the best there is.
+  const chatModel = settings ? String(settingValue(settings, 'chat.model', '')) : (chatState.model ?? '')
   // S28: which model reads an image. Empty means she picks one herself, which
   // is the default and what she did before this became selectable.
   const visionModel = settings ? String(settingValue(settings, 'chat.vision_model', '')) : ''
@@ -221,18 +225,9 @@ export function SettingsPage() {
             )}
             {tab === 'models' && (
               <>
-                {/* First: where the models run, before which one answers. */}
-                <MachinesSection />
-                <ModelsSection
-                  chatModel={chatModel}
-                  visionModel={visionModel}
-                  onModelChanged={onChatModelChanged}
-                  onRerunSetup={handleRerunSetup}
-                />
-                <ProvidersSection
-                  chatModel={chatModel}
-                  onModelChanged={onChatModelChanged}
-                />
+                {/* First: which model answers — chat's order is the question
+                    this tab is opened for. Then images and setup, who
+                    provides the models, and where they run. */}
                 <RoutingSection
                   chatModel={chatModel}
                   onChatModelChanged={onChatModelChanged}
@@ -241,6 +236,16 @@ export function SettingsPage() {
                   // settings state this page renders from.
                   onSettingChanged={updateSettingValue}
                 />
+                <ModelsSection
+                  visionModel={visionModel}
+                  onVisionChanged={model => updateSettingValue('chat.vision_model', model)}
+                  onRerunSetup={handleRerunSetup}
+                />
+                <ProvidersSection
+                  chatModel={chatModel}
+                  onModelChanged={onChatModelChanged}
+                />
+                <MachinesSection />
               </>
             )}
             {tab === 'behaviour' && (

@@ -454,8 +454,11 @@ function NoticeCard({
       data-testid={`notice-row-${notice.id}`}
       className="rounded-lg border border-border glass-card dark:border-white/[0.08] px-4 py-3"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      {/* A phone stacks the actions under the title: side by side, the
+          buttons kept their width and the title was squeezed to one
+          character a line (2026-10-05). */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+        <div className="min-w-0 sm:flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {notice.urgent && (
               <span data-testid="urgent-badge" title="the check itself declares this urgent — nothing she wrote can promote a finding">
@@ -464,7 +467,11 @@ function NoticeCard({
                 </Badge>
               </span>
             )}
-            <span className="text-content-primary font-medium">{notice.title}</span>
+            {/* A title can carry a URL or a key with no space in it (a
+                provider's refusal names its billing page); `anywhere` lets
+                it wrap instead of pushing the whole page sideways on a phone
+                (2026-10-05: 327 px past the edge). */}
+            <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">{notice.title}</span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
             <span className="font-mono" title="the check that found it">
@@ -487,7 +494,7 @@ function NoticeCard({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0">
           {/* S25.2.4. Disabled rather than hidden when there is no room: the
               reason is a fact about the world — nothing has carried this to
               him yet — and hiding it would leave him wondering why this card
@@ -571,7 +578,7 @@ function NoticeCard({
       {facts.length > 0 && (
         <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-micro text-content-tertiary" data-testid="notice-facts">
           {facts.map(fact => (
-            <li key={fact.key} title={fact.title}>
+            <li key={fact.key} title={fact.title} className="min-w-0 [overflow-wrap:anywhere]">
               {fact.key}:{' '}
               {fact.href === undefined ? (
                 <span className="text-content-secondary">{fact.value}</span>
@@ -608,7 +615,10 @@ function NoticeCard({
             <li
               key={i}
               className={clsx(
-                'font-mono text-micro',
+                // A delivery's own words can hold a long unbroken token (a
+                // device's error output); it wraps rather than pushing the
+                // page sideways on a phone.
+                'font-mono text-micro [overflow-wrap:anywhere]',
                 line.verdict === 'ok' && 'text-success',
                 line.verdict === 'failed' && 'text-danger',
                 line.verdict === 'stated' && 'text-content-tertiary',

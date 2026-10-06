@@ -3314,6 +3314,8 @@ async def _gateway_round(
     # One site covers every round there is — the loop's, the narration
     # round, both redirect shapes — because they all come through here.
     traces.set_doing(turn.id, "thinking")
+    # And so does asking for chat's pick as it stands now, for the same reason.
+    model = await _round_model(turn, model, messages)
     collected: list[str] = []
     buffer = ToolCallBuffer()
     failure: str | None = None
@@ -3359,7 +3361,8 @@ async def _gateway_round(
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
-                        detail = (await response.aread()).decode(errors="replace")[:400]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         raise GatewayFailure(
                             f"the gateway refused the request ({response.status_code}): {detail}"
                         )
@@ -3667,6 +3670,62 @@ def _role_of(turn: traces.Turn) -> str | None:
     return turn.role or _ROLE_BY_KIND.get(traces.purpose_of(turn))
 
 
+def _carries_pictures(messages: Sequence[dict]) -> bool:
+    """Do these messages hand the model a picture (an image content part)?"""
+    return any(
+        isinstance(message, dict)
+        and isinstance(message.get("content"), list)
+        and any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in message["content"]
+        )
+        for message in messages
+    )
+
+
+async def _round_model(turn: traces.Turn, model: str, messages: Sequence[dict]) -> str:
+    """The model a gateway call of this turn asks for: chat's pick as it
+    stands NOW when the turn is sending chat's pick, else `model`.
+
+    A turn reads chat.model once, when it opens, but chat's chain is read live
+    on every call — and a pick moves the model it replaces INTO that chain and
+    the new pick out of it (chat_pick). A call still asking for the pick the
+    turn opened with therefore walks the old pick alone, and fails outright
+    while it cannot answer. The walk on 2026-10-05 did exactly that: her own
+    set_chat_model switched chat to Gemini, the pick was stored and read back,
+    and round 4 of the same turn died on the walled Dell it had replaced. A
+    pick made anywhere lands the same way — her tool, the switcher while she
+    is answering, an agent she delegated to — so the pick is read, never
+    remembered.
+
+    Everything else keeps `model`. An agent's turn walks its own role and an
+    eval names its candidate (neither role is in CHAT_MODEL_ROLES); a turn
+    swapped to a model that can see its pictures no longer sends the model it
+    opened with; and a turn carrying pictures keeps the model they were
+    checked against, so a pick never hands them to a model that cannot see.
+    A pick that cannot be read keeps it too: the call still runs, on what the
+    turn was already asking for.
+    """
+    if _role_of(turn) not in CHAT_MODEL_ROLES or model != (turn.model or ""):
+        return model
+    if _carries_pictures(messages):
+        return model
+    try:
+        now = await settings_store.read_value(await db.get_pool(), "chat.model")
+    except Exception as exc:  # noqa: BLE001 - the call runs on what the turn had
+        logger.warning("turn %s: chat.model could not be read — %s", turn.id, peers.reason(exc))
+        return model
+    return now if isinstance(now, str) and now else model
+
+
+def _asked_model(turn: traces.Turn, model: str) -> str:
+    """What the turn's last gateway call asked for, as its span recorded it
+    (_round_model may have moved it off `model`); `model` when none did."""
+    llm = _last_llm_span(turn.spans)
+    asked = llm.meta.get("model") if llm is not None else None
+    return asked if isinstance(asked, str) and asked else model
+
+
 async def _collect_completion(
     app,
     turn: traces.Turn,
@@ -3694,6 +3753,7 @@ async def _collect_completion(
     # A redirect or judge round is a gateway round too: whoever asks what the
     # turn is doing gets the same answer as for its own rounds (traces.DOING).
     traces.set_doing(turn.id, "thinking")
+    model = await _round_model(turn, model, messages)
     payload: dict = {"messages": list(messages), "stream": True}
     if model:
         # An empty chat.model means "the gateway default"; sending "" would ask
@@ -3718,7 +3778,8 @@ async def _collect_completion(
                     _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
-                        detail = (await response.aread()).decode(errors="replace")[:200]
+                        body = (await response.aread()).decode(errors="replace")
+                        detail = peers.refusal_words(body)
                         span.meta["gateway_status"] = response.status_code
                         raise GatewayFailure(
                             f"the gateway refused ({response.status_code}): {detail}"
@@ -4719,7 +4780,9 @@ async def _run_turn(
         statement = (
             stated
             if verbatim
-            else model_failure_statement(model=model, failure=stated, spans=turn.spans)
+            else model_failure_statement(
+                model=_asked_model(turn, model), failure=stated, spans=turn.spans
+            )
         )
         logger.warning("chat turn %s failed: %s", turn.id, stated)
         decided = "error"
@@ -4999,9 +5062,11 @@ async def _run_turn(
                 # OpenAI-compatible content parts: the text, then the images.
                 # Read from DISK at send time, because the upload may have
                 # been hours ago and the file is the fact.
-                parts = attachments.image_parts(pictures)
-                if parts:
-                    ask = [{"type": "text", "text": ask}, *parts]
+                # Not `parts`: that is the reply this turn accumulates, and
+                # the images bound to it were joined as the reply's text.
+                picture_parts = attachments.image_parts(pictures)
+                if picture_parts:
+                    ask = [{"type": "text", "text": ask}, *picture_parts]
         messages = base_messages(
             model,
             recalled,

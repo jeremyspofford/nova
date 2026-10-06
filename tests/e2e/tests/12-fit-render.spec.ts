@@ -1,6 +1,10 @@
 /**
  * Scenario 12 — the model picker renders a real fit verdict, not a guess.
  *
+ * MOVED 2026-10-05 from Settings -> Models' own model cards, which are gone:
+ * the Models page is the one model list, and a local row carries its fit
+ * under its size. Still not run: the e2e job is off in CI.
+ *
  * AUTHORED IN S2e-T4, NOT YET RUN — see the top of 11-change-model.spec.ts
  * for why: the running stack at the time this was written predates T2's
  * fit computation entirely (confirmed directly against the live gateway
@@ -12,7 +16,7 @@
  * comfortable/tight/wont_fit depends on free VRAM at the moment the walk
  * runs (what else is resident), which this scenario does not control. What
  * it CAN assert without inventing a number: whatever GET /api/v1/models/
- * suggest says for a model, Settings -> Models has to say the identical
+ * suggest says for a model, the Models page has to say the identical
  * thing — same pattern scenario 1 uses for hardware.json. The label and
  * source-badge text are recomputed here from the verdict/source fields
  * rather than imported from apps/web/src/lib/modelFit.ts (a separate npm
@@ -21,7 +25,7 @@
  * failing.
  */
 import { expect, test } from '@playwright/test'
-import { modelCard } from '../lib/app'
+import { modelRow } from '../lib/app'
 import { config } from '../lib/env'
 
 test.use({ storageState: config.storageStatePath })
@@ -56,21 +60,30 @@ function expectedLabel(fit: ModelFit): string | RegExp {
   }
 }
 
-test('fit-render: Settings -> Models matches the gateway fit verdict exactly, per model', async ({
+test('fit-render: the Models page matches the gateway fit verdict exactly, per model', async ({
   page,
 }) => {
   const suggestion = await (await page.request.get('/api/v1/models/suggest')).json()
   const models: SuggestedModel[] = suggestion.models
   expect(models.length, 'the curated catalog returned no models to check').toBeGreaterThan(0)
 
-  await page.goto('/settings')
+  await page.goto('/models')
   await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible()
+  await page.getByRole('button', { name: /^All/ }).click()
+  const installedIds = new Set(
+    (await (await page.request.get('/api/v1/models/catalog')).json()).rows
+      .filter((r: { kind: string; installed?: boolean }) => r.kind === 'local' && r.installed === true)
+      .map((r: { id: string }) => r.id),
+  )
 
   const verdictsSeen = new Set<string>()
 
   for (const model of models) {
-    const card = modelCard(page, model.slug)
-    await expect(card, `${model.slug} is not rendered in Settings -> Models`).toBeVisible()
+    // An installed pick is its machine's row; one on no machine yet is the
+    // library's.
+    const id = installedIds.has(`hub:${model.slug}`) ? `hub:${model.slug}` : `library:${model.slug}`
+    const card = modelRow(page, id)
+    await expect(card, `${id} is not rendered on the Models page`).toBeVisible()
 
     // T2's own contract: GET /admin/suggest attaches `fit` to every curated
     // model, unconditionally (services/gateway/app/admin.py's suggest_route
