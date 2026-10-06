@@ -427,31 +427,25 @@ func cmdStatus(argv []string) {
 		fmt.Printf("server:      NOT reachable (%s)\n", detail)
 	}
 
-	var ag *state.AgentStatus
-	var sv *state.SupervisorStatus
-	var up *state.Update
-	if a := new(state.AgentStatus); state.ReadJSON(filepath.Join(paths.StateDir, state.AgentStatusFile), a) == nil {
-		ag = a
-	}
-	if s := new(state.SupervisorStatus); state.ReadJSON(filepath.Join(paths.StateDir, state.SupervisorStatusFile), s) == nil {
-		sv = s
-	}
-	if u := new(state.Update); state.ReadJSON(filepath.Join(paths.StateDir, state.UpdateFile), u) == nil {
-		up = u
-	}
-	for _, line := range statusLines(ag, sv, up) {
+	for _, line := range statusLines(paths.StateDir) {
 		fmt.Println(line)
 	}
 }
 
-// statusLines says what the status files say — and that there is none when
-// there is none, never a guess. A "ready" is what the agent last wrote, not
-// a live probe; the reachability line below it is the probe.
-func statusLines(a *state.AgentStatus, s *state.SupervisorStatus, u *state.Update) []string {
+// statusLines says what the status files in stateDir say — and that there is
+// none when there is none, never a guess. A file that is there but cannot be
+// read is said to be unreadable, with why: it is never read as one that was
+// never written (Task 32, L61). A "ready" is what the agent last wrote, not a
+// live probe; the reachability line above it is the probe.
+func statusLines(stateDir string) []string {
 	var out []string
-	if a == nil {
+	var a state.AgentStatus
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.AgentStatusFile), &a); {
+	case errors.Is(err, fs.ErrNotExist):
 		out = append(out, "agent:       no status yet (it has not run since S42b's build)")
-	} else {
+	case err != nil:
+		out = append(out, "agent:       status unknown — "+err.Error())
+	default:
 		line := fmt.Sprintf("agent:       %s since %s (pid %d, %s, build %s)", a.State,
 			a.Since.UTC().Format(time.RFC3339), a.PID, a.Mode, a.Version)
 		if a.Server != "" {
@@ -462,14 +456,24 @@ func statusLines(a *state.AgentStatus, s *state.SupervisorStatus, u *state.Updat
 			out = append(out, "             last error: "+a.Error)
 		}
 	}
-	if s != nil {
+	var s state.SupervisorStatus
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.SupervisorStatusFile), &s); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		out = append(out, "supervisor:  status unknown — "+err.Error())
+	default:
 		line := fmt.Sprintf("supervisor:  pid %d, %d restarts", s.PID, s.Restarts)
 		if s.LastExit != nil {
 			line += fmt.Sprintf(", last exit %d", *s.LastExit)
 		}
 		out = append(out, line)
 	}
-	if u != nil {
+	var u state.Update
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.UpdateFile), &u); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		out = append(out, "last update: unknown — "+err.Error())
+	default:
 		line := fmt.Sprintf("last update: %s %s at %s", u.Outcome, u.Version, u.At.UTC().Format(time.RFC3339))
 		if u.Reason != "" {
 			line += " — " + u.Reason
