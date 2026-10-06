@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from app import agent_updates, device_facts, machines
+from app import agent_updates, device_facts, machines, schedule
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -623,13 +623,16 @@ def _bound_words(seconds: float) -> str:
 # Both bounds are read off agent_updates, the numbers the update waits on: the
 # send's (COMMAND_TIMEOUT_S, its agent's download and stage) and the reconnect's
 # (WAIT_S). Typed here, a change to either would leave her told the old one
-# (Task 32, L477 — derived, never hardcoded).
+# (Task 32, L477 — derived, never hardcoded). The job's cadence is too: its
+# schedule (JOB_SCHEDULE, which timers.JOB_SCHEDULES runs it on), in the words
+# the timers say, in UTC as the job is seeded (Task 32 Phase C, C4).
 MACHINE_UPDATE = Tool(
     name="machine_update",
     description=(
         "Update Nova's agent on a paired machine to the hub's build now — the owner's \"update "
         "it now\". Nova already keeps her agents on the hub's build by herself, one idle machine "
-        "at a time every 15 minutes, so this is for now. It sends the build — the agent has up "
+        f"at a time {schedule.describe(agent_updates.JOB_SCHEDULE, 'UTC', None)}, so this is "
+        "for now. It sends the build — the agent has up "
         f"to {_bound_words(agent_updates.COMMAND_TIMEOUT_S)} to download and stage it — then "
         f"waits up to {_bound_words(agent_updates.WAIT_S)} more for the agent "
         "to reconnect on it, saying so while it waits. The result says current (its agent last "

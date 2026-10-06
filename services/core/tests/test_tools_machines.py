@@ -1329,3 +1329,46 @@ def test_machine_updates_description_says_the_bounds_the_update_waits_on():
     assert "the agent has up to 90 seconds to download and stage it" in said
     assert "waits up to 3 minutes more for the agent to reconnect on it" in said
     assert "2 minutes" not in said
+
+
+# Task 32 Phase C (C4, review minor 5): the cadence in machine_update's
+# description is the update job's own schedule (agent_updates.JOB_SCHEDULE,
+# which timers.JOB_SCHEDULES runs it on), never typed beside it.
+
+
+def test_machine_updates_description_says_the_jobs_cadence():
+    from app import agent_updates, schedule, timers
+
+    said = schedule.describe(timers.JOB_SCHEDULES["agent_updates"], "UTC", None)
+    assert said == "every 15 minutes"
+    assert timers.JOB_SCHEDULES["agent_updates"] == agent_updates.JOB_SCHEDULE
+    update = tools.REGISTRY["machine_update"].description
+    assert f"one idle machine at a time {said}, so this is for now" in update
+
+
+def test_a_changed_job_schedule_changes_machine_updates_words():
+    """Imported cold with the job's schedule changed: the job runs on the new
+    one and her description says it. A subprocess, because the description
+    is built at import."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = (
+        "from app import agent_updates\n"
+        "agent_updates.JOB_SCHEDULE = {'kind': 'minutes', 'every': 5}\n"
+        "from app import timers, tools\n"
+        "print(timers.JOB_SCHEDULES['agent_updates'])\n"
+        "print(tools.REGISTRY['machine_update'].description)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
+    job, said = proc.stdout.split("\n", 1)
+    assert job == "{'kind': 'minutes', 'every': 5}"
+    assert "one idle machine at a time every 5 minutes, so this is for now" in said
+    assert "15 minutes" not in said

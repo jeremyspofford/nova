@@ -56,6 +56,10 @@ CONFIRM_WITHIN_S = 600
 IDLE_S = 300
 WAIT_S = 120
 COMMAND_TIMEOUT_S = 120
+# How often the timer job runs reconcile() (P10). timers.JOB_SCHEDULES runs
+# it on this, and machine_update's description says it from here (Task 32
+# Phase C, C4): one schedule, so changing it changes her words with it.
+JOB_SCHEDULE = {"kind": "minutes", "every": 15}
 # While update_now waits for the reconnect (Task 22 fix round 1): how often
 # the "waiting" line is said again. Each saying is where a Stop can land — the
 # progress callback chat binds raises TurnStopped (chat._report_progress) — so
