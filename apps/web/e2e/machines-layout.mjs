@@ -1,10 +1,10 @@
 /**
- * Settings → Models → Machines, measured at phone widths (S40).
+ * Settings → Devices → Machines, measured at phone widths (S40).
  *
  * jsdom does not lay out, so MachinesSection.test.tsx cannot see the ways
  * this tile fails on a phone: a compute id, a model name or a reason that
  * will not wrap and pushes past the screen, a switch too small to hit, and
- * the section not being first on the tab. Each check is a number with a
+ * the section not being on the Devices tab. Each check is a number with a
  * reason, and an element that is not found is a FAILURE, never a pass (the
  * phone-layout lesson). The API is intercepted, so no deployment's data is
  * touched. Run it with e2e/machines-layout.sh.
@@ -64,6 +64,7 @@ const FIXTURES = [
   [/\/api\/v1\/notices/, { notices: [], unseen_count: 0, muted_count: 0 }],
   [/\/api\/v1\/conversations\/active/, { id: 'c1', title: 'Chat', created_at: NOW, pending_turn: false, pending_turn_id: null, queued: [] }],
   [/\/api\/v1\/machines/, { machines: [MACHINE, DOWN] }],
+  [/\/api\/v1\/devices/, { devices: [] }],
   [/\/api\/v1\/settings/, { settings: [
     { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true },
     { key: 'chat.model', type: 'str', default: '', description: '', value: 'hub:qwen3.8:27b' },
@@ -110,7 +111,7 @@ for (const shape of SHAPES) {
   const page = await ctx.newPage()
   const errors = []
   page.on('pageerror', e => errors.push(String(e).split('\n')[0]))
-  await page.goto(`${BASE}/settings/models`, { waitUntil: 'networkidle', timeout: 30_000 })
+  await page.goto(`${BASE}/settings/devices`, { waitUntil: 'networkidle', timeout: 30_000 })
   await page.waitForSelector('[data-testid="machine-hub"]', { timeout: 10_000 }).catch(() => {})
   const w = shape.options.viewport.width
   if (OUT) await page.screenshot({ path: `${OUT}/machines-${w}.png` })
@@ -163,7 +164,7 @@ for (const shape of SHAPES) {
     return {
       vw: window.innerWidth,
       overflow: document.documentElement.scrollWidth - window.innerWidth,
-      first: document.querySelector('[data-testid="settings-panel"] h2')?.textContent ?? null,
+      sections: [...document.querySelectorAll('[data-testid="settings-panel"] h2')].map(h => h.textContent),
       tiles: Object.fromEntries(names.map(n => [n, box(`[data-testid="machine-${n}"]`)])),
       compute: box('[data-testid="machine-hub-compute"]'),
       reasonLine: box('p[data-testid="machine-dell-state"]'),
@@ -181,7 +182,7 @@ for (const shape of SHAPES) {
   if (!seen.compute) say('no compute line rendered')
   if (!seen.reasonLine) say("dell's reason is not on a line of its own")
   if (!seen.toggle) say('no serving switch rendered')
-  if (seen.first !== 'Machines') say(`the first section on the Models tab is ${JSON.stringify(seen.first)}, not Machines`)
+  if (!seen.sections.includes('Machines')) say(`the Devices tab carries ${JSON.stringify(seen.sections)}, not Machines`)
   if (seen.overflow > 0) say(`the page scrolls sideways by ${seen.overflow}px`)
   if (seen.widest !== null && seen.widest > seen.vw + 1) say(`something in a tile ends at x=${seen.widest}, past the ${seen.vw}px screen`)
   if (seen.spill) say(`${seen.spill.what} reaches ${seen.spill.by}px past the ${seen.spill.tile} tile (${seen.spills} painted boxes outside it): cut off, not wrapped`)
@@ -195,7 +196,7 @@ for (const shape of SHAPES) {
     if (cutSeen[cut.seenBy]) caught++
     else say(`the ${cut.seenBy} check is blind: with ${cut.what} it saw nothing`)
   }
-  table.push({ shape: shape.name, width: w, overflow: seen.overflow, widest: seen.widest, spill: seen.spill?.by ?? 0, clip: seen.clip?.by ?? 0, toggleH: seen.toggle?.h ?? null, first: seen.first, cuts: `${caught}/${CUTS.length}` })
+  table.push({ shape: shape.name, width: w, overflow: seen.overflow, widest: seen.widest, spill: seen.spill?.by ?? 0, clip: seen.clip?.by ?? 0, toggleH: seen.toggle?.h ?? null, cuts: `${caught}/${CUTS.length}` })
   await ctx.close()
 }
 await browser.close()

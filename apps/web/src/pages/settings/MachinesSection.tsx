@@ -7,8 +7,9 @@ import { formatBytes } from '../../lib/pullStream'
 import { lifecycleLabel, machineStateLabel, readBackMismatch } from './machinesFormat'
 
 /**
- * Settings → Models → Machines (S40): where Nova's models run. In S40 that
- * is one machine, the bundled engine `hub`. The tile states what the
+ * Settings → Devices → Machines (S40; on Models until 2026-10-07): where
+ * Nova's models run. In S40 that is one machine, the bundled engine `hub`.
+ * The tile states what the
  * gateway observed: its state (with the reason when it is not ready), its
  * compute identity (shown raw; null is said, never guessed), its runtime,
  * and the models it holds.

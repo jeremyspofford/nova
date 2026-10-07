@@ -81,7 +81,7 @@ state). Today there is one, the bundled container, and its provider name is
 - **Measurement identity.** Every served reply, probe and usage row carries `served_on`, the compute it actually ran on, in the D10 grammar (`gpu:cuda:<uuid>`, `cpu:<model>|<n>c|<GiB>g`, joined by `+` for a split). `runtime` (`container`) is recorded separately.
   - When it cannot be known, it is **omitted, never guessed**.
   - Fit and speed read only numbers measured on the same compute. Legacy probes with no compute are never read by fit.
-- **The serving switch** is in Settings → Models → Machines, or you can ask her ("stop running chat models here" → `machine_configure`, which reads the value back).
+- **The serving switch** is in Settings → Devices → Machines, or you can ask her ("stop running chat models here" → `machine_configure`, which reads the value back).
   - When it is off, chat routing passes over that machine and the next link in the role's chain answers, saying so. With no next link, the turn fails and says why.
   - Calls that name their model with no role are still served there.
   - **Memory's embeddings do not go through the switch.** The memory service calls the bundled ollama container directly (`http://ollama:11434`), so a switched-off `hub` still embeds. If that container stops answering, the urgent `peer_down:hub` check still fires.

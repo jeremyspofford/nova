@@ -31,7 +31,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     slug: 'models',
     label: 'Models',
-    blurb: 'Which model answers, where it runs, and who provides it.',
+    blurb: 'Which model answers, and who provides it.',
   },
   {
     slug: 'behaviour',
@@ -41,7 +41,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     slug: 'devices',
     label: 'Devices',
-    blurb: 'Add machines and phones to Nova, and the machines paired to it.',
+    blurb: 'Add machines and phones to Nova, the machines paired to it, and where its models run.',
   },
   {
     slug: 'connections',
