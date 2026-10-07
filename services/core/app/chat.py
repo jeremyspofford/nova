@@ -125,6 +125,7 @@ from app import (
 from app.identity import Person
 from app.mcp import client as mcp_client
 from app.mcp import servers as mcp_servers
+from app.tools import devices as device_tools
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 logger = logging.getLogger("core")
@@ -5188,6 +5189,11 @@ async def _run_turn(
         emit(_frame({"stopped": note}))
         emit(DONE_FRAME)
 
+    # The turn's kind, stated to the device tools for the turn's duration: a
+    # device fact's `known_as` (and the gateway providers read it costs) is
+    # recorded only when this kind arms the stack-claim guard that reads it.
+    # Set here, the one place a turn runs, so no caller keeps a list of kinds.
+    stated_purpose = device_tools.TURN_PURPOSE.set(traces.purpose_of(turn))
     try:
         # Inside the try, so a persona that cannot be built still reaches
         # the finally that closes the turn.
@@ -7080,6 +7086,7 @@ async def _run_turn(
         emit(_frame({"error": reason}))
         emit(DONE_FRAME)
     finally:
+        device_tools.TURN_PURPOSE.reset(stated_purpose)
         # The atomic trace close, always — shielded so a cancellation during
         # shutdown cannot leave the turn's status NULL forever. Then the
         # sentinel, so the SSE consumer stops only AFTER the turn is on record:

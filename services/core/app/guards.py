@@ -4846,6 +4846,139 @@ def machine_names(spans: Sequence[Any]) -> tuple[str, ...]:
     return tuple(sorted(name for name in found if len(name) >= 2))
 
 
+def other_machine_names(spans: Sequence[Any], purpose: str) -> tuple[str, ...]:
+    """The machines and devices this turn's spans name OTHER than the one whose
+    round wrote the reply (stack-claim epic T1) — DERIVED from the spans,
+    never a list. The union of:
+
+      * machine_names(spans);
+      * the `device` argument of every device_* tool span whose executor ran
+        (reached_executor true — even a failed launch names a real device; a
+        dispatch refusal's argument may name nothing that exists);
+      * each `facts[].device` any tool span recorded;
+
+    minus the engine head of the round that wrote the reply: the LAST
+    error-free llm_call of `purpose` (a cloud round subtracts nothing).
+    Exact-string subtraction; names shorter than two characters dropped."""
+    found: set[str] = set(machine_names(spans))
+    reply_round: Any = None
+    for span in spans:
+        kind = getattr(span, "kind", None)
+        meta = _span_meta(span)
+        if kind == "llm_call":
+            if meta.get("purpose") in (None, purpose) and not meta.get("error"):
+                reply_round = span
+            continue
+        if kind != "tool":
+            continue
+        name = getattr(span, "name", None)
+        if (
+            isinstance(name, str)
+            and name.startswith("device_")
+            and meta.get("reached_executor") is True
+        ):
+            args = meta.get("args_redacted")
+            device = args.get("device") if isinstance(args, Mapping) else None
+            if isinstance(device, str):
+                found.add(device.strip())
+        facts = meta.get("facts")
+        if isinstance(facts, list):
+            found.update(
+                fact["device"].strip()
+                for fact in facts
+                if isinstance(fact, dict) and isinstance(fact.get("device"), str)
+            )
+    for aliases in _known_as(spans).values():
+        found.update(aliases)
+    own = _engine_served_head(reply_round) if reply_round is not None else None
+    if own:
+        found.discard(own)
+    found.difference_update(_hub_names(spans))
+    return tuple(sorted(name for name in found if len(name) >= 2))
+
+
+def _known_as(spans: Sequence[Any]) -> dict[str, set[str]]:
+    """Each device's other names, as its device call recorded them on the
+    span's facts (`known_as`, stack-claim epic T3: the paired name, the row's
+    hostname, the remote providers that map to it) — keyed by the fact's
+    device. Strings only, stripped, two characters or more."""
+    found: dict[str, set[str]] = {}
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        facts = _span_meta(span).get("facts")
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict) or not isinstance(fact.get("device"), str):
+                continue
+            aliases = fact.get("known_as")
+            if not isinstance(aliases, list):
+                continue
+            found.setdefault(fact["device"].strip(), set()).update(
+                alias.strip()
+                for alias in aliases
+                if isinstance(alias, str) and len(alias.strip()) >= 2
+            )
+    return found
+
+
+def _hub_names(spans: Sequence[Any]) -> tuple[str, ...]:
+    """The hub's own computer by every name this turn's spans give it: each
+    hub_devices device and the known_as its device calls recorded."""
+    hubs = hub_devices(spans)
+    if not hubs:
+        return ()
+    aliases = _known_as(spans)
+    found = set(hubs)
+    for hub in hubs:
+        found.update(aliases.get(hub, ()))
+    return tuple(sorted(found))
+
+
+# What device_list says of a paired device whose agent reached the hub through
+# its own loopback door (tools/devices.py _agent_line): her own computer. The
+# door is the one fact core records about which paired device is the hub's.
+_HUB_DOOR = "came in through the hub machine's own door"
+
+
+def hub_devices(spans: Sequence[Any]) -> tuple[str, ...]:
+    """The paired devices this turn's spans say are the hub's OWN computer
+    (stack-claim epic T2) — DERIVED: a device a tool span's facts name whose
+    line in that span's result_head ("- <name> (…") carries the hub-door
+    words. Never another machine. A result_head clipped before the line names
+    nothing (fails toward the device staying in other_machine_names)."""
+    found: set[str] = set()
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        meta = _span_meta(span)
+        head = meta.get("result_head")
+        facts = meta.get("facts")
+        if not isinstance(head, str) or _HUB_DOOR not in head or not isinstance(facts, list):
+            continue
+        lines = [line for line in head.splitlines() if _HUB_DOOR in line]
+        for fact in facts:
+            device = fact.get("device") if isinstance(fact, dict) else None
+            if not isinstance(device, str) or not device.strip():
+                continue
+            lead = f"- {device.strip()} ("
+            if any(line.lstrip().startswith(lead) for line in lines):
+                found.add(device.strip())
+    return tuple(sorted(found))
+
+
+@lru_cache(maxsize=64)
+def _machine_name_pattern(names: tuple[str, ...]) -> re.Pattern[str]:
+    """One case-insensitive, whole-word alternation over `names` (stack-claim
+    epic T2): re.escape'd, longest-first, built once per names tuple. Whole
+    word = not touching [A-Za-z0-9_-] on either side, so "DELL-XPS-8950" is
+    one name, "the Dell's" names "dell", and "GitHub" never names "hub". A
+    literal alternation behind fixed-width lookarounds: linear in the text."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(rf"(?<![\w-])(?:{alternation})(?![\w-])", re.I)
+
+
 def _machine_read(spans: Sequence[Any], machine: str) -> bool:
     """Did this turn READ `machine`? An ok machine read (_machine_read_tools:
     machine_status, inference_health, route_explain) that asked for every
@@ -10303,10 +10436,16 @@ STACK_CLAIM_KINDS = frozenset({"chat", "eval"})
 # The serving path, as the words a reply reaches for. A vocabulary, not a
 # policy list: these are the nouns that mean "the thing that answers", and the
 # model actually in play is added from the turn's own spans.
-_SERVING_NOUN = (
-    r"(?:model|gateway|inference(?:\s+service)?|inference|llm|ollama"
-    r"|chat\s+chain|chain|backend|stack)"
-)
+#
+# Two vocabularies (stack-claim epic T3): the words a REMOTE machine's model
+# server can be called (stack_claim_check's rule (b) excuses only these), and
+# her own stack's words, which never name another machine's server.
+_REMOTE_SERVER_NOUN = r"model|inference(?:\s+service)?|inference|llm|ollama"
+_OWN_STACK_NOUN = r"gateway|chat\s+chain|chain|backend|stack"
+_SERVING_NOUN = rf"(?:{_REMOTE_SERVER_NOUN}|{_OWN_STACK_NOUN})"
+# The words of _REMOTE_SERVER_NOUN, for telling a matched subject's noun apart
+# without another pattern: a subject naming any of them is a model server's.
+_REMOTE_SERVER_WORDS = frozenset({"model", "inference", "llm", "ollama"})
 _SERVING_DET = r"(?:the|your|that|this|its)"
 # States that mean "it cannot answer right now".
 _SERVING_STATE = (
@@ -10339,6 +10478,118 @@ _SERVING_UNREACHED = re.compile(
     rf"(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})\b",
     re.I,
 )
+
+
+# The words by which a clause names her OWN serving path (stack-claim epic T2):
+# first-person possessives, her name, the hub, the gateway. A vocabulary, like
+# _SERVING_NOUN: a clause carrying one is about her stack, never excused.
+_OWN_STACK_MARKER = re.compile(
+    r"(?<![\w-])(?:my|our|nova['’]s|hub|gateway)(?![\w-])",
+    re.I,
+)
+
+
+@lru_cache(maxsize=64)
+def _qualifier_patterns(names: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """(before, after) qualifier patterns over `names`, built once per tuple.
+
+    before: the name ends the text right before the subject — "the Dell's
+    Ollama", "the Dell Ollama" — searched on a bounded tail, anchored at \\Z.
+    after: right after the claim, "… on/at/in [the] <name>" — re.match, so
+    anchored at the claim's end. Literal alternations: linear in the text.
+    The after pattern's leading gap is BOUNDED (\\s{1,16}): an unbounded
+    leading \\s+ restarts at every position of a whitespace run under
+    .search and walks the rest of the run each time — quadratic (timing
+    sweep, 50 ms on 1500 spaces). The other gaps follow a literal word, so
+    each starts once per occurrence."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    before = re.compile(rf"(?<![\w-])(?P<name>{alternation})(?:['’]s)?\Z", re.I)
+    after = re.compile(
+        rf"\s{{1,16}}(?:on|at|in)\s+(?:the\s+)?(?P<name>{alternation})(?![\w-])",
+        re.I,
+    )
+    return before, after
+
+
+@dataclass(frozen=True)
+class _RemoteContext:
+    """What this turn's spans say about machines other than her own — the
+    inputs to stack_claim_check's two excuses (stack-claim epic T2)."""
+
+    names: tuple[str, ...]
+    longest: int
+    not_answering: bool
+    own_devices: re.Pattern[str] | None
+    engine_served: bool
+
+    @classmethod
+    def of(cls, spans: Sequence[Any], names: tuple[str, ...], purpose: str) -> _RemoteContext:
+        folded = {name.casefold() for name in names if not _OWN_STACK_MARKER.fullmatch(name)}
+        not_answering = False
+        reads = _machine_read_tools()
+        for span in spans:
+            if not _ok_tool_span(span, reads):
+                continue
+            facts = _span_meta(span).get("facts")
+            if not isinstance(facts, list):
+                continue
+            for fact in facts:
+                if (
+                    isinstance(fact, dict)
+                    and fact.get("answering") is False
+                    and isinstance(fact.get("machine"), str)
+                    and fact["machine"].strip().casefold() in folded
+                ):
+                    not_answering = True
+        own = _hub_names(spans)
+        # Her own engine answered a round of this turn (stack-claim epic T3):
+        # an error-free round of her purpose the gateway says ran on an engine
+        # — derived from the llm_call spans, never from a machine's name.
+        engine_served = any(
+            _span_meta(span).get("purpose") in (None, purpose)
+            and _engine_served_head(span) is not None
+            for span in spans
+        )
+        return cls(
+            names=names,
+            longest=max(len(name) for name in names),
+            not_answering=not_answering,
+            own_devices=_machine_name_pattern(own) if own else None,
+            engine_served=engine_served,
+        )
+
+    def _qualifier(self, clause: str, match: re.Match[str]) -> str | None:
+        """The name that qualifies the claim's subject, if one does: right
+        before the subject (possessive or adjacent) or right after the claim
+        ("on/at/in [the] <name>"). Never a name elsewhere in the clause."""
+        before_pattern, after_pattern = _qualifier_patterns(self.names)
+        tail = clause[: match.start("subj")].rstrip()
+        found = before_pattern.search(tail[-(self.longest + 3) :])
+        if found is None:
+            found = after_pattern.match(clause, match.end())
+        return found.group("name") if found is not None else None
+
+    def excuses(self, clause: str, match: re.Match[str]) -> bool:
+        if "gateway" in match.group("subj").casefold():
+            return False
+        qualifier = self._qualifier(clause, match)
+        if qualifier is not None:
+            # (a) "the Dell's Ollama", "Ollama on the Dell" — unless the name
+            # is her own ("the hub's Ollama").
+            return not _OWN_STACK_MARKER.fullmatch(qualifier)
+        # (b) a bare subject while another machine is recorded not answering,
+        # and nothing in the clause names her own stack or computer. Never
+        # when her own engine answered this turn (a bare "Ollama is down" is
+        # then false of hers and ambiguous at best), and only for a noun a
+        # remote machine's model server can be called — "the backend", "the
+        # stack" are her own stack's words (stack-claim epic T3).
+        if self.engine_served or not self.not_answering:
+            return False
+        if not _REMOTE_SERVER_WORDS.intersection(match.group("subj").casefold().split()):
+            return False
+        if _OWN_STACK_MARKER.search(clause):
+            return False
+        return self.own_devices is None or self.own_devices.search(clause) is None
 
 
 @dataclass(frozen=True)
@@ -10394,6 +10645,13 @@ def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) ->
         return None
     if not served_this_turn(spans, purpose):
         return None
+    # A claim about ANOTHER machine's model server (stack-claim epic T2) is
+    # not a claim about hers: excused when (a) a machine of this turn
+    # qualifies the claim's subject, or (b) the subject is bare while this
+    # turn's machine_status recorded such a machine not answering and the
+    # clause names nothing of her own. Names come only from the spans.
+    others = other_machine_names(spans, purpose)
+    remote = _RemoteContext.of(spans, others, purpose) if others else None
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue
@@ -10403,6 +10661,8 @@ def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) ->
                 continue
             before = clause[: match.start()]
             if _state_prefix_blocks(before) or _PRIOR_TIME.search(clause):
+                continue
+            if remote is not None and remote.excuses(clause, match):
                 continue
             return StackClaim(
                 subject=match.group("subj").strip(),

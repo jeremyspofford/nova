@@ -32,11 +32,24 @@ launches and shell runs are not.
 
 from __future__ import annotations
 
+import logging
 import ntpath
 import posixpath
 import re
+from contextvars import ContextVar
 
-from app import db, device_facts, devices, devices_ws, envelopes, machines
+from app import (
+    db,
+    device_facts,
+    devices,
+    devices_ws,
+    envelopes,
+    guards,
+    machines,
+    model_machines,
+    network,
+)
+from app.tools import machines as machine_tools
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -70,6 +83,20 @@ READ_FILE_CAP_KIB = 256
 # too (defence in depth).
 WRITE_FILE_CAP_KIB = 256
 
+log = logging.getLogger(__name__)
+
+# The KIND of turn (traces.purpose_of) a device call is serving, set by the
+# one place a turn runs — chat._run_turn, for the turn's duration. Unset
+# (None) is no turn at all: a push without a turn, or a call outside the loop.
+# Read only by _names_armed: a fact's `known_as` costs a gateway providers
+# read, and the one reader of those names is the stack-claim guard, armed
+# only in guards.STACK_CLAIM_KINDS — so a beat, a reminder or an agent turn
+# (no stack-claim guard) makes no providers read. A ContextVar, not a
+# ToolContext field: the context's fields are pinned by test_no_approvals, and
+# this is not a principal either — nothing reads it to refuse a call, only to
+# skip recording names nobody will read.
+TURN_PURPOSE: ContextVar[str | None] = ContextVar("device_tools_turn_purpose", default=None)
+
 _DEVICE_ARG = {
     "type": "string",
     "description": "The name of the paired device, as shown in Settings → Devices.",
@@ -96,7 +123,57 @@ async def _resolve(app, name: object):
         raise ToolFailure(str(exc)) from exc
 
 
-def _require_connected(row, ctx: ToolContext | None = None) -> None:
+async def _known_as(row, ctx: ToolContext) -> list[str]:
+    """The names a reply may call this device by (stack-claim epic T3): its
+    paired name, its row's hostname, then every remote model provider whose
+    URL model_machines.device_of maps to THIS device — the gateway's
+    providers (tools/machines._remotes: on a machine, never the bundled
+    engine) matched against Nova's agents and the tailnet peers, the read
+    machine_status makes. A provider that maps to another device, or to none,
+    adds nothing. A providers or agents read that fails drops the provider
+    names only — said in the log, never raised: the call still runs, and the
+    guard reading these names then fails toward firing."""
+    known = [row["name"]]
+    hostname = row["hostname"] if "hostname" in row.keys() else None
+    if isinstance(hostname, str) and hostname.strip():
+        known.append(hostname.strip())
+    reader = machines.plant()
+    remotes, error = await machine_tools._remotes(reader, ctx)
+    if error is not None:
+        log.info("device %s: remote provider names not read — %s", row["name"], error)
+        return known
+    if not remotes:
+        return known
+    # Through machine_status's own agents read (tools/machines._agents), the
+    # one named place an agents listing reaches a reply or a guard; only the
+    # names it maps to are kept here, never its connectivity.
+    agents, agents_error = await machine_tools._agents(reader, ctx)
+    if agents_error is not None:
+        log.info(
+            "device %s: agents not read, provider names dropped — %s", row["name"], agents_error
+        )
+        return known
+    peers = network.tailnet_peers()
+    for remote in remotes:
+        found = model_machines.device_of(remote["base_url"], agents, peers)
+        if found["device"] == row["name"] and isinstance(remote["name"], str):
+            known.append(remote["name"])
+    return known
+
+
+def _names_armed(ctx: ToolContext | None) -> bool:
+    """Whether a device call's connectivity fact carries `known_as`: only with
+    a sink to record it on, and only in a turn whose kind arms the guard that
+    reads it (guards.STACK_CLAIM_KINDS — the guard's own set, never a second
+    list). An unstated purpose is no turn's, so nothing reads the names."""
+    if ctx is None or ctx.facts_sink is None:
+        return False
+    return TURN_PURPOSE.get() in guards.STACK_CLAIM_KINDS
+
+
+def _require_connected(
+    row, ctx: ToolContext | None = None, known_as: list[str] | None = None
+) -> None:
     """Refuse unless the device's socket is live in the hub right now. The same
     words hub.command uses for a socket that is gone by the time it sends, so
     the model reads one refusal for one fact whichever layer states it.
@@ -115,7 +192,10 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
     """
     connected = devices_ws.hub.is_connected(row["id"])
     if ctx is not None and ctx.facts_sink is not None:
-        ctx.facts_sink.append({"device": row["name"], "connected": connected})
+        fact = {"device": row["name"], "connected": connected}
+        if known_as is not None:
+            fact["known_as"] = list(known_as)
+        ctx.facts_sink.append(fact)
     if not connected:
         raise ToolFailure(
             f"device {row['name']!r} is not connected — its tile is stale; check it is "
@@ -240,7 +320,11 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
     # pool, the registry or the hub is touched.
     row = await _resolve(ctx.app if ctx is not None else None, args["device"])
     pool = await db.get_pool()
-    _require_connected(row, ctx)
+    # The names the device is known by ride its connectivity fact (stack-claim
+    # epic T3) — read only when there is a sink to record them on AND the
+    # turn's kind arms the guard that reads them (_names_armed).
+    known_as = await _known_as(row, ctx) if _names_armed(ctx) else None
+    _require_connected(row, ctx, known_as)
     path = (
         _check_fs_path(
             args["path"],
