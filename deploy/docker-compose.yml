@@ -411,6 +411,15 @@ services:
     # `sh` explicitly, so the wrapper does not depend on an executable bit
     # surviving the bind mount.
     command: ["sh", "/config/start.sh"]
+    # The hash of ./tailscale/*.sh, written to .env by install.sh
+    # (record_tailscale_scripts). start.sh runs once, at container start, and
+    # a script edit is not a config change, so without this `up` leaves the
+    # sidecar on the old script. A changed hash IS a config change: compose
+    # recreates this container then, and only then. install.sh reads the label
+    # back off the running container and refuses "Nova is up" if it is not
+    # this checkout's (verify_tailscale_scripts).
+    labels:
+      nova.tailscale-scripts: ${NOVA_TAILSCALE_SCRIPTS:-}
     healthcheck:
       # The SAME two facts the wrapper verifies, read from tailscaled each
       # time (tailscale/serve_check.sh): BackendState Running, and the serve

@@ -2085,6 +2085,193 @@ expect_tn "foreign: nothing foreign ⇒ one line and no offer" "$FG_CLEAN" 0 3 "
 expect_tn_lacks "foreign: nothing foreign ⇒ no refusal block" "$FG_CLEAN" 3 "REFUSED"
 expect_str "foreign: nothing foreign ⇒ nothing removed" "$(tn_field "$FG_CLEAN" 2)" ""
 
+# ── the tailnet sidecar runs THIS checkout's start.sh ───────────────────────
+# Deploying PR #111 (2026-10-07): start.sh changed in git, ./install ran,
+# compose saw no config change and left nova-tailscale-1 on a two-day-old
+# start.sh, and install said "Nova is up". The scripts' hash now goes into
+# .env and from there into a label on the service, so a script change is a
+# config change. cmd_install runs for real against a real temp copy of
+# deploy/tailscale; `docker` is a function that answers as compose does on
+# that one point — `up` recreates the sidecar when the label's interpolated
+# value differs from the running container's, and only then (measured with
+# `docker compose config --hash`: same value, same hash; new value, new
+# hash for tailscale alone) — and records every recreate. COMPOSE=stuck is a
+# compose that never recreates: the PR #111 shape.
+#   $1 world dir (persists across calls: .env, the scripts, the container)
+#   $2 compose behaviour: honest | stuck
+# Prints "<exit>|<.env with ;>|<combined output>|<recreates so far>".
+run_ts_install() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    W="$1"; COMPOSE="$2"
+    # shellcheck disable=SC2034
+    DATA_DIR="$W/data"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$W/data/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$W/.env"
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    TAILSCALE_DIR="$W/tailscale"
+    install_hub_agent() { log "HUB AGENT REACHED"; }
+    tailnet_dns_name() { printf 'nova.example.ts.net'; }
+    docker() {
+      case "$*" in
+        info) printf 'Runtimes: runc\n' ;;
+        "compose version") ;;
+        *" up -d --build")
+          local wanted
+          wanted="$(get_env_value NOVA_TAILSCALE_SCRIPTS)"
+          if [ "$COMPOSE" = honest ] && [ "$wanted" != "$(cat "$W/label" 2>/dev/null)" ]; then
+            printf '%s' "$wanted" > "$W/label"
+            echo recreate >> "$W/recreates"
+          fi ;;
+        *" ps -q tailscale") printf 'tscid\n' ;;
+        *" ps -q "*) printf 'cid\n' ;;
+        "inspect --format {{index .Config.Labels \"nova.tailscale-scripts\"}} tscid")
+          cat "$W/label" 2>/dev/null; printf '\n' ;;
+        "inspect "*) printf 'healthy\n' ;;
+        *) printf 'unexpected docker call: %s\n' "$*" >&2; return 1 ;;
+      esac
+    }
+    detect_gpus_json() { printf '[]'; }
+    detect_disk_free_gb() { printf '100'; }
+    port_holder() { printf ''; }
+    check_foreign_project() { :; }
+    docker_network_ids() { :; }
+    have_cmd() { [ "$1" = ip ]; }
+    have_tty() { return 1; }
+    ip_route_text() { printf '%s\n' '172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1'; }
+    compose_project_name() { printf '%s' nova; }
+    unset NOVA_SKIP_INFERENCE NOVA_SUBNET
+    export NOVA_TAILNET=1
+    out="$(cmd_install 2>&1)"; code=$?
+    printf '%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" "$(printf '%s' "$out" | tr '\n' ' ')" \
+      "$(grep -c recreate "$W/recreates" 2>/dev/null || echo 0)"
+  )
+}
+# A world whose sidecar was created from the scripts as they are now: the
+# shipped scripts copied in, .env already carrying their hash, the running
+# container labelled with it. Prints the world dir.
+ts_world() {
+  local w h
+  w="$(mktemp -d)"
+  mkdir -p "$w/tailscale" "$w/data"
+  cp "$SCRIPT_DIR"/tailscale/*.sh "$w/tailscale/"
+  h="$( . "$SCRIPT_DIR/install.sh"; TAILSCALE_DIR="$w/tailscale"; tailscale_scripts_hash )"
+  { sed 's/^TS_AUTHKEY=$/TS_AUTHKEY=tskey-auth-x/' "$SCRIPT_DIR/.env.example"
+    printf 'NOVA_TAILSCALE_SCRIPTS=%s\n' "$h"; } > "$w/.env"
+  printf '%s' "$h" > "$w/label"
+  printf '%s' "$w"
+}
+
+# Unchanged scripts: the sidecar is left alone, and install says so.
+TSW="$(ts_world)"
+TS_SAME="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet scripts unchanged: install succeeds" "$TS_SAME" 0 3 "Nova is up"
+expect_str "tailnet scripts unchanged: the sidecar is NOT recreated" "$(tn_field "$TS_SAME" 4)" 0
+expect_tn "tailnet scripts unchanged: says it left the sidecar running" "$TS_SAME" 0 3 "sidecar scripts unchanged"
+expect_tn_lacks "tailnet scripts unchanged: no 'changed' line" "$TS_SAME" 3 "sidecar scripts changed"
+
+# A test file beside the scripts is not one the container runs.
+printf '\n# edited\n' >> "$TSW/tailscale/start_test.sh"
+TS_TESTONLY="$(run_ts_install "$TSW" honest)"
+expect_str "tailnet: editing start_test.sh recreates nothing" "$(tn_field "$TS_TESTONLY" 4)" 0
+
+# A changed start.sh: exactly one recreate, one line saying so, success.
+printf '\n# a change that has to reach the running sidecar\n' >> "$TSW/tailscale/start.sh"
+TS_CHANGED="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet start.sh changed: install succeeds" "$TS_CHANGED" 0 3 "Nova is up"
+expect_str "tailnet start.sh changed: exactly one recreate" "$(tn_field "$TS_CHANGED" 4)" 1
+expect_str "tailnet start.sh changed: one log line says so" \
+  "$(tn_field "$TS_CHANGED" 3 | grep -o 'sidecar scripts changed' | grep -c .)" 1
+expect_str "tailnet start.sh changed: .env carries the new hash" \
+  "$(env_key_value "$TS_CHANGED" 2 NOVA_TAILSCALE_SCRIPTS)" \
+  "$( . "$SCRIPT_DIR/install.sh"; TAILSCALE_DIR="$TSW/tailscale"; tailscale_scripts_hash )"
+expect_str "tailnet start.sh changed: still exactly one NOVA_TAILSCALE_SCRIPTS line" \
+  "$(tn_field "$TS_CHANGED" 2 | tr ';' '\n' | grep -c '^NOVA_TAILSCALE_SCRIPTS=')" 1
+# ...and the install after it does not recreate it again.
+TS_AGAIN="$(run_ts_install "$TSW" honest)"
+expect_str "tailnet: the next install leaves it alone (still one recreate in all)" "$(tn_field "$TS_AGAIN" 4)" 1
+expect_tn "tailnet: the next install says unchanged" "$TS_AGAIN" 0 3 "sidecar scripts unchanged"
+
+# serve_check.sh is the healthcheck's script, and counts the same.
+printf '\n# edited\n' >> "$TSW/tailscale/serve_check.sh"
+expect_str "tailnet serve_check.sh changed: one more recreate" \
+  "$(tn_field "$(run_ts_install "$TSW" honest)" 4)" 2
+rm -rf "$TSW"
+
+# A first install after this change: .env has no hash yet, the container has
+# no label. One recreate, and from then on the label is the repo's.
+TSW="$(ts_world)"
+TS_ENV_BODY="$(grep -v '^NOVA_TAILSCALE_SCRIPTS=' "$TSW/.env")"; printf '%s\n' "$TS_ENV_BODY" > "$TSW/.env"
+: > "$TSW/label"
+TS_FIRST="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet, no hash recorded yet: install succeeds" "$TS_FIRST" 0 3 "Nova is up"
+expect_str "tailnet, no hash recorded yet: exactly one recreate" "$(tn_field "$TS_FIRST" 4)" 1
+rm -rf "$TSW"
+
+# PR #111's shape: the script changed and compose did not recreate the
+# sidecar. Install must fail, name it, and never say "Nova is up".
+TSW="$(ts_world)"
+printf '\n# changed\n' >> "$TSW/tailscale/start.sh"
+TS_STUCK="$(run_ts_install "$TSW" stuck)"
+expect_tn "tailnet, sidecar not recreated: install fails" "$TS_STUCK" 1 3 "not running this checkout's start.sh"
+expect_tn "tailnet, sidecar not recreated: gives the command that fixes it" "$TS_STUCK" 1 3 \
+  "up -d --force-recreate tailscale"
+expect_tn_lacks "tailnet, sidecar not recreated: never says Nova is up" "$TS_STUCK" 3 "Nova is up"
+expect_tn_lacks "tailnet, sidecar not recreated: the hub's agent is never reached" "$TS_STUCK" 3 "HUB AGENT REACHED"
+# A sidecar the label cannot be read from is not one that was checked.
+: > "$TSW/label"
+TS_NOLABEL="$(run_ts_install "$TSW" stuck)"
+expect_tn "tailnet, no label on the sidecar: install fails" "$TS_NOLABEL" 1 3 "not running this checkout's start.sh"
+rm -rf "$TSW"
+
+# No way to hash is a refusal, never an empty value that compose would
+# read as "no change".
+TS_NOHASH="$(
+  . "$SCRIPT_DIR/install.sh"; set +e
+  TAILNET_ENABLED=1; TAILSCALE_DIR="$(mktemp -d)"
+  out="$( (record_tailscale_scripts) 2>&1 )"; code=$?
+  rmdir "$TAILSCALE_DIR"
+  printf '%s|%s' "$code" "$(printf '%s' "$out" | tr '\n' ' ')"
+)"
+expect_case "tailnet: no scripts to hash is a refusal" "$TS_NOHASH" 1 "could not hash the tailnet sidecar's scripts"
+
+# Tripwires: the label install.sh reads back is the one the compose file sets
+# on the tailscale service, fed from the .env key install.sh writes; the key
+# is declared for the backup; and cmd_install records before `up` and
+# verifies after it.
+TS_LABEL_LINE="$(awk '
+  /^  tailscale:$/ { f = 1; next }
+  f && /^  [a-z]/ { f = 0 }
+  f && /^    labels:$/ { l = 1; next }
+  f && l && /^      / { print; next }
+  { l = 0 }
+' "$SCRIPT_DIR/docker-compose.yml" | sed 's/^ *//')"
+expect_str "tripwire: the tailscale service carries the scripts label, fed from .env" \
+  "$TS_LABEL_LINE" "$( . "$SCRIPT_DIR/install.sh"; printf '%s' "$TAILSCALE_SCRIPTS_LABEL"): \${NOVA_TAILSCALE_SCRIPTS:-}"
+if awk '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    /^(# )?NOVA_TAILSCALE_SCRIPTS=/ { if (d) ok = 1 }
+    { d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example"; then
+  report 0 "tripwire: .env.example declares NOVA_TAILSCALE_SCRIPTS for the backup"
+else
+  report 1 "tripwire: .env.example declares NOVA_TAILSCALE_SCRIPTS for the backup" "no declared line"
+fi
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  record_tailscale_scripts$/{r=NR} f&&/^  compose_up$/{u=NR} f&&/^  verify_tailscale_scripts$/{v=NR}
+        END{exit !(r && u && v && r < u && u < v)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "tailnet: cmd_install records the scripts hash before up and verifies it after"
+else
+  report 1 "tailnet: cmd_install records the scripts hash before up and verifies it after" "order or call missing"
+fi
+
 # ── record_repository: she is told which GitHub repository is her own ───────
 # Walk finding (turn 641f312e): asked "why is CI red on main?", she spent all
 # six tool rounds hunting for WHICH repository is hers. The installer runs
