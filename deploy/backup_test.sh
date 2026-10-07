@@ -4724,7 +4724,7 @@ RETAR
   expect_str "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_RC" "0"
   if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
   expect_has "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_OUT" \
-    "started: core gateway memory ollama postgres searxng tailscale web — every one"
+    "started: browser core gateway memory ollama postgres searxng tailscale web — every one"
   expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
     "$BKT_OUT$BKT_ERR" "bundle-job"
   expect_has "a_one_shot_job_is_neither_started_nor_waited_for" \
