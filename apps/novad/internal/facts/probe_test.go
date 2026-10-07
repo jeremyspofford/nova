@@ -308,7 +308,7 @@ func TestALookCutShortIsUnreadableNeverNoAgent(t *testing.T) {
 	// A look that finished is read even though wsl.exe then failed.
 	s = &script{answers: []answer{{out: "Ubuntu-26.04\n"}, {out: "Ubuntu-26.04\n"}, {out: lookOut, err: errors.New("wsl.exe: exit status 1")}, {}}}
 	got, unread = probeWSL(context.Background(), s)
-	if d := got.Distros[0]; !d.Looked || d.Unit == nil || !reflect.DeepEqual(d.PIDs, []int{412}) || len(unread) != 0 {
+	if d := got.Distros[0]; !d.Looked || d.Unit == nil || !reflect.DeepEqual(d.PIDs, PIDList{412}) || len(unread) != 0 {
 		t.Fatalf("got %+v, unreadable %+v", d, unread)
 	}
 }
@@ -479,7 +479,7 @@ func TestSudosWordsAreKeptAndUnknownPIDsAreNeverNone(t *testing.T) {
 		unread[0].Item != "wsl_distros.Ubuntu-26.04.novad_pids" || !strings.Contains(unread[0].Reason, "could not be listed") {
 		t.Fatalf("got %+v, unreadable %+v", d, unread)
 	}
-	data, _ := json.Marshal(d)
+	data, _ := Marshal(d)
 	if !strings.Contains(string(data), `"novad_pids":null`) || !strings.Contains(string(data), `"sudo_said":"sudo: a password is required"`) {
 		t.Fatalf("on the wire: %s", data)
 	}
@@ -576,7 +576,7 @@ func TestNovadPIDsAreUnknownUnlessKnownToBeNone(t *testing.T) {
 			if (d.PIDs == nil) != (c.want == nil) || len(d.PIDs) != len(c.want) {
 				t.Fatalf("novad_pids = %#v, want %#v", d.PIDs, c.want)
 			}
-			data, _ := json.Marshal(d)
+			data, _ := Marshal(d)
 			if wire := `"novad_pids":null`; (c.want == nil) != strings.Contains(string(data), wire) {
 				t.Fatalf("on the wire: %s", data)
 			}

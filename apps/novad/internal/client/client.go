@@ -520,12 +520,16 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	a.factsMu.Lock()
 	a.authUnread = unread
 	a.factsMu.Unlock()
-	if err := writeFrame(hsCtx, c, wire.Auth{
+	data, err := factsJSON(wire.Auth{
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
-		Facts:    auth,
-	}); err != nil {
+		Facts:    authFacts(auth),
+	})
+	if err != nil {
+		return fmt.Errorf("encoding auth: %w", err)
+	}
+	if err := c.Write(hsCtx, websocket.MessageText, data); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}
 
@@ -924,7 +928,8 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 // findings, carried in every frame. Findings that would take the frame over
 // core's cap are left out and said so: they never stop every facts frame
 // (fix round 1). A frame over the cap even without them is an error here —
-// never sent to be refused over there.
+// never sent to be refused over there. Both encodings go through factsJSON,
+// so no list in either goes out as null by accident.
 func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Lock()
 	carried := append([]facts.Unreadable(nil), a.authUnread...)
@@ -940,7 +945,7 @@ func (a *Agent) frameBytes() ([]byte, error) {
 		// healthy agent sent once its probe had run.
 		full.Unreadable = append([]facts.Unreadable{}, frame.Unreadable...)
 		probed.ApplyTo(&full)
-		data, err := json.Marshal(full)
+		data, err := factsJSON(full)
 		if err != nil {
 			return nil, err
 		}
@@ -951,7 +956,7 @@ func (a *Agent) frameBytes() ([]byte, error) {
 			"the probe's findings would make the frame %d bytes, over the %d-byte cap; they are left out",
 			len(data), facts.MaxFrameBytes)})
 	}
-	data, err := json.Marshal(frame)
+	data, err := factsJSON(frame)
 	if err != nil {
 		return nil, err
 	}
@@ -960,6 +965,20 @@ func (a *Agent) frameBytes() ([]byte, error) {
 	}
 	return data, nil
 }
+
+// factsJSON encodes a frame that carries facts — the facts frame
+// (frameBytes) and the auth frame (handshake) — and is the one encoder
+// either goes through: facts.Marshal, encoding/json's v2 encoder with its v1
+// options and every nil list written as [] — the lists a later slice adds
+// included (fix/facts-unreadable-null: core refused a whole frame over one
+// null list). novad_pids keeps its null where it is unknown (PIDList).
+func factsJSON(v any) ([]byte, error) { return facts.Marshal(v) }
+
+// authFacts is what the auth frame carries as its facts: auth itself. A
+// variable for one test, which hands the real handshake facts that hold a
+// nil list — facts.Auth holds none yet — to see the frame go through
+// factsJSON (TestTheAuthFrameSendsNoListAsNull).
+var authFacts = func(auth facts.Auth) any { return auth }
 
 // writeFacts writes an encoded frame and remembers what went out and when.
 // The write is bounded by pingTimeout (fix round 1): on a dead path, once

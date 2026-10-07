@@ -7,12 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +37,18 @@ import (
 // carried a probe and had nothing unreadable — the healthy case — and core
 // dropped the whole frame for it. No test crossed this boundary with that
 // frame, so both suites stayed green (fix/facts-unreadable-null).
+//
+// What this test checks, exactly. The VALUES are fixtures: goldenAuth,
+// goldenFrame and goldenProbe stand in for GatherAuth, GatherFrame and
+// Probe, so no builder runs here. What is real is everything from them to
+// the socket: the handshake, frameBytes, Probed.ApplyTo and factsJSON, the
+// one encoder of both frames (facts.Marshal inside it). So it fails when a
+// golden is stale, or when a list in one of these three frames crossed the
+// wire as null; a list a builder leaves nil it cannot see, since no builder
+// made these values (PR #110's review). That a builder leaves none is
+// facts' TestNoBuilderLeavesAListNil, over each builder's real output,
+// branch by branch; that frameBytes sends none whatever it is handed is
+// TestFrameBytesSendsNoListAsNull, in client_test.go.
 //
 // When this test says a golden is stale, the agent's frames moved. Rewrite
 // them with
@@ -205,55 +215,8 @@ func sentAtConnect(t *testing.T, set func(*Agent)) (auth, frame []byte) {
 	}
 }
 
-// nullableLists are the lists the agent sends as null ON PURPOSE, by their
-// JSON name: a distribution's novad_pids is null when they could not be
-// listed — unknown, never none (facts.Distro.PIDs) — and core reads it so.
-var nullableLists = map[string]bool{"novad_pids": true}
-
-// nullLists is the path of every list in v — a frame decoded from what the
-// agent sent — that crossed the wire as null: encoding/json decodes null (or
-// a key left out) into a nil slice, and [] into an empty one. Read off the
-// Go types, so a list a later slice adds is checked the day it lands.
-func nullLists(v reflect.Value, path string) []string {
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface:
-		if v.IsNil() {
-			return nil
-		}
-		return nullLists(v.Elem(), path)
-	case reflect.Struct:
-		var out []string
-		for i := 0; i < v.NumField(); i++ {
-			field := v.Type().Field(i)
-			name, opts, _ := strings.Cut(field.Tag.Get("json"), ",")
-			if !field.IsExported() || name == "-" {
-				continue
-			}
-			if name == "" {
-				name = field.Name
-			}
-			fv := v.Field(i)
-			if fv.Kind() == reflect.Slice && fv.IsNil() {
-				if !strings.Contains(opts, "omitempty") && !nullableLists[name] {
-					out = append(out, path+"."+name)
-				}
-				continue
-			}
-			out = append(out, nullLists(fv, path+"."+name)...)
-		}
-		return out
-	case reflect.Slice:
-		var out []string
-		for i := 0; i < v.Len(); i++ {
-			out = append(out, nullLists(v.Index(i), fmt.Sprintf("%s[%d]", path, i))...)
-		}
-		return out
-	}
-	return nil
-}
-
-// authFrame decodes the auth frame with its facts typed, so nullLists reads
-// facts.Auth's own fields.
+// authFrame decodes the auth frame with its facts typed, so the checks
+// below read facts.Auth's own fields.
 type authFrame struct {
 	Type     string     `json:"type"`
 	DeviceID string     `json:"device_id"`
@@ -324,10 +287,11 @@ func TestTheFramesTheAgentSendsAreTheGoldenFilesCoreReads(t *testing.T) {
 		if err := json.Unmarshal(g.sent, g.into); err != nil {
 			t.Fatalf("%s: %v", g.file, err)
 		}
-		// Never null for a list: core's validators read a list, and before
-		// fix/facts-unreadable-null refused the whole frame over a null one.
-		if nulls := nullLists(reflect.ValueOf(g.into), "frame"); len(nulls) > 0 {
-			t.Errorf("%s: the agent sent null for a list at %s: %s", g.file, strings.Join(nulls, ", "), g.sent)
+		// Null only where the agent means it (facts.NullsOnPurpose): core's
+		// validators read a list, and before fix/facts-unreadable-null refused
+		// the whole frame over a null one. Read off the bytes themselves.
+		if stray, err := facts.StrayNulls(g.sent); err != nil || len(stray) > 0 {
+			t.Errorf("%s: null where nothing means null, at %s (%v): %s", g.file, strings.Join(stray, ", "), err, g.sent)
 		}
 		matchesGolden(t, g.file, g.sent)
 	}
