@@ -6,7 +6,8 @@ with its own fact:
 
   1. **start** (nova_update, or the About page's button): GitHub must say
      there is something to pull, the hub's own agent must be connected, and
-     the checkout must be known. A row is opened `sent` FIRST — the database
+     the checkout must be known. Whether the checkout is clean is the
+     installer's live read, not the stamp's (see start). A row is opened `sent` FIRST — the database
      holds one open update at a time — and then one command goes to the hub's
      agent: run `./install update --attempt <id>` detached, so neither this
      turn ending nor core restarting cuts it short. What comes back says it
@@ -218,11 +219,11 @@ async def start(app, pool, *, requested_by: str, facts_sink: list[dict] | None =
         )
     if state != "available":
         raise CannotUpdate(f"whether there is an update could not be checked: {updates['reason']}")
-    if build["dirty"]:
-        raise CannotUpdate(
-            "the hub was brought up with uncommitted changes, and ./install update refuses a "
-            "dirty checkout rather than overwrite them"
-        )
+    # No refusal here on build["dirty"]: that is NOVA_DIRTY, stamped when the
+    # hub was last brought up, and the checkout can have been committed or
+    # stashed since — a stale reading refused an update a clean checkout could
+    # run. ./install update reads the checkout live, refuses a dirty one by
+    # name, and reports that back as this attempt's `refused`.
     target = updates["latest"]["sha"] if updates["latest"] else None
     checkout_dir = checkout()
     if checkout_dir is None:

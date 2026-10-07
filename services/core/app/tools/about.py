@@ -79,8 +79,10 @@ TOOLS: tuple[Tool, ...] = (
             "the stack, and rolls back if the rebuild fails. Takes no arguments. It returns once "
             "the update has STARTED; the stack restarts (this conversation drops for a few "
             "minutes), and nova_about shows whether it was confirmed. Fails with the reason when "
-            "there is nothing to install, the checkout has diverged or has uncommitted changes, "
-            "the hub's agent is not connected, or an update is already running."
+            "there is nothing to install, the checkout has diverged, the hub's agent is not "
+            "connected, or an update is already running. Uncommitted changes on the hub are "
+            "checked by the installer itself, live: it refuses, names the files, and nova_about "
+            "shows that attempt as did-not-start."
         ),
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
         executor=nova_update,

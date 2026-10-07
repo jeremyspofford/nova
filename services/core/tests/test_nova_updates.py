@@ -125,7 +125,6 @@ async def test_an_unknown_check_is_not_read_as_something_to_install(pool, monkey
 @pytest.mark.parametrize(
     ("setup", "words"),
     [
-        ("dirty", "uncommitted changes"),
         ("no_checkout", "NOVA_CHECKOUT is unset"),
         ("no_agent", "no agent is paired on the hub"),
         ("disconnected", "is not connected"),
@@ -135,8 +134,6 @@ async def test_an_unknown_check_is_not_read_as_something_to_install(pool, monkey
 @requires_db
 async def test_what_it_cannot_run_without_is_stated(pool, monkeypatch, setup, words):
     over = {}
-    if setup == "dirty":
-        over[about.DIRTY_ENV] = "1"
     if setup == "no_checkout":
         over[nova_updates.CHECKOUT_ENV] = None
     _stamp(monkeypatch, **{nova_updates.CHECKOUT_ENV: CHECKOUT, **over})
@@ -149,6 +146,18 @@ async def test_what_it_cannot_run_without_is_stated(pool, monkeypatch, setup, wo
     with pytest.raises(nova_updates.CannotUpdate, match=words):
         await nova_updates.start(app, pool, requested_by="nova")
     assert agent.sent == []
+
+
+@requires_db
+async def test_a_dirty_stamp_does_not_refuse_the_installer_reads_it_live(pool, monkeypatch):
+    # NOVA_DIRTY is when the hub was brought up; the checkout may be clean
+    # now. ./install update checks it live and reports `refused` if not.
+    _ready(monkeypatch, **{about.DIRTY_ENV: "1"})
+    await _hub_device(pool)
+    agent = Agent(monkeypatch)
+    row = await nova_updates.start(app, pool, requested_by="jeremy")
+    assert row["outcome"] == "sent"
+    assert len(agent.sent) == 1
 
 
 @requires_db

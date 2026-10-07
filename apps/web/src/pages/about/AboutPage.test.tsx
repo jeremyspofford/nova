@@ -111,7 +111,7 @@ describe('AboutPage', () => {
     const getAbout = vi.fn().mockResolvedValue(about())
     render(<AboutPage getAbout={getAbout} />)
     await screen.findByTestId('about-version')
-    fireEvent.click(screen.getByRole('button', { name: /check for updates/i }))
+    fireEvent.click(within(screen.getByTestId('about-updates')).getByRole('button', { name: /check for updates/i }))
     await waitFor(() => expect(getAbout).toHaveBeenLastCalledWith({ refresh: true }))
     expect(getAbout).toHaveBeenNthCalledWith(1, { refresh: false })
   })
@@ -166,7 +166,10 @@ describe('AboutPage updates', () => {
     render(<AboutPage getAbout={vi.fn().mockResolvedValue(about())} startUpdate={startUpdate} />)
     fireEvent.click(await screen.findByRole('button', { name: /update now/i }))
     fireEvent.click(screen.getByRole('button', { name: /start the update/i }))
-    expect((await screen.findByRole('alert')).textContent).toContain('is not connected')
+    // said in the Updates card, next to the button that was pressed
+    const alert = await within(screen.getByTestId('about-updates')).findByRole('alert')
+    expect(alert.textContent).toContain('did not start')
+    expect(alert.textContent).toContain('is not connected')
   })
 
   it('names a failed update, its reason and where its log is', async () => {
