@@ -529,7 +529,11 @@ export function ChatPage({
       )}
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-        <div className="mx-auto px-4 md:px-8 py-6 space-y-4 max-w-none md:max-w-3xl">
+        {/* Same column as every other page: AppLayout's non-fullWidth
+            wrapper is `max-w-[1200px] px-6`. Chat renders fullWidth (it owns
+            its own scroll and pinned composer), so it restates that width
+            here and on the composer below rather than inheriting it. */}
+        <div className="mx-auto px-4 md:px-6 py-6 space-y-4 max-w-none md:max-w-[1200px]">
           {loadError && (
             <div
               role="alert"
@@ -636,8 +640,8 @@ export function ChatPage({
       {/* Only the home indicator to clear now: the bottom tab bar was
           replaced by a left-edge handle on 2026-09-15, so nothing is pinned
           across the bottom and the composer reclaims its 3.5rem. */}
-      <div className="shrink-0 w-full px-2 md:px-8 pb-[max(var(--nova-safe-bottom,0px),0.5rem)] md:pb-4">
-        <div className="mx-auto max-w-none md:max-w-3xl space-y-1.5">
+      <div className="shrink-0 w-full px-2 md:px-0 pb-[max(var(--nova-safe-bottom,0px),0.5rem)] md:pb-4">
+        <div className="mx-auto max-w-none md:max-w-[1200px] md:px-6 space-y-1.5">
           {/* Stop (S15). Shown whenever a turn is in flight — whether this tab
               is streaming it or found it already running after a reload — and
               only once there is a turn id to address, because a button that
