@@ -582,6 +582,55 @@ export async function clearConversation(conversationId: string): Promise<Cleared
   return apiSend<ClearedConversation>(`/api/v1/conversations/${conversationId}/clear`, 'POST')
 }
 
+// ── chat sessions (2026-10-07) ──────────────────────────────────────────
+// Several top-level conversations, listed in the sidebar and opened side by
+// side. `main` is where digests and outside reminders land — derived by core
+// from the same query delivery uses, never stored here.
+
+export interface ChatSession {
+  id: string
+  /** His own title, or null — then `label` is derived from his first line. */
+  title: string | null
+  label: string
+  created_at: string
+  last_activity_at: string
+  archived_at: string | null
+  message_count: number
+  main: boolean
+  /** A turn running in it right now (core's live maps). */
+  busy: boolean
+}
+
+export async function listSessions(archived = false): Promise<ChatSession[]> {
+  const body = await apiGet<{ sessions: ChatSession[] }>(
+    `/api/v1/conversations?archived=${archived ? 'true' : 'false'}`,
+  )
+  return body.sessions
+}
+
+export const createSession = (title?: string) =>
+  apiSend<ChatSession>('/api/v1/conversations', 'POST', title ? { title } : {})
+
+export const renameSession = (id: string, title: string | null) =>
+  apiSend<ChatSession>(`/api/v1/conversations/${id}`, 'PATCH', { title })
+
+export const setSessionArchived = (id: string, archived: boolean) =>
+  apiSend<ChatSession>(`/api/v1/conversations/${id}`, 'PATCH', { archived })
+
+export const makeSessionMain = (id: string) =>
+  apiSend<ChatSession>(`/api/v1/conversations/${id}/main`, 'POST')
+
+export interface DeletedSession {
+  id: string
+  deleted: true
+  messages: number
+  /** Reminders that were set to land there and now have no chat to land in. */
+  timers_unlinked: number
+}
+
+export const deleteSession = (id: string) =>
+  apiSend<DeletedSession>(`/api/v1/conversations/${id}`, 'DELETE')
+
 // ── spend (S10): the gateway's ledger, rolled up ────────────────────────
 
 export type SpendWindow = 'today' | '7d' | '30d' | 'month'

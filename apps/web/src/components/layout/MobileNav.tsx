@@ -8,6 +8,7 @@ import { useMobileNav } from '../../hooks/useMobileNav'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { AccountMenu } from './AccountMenu'
+import { SessionsList } from './SessionsList'
 import { NavCountBadge, navBadgeState, navSections, type NavItem, type NavSection } from './Sidebar'
 
 // The nav config is Sidebar's, DERIVED rather than copied: the unlabelled
@@ -256,6 +257,8 @@ export function MobileNav() {
                   </div>
                 )
               })}
+              {/* The phone shows one session at a time; tapping one opens it. */}
+              <SessionsList onNavigate={close} touch />
             </div>
             {/* HIS NAME, on the phone too (2026-09-16). It was desktop-only,
                 which left Settings, Usage and "what she has done" reachable

@@ -160,6 +160,12 @@ class ToolContext:
     # None outside a turn; an executor with no sink records nothing, and its
     # call can then never be claimed reverted. Nothing reads it to decide.
     undo_sink: list | None = None
+    # The conversation the turn is answering in (chat sessions, 2026-10-07).
+    # With several sessions, "the person's active conversation" is no longer
+    # the one being typed in, so a tool that writes back into the chat — a
+    # reminder — needs to be told which one. None outside a turn. Not a
+    # principal: it is where output goes.
+    conversation_id: Any = None
 
 
 @dataclass(frozen=True)

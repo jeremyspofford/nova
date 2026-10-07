@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, usePa
 import { Loader2 } from 'lucide-react'
 import { ThemeProvider, useTheme } from './stores/theme-store'
 import { ChatProvider } from './stores/chat-store'
+import { SessionsProvider } from './stores/sessions-store'
 import { ToastProvider } from './components/ToastProvider'
 import { AuthProvider, useAuth } from './stores/auth-store'
 import { AppLayout } from './components/layout/AppLayout'
@@ -13,7 +14,7 @@ import { DEFAULT_PRESET } from './lib/color-palettes'
 import ComponentGallery from './pages/dev/ComponentGallery'
 import { Login } from './pages/Login'
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
-import { ChatPage } from './pages/chat/ChatPage'
+import { ChatWorkspace } from './pages/chat/ChatWorkspace'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ModelsPage } from './pages/models/ModelsPage'
 import { SpendPage } from './pages/spend/SpendPage'
@@ -137,7 +138,9 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
   return (
     <AppLayout fullWidth={fullWidth}>
       <Routes>
-        <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
+        {/* One or more chat sessions side by side (ChatWorkspace); with one
+            pane it is the ChatPage it always was. */}
+        <Route path="/chat" element={<ChatWorkspace initialModel={chatModel} />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityRoute />} />
@@ -277,7 +280,13 @@ function Gate() {
   // guard — see stores/chat-store.tsx.
   return (
     <ChatProvider personId={user?.id ?? null}>
-      <AppRoutes chatModel={defs ? settingValue(defs, 'chat.model', '') : ''} />
+      {/* Chat sessions: the sidebar's list and /chat's split view share it,
+          and it lives under ChatProvider so closing a pane can release that
+          pane's transcript. Keyed by person, like the chat store: a sign-in
+          as someone else starts from their list and a single pane. */}
+      <SessionsProvider key={user?.id ?? 'nobody'} personId={user?.id ?? null}>
+        <AppRoutes chatModel={defs ? settingValue(defs, 'chat.model', '') : ''} />
+      </SessionsProvider>
     </ChatProvider>
   )
 }

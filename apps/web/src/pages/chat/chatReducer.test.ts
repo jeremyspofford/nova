@@ -2006,3 +2006,35 @@ describe('chatReducer — correction frames', () => {
     expect(state).toEqual(emptyChat())
   })
 })
+
+
+describe('chatReducer — a send that core queued (chat sessions)', () => {
+  it('takes back the optimistic rows and shows the chip, with no false "no reply"', () => {
+    let state = chatReducer(emptyChat(), { type: 'send', userId: 'u1', assistantId: 'a1', text: 'hi there' })
+    expect(state.rows).toHaveLength(2)
+    state = chatReducer(state, {
+      type: 'sendQueued',
+      userId: 'u1',
+      assistantId: 'a1',
+      event: { type: 'queued', id: 'q1', conversationId: 'c1', body: 'hi there', ahead: 0 },
+    })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(state.rows).toHaveLength(0)
+    expect(state.streaming).toBe(false)
+    expect(state.queued).toEqual([{ id: 'q1', body: 'hi there', ahead: 0 }])
+  })
+
+  it('leaves rows alone that are no longer that send’s pending bubble', () => {
+    let state = chatReducer(emptyChat(), { type: 'send', userId: 'u1', assistantId: 'a1', text: 'one' })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    const settled = state.rows.length
+    state = chatReducer(state, {
+      type: 'sendQueued',
+      userId: 'u1',
+      assistantId: 'a1',
+      event: { type: 'queued', id: 'q1', conversationId: 'c1', body: 'one', ahead: 0 },
+    })
+    expect(state.rows).toHaveLength(settled)
+    expect(state.queued).toHaveLength(1)
+  })
+})

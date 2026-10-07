@@ -188,13 +188,19 @@ async def active_conversation(pool: asyncpg.Pool, person: Person) -> asyncpg.Rec
     row = await pool.fetchrow(
         "SELECT id, title, created_at FROM conversations "
         "WHERE person_id = $1 AND active AND parent_message_id IS NULL "
+        # Chat sessions: an archived session is one he put away, so it is not
+        # where a digest should land. Archiving the main session hands the
+        # hallway to a fresh one on the next ask, never to a side session.
+        "AND archived_at IS NULL "
         "ORDER BY created_at DESC LIMIT 1",
         person.id,
     )
     if row is not None:
         return row
+    # The hallway is his chat, so it is a session (043_chat_sessions.sql).
     return await pool.fetchrow(
-        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id, title, created_at",
+        "INSERT INTO conversations (person_id, chat_session) VALUES ($1, true) "
+        "RETURNING id, title, created_at",
         person.id,
     )
 
@@ -556,6 +562,261 @@ async def clear_conversation(
     await owned_conversation(pool, person, conversation_id)
     cleared = await clear_messages(pool, conversation_id)
     return {"id": str(conversation_id), "cleared": cleared}
+
+
+# ── Chat sessions (owner, 2026-10-07) ──────────────────────────────────
+#
+# Several top-level conversations at once, listed in the sidebar and opened
+# side by side. A session is a conversation with `chat_session` set — the
+# column, not a guess from `active`, because beats, agents and evals keep
+# their own inactive conversations that were never his to pick from
+# (043_chat_sessions.sql).
+#
+# The hallway is still exactly one of them: the one `active_conversation`
+# picks. A new session is created inactive so that opening one never moves
+# where a digest or an outside reminder is delivered; `/main` moves it on
+# purpose. Which one is main is DERIVED from that same query on every read,
+# so the list and delivery can never disagree about it.
+#
+# The label a session shows is derived too: his own title if he gave one,
+# else the first line of the first thing he said there. No model writes it.
+
+_LABEL_CHARS = 80
+
+_SESSION_COLUMNS = (
+    "c.id, c.title, c.created_at, c.archived_at, "
+    # The first thing he said, first line only — the label when he never
+    # named the session. Withdrawn rows (a rewind) are not what it is about.
+    "(SELECT split_part(m.content, E'\\n', 1) FROM messages m "
+    "  WHERE m.conversation_id = c.id AND m.role = 'user' AND m.withdrawn_by IS NULL "
+    "  ORDER BY m.created_at LIMIT 1) AS first_line, "
+    "(SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_message_at, "
+    "(SELECT count(*) FROM messages m "
+    "  WHERE m.conversation_id = c.id AND m.withdrawn_by IS NULL) AS message_count"
+)
+
+
+def _label(row: asyncpg.Record) -> str:
+    title = (row["title"] or "").strip()
+    if title:
+        return title
+    first = (row["first_line"] or "").strip()
+    if first:
+        return first if len(first) <= _LABEL_CHARS else first[: _LABEL_CHARS - 1].rstrip() + "…"
+    return "New session"
+
+
+async def _session_json(pool: asyncpg.Pool, row: asyncpg.Record, main_id: uuid.UUID) -> dict:
+    last = row["last_message_at"] or row["created_at"]
+    return {
+        "id": str(row["id"]),
+        "title": row["title"],
+        "label": _label(row),
+        "created_at": row["created_at"].isoformat(),
+        "last_activity_at": last.isoformat(),
+        "archived_at": None if row["archived_at"] is None else row["archived_at"].isoformat(),
+        "message_count": row["message_count"],
+        # Where digests and outside reminders land — the same query that
+        # delivers them, never a stored flag that could disagree with it.
+        "main": row["id"] == main_id,
+        # A turn running in it right now, from the live maps (conversation_busy).
+        "busy": await conversation_busy(pool, row["id"]),
+    }
+
+
+async def owned_session(
+    pool: asyncpg.Pool, person: Person, conversation_id: uuid.UUID
+) -> asyncpg.Record:
+    """His chat session, or a stated refusal.
+
+    Someone else's is a 404 (owned_conversation's answer). One of his that is
+    not a session — a room, a beat or agent log — is a 400 saying so: those
+    are reached and removed by their own paths, and a rename or archive here
+    would act on something the sidebar never showed him.
+    """
+    row = await pool.fetchrow(
+        f"SELECT {_SESSION_COLUMNS}, c.chat_session FROM conversations c "
+        "WHERE c.id = $1 AND c.person_id = $2",
+        conversation_id,
+        person.id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no conversation {conversation_id} here")
+    if not row["chat_session"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"conversation {conversation_id} is not a chat session "
+            "(it is a side room or one of Nova's own logs)",
+        )
+    return row
+
+
+@router.get("")
+async def list_sessions(
+    archived: bool = False, person: Person = Depends(identity.require_person)
+) -> dict:
+    """His chat sessions, most recently active first.
+
+    `archived=false` (the default) is the live list; `archived=true` is the
+    archive. The main session always exists in the live list unless he
+    archived it — it is created on first ask, exactly as `/active` does, so
+    a brand-new person sees one session rather than none.
+    """
+    pool = await db.get_pool()
+    main = await active_conversation(pool, person)
+    rows = await pool.fetch(
+        f"SELECT {_SESSION_COLUMNS} FROM conversations c "
+        "WHERE c.person_id = $1 AND c.chat_session AND c.parent_message_id IS NULL "
+        f"AND c.archived_at IS {'NOT ' if archived else ''}NULL "
+        "ORDER BY coalesce((SELECT max(m.created_at) FROM messages m "
+        "                   WHERE m.conversation_id = c.id), c.created_at) DESC",
+        person.id,
+    )
+    return {"sessions": [await _session_json(pool, row, main["id"]) for row in rows]}
+
+
+class NewSessionBody(BaseModel):
+    title: str | None = None
+
+
+def _clean_title(title: str | None) -> str | None:
+    if title is None:
+        return None
+    title = " ".join(title.split())
+    if len(title) > 200:
+        raise HTTPException(status_code=400, detail="a session title is at most 200 characters")
+    return title or None
+
+
+@router.post("")
+async def create_session(
+    body: NewSessionBody | None = None, person: Person = Depends(identity.require_person)
+) -> dict:
+    """Open a new chat session. Inactive, so the hallway stays where it was."""
+    pool = await db.get_pool()
+    title = _clean_title(body.title if body else None)
+    created = await pool.fetchval(
+        "INSERT INTO conversations (person_id, active, chat_session, title) "
+        "VALUES ($1, false, true, $2) RETURNING id",
+        person.id,
+        title,
+    )
+    row = await owned_session(pool, person, created)
+    main = await active_conversation(pool, person)
+    return await _session_json(pool, row, main["id"])
+
+
+class SessionPatch(BaseModel):
+    # Absent leaves it; null (or blank) clears a title back to the derived label.
+    title: str | None = None
+    archived: bool | None = None
+
+
+@router.patch("/{conversation_id}")
+async def update_session(
+    conversation_id: uuid.UUID,
+    body: SessionPatch,
+    person: Person = Depends(identity.require_person),
+) -> dict:
+    """Rename, archive or unarchive one session. Read back, never assumed."""
+    pool = await db.get_pool()
+    await owned_session(pool, person, conversation_id)
+    fields = body.model_fields_set
+    if "title" in fields:
+        await pool.execute(
+            "UPDATE conversations SET title = $2 WHERE id = $1",
+            conversation_id,
+            _clean_title(body.title),
+        )
+    if "archived" in fields and body.archived is not None:
+        await pool.execute(
+            "UPDATE conversations SET archived_at = "
+            "CASE WHEN $2 THEN coalesce(archived_at, now()) ELSE NULL END WHERE id = $1",
+            conversation_id,
+            body.archived,
+        )
+    row = await owned_session(pool, person, conversation_id)
+    main = await active_conversation(pool, person)
+    return await _session_json(pool, row, main["id"])
+
+
+@router.post("/{conversation_id}/main")
+async def make_main(
+    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """Make this session the hallway: where digests and outside reminders land.
+
+    One transaction, so there is never a moment with two mains or none. An
+    archived session is unarchived by this — the hallway is the one place he
+    is certain to look, so it cannot be one he put away.
+    """
+    pool = await db.get_pool()
+    await owned_session(pool, person, conversation_id)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE conversations SET active = false "
+                "WHERE person_id = $1 AND chat_session AND active AND id <> $2",
+                person.id,
+                conversation_id,
+            )
+            await conn.execute(
+                "UPDATE conversations SET active = true, archived_at = NULL WHERE id = $1",
+                conversation_id,
+            )
+    main = await active_conversation(pool, person)
+    if main["id"] != conversation_id:
+        # The query that delivers disagrees with what was just written — say
+        # so rather than answer as if it had worked.
+        raise HTTPException(
+            status_code=500,
+            detail=f"session {conversation_id} was marked main but delivery still "
+            f"resolves to {main['id']}",
+        )
+    row = await owned_session(pool, person, conversation_id)
+    return await _session_json(pool, row, main["id"])
+
+
+@router.delete("/{conversation_id}")
+async def delete_session(
+    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """Delete one session: its transcript, its rooms and its attachments.
+
+    The trace (turns, spans) stays as the audit trail, its conversation link
+    nulled by the foreign key. A timer that was set to land here keeps
+    firing but loses its chat leg, and the scheduler already says so on each
+    firing; the count is returned so the client can say it now.
+
+    A session with a turn running cannot be deleted: that turn would try to
+    write its reply into a conversation that no longer exists. Stop it (or
+    let it finish) first — a stated fact about the call, not a decision.
+    """
+    pool = await db.get_pool()
+    row = await owned_session(pool, person, conversation_id)
+    if await conversation_busy(pool, conversation_id):
+        raise HTTPException(
+            status_code=409,
+            detail="a turn is still running in this session — stop it or let it finish, "
+            "then delete",
+        )
+    timers = await pool.fetchval(
+        "SELECT count(*) FROM timers WHERE conversation_id = $1", conversation_id
+    )
+    tag = await pool.execute(
+        "DELETE FROM conversations WHERE id = $1 AND person_id = $2", conversation_id, person.id
+    )
+    deleted = int(tag.rsplit(" ", 1)[1])
+    if deleted != 1:
+        raise HTTPException(
+            status_code=500, detail=f"session {conversation_id} was not deleted ({tag})"
+        )
+    return {
+        "id": str(conversation_id),
+        "deleted": True,
+        "messages": row["message_count"],
+        "timers_unlinked": timers,
+    }
 
 
 # ── Threads (S24) ────────────────────────────────────────────────────────

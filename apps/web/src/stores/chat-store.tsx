@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   type ReactNode,
@@ -19,11 +20,57 @@ import {
 import {
   chatReducer,
   emptyChat,
+  type ChatAction,
   type ChatRow,
   type ChatState,
   type FetchedMessage,
   type QueuedMessage,
 } from '../pages/chat/chatReducer'
+
+/**
+ * CHAT SESSIONS SIDE BY SIDE (2026-10-07). The store used to hold ONE
+ * transcript, which was right while one conversation was on screen. A split
+ * view puts several on screen at once, each streaming its own turn, so the
+ * store now holds one ChatState per SLOT — a slot is a pane — and every
+ * action names the slot it is for. A delta from the turn in the left pane
+ * reaches the left pane's transcript by key, never by which pane happens to
+ * be focused.
+ *
+ * `useChatStore()` reads the slot from the nearest <ChatSlot>; with none it
+ * is MAIN_SLOT, the single pane every page and test before this used, so
+ * that path is unchanged.
+ */
+export const MAIN_SLOT = 'main'
+
+type SlotsState = Record<string, ChatState>
+type SlotsAction =
+  | { slot: string; action: ChatAction }
+  | { slot: null; action: { type: 'resetAll' } }
+  | { slot: string; action: { type: 'release' } }
+
+/** What a slot reads before anything happened in it. Never mutated: the
+ *  reducer returns new state. */
+const EMPTY: ChatState = emptyChat()
+
+function slotsReducer(state: SlotsState, { slot, action }: SlotsAction): SlotsState {
+  if (slot === null) return {}
+  if (action.type === 'release') {
+    if (!(slot in state)) return state
+    const next = { ...state }
+    delete next[slot]
+    return next
+  }
+  const before = state[slot] ?? EMPTY
+  const after = chatReducer(before, action as ChatAction)
+  return after === before && slot in state ? state : { ...state, [slot]: after }
+}
+
+const SlotContext = createContext<string>(MAIN_SLOT)
+
+/** Everything inside reads and writes the transcript of pane `id`. */
+export function ChatSlot({ id, children }: { id: string; children: ReactNode }) {
+  return <SlotContext.Provider value={id}>{children}</SlotContext.Provider>
+}
 
 /**
  * Chat-stream ownership, lifted out of ChatPage so a turn keeps running when
@@ -135,6 +182,33 @@ interface ChatStore {
    * what runs them, so its list is the truth; ChatPage hands this the `queued`
    * field of /conversations/active on every poll tick. */
   syncQueue: (queued: QueuedMessage[]) => void
+  /**
+   * A pane closed: forget its transcript and stop reading its stream. The
+   * turn itself is NOT stopped — a disconnect means "finish" (ruling S2c-R1),
+   * so core completes it and the session shows the reply when next opened.
+   */
+  releaseSlot: () => void
+}
+
+/** The provider's slot-keyed surface; `useChatStore` binds it to one slot. */
+interface SlotStore {
+  slots: SlotsState
+  sendMessage: (slot: string, text: string, attachmentIds?: string[]) => void
+  loadConversation: (slot: string, conversationId: string, messages: FetchedMessage[]) => void
+  resolveServerTurn: (slot: string, conversationId: string, messages: FetchedMessage[]) => void
+  syncFromServer: (
+    slot: string,
+    conversationId: string,
+    messages: FetchedMessage[],
+    observedRows: ChatRow[],
+  ) => void
+  setModel: (model: string) => void
+  clearChat: (slot: string) => Promise<void>
+  stopTurn: (slot: string) => Promise<void>
+  noteServerTurn: (slot: string, turnId: string | null) => void
+  unqueue: (slot: string, id: string) => Promise<void>
+  syncQueue: (slot: string, queued: QueuedMessage[]) => void
+  releaseSlot: (slot: string) => void
 }
 
 /** The DI seam for the clear-chat call — same idiom as `fetchImpl`: production
@@ -143,7 +217,7 @@ interface ConversationsApi {
   clearConversation: typeof apiClearConversation
 }
 
-const ChatContext = createContext<ChatStore | null>(null)
+const ChatContext = createContext<SlotStore | null>(null)
 
 /** The abort-map key for a conversation that has no id yet — the very first
  *  message of a brand-new chat, whose id arrives on the meta frame. A
@@ -164,12 +238,17 @@ export function ChatProvider({
   /** Test seam only — production always uses the real api.clearConversation. */
   conversationsApi?: ConversationsApi
 }) {
-  const [state, dispatch] = useReducer(chatReducer, undefined, emptyChat)
+  const [slots, dispatchSlots] = useReducer(slotsReducer, {})
+  const dispatch = useCallback(
+    (slot: string, action: ChatAction) => dispatchSlots({ slot, action }),
+    [],
+  )
   // Read inside the send loop via a ref, not the `state` closed over at call
   // time: the loop outlives any particular render, and a page that remounts
   // mid-turn must not restart it with a stale conversationId.
-  const stateRef = useRef(state)
-  stateRef.current = state
+  const slotsRef = useRef(slots)
+  slotsRef.current = slots
+  const stateOf = useCallback((slot: string) => slotsRef.current[slot] ?? EMPTY, [])
   /**
    * One controller per conversation (S24), not one for the store.
    *
@@ -181,7 +260,9 @@ export function ChatProvider({
    * request is orphaned: still open, still delivering, unreachable.
    *
    * Keyed by conversation id, with a sentinel for the very first message of
-   * a brand-new conversation (which has no id until the meta frame).
+   * a brand-new conversation (which has no id until the meta frame) — and,
+   * since chat sessions, prefixed by the slot, so two panes never share a
+   * controller (see `abortKey`).
    */
   const abortsRef = useRef<Map<string, AbortController>>(new Map())
 
@@ -190,8 +271,8 @@ export function ChatProvider({
     abortsRef.current.clear()
   }, [])
 
-  const abortConversation = useCallback((conversationId: string | null) => {
-    const key = conversationId ?? NEW_CONVERSATION
+  const abortConversation = useCallback((slot: string, conversationId: string | null) => {
+    const key = abortKey(slot, conversationId)
     abortsRef.current.get(key)?.abort()
     abortsRef.current.delete(key)
   }, [])
@@ -215,7 +296,7 @@ export function ChatProvider({
       // previous person's — belt to the guard's suspenders in sendMessage,
       // for the case this Provider is ever mounted somewhere that does not
       // naturally unmount on identity change.
-      dispatch({ type: 'reset' })
+      dispatchSlots({ slot: null, action: { type: 'resetAll' } })
     }
     return () => {
       // Runs on every identity change (before the effect above runs again)
@@ -227,26 +308,26 @@ export function ChatProvider({
     }
   }, [personId, abortAll])
 
-  const clearChat = useCallback(async () => {
-    const conversationId = stateRef.current.conversationId
+  const clearChat = useCallback(async (slot: string) => {
+    const conversationId = stateOf(slot).conversationId
     if (!conversationId) {
       // Nothing loaded in this tab yet — there is nothing on the server to
       // clear. Still empty any local rows so the UI is consistent.
-      dispatch({ type: 'reset' })
+      dispatch(slot, { type: 'reset' })
       return
     }
     // Stop any turn in flight first: its late frames must not land into a
     // transcript we are about to empty. Only THIS conversation's — clearing
     // a room must not kill a turn still running in the hallway.
-    abortConversation(conversationId)
+    abortConversation(slot, conversationId)
     await conversationsApi.clearConversation(conversationId)
     // Only after the server confirms the delete — no fake success.
-    dispatch({ type: 'cleared', conversationId })
-  }, [conversationsApi])
+    dispatch(slot, { type: 'cleared', conversationId })
+  }, [conversationsApi, abortConversation, dispatch, stateOf])
 
-  const noteServerTurn = useCallback((turnId: string | null) => {
-    dispatch({ type: 'serverTurn', turnId })
-  }, [])
+  const noteServerTurn = useCallback((slot: string, turnId: string | null) => {
+    dispatch(slot, { type: 'serverTurn', turnId })
+  }, [dispatch])
 
   /** Send while a turn is already running (S15).
    *
@@ -263,9 +344,9 @@ export function ChatProvider({
    * than this path inventing a second way to render a live turn.
    */
   const queueMessage = useCallback(
-    async (text: string) => {
+    async (slot: string, text: string) => {
       const send: FetchLike = fetchImpl ?? (((url, init) => fetch(url, init)) as FetchLike)
-      const conversationId = stateRef.current.conversationId
+      const conversationId = stateOf(slot).conversationId
       const body: Record<string, unknown> = { message: text }
       if (conversationId) body.conversation_id = conversationId
       let response: Response
@@ -277,33 +358,33 @@ export function ChatProvider({
           body: JSON.stringify(body),
         })
       } catch (err) {
-        dispatch({ type: 'queueFailed', reason: `could not reach Nova — ${failureReason(err)}` })
+        dispatch(slot, { type: 'queueFailed', reason: `could not reach Nova — ${failureReason(err)}` })
         return
       }
       if (response.status === 202) {
         const queued = parseQueued(await response.text())
         if (queued === null) {
-          dispatch({
+          dispatch(slot, {
             type: 'queueFailed',
             reason: 'Nova accepted that message but described it in a way this page cannot read',
           })
           return
         }
-        dispatch({ type: 'event', event: queued })
+        dispatch(slot, { type: 'event', event: queued })
         return
       }
       if (!response.ok) {
-        dispatch({ type: 'queueFailed', reason: await statedRefusal(response) })
+        dispatch(slot, { type: 'queueFailed', reason: await statedRefusal(response) })
         return
       }
       // A 200: core started it. Nothing to render here — the reply lands through
       // the pending-turn poll, the same path a reloaded tab uses.
     },
-    [fetchImpl],
+    [fetchImpl, dispatch, stateOf],
   )
 
   const unqueue = useCallback(
-    async (id: string) => {
+    async (slot: string, id: string) => {
       const send: FetchLike = fetchImpl ?? (((url, init) => fetch(url, init)) as FetchLike)
       const response = await send(`/api/v1/chat/queued/${id}`, {
         method: 'DELETE',
@@ -314,17 +395,17 @@ export function ChatProvider({
         // the opposite. Same discipline as clearChat: never a fake success.
         throw new Error(await statedRefusal(response))
       }
-      dispatch({ type: 'unqueued', id })
+      dispatch(slot, { type: 'unqueued', id })
     },
-    [fetchImpl],
+    [fetchImpl, dispatch],
   )
 
-  const syncQueue = useCallback((queued: QueuedMessage[]) => {
-    dispatch({ type: 'queueSynced', queued })
-  }, [])
+  const syncQueue = useCallback((slot: string, queued: QueuedMessage[]) => {
+    dispatch(slot, { type: 'queueSynced', queued })
+  }, [dispatch])
 
-  const stopTurn = useCallback(async () => {
-    const turnId = stateRef.current.turnId
+  const stopTurn = useCallback(async (slot: string) => {
+    const turnId = stateOf(slot).turnId
     // No turn id means no turn this tab is streaming — nothing to stop, and
     // nothing to ask about. Read from the ref, not a closed-over render.
     if (!turnId) return
@@ -339,41 +420,45 @@ export function ChatProvider({
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
     })
-  }, [fetchImpl])
+  }, [fetchImpl, stateOf])
 
-  // A local, un-sent assistant row (the /help listing). Never streamed to the
-  // model, never persisted — see chatReducer's 'localMessage'.
-  const appendLocalMessage = useCallback((text: string) => {
-    dispatch({ type: 'localMessage', id: nextId('local'), text })
-  }, [])
+  /** Slots closed since they last held a transcript. A slot id is reused
+   *  only by the pane that owns it, so loading into it un-releases it. */
+  const released = useRef<Set<string>>(new Set())
 
   const sendMessage = useCallback(
-    (text: string, attachmentIds: string[] = []) => {
+    (slot: string, text: string, attachmentIds: string[] = []) => {
       const command = matchCommand(text)
       if (command) {
+        // A local, un-sent assistant row (the /help listing). Never streamed
+        // to the model, never persisted — see chatReducer's 'localMessage'.
+        const appendLocalMessage = (line: string) =>
+          dispatch(slot, { type: 'localMessage', id: nextId('local'), text: line })
         // A whole-message slash command (e.g. /clear, /help) is a command, not a
         // turn: run its registered effect instead of streaming to the model. The
         // parser is the registry's own (lib/commands.ts), so a message that
         // merely CONTAINS "/clear" mid-text still sends normally.
-        command.run({ clearChat, appendLocalMessage })
+        command.run({ clearChat: () => clearChat(slot), appendLocalMessage })
         return
       }
-      if (stateRef.current.streaming) {
+      if (stateOf(slot).streaming) {
         // A turn is already running, so this message is for the queue (S15).
         // Read from the ref, not a render's closure: the composer can be a
         // render behind, and the SERVER decides anyway — if the turn has in fact
         // ended, core starts this message and queueMessage says what happens
         // then. The live turn's state is not touched on this path.
-        void queueMessage(text)
+        void queueMessage(slot, text)
         return
       }
       const userId = nextId('u')
       const assistantId = nextId('a')
-      dispatch({ type: 'send', userId, assistantId, text })
+      // Read BEFORE the dispatch: the send action does not move the
+      // conversation, but a ref read after it is a render behind anyway.
+      const conversationId = stateOf(slot).conversationId
+      dispatch(slot, { type: 'send', userId, assistantId, text })
 
       const controller = new AbortController()
-      const conversationId = stateRef.current.conversationId
-      const key = conversationId ?? NEW_CONVERSATION
+      const key = abortKey(slot, conversationId)
       abortsRef.current.get(key)?.abort()
       abortsRef.current.set(key, controller)
       const startedForIdentity = identityRef.current
@@ -397,39 +482,72 @@ export function ChatProvider({
             // transcript — by identity rather than by arrival order, which
             // is the only way that holds when the owner is switching
             // between them mid-stream.
-            dispatch({ type: 'event', event, conversationId })
+            // A pane that was closed mid-stream has been released; its late
+            // frames must not bring the slot back to life.
+            if (released.current.has(slot)) break
+            if (event.type === 'queued') {
+              // Core queued this send rather than starting it (a turn is
+              // running in another session) — see chatReducer's sendQueued.
+              dispatch(slot, { type: 'sendQueued', userId, assistantId, event, conversationId })
+              continue
+            }
+            dispatch(slot, { type: 'event', event, conversationId })
           }
         } finally {
           if (abortsRef.current.get(key) === controller) abortsRef.current.delete(key)
         }
       })()
     },
-    [fetchImpl, clearChat, appendLocalMessage, queueMessage],
+    [fetchImpl, clearChat, queueMessage, dispatch, stateOf],
   )
 
-  const loadConversation = useCallback((conversationId: string, messages: FetchedMessage[]) => {
-    dispatch({ type: 'reconcile', conversationId, messages })
-  }, [])
+  const loadConversation = useCallback(
+    (slot: string, conversationId: string, messages: FetchedMessage[]) => {
+      released.current.delete(slot)
+      dispatch(slot, { type: 'reconcile', conversationId, messages })
+    },
+    [dispatch],
+  )
 
-  const resolveServerTurn = useCallback((conversationId: string, messages: FetchedMessage[]) => {
-    dispatch({ type: 'pollResolved', conversationId, messages })
-  }, [])
+  const resolveServerTurn = useCallback(
+    (slot: string, conversationId: string, messages: FetchedMessage[]) => {
+      dispatch(slot, { type: 'pollResolved', conversationId, messages })
+    },
+    [dispatch],
+  )
 
   const syncFromServer = useCallback(
-    (conversationId: string, messages: FetchedMessage[], observedRows: ChatRow[]) => {
-      dispatch({ type: 'idlePolled', conversationId, messages, observedRows })
+    (slot: string, conversationId: string, messages: FetchedMessage[], observedRows: ChatRow[]) => {
+      dispatch(slot, { type: 'idlePolled', conversationId, messages, observedRows })
     },
-    [],
+    [dispatch],
   )
 
+  /** The model pick is one setting for the whole app, so every open pane's
+   *  badge moves with it — not just the pane the switch was made from. */
   const setModel = useCallback((model: string) => {
-    dispatch({ type: 'modelSwitched', model })
+    const open = Object.keys(slotsRef.current)
+    for (const slot of open.length ? open : [MAIN_SLOT]) {
+      dispatch(slot, { type: 'modelSwitched', model })
+    }
+  }, [dispatch])
+
+  const releaseSlot = useCallback((slot: string) => {
+    released.current.add(slot)
+    // Stop READING this pane's streams; core finishes the turn regardless.
+    for (const [key, controller] of abortsRef.current) {
+      if (key.startsWith(`${slot}|`)) {
+        controller.abort()
+        abortsRef.current.delete(key)
+      }
+    }
+    dispatchSlots({ slot, action: { type: 'release' } })
   }, [])
 
   return (
     <ChatContext.Provider
       value={{
-        state,
+        slots,
         sendMessage,
         loadConversation,
         resolveServerTurn,
@@ -440,6 +558,7 @@ export function ChatProvider({
         noteServerTurn,
         unqueue,
         syncQueue,
+        releaseSlot,
       }}
     >
       {children}
@@ -447,8 +566,60 @@ export function ChatProvider({
   )
 }
 
+/** One pane's abort-map key. The slot comes first so releasing a pane can
+ *  find every controller it owns. */
+function abortKey(slot: string, conversationId: string | null): string {
+  return `${slot}|${conversationId ?? NEW_CONVERSATION}`
+}
+
+/**
+ * Across every pane, for the sessions list: which panes are mid-turn (a turn
+ * ending is when a session's label and busy flag change), and the way to
+ * let a closed pane go.
+ */
+export function useChatSlots(): { streamingSlots: string[]; releaseSlot: (slot: string) => void } {
+  const ctx = useContext(ChatContext)
+  if (!ctx) throw new Error('useChatSlots must be used within ChatProvider')
+  const streamingSlots = Object.entries(ctx.slots)
+    .filter(([, state]) => state.streaming)
+    .map(([slot]) => slot)
+    .sort()
+  return { streamingSlots, releaseSlot: ctx.releaseSlot }
+}
+
+/** The store, bound to the pane this component is in (see <ChatSlot>). */
 export function useChatStore(): ChatStore {
   const ctx = useContext(ChatContext)
+  const slot = useContext(SlotContext)
   if (!ctx) throw new Error('useChatStore must be used within ChatProvider')
-  return ctx
+  const state = ctx.slots[slot] ?? EMPTY
+  // Calls go through a ref to the LATEST provider surface, so each bound
+  // function is stable for the life of the pane. ChatPage's effects list
+  // these as dependencies; a new identity on every provider render would
+  // re-run its loader and polls (which is exactly what a binding memoised on
+  // the provider's callbacks did — clearChat's default api object is new
+  // every render).
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const bound = useMemo(() => {
+    const c = () => ctxRef.current
+    return {
+      sendMessage: (text: string, attachmentIds?: string[]) =>
+        c().sendMessage(slot, text, attachmentIds),
+      loadConversation: (conversationId: string, messages: FetchedMessage[]) =>
+        c().loadConversation(slot, conversationId, messages),
+      resolveServerTurn: (conversationId: string, messages: FetchedMessage[]) =>
+        c().resolveServerTurn(slot, conversationId, messages),
+      syncFromServer: (conversationId: string, messages: FetchedMessage[], observedRows: ChatRow[]) =>
+        c().syncFromServer(slot, conversationId, messages, observedRows),
+      setModel: (model: string) => c().setModel(model),
+      clearChat: () => c().clearChat(slot),
+      stopTurn: () => c().stopTurn(slot),
+      noteServerTurn: (turnId: string | null) => c().noteServerTurn(slot, turnId),
+      unqueue: (id: string) => c().unqueue(slot, id),
+      syncQueue: (queued: QueuedMessage[]) => c().syncQueue(slot, queued),
+      releaseSlot: () => c().releaseSlot(slot),
+    }
+  }, [slot])
+  return { state, ...bound }
 }

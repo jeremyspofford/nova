@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
-import { ChatProvider, useChatStore } from './chat-store'
+import { ChatProvider, ChatSlot, useChatStore } from './chat-store'
 import type { ChatState } from '../pages/chat/chatReducer'
 import { MessageBubble } from '../pages/chat/MessageBubble'
 
@@ -758,5 +758,83 @@ describe('ChatProvider — stopping a turn', () => {
       await probe.store!.stopTurn()
     })
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+
+/**
+ * Chat sessions side by side (2026-10-07): each pane is a slot with its own
+ * transcript. A turn streaming in one pane must land in that pane's rows and
+ * nowhere else, by key — not by which pane happened to send last.
+ */
+describe('ChatProvider — one transcript per pane (chat sessions)', () => {
+  it('streams two panes independently, each into its own rows', async () => {
+    const left = controlledStream()
+    const right = controlledStream()
+    const { fetchImpl, seenSignals } = multiStreamFetch([left, right])
+    const a: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    const b: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={a} />
+        <ChatSlot id="pane-b">
+          <Probe probe={b} />
+        </ChatSlot>
+      </ChatProvider>,
+    )
+
+    act(() => a.store!.sendMessage('left question'))
+    act(() => b.store!.sendMessage('right question'))
+    await tick()
+    left.push('data: {"meta":{"conversation_id":"c-left","model":"m","turn_id":"t1"}}\n\n')
+    right.push('data: {"meta":{"conversation_id":"c-right","model":"m","turn_id":"t2"}}\n\n')
+    left.push('data: {"t":"left answer"}\n\n')
+    right.push('data: {"t":"right answer"}\n\n')
+    await tick()
+
+    // Both are live at once; neither send aborted the other's request.
+    expect(a.store!.state.streaming).toBe(true)
+    expect(b.store!.state.streaming).toBe(true)
+    expect(seenSignals[0]?.aborted).toBe(false)
+    expect(seenSignals[1]?.aborted).toBe(false)
+
+    left.push('data: [DONE]\n\n')
+    left.end()
+    right.push('data: [DONE]\n\n')
+    right.end()
+    await tick()
+
+    const texts = (store: ReturnType<typeof useChatStore>) =>
+      store.state.rows.map(r => (r.kind === 'message' ? r.text : r.kind))
+    expect(texts(a.store!)).toEqual(['left question', 'left answer'])
+    expect(texts(b.store!)).toEqual(['right question', 'right answer'])
+    expect(a.store!.state.conversationId).toBe('c-left')
+    expect(b.store!.state.conversationId).toBe('c-right')
+  })
+
+  it('a released pane stops reading its stream and forgets its rows', async () => {
+    const stream = controlledStream()
+    const { fetchImpl, seenSignals } = fakeStreamingFetch(stream)
+    const b: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <ChatSlot id="pane-b">
+          <Probe probe={b} />
+        </ChatSlot>
+      </ChatProvider>,
+    )
+    act(() => b.store!.sendMessage('hello'))
+    await tick()
+    stream.push('data: {"t":"partial"}\n\n')
+    await tick()
+    expect(b.store!.state.rows).toHaveLength(2)
+
+    act(() => b.store!.releaseSlot())
+    // Reading stops; core finishes the turn regardless (a disconnect is
+    // "finish", ruling S2c-R1).
+    expect(seenSignals[0]?.aborted).toBe(true)
+    stream.push('data: {"t":" more"}\n\n')
+    await tick()
+    expect(b.store!.state.rows).toHaveLength(0)
   })
 })

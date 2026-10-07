@@ -191,6 +191,7 @@ def context_for(
     undo_sink: list | None = None,
     workspace_root: Path | None = None,
     card: Callable[[dict], None] | None = None,
+    conversation_id=None,
 ) -> ToolContext:
     """The context a turn hands its tools. The workspace root is decided
     once, here, so a single decision sets the boundary for every filesystem
@@ -223,6 +224,7 @@ def context_for(
         facts_sink=facts_sink,
         undo_sink=undo_sink,
         card=card,
+        conversation_id=conversation_id,
     )
 
 

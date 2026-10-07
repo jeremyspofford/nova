@@ -8,6 +8,7 @@ import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useTheme } from '../../stores/theme-store'
 import { AccountMenu } from './AccountMenu'
+import { SessionsList } from './SessionsList'
 import { appIcon, appIconHref } from '../../lib/app-icon'
 
 /** The one count a nav entry can carry (S11). A KEY, not a number: this
@@ -406,6 +407,10 @@ export function Sidebar({
             </div>
           )
         })}
+        {/* Chat sessions (2026-10-07): every conversation he has open, the
+            way Claude lists its chats — click to open, drag onto the chat to
+            split it. Hidden when the panel is collapsed, like every label. */}
+        {!collapsed && <SessionsList />}
       </nav>
 
       {/* Who is signed in, and where to go next. The card was static and

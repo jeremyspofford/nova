@@ -208,6 +208,21 @@ export type ChatAction =
    *  for (S24). null means "a brand-new conversation with no id yet", which
    *  cannot belong to anything else and is always accepted. */
   | { type: 'event'; event: StreamEvent; conversationId?: string | null }
+  /**
+   * The send's own request came back 202: core QUEUED it, because a turn is
+   * running elsewhere for this person (another chat session, or a room). The
+   * optimistic question and the empty reply bubble this send drew are taken
+   * back and the message becomes a queued chip — the same thing a message
+   * typed mid-turn in this pane becomes. Without this the bubble settled into
+   * "the turn finished without a reply" beside a chip saying it would run.
+   */
+  | {
+      type: 'sendQueued'
+      userId: string
+      assistantId: string
+      event: Extract<StreamEvent, { type: 'queued' }>
+      conversationId?: string | null
+    }
   | {
       type: 'reconcile'
       conversationId: string
@@ -1030,6 +1045,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // previous one would point Stop at a turn that already finished.
         turnId: null,
       }
+
+    case 'sendQueued': {
+      const startedFor = action.conversationId
+      if (startedFor != null && state.conversationId != null && startedFor !== state.conversationId) {
+        return state
+      }
+      // Only while that send's bubble is still the pending one: if anything
+      // has replaced it since, the rows are not this send's to take back.
+      if (state.pendingId !== action.assistantId) return applyEvent(state, action.event)
+      return applyEvent(
+        {
+          ...state,
+          rows: state.rows.filter(r => r.id !== action.userId && r.id !== action.assistantId),
+          streaming: false,
+          pendingId: null,
+          turnId: null,
+        },
+        action.event,
+      )
+    }
 
     case 'event': {
       // A LATE FRAME FROM ANOTHER ROOM IS DROPPED (S24).

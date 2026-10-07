@@ -346,11 +346,21 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             raise ToolFailure(NO_TIMEZONE)
         spec = _absolute_spec(args["at"]) if given == ["at"] else _repeat_spec(args["repeat"])
 
-    # The turn's own conversation is not on the ToolContext (it carries app,
-    # person, workspace root and the facts sink — nothing that names a turn),
-    # so the row lands in the person's ACTIVE conversation: the thread the chat
-    # page shows, which for a chat-created timer is the one being typed in.
-    conversation = await conversations.active_conversation(pool, person)
+    # WHERE IT LANDS: the chat session this turn is answering in, so a
+    # reminder set in one of several sessions comes back to that one. Anything
+    # that is not one of his sessions — a side room, an agent's or the beats'
+    # own log, or no conversation at all — falls back to his ACTIVE
+    # conversation, the hallway, which is where it always landed before.
+    conversation = None
+    if ctx.conversation_id is not None:
+        conversation = await pool.fetchrow(
+            "SELECT id FROM conversations WHERE id = $1 AND person_id = $2 "
+            "AND chat_session AND parent_message_id IS NULL",
+            ctx.conversation_id,
+            person.id,
+        )
+    if conversation is None:
+        conversation = await conversations.active_conversation(pool, person)
     store = _store()
     payload = (
         {"message": text.strip(), "device": device}

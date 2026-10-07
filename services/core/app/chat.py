@@ -5297,6 +5297,9 @@ async def _run_turn(
                 # payload off it onto the turn's action ledger.
                 undo_sink=[],
                 card=card,
+                # Which chat session this turn answers in, so a reminder set
+                # here lands here and not in the main session.
+                conversation_id=conversation_id,
             )
         else:
             advertised = tools.advertised_tools(persona.tool_names)
