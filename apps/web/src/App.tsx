@@ -17,6 +17,7 @@ import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ModelsPage } from './pages/models/ModelsPage'
 import { SpendPage } from './pages/spend/SpendPage'
+import { AboutPage } from './pages/about/AboutPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
@@ -148,6 +149,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/spend" element={<SpendPage />} />
+        <Route path="/about" element={<AboutPage />} />
         {/* The tab is in the PATH, not in component state: a settings
             page you cannot link to is one you have to give directions to
             ("scroll down past Models..."), and a refresh drops you back at

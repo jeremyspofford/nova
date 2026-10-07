@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -182,6 +184,86 @@ def _person(row: asyncpg.Record | None) -> Person | None:
     return Person(id=row["id"], name=row["name"], role=row["role"])
 
 
+# -- what each signed-in client is (the About page) ----------------------
+#
+# The web app says on every request whether it is running as an installed app
+# (the PWA) or in a browser tab — only the page can know: `display-mode:
+# standalone` is a fact about the window, not the request. A value that is not
+# one of the two is not stored (a hand-made request can send anything), and
+# nothing anywhere reads either to decide access: it is a description of the
+# client, shown on the About page and in nova_about.
+DISPLAY_HEADER = "x-nova-display"
+DISPLAYS = frozenset({"standalone", "browser"})
+USER_AGENT_MAX = 300
+# A session is written at most this often: the About page needs "seen in the
+# last few minutes", not one UPDATE per request.
+TOUCH_EVERY_S = 60.0
+_TOUCH_CACHE_MAX = 2048
+_touched: dict[str, tuple[float, str | None, str | None]] = {}
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def client_description(
+    user_agent: str | None, display: str | None
+) -> tuple[str | None, str | None]:
+    """(user_agent, display) as stored: the agent cut and stripped of control
+    characters, the display only when it is one of DISPLAYS."""
+    agent = _CONTROL.sub("", user_agent or "").strip()[:USER_AGENT_MAX] or None
+    shown = (display or "").strip().lower()
+    return agent, shown if shown in DISPLAYS else None
+
+
+async def touch_session(
+    pool: asyncpg.Pool, token: str, user_agent: str | None, display: str | None
+) -> None:
+    """Stamp the session with when it was last used and what it is.
+
+    Throttled in-process (TOUCH_EVERY_S), except that a change of what the
+    client says it is writes at once — a phone that just installed the app
+    reads as the app on the next page load, not a minute later."""
+    token_hash = hash_token(token)
+    agent, shown = client_description(user_agent, display)
+    now = time.monotonic()
+    last = _touched.get(token_hash)
+    if last is not None:
+        # A value this request did not send is not a change: the chat stream
+        # has its own fetch and says nothing about the window, and it must not
+        # read as the client turning into something else every other request.
+        agent_known = agent if agent is not None else last[1]
+        shown_known = shown if shown is not None else last[2]
+        if now - last[0] < TOUCH_EVERY_S and (agent_known, shown_known) == last[1:]:
+            return
+    else:
+        agent_known, shown_known = agent, shown
+    if len(_touched) >= _TOUCH_CACHE_MAX:
+        _touched.clear()
+    _touched[token_hash] = (now, agent_known, shown_known)
+    # COALESCE: a request that did not say (a stream, a fetch from outside the
+    # app's own wrapper) never erases what an earlier one did.
+    await pool.execute(
+        "UPDATE sessions SET last_seen_at = now(), "
+        "user_agent = COALESCE($2, user_agent), display = COALESCE($3, display) "
+        "WHERE token_hash = $1",
+        token_hash,
+        agent,
+        shown,
+    )
+
+
+async def _touch(request: Request, token: str) -> None:
+    try:
+        await touch_session(
+            await db.get_pool(),
+            token,
+            request.headers.get("user-agent"),
+            request.headers.get(DISPLAY_HEADER),
+        )
+    except Exception:
+        # Describing the client is never worth failing the request it rides
+        # on; the reason is logged, and the About page reads the row as it is.
+        logger.exception("could not record the session's client")
+
+
 async def _cookie_identity(token: str) -> Person | None:
     try:
         return await person_for_token(await db.get_pool(), token)
@@ -216,6 +298,7 @@ async def identity_middleware(request: Request, call_next):
         if person is not None:
             request.state.person = person
             request.state.auth_kind = "session"
+            await _touch(request, token)
             return await call_next(request)
 
     if is_public(request.scope):

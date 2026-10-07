@@ -61,7 +61,8 @@ describe('AccountMenu', () => {
       .getAllByRole('menuitem')
       .map(i => i.getAttribute('href'))
       .filter(Boolean)
-    expect(hrefs).toEqual(['/settings', '/spend', '/activity'])
+    // /about joined 2026-10-07 with its page (pages/about/AboutPage.tsx).
+    expect(hrefs).toEqual(['/settings', '/spend', '/activity', '/about'])
   })
 
   it('offers a guest only what a guest can reach', async () => {
@@ -73,7 +74,9 @@ describe('AccountMenu', () => {
       .getAllByRole('menuitem')
       .map(i => i.getAttribute('href'))
       .filter(Boolean)
-    expect(hrefs).toEqual(['/settings'])
+    // About is every signed-in person's: what this instance is, nothing
+    // anyone could change from it.
+    expect(hrefs).toEqual(['/settings', '/about'])
   })
 
   it('closes on Escape', async () => {

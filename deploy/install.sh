@@ -2205,6 +2205,55 @@ record_repository() {
   fi
 }
 
+# ---- the build this stack is brought up from (the About page) --------------
+#
+# Nothing said which commit a running hub was built from: the owner could not
+# tell which version he was on, and nothing could ask GitHub whether there was
+# anything newer. The checkout ./install runs from IS the build, so its HEAD
+# is the answer — derived here, never typed in — and compose hands it to core
+# (app/about.py), which shows it on the About page and in nova_about.
+#
+#   NOVA_COMMIT        HEAD, 40 hex
+#   NOVA_VERSION       `git describe --tags --always --dirty`
+#   NOVA_COMMIT_DATE   HEAD's committer date, ISO 8601
+#   NOVA_DIRTY         1 when tracked files differ from HEAD, else 0
+#   NOVA_INSTALLED_AT  when THIS stamp was first written (UTC)
+#
+# NOVA_INSTALLED_AT moves only when the stamp itself does: a re-run on the same
+# commit changes nothing in .env, so compose has no new config to recreate
+# core for. Not a checkout: every key blanked and one line saying so — a stamp
+# left over from an earlier install would name a build that is not this one.
+BUILD_KEYS="NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT"
+
+record_build() {
+  local commit version date dirty=0 key
+  if ! commit="$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD 2>/dev/null)" \
+    || ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
+    log "build: $REPO_ROOT has no git commit to read — no build stamp; the About page says the build is unknown"
+    for key in $BUILD_KEYS; do
+      [ -z "$(get_env_value "$key")" ] || set_env_value "$key" ""
+    done
+    return 0
+  fi
+  version="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null)" || version=""
+  date="$(git -C "$REPO_ROOT" show -s --format=%cI HEAD 2>/dev/null)" || date=""
+  if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    dirty=1
+  fi
+  if [ "$(get_env_value NOVA_COMMIT)" != "$commit" ] || [ "$(get_env_value NOVA_DIRTY)" != "$dirty" ]; then
+    set_env_value NOVA_INSTALLED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  [ "$(get_env_value NOVA_COMMIT)" = "$commit" ] || set_env_value NOVA_COMMIT "$commit"
+  [ "$(get_env_value NOVA_VERSION)" = "$version" ] || set_env_value NOVA_VERSION "$version"
+  [ "$(get_env_value NOVA_COMMIT_DATE)" = "$date" ] || set_env_value NOVA_COMMIT_DATE "$date"
+  [ "$(get_env_value NOVA_DIRTY)" = "$dirty" ] || set_env_value NOVA_DIRTY "$dirty"
+  if [ "$dirty" -eq 1 ]; then
+    log "build: ${commit:0:12} (${version:-no describe}) plus uncommitted changes — the About page says so"
+  else
+    log "build: ${commit:0:12} (${version:-no describe})"
+  fi
+}
+
 # ---- the tailnet sidecar's scripts, made part of its config ----------------
 #
 # The sidecar's scripts are files on a bind mount, not config: compose cannot
@@ -2370,6 +2419,9 @@ cmd_install() {
   record_compose_profiles
   # Before compose_up, so the core container this run creates reads it.
   record_repository
+  # Before compose_up, for the same reason: the core this run creates is the
+  # one whose About page names this commit.
+  record_build
   # Before compose_up: the hash it writes is what makes compose recreate the
   # sidecar when, and only when, one of its scripts changed.
   record_tailscale_scripts
