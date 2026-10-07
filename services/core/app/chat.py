@@ -1872,33 +1872,49 @@ class _SpanScrub:
 
     def __init__(self) -> None:
         self._pairs: dict[str, str] = {}
+        # The subset `tree` applies to the span's facts. Text she TYPED on a
+        # page is not in it (merge review round 2, 2026-10-07): a search she
+        # typed lands on /wiki/<it>, and the page fact's address and a
+        # download's name are the engine's words — scrubbing them turned an
+        # honest "I opened <that page>" into a correction and listed a file
+        # named "[masked]" that does not exist.
+        self._fact_pairs: dict[str, str] = {}
 
-    def add(self, value: object, replacement: str = "[masked]") -> None:
+    def add(self, value: object, replacement: str = "[masked]", *, in_facts: bool = True) -> None:
         for leaf in _leaves(value):
             if len(leaf) < mcp_client._MIN_CREDENTIAL_CHARS:
                 continue
             for form in (leaf, repr(leaf)[1:-1], json.dumps(leaf)[1:-1]):
                 self._pairs.setdefault(form, replacement)
+                if in_facts:
+                    self._fact_pairs.setdefault(form, replacement)
 
     def __call__(self, text: str) -> str:
-        for secret in sorted(self._pairs, key=len, reverse=True):
-            if secret in text:
-                text = text.replace(secret, self._pairs[secret])
-        return text
+        return _replace_all(text, self._pairs)
 
     def tree(self, value: object) -> object:
         """The same scrub over every string in a JSON-shaped value — the
         span's `facts`, where a refused connect still names what it was
         given (`mcp_server`)."""
-        if not self._pairs:
+        if not self._fact_pairs:
             return value
         if isinstance(value, str):
-            return self(value)
+            return _replace_all(value, self._fact_pairs)
         if isinstance(value, dict):
-            return {self(k) if isinstance(k, str) else k: self.tree(v) for k, v in value.items()}
+            return {
+                _replace_all(k, self._fact_pairs) if isinstance(k, str) else k: self.tree(v)
+                for k, v in value.items()
+            }
         if isinstance(value, list):
             return [self.tree(item) for item in value]
         return value
+
+
+def _replace_all(text: str, pairs: dict[str, str]) -> str:
+    for secret in sorted(pairs, key=len, reverse=True):
+        if secret in text:
+            text = text.replace(secret, pairs[secret])
+    return text
 
 
 def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
@@ -2140,9 +2156,14 @@ def _typed_text_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) 
     if tool_name != "browser_act" or not isinstance(parsed, dict):
         return parsed
     value = parsed.get("value")
-    if parsed.get("action") not in _TYPED_BROWSER_ACTIONS or not isinstance(value, str):
+    action = parsed.get("action")
+    # Read as the tool reads it (tools/browser.py: stripped, lower-cased), so
+    # "Type" — which the tool runs as a type — is masked as one.
+    if not isinstance(action, str) or action.strip().lower() not in _TYPED_BROWSER_ACTIONS:
         return parsed
-    sink.add(value)
+    if not isinstance(value, str):
+        return parsed
+    sink.add(value, in_facts=False)
     return {**parsed, "value": _masked(value)}
 
 

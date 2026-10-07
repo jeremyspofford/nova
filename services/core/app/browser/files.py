@@ -369,7 +369,16 @@ def _bring_in(
                 f"could not read the free space in {folder}/: {exc.strerror or exc}"
             ) from exc
         free = disk.f_bavail * disk.f_frsize
-        if free - info.st_size < MIN_FREE_BYTES_AFTER:
+        # On one disk (the shipped stack's named volumes) the engine's copy is
+        # removed once this lands, so what the disk keeps is what it has now;
+        # only the copy itself needs room while both exist (merge review
+        # round 2: the engine's copy was counted twice).
+        try:
+            same_disk = os.stat(destination_dir).st_dev == info.st_dev
+        except OSError:
+            same_disk = False
+        needed = info.st_size if same_disk else info.st_size + MIN_FREE_BYTES_AFTER
+        if free < needed or (same_disk and free < MIN_FREE_BYTES_AFTER):
             reason = _remove(source)
             kept = (
                 "the engine's copy was removed"

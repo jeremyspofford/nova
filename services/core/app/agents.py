@@ -1545,6 +1545,10 @@ def _cost_words(facts: RunFacts) -> str:
     return money(facts.cost_usd)
 
 
+# How many file names the facts line names before it states the rest as a count.
+FACTS_FILES_SHOWN = 20
+
+
 def compose_result(facts: RunFacts, report: str) -> str:
     """The delegate tool's result: the facts FIRST (a small model reads the
     top line and stops), each derived from the trace, then the agent's own
@@ -1555,7 +1559,13 @@ def compose_result(facts: RunFacts, report: str) -> str:
         f"{_plural(facts.calls, 'call')} ({facts.calls_ok} ok, {facts.calls_failed} failed) · "
         f"{_seconds_words(facts.seconds)} · {cost} · trace {facts.turn_id}]"
     ]
-    written = f"Files written in agents/{facts.agent}/: {', '.join(facts.files) or 'none'}"
+    shown = ", ".join(facts.files[:FACTS_FILES_SHOWN]) or "none"
+    if len(facts.files) > FACTS_FILES_SHOWN:
+        # A page can bring in thousands of downloads (merge review round 2):
+        # the line names the first ones and states the count, never all of
+        # them in the delegate's result.
+        shown += f" … and {len(facts.files) - FACTS_FILES_SHOWN} more"
+    written = f"Files written in agents/{facts.agent}/: {shown}"
     if facts.unreadable_writes:
         written += (
             f"; plus {_plural(facts.unreadable_writes, 'successful write')} whose path could "

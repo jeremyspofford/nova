@@ -510,7 +510,7 @@ async def test_a_token_as_the_server_name_through_the_chat_loop_stores_no_secret
 # -- S38 (merge review, 2026-10-07): what she types on a page ----------------
 
 
-@pytest.mark.parametrize("action", ["type", "accept"])
+@pytest.mark.parametrize("action", ["type", "accept", "Type", " type", "TYPE", "Accept"])
 def test_text_she_typed_on_a_page_is_recorded_as_its_length(action):
     """A password typed into a sign-in form, or a prompt's answer, must never
     sit in turn_spans or on Activity (the S38 plan: typed text is never
@@ -538,3 +538,34 @@ def test_what_she_chose_or_pressed_on_a_page_is_recorded_as_it_was(args):
 def test_another_tools_value_argument_is_left_as_it_was():
     args = {"action": "type", "value": "hello"}
     assert chat._span_record(json.dumps(args), "memory_save")[0] == args
+
+
+def test_typed_text_never_rewrites_the_pages_own_facts():
+    """A search she typed lands on /wiki/<it>, and a download can be named after
+    it: those are the engine's words, and the guard and the agent's facts line
+    read them (merge review round 2). The typed text is still masked in the
+    arguments and scrubbed from the result and the error."""
+    raw = json.dumps({"action": "type", "ref": "e12", "value": "Photosynthesis", "submit": True})
+    recorded, scrub = chat._span_record(raw, "browser_act")
+    assert recorded["value"] == "<masked:14 chars>"
+    assert "Photosynthesis" not in scrub(
+        "The page is now https://en.wikipedia.org/wiki/Photosynthesis"
+    )
+    facts = [
+        {"browser": "page", "url": "https://en.wikipedia.org/wiki/Photosynthesis", "title": "x"},
+        {"browser": "download", "path": "downloads/Photosynthesis.pdf", "bytes": 3},
+    ]
+    assert scrub.tree(facts) == facts
+
+
+def test_a_credential_is_still_scrubbed_from_the_facts():
+    """Only typed text is kept out of the facts' scrub; everything else masked
+    on a call still is (S37a final review, F-H1)."""
+    scrub = chat._SpanScrub()
+    scrub.add("ghp_secret_value")
+    scrub.add("Photosynthesis", in_facts=False)
+    fact = {"mcp_server": "ghp_secret_value", "url": "https://x.invalid/wiki/Photosynthesis"}
+    assert scrub.tree([fact]) == [
+        {"mcp_server": "[masked]", "url": "https://x.invalid/wiki/Photosynthesis"}
+    ]
+    assert scrub("ghp_secret_value Photosynthesis") == "[masked] [masked]"

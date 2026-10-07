@@ -836,6 +836,14 @@ _BROWSER_PAGE_FIELD_TOKENS = frozenset({"field", "fields", "form", "forms"})
 # one that opens with a condition ("if I clicked…") claims nothing.
 _BROWSER_RECAP_TOKENS = frozenset({"earlier", "before", "yesterday", "previously", "last"})
 _BROWSER_HYPOTHETICAL_TOKENS = frozenset({"if", "when", "once", "unless", "whether", "until"})
+# Of those, the words that are as often TEMPORAL in her past-tense narration
+# ("once the page loaded I clicked Submit"): they cut the page-control nouns
+# only when what follows them is about him or the future — "you", or a modal
+# (merge review round 2, 2026-10-07). "if", "unless" and "whether" always cut.
+_BROWSER_TEMPORAL_CONDITION_TOKENS = frozenset({"when", "once", "until"})
+_BROWSER_HYPOTHETICAL_MARKERS = frozenset(
+    {"you", "you're", "your", "would", "will", "could", "should", "might", "can"}
+)
 # S38 (ruling G2, spec §4's "or downloaded"): "I downloaded <file>" — a real
 # filename token as the verb's own object (_objects_of, the file claims' rule)
 # — is backed only by a download her browser brought into the workspace this
@@ -1473,10 +1481,20 @@ def _claims_in(
     # matches the span's clean URL ("…/data." -> "…/data").
     urls = [_strip_trailing_punct(m.group(0)) for m in _URL.finditer(clause)]
     if urls:
+        # The claim's verb is the clause's first OLDER fetch verb when it has
+        # one (merge review round 2): "I opened and read <url>" is a read,
+        # which the exemptions for the browser's two verbs must never skip.
+        browser_tok = None
         for vi, tok in enumerate(tokens):
             if tok.lower() in _FETCH_VERB_TOKENS and _first_person_subject(tokens, vi):
-                claims.append(("fetched_url", urls[0], tok))
-                break
+                if tok.lower() not in _BROWSER_FETCH_VERBS:
+                    claims.append(("fetched_url", urls[0], tok))
+                    break
+                if browser_tok is None:
+                    browser_tok = tok
+        else:
+            if browser_tok is not None:
+                claims.append(("fetched_url", urls[0], browser_tok))
 
     # S38: an action on a page — I + clicked/typed/submitted… + a page-control
     # noun later in the clause (which nouns: the verb's own set, ruling G2).
@@ -1495,10 +1513,18 @@ def _claims_in(
         # later conditional ("I typed up the cover letter, so when you click
         # the button it sends") is about what HE may do, and must not anchor
         # the verb before it (merge review, 2026-10-07).
+        # A temporal word cuts only when a "you" or a modal follows it in the
+        # clause: the LAST such marker is found once, so the cut stays one pass.
+        last_marker = -1
+        for i, low in enumerate(lowered):
+            if low in _BROWSER_HYPOTHETICAL_MARKERS or low.endswith("'ll"):
+                last_marker = i
         last_click_object = last_choice_object = -1
         first_condition = len(lowered)
         for i, low in enumerate(lowered):
-            if low in _BROWSER_HYPOTHETICAL_TOKENS:
+            if low in _BROWSER_HYPOTHETICAL_TOKENS and (
+                low not in _BROWSER_TEMPORAL_CONDITION_TOKENS or last_marker > i
+            ):
                 first_condition = i
                 break
             if low in click_objects:
@@ -1977,6 +2003,16 @@ def _browser_downloaded(spans: Sequence[Any]) -> bool:
     )
 
 
+# The tools that can themselves open something (merge review round 2): a
+# device listing or reading a file opens no page, so after device_info alone
+# "I opened <url>" is still the fabrication it was.
+_OPENING_TOOLS = frozenset({"mcp_call", "device_run", "device_launch_app"})
+# The verbs that claim REACHING an address, which a failed browser call that
+# filed a page fact backs. "Read" and the rest claim its content: an error
+# page, or one whose snapshot failed, backs none of them.
+_REACH_FETCH_VERBS = frozenset({"opened", "navigated", "visited", "accessed"})
+
+
 def _opened_by_another_tool(successful: Sequence[Any]) -> bool:
     """Whether a tool that can itself open something succeeded this turn: an
     MCP call ("I opened PR #121 at <url>" through a GitHub server) or a device
@@ -1984,9 +2020,7 @@ def _opened_by_another_tool(successful: Sequence[Any]) -> bool:
     "I opened/navigated <url>" with no browser span is that tool's work, not a
     claim about her browser (merge review, 2026-10-07: the browser's two verbs
     must not retract an honest report main never read as a fetch)."""
-    return any(
-        span.name == "mcp_call" or span.name.startswith(_DEVICE_SPAN_PREFIX) for span in successful
-    )
+    return any(span.name in _OPENING_TOOLS for span in successful)
 
 
 def _failed_pages(spans: Sequence[Any]) -> list[Any]:
@@ -2041,7 +2075,7 @@ def narration_check(
     delegated: bool | None = None  # read on the first claim that asks
     failed_pages: list[Any] | None = None  # read on the first unbacked fetch claim
     unbacked: list[UnbackedClaim] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, bool]] = set()
     reported: set[tuple[str, str | None]] = set()
     found = [
         claim
@@ -2057,10 +2091,15 @@ def narration_check(
         for claim in _results_in(sentence, names)
     ]
     for kind, target, phrase in found:
-        key = (kind, (target or "").lower())
+        verb = phrase.lower()
+        reach = kind == "fetched_url" and verb in _REACH_FETCH_VERBS
+        # Reaching an address and reading it are judged apart (merge review
+        # round 2): "I opened X. I read X: …" after a 404 open must still
+        # judge the read the error page cannot back.
+        key = (kind, (target or "").lower(), reach)
         if key in seen:
             continue
-        browser_verb = kind == "fetched_url" and phrase.lower() in _BROWSER_FETCH_VERBS
+        browser_verb = kind == "fetched_url" and verb in _BROWSER_FETCH_VERBS
         if kind in _BROWSER_DELEGABLE_KINDS or browser_verb:
             # S38 (ruling G9): her browser agent may have done it on its
             # own turn, which this turn's spans cannot show. The key is NOT
@@ -2071,10 +2110,12 @@ def narration_check(
                 delegated = _a_delegation_ran(spans)
             if delegated:
                 continue
-        seen.add(key)
         if browser_verb and not on_a_page and _opened_by_another_tool(successful):
+            # Before `seen`, as G9's exemption is: a skipped "opened" must not
+            # record the address as judged for a later "I fetched" of it.
             continue
-        if kind == "fetched_url" and not _backed(kind, target, successful, record):
+        seen.add(key)
+        if reach and not _backed(kind, target, successful, record):
             if failed_pages is None:
                 failed_pages = _failed_pages(spans)
             if failed_pages and _backed(kind, target, failed_pages, record):

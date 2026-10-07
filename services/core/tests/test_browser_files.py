@@ -729,46 +729,81 @@ def test_a_stuck_temp_file_after_a_successful_link_is_logged_not_a_failed_bring_
 # -- the merge review (2026-10-07): the disk she shares with postgres --------
 
 
-def _free(monkeypatch, free_bytes: int) -> None:
-    real = os.statvfs
+def _free(monkeypatch, free_bytes: int, *, other_disk: bool = False) -> None:
+    real_statvfs, real_stat = os.statvfs, os.stat
 
-    def fake(path):
-        real(path)  # the folder must still exist and be readable
+    def statvfs(path):
+        real_statvfs(path)  # the folder must still exist and be readable
         return os.statvfs_result((4096, 4096, 0, 0, free_bytes // 4096, 0, 0, 0, 0, 255))
 
-    monkeypatch.setattr(files.os, "statvfs", fake)
+    monkeypatch.setattr(files.os, "statvfs", statvfs)
+    if other_disk:
+        # The workspace folder on another device than the engine's volume.
+        def stat(path, *args, **kwargs):
+            result = real_stat(path, *args, **kwargs)
+            if Path(path).name == "downloads":
+                fields = list(result)
+                fields[2] = result.st_dev + 1  # st_dev
+                return os.stat_result(fields)
+            return result
+
+        monkeypatch.setattr(files.os, "stat", stat)
 
 
-def test_a_download_that_would_leave_the_disk_short_is_stated_not_copied_and_removed(
+def test_a_disk_already_under_the_floor_takes_no_download_and_frees_the_engines_copy(
     dirs, monkeypatch
 ):
-    """The per-file cap bounds ONE download, not how many a page can send; a
-    copy that would leave less than the floor free is a stated cannot."""
+    """The per-file cap bounds ONE download, not how many a page can send."""
     output, workspace = dirs
     _put(output, "report.bin", b"x" * 8192)
-    _free(monkeypatch, files.MIN_FREE_BYTES_AFTER + 4096)
+    free = files.MIN_FREE_BYTES_AFTER - 4096
+    _free(monkeypatch, free)
     with pytest.raises(files.HandoffError) as caught:
         files.bring_in(
             "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
         )
     assert str(caught.value) == (
-        f"report.bin is 8,192 bytes and the workspace's disk has "
-        f"{files.MIN_FREE_BYTES_AFTER + 4096:,} bytes free; bringing it in would leave less "
-        "than 1 GiB, so it was not copied, and the engine's copy was removed"
+        f"report.bin is 8,192 bytes and the workspace's disk has {free:,} bytes free; "
+        "bringing it in would leave less than 1 GiB, so it was not copied, and the "
+        "engine's copy was removed"
     )
     assert not (output / "report.bin").exists()
     assert list((workspace / "downloads").iterdir()) == []
 
 
-def test_a_download_that_leaves_the_floor_free_is_brought_in(dirs, monkeypatch):
+def test_on_one_disk_the_engines_copy_is_not_counted_twice(dirs, monkeypatch):
+    """Both volumes on one disk (the shipped stack): the engine's copy goes once
+    this lands, so the disk keeps what it has — just over the floor is room."""
     output, workspace = dirs
-    _put(output, "report.bin", b"x" * 4096)
+    _put(output, "report.bin", b"x" * 8192)
     _free(monkeypatch, files.MIN_FREE_BYTES_AFTER + 4096)
     brought = files.bring_in(
         "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
     )
     assert brought.path == "downloads/report.bin"
-    assert (workspace / "downloads" / "report.bin").read_bytes() == b"x" * 4096
+
+
+def test_on_another_disk_the_copy_must_leave_the_floor(dirs, monkeypatch):
+    output, workspace = dirs
+    _put(output, "report.bin", b"x" * 8192)
+    free = files.MIN_FREE_BYTES_AFTER + 4096
+    _free(monkeypatch, free, other_disk=True)
+    with pytest.raises(files.HandoffError) as caught:
+        files.bring_in(
+            "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert "bringing it in would leave less than 1 GiB" in str(caught.value)
+    assert not (output / "report.bin").exists()
+
+
+def test_on_another_disk_a_copy_that_leaves_the_floor_is_brought_in(dirs, monkeypatch):
+    output, workspace = dirs
+    _put(output, "report.bin", b"x" * 4096)
+    _free(monkeypatch, files.MIN_FREE_BYTES_AFTER + 4096, other_disk=True)
+    brought = files.bring_in(
+        "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+    )
+    assert (workspace / brought.path).read_bytes() == b"x" * 4096
 
 
 def test_free_space_that_cannot_be_read_is_stated_and_keeps_the_engines_copy(dirs, monkeypatch):
@@ -785,5 +820,5 @@ def test_free_space_that_cannot_be_read_is_stated_and_keeps_the_engines_copy(dir
         files.bring_in(
             "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
         )
-    assert str(caught.value) == ("could not read the free space in downloads/: Input/output error")
+    assert str(caught.value) == "could not read the free space in downloads/: Input/output error"
     assert (output / "report.bin").exists()

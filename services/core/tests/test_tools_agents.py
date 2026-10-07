@@ -391,6 +391,23 @@ def test_files_her_browser_brought_in_are_files_on_the_facts_line():
     )
 
 
+def test_the_facts_line_names_twenty_files_and_counts_the_rest():
+    """A page can bring in thousands of downloads: the line names the first
+    twenty and states how many more, never all of them in her context."""
+    agent = _agent_value()
+    turn = traces.Turn(id=uuid.UUID(int=5), started_at=datetime.now(UTC), agent_id=agent.id)
+    downloads = [{"browser": "download", "path": f"downloads/f{i}.bin"} for i in range(3000)]
+    now = datetime.now(UTC)
+    turn.spans.append(traces.Span("tool", "browser_act", now, 1, {"ok": True, "facts": downloads}))
+    facts = agents.run_facts(agent, turn, status="ok", seconds=1.0, usage=None)
+    assert len(facts.files) == 3000
+    line = next(
+        x for x in agents.compose_result(facts, "done").splitlines() if x.startswith("Files")
+    )
+    assert line.endswith("downloads/f19.bin … and 2980 more")
+    assert len(line) < 600
+
+
 def test_rounds_are_the_span_count_and_a_part_priced_cost_says_so():
     """A metered round and a round that failed before the gateway stated
     anything: TWO gateway calls happened, so rounds is 2. turn_usage counts

@@ -762,3 +762,90 @@ def test_a_failed_fetch_url_still_backs_nothing():
     spans = [_span("fetch_url", ok=False, args={"url": "https://example.com/missing"})]
     reply = "I fetched https://example.com/missing but it answered 404."
     assert _kinds(guards.narration_check(reply, spans)) == ["fetched_url"]
+
+
+# -- the merge review, round 2 (2026-10-07): the round-1 fixes held to main --
+#
+# None of the exemptions above may ever be LESS strict than main, which never
+# read "opened" or "navigated" as a fetch at all.
+
+_OPENER_SPANS = [
+    _span("mcp_call", args={"server": "weather", "tool": "forecast"}),
+    _span("device_run", args={"device": "DELL-XPS-8950", "command": "dir"}),
+]
+
+
+@pytest.mark.parametrize("opener", _OPENER_SPANS, ids=["mcp_call", "device_run"])
+@pytest.mark.parametrize(
+    "reply,verb",
+    [
+        ("I opened https://news.example/a. I fetched https://news.example/a.", "fetched"),
+        ("I opened https://news.example/a; I visited https://news.example/a.", "visited"),
+        ("I navigated to https://news.example/a, then I read https://news.example/a.", "read"),
+        ("I opened and read https://news.example/a: rates rose.", "read"),
+        ("I've opened and visited https://news.example/a.", "visited"),
+    ],
+)
+def test_an_exempted_open_never_lets_an_older_verb_through(reply, verb, opener):
+    correction = guards.narration_check(reply, [opener])
+    assert [(c.kind, c.phrase) for c in correction.claims] == [("fetched_url", verb)], reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I opened and read https://news.example/a: rates rose.",
+        "I've opened and fetched https://news.example/a.",
+    ],
+)
+def test_a_delegation_never_backs_an_older_verb_in_the_same_clause(reply):
+    assert _kinds(guards.narration_check(reply, [_delegation()])) == ["fetched_url"], reply
+
+
+@pytest.mark.parametrize(
+    "tool", ["device_info", "device_list", "device_list_files", "device_read_file", "mcp_tools"]
+)
+def test_a_tool_that_opens_nothing_backs_no_open(tool):
+    reply = "I opened https://news.example/a and the top story is the merger."
+    assert _kinds(guards.narration_check(reply, [_span(tool)])) == ["fetched_url"]
+
+
+def test_device_launch_app_can_open_a_page():
+    reply = "I opened https://example.com/docs in Edge on DELL-XPS-8950."
+    assert guards.narration_check(reply, [_span("device_launch_app")]) is None
+
+
+def _failed_open(url: str, status: int | None = 404):
+    return _span("browser_open", ok=False, args={"url": url}, facts=[_error_page(url, status)])
+
+
+@pytest.mark.parametrize("status", [404, None], ids=["4xx", "snapshot-error"])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I read https://news.example/a and it says the Fed raised rates.",
+        "I opened https://news.example/a. I read https://news.example/a: rates rose.",
+        "I fetched https://news.example/a and it says rates rose.",
+    ],
+)
+def test_an_error_page_backs_reaching_the_address_never_reading_it(reply, status):
+    correction = guards.narration_check(reply, [_failed_open("https://news.example/a", status)])
+    assert _kinds(correction) == ["fetched_url"], reply
+    assert correction.claims[0].phrase in ("read", "fetched")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I clicked, and once the page loaded I clicked the Submit button.",
+        "I typed your name, and when it was ready I clicked the button.",
+        "I selected Express from the dropdown once it loaded.",
+        "I pressed the button until it responded.",
+    ],
+)
+def test_a_temporal_when_or_once_in_her_narration_is_no_condition(reply):
+    """Past-tense "when"/"once"/"until" are time, not a hypothetical: the claim
+    after them is still hers to back. Only a "you" or a modal after the word
+    makes it a condition (CONDITIONAL_CONTROLS above)."""
+    assert _kinds(guards.narration_check(reply, [])) == ["browser_acted"], reply
+    assert guards.narration_check(reply, [_span("browser_act")]) is None
