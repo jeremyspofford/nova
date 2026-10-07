@@ -66,6 +66,26 @@ camera, one photo per step or live video, on a local model where one can do
 it) → the doing lane from S29, without S30b. S46b (wake in chat) and the rest
 of the hub lane stay paused.
 
+**2026-10-07, the owner widened model machines past Ollama.** The Dell's
+Ollama had been down since 10-05, and the port was right. Looking into it
+showed that a remote model machine can be nothing but Ollama today: the
+gateway's engine is an adapter=ollama row, it refuses any engine but the
+bundled one, and S44 was designed around Ollama too. The owner: "ollama
+shouldn't be the only one. I want vllm, and other ones too. people should be
+able to choose or we ship nova with the capability of setting up any remote
+inference application on any device." That is now a slice of its own,
+**any-runtime engines** (row below). It is **not built now**: "We need nova to
+do things first, then we can start hoping nova can build that herself." It
+comes after the doing lane's self-coding (S32/S32b), as work she builds.
+
+**2026-10-07, the owner put the doing lane straight after S42b** ("Let's get
+her to do things asap"; option B). This supersedes the 10-06 order above. The
+order after S42b is now: S29 → S30 → **S30b** (back beside S30, since installs
+need admin rights) → S32 → S32b → S33 → S34 → S35 → S34b → S37c → S32c → S37d →
+the install walk → S39. **Provider balances, S46a and S46c wait until after
+S32b** (self-coding). Until then the Dell is woken by hand, and OpenRouter and
+Anthropic balances are not shown.
+
 ---
 
 ## The order of work
@@ -82,8 +102,9 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
 | — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S47 shipped 2026-09-26, walked 2026-09-30** (setup QR codes for a phone, a machine or a model server). **S42a shipped 2026-09-28** (the agent on every OS). **S42b in progress** (install, service, downloads, the code card, the hub's own agent). **Paused by the owner 2026-09-30:** S46a, S46b, S43a, S43b, S44, S48, S49 — the doing lane goes next (row below). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
 | — | **The decision role — Jev and Kev** ([`decision-role/spec.md`](decision-role/spec.md)) | **Shipped 2026-09-29** (PR #85), **with a local/cloud switch** the same day (PR #86), after the owner pulled it forward from the optional list on 2026-09-27. Built on `slice/decisions` ([plan](decision-role/plan.md), close-out at its end): the gateway's `decisions` role and `POST /v1/systemone`; core asks two questions (the tool hint, the recall check) on typed turns and eval turns, fail-open in 5 s; Routing and Models; a Jev Router switch on chat, scheduled and agent roles. **Measured** on the deployed stack (`dell:qwen3:8b` chatting, the whole eval corpus × 3): with Jev (cloud, the default) answering, 90 of 90 turns decided in 0.7 s median, no case worse and three better, and the S47 phone case went from 1 of 3 right to 3 of 3. Kev (local) shares the Dell's GPU with the chat model and decided only 1 of 90 turns in time, so its arm is not yet judged — the reason local ships off by default. Walked in the owner's real chat 2026-09-30. The Kev engine on the Dell (spec §5) is a separate, later plan. |
-| — | **The doing lane — S29–S39** ([`doing-things.md`](doing-things.md)) | **Next after S42b and the provider-balances slice** (owner, 2026-09-30; order revised 2026-10-05). Designed 2026-09-18 and refreshed 2026-09-30. **Self-coding was moved forward and widened 2026-10-05** in [`nova-codes.md`](nova-codes.md), which wins where the two docs differ. Order: S29 → S30 (+ part-file edits, code search) → S32 → S32b (outside coders, Nova driving) → S33 → S34 → S35 (frontier first, then local) → S34b (she starts work herself) → S37c (she reacts, widened to monitoring and CI) → S32c (other repos) → S30b (the standing admin path, owner Q17) → S37d → the install walk → S39. **S38 (her browser) and then S38b (reading past the context) run in parallel now**, beside S37a (owner, 2026-09-30). Every open question in `doing-things.md` was answered 2026-09-30. S31 is superseded by S42b. |
+| — | **The doing lane — S29–S39** ([`doing-things.md`](doing-things.md)) | **Next, straight after S42b** (owner, 2026-10-07: provider balances, S46a and S46c moved after S32b). Designed 2026-09-18 and refreshed 2026-09-30. **Self-coding was moved forward and widened 2026-10-05** in [`nova-codes.md`](nova-codes.md), which wins where the two docs differ. Order: S29 → S30 (+ part-file edits, code search) → S30b (the standing admin path, owner Q17; moved here 2026-10-07) → S32 → S32b (outside coders, Nova driving) → S33 → S34 → S35 (frontier first, then local) → S34b (she starts work herself) → S37c (she reacts, widened to monitoring and CI) → S32c (other repos) → S37d → the install walk → S39. **S38 (her browser) and then S38b (reading past the context) run in parallel now**, beside S37a (owner, 2026-09-30). Every open question in `doing-things.md` was answered 2026-09-30. S31 is superseded by S42b. |
 | — | **S37a — the MCP client** | **In progress since 2026-09-30** (`slice/mcp-client`, spec `s37a/spec.md` on that branch), beside S42b. The first part of the doing lane's integrations: GitHub's MCP server for CI, and whatever MCP server an installed app brings. |
+| — | **Any-runtime engines** (no spec yet) | **Owner goal 2026-10-07, after the doing lane's self-coding (S32/S32b), meant for her to build.** A model machine is any inference runtime the user picks (Ollama, vLLM, llama.cpp and others), never Ollama only: the gateway's engine becomes a runtime adapter, with list, pull, remove, health and "what is loaded" per runtime, so `model_pull`, `model_remove`, the catalogue and `machine_status` work on any machine. She installs, starts, updates and repairs a runtime on any paired device through her agent, which needs S30 (a job that outlives a 120 s `device_run`). S44's transport, lease and hold, when un-paused, carry over unchanged and must not assume Ollama. Until then, a remote Ollama stays an `openai-chat` provider row (the Dell's `dell`), which she can restart with `device_run` but cannot pull onto. |
 | — | **S50–S52 — one Devices page, the Nova page, devices she can see into** ([`s50-devices-config-router.md`](s50-devices-config-router.md)) | **Designed 2026-10-06, unscheduled, low priority** (owner: "I'd rather do other things instead"). S50: one card per physical computer, with storage and activity. S51: a `/nova` page for her configuration, absorbing S37b. S52: device health, the router (browser driver first, needs S38). |
 | 4 | **S26 — the quality corpus** | Nothing built. A spec was written 2026-09-25 on `slice/s26` (`a3f61c99`), not on `main`, and waits on the owner's review. Order (2026-09-30): after the doing lane and the paused hub slices. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
