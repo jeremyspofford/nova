@@ -11,9 +11,11 @@ Asked for 2026-10-07 by the owner:
 > nova to also be able to check if there are any updates to pull, download and
 > install. Is that a possible feature too?
 
-**Part 1 (the page, the version, the check) is built.** Part 2 (pull, download
-and install) is possible and designed below. It is not built, because it
-depends on S30.
+**Both parts are built.** Part 1 (the page, the version, the check) merged
+in PR #123. Part 2 (pull, download and install, from chat or the page) was
+asked for the same day ("go ahead and build the update install part too") and
+is built as designed below, without waiting for S30. Its long run is the
+installer's own detached job on the hub, which the next core decides.
 
 ---
 
@@ -73,79 +75,65 @@ disagree about what is running.
 
 ---
 
-## Part 2: pulling and installing an update (designed, not built)
+## Part 2: pulling and installing an update (built)
 
-### Yes, it is possible
+### How it runs
 
-The pieces mostly exist:
+1. **Start**: `nova_update` (her tool) or **Update now** on `/about`, which
+   is the same `nova_updates.start`. It runs only when GitHub says there is
+   something to fast-forward to, the hub was brought up clean, the checkout's
+   path is known (`NOVA_CHECKOUT`, written by `record_build`), and the hub's
+   own agent is connected. Otherwise it fails with the reason. A
+   `nova_updates` row is opened as `sent` **before** anything is sent. A
+   unique partial index holds one open update at a time.
+2. **Send**: one signed `shell.exec` to the hub's own agent. The script is
+   composed in core with every value quoted (`launch_script`). It runs
+   `./install update --attempt <id>` **detached**: a `systemd-run --user`
+   transient unit when there is one (it survives the agent's own restart),
+   then system `systemd-run` as root, then `setsid`/`nohup`. Output goes to
+   `deploy/.update-<id8>.log` (gitignored). The command answers `started: …`,
+   and the tool says **started**, never installed.
+3. **`./install update`** (`cmd_update`): it refuses (with a report) a missing
+   `NOVA_REPO_BRANCH`, a checkout on another branch, uncommitted tracked
+   changes, a failed fetch, or a diverged branch. Already at `origin/<branch>`
+   is reported as `up_to_date`. Otherwise it **backs up first** (S41; a failed
+   backup refuses with nothing changed), runs `git merge --ff-only`, then
+   `cmd_install`. If that install fails, it runs `git reset --keep` back to the
+   old commit and installs again, then reports `failed` with which half held.
+4. **Decide**: the installer runs `python -m app.updates_cli finish` in the
+   core it just brought up. `installed` becomes **confirmed only if that core's
+   own `NOVA_COMMIT` is the target**. Otherwise it is recorded as `failed`,
+   naming both commits. A `sent` row nobody decides within 45 minutes reads as
+   `not_confirmed` (the job died, the host rebooted, core was unreachable),
+   with the log's path. A hand-run `./install update` reports too, as
+   "by hand on the hub".
 
-- **Something that can act on the host.** The hub's own agent (S42b P23) runs
-  on the mini PC beside the stack. It is the device whose socket came through
-  the host's own door (`last_transport == "host"`). Core already composes argv
-  for it and sends `shell.exec` (`agent_updates.py` does exactly this for agent
-  builds).
-- **Something that knows the target.** Part 1's check names the exact commit
-  to move to.
-- **Something that can verify.** After the update, the new core's
-  `NOVA_COMMIT` either is the target commit or is not. That is a fact, not a
-  sentence.
+`nova_about` and the page both show the latest attempt. While one is in
+flight the page re-reads every 10 s, and says "Nova is restarting" when a
+read fails during the restart.
 
-### Why it is not built yet
+### What was checked
 
-1. **The update restarts the thing that asked for it.** `./install` recreates
-   core. The turn that started the update dies with it. The update has to run
-   detached from the turn, and its result has to be read by the *next* core.
-2. **It takes minutes.** Image builds take minutes. `device_run` and the agent
-   command path stop at 120 s. That is S30's gap ("jobs that outlive a turn"),
-   which is next in the doing lane.
-3. **The hub's agent can be restarted by the install.** `install_hub_agent`
-   can replace and restart novad. A child started inside novad's systemd
-   cgroup dies with it. The update has to be started outside that cgroup
-   (`systemd-run --user --unit nova-update …` on Linux; a scheduled task on
-   Windows/WSL).
+- `deploy/install_test.sh`: 26 `cmd_update` cases against real git (a bare
+  origin and a clone): fast-forward and install at the new commit, rollback
+  and reinstall of the old one, both failing, backup failure, nothing new,
+  diverged, dirty, wrong branch, no branch recorded, bad arguments.
+- `tests/test_nova_updates.py`: start/refuse/one-at-a-time/stale, finish
+  confirmed only by the reporting core's commit, the CLI, the tool, the
+  route, and the real launch script run under `sh` (detached, quoted, exact
+  argv).
+- A live walk in a cloud container with no Docker daemon. Core ran under
+  uvicorn and the **real `novad` agent** was built, paired and connected
+  through the host door. **Update now** in Chromium led to a signed
+  `shell.exec`, then the agent ran the launch script, which detached
+  `./install update --attempt …` (a stand-in installer that reports through
+  the real `updates_cli`). The page went from "started, not yet reported
+  back" to "Updated 6665a73 → eb14e30" by itself. The real installer was
+  not run end to end (it needs Docker); its logic is the 26 cases above.
 
-### The design
+### Still to walk on the hub
 
-**`./install update`** (replacing today's stub; infrastructure, in git):
-
-1. Refuse with a stated reason if the tree is dirty, HEAD is not on the
-   recorded default branch, or the branch has diverged. Only fast-forward.
-2. `./install backup` first (S41). A failed backup stops the update.
-3. `git fetch` then `git merge --ff-only origin/<branch>`.
-4. Run `cmd_install` (records the new build stamp, `up -d --build`, waits for
-   health, verifies the tailnet sidecar, installs the hub's agent).
-5. On an unhealthy stack: `git checkout` the previous commit, run
-   `cmd_install` again, and exit non-zero naming both commits. Never leave a
-   half-updated stack that reads as updated.
-6. Write a result file (`deploy/.update-result.json`: from, to, outcome, log
-   tail). Exit non-zero on anything but success.
-
-**`nova_update`** (her tool):
-
-1. Read Part 1's check. If nothing is available, say so and stop.
-2. Find the hub's agent. If none is paired or it is not connected, say "cannot"
-   and give the one command the owner runs instead.
-3. Record an `updates` row (from, to, requested by, started at) **before**
-   sending, so the next core can decide it.
-4. Send `systemd-run … ./install update` through the hub agent's `shell.exec`.
-   The tool returns "started: from X to Y". It never returns "updated".
-5. **On startup, core decides the open row** (the mechanical part): if its own
-   `NOVA_COMMIT` equals the row's target, mark it `confirmed`. Otherwise mark
-   it `failed` with the result file's reason. Either way, post an Inbox notice.
-   A row still open after 30 minutes is marked `not_confirmed`. Only the new
-   core's own stamp confirms an update. No sentence does, which is the same
-   rule `agent_updates` follows (P8).
-
-**The page** gets an "Update now" button beside the commit list. It calls the
-same function, shows the open row's state, and shows the result once the new
-core decides it.
-
-No approval step (owner ruling 2026-09-03). She runs the update when asked;
-the controls are the fast-forward-only refusal, the backup, the rollback and
-the startup check. Something that can refuse when she is wrong.
-
-### Order
-
-After S30 (jobs that outlive a turn) in the doing lane, because steps 1–3 of
-the problem above are S30's problem in its sharpest form. Until then, the page
-and `nova_about` say what to run: `git pull && ./install` on the hub.
+Ask her "is there an update? install it". In `turn_spans`, `nova_update`
+should run and her reply should say *started*, not done. After the restart,
+`nova_about` should show it confirmed. Re-run `./install` once by hand first
+so `NOVA_CHECKOUT` is written.

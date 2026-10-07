@@ -74,6 +74,9 @@ _TABLES = (
     # so its place is free; it must be here, or the second run of the suite
     # collides on its CREATE TABLE (conftest re-runs every migration).
     "mcp_servers",
+    # The About page, part 2: nova_updates references nothing; listed so the
+    # second run of the suite does not collide on its CREATE TABLE.
+    "nova_updates",
     # chat-rewind T1: turn_actions references turns, conversations AND
     # rewinds; rewinds references conversations, people and messages while
     # messages references rewinds back (withdrawn_by, rewind_id) — a cycle

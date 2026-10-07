@@ -1,5 +1,5 @@
 import type { SemanticColor } from '../../lib/design-tokens'
-import type { AboutAgent, AboutBuild, AboutModelMachine, AboutService, AboutUpdates } from '../../lib/api'
+import type { AboutAgent, AboutBuild, AboutModelMachine, AboutService, AboutUpdateAttempt, AboutUpdates } from '../../lib/api'
 
 /** The update check's one-line verdict and its colour. "unknown" is never
  *  drawn as up to date: a check that could not run says why instead. */
@@ -58,4 +58,31 @@ export function serviceColor(s: AboutService): SemanticColor {
 
 export function plural(n: number, word: string): string {
   return n === 1 ? word : `${word}s`
+}
+
+/** The latest update attempt's state. `sent` is "started", never "updating
+ *  succeeded": only the installer's report to the new core confirms it. */
+export function attemptState(a: AboutUpdateAttempt): { text: string; color: SemanticColor } {
+  const span = `${a.from_commit.slice(0, 7)} → ${(a.to_commit ?? '?').slice(0, 7)}`
+  switch (a.outcome) {
+    case 'sent':
+      return { text: `Updating ${span} — started, not yet reported back`, color: 'info' }
+    case 'confirmed':
+      return { text: `Updated ${span}`, color: 'success' }
+    case 'failed':
+      return { text: `Update ${span} failed`, color: 'danger' }
+    case 'refused':
+      return { text: `Update ${span} did not start`, color: 'warning' }
+    case 'up_to_date':
+      return { text: 'Last update: nothing to install', color: 'neutral' }
+    case 'not_confirmed':
+      return { text: `Update ${span} was never confirmed`, color: 'warning' }
+  }
+}
+
+/** Whether an update can be started from the page right now: something to
+ *  pull and nothing already in flight. The server still decides; this only
+ *  keeps a button from offering what it would refuse on its face. */
+export function canStartUpdate(u: AboutUpdates, last: AboutUpdateAttempt | null): boolean {
+  return u.state === 'available' && last?.outcome !== 'sent'
 }
