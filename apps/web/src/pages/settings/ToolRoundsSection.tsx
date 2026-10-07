@@ -95,7 +95,7 @@ export function ToolRoundsSection({
     <Section
       icon={Repeat}
       title="Tool rounds"
-      description="How many rounds of tool calls one reply may take before Nova stops."
+      description="The safety ceiling on tool rounds in one reply: a backstop against a runaway turn. A turn going in circles is stopped by its own check, before this limit whenever the limit is more than a few rounds."
     >
       <div className="space-y-2">
         <Input

@@ -8,12 +8,14 @@ new hour would otherwise sit in the table doing nothing.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import re
+from pathlib import Path
 
 import pytest
 
-from app import agents, beats, decisions, schedule, settings_store
+from app import agents, beats, chat, decisions, schedule, scheduler, settings_store
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -326,14 +328,106 @@ async def test_the_bounds_are_read_on_every_write_not_copied_at_the_first(
     assert await _stored_rounds(pool) == past
 
 
-async def test_the_limit_still_defaults_to_six_and_its_default_passes_its_own_hook(owner_client):
+async def test_the_limit_defaults_to_the_top_of_the_agent_range_and_passes_its_own_hook(
+    owner_client,
+):
+    """PIN MOVED (turn-cap T5): this pinned the default at 6 while the count was
+    the normal way a turn stopped. A turn going in circles is now stopped by
+    chat.RoundProgress, so the limit is the runaway/cost backstop and its default
+    is the top of the range the field and agent rows already accept,
+    agents.MAX_ROUNDS (50), read here, never typed."""
     item = (await _by_key(owner_client))[ROUNDS_KEY]
-    assert (item["type"], item["default"], item["value"]) == ("int", 6, 6)
+    top = agents.MAX_ROUNDS
+    assert (item["type"], item["default"], item["value"]) == ("int", top, top)
 
     definition = settings_store.DEFS_BY_KEY[ROUNDS_KEY]
-    assert definition.default == 6
+    assert definition.default == agents.MAX_ROUNDS == 50
     assert definition.validate is not None, "the tool-round limit has no bounds hook"
     assert definition.validate(definition.default) is None
+
+
+async def test_an_unset_limit_reads_the_top_of_the_range_through_every_reader(pool):
+    assert await _stored_rounds(pool) is None
+    assert await settings_store.read_value(pool, ROUNDS_KEY) == agents.MAX_ROUNDS
+    assert (await settings_store.read_values(pool))[ROUNDS_KEY] == agents.MAX_ROUNDS
+
+
+async def test_a_stored_limit_still_wins_over_the_new_default(owner_client, pool):
+    """The owner's live stored 20 must keep running under 20: the new default
+    only reaches an install that never set the limit."""
+    stored = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 20})
+    assert stored.status_code == 200, stored.text
+
+    item = (await _by_key(owner_client))[ROUNDS_KEY]
+    assert (item["default"], item["value"]) == (agents.MAX_ROUNDS, 20)
+    assert await settings_store.read_value(pool, ROUNDS_KEY) == 20
+
+
+def _int_literals(path: Path, number: int) -> list[int]:
+    """The line of every int literal equal to `number` in the file."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and type(node.value) is int and node.value == number
+    ]
+
+
+def test_the_default_is_derived_not_a_second_literal():
+    """The number 50 is written once (the rounds range), and the def's default
+    is an expression naming it, never an int typed into the def: the day the
+    range moves, the default moves with it."""
+    app_dir = Path(settings_store.__file__).resolve().parent
+    tree = ast.parse((app_dir / "settings_store.py").read_text(encoding="utf-8"))
+    defaults = [
+        keyword.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "SettingDef"
+        and any(
+            kw.arg == "key" and isinstance(kw.value, ast.Constant) and kw.value.value == ROUNDS_KEY
+            for kw in node.keywords
+        )
+        for keyword in node.keywords
+        if keyword.arg == "default"
+    ]
+    assert len(defaults) == 1, f"{len(defaults)} defaults for {ROUNDS_KEY}"
+    assert not isinstance(defaults[0], ast.Constant), (
+        f"the {ROUNDS_KEY} default is the literal {ast.unparse(defaults[0])}, not derived"
+    )
+
+    files = ("agents.py", "settings_store.py", "scheduler.py", "evals/runner.py")
+    found = {name: _int_literals(app_dir / name, agents.MAX_ROUNDS) for name in files}
+    assert sum(len(lines) for lines in found.values()) == 1, found
+
+
+# The words under the Settings -> Behaviour field (turn-cap T5): the limit is
+# the backstop, a turn going in circles is stopped before it, and reaching it
+# still ends the turn with a note, never silently.
+BACKSTOP_WORDS = ("backstop", "safety ceiling")
+CIRCLING_WORDS = ("in circles", "the same call", "nothing new", "before")
+
+
+def test_the_help_text_says_the_limit_is_a_backstop_and_circling_stops_a_turn_first():
+    said = settings_store.DEFS_BY_KEY[ROUNDS_KEY].description
+    lowered = said.lower()
+    assert any(word in lowered for word in BACKSTOP_WORDS), said
+    for words in CIRCLING_WORDS:
+        assert words in lowered, f"the help text does not say `{words}`: {said}"
+    assert "note" in lowered and "never silently" in lowered, said
+
+
+def test_the_help_text_no_longer_reads_as_the_normal_stop():
+    said = settings_store.DEFS_BY_KEY[ROUNDS_KEY].description
+    assert not said.startswith("How many times one chat turn may call the model"), said
+
+
+async def test_an_unset_limit_bounds_a_firing_by_the_top_of_the_range(pool):
+    """scheduler.firing_timeout_s follows the default by derivation: an unset
+    limit is agents.MAX_ROUNDS rounds of the gateway's read budget."""
+    assert await _stored_rounds(pool) is None
+    bound = await scheduler.firing_timeout_s(pool, "scheduled")
+    assert bound == agents.MAX_ROUNDS * chat.GATEWAY_TIMEOUT.read
 
 
 # -- the decision role's two switches (decision-role spec §6) -----------------

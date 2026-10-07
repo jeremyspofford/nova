@@ -222,9 +222,6 @@ EVAL_TURN_KIND = "eval"
 # case scoring; a failure here is logged and swallowed, never raised.
 _FORGET_TIMEOUT = httpx.Timeout(5.0)
 
-# The default tool-round budget if the setting cannot be read — the same
-# SETTING_DEFS default, so an eval turn matches a real one.
-_DEFAULT_MAX_TOOL_ROUNDS = 6
 # How much reply text lands in the persisted eval_runs.detail — evidence for the
 # page, not the whole essay.
 _DETAIL_REPLY_CHARS = 2000
@@ -1218,7 +1215,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         try:
             max_tool_rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
         except Exception:
-            max_tool_rounds = _DEFAULT_MAX_TOOL_ROUNDS
+            # The setting's own default, read here, so an eval turn runs
+            # under the same ceiling a real one would.
+            max_tool_rounds = settings_store.DEFS_BY_KEY["agents.max_tool_rounds"].default
 
         turn = await traces.open_turn(
             pool,

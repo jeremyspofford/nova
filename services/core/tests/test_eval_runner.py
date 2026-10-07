@@ -15,18 +15,20 @@ read back only for reporting.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import dataclasses
 import inspect
 import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import anyio
 import asyncpg
 import pytest
 
-from app import chat, devices_ws, machines, scheduler, tools
+from app import chat, devices_ws, machines, scheduler, settings_store, tools
 from app.evals import cases as cases_mod
 from app.evals import runner
 from app.evals.cases import (
@@ -110,6 +112,61 @@ def _case(
         contract=tuple(contract),
         agents=tuple(agents),
     )
+
+
+# -- the round ceiling when the setting cannot be read (turn-cap T5) --------
+
+
+async def test_an_unreadable_limit_runs_the_turn_under_the_defs_own_default(
+    pool, mount_peers, monkeypatch
+):
+    """evals/runner.py once carried its own literal 6 beside the SettingDef's:
+    two numbers that agreed only until one moved. When the setting read fails
+    the turn runs under DEFS_BY_KEY's default, moved here to 7 so a literal
+    that happens to match the real default cannot pass."""
+    key = "agents.max_tool_rounds"
+    moved = dataclasses.replace(settings_store.DEFS_BY_KEY[key], default=7)
+    monkeypatch.setitem(settings_store.DEFS_BY_KEY, key, moved)
+
+    real_read = settings_store.read_value
+
+    async def unreadable(pool_or_conn, wanted):
+        if wanted == key:
+            raise RuntimeError("the settings table is unreachable")
+        return await real_read(pool_or_conn, wanted)
+
+    monkeypatch.setattr(settings_store, "read_value", unreadable)
+
+    ran_with: list[int] = []
+    real_turn = chat._run_turn
+    bound = inspect.signature(real_turn)
+
+    async def spy(*args, **kwargs):
+        ran_with.append(bound.bind(*args, **kwargs).arguments["max_tool_rounds"])
+        return await real_turn(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_run_turn", spy)
+    mount_peers(gateway=ScriptedGateway(rounds=((text("Here it is."),),)), memory=FakeMemory())
+
+    run = await runner.run_case(app, pool, _case([PredicateSpec("reply_matches", "Here")]), MODEL)
+
+    assert ran_with == [7], ran_with
+    assert run.ungradeable is False, run.detail
+
+
+def test_the_runner_types_no_round_default_of_its_own():
+    """No module-level int named for rounds in evals/runner.py: the fallback is
+    the SettingDef's default, read where it is used."""
+    tree = ast.parse(Path(runner.__file__).read_text(encoding="utf-8"))
+    typed = [
+        ast.unparse(node)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Constant)
+        and type(node.value.value) is int
+        and any("ROUNDS" in getattr(target, "id", "") for target in node.targets)
+    ]
+    assert typed == [], typed
 
 
 # -- a met contract passes, an unmet one fails (over a REAL trace) ----------

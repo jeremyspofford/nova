@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app import agents, timers, tools, traces
+from app import agents, settings_store, timers, tools, traces
 from app.agents_api import IDLE
 from app.identity import Person
 from app.tools.base import RESULT_KIND_LISTING
@@ -182,7 +182,10 @@ async def test_create_read_update_delete_round_trip(owner_client, pool, mount_pe
     assert created["tools"] == SPEC_TOOLS and created["unknown_tools"] == []
     assert created["skills"] == []
     assert created["monthly_cap_usd"] == 20.0
-    assert created["max_tool_rounds"] == 6  # the agents.max_tool_rounds default, COPIED
+    # PIN MOVED (turn-cap T6): read the setting's default where the code reads it
+    # (settings_store), not a literal; T5 moved it 6 -> 50 on purpose.
+    default_rounds = settings_store.DEFS_BY_KEY["agents.max_tool_rounds"].default
+    assert created["max_tool_rounds"] == default_rounds  # COPIED at create
     assert created["read_shared_memory"] is False
     assert created["created_via"] == "page"
     assert created["log_conversation_id"] is not None
