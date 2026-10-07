@@ -110,6 +110,10 @@ var lookSudo = map[string]bool{"no_password": true, "refused": true, "absent": t
 // readDistros is WSL's registry list; a variable so a test hands in its own.
 var readDistros = platform.WSLDistros
 
+// probesWSL is whether Probe looks for WSL distributions: on Windows only. A
+// variable so a test drives Probe's WSL branch on the OS it runs on.
+var probesWSL = runtime.GOOS == "windows"
+
 // Probe runs the probes. The client runs it at connect and on facts.refresh
 // only — never on the minute cadence: `sudo -n` can write an auth-log line
 // each time, and wsl.exe is not free. Every program runs through r, bounded
@@ -137,7 +141,7 @@ func Probe(ctx context.Context, r platform.Runner, self Self) Probed {
 			p.Elevation.Sudo, p.Elevation.SudoSaid = "unknown", failed(err)
 		}
 	}
-	if runtime.GOOS == "windows" {
+	if probesWSL {
 		w, unread := probeWSL(ctx, r)
 		p.WSL = w
 		p.OutOfTime = p.OutOfTime || (w != nil && w.outOfTime)

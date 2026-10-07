@@ -520,12 +520,16 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	a.factsMu.Lock()
 	a.authUnread = unread
 	a.factsMu.Unlock()
-	if err := writeFrame(hsCtx, c, wire.Auth{
+	data, err := factsJSON(wire.Auth{
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
 		Facts:    auth,
-	}); err != nil {
+	})
+	if err != nil {
+		return fmt.Errorf("encoding auth: %w", err)
+	}
+	if err := c.Write(hsCtx, websocket.MessageText, data); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}
 
@@ -924,7 +928,8 @@ func (a *Agent) reprobe(ctx context.Context, c *websocket.Conn, force bool) erro
 // findings, carried in every frame. Findings that would take the frame over
 // core's cap are left out and said so: they never stop every facts frame
 // (fix round 1). A frame over the cap even without them is an error here —
-// never sent to be refused over there.
+// never sent to be refused over there. Both encodings go through factsJSON,
+// so no list in either goes out as null by accident.
 func (a *Agent) frameBytes() ([]byte, error) {
 	a.factsMu.Lock()
 	carried := append([]facts.Unreadable(nil), a.authUnread...)
@@ -940,7 +945,7 @@ func (a *Agent) frameBytes() ([]byte, error) {
 		// healthy agent sent once its probe had run.
 		full.Unreadable = append([]facts.Unreadable{}, frame.Unreadable...)
 		probed.ApplyTo(&full)
-		data, err := json.Marshal(full)
+		data, err := factsJSON(full)
 		if err != nil {
 			return nil, err
 		}
@@ -951,7 +956,7 @@ func (a *Agent) frameBytes() ([]byte, error) {
 			"the probe's findings would make the frame %d bytes, over the %d-byte cap; they are left out",
 			len(data), facts.MaxFrameBytes)})
 	}
-	data, err := json.Marshal(frame)
+	data, err := factsJSON(frame)
 	if err != nil {
 		return nil, err
 	}
@@ -960,6 +965,15 @@ func (a *Agent) frameBytes() ([]byte, error) {
 	}
 	return data, nil
 }
+
+// factsJSON encodes a frame that carries facts — the facts frame
+// (frameBytes) and the auth frame (handshake) — and is the one encoder
+// either goes through. facts.ForWire first: no list crosses the wire as null
+// unless null is what it means, the lists a later slice adds and leaves nil
+// included (fix/facts-unreadable-null: core refused a whole frame over one
+// null list). ForWire copies; the probe the agent keeps, carried in every
+// later frame, is never changed by it.
+func factsJSON(v any) ([]byte, error) { return json.Marshal(facts.ForWire(v)) }
 
 // writeFacts writes an encoded frame and remembers what went out and when.
 // The write is bounded by pingTimeout (fix round 1): on a dead path, once
