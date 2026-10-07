@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,8 @@ func TestOnlyNovadPIDsIsSentAsNullOnPurpose(t *testing.T) {
 	}
 	for f := range nullIsUnknown {
 		sf, ok := f.in.FieldByName(f.name)
-		if !ok || sf.Type.Kind() != reflect.Slice || leftOut(sf) {
+		omitEmpty, omitZero := omitOptions(sf)
+		if !ok || sf.Type.Kind() != reflect.Slice || isBytes(sf.Type) || omitEmpty || omitZero {
 			t.Fatalf("%s is not a list field the encoder writes", f)
 		}
 	}
@@ -161,23 +163,202 @@ func TestForWireLeavesAValueThatEncodesItself(t *testing.T) {
 	}
 }
 
-// The one place ForWire cannot reach — an unexported embedded struct, whose
-// fields reflect cannot set — is still looked at by NullLists, so a builder
-// that left a list nil there goes red instead of going out as null.
+// An unexported embedded struct promotes its exported fields onto the wire.
+// reflect sets those through an embedded value, so ForWire fills them. It
+// leaves an embedded pointer — reflect will not replace it, and writing
+// through it would change what it points to — and one under a JSON key of
+// its own, whose value reflect will not hand out for an IsZero or
+// MarshalJSON check. NullLists looks inside both all the same and reports
+// their nil lists: a builder's test goes red instead of one going out as
+// null.
 type shapeHidden struct {
 	Inner []string `json:"inner"`
 }
 
-func TestNullListsSeesWhatForWireCannotReach(t *testing.T) {
+type shapeHiddenPtr struct {
+	Deep []string `json:"deep"`
+}
+
+type shapeHiddenKeyed struct {
+	Item []string `json:"item"`
+}
+
+func TestForWireFillsAnUnexportedEmbeddedValueAndNullListsSeesWhatItCannot(t *testing.T) {
 	type withHidden struct {
 		shapeHidden
-		List []string `json:"list"`
+		*shapeHiddenPtr
+		shapeHiddenKeyed `json:"keyed"`
+		List             []string `json:"list"`
 	}
-	out := ForWire(withHidden{})
-	data, _ := json.Marshal(out)
+	in := withHidden{shapeHiddenPtr: &shapeHiddenPtr{}}
+	out := ForWire(in)
+	data, err := json.Marshal(out)
 	got := NullLists(out)
-	if string(data) != `{"inner":null,"list":[]}` || !reflect.DeepEqual(got, []string{"inner (facts.shapeHidden.Inner)"}) {
-		t.Fatalf("%s, null lists %q", data, got)
+	if err != nil || string(data) != `{"inner":[],"deep":null,"keyed":{"item":null},"list":[]}` ||
+		!reflect.DeepEqual(got, []string{"deep (facts.shapeHiddenPtr.Deep)", "keyed.item (facts.shapeHiddenKeyed.Item)"}) {
+		t.Fatalf("%s, %v, null lists %q", data, err, got)
+	}
+	if in.Inner != nil || in.Deep != nil || out.shapeHiddenPtr != in.shapeHiddenPtr {
+		t.Fatalf("ForWire changed what it was handed: %+v", in)
+	}
+}
+
+// Review of 2c77f2fb, (a): a []byte is a base64 string on the wire, never a
+// list — a nil one is null, and stays null. NullLists does not count it.
+type fixtureBytes []byte
+
+type byteShape struct {
+	B     []byte            `json:"b"`
+	Named fixtureBytes      `json:"named"`
+	ByKey map[string][]byte `json:"by_key"`
+	Some  []byte            `json:"some"`
+	List  []string          `json:"list"`
+}
+
+func TestForWireLeavesANilByteListNull(t *testing.T) {
+	in := byteShape{ByKey: map[string][]byte{"none": nil}, Some: []byte("fixture")}
+	data, err := json.Marshal(ForWire(in))
+	if err != nil || string(data) != `{"b":null,"named":null,"by_key":{"none":null},"some":"Zml4dHVyZQ==","list":[]}` {
+		t.Fatalf("%s, %v", data, err)
+	}
+	if got := NullLists(in); !reflect.DeepEqual(got, []string{"list (facts.byteShape.List)"}) {
+		t.Fatalf("null lists %q: a []byte is a string, never a list", got)
+	}
+}
+
+// Review of 2c77f2fb, (b): a field encoding/json leaves out stays out.
+// omitzero asks the field's IsZero method when it has one; a struct or an
+// array that holds only nil lists is zero, and filling one would put it on
+// the wire. An embedded struct's tag options are ignored: its fields are
+// promoted, and filled.
+type neverZero struct {
+	List []string `json:"list"`
+}
+
+func (neverZero) IsZero() bool { return false }
+
+type zeroByPointer struct {
+	List []string `json:"list"`
+}
+
+func (*zeroByPointer) IsZero() bool { return true }
+
+func TestForWireLeavesAnOmittedFieldOut(t *testing.T) {
+	type promotes struct {
+		Promoted []string `json:"promoted"`
+	}
+	in := struct {
+		Sec           shapeSection  `json:"sec,omitzero"`
+		Pair          [2][]int      `json:"pair,omitzero"`
+		ByPtr         zeroByPointer `json:"by_ptr,omitzero"`
+		Never         neverZero     `json:"never,omitzero"`
+		Set           shapeSection  `json:"set,omitzero"`
+		Empty         shapeSection  `json:"empty,omitempty"`
+		NoList        []string      `json:"no_list,omitempty"`
+		NoneZero      []string      `json:"none_zero,omitzero"`
+		promotes      `json:",omitzero"`
+		ShapeEmbedded `json:",omitzero"`
+	}{Set: shapeSection{List: []string{}}, ByPtr: zeroByPointer{List: []string{"left out"}}}
+	data, err := json.Marshal(ForWire(in))
+	want := `{"never":{"list":[]},"set":{"list":[]},"empty":{"list":[]},"promoted":[],"inner":[]}`
+	if err != nil || string(data) != want {
+		t.Fatalf("\n got %s, %v\nwant %s", data, err, want)
+	}
+	// What the wire would carry before ForWire: the same fields, nulls in them.
+	got := NullLists(in)
+	want2 := []string{"never.list (facts.neverZero.List)", "empty.list (facts.shapeSection.List)",
+		"promoted (facts.promotes.Promoted)", "inner (facts.ShapeEmbedded.Inner)"}
+	if !reflect.DeepEqual(got, want2) {
+		t.Fatalf("null lists\n got %q\nwant %q", got, want2)
+	}
+}
+
+// Review of 2c77f2fb, (c): encoding/json calls a method of a pointer only
+// where it can take the value's address — behind a pointer, a list's
+// element, a field of either. Elsewhere — the value itself, a map's value,
+// an interface's value, an array or a field of one — it reads the value
+// field by field, and ForWire fills it: it never leaves a list nil on the
+// strength of a method encoding/json does not call.
+type ptrMarshaled struct {
+	List []string `json:"list"`
+}
+
+func (*ptrMarshaled) MarshalJSON() ([]byte, error) { return []byte(`"its own method"`), nil }
+
+type ptrTexted struct {
+	List []string `json:"list"`
+}
+
+func (*ptrTexted) MarshalText() ([]byte, error) { return []byte("its own text"), nil }
+
+func TestForWireFillsWhatEncodingJSONReadsFieldByField(t *testing.T) {
+	type behind struct {
+		In ptrMarshaled `json:"in"`
+	}
+	in := struct {
+		In     ptrMarshaled            `json:"in"`
+		Text   ptrTexted               `json:"text"`
+		Ptr    *ptrMarshaled           `json:"ptr"`
+		Behind *behind                 `json:"behind"`
+		Map    map[string]ptrMarshaled `json:"map"`
+		Any    any                     `json:"any"`
+		Elems  []ptrMarshaled          `json:"elems"`
+		Arr    [1]ptrMarshaled         `json:"arr"`
+	}{Ptr: &ptrMarshaled{}, Behind: &behind{}, Map: map[string]ptrMarshaled{"k": {}}, Any: ptrMarshaled{}, Elems: []ptrMarshaled{{}}}
+	data, err := json.Marshal(ForWire(in))
+	want := `{"in":{"list":[]},"text":{"list":[]},"ptr":"its own method","behind":{"in":"its own method"},` +
+		`"map":{"k":{"list":[]}},"any":{"list":[]},"elems":["its own method"],"arr":[{"list":[]}]}`
+	if err != nil || string(data) != want {
+		t.Fatalf("\n got %s, %v\nwant %s", data, err, want)
+	}
+	for _, c := range []struct {
+		v    any
+		want string
+	}{
+		{ForWire(ptrMarshaled{}), `{"list":[]}`},
+		{ForWire(&ptrMarshaled{}), `"its own method"`},
+		{ForWire[any](ptrMarshaled{}), `{"list":[]}`},
+		{ForWire[any](&ptrMarshaled{}), `"its own method"`},
+	} {
+		if data, err := json.Marshal(c.v); err != nil || string(data) != c.want {
+			t.Errorf("%T: %s, %v, want %s", c.v, data, err, c.want)
+		}
+	}
+}
+
+// Review of 2c77f2fb, (d): a value that leads back to itself — through a
+// pointer, a map or a list — never crashes the agent. ForWire stops where
+// the cycle closes and leaves it as it is; json.Marshal then refuses it
+// with an error of its own, which frameBytes returns and the agent logs.
+// The stack is capped low here, so a walk that never stops fails fast.
+func TestForWireStopsAtACycle(t *testing.T) {
+	defer debug.SetMaxStack(debug.SetMaxStack(64 << 20))
+	type node struct {
+		List []string `json:"list"`
+		Next *node    `json:"next"`
+	}
+	n := &node{}
+	n.Next = n
+	m := map[string]any{"list": []string(nil)}
+	m["self"] = m
+	s := []any{nil, []string(nil)}
+	s[0] = s
+	for _, c := range []struct {
+		name string
+		v    any
+	}{{"a pointer", n}, {"a map", m}, {"a list", s}} {
+		out := ForWire(c.v)
+		var cycle *json.UnsupportedValueError
+		if _, err := json.Marshal(out); !errors.As(err, &cycle) || !strings.Contains(err.Error(), "cycle") {
+			t.Errorf("%s: json.Marshal said %v, want its own cycle error", c.name, err)
+		}
+		NullLists(c.v) // returns: the walk stops where the cycle closes
+	}
+	if out := ForWire(n); out.List == nil || out.Next != n || n.List != nil || n.Next != n {
+		t.Errorf("ForWire filled what it could and left the cycle as it is: got %+v from %+v", out, n)
+	}
+	if m["list"].([]string) != nil || s[1].([]string) != nil {
+		t.Error("ForWire changed what it was handed")
 	}
 }
 

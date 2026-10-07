@@ -116,6 +116,34 @@ func TestFactsJSONSendsNoListAsNull(t *testing.T) {
 	}
 }
 
+// The auth frame goes through factsJSON, as the facts frame does: the real
+// handshake, read off the socket. facts.Auth holds no list yet, so
+// authFacts hands the handshake facts that hold one, nil: encoded any other
+// way, it goes out as null — and facts the seam did not carry say so too.
+func TestTheAuthFrameSendsNoListAsNull(t *testing.T) {
+	old := authFacts
+	t.Cleanup(func() { authFacts = old }) // after the agent's own: Run has returned by then
+	authFacts = func(auth facts.Auth) any {
+		return struct {
+			facts.Auth
+			Later []string `json:"later"`
+		}{Auth: auth}
+	}
+	sent, _ := sentAtConnect(t, func(a *Agent) {
+		a.gatherAuth = func(context.Context) (facts.Auth, []facts.Unreadable) { return goldenAuth(), nil }
+		a.gatherFrame = goldenFrame()
+	})
+	var got struct {
+		Facts map[string]json.RawMessage `json:"facts"`
+	}
+	if err := json.Unmarshal(sent, &got); err != nil {
+		t.Fatalf("%v: %s", err, sent)
+	}
+	if string(got.Facts["later"]) != "[]" || string(got.Facts["hostname"]) != `"FIXTURE-PC"` {
+		t.Fatalf("the auth frame's facts went out as %s", sent)
+	}
+}
+
 // fix/facts-unreadable-null, and PR #110's review of it: the bytes
 // frameBytes sends carry no list as null, whatever it is handed — the real
 // facts.Probe's output on each branch a FakeRunner drives here, a gathered

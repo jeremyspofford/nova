@@ -524,7 +524,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
-		Facts:    auth,
+		Facts:    authFacts(auth),
 	})
 	if err != nil {
 		return fmt.Errorf("encoding auth: %w", err)
@@ -974,6 +974,12 @@ func (a *Agent) frameBytes() ([]byte, error) {
 // null list). ForWire copies; the probe the agent keeps, carried in every
 // later frame, is never changed by it.
 func factsJSON(v any) ([]byte, error) { return json.Marshal(facts.ForWire(v)) }
+
+// authFacts is what the auth frame carries as its facts: auth itself. A
+// variable for one test, which hands the real handshake facts that hold a
+// nil list — facts.Auth holds none yet — to see the frame go through
+// factsJSON (TestTheAuthFrameSendsNoListAsNull).
+var authFacts = func(auth facts.Auth) any { return auth }
 
 // writeFacts writes an encoded frame and remembers what went out and when.
 // The write is bounded by pingTimeout (fix round 1): on a dead path, once
