@@ -42,7 +42,7 @@ import (
 // goldenFrame and goldenProbe stand in for GatherAuth, GatherFrame and
 // Probe, so no builder runs here. What is real is everything from them to
 // the socket: the handshake, frameBytes, Probed.ApplyTo and factsJSON, the
-// one encoder of both frames (facts.ForWire inside it). So it fails when a
+// one encoder of both frames (facts.Marshal inside it). So it fails when a
 // golden is stale, or when a list in one of these three frames crossed the
 // wire as null; a list a builder leaves nil it cannot see, since no builder
 // made these values (PR #110's review). That a builder leaves none is
@@ -215,8 +215,8 @@ func sentAtConnect(t *testing.T, set func(*Agent)) (auth, frame []byte) {
 	}
 }
 
-// authFrame decodes the auth frame with its facts typed, so facts.NullLists
-// reads facts.Auth's own fields.
+// authFrame decodes the auth frame with its facts typed: facts.Marshal
+// writes it back with facts.Auth's own fields.
 type authFrame struct {
 	Type     string     `json:"type"`
 	DeviceID string     `json:"device_id"`
@@ -289,9 +289,11 @@ func TestTheFramesTheAgentSendsAreTheGoldenFilesCoreReads(t *testing.T) {
 		}
 		// Never null for a list, but novad_pids where it is unknown: core's
 		// validators read a list, and before fix/facts-unreadable-null refused
-		// the whole frame over a null one. A null decodes to a nil slice.
-		if nulls := facts.NullLists(g.into); len(nulls) > 0 {
-			t.Errorf("%s: the agent sent null for a list at %s: %s", g.file, strings.Join(nulls, ", "), g.sent)
+		// the whole frame over a null one. A list sent as null decodes to nil,
+		// which facts.Marshal writes as []: the frame would not come back as
+		// the bytes that were sent.
+		if again, err := facts.Marshal(g.into); err != nil || !bytes.Equal(again, g.sent) {
+			t.Errorf("%s: a list crossed the wire as null:\n sent %s\nas [] %s (%v)", g.file, g.sent, again, err)
 		}
 		matchesGolden(t, g.file, g.sent)
 	}

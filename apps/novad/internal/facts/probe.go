@@ -72,7 +72,8 @@ type Distro struct {
 	// PIDs are its novad processes: [] only when none is known to run (it
 	// is stopped, or a finished look found none); null — unknown — whenever
 	// they could not be listed: the list or look failed, pgrep is missing.
-	PIDs []int `json:"novad_pids"`
+	// A PIDList, so the wire keeps that null (Marshal).
+	PIDs PIDList `json:"novad_pids"`
 }
 
 // Unit is the user unit novad.service inside a distribution.

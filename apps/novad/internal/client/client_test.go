@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -231,8 +232,10 @@ func TestFrameBytesSendsNoListAsNull(t *testing.T) {
 				t.Errorf("%s: %v: %s", what, err, data)
 				continue
 			}
-			if nulls := facts.NullLists(got); len(nulls) > 0 {
-				t.Errorf("%s: a list crossed the wire as null at %s: %s", what, strings.Join(nulls, ", "), data)
+			// A list sent as null decodes to nil, which facts.Marshal writes
+			// as []: the frame would not come back as the bytes sent.
+			if again, err := facts.Marshal(got); err != nil || !bytes.Equal(again, data) {
+				t.Errorf("%s: a list crossed the wire as null:\n sent %s\nas [] %s (%v)", what, data, again, err)
 			}
 			if agent.probed == nil {
 				continue

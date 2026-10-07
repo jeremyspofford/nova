@@ -968,12 +968,11 @@ func (a *Agent) frameBytes() ([]byte, error) {
 
 // factsJSON encodes a frame that carries facts — the facts frame
 // (frameBytes) and the auth frame (handshake) — and is the one encoder
-// either goes through. facts.ForWire first: no list crosses the wire as null
-// unless null is what it means, the lists a later slice adds and leaves nil
+// either goes through: facts.Marshal, encoding/json's v2 encoder with its v1
+// options and every nil list written as [] — the lists a later slice adds
 // included (fix/facts-unreadable-null: core refused a whole frame over one
-// null list). ForWire copies; the probe the agent keeps, carried in every
-// later frame, is never changed by it.
-func factsJSON(v any) ([]byte, error) { return json.Marshal(facts.ForWire(v)) }
+// null list). novad_pids keeps its null where it is unknown (PIDList).
+func factsJSON(v any) ([]byte, error) { return facts.Marshal(v) }
 
 // authFacts is what the auth frame carries as its facts: auth itself. A
 // variable for one test, which hands the real handshake facts that hold a
