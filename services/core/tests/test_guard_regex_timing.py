@@ -1659,8 +1659,18 @@ def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
         ("a letter, then a run", lambda n: "x" + mark * n),
         ("runs of 999", lambda n: (mark * 999 + "y") * (n // 1_000)),
     ):
+        # 20k -> 80k and best of 7 (2026-10-07): at 5k a call took ~0.1 ms, so
+        # scheduler noise alone moved the ratio past the limit (x6.3 in CI on
+        # an unchanged _sentences). Bigger samples measure the growth, not the
+        # noise; the x6 limit and the cap are unchanged.
         _assert_linear(
-            f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
+            f"{mark!r} {label}",
+            guards._sentences,
+            build,
+            small=20_000,
+            large=80_000,
+            cap_s=BUDGET_S,
+            runs=7,
         )
 
 
