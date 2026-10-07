@@ -649,19 +649,31 @@ function sameCards(a: SetupCard[], b: SetupCard[]): boolean {
  * is never stored — the server's row redraws the card without it, and may
  * carry no card AT ALL yet: the span that would persist it lands in
  * close_turn AFTER [DONE], and a failed close is only logged, so a poll can
- * land in that gap (round 1, Important #2). While this tab holds a code, the
- * merge:
+ * land in that gap (round 1, Important #2). The code is not all the redraw
+ * lacks (core's _card_json): the per-OS commands carry the code, so they are
+ * never stored either, and the walks, notes and version are not redrawn. So
+ * the tab keeps the WHOLE live card, not just its code: keeping only code and
+ * url took her command off the card at the first idle poll, about 15 s after
+ * her reply, and drew "No command:" in its place, which is untrue — core made
+ * one (card-keeps-commands, 2026-10-07). The idle poll and `pollResolved` (a
+ * rewind's reload, the pending-turn poll's resolve) both lay a row's live
+ * cards through here. While this tab holds a code, the merge:
  *   - matches it to its server twin (same setup, same expiry) when one has
- *     landed, replacing the twin's code-less code/url with the live ones;
+ *     landed, and lays every part the live frame carried over the twin (code,
+ *     url with the code, commands, walks, notes, version, machine, for_os,
+ *     expires_at), each exactly as the frame carried it — nothing is rebuilt
+ *     here. The redraw's own parts (code_shown, walk) stay; where both carry
+ *     a part, the live one wins;
  *   - keeps it as its own card, unmatched, when no twin has landed yet —
  *     dropping it here would take a still-valid code off the screen for no
  *     reason the owner caused; the next poll's twin absorbs it in place;
  *   - consumes each live card at most once, in the order its twin appears in
  *     the server's list (round 1, Folded Minor #3), so two cards in one row
- *     never cross codes, and a twin that already claimed one is never handed
- *     out again as though it were still unmatched — which would show the
- *     same card twice.
- * A reload has no code to keep, which is the design.
+ *     never cross codes or commands, and a twin that already claimed one is
+ *     never handed out again as though it were still unmatched — which would
+ *     show the same card twice.
+ * A reload has no live card to keep, so it draws the redraw with no code and
+ * no command, which is the design.
  */
 function withLiveCodes(server: MessageRow, local: MessageRow): MessageRow {
   const liveCoded = local.cards.filter(card => card.code)
@@ -673,7 +685,7 @@ function withLiveCodes(server: MessageRow, local: MessageRow): MessageRow {
     )
     if (i === -1) return card
     used.add(i)
-    return { ...card, code: liveCoded[i].code, url: liveCoded[i].url }
+    return { ...card, ...liveCoded[i] }
   })
   const unmatched = liveCoded.filter((_, idx) => !used.has(idx))
   return { ...server, cards: [...matched, ...unmatched] }
@@ -763,10 +775,35 @@ function couldBeOurReply(row: MessageRow): boolean {
  * place, exactly as a reload would.
  */
 function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] {
+  const { spine, inserts } = resolveAgainstSpine(rows, fetched)
+  const merged: ChatRow[] = []
+  for (let k = 0; k <= spine.length; k++) {
+    const bucket = inserts.get(k)
+    if (bucket) merged.push(...bucket)
+    if (k < spine.length) merged.push(spine[k])
+  }
+  return merged
+}
+
+/**
+ * The walk `mergeServerRows` describes: which fetched row each store row
+ * stands for. Returns the spine, every fetched row in core's order, each
+ * carrying the live cards of the store row that stands for it
+ * (`withLiveCodes`); and `inserts`, the store rows that stand for none, keyed
+ * by how many spine rows precede them. The idle poll keeps those as
+ * client-only rows. `pollResolved` takes only the spine (card-keeps-commands
+ * T2): its fetch is authoritative, so a row it no longer holds goes, and a
+ * card on that row goes with it.
+ */
+function resolveAgainstSpine(
+  rows: ChatRow[],
+  fetched: FetchedMessage[],
+): { spine: MessageRow[]; inserts: Map<number, ChatRow[]> } {
   const spine = fetched.map(serverRow)
   const spineIndex = new Map(spine.map((row, i) => [row.id, i] as const))
   const claimed = new Set<number>()
-  // Client-only rows, keyed by how many spine rows precede them.
+  // Store rows that stand for no spine row, keyed by how many spine rows
+  // precede them.
   const inserts = new Map<number, ChatRow[]>()
   const keep = (cursor: number, row: ChatRow) => {
     const bucket = inserts.get(cursor)
@@ -799,8 +836,9 @@ function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] 
       continue
     }
     claimed.add(resolved)
-    // S47: a live code this tab holds on its own copy of the row survives
-    // being replaced by the spine's redrawn (code-less) copy.
+    // S47: a live card this tab holds on its own copy of the row (its code
+    // and every other part its frame carried) survives being replaced by the
+    // spine's redrawn (code-less) copy.
     if (row.kind === 'message') spine[resolved] = withLiveCodes(spine[resolved], row)
     cursor = resolved + 1
     // A client assistant row directly after a resolved USER row is that
@@ -831,14 +869,7 @@ function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] 
       keep(cursor, next)
     }
   }
-
-  const merged: ChatRow[] = []
-  for (let k = 0; k <= spine.length; k++) {
-    const bucket = inserts.get(k)
-    if (bucket) merged.push(...bucket)
-    if (k < spine.length) merged.push(spine[k])
-  }
-  return merged
+  return { spine, inserts }
 }
 
 /** Structurally the same transcript — so a poll that learned nothing new
@@ -904,9 +935,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       //   - if the store is now streaming its OWN turn (the operator asked
       //     something new while the poll was in flight), the live turn wins
       //     and the poll result is dropped.
+      // The rows are core's, but a card on them may not be: a rewind's reload
+      // (ChatPage rewindTo) lands here too, and so does this poll when he left
+      // /chat and came back, so the store can hold a setup card it DID stream.
+      // Core's row redraws that card without the code or the commands, which
+      // it never stores (card-keeps-commands T2). So each store row's live
+      // cards are laid on the fetched row it stands for, as the idle poll lays
+      // them (`resolveAgainstSpine`), under its client id or its server id. A
+      // store row that stands for no fetched row (one a rewind withdrew, a
+      // /help note, an error row) goes, cards and all.
       if (state.streaming) return state
       if (state.conversationId !== action.conversationId) return state
-      return fromFetchedMessages(state, action.conversationId, action.messages)
+      return {
+        ...fromFetchedMessages(state, action.conversationId, action.messages),
+        rows: resolveAgainstSpine(state.rows, action.messages).spine,
+      }
 
     case 'idlePolled':
       // A live turn owns the transcript; the poll is not even issued while

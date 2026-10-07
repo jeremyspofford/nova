@@ -1296,3 +1296,152 @@ describe('ChatPage — rewinding to one of his messages (chat rewind T7)', () =>
     expect(page.textContent).not.toMatch(/Rewind refused/i)
   })
 })
+
+/**
+ * A setup card keeps its command (card-keeps-commands T1). Her machine card's
+ * code and per-OS commands reach this tab once, on the live stream; core's
+ * GET .../messages redraws the card with neither (the code is a credential and
+ * is never stored). The owner watched the command vanish about 15 s after her
+ * reply, the first idle poll, with "No command:" in its place.
+ */
+describe('ChatPage — a setup card this tab streamed keeps its command', () => {
+  const ORIGIN = 'https://nova.example.com'
+  const CODE = 'WXYZ2345'
+
+  /** A chat stream that sends exactly these frames, then [DONE]. */
+  function streamOf(frames: unknown[]) {
+    const bytes = new TextEncoder().encode(
+      [...frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`), 'data: [DONE]\n\n'].join(''),
+    )
+    return vi.fn(async () => {
+      let sent = false
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '',
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (sent) return { done: true, value: undefined }
+              sent = true
+              return { done: false, value: bytes }
+            },
+            cancel: async () => {},
+          }),
+        },
+      } as unknown as Response
+    })
+  }
+
+  it('still shows the code and the command for its OS after three idle polls bring core\'s code-less redraw', async () => {
+    // SetupPanel hides the command once expires_at is past by the real clock;
+    // core states it as Postgres' isoformat, microseconds and all.
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString().replace(/Z$/, '000+00:00')
+    // Every line carries the code, as core fills it.
+    const commands = {
+      linux: `curl -fsSL -o novad ${ORIGIN}/api/v1/agent/dist/novad-linux-amd64 && ./novad install --hub ${ORIGIN} --code ${CODE}`,
+      macos: `curl -fsSL -o novad ${ORIGIN}/api/v1/agent/dist/novad-darwin-arm64 && ./novad install --hub ${ORIGIN} --code ${CODE}`,
+      windows: `curl.exe -fsSL -o novad.exe ${ORIGIN}/api/v1/agent/dist/novad-windows-amd64.exe; ./novad.exe install --hub ${ORIGIN} --code ${CODE}`,
+    }
+    const walks = {
+      linux: 'Linux: walked on real hardware',
+      macos: 'macOS: built and tested in CI, not walked on a Mac',
+      windows: 'Windows: walked on real hardware',
+    }
+    const live = {
+      kind: 'setup_qr',
+      setup: 'add_machine',
+      address: ORIGIN,
+      url: `${ORIGIN}/add#${CODE}`,
+      code: CODE,
+      expires_at: expiresAt,
+      machine: 'EXAMPLE-DESKTOP',
+      for_os: 'windows',
+      commands,
+      walks,
+      notes: { linux: 'The Linux note.', macos: 'The macOS note.', windows: 'The Windows note.' },
+      version: '0.0.0-example',
+    }
+    // services/core/app/conversations.py _card_json: no code, commands, walks, notes or version.
+    const redrawn = {
+      kind: 'setup_qr' as const,
+      setup: 'add_machine',
+      address: ORIGIN,
+      url: `${ORIGIN}/add`,
+      code_shown: true,
+      expires_at: expiresAt,
+      machine: 'EXAMPLE-DESKTOP',
+      for_os: 'windows',
+      walk: walks.windows,
+    }
+    // Core holds the turn only once the stream has ended: before that every
+    // read is the empty conversation. A flag, as the reminder test does: an
+    // idle poll that merged the turn's rows before the send would show it twice.
+    let persisted = false
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation({ pending_turn: false })),
+      getMessages: vi.fn(
+        async (): Promise<StoredMessage[]> =>
+          persisted
+            ? [
+                { id: 'srv-u1', role: 'user', content: 're-pair my desktop', created_at: '', served_by: null, cards: [] },
+                {
+                  id: 'srv-a1',
+                  role: 'assistant',
+                  content: 'Here is the card for EXAMPLE-DESKTOP.',
+                  created_at: '',
+                  turn_kind: 'chat',
+                  served_by: 'ollama:qwen3:8b',
+                  cards: [redrawn],
+                },
+              ]
+            : [],
+      ),
+    }
+    const fetchImpl = streamOf([
+      // The loaded conversation's id, or S24 drops every later frame.
+      { meta: { conversation_id: 'c1', model: 'qwen3:8b', turn_id: 't1' } },
+      { t: 'Here is the card for EXAMPLE-DESKTOP.' },
+      { card: live },
+    ])
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} idlePollMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Nothing here yet. Say something.')
+    const textarea = screen.getByLabelText('Message Nova')
+    fireEvent.change(textarea, { target: { value: 're-pair my desktop' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await screen.findByTestId('setup-code')
+    await waitFor(() => expect(screen.getByTestId('chat-page').getAttribute('data-streaming')).toBe('false'))
+
+    /** What the card shows: its code, the Windows line (for_os opens that tab), and any "No command:". */
+    const shown = () => {
+      const panel = screen.getByTestId('setup-panel')
+      return {
+        code: within(panel).queryByTestId('setup-code')?.textContent ?? null,
+        command: within(panel).queryByText(commands.windows) !== null,
+        noCommand: screen.queryAllByText(/No command:/).length,
+      }
+    }
+    const whole = { code: 'WXYZ-2345', command: true, noCommand: 0 }
+
+    // Once the stream ends.
+    expect(shown()).toEqual(whole)
+
+    // Core has written the turn: every idle poll from here brings its redraw.
+    persisted = true
+    const atPersist = api.getMessages.mock.calls.length
+    // The first such poll re-keys the rows, so the bubble remounts under its
+    // server id (queried afresh below, never held from before)...
+    await waitFor(() => expect(document.querySelector('[data-message-id="srv-a1"]')).not.toBeNull())
+    // ...and at least two more polls follow it.
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThanOrEqual(atPersist + 4))
+
+    expect(assistantBubbles()).toHaveLength(1)
+    expect(shown()).toEqual(whole)
+  })
+})
