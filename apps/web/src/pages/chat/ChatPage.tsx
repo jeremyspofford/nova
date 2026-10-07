@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowDown, ArrowLeft, Clock, Square, X } from 'lucide-react'
 import {
@@ -98,16 +98,37 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 // stops asserting "still responding" — a claim it can no longer back.
 const MAX_POLL_FAILURES = 8
 
+/** Which conversation a chat surface shows (chat sessions, 2026-10-07): a
+ *  session (null = the main one, the hallway) and, optionally, a room off
+ *  one of its messages. */
+export interface ChatLocation {
+  sessionId: string | null
+  threadId: string | null
+}
+
 export function ChatPage({
   initialModel,
   api = DEFAULT_API,
   pollIntervalMs = POLL_INTERVAL_MS,
   idlePollMs = IDLE_POLL_MS,
+  location,
+  onNavigate,
+  header,
 }: {
   initialModel?: string
   api?: ChatApi
   pollIntervalMs?: number
   idlePollMs?: number
+  /**
+   * A split-view pane says which conversation it shows, and is told where
+   * to go (`onNavigate`), instead of reading the URL — two panes cannot both
+   * own `?thread=`. Absent, the page reads `?session=` and `?thread=` off
+   * the URL exactly as it always read `?thread=`.
+   */
+  location?: ChatLocation
+  onNavigate?: (next: ChatLocation) => void
+  /** What the desktop header says, in place of the word "Chat". */
+  header?: ReactNode
 }) {
   const {
     state,
@@ -131,6 +152,10 @@ export function ChatPage({
   // change when the poll resolves.
   const [responding, setResponding] = useState(false)
   const [resolvedTick, setResolvedTick] = useState(0)
+  /** Bumped to re-run the loader: the queue watch does it when a message
+   *  this pane queued has started its turn, so the pending-turn poll below
+   *  picks the reply up as it lands instead of the idle poll, a tick later. */
+  const [recheck, setRecheck] = useState(0)
   /**
    * S24 — WHICH ROOM, FROM THE URL.
    *
@@ -145,7 +170,25 @@ export function ChatPage({
    * recover the reply that is still arriving.
    */
   const [search, setSearch] = useSearchParams()
-  const threadId = search.get('thread')
+  const controlled = location !== undefined && onNavigate !== undefined
+  const sessionId = controlled ? location.sessionId : search.get('session')
+  const threadId = controlled ? location.threadId : search.get('thread')
+  /** Go somewhere else in the chat: the pane's own callback, or the URL. */
+  const navigateTo = useCallback(
+    (next: ChatLocation) => {
+      if (controlled) {
+        onNavigate(next)
+        return
+      }
+      const params: Record<string, string> = {}
+      if (next.sessionId) params.session = next.sessionId
+      if (next.threadId) params.thread = next.threadId
+      setSearch(params)
+    },
+    // `location` is read only through `controlled`. A pane passes a stable
+    // onNavigate; a new one each render would re-run the loader.
+    [controlled, onNavigate, setSearch],
+  )
   /** `{message_id: reply_count}` for every message here that offers a room.
    *  Counted by the server; absent means no stub. */
   const [threads, setThreads] = useState<ThreadCounts>({})
@@ -173,13 +216,23 @@ export function ChatPage({
         // below is identical either way. A room whose id no longer resolves
         // (cleared from another device) falls back rather than stranding
         // the page on an error: the hallway always exists.
+        // A named session (chat sessions) resolves the same way; one that
+        // no longer resolves (deleted from another tab) falls back to the
+        // hallway the same way a lost room does — and the location is
+        // corrected below so the pane stops naming what is gone.
         let conversation: Conversation
+        let fellBack = false
         try {
-          conversation = threadId
-            ? await api.getConversationState(threadId)
+          const named = threadId ?? sessionId
+          conversation = named
+            ? await api.getConversationState(named)
             : await api.getActiveConversation()
         } catch {
+          fellBack = true
           conversation = await api.getActiveConversation()
+        }
+        if (fellBack && sessionId && !threadId && live) {
+          navigateTo({ sessionId: null, threadId: null })
         }
         const { messages, threads: stubs } = await api.getMessages(conversation.id)
         if (!live) return
@@ -287,6 +340,9 @@ export function ChatPage({
   }, [
     api,
     threadId,
+    sessionId,
+    recheck,
+    navigateTo,
     loadConversation,
     resolveServerTurn,
     pollIntervalMs,
@@ -305,6 +361,15 @@ export function ChatPage({
   // makes no claim there is anything to retract.
   const rowsRef = useRef(state.rows)
   rowsRef.current = state.rows
+  const conversationIdRef = useRef(state.conversationId)
+  conversationIdRef.current = state.conversationId
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   useEffect(() => {
     if (loading || responding || state.streaming || state.conversationId === null) return
     const conversationId = state.conversationId
@@ -342,11 +407,35 @@ export function ChatPage({
     let live = true
     const id = setInterval(() => {
       if (streamingRef.current) return
-      api
-        .getActiveConversation()
+      // THE CONVERSATION ON SCREEN (chat sessions): in a side session or a
+      // room, `/active` is the hallway's queue, not this one's.
+      const onScreen = conversationIdRef.current
+      ;(onScreen ? api.getConversationState(onScreen) : api.getActiveConversation())
         .then(active => {
           if (!live) return
           syncQueue(asQueued(active))
+          // The queue drained here. With several sessions this is the usual
+          // way a queued message runs — nobody in this pane is streaming it —
+          // so its reply is fetched now rather than left to the idle poll: a
+          // turn still running hands over to the pending-turn poll (the
+          // loader), and one already finished is merged straight in.
+          if ((active.queued ?? []).length > 0 || !onScreen) return
+          if (active.pending_turn) {
+            setRecheck(n => n + 1)
+            return
+          }
+          const observedRows = rowsRef.current
+          api
+            .getMessages(onScreen)
+            .then(({ messages, threads: stubs }) => {
+              // Not `live`: syncing the now-empty queue above is what tears
+              // this effect down, so `live` is already false by the time
+              // this lands. The page being gone is what matters here.
+              if (!mountedRef.current) return
+              setThreads(stubs)
+              syncFromServer(onScreen, messages, observedRows)
+            })
+            .catch(() => {})
         })
         // A failed read is not news. The next tick asks again, and nothing is
         // retracted on the strength of a read that did not happen.
@@ -356,7 +445,16 @@ export function ChatPage({
       live = false
       clearInterval(id)
     }
-  }, [api, pollIntervalMs, loading, responding, state.streaming, state.queued.length, syncQueue])
+  }, [
+    api,
+    pollIntervalMs,
+    loading,
+    responding,
+    state.streaming,
+    state.queued.length,
+    syncQueue,
+    syncFromServer,
+  ])
 
   // Part C — land on the newest message when the conversation opens, when it
   // changes, and when the in-flight poll resolves. Keyed on those events
@@ -372,14 +470,14 @@ export function ChatPage({
       if (!conversationId) return
       try {
         const room = await api.openThread(conversationId, messageId)
-        setSearch({ thread: room.id })
+        navigateTo({ sessionId, threadId: room.id })
       } catch {
         // The room could not be opened. Say nothing rather than navigating
         // to a URL that will fall back to the hallway and look like the tap
         // did nothing on purpose.
       }
     },
-    [api, state.conversationId, setSearch],
+    [api, state.conversationId, navigateTo, sessionId],
   )
 
   /** The last rewind's result as core stated it (chat rewind, T7) — shown
@@ -426,8 +524,8 @@ export function ChatPage({
   /** Back out to the hallway, remembering where to land. */
   const leaveThread = useCallback(() => {
     returnToRef.current = parentMessageId
-    setSearch({})
-  }, [parentMessageId, setSearch])
+    navigateTo({ sessionId, threadId: null })
+  }, [parentMessageId, navigateTo, sessionId])
 
   useLayoutEffect(() => {
     // BACK OUT LANDS ON THE MESSAGE HE LEFT FROM (S24), not at the bottom.
@@ -511,7 +609,7 @@ export function ChatPage({
         data-testid="chat-header"
         className="hidden [@media(min-width:768px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
       >
-        <h1 className="text-h3 text-content-primary">Chat</h1>
+        {header ?? <h1 className="text-h3 text-content-primary">Chat</h1>}
       </header>
 
       {/* A ROOM SAYS SO, AND SAYS THE WAY OUT (S24) — on the phone too,

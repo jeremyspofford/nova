@@ -382,7 +382,12 @@ async def test_a_message_accepted_into_a_conversation_that_just_went_free_still_
 
     async def busy_once(conn, person_id):
         calls["n"] += 1
-        return calls["n"] == 1
+        # The send asks TWICE since chat sessions (2026-10-07): once before
+        # the lock, to learn whether the gateway needs asking where the turn
+        # would run (chat.runs_beside), and once under it, which is the gate.
+        # Both see "busy" — the window is one send wide — and every later
+        # read (the drain) sees it free.
+        return calls["n"] <= 2
 
     # `person_busy` since S24, not `conversation_busy`: the gate is per
     # person now, because a thread is a different conversation and a

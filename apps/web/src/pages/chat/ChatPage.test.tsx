@@ -1446,6 +1446,73 @@ describe('ChatPage — a setup card this tab streamed keeps its command', () => 
   })
 })
 
+/**
+ * Chat sessions (2026-10-07): a split-view pane names its session instead
+ * of reading the URL, and is told where to go instead of writing it.
+ */
+describe('ChatPage — a pane that names its session', () => {
+  it('loads the named session, not the hallway', async () => {
+    const getActive = vi.fn(async () => conversation({ id: 'hallway' }))
+    const getState = vi.fn(async (id: string) => conversation({ id }))
+    const getMessages = vi.fn(async (id: string) => [stored(`m-${id}`, 'user', `hello from ${id}`)])
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage
+            api={fakeApi({ getActiveConversation: getActive, getMessages, getConversationState: getState })}
+            location={{ sessionId: 's-side', threadId: null }}
+            onNavigate={() => {}}
+          />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('hello from s-side')).toBeTruthy()
+    expect(getState).toHaveBeenCalledWith('s-side')
+    expect(getActive).not.toHaveBeenCalled()
+    expect(getMessages).toHaveBeenCalledWith('s-side')
+  })
+
+  it('a session that no longer exists falls back to the hallway and corrects the pane', async () => {
+    const onNavigate = vi.fn()
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage
+            api={fakeApi({
+              getActiveConversation: async () => conversation({ id: 'hallway' }),
+              getMessages: async () => [stored('m1', 'user', 'in the hallway')],
+              getConversationState: async () => {
+                throw new ApiError(404, 'no conversation here')
+              },
+            })}
+            location={{ sessionId: 's-gone', threadId: null }}
+            onNavigate={onNavigate}
+          />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('in the hallway')).toBeTruthy()
+    expect(onNavigate).toHaveBeenCalledWith({ sessionId: null, threadId: null })
+  })
+
+  it('shows the header it is given in place of the word "Chat"', async () => {
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage
+            api={fakeApi({
+              getActiveConversation: async () => conversation(),
+              getMessages: async () => [],
+            })}
+            header={<span>Dell wifi</span>}
+          />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    expect(within(screen.getByTestId('chat-header')).getByText('Dell wifi')).toBeTruthy()
+  })
+})
+
 describe('ChatPage — jump to the latest message', () => {
   /** jsdom lays nothing out, so scroll geometry is stated by hand. */
   function scrollTo(el: HTMLElement, { top, height, client }: { top: number; height: number; client: number }) {

@@ -93,6 +93,11 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # back what it changed, and chat._run_tool copies that onto the turn's
     # action ledger AFTER the call ran. Nothing reads it to decide whether a
     # call may run; dispatch never touches it.
+    # 2026-10-07 (chat sessions): `conversation_id` joins the set. With several
+    # chat sessions "his active conversation" stops being the one being typed
+    # in, so a tool that writes back into the chat (a reminder) is told which
+    # one the turn answers in. It is WHERE output goes, like card; nothing
+    # reads it to decide whether a call may run.
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
@@ -102,6 +107,7 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
         "step",
         "card",
         "undo_sink",
+        "conversation_id",
     }
 
 
