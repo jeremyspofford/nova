@@ -4,6 +4,9 @@
 how we can setup our pipeline so that when all builds and test finish, we have
 a deploy stage process … We cannot have nova deploy a broken nova that cannot
 be recovered automatically"), then asked for it written up ("yes please").
+**Amended 2026-10-07** with §7's integration stage: a target chain she
+configures (`ci`, the hub, or an enrolled server), the deployer measuring
+every verdict itself, and a scrubbed, egress-less copy of real data.
 **Nothing here is approved yet.** The decisions marked **OPEN** in §9 are the
 owner's; everything else follows from rulings already on record, which are
 cited where they are used.
@@ -122,10 +125,14 @@ push to main
             build core, gateway, memory, web
             push ghcr.io/jeremyspofford/nova-<svc>:<sha12>  + :h-<content hash>
             write release manifest (sha, per-service hash, migration heads)
+            (the synthetic e2e walk ran before this — the integration floor)
 hub: nova-deployer.timer (every 2 min)
-  └─ newest published manifest on main ≠ current?  → redeploy.sh <sha>
-       snapshot → migrate-check → pull → up changed → gate → smoke → verdict
-                                                             └─ fail → rollback.sh
+  └─ newest published manifest on main ≠ current?
+       ├─ integration (§7): first runnable target in the chain
+       │    scrubbed real data → full walk → verdict bound to image digests
+       └─ redeploy.sh <sha>   (only those digests, only on a passed verdict)
+            snapshot → migrate-check → pull → up changed → gate → smoke → verdict
+                                                                  └─ fail → rollback.sh
 ```
 
 ### 4.1 CI builds the images, the hub pulls them
@@ -170,26 +177,30 @@ Each step fails and says why; none falls back to a word that reads as success.
 1. **Lock** and write `deploy/state/deployments/<id>.json` with
    `phase: started`. From here on a crash leaves a file that says how far it
    got.
-2. **Snapshot**: an S41 bundle, taken by this host job (not a second dump
+2. **Integration verdict** (§7): the deployer's own record says these exact
+   image digests passed integration, on which target, on real or synthetic
+   data. No verdict for these digests — run §7 now. A failed one — the deploy
+   ends here, live untouched, verdict `failed_integration`.
+3. **Snapshot**: an S41 bundle, taken by this host job (not a second dump
    path; `doing-things.md` already settles this). It holds provider keys and
    the core signing key, and lives on the host so a rollback artifact does not
    share a deletion boundary with the data it restores.
-3. **Migration check, per database.** Read each `schema_migrations` head;
+4. **Migration check, per database.** Read each `schema_migrations` head;
    compare with the manifest's. Record which migrations this deploy will
    cross, and whether each is marked compatible (§5). Crossing an
    incompatible one is not refused; it changes what rollback means (§5.3),
    and the verdict says so.
-4. **Pull** the new images and tag the outgoing ones `:previous` (and keep
+5. **Pull** the new images and tag the outgoing ones `:previous` (and keep
    `:known-good`, the last version whose smoke suite passed).
-5. **`up -d --no-build`** only the services whose content hash changed.
+6. **`up -d --no-build`** only the services whose content hash changed.
    Core's 330 s stop is waited out, not cut short.
-6. **Health gate**: every recreated container healthy by `docker inspect`,
+7. **Health gate**: every recreated container healthy by `docker inspect`,
    within a bound; `/status` (and web's `/build.json`) read back and each
    reports the manifest's SHA and hash; the ollama compute line where a GPU
    is expected (`./install` already reads it).
-7. **Smoke suite** (§4.4) against the live stack.
-8. **Verdict**: `serving` — write `current.json`, move `:known-good`. Any
-   failure in 5–7 — run `rollback.sh` (§6), then the smoke suite again
+8. **Smoke suite** (§4.4) against the live stack.
+9. **Verdict**: `serving` — write `current.json`, move `:known-good`. Any
+   failure in 6–8 — run `rollback.sh` (§6), then the smoke suite again
    against what came back, and write `rolled_back` with the failing step and
    its stated reason. A rollback whose smoke suite also fails writes
    `broken`, stops deploying, and leaves the stack on `:known-good`'s images
@@ -200,12 +211,17 @@ Each step fails and says why; none falls back to a word that reads as success.
 The existing e2e walk cannot run on live, so tests split by whether they are
 allowed to break things.
 
-**Before deploy — destructive, on a throwaway stack.** The e2e walk
-(`tests/e2e/isolated.sh up && walk && down`) runs in CI, on a hosted runner,
-against the images `publish` is about to push, with ollama on the CPU and a
-small model. A red walk means `publish` does not run. *To check:* runtime and
-memory on a hosted runner with a CPU model — the walk was written against the
-Dell.
+**Before deploy — destructive, on a throwaway stack.** Two places, both
+§7's integration stage:
+
+- **The floor, in CI, always.** The e2e walk (`tests/e2e/isolated.sh up &&
+  walk && down`) runs on a hosted runner against the images `publish` is about
+  to push, with ollama on the CPU and a small model, on synthetic data. A red
+  walk means `publish` does not run, so every published commit has passed it.
+  *To check:* runtime and memory on a hosted runner with a CPU model — the
+  walk was written against the Dell.
+- **The rehearsal, on real data, where the chain says** (§7.2): the same walk
+  plus the smoke suite, against a scrubbed copy of live data.
 
 **After deploy — read-mostly, on live.** A new suite, `deploy/smoke/`,
 written for this slice. It may write only to things it owns and can name, and
@@ -219,7 +235,7 @@ read back, never a reply's word:
 | a chat turn completes | one turn in a canary conversation; its `turn_spans` rows read back, `status` closed ok, an `llm_call` span present |
 | memory answers | a recall on the canary conversation's own note returns it |
 | a tool runs | a write then read of `smoke/<deployment id>.txt` in the workspace; byte count equals the file's real size; file removed |
-| the hub kept its agents | connected-agent count ≥ the count read in step 1 (an agent that was offline before is not counted) |
+| the hub kept its agents | connected-agent count ≥ the count read before step 6 (an agent that was offline before is not counted) |
 | the gateway routes | the gateway's current route for chat names a model (the same read her `route_explain` makes) |
 
 A smoke turn costs a real model call per deploy. It uses chat's own chain, so
@@ -259,7 +275,7 @@ least one release earlier stopped using. Two lines of code hold this:
 ### 5.3 The last resort: the bundle
 
 When the deploy crossed a contract migration and fails its gate, the deployer
-restores the step-2 bundle and then rolls back the images. That loses whatever
+restores the step-3 bundle and then rolls back the images. That loses whatever
 was written between the snapshot and the restore — minutes, since the gate
 runs immediately. **Whether this happens unattended is §9, decision 3.**
 Today S33 in `doing-things.md` says the tool answers "crossed migration NNN in
@@ -297,20 +313,117 @@ finding, not a rollback: by then the cause is more likely the world than the
 build. A `broken` verdict stops deploys until a later published commit is
 green **and** passes a deploy, which clears it; nothing waits on a person.
 
-## 7. Blue/green: later, as a verify stack, not a second live copy
+## 7. Integration: prove the new version before it touches live
 
 Two full live copies on 16 GB means two cores sharing one database, a split
 device hub, a split memory index and two sets of schedulers. Not proposed.
 
 The useful half of blue/green is "prove the new version before it touches
-live". That is Q4's third option, and the drill machinery already does most of
-it: before step 5, boot the new images as a throwaway project
-(`nova-verify-<8 hex>`, swept by exact name like `nova-drill-*`) against a
-restore of the step-2 bundle, run the full smoke suite there — migrations run
-against a copy of real data — and only then cut over in place. It costs memory
-on the mini PC for a few minutes per deploy and needs an exception to the
-08-29 "no throwaway stacks" rule (§9, decision 5). It can be added after the
-in-place path ships without changing anything above.
+live" — Q4's third option, widened by the owner on 2026-10-07: *"what if we
+allow an integration instance for testing? … we could allow nova to configure
+where the integration server will be. it could be in ci/cd, the hub, or a
+server."* Integration is a stage of every deploy, between `publish` and
+`redeploy.sh`, and **where** it runs is configuration.
+
+Integration does not replace §4.4's live smoke suite or §6's rollback. A
+version that passed on a copy can still fail on live — other hardware, other
+settings, the real agents — so live keeps its own gate.
+
+### 7.1 Targets
+
+| Target | What it proves | What it cannot |
+|---|---|---|
+| `ci` — a hosted runner | the full walk on synthetic data; free; always available | no GPU, CPU model only, never real data (a bundle holds provider keys and the core signing key, and does not go to GitHub) |
+| `hub` — a throwaway project on the hub | migrations and the walk against a scrubbed copy of real data, on the hardware live runs on | shares 16 GB with live: a few minutes of memory per deploy (to measure: the services, plus its own CPU ollama and a small model, §7.4) |
+| `<server>` — an enrolled machine (the Dell, a VM) | real data and a real GPU, with no contention with live | the Dell sleeps and wake is paused, so it is often not runnable; a VM costs money; data leaves the hub |
+
+`ci` is the **floor**: it runs on every commit before `publish` (§4.4), so it
+has always passed by the time the hub sees a manifest. The configurable part
+is the **real-data rehearsal** above it.
+
+### 7.2 The chain, and who sets it
+
+The rehearsal targets form an ordered chain, the same idiom as a routing
+role's chain — for example `dell → hub`. On each deploy the deployer walks it
+and the first target that **can run now** takes the job: a server that
+answers its health probe and has the disk; the hub with the free memory the
+rehearsal measured last time plus a margin. A target passed over is recorded
+with its reason (`dell: no answer in 30 s`; `hub: 1.8 GB free, needs 3.1 GB`),
+the way a routing link says why it was skipped.
+
+**She chooses where, never whether.** Nova sets the chain with a tool (§8);
+that is configuration, not a gate, and sits inside the 2026-09-03 ruling.
+What no value she can set does is remove the stage: the floor has already
+run, and an empty chain means "the floor only", stated on every verdict. When
+no rehearsal target in a non-empty chain can run, what happens is §9,
+decision 5.
+
+**The setting survives a broken Nova.** She writes the chain as a request
+(§8's request directory); the deployer validates it — every entry is `hub` or
+an enrolled server's name, no duplicates — copies it into its own state, and
+keeps the last valid one. A core that cannot be read, or a request that does
+not validate, leaves the deployer on the chain it already had, and the
+rejection is a finding with its reason.
+
+### 7.3 The deployer runs the checks itself
+
+A verdict is a fact the deployer measured, never a report it was handed:
+
+- **`hub`**: the deployer starts `nova-int-<8 hex>` (swept by exact name like
+  `nova-drill-*`), restores the scrubbed bundle into it (§7.4), runs the walk
+  and the smoke suite, and sweeps it.
+- **`<server>`**: the server runs its own pinned deployer in integration role
+  (the same §6.2 copy and update rules), pulls the candidate digests from GHCR,
+  restores the scrubbed bundle, and runs the destructive walk — it needs that
+  machine's docker to restart containers, so it cannot run from the hub. Its
+  result is signed with the integration deployer's own ed25519 key, enrolled
+  on the hub's deployer by the installer — never through core, which is the
+  thing under test. Then the **hub's** deployer runs the smoke suite against
+  the server's integration address itself, and reads `/status` there to see
+  the candidate digests. Both must pass.
+- **Bound to digests.** Every verdict names the exact image digests it ran.
+  `redeploy.sh` promotes only those digests; a manifest whose digests differ
+  from the verdict's has no verdict.
+
+How the hub's deployer reaches an enrolled server is the deployer's own key
+over the tailnet, not `novad`: `novad` is paired to core, and core is what is
+being replaced.
+
+### 7.4 A copy of Nova must not act on the world
+
+A restore of a real bundle is a working Nova: it holds the core signing key
+(it could pose as the hub to every paired device), provider keys, MCP tokens,
+scheduled timers, goals, agents and, on a move bundle, the tailnet identity.
+An integration copy gets none of that. Two controls, each a line of code
+rather than a hope:
+
+1. **A scrubbed bundle, made on the hub, and only it leaves.** `./install
+   backup --integration` takes a fresh S41 bundle, restores it into
+   throwaway objects (the drill's machinery), scrubs, and dumps a new bundle. The scrub:
+   generates a fresh core signing key; empties every credential column;
+   switches off timers, goals and agents; revokes every device row; leaves out
+   the tailscale volume. "Every credential column" is **derived, never a list**:
+   columns are marked in their migration (`COMMENT ON COLUMN … IS
+   'nova:secret'`) and the scrub reads the marks from the catalog; a test
+   fails when a column whose name says token, secret, password, key or auth
+   carries no mark. Before the bundle counts, the deployer reads back: the
+   signing-key fingerprint differs from live's; every marked column is empty;
+   no timer, goal or agent is enabled. Any one failing — no bundle, no
+   rehearsal, and a finding.
+2. **No way out.** The integration project's network is `internal: true`: no
+   egress at all. It reaches a model only through an ollama on that network
+   (its own on a server; on the hub, a CPU ollama in the project, as the e2e
+   walk already does). Even a scrub that missed something has nowhere to send
+   it. A cloud model in integration is not offered.
+
+### 7.5 What a rehearsal costs
+
+On the hub, a few minutes of memory and CPU per deploy, during which live is
+slower; the deployer measures the rehearsal's peak and uses it as the next
+run's admission check (§7.2). Disk for one scrubbed bundle, replaced each
+time. It needs an exception to the 08-29 "no throwaway stacks" rule (§9,
+decision 6). On a server, the transfer of one scrubbed bundle per deploy over
+the tailnet.
 
 ## 8. Her side
 
@@ -322,11 +435,20 @@ act on (`CLAUDE.md`, "the work is her capability"):
   mid-turn still learns the verdict.
 - An Inbox notice per deploy: "Deployed abc123" or "Rolled back abc123: the
   smoke turn closed with status error (gateway 502)", with a room.
-- Tools (registry +3, as S33 already counts): `deploy_stack` (deploy a
-  published commit now), `deploy_verdict` (read a deployment), `deploy_rollback`
-  (ask the deployer to roll back to `:known-good`). She asks the host; the host
-  does it. None of them can change the gate, the deadline, or the pinned
-  rollback path.
+- Tools (registry +5: S33's three, and two for §7): `deploy_stack` (deploy a
+  published commit now), `deploy_verdict` (read a deployment, its integration
+  verdict and target included), `deploy_rollback` (ask the deployer to roll
+  back to `:known-good`), `integration_configure` (set the rehearsal chain,
+  read back from the deployer's own state once it has validated it) and
+  `integration_status` (each target: enrolled, runnable now or why not, its
+  last verdict). None of them can change the gate, the deadline, the floor, or
+  the pinned rollback path.
+- **How she asks the host.** Core writes a request file into
+  `deploy/state/requests/`, the one directory of the deployer's that core's
+  container mounts; the deployer reads nothing from it but request files, so
+  core can ask but cannot change the deployer's state. The deployer picks it up on its next tick, validates it, acts, and writes the
+  outcome beside it. Nothing the deployer needs in order to roll back is read
+  from core.
 - A rolled-back deploy is an event S34b's goals can pick up: she investigates
   and fixes on the same landing and deploy path (`nova-codes.md`).
 
@@ -349,8 +471,23 @@ act on (`CLAUDE.md`, "the work is her capability"):
 4. **The smoke turn's model.** *Proposed:* chat's own chain, so the deploy
    proves the path in use; one real call per deploy. *Otherwise:* a fixed
    cheap model, cheaper but proving less.
-5. **The verify stack** (§7). *Proposed:* later, after the in-place path ships.
-   Needs an exception to the 08-29 "no throwaway stacks" rule.
+5. **When no rehearsal target can run** (§7.2) — the Dell asleep and the
+   hub short of memory. *Proposed:* deploy on the CI floor's verdict, stated
+   on the verdict and in the Inbox notice ("verified on synthetic data only:
+   dell no answer, hub 1.8 GB free"); live's smoke suite and rollback still
+   guard. *Otherwise:* wait for a target, up to a bound, then the same — or
+   wait without a bound, which stalls every deploy while the Dell sleeps.
+6. **The hub as a rehearsal target** (§7.5). Needs an exception to the 08-29
+   "no throwaway stacks" rule for `nova-int-*` projects. *Proposed:* yes, as
+   the chain's default (`hub`).
+7. **Real data off the hub** (§7.1, §7.4). *Proposed:* allowed to an enrolled
+   server, only as a scrubbed bundle over the tailnet. *Otherwise:* real-data
+   rehearsals on the hub only; servers rehearse on synthetic data.
+8. **Enrolling a server** as a target is an installer step on that machine
+   (`./install integration-target`), exchanging deployer keys with the hub.
+   *Proposed:* the installer, run by a person once per machine, like pairing.
+   *Otherwise:* her own hands on that machine through `novad` — faster to
+   grow, but then enrolment goes through core.
 
 ## 10. Order
 
@@ -363,8 +500,13 @@ act on (`CLAUDE.md`, "the work is her capability"):
    two-phase self-update, the watchdog.
 5. **§8** — her tools, the reconciler, the Inbox notice. Retires "Claude
    deploys" (`nova-codes.md`).
-6. **Turn on** the timer.
-7. Later: §7's verify stack; S20's k3s engine if it is ever wanted.
+6. **Turn on** the timer. Integration is the CI floor alone at this point.
+7. **§7.4** — the `nova:secret` marks and their test, `backup
+   --integration`, the read-back. Before any real-data rehearsal.
+8. **§7.2, §7.3** — the chain, `hub` as a target, `integration_configure` /
+   `integration_status`.
+9. Later: enrolled servers (§7.3), once wake works or a VM is chosen; S20's
+   k3s engine if it is ever wanted.
 
 ## 11. Definition of done
 
@@ -381,6 +523,19 @@ act on (`CLAUDE.md`, "the work is her capability"):
   and files a finding; the stack is untouched.
 - A migration that drops a column without a `-- contract:` header turns CI
   red; one with the header whose expand is not yet published turns it red too.
+- A commit whose migration fails against real data (pinned: a migration
+  that adds `NOT NULL` to a column live data leaves empty) passes the CI
+  floor, fails the hub rehearsal, and never reaches live; the verdict is
+  `failed_integration` with the migration's error, and live's container IDs
+  did not change.
+- A scrubbed bundle with one credential column left full (pinned: a new
+  column named `*_token` with no `nova:secret` mark) turns CI red; a scrub
+  whose read-back finds the live signing-key fingerprint refuses the
+  rehearsal.
+- She is asked "rehearse on the Dell first, then the hub" and the chain reads
+  back from the deployer's state as `dell → hub`; with the Dell asleep, the
+  next deploy's verdict says `dell: no answer` and names `hub` as the target
+  that ran.
 - She is asked in chat "what's deployed, and did the last deploy work?" and
   answers from `deploy_verdict`, matching `deploy/state/current.json` and the
   trace.
