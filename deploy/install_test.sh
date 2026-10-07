@@ -2234,7 +2234,9 @@ rm -rf "$TSW"
 # read as "no change".
 TS_NOHASH="$(
   . "$SCRIPT_DIR/install.sh"; set +e
-  TAILNET_ENABLED=1; TAILSCALE_DIR="$(mktemp -d)"
+  # shellcheck disable=SC2034
+  TAILNET_ENABLED=1
+  TAILSCALE_DIR="$(mktemp -d)"
   out="$( (record_tailscale_scripts) 2>&1 )"; code=$?
   rmdir "$TAILSCALE_DIR"
   printf '%s|%s' "$code" "$(printf '%s' "$out" | tr '\n' ' ')"
