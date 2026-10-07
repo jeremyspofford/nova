@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Clock, Square, X } from 'lucide-react'
+import { ArrowDown, ArrowLeft, Clock, Square, X } from 'lucide-react'
 import {
   getActiveConversation as apiGetActiveConversation,
   getConversationState as apiGetConversationState,
@@ -549,6 +549,19 @@ export function ChatPage({
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [state.conversationId, resolvedTick])
 
+  /** Scrolled up far enough that the newest message is out of view — the
+   *  cue for the jump-to-latest button. Same 200px band as the streaming
+   *  pin below, so the button shows exactly when new rows stop following. */
+  const [awayFromBottom, setAwayFromBottom] = useState(false)
+  const updateAwayFromBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setAwayFromBottom(el.scrollHeight - el.scrollTop - el.clientHeight >= 200)
+  }, [])
+  const jumpToLatest = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
+  }, [])
+
   // While a reply streams, keep it pinned to the bottom — unless the operator
   // has scrolled up to read, in which case leave them where they are.
   useEffect(() => {
@@ -556,7 +569,8 @@ export function ChatPage({
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     if (distanceFromBottom < 200) el.scrollTop = el.scrollHeight
-  }, [state.rows])
+    updateAwayFromBottom()
+  }, [state.rows, updateAwayFromBottom])
 
   // `??`, not `||`: an empty pick the store was told about is "no pick", not
   // a cue to fall back to the value read when the app started.
@@ -626,7 +640,12 @@ export function ChatPage({
         </header>
       )}
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+      <div className="relative flex-1 min-h-0 flex flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={updateAwayFromBottom}
+        className="flex-1 min-h-0 overflow-y-auto custom-scrollbar"
+      >
         {/* Same column as every other page: AppLayout's non-fullWidth
             wrapper is `max-w-[1200px] px-6`. Chat renders fullWidth (it owns
             its own scroll and pinned composer), so it restates that width
@@ -733,6 +752,22 @@ export function ChatPage({
           {/* Scroll target: landing here means the newest message is in view. */}
           <div ref={bottomRef} aria-hidden="true" />
         </div>
+      </div>
+      {/* Jump to latest: shown only once he has scrolled up out of reach of
+          the newest message, and floats over the transcript just above the
+          composer so it never shifts the layout. */}
+      {awayFromBottom && (
+        <button
+          type="button"
+          data-testid="jump-to-latest"
+          onClick={jumpToLatest}
+          aria-label="jump to the latest message"
+          title="jump to the latest message"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface-card text-content-secondary shadow-md transition-colors duration-fast hover:bg-surface-card-hover hover:text-content-primary"
+        >
+          <ArrowDown size={16} />
+        </button>
+      )}
       </div>
 
       {/* Only the home indicator to clear now: the bottom tab bar was

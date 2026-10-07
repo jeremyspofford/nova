@@ -1512,3 +1512,38 @@ describe('ChatPage — a pane that names its session', () => {
     expect(within(screen.getByTestId('chat-header')).getByText('Dell wifi')).toBeTruthy()
   })
 })
+
+describe('ChatPage — jump to the latest message', () => {
+  /** jsdom lays nothing out, so scroll geometry is stated by hand. */
+  function scrollTo(el: HTMLElement, { top, height, client }: { top: number; height: number; client: number }) {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: height })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: client })
+    el.scrollTop = top
+    fireEvent.scroll(el)
+  }
+
+  it('appears once he scrolls up, jumps to the bottom anchor, and hides at the bottom', async () => {
+    const spy = (HTMLElement.prototype as unknown as { scrollIntoView: ReturnType<typeof vi.fn> })
+      .scrollIntoView
+    renderChat({
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [
+        stored('u1', 'user', 'first'),
+        stored('a1', 'assistant', 'the newest'),
+      ]),
+    })
+    await screen.findByText('the newest')
+    expect(screen.queryByTestId('jump-to-latest')).toBeNull()
+
+    const scroller = screen.getByTestId('chat-page').querySelector('.overflow-y-auto') as HTMLElement
+    scrollTo(scroller, { top: 0, height: 2000, client: 600 })
+    const button = await screen.findByTestId('jump-to-latest')
+
+    spy.mockClear()
+    fireEvent.click(button)
+    expect(spy).toHaveBeenCalledWith({ block: 'end', behavior: 'smooth' })
+
+    scrollTo(scroller, { top: 1400, height: 2000, client: 600 })
+    await waitFor(() => expect(screen.queryByTestId('jump-to-latest')).toBeNull())
+  })
+})
