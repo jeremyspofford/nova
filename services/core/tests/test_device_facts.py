@@ -5,6 +5,7 @@ that pins the shapes both sides of the wire agree on."""
 from __future__ import annotations
 
 import copy
+import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1773,3 +1774,241 @@ def test_the_agents_line_class_is_cores_at_every_code_point():
         f"only the agent keeps out: {[hex(cp) for cp in sorted(agent - core)]}; "
         f"only core refuses: {[hex(cp) for cp in sorted(core - agent)]}"
     )
+
+
+# -- fix/facts-unreadable-null: a list the agent sent as null ------------------
+#
+# Go's encoding/json writes a nil slice as null. Agent build 8a2c15dab611 sent
+# "unreadable": null in every facts frame that carried a probe and had nothing
+# unreadable — the healthy case — and core refused the WHOLE frame over it:
+# net, folders and the probe never landed, for every agent. Core reads null, or
+# the key left out, as the empty list in each list the Go frame can send as
+# null; any other type is still refused. novad_pids is the one list null on
+# purpose — unknown, never none — and keeps that reading.
+
+_IFACE = {"name": "eth0", "mac": "02:00:00:00:00:01", "ipv4_cidr": ["192.0.2.7/24"], "up": True}
+
+
+def test_the_live_frame_a_probe_with_a_null_unreadable_list_is_recorded():
+    """The frame build 8a2c15dab611 sends once its probe has run."""
+    frame = {**PROBED, "net": {"ifaces": [_IFACE]}, "unreadable": None}
+    got = df.validate_frame(frame)
+    assert got["unreadable"] == []
+    assert got["net"]["ifaces"][0]["ipv4_cidr"] == ["192.0.2.7/24"]
+    assert {k: got[k] for k in df.PROBE_KEYS} == {
+        k: v for k, v in df.validate_frame(PROBED).items() if k in df.PROBE_KEYS
+    }
+
+
+@pytest.mark.parametrize(
+    "frame,section,read",
+    [
+        ({"type": "facts", "unreadable": None}, "unreadable", []),
+        ({"type": "facts", "net": {"ifaces": None}}, "net", {"ifaces": []}),
+        ({"type": "facts", "net": {}}, "net", {"ifaces": []}),
+        (
+            {"type": "facts", "net": {"ifaces": [{**_IFACE, "ipv4_cidr": None}]}},
+            "net",
+            {"ifaces": [{**_IFACE, "ipv4_cidr": []}]},
+        ),
+        (
+            {
+                "type": "facts",
+                "net": {"ifaces": [{k: v for k, v in _IFACE.items() if k != "ipv4_cidr"}]},
+            },
+            "net",
+            {"ifaces": [{**_IFACE, "ipv4_cidr": []}]},
+        ),
+        (
+            {
+                "type": "facts",
+                "wsl_distros": {"distros": None},
+                "probed_at": "2026-10-06T12:00:00Z",
+            },
+            "wsl_distros",
+            {"distros": [], "running_said": ""},
+        ),
+        (
+            {"type": "facts", "wsl_distros": {}, "probed_at": "2026-10-06T12:00:00Z"},
+            "wsl_distros",
+            {"distros": [], "running_said": ""},
+        ),
+    ],
+    ids=[
+        "unreadable-null",
+        "ifaces-null",
+        "ifaces-left-out",
+        "ipv4_cidr-null",
+        "ipv4_cidr-left-out",
+        "distros-null",
+        "distros-left-out",
+    ],
+)
+def test_a_list_sent_as_null_or_left_out_is_the_empty_list(frame, section, read):
+    assert df.validate_frame(frame)[section] == read
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        {"type": "facts", "unreadable": "nothing"},
+        {"type": "facts", "unreadable": {}},
+        {"type": "facts", "unreadable": 0},
+        {"type": "facts", "unreadable": False},
+        {"type": "facts", "unreadable": ""},
+        {"type": "facts", "net": {"ifaces": {}}},
+        {"type": "facts", "net": {"ifaces": [{**_IFACE, "ipv4_cidr": "192.0.2.7/24"}]}},
+        {
+            "type": "facts",
+            "wsl_distros": {"distros": "Ubuntu"},
+            "probed_at": "2026-10-06T12:00:00Z",
+        },
+    ],
+    ids=[
+        "unreadable-text",
+        "unreadable-object",
+        "unreadable-zero",
+        "unreadable-false",
+        "unreadable-empty-text",
+        "ifaces-object",
+        "ipv4_cidr-text",
+        "distros-text",
+    ],
+)
+def test_a_list_of_the_wrong_type_is_still_refused(frame):
+    """Only null (or the key left out) reads as empty — never another falsy
+    value, and never a type that is not a list."""
+    with pytest.raises(df.FactsRejected, match="must be a list"):
+        df.validate_frame(frame)
+
+
+def test_a_null_novad_pids_is_still_unknown_never_none():
+    probe = _set(PROBED, ("wsl_distros", "distros", 0, "novad_pids"), None)
+    assert df.validate_frame(probe)["wsl_distros"]["distros"][0]["novad_pids"] is None
+
+
+def test_a_healthy_probe_frame_with_a_null_list_clears_what_it_can_now_read():
+    """null is "nothing unreadable", never "keep what was said before": the
+    stored reasons, the older probe's and the frame's own, are gone."""
+    healthy = {**NEWER_PROBE, "unreadable": None}
+    merged = df.merge_frame(_stored_older(), df.validate_frame(healthy))
+    assert merged["unreadable"] == [] and merged["probed_at"] == NEWER_PROBE["probed_at"]
+
+
+_FIELD_BUILD = Path(__file__).parent / "fixtures" / "facts_frame_build_8a2c15dab611.json"
+
+
+def test_the_frame_the_build_in_the_field_sends_is_recorded_whole():
+    """tests/fixtures/facts_frame_build_8a2c15dab611.json is the healthy frame
+    golden_test.go captured off the socket at that build's own apps/novad tree
+    (origin/main b50c6450), "unreadable": null and all: the agents already in
+    the field send it until they are updated, so core keeps reading it — the
+    tolerant reader is not dead code while that build runs anywhere."""
+    frame = json.loads(_FIELD_BUILD.read_text(encoding="utf-8"))
+    assert frame["unreadable"] is None
+    got = df.validate_frame(frame)
+    assert got["unreadable"] == [] and set(got) == set(df.FRAME_SECTIONS)
+
+
+# -- the frames novad really sends (golden) ------------------------------------
+#
+# apps/novad/internal/client/testdata/*_golden.json are the auth frame and two
+# facts frames exactly as novad's agent wrote them on a real socket —
+# golden_test.go captures them, and fails when a committed one is stale. Here
+# each goes through the validator core runs on the socket, so a frame the agent
+# sends that core would refuse is red in core's suite instead of dropped in
+# production. If this goes red after the goldens were rewritten, the agent's
+# frames moved: fix the side that is wrong, never the golden.
+
+_GOLDEN = Path(__file__).resolve().parents[3] / "apps/novad/internal/client/testdata"
+
+
+def _golden(name: str) -> dict:
+    return json.loads((_GOLDEN / name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("name", ["facts_healthy_golden.json", "facts_unreadable_golden.json"])
+def test_each_facts_frame_novad_sends_is_recorded_whole(name):
+    """Accepted, with every section core records — and nothing the agent
+    sends is a section core drops."""
+    frame = _golden(name)
+    assert frame["type"] == "facts"
+    got = df.validate_frame(frame)
+    assert set(got) == set(frame) - {"type"} == set(df.FRAME_SECTIONS)
+
+
+def test_the_healthy_frame_novad_sends_has_its_probe_and_nothing_unreadable():
+    got = df.validate_frame(_golden("facts_healthy_golden.json"))
+    assert got["unreadable"] == []
+    assert df.folders_of(got) == df.FOLDER_NAMES
+    assert got["service"]["process"] == "novad.exe" and got["probed_at"]
+    running, stopped = got["wsl_distros"]["distros"]
+    assert running["novad_pids"] == [412] and stopped["novad_pids"] == []
+
+
+def test_the_unreadable_frame_novad_sends_keeps_every_entry_and_its_unknowns():
+    frame = _golden("facts_unreadable_golden.json")
+    got = df.validate_frame(frame)
+    assert got["unreadable"] == frame["unreadable"]
+    assert {u["item"] for u in got["unreadable"]} >= {
+        "machine_uid",
+        "folders.desktop",
+        "elevation",
+        "wsl_distros.Ubuntu-Fixture",
+    }
+    assert "desktop" not in got["folders"]
+    looked_at, stopped = got["wsl_distros"]["distros"]
+    assert looked_at["novad_pids"] is None and stopped["novad_pids"] == []
+
+
+def test_the_auth_frame_novad_sends_is_recorded_in_its_shape():
+    frame = _golden("auth_golden.json")
+    assert frame["type"] == "auth" and frame["device_id"] and frame["sig"]
+    assert df.validate_auth(frame["facts"]) == frame["facts"]
+    assert frame["facts"]["agent"]["update"]["outcome"] == "applied"
+
+
+# -- the folders an agent's own facts show it predates -------------------------
+#
+# device_list_files' @folder refusal said "an agent from before S42b reports
+# none" of every agent that had reported no folders — and of the live S42b
+# agents above, whose frames core had refused, that cause was false. It is
+# said only when the agent's own facts show it.
+
+_FRAME_ROW = {**WINDOWS, "net": {"ifaces": []}, "unreadable": []}
+
+
+@pytest.mark.parametrize(
+    "facts,shows",
+    [
+        (None, False),
+        (WINDOWS, False),
+        (_FRAME_ROW, True),
+        ({**_FRAME_ROW, "folders": {"home": "C:\\Users\\sam"}}, False),
+        ({**_FRAME_ROW, "unreadable": [{"item": "folders.desktop", "reason": "x"}]}, False),
+        ({**_FRAME_ROW, "unreadable": [{"item": "folders.desktop", "reason": ""}]}, False),
+        (
+            {
+                **_FRAME_ROW,
+                "unreadable": [
+                    {"item": "unreadable", "reason": "more unreadable items than can be listed"}
+                ],
+            },
+            False,
+        ),
+    ],
+    ids=[
+        "no-facts",
+        "auth-only-no-frame-yet",
+        "a-frame-that-accounts-for-no-folder",
+        "a-folder-reported",
+        "a-folder-filed-unreadable",
+        "a-folder-filed-with-no-reason",
+        "a-list-cut-at-the-cap",
+    ],
+)
+def test_only_a_frame_that_accounts_for_no_folder_shows_an_agent_predates_them(facts, shows):
+    """Every agent with folders accounts for all four in every frame —
+    reported, or filed unreadable — so only a frame that landed (net) and
+    accounted for none shows it. Before a frame lands nothing does."""
+    assert df.predates_folders(facts) is shows

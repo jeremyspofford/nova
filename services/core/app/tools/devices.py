@@ -145,6 +145,7 @@ def _check_fs_path(
     folders: tuple[str, ...] = (),
     name: str = "this device",
     unread: dict[str, str] | None = None,
+    predates_folders: bool = False,
 ) -> str:
     """The requested path must be absolute ON THE DEVICE'S OS; it is returned
     normalized. Lexical on purpose: the path names a file on the REMOTE
@@ -159,7 +160,11 @@ def _check_fs_path(
     device_facts.folders_of) — the machine resolves it as its OS names it,
     never core — and otherwise a stated cannot, in the agent's own words
     when it said why it could not read the folder (`unread`,
-    device_facts.folders_unread).
+    device_facts.folders_unread). That the agent is from before S42b is said
+    only when its own facts show it (`predates_folders`,
+    device_facts.predates_folders); otherwise only that it reported none —
+    an S42b agent whose frames core refused was told it was older
+    (fix/facts-unreadable-null).
 
     linux/darwin: posix, a leading "/". windows: a drive or a share, checked
     EXPLICITLY — Python 3.12's ntpath.isabs also accepts a rooted path with
@@ -185,8 +190,10 @@ def _check_fs_path(
                 why = f"it said: {said or 'no reason given'}"
             elif folders:
                 why = "it reported others, and filed no reason for this one"
-            else:
+            elif predates_folders:
                 why = "it has reported no folders — an agent from before S42b reports none"
+            else:
+                why = "it has reported no folders"
             raise ToolFailure(
                 f"cannot: {name}'s agent did not report its {folder} folder ({why}) — give an "
                 "absolute path instead"
@@ -241,6 +248,7 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
             device_facts.folders_of(row["facts"]),
             row["name"],
             device_facts.folders_unread(row["facts"]),
+            device_facts.predates_folders(row["facts"]),
         )
         if fs_path
         else None

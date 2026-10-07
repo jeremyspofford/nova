@@ -325,13 +325,25 @@ func failed(err error) string {
 }
 
 // ApplyTo puts a probe's findings in a frame, with the time they were read.
+// It leaves no list nil, whatever it was handed: encoding/json writes a nil
+// slice as null, and core refused a whole frame over a null unreadable — the
+// distributions are copied in with [] for none, and the probe itself, which
+// every later frame carries too, is never changed. A distribution's
+// novad_pids stays null where it is unknown (Distro.PIDs).
 func (p Probed) ApplyTo(f *Frame) {
 	svc := p.Service
 	f.Service = &svc
 	f.Elevation = p.Elevation
-	f.WSLDistros = p.WSL
+	f.WSLDistros = nil
+	if p.WSL != nil {
+		w := *p.WSL
+		if w.Distros == nil {
+			w.Distros = []Distro{}
+		}
+		f.WSLDistros = &w
+	}
 	f.ProbedAt = p.At.UTC().Format(time.RFC3339)
-	f.Unreadable = append(f.Unreadable, p.Unreadable...)
+	f.Unreadable = append(append([]Unreadable{}, f.Unreadable...), p.Unreadable...)
 	*f = capUnreadable(*f)
 }
 

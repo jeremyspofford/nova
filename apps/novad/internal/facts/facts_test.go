@@ -163,6 +163,25 @@ func TestAnInterfaceListThatCannotBeReadIsSaidNeverEmpty(t *testing.T) {
 	}
 }
 
+// fix/facts-unreadable-null: an empty list goes out as [], never null —
+// core reads each of the frame's lists as a list.
+func TestAFrameWithNothingToListSendsEmptyListsNeverNull(t *testing.T) {
+	withFolders(t, everyFolder())
+	withIfaces(t, []ifaceInfo{{Name: "eth0", MAC: "02:00:00:00:00:01", Up: true}}, nil)
+	data, err := json.Marshal(GatherFrame(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"unreadable":[]`) || !strings.Contains(string(data), `"ipv4_cidr":[]`) ||
+		strings.Contains(string(data), "null") {
+		t.Fatalf("a list went out as null: %s", data)
+	}
+	withIfaces(t, nil, nil)
+	if data, _ := json.Marshal(GatherFrame(nil)); !strings.Contains(string(data), `"ifaces":[]`) {
+		t.Fatalf("no interfaces is [], never null: %s", data)
+	}
+}
+
 func TestTheFactsFrameCarriesTheFoldersAndSaysWhichCouldNotBeRead(t *testing.T) {
 	oldIf, oldF := readIfaces, readFolder
 	t.Cleanup(func() { readIfaces, readFolder = oldIf, oldF })

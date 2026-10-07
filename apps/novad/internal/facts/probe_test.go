@@ -130,6 +130,28 @@ func TestAProbeIsCarriedInTheFrameWithItsTime(t *testing.T) {
 	}
 }
 
+// fix/facts-unreadable-null: encoding/json writes a nil slice as null, and
+// core refused a facts frame whose unreadable was null — every frame a
+// healthy agent sent once its probe had run. ApplyTo leaves no list nil:
+// unreadable, and the distributions it copies in, whatever it was handed —
+// without changing the probe, which every later frame carries too.
+func TestApplyToNeverLeavesANilList(t *testing.T) {
+	p := Probed{At: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), WSL: &WSLDistros{}}
+	f := Frame{Type: "facts"}
+	p.ApplyTo(&f)
+	data, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Unreadable == nil || f.WSLDistros == nil || f.WSLDistros.Distros == nil ||
+		!strings.Contains(string(data), `"unreadable":[]`) || !strings.Contains(string(data), `"distros":[]`) {
+		t.Fatalf("ApplyTo left a list nil, so null on the wire: %s", data)
+	}
+	if p.WSL.Distros != nil {
+		t.Fatal("ApplyTo changed the probe it was handed")
+	}
+}
+
 // script answers each call in turn with an output AND an error when told —
 // what FakeRunner does not: a program that printed something, then failed.
 // An answer with a hold waits for it to close first, deaf to ctx: a child
