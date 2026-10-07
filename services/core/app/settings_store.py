@@ -78,6 +78,26 @@ def _max_notices_problem(value: Any) -> str | None:
     return None
 
 
+def _tool_rounds_problem(value: Any) -> str | None:
+    """The tool-round limit takes the bounds an agent row's own rounds take:
+    agents.MIN_ROUNDS..agents.MAX_ROUNDS, read from agents.py on every write.
+
+    There is no second pair here. A pair typed again, or copied when this
+    module loaded, would keep refusing and storing by the old numbers the day
+    agents.py moved its own — and a new agent made without its own rounds
+    takes this setting, which agents._rounds_for refuses outside that range.
+    """
+    # Function-local: app.agents imports THIS module at its top (it reads this
+    # limit as a new agent's rounds), so naming it up there would close the
+    # cycle — the same one-way idiom write_setting uses for app.beats.
+    from app import agents
+
+    low, high = agents.MIN_ROUNDS, agents.MAX_ROUNDS
+    if not low <= value <= high:
+        return f"the tool-round limit must be between {low} and {high}, got {value}"
+    return None
+
+
 # The decision step's budget as its notice says it — read off the step's own
 # constant, so the words cannot say one budget while the step runs another.
 _DECISION_BUDGET = f"{decisions.TURN_BUDGET_S:g} s"
@@ -157,6 +177,7 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "asking for tools. Reaching the limit ends the turn with a note "
             "saying so, never silently."
         ),
+        validate=_tool_rounds_problem,
     ),
     SettingDef(
         key="agents.responsiveness_check",
