@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from app.tools import (
+    about,
     agents,
     browser,
     devices,
@@ -126,6 +127,10 @@ REGISTRY: dict[str, Tool] = {
         # (tools/mcp.py). The servers and their tools are rows, never
         # registrations: this set does not grow with them.
         *mcp.TOOLS,
+        # The About page (2026-10-07): what this instance is — its build,
+        # whether there is anything newer to pull, and its live architecture,
+        # the clients people use her from included (tools/about.py).
+        *about.TOOLS,
     )
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, Coins, LogOut, Settings as SettingsIcon, Activity as ActivityIcon } from 'lucide-react'
+import { ChevronDown, Coins, Info, LogOut, Settings as SettingsIcon, Activity as ActivityIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -38,6 +38,9 @@ const ITEMS: Item[] = [
   // are not.
   { to: '/spend', label: 'Usage', icon: Coins, minRole: 'admin' },
   { to: '/activity', label: 'What she has done', icon: ActivityIcon, minRole: 'admin' },
+  // What this instance is: its build, whether there is anything newer, and
+  // the machines and apps it is made of (pages/about).
+  { to: '/about', label: 'About Nova', icon: Info, minRole: 'guest' },
 ]
 
 export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {

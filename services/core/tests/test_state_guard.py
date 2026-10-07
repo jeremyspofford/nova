@@ -396,6 +396,13 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "caller threaded one through _command, so a span's facts end on the "
         "truth this refusal is actually reporting.",
     ),
+    ("about.py", "_device"): (
+        _RECORDS,
+        "the About page and nova_about: each agent's connected state, read "
+        "from the hub's sockets, recorded as {device, connected} on the "
+        "facts_sink nova_about threads through (the page passes none — a page "
+        "is no reply).",
+    ),
     ("tools/devices.py", "_require_connected"): (
         _RECORDS,
         "the ONE place core determines a device's connectivity during _admit; "

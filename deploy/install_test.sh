@@ -2366,6 +2366,102 @@ else
   report 1 "repo: both keys are passed to core and declared in .env.example" "missing:$RP_MISSING"
 fi
 
+# ── record_build: which commit this stack is (the About page) ───────────────
+# A real throwaway repo per case, real git, real set_env_value; only REPO_ROOT
+# and ENV_FILE are pointed at a temp dir.
+#   $1 "commit" | "dirty" | "none"   $2 initial .env body
+# Prints "<exit>|<.env with ;>|<stderr>|<HEAD or ->".
+run_build() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${2:-}" > "$ENV_FILE"
+    git init -q "$REPO_ROOT"
+    head="-"
+    if [ "$1" != none ]; then
+      printf 'a\n' > "$REPO_ROOT/f"
+      git -C "$REPO_ROOT" add f
+      git -C "$REPO_ROOT" -c user.name=t -c user.email=t@t commit -q -m init
+      git -C "$REPO_ROOT" -c user.name=t -c user.email=t@t tag v9.9.9
+      head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    fi
+    if [ "$1" = dirty ]; then printf 'b\n' > "$REPO_ROOT/f"; fi
+    err="$( ( set -e; record_build ) 2>&1 )"; code=$?
+    printf '%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$head"
+  )
+}
+RB_CLEAN="$(run_build commit 'A=1\n')"
+RB_HEAD="$(tn_field "$RB_CLEAN" 4)"
+expect_tn "build: HEAD is written as NOVA_COMMIT" "$RB_CLEAN" 0 2 "NOVA_COMMIT=$RB_HEAD;"
+expect_tn "build: the describe is written" "$RB_CLEAN" 0 2 "NOVA_VERSION=v9.9.9;"
+expect_tn "build: a clean tree is not dirty" "$RB_CLEAN" 0 2 "NOVA_DIRTY=0;"
+expect_tn "build: the commit date is written" "$RB_CLEAN" 0 2 "NOVA_COMMIT_DATE=20"
+expect_tn "build: when it was first stamped is written" "$RB_CLEAN" 0 2 "NOVA_INSTALLED_AT=20"
+expect_tn "build: other keys untouched" "$RB_CLEAN" 0 2 "A=1;"
+RB_DIRTY="$(run_build dirty '')"
+expect_tn "build: a changed tracked file is dirty" "$RB_DIRTY" 0 2 "NOVA_DIRTY=1;"
+expect_tn "build: and the describe says so" "$RB_DIRTY" 0 2 "NOVA_VERSION=v9.9.9-dirty;"
+expect_tn "build: and it says so out loud" "$RB_DIRTY" 0 3 "uncommitted changes"
+RB_NONE="$(run_build none 'NOVA_COMMIT=0123456789abcdef0123456789abcdef01234567\nNOVA_DIRTY=0\n')"
+expect_tn "build: no commit blanks a stale stamp" "$RB_NONE" 0 2 "NOVA_COMMIT=;"
+expect_tn "build: no commit says so" "$RB_NONE" 0 3 "no build stamp"
+# A re-run on the same commit writes nothing, so compose has no new config to
+# recreate core for: the first stamp's time stands.
+RB_SAME="$(run_build commit 'NOVA_INSTALLED_AT=2026-01-01T00:00:00Z\n')"
+expect_tn "build: a new commit moves NOVA_INSTALLED_AT" "$RB_SAME" 0 2 "NOVA_INSTALLED_AT=20"
+expect_tn_lacks "build: (not left at the old time)" "$RB_SAME" 2 "2026-01-01T00:00:00Z"
+RB_RERUN="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    REPO_ROOT="$tmp/repo"
+    ENV_FILE="$tmp/.env"
+    git init -q "$REPO_ROOT"
+    git -C "$REPO_ROOT" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+    : > "$ENV_FILE"
+    record_build 2>/dev/null
+    sed -i.bak 's/^NOVA_INSTALLED_AT=.*/NOVA_INSTALLED_AT=2026-01-01T00:00:00Z/' "$ENV_FILE"
+    before="$(cat "$ENV_FILE")"
+    record_build 2>/dev/null
+    [ "$(cat "$ENV_FILE")" = "$before" ] && echo same || echo changed
+  )
+)"
+expect_str "build: a re-run on the same commit leaves .env byte-identical" "$RB_RERUN" "same"
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  record_build$/{b=NR} f&&/^  compose_up$/{u=NR}
+        END{exit !(b && u && b < u)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "build: cmd_install records the build before compose_up"
+else
+  report 1 "build: cmd_install records the build before compose_up" "order or call missing"
+fi
+RB_MISSING=""
+for RB_KEY in NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT; do
+  grep -q "^  *${RB_KEY}: \${${RB_KEY}:-}" "$SCRIPT_DIR/docker-compose.yml" \
+    || RB_MISSING="$RB_MISSING docker-compose.yml:$RB_KEY"
+  awk -v k="$RB_KEY" '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    $0 ~ ("^(# )?" k "=") { if (d) ok = 1 }
+    { d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example" || RB_MISSING="$RB_MISSING .env.example:$RB_KEY"
+done
+if [ -z "$RB_MISSING" ]; then
+  report 0 "build: every key is passed to core and declared in .env.example"
+else
+  report 1 "build: every key is passed to core and declared in .env.example" "missing:$RB_MISSING"
+fi
+
 # ── tripwire: the five keys decide_subnet writes have to MEAN something ─────
 # It writes NOVA_SUBNET, NOVA_SUBNET_RANGE, NOVA_SUBNET_GATEWAY, NOVA_WEB_ADDR
 # and NOVA_TAILSCALE_ADDR. Two of those are already read by

@@ -12,6 +12,7 @@ import type { Person } from './gate'
 import { failureReason } from './streamChat'
 import { statedReason } from './statedReason'
 import { createLineBuffer } from './lineBuffer'
+import { installedApp } from './safeArea'
 
 /** The three backends core's PUT /inference/backend accepts. */
 export type EngineKind = 'ollama' | 'remote' | 'cloud'
@@ -33,6 +34,16 @@ export function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** 'standalone' for the installed app, 'browser' for a tab; never throws —
+ *  a page that cannot ask (no matchMedia in a test shim) is a browser. */
+export function displayMode(): 'standalone' | 'browser' {
+  try {
+    return installedApp() ? 'standalone' : 'browser'
+  } catch {
+    return 'browser'
+  }
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   let response: Response
   try {
@@ -49,6 +60,10 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
         ...(init.body && !(init.body instanceof FormData)
           ? { 'Content-Type': 'application/json' }
           : {}),
+        // Whether this is the installed app (the PWA) or a browser tab — a
+        // fact only the page can know, recorded on the session so the About
+        // page and Nova can say where she is used from (identity.touch_session).
+        'X-Nova-Display': displayMode(),
         ...(init.headers ?? {}),
       },
     })
@@ -2374,4 +2389,94 @@ export async function testMcpServer(name: string): Promise<McpServer> {
 
 export async function removeMcpServer(name: string): Promise<void> {
   await apiSend(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, 'DELETE')
+}
+
+
+// -- About (app/about.py) ------------------------------------------------
+
+export interface AboutBuild {
+  commit: string | null
+  short: string | null
+  version: string | null
+  committed_at: string | null
+  installed_at: string | null
+  dirty: boolean | null
+  repo: string | null
+  branch: string | null
+  commit_url: string | null
+  /** Why there is no commit to show; null when there is one. */
+  reason: string | null
+}
+
+export interface AboutCommit {
+  sha: string
+  short: string
+  message: string
+  date: string | null
+}
+
+export interface AboutUpdates {
+  state: 'up_to_date' | 'available' | 'local_ahead' | 'diverged' | 'unknown'
+  /** Commits on the branch this instance does not run. */
+  behind_by: number | null
+  /** Commits this instance runs that the branch does not have. */
+  ahead_by: number | null
+  /** Newest first; empty when GitHub could not list them all. */
+  commits: AboutCommit[]
+  latest: AboutCommit | null
+  compare_url: string | null
+  reason: string | null
+  checked_at: string
+}
+
+export interface AboutAgent {
+  name: string
+  hostname: string
+  platform: string
+  os: string | null
+  connected: boolean
+  last_seen: string | null
+  agent_version: string | null
+  build_state: 'current' | 'behind' | 'unknown'
+}
+
+export interface AboutModelMachine {
+  name: string
+  state: string | null
+  serving: boolean | null
+  runtime: string | null
+  compute: string | null
+  models: number | null
+  reason: string | null
+}
+
+export interface AboutService {
+  name: string
+  state: 'up' | 'unhealthy' | 'unreachable'
+  reason: string | null
+}
+
+export interface AboutClient {
+  kind: 'installed app' | 'browser' | null
+  device: string | null
+  browser: string | null
+  label: string
+  person: string
+  last_seen: string
+  signed_in_at: string
+}
+
+export interface About {
+  build: AboutBuild
+  updates: AboutUpdates
+  hub: { address: string | null; address_reason: string | null; agent: AboutAgent | null }
+  satellites: AboutAgent[]
+  /** `machines` null: the gateway could not be asked, and `reason` says why. */
+  model_machines: { machines: AboutModelMachine[] | null; reason: string | null }
+  services: AboutService[]
+  clients: { clients: AboutClient[]; unseen: number; window_days: number }
+}
+
+export async function getAbout({ refresh = false }: { refresh?: boolean } = {}): Promise<About> {
+  return apiGet<About>(`/api/v1/about${refresh ? '?refresh=true' : ''}`)
 }

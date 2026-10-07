@@ -147,6 +147,10 @@ UNASKED_READERS: dict[str, Callable[[dict, ToolContext], Awaitable[str]]] = {
 # reads_only, and deliberately NOT auto-run — each with the reason, because an
 # exclusion nobody can explain gets deleted by the next person who reads it.
 NOT_AUTO_RUN = {
+    # The About page (2026-10-07): a note about her version is better answered
+    # by her asking, and the update check reaches GitHub — nothing calls out of
+    # this network unasked.
+    "nova_about": "its update check asks GitHub; nothing reaches outside unasked",
     "fetch_url": "the note would choose the address; nothing checks it against this system",
     "web_search": "the note would choose the query; a search reaches whoever answers it",
     "memory_search": "the note came out of memory, so checking it against memory proves nothing",

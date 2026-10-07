@@ -153,6 +153,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # browser_back, browser_screenshot), so this set moved by five: FIFTY-ONE
     # (main's set at the 2026-10-07 merge, machine_update included) ->
     # FIFTY-SIX.
+    # Deliberate snapshot update (the About page, 2026-10-07): nova_about
+    # (tools/about.py), so FIFTY-SIX -> FIFTY-SEVEN. Asked about her own
+    # architecture she named the hub and the Dell and never the phone's
+    # installed web app, and nothing could say which commit was running or
+    # whether a newer one was on GitHub. A read; nothing waits on anyone.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -257,6 +262,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "browser_act",
         "browser_back",
         "browser_screenshot",
+        # The About page (2026-10-07): what this instance is, read live.
+        # FIFTY-SIX -> FIFTY-SEVEN.
+        "nova_about",
     }
 
 
@@ -660,6 +668,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         "browser_open",
         "browser_read",
         "browser_back",
+        # The About page (2026-10-07): nova_about reads the build, the
+        # devices, sessions and the gateway, and asks GitHub (one fixed
+        # address, never one the caller chose) — it writes nothing.
+        "nova_about",
     }
 
 

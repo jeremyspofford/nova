@@ -79,6 +79,14 @@ services:
       # says nothing about a repository rather than a placeholder.
       NOVA_REPO: ${NOVA_REPO:-}
       NOVA_REPO_BRANCH: ${NOVA_REPO_BRANCH:-}
+      # The build this stack was brought up from (the About page) — written
+      # by install.sh from the checkout's HEAD (record_build). Empty when it
+      # was not a checkout; core then says the build is unknown.
+      NOVA_COMMIT: ${NOVA_COMMIT:-}
+      NOVA_VERSION: ${NOVA_VERSION:-}
+      NOVA_COMMIT_DATE: ${NOVA_COMMIT_DATE:-}
+      NOVA_DIRTY: ${NOVA_DIRTY:-}
+      NOVA_INSTALLED_AT: ${NOVA_INSTALLED_AT:-}
       # Her browser (S38): where the engine listens, and where core sees the
       # files it writes (the same volume as its /output).
       BROWSER_MCP_URL: http://browser:8931/mcp
