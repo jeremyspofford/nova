@@ -17,6 +17,7 @@ import (
 
 	"novad/internal/platform"
 	"novad/internal/state"
+	"novad/internal/wire"
 )
 
 // fix/facts-unreadable-null, and PR #110's review of it: the golden frames
@@ -25,17 +26,23 @@ import (
 // the real builders, branch by branch — GatherAuth, GatherFrame over each
 // way its readers answer, Probe through a FakeRunner on each branch it can
 // drive here (sudo's answers on unix, the WSL distributions Windows lists),
-// each probe applied to each frame — and json.Marshal must write it as the
-// wire does (Marshal). The two differ only where a list is nil
-// (TestTheWireIsJSONMarshalButForNilLists), so a builder that leaves one
-// nil is red here even though the wire would carry []: an empty list says
-// "none", and only its builder knows whether that is true or the list is
-// unknown (PIDList).
+// each probe applied to each frame — and held two ways:
+//
+//   - json.Marshal must write it as the wire does (Marshal). The two differ
+//     only where a list is nil (TestTheWireIsJSONMarshalButForNilLists), so
+//     a builder that leaves one nil is red here even though the wire would
+//     carry []: an empty list says "none", and only its builder knows
+//     whether that is true or the list is unknown (PIDList).
+//   - the bytes the wire writes, as the frame is sent, hold null only where
+//     NullsOnPurpose says (StrayNulls). That one reads the bytes: a list
+//     type that writes its own null is the same to json.Marshal and the
+//     wire, so only this sees it.
 func TestNoBuilderLeavesAListNil(t *testing.T) {
 	auths, frames, probed := builderOutputs(t)
 	var sent []output
 	for _, a := range auths {
-		sent = append(sent, output{"GatherAuth (" + a.name + ")", a.auth})
+		// The auth facts as the handshake sends them: inside the auth frame.
+		sent = append(sent, output{"GatherAuth (" + a.name + ")", wire.Auth{Type: wire.TypeAuth, Facts: a.auth}})
 	}
 	for _, g := range frames {
 		sent = append(sent, output{"GatherFrame (" + g.name + ")", g.frame})
@@ -55,6 +62,13 @@ func TestNoBuilderLeavesAListNil(t *testing.T) {
 			}
 			t.Errorf("%s: json.Marshal writes %s at %s, the wire %s — the wire's encoding moved (TestTheWireIsJSONMarshalButForNilLists)",
 				o.name, show(d.marshal), d.where(), show(d.wire))
+		}
+		data, err := Marshal(o.v)
+		if err != nil {
+			t.Fatalf("%s: %v", o.name, err)
+		}
+		if stray, err := StrayNulls(data); err != nil || len(stray) > 0 {
+			t.Errorf("%s: null on the wire where nothing means null, at %s (%v): %s", o.name, strings.Join(stray, ", "), err, data)
 		}
 	}
 
@@ -80,6 +94,41 @@ func TestNoBuilderLeavesAListNil(t *testing.T) {
 					p.name, back.WSLDistros.Distros[i].PIDs, d.PIDs, data)
 			}
 		}
+	}
+}
+
+// The nulls the agent sends on purpose are a ruling, each with its reason:
+// novad_pids where a distribution's novad processes could not be listed,
+// and the auth facts' os.wsl outside WSL — the two today's goldens hold.
+// StrayNulls names every other null by its path, wherever it sits: a map's
+// value, a list's element, the frame itself.
+func TestOnlyTheseNullsAreSentOnPurpose(t *testing.T) {
+	if got := slices.Sorted(maps.Keys(NullsOnPurpose)); !slices.Equal(got, []string{"facts.os.wsl", "wsl_distros.distros[].novad_pids"}) {
+		t.Fatalf("null on purpose at %q; the ruling is novad_pids and os.wsl alone", got)
+	}
+	for path, why := range NullsOnPurpose {
+		if why == "" {
+			t.Errorf("%s holds null on purpose for no reason given", path)
+		}
+	}
+	for _, c := range []struct {
+		data string
+		want []string
+	}{
+		{`{"wsl_distros":{"distros":[{"novad_pids":null},{"novad_pids":[]},{"novad_pids":null}]}}`, nil},
+		{`{"type":"auth","facts":{"os":{"wsl":null}}}`, nil},
+		{`{"wsl_distros":{"distros":[{"novad_pids":null,"novad_ppids":null}]},"service":{"later":null}}`,
+			[]string{"service.later", "wsl_distros.distros[0].novad_ppids"}},
+		{`{"novad_pids":null,"os":{"wsl":null},"facts":{"novad_pids":null}}`, []string{"facts.novad_pids", "novad_pids", "os.wsl"}},
+		{`{"folders":{"home":null},"unreadable":[null,{"item":null}]}`, []string{"folders.home", "unreadable[0]", "unreadable[1].item"}},
+		{`null`, []string{"(the frame itself)"}},
+	} {
+		if got, err := StrayNulls([]byte(c.data)); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("StrayNulls(%s) = %q, %v; want %q", c.data, got, err, c.want)
+		}
+	}
+	if _, err := StrayNulls([]byte(`{"type":`)); err == nil {
+		t.Error("bytes that are not JSON must be an error, never no stray nulls")
 	}
 }
 

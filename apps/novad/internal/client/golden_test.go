@@ -215,8 +215,8 @@ func sentAtConnect(t *testing.T, set func(*Agent)) (auth, frame []byte) {
 	}
 }
 
-// authFrame decodes the auth frame with its facts typed: facts.Marshal
-// writes it back with facts.Auth's own fields.
+// authFrame decodes the auth frame with its facts typed, so the checks
+// below read facts.Auth's own fields.
 type authFrame struct {
 	Type     string     `json:"type"`
 	DeviceID string     `json:"device_id"`
@@ -287,13 +287,11 @@ func TestTheFramesTheAgentSendsAreTheGoldenFilesCoreReads(t *testing.T) {
 		if err := json.Unmarshal(g.sent, g.into); err != nil {
 			t.Fatalf("%s: %v", g.file, err)
 		}
-		// Never null for a list, but novad_pids where it is unknown: core's
+		// Null only where the agent means it (facts.NullsOnPurpose): core's
 		// validators read a list, and before fix/facts-unreadable-null refused
-		// the whole frame over a null one. A list sent as null decodes to nil,
-		// which facts.Marshal writes as []: the frame would not come back as
-		// the bytes that were sent.
-		if again, err := facts.Marshal(g.into); err != nil || !bytes.Equal(again, g.sent) {
-			t.Errorf("%s: a list crossed the wire as null:\n sent %s\nas [] %s (%v)", g.file, g.sent, again, err)
+		// the whole frame over a null one. Read off the bytes themselves.
+		if stray, err := facts.StrayNulls(g.sent); err != nil || len(stray) > 0 {
+			t.Errorf("%s: null where nothing means null, at %s (%v): %s", g.file, strings.Join(stray, ", "), err, g.sent)
 		}
 		matchesGolden(t, g.file, g.sent)
 	}

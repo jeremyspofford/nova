@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -105,6 +104,9 @@ func TestFactsJSONSendsNoListAsNull(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"facts":{"later":[]}`) {
 		t.Fatalf("the auth frame: %s, %v", data, err)
 	}
+	if stray, err := facts.StrayNulls(data); err != nil || len(stray) > 0 {
+		t.Errorf("the auth frame holds null at %s (%v): %s", strings.Join(stray, ", "), err, data)
+	}
 	data, err = factsJSON(facts.Frame{Type: "facts", Net: facts.Net{Ifaces: []facts.Iface{{Name: "eth0"}}},
 		WSLDistros: &facts.WSLDistros{Distros: []facts.Distro{{Name: "Unknown-Fixture", Running: true}}}})
 	if err != nil {
@@ -115,13 +117,26 @@ func TestFactsJSONSendsNoListAsNull(t *testing.T) {
 			t.Errorf("no %s on the wire: %s", want, data)
 		}
 	}
+	if stray, err := facts.StrayNulls(data); err != nil || len(stray) > 0 {
+		t.Errorf("the facts frame holds null at %s (%v): %s", strings.Join(stray, ", "), err, data)
+	}
 }
 
 // The auth frame goes through factsJSON, as the facts frame does: the real
 // handshake, read off the socket. facts.Auth holds no list yet, so
 // authFacts hands the handshake facts that hold one, nil: encoded any other
 // way, it goes out as null — and facts the seam did not carry say so too.
+// The frame holds null only where the agent means it (facts.NullsOnPurpose),
+// with the facts the real GatherAuth reads, as New wires it, and with the
+// facts the seam hands in.
 func TestTheAuthFrameSendsNoListAsNull(t *testing.T) {
+	t.Run("with the facts GatherAuth reads", func(t *testing.T) {
+		sent, _ := sentAtConnect(t, func(a *Agent) { a.gatherFrame = goldenFrame() })
+		if stray, err := facts.StrayNulls(sent); err != nil || len(stray) > 0 {
+			t.Errorf("the auth frame holds null at %s (%v)", strings.Join(stray, ", "), err)
+		}
+	}) // its agent has stopped by now: its cleanups ran as it returned
+
 	old := authFacts
 	t.Cleanup(func() { authFacts = old }) // after the agent's own: Run has returned by then
 	authFacts = func(auth facts.Auth) any {
@@ -142,6 +157,9 @@ func TestTheAuthFrameSendsNoListAsNull(t *testing.T) {
 	}
 	if string(got.Facts["later"]) != "[]" || string(got.Facts["hostname"]) != `"FIXTURE-PC"` {
 		t.Fatalf("the auth frame's facts went out as %s", sent)
+	}
+	if stray, err := facts.StrayNulls(sent); err != nil || len(stray) > 0 {
+		t.Errorf("the auth frame holds null at %s (%v): %s", strings.Join(stray, ", "), err, sent)
 	}
 }
 
@@ -232,10 +250,8 @@ func TestFrameBytesSendsNoListAsNull(t *testing.T) {
 				t.Errorf("%s: %v: %s", what, err, data)
 				continue
 			}
-			// A list sent as null decodes to nil, which facts.Marshal writes
-			// as []: the frame would not come back as the bytes sent.
-			if again, err := facts.Marshal(got); err != nil || !bytes.Equal(again, data) {
-				t.Errorf("%s: a list crossed the wire as null:\n sent %s\nas [] %s (%v)", what, data, again, err)
+			if stray, err := facts.StrayNulls(data); err != nil || len(stray) > 0 {
+				t.Errorf("%s: null where nothing means null, at %s (%v): %s", what, strings.Join(stray, ", "), err, data)
 			}
 			if agent.probed == nil {
 				continue
