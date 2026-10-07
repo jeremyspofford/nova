@@ -1,7 +1,7 @@
 {
   "id": "adds-a-machine-with-a-setup-card",
   "suite": "agent_quality",
-  "suite_version": 19,
+  "suite_version": 20,
   "message": "Add my laptop so you can control it.",
   "contract": [
     {

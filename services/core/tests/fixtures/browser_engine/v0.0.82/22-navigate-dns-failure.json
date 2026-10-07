@@ -1,0 +1,31 @@
+{
+  "step": "navigate-dns-failure",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 22,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_navigate",
+      "arguments": {
+        "url": "http://no-such-host.invalid/"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Error\nError: browserBackend.callTool: net::ERR_NAME_NOT_RESOLVED at http://no-such-host.invalid/\nCall log:\n  - navigating to \"http://no-such-host.invalid/\", waiting until \"domcontentloaded\"\n"
+          }
+        ],
+        "isError": true
+      },
+      "jsonrpc": "2.0",
+      "id": 22
+    }
+  ]
+}

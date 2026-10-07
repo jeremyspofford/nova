@@ -415,12 +415,23 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     by both walks — `_SENT_BUILD`, the hub's build as a send's object, which
     makes "I sent the hub's build to minipc" device_completion's install kind
     rather than a notification: 208 -> 209, 276 -> 277. The recipient a send
-    names first is read by the device anchor already counted."""
+    names first is read by the device anchor already counted.
+
+    S38 (her browser, 2026-10) moved all three, deliberately: 2 new BARE
+    module Patterns, `_CAP_BROWSER_ACT` and `_CAP_BROWSER_SCREENSHOT`, reached
+    by both walks, each also reached as a `_CAPABILITY_TOOLS` row by the live
+    walk only: old +2, new +4, difference +2. Measured on slice/s38-browser on
+    top of S37a's numbers (203/270/67 -> 205/274/69), and again when main came
+    into slice/s38-browser (2026-10-07) on top of S42b's above:
+    209 -> 211, 277 -> 281, 68 -> 70 (measured). The two rows sit after S42b's update row, at
+    `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, so the device_run row is [24]
+    and the mcp_connect and mcp_call rows are [25] and [26]; no id the fossil
+    holds moved."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 209, len(old)
-    assert len(new) == 277, len(new)
-    assert len(new) - len(old) == 68
+    assert len(old) == 211, len(old)
+    assert len(new) == 281, len(new)
+    assert len(new) - len(old) == 70
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -1346,6 +1357,39 @@ def test_one_long_clause_of_claims_is_read_in_linear_time(label, build):
     )
 
 
+# -- narration reads her page actions in linear time (S38, ruling G4) ----------
+#
+# The browser_acted claim reads each clause's tokens once: every noun set's
+# last position and the first condition word are found in one pass, then the
+# verbs are walked once. A clause of nothing but page verbs, and one with a
+# control noun at its end so every verb is a candidate, must stay linear.
+NARRATION_FIFTY_KB = [
+    ("page verbs, no object", _repeat("I clicked typed pressed selected ")),
+    (
+        "page verbs, the object at the end",
+        lambda n: _repeat("clicked typed pressed ")(n - 11) + " the button",
+    ),
+    (
+        "other subjects, the object at the end",
+        lambda n: _repeat("you clicked and ")(n - 11) + " the button",
+    ),
+    ("downloads with no file", _repeat("I downloaded the latest one and ")),
+    # Fix round 1 (M1): a choice claim reads the clause for a file name once.
+    (
+        "a choice, then a clause of names, a file at the end",
+        lambda n: "I chose the button " + _repeat("style.v2 ")(n - 29) + " theme.css",
+    ),
+    ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
+]
+
+
+@pytest.mark.parametrize("label,build", NARRATION_FIFTY_KB, ids=[c[0] for c in NARRATION_FIFTY_KB])
+@pytest.mark.parametrize("on_a_page", [False, True], ids=["off a page", "on a page"])
+def test_narration_reads_her_page_actions_in_50_kb_in_linear_time(label, build, on_a_page):
+    spans = [_span("tool", "browser_open", ok=True)] if on_a_page else []
+    _assert_linear(f"narration {label}", lambda r: guards.narration_check(r, spans), build)
+
+
 # -- the capability guard reads 50 KB in linear time (S37a Task 12, ruling X1) --
 #
 # capability_claim_check asked, for EVERY capability phrase in a clause that
@@ -1388,6 +1432,27 @@ CAPABILITY_FIFTY_KB = [
         lambda n: _repeat("there is no delete operation and ")(n - 15) + " in my toolbox.",
     ),
     ("mcp phrases then a lead", lambda n: _repeat("connect to MCP servers ")(n - 9) + " I can't."),
+    # S38 (ruling G4): her browser's two rows, both orders, and their honest
+    # tail's window read after every phrase.
+    (
+        "browser phrases then a lead",
+        lambda n: _repeat("click links on web pages ")(n - 9) + " I can't.",
+    ),
+    (
+        "a lead then browser phrases",
+        lambda n: "I can't " + _repeat("fill in forms on websites and ")(n - 8),
+    ),
+    (
+        "a lead then screenshot phrases, a tail at the end",
+        lambda n: (
+            "I can't "
+            + _repeat("take screenshots of web pages or ")(n - 30)
+            + " behind your login right now"
+        ),
+    ),
+    ("browser denials", _repeat("I can't interact with websites that block automation and ")),
+    # Fix round 1 (I3): the skippable "on your behalf" before every tail.
+    ("browser denials on your behalf", _repeat("I can't interact with websites on your behalf ")),
     ("prose", _repeat("The quick brown fox jumps over the lazy dog. ")),
 ]
 
@@ -1594,8 +1659,18 @@ def test_sentences_reads_a_run_of_one_terminator_in_linear_time(mark):
         ("a letter, then a run", lambda n: "x" + mark * n),
         ("runs of 999", lambda n: (mark * 999 + "y") * (n // 1_000)),
     ):
+        # 20k -> 80k and best of 7 (2026-10-07): at 5k a call took ~0.1 ms, so
+        # scheduler noise alone moved the ratio past the limit (x6.3 in CI on
+        # an unchanged _sentences). Bigger samples measure the growth, not the
+        # noise; the x6 limit and the cap are unchanged.
         _assert_linear(
-            f"{mark!r} {label}", guards._sentences, build, small=5_000, large=20_000, cap_s=BUDGET_S
+            f"{mark!r} {label}",
+            guards._sentences,
+            build,
+            small=20_000,
+            large=80_000,
+            cap_s=BUDGET_S,
+            runs=7,
         )
 
 

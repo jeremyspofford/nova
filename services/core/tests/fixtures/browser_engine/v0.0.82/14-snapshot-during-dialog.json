@@ -1,0 +1,29 @@
+{
+  "step": "snapshot-during-dialog",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_snapshot",
+      "arguments": {}
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Error\nError: Tool \"browser_snapshot\" does not handle the modal state.\n### Modal state\n- [\"alert\" dialog with message \"Hello from the page\"]: can be handled by browser_handle_dialog"
+          }
+        ],
+        "isError": true
+      },
+      "jsonrpc": "2.0",
+      "id": 14
+    }
+  ]
+}

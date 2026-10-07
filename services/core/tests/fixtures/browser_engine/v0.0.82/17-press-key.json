@@ -1,0 +1,30 @@
+{
+  "step": "press-key",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 17,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_press_key",
+      "arguments": {
+        "key": "Tab"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Ran Playwright code\n```js\n// Press Tab\nawait page.keyboard.press('Tab');\n```"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 17
+    }
+  ]
+}

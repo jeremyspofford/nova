@@ -1465,6 +1465,17 @@ def run_facts(
         if span.kind != "tool":
             continue
         meta = span.meta or {}
+        # A file her browser brought into the folder (S38): a download or a
+        # screenshot, stated by the tool's own fact, path relative to the
+        # folder as a write's is. Read on a FAILED call too — a download that
+        # finished is brought in even when the call it rode on then failed
+        # (tools/browser.py _bring_downloads). Without it the line said
+        # "none" beside files core itself put there (merge review, 2026-10-07).
+        for fact in meta.get("facts") or ():
+            if isinstance(fact, dict) and fact.get("browser") in ("download", "screenshot"):
+                path = fact.get("path")
+                if isinstance(path, str) and path.strip() and path not in files:
+                    files.append(path)
         if meta.get("ok") is True:
             calls_ok += 1
             if span.name == WRITE_TOOL:
@@ -1534,6 +1545,10 @@ def _cost_words(facts: RunFacts) -> str:
     return money(facts.cost_usd)
 
 
+# How many file names the facts line names before it states the rest as a count.
+FACTS_FILES_SHOWN = 20
+
+
 def compose_result(facts: RunFacts, report: str) -> str:
     """The delegate tool's result: the facts FIRST (a small model reads the
     top line and stops), each derived from the trace, then the agent's own
@@ -1544,7 +1559,13 @@ def compose_result(facts: RunFacts, report: str) -> str:
         f"{_plural(facts.calls, 'call')} ({facts.calls_ok} ok, {facts.calls_failed} failed) · "
         f"{_seconds_words(facts.seconds)} · {cost} · trace {facts.turn_id}]"
     ]
-    written = f"Files written in agents/{facts.agent}/: {', '.join(facts.files) or 'none'}"
+    shown = ", ".join(facts.files[:FACTS_FILES_SHOWN]) or "none"
+    if len(facts.files) > FACTS_FILES_SHOWN:
+        # A page can bring in thousands of downloads (merge review round 2):
+        # the line names the first ones and states the count, never all of
+        # them in the delegate's result.
+        shown += f" … and {len(facts.files) - FACTS_FILES_SHOWN} more"
+    written = f"Files written in agents/{facts.agent}/: {shown}"
     if facts.unreadable_writes:
         written += (
             f"; plus {_plural(facts.unreadable_writes, 'successful write')} whose path could "

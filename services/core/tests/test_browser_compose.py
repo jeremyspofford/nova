@@ -1,0 +1,160 @@
+"""Her browser's engine as deployed (S38), pinned from the files a human edits:
+what core can reach, what the engine may do, and where its state lives. Read
+the way test_traces.py reads the grace period, from deploy/ and the
+Dockerfiles, so a hand edit that drops a measured flag goes red here."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[3]
+COMPOSE = yaml.safe_load((ROOT / "deploy" / "docker-compose.yml").read_text())
+ENGINE_DOCKERFILE = (ROOT / "deploy" / "browser" / "Dockerfile").read_text()
+PIN = (
+    "mcr.microsoft.com/playwright/mcp:v0.0.82"
+    "@sha256:77dccc5ce9e94cb8ae7ebea87ddbb6cd54b05760c4d63c54e16accf2726b8734"
+)
+
+
+def _service(name: str) -> dict:
+    return COMPOSE["services"][name]
+
+
+def _flag(command: list[str], name: str):
+    """The value after `name` in the engine's arguments, True for a bare flag,
+    None when it is absent."""
+    if name not in command:
+        return None
+    at = command.index(name)
+    following = command[at + 1] if at + 1 < len(command) else None
+    if following is None or following.startswith("--"):
+        return True
+    return following
+
+
+def _instructions(text: str) -> list[str]:
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def test_the_image_is_the_pinned_digest_and_only_adds_the_two_folders():
+    lines = _instructions(ENGINE_DOCKERFILE)
+    assert lines[0] == f"FROM {PIN}"
+    assert "RUN mkdir -p /profile /output && chown node:node /profile /output" in lines
+    assert lines[-1] == "USER node"
+    # The engine's own entrypoint stands: no second way to start it.
+    assert not any(line.startswith(("ENTRYPOINT", "CMD", "EXPOSE", "VOLUME")) for line in lines)
+
+
+def _exposures(service: dict) -> list[str]:
+    """Every way `service` could put the engine (no login of its own, and
+    run-any-code tools) somewhere other than the stack's own network
+    (final review, m2): a host port, a network mode of any kind (`host`
+    shares the host's), exposed ports, or a network other than the stack's
+    default."""
+    found = [key for key in ("ports", "network_mode", "expose") if key in service]
+    networks = service.get("networks")
+    if networks is not None:
+        names = networks if isinstance(networks, list) else list(networks)
+        found += [f"networks: {name}" for name in names if name != "default"]
+    return found
+
+
+def test_the_engine_publishes_no_port_and_is_built_from_its_folder():
+    browser = _service("browser")
+    assert _exposures(browser) == []
+    assert browser["build"]["context"] == "./browser"
+    assert browser.get("init") is True
+    assert browser["restart"] == "unless-stopped"
+
+
+def test_the_engine_runs_with_the_measured_flags():
+    command = [str(part) for part in _service("browser")["command"]]
+    assert _flag(command, "--port") == "8931"
+    assert _flag(command, "--host") == "0.0.0.0"
+    assert _flag(command, "--allowed-hosts") == "browser:8931,127.0.0.1:8931"
+    assert _flag(command, "--no-webmcp") is True
+    assert _flag(command, "--shared-browser-context") is True
+    assert _flag(command, "--user-data-dir") == "/profile"
+    assert _flag(command, "--output-dir") == "/output"
+    assert _flag(command, "--output-max-size") == "2147483648"
+    assert _flag(command, "--image-responses") == "omit"
+    assert _flag(command, "--snapshot-mode") == "none"
+    assert _flag(command, "--file-paths") == "absolute"
+    assert _flag(command, "--timeout-navigation") == "45000"
+    assert _flag(command, "--console-level") == "error"
+    assert _flag(command, "--idle-timeout") == "3600000"
+    for absent in ("--isolated", "--allow-unrestricted-file-access", "--caps", "--extension"):
+        assert absent not in command, absent
+
+
+def test_the_healthcheck_wants_exactly_the_400_a_bare_get_measures():
+    # Pinned exactly, not by substring (fix round 2): a JS edit that ALSO
+    # accepts 403 ("r.status===400||r.status===403?0:1") still contains both
+    # substrings a looser check would look for, and would stay green.
+    check = _service("browser")["healthcheck"]
+    assert check["test"] == [
+        "CMD",
+        "node",
+        "-e",
+        "fetch('http://127.0.0.1:8931/mcp')"
+        ".then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))",
+    ]
+
+
+def test_the_profile_is_carried_and_the_output_is_not():
+    volumes = COMPOSE["volumes"]
+    assert volumes["v4_browser_profile"]["x-nova-backup"] == "include"
+    assert volumes["v4_browser_profile"]["x-nova-backup-reason"].strip()
+    assert volumes["v4_browser_output"]["x-nova-backup"] == "exclude-ephemeral"
+    assert volumes["v4_browser_output"]["x-nova-backup-reason"].strip()
+    mounts = _service("browser")["volumes"]
+    assert "v4_browser_profile:/profile" in mounts
+    assert "v4_browser_output:/output" in mounts
+
+
+def test_core_sees_the_engine_output_and_knows_where_the_engine_is():
+    core = _service("core")
+    assert "v4_browser_output:/data/browser-output" in core["volumes"]
+    assert core["environment"]["BROWSER_MCP_URL"] == "http://browser:8931/mcp"
+    assert core["environment"]["BROWSER_OUTPUT_DIR"] == "/data/browser-output"
+    # A missing engine is a stated failure in her tools, never a core that
+    # will not start.
+    assert "browser" not in (core.get("depends_on") or {})
+
+
+def test_core_image_creates_the_output_mount_point_for_appuser():
+    dockerfile = (ROOT / "services" / "core" / "Dockerfile").read_text()
+    assert "mkdir -p /data/workspace /data/browser-output && chown -R appuser /data" in dockerfile
+
+
+@pytest.mark.parametrize(
+    "edit,named",
+    [
+        ({"ports": ["127.0.0.1:8931:8931"]}, "ports"),
+        ({"network_mode": "host"}, "network_mode"),
+        ({"network_mode": "service:tailscale"}, "network_mode"),
+        ({"expose": ["8931"]}, "expose"),
+        ({"networks": ["default", "lan"]}, "networks: lan"),
+        ({"networks": {"default": {}, "outside": {"aliases": ["b"]}}}, "networks: outside"),
+    ],
+)
+def test_every_way_to_expose_the_engine_is_refused(edit, named):
+    """Each shape pinned against a mutated copy of the real compose file's
+    browser service, so the check above cannot pass by never looking."""
+    mutated = copy.deepcopy(_service("browser"))
+    mutated.update(edit)
+    assert named in _exposures(mutated)
+
+
+def test_the_engine_on_the_stacks_own_network_only_is_not_an_exposure():
+    mutated = copy.deepcopy(_service("browser"))
+    mutated["networks"] = {"default": {}}
+    assert _exposures(mutated) == []

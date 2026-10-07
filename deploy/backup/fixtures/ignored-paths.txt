@@ -1,5 +1,7 @@
+.ruff_cache/
 .superpowers/sdd/.gitignore
 .superpowers/sdd/plan/
+.superpowers/sdd/s38.env
 apps/web/node_modules/
 deploy/backup/.pytest_cache/
 deploy/backup/.ruff_cache/

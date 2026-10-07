@@ -493,6 +493,10 @@ def test_the_real_file_itself_is_read_whole():
     assert fact["volumes"] == [
         "v4_agent_build_cache",
         "v4_agent_dist",
+        # S38 (2026-10-01): her browser's engine gained two volumes, its
+        # profile and its output.
+        "v4_browser_output",
+        "v4_browser_profile",
         "v4_memdata",
         "v4_models",
         "v4_ollama",

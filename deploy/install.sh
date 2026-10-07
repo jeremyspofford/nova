@@ -51,7 +51,9 @@ SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN S
 # The bundled ollama joins this list only when it is actually being started —
 # see decide_inference. searxng comes up with the base stack (no profile), so it
 # is always waited on: web search is a first-class capability, not an add-on.
-HEALTH_CHECKED_SERVICES="postgres core gateway memory web searxng"
+# browser (S38) comes up with the base stack too: her browser is a capability,
+# not an add-on, and an install whose engine never answered is not a success.
+HEALTH_CHECKED_SERVICES="postgres core gateway memory web searxng browser"
 # Ports we WARN about: the services below are ours, so a busy port here is
 # almost always our own previous install, and a warning is the honest level.
 # 8380 is searxng's published loopback port (docker-compose.yml).

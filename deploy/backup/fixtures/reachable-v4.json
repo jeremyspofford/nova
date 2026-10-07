@@ -1,6 +1,7 @@
 {
   "probe_image": "sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6",
   "volumes": {
+    "v4_browser_profile": {"exists": true, "ok": true, "detail": ""},
     "v4_memdata": {"exists": true, "ok": true, "detail": ""},
     "v4_workspace": {"exists": true, "ok": true, "detail": ""}
   },

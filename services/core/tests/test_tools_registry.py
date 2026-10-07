@@ -148,6 +148,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # now". It sends; only the agent's reconnect confirms (P8), and nothing
     # waits on the owner, which is why test_no_approvals stays green beside
     # this.
+    # Deliberate snapshot update (S38, 2026-10): her browser's five tools
+    # joined (tools/browser.py — browser_open, browser_read, browser_act,
+    # browser_back, browser_screenshot), so this set moved by five: FIFTY-ONE
+    # (main's set at the 2026-10-07 merge, machine_update included) ->
+    # FIFTY-SIX.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -244,6 +249,14 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # reconnect confirms it (P8). FIFTY -> FIFTY-ONE, on top of main's
         # notice_seen_all, memory_forget and the four MCP tools above.
         "machine_update",
+        # S38 (2026-10): her own browser (tools/browser.py), over the pinned
+        # Playwright MCP engine through app/browser/engine.py. FIFTY-ONE ->
+        # FIFTY-SIX, on top of main's machine_update above.
+        "browser_open",
+        "browser_read",
+        "browser_act",
+        "browser_back",
+        "browser_screenshot",
     }
 
 
@@ -639,6 +652,14 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # may refresh the stored copy of the list). Its three twins change
         # things and are deliberately NOT here.
         "mcp_tools",
+        # S38 (2026-10): her browser's three readers — opening and reading a
+        # page, and going back — change nothing (the pinned engine's own
+        # answer is read, never acted on). browser_act and browser_screenshot
+        # are deliberately NOT here: a click or a key changes the page, and a
+        # screenshot writes a file into the workspace.
+        "browser_open",
+        "browser_read",
+        "browser_back",
     }
 
 
@@ -669,5 +690,9 @@ def test_every_tool_that_writes_says_it_changes_something():
         "mcp_connect",
         "mcp_disconnect",
         "mcp_call",
+        # S38 (ruling G18): a click, a type, a select, a press or a dialog
+        # answered is a change on the page; a screenshot writes a file.
+        "browser_act",
+        "browser_screenshot",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

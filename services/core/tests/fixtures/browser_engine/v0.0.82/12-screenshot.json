@@ -1,0 +1,31 @@
+{
+  "step": "screenshot",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_take_screenshot",
+      "arguments": {
+        "type": "png",
+        "scale": "css"
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Result\n- [Screenshot of viewport](/output/page-2026-09-30T20-25-33-996Z.png)\n### Ran Playwright code\n```js\n// Screenshot viewport and save it as /output/page-2026-09-30T20-25-33-996Z.png\nawait page.screenshot({\n  path: '/output/page-2026-09-30T20-25-33-996Z.png',\n  scale: 'css',\n  type: 'png'\n});\n```"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 12
+    }
+  ]
+}

@@ -1277,8 +1277,10 @@ mkdir -p "$WORLD/stage/facts"
   render_facts "$WORLD/stage" routine
 ) >/dev/null 2>&1
 
+# browser (S38, 2026-10-01) joins the writer set: it mounts v4_browser_profile
+# (include-class) read-write, same rule gateway is already here for.
 expect_str "writers_are_the_union_of_the_two_facts_minus_postgres" \
-  "$(writer_services "$WORLD/stage" routine | tr '\n' ' ')" "core gateway memory "
+  "$(writer_services "$WORLD/stage" routine | tr '\n' ' ')" "browser core gateway memory "
 # shell-first M2, and it is not hypothetical: gateway mounts only v4_models
 # read-write — an exclude-redownload volume — so under the mount rule alone it
 # stays running while it writes nova_gateway through its DATABASE_URL.
@@ -2321,6 +2323,21 @@ for c in fact["containers"]:
     open(f"{sys.argv[2]}/svc/{c['service']}", "w").write(c["id"])
     open(f"{sys.argv[2]}/id2svc/{c['id']}", "w").write(c["service"])
 PY
+# browser (S38, 2026-10-01): containers-v4.json is refresh.sh's capture of
+# the real hub, which has not deployed the engine yet (Task 11 does), so the
+# fixture alone carries no id for it yet. The other EIGHT ids above are
+# CAPTURED from that fixture, not placeholders. This one is a placeholder
+# ONLY until a real one exists: guarded so that once Task 11 deploys the
+# engine and refreshes again, the loop above (a real browser container, a
+# real entry) is never overwritten by it. Either way the id is opaque
+# plumbing for bkt_ps/bkt_inspect to key on — never a claim about what is
+# really running, which BKT_RUNNING alone decides.
+[ -s "$BK_WORLD/svc/browser" ] || {
+  printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    > "$BK_WORLD/svc/browser"
+  printf 'browser' \
+    > "$BK_WORLD/id2svc/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
 
 # Two small binaries, so the SHIPPED dump script runs for real against them.
 cat > "$BK_WORLD/bin/pg_dump" <<'SH'
@@ -2388,11 +2405,14 @@ bkt_reset() {
   : > "$BK_WORLD/dbops.log"
   : > "$BK_WORLD/sql.log"
   printf 1000000 > "$BK_WORLD/clock"
-  # The two volumes the compose file classifies `include`. v4_memdata carries
-  # a symlink INSIDE the tree on purpose (s41/rulings.md A); v4_workspace is
-  # left EMPTY on purpose — it is the volume port-v3 M3 is about.
+  # The three volumes the compose file classifies `include`. v4_memdata
+  # carries a symlink INSIDE the tree on purpose (s41/rulings.md A);
+  # v4_workspace is left EMPTY on purpose — it is the volume port-v3 M3 is
+  # about. v4_browser_profile (S38, 2026-10-01) is left EMPTY too, matching
+  # the real nova_v4_browser_profile on the hub: created empty by Task 1,
+  # populated only once the engine actually signs her in somewhere.
   mkdir -p "$BKT_VOLS/nova_v4_memdata/notes" "$BKT_VOLS/nova_v4_workspace" \
-    "$BKT_VOLS/nova_v4_tailscale"
+    "$BKT_VOLS/nova_v4_tailscale" "$BKT_VOLS/nova_v4_browser_profile"
   printf 'not a real node key\n' > "$BKT_VOLS/nova_v4_tailscale/tailscaled.state"
   printf 'a note\n' > "$BKT_VOLS/nova_v4_memdata/notes/one.md"
   ln -sf one.md "$BKT_VOLS/nova_v4_memdata/notes/current"
@@ -2418,7 +2438,9 @@ bkt_reset() {
   # thinks it is.
   [ -f "$WORLD/env.pristine" ] && cp "$WORLD/env.pristine" "$WORLD/repo/deploy/.env"
   : > "$BK_WORLD/pw/.env"
-  BKT_ALL_SERVICES="$(printf 'core\ngateway\nmemory\npostgres\nsearxng\ntailscale\nweb\nollama\n')"
+  # browser (S38, 2026-10-01) joins the happy-path's fully-up stack, same as
+  # every other declared service — its placeholder id is set up above.
+  BKT_ALL_SERVICES="$(printf 'core\ngateway\nmemory\npostgres\nsearxng\nbrowser\ntailscale\nweb\nollama\n')"
   BKT_RUNNING="$BKT_ALL_SERVICES"
   STUB_STOP_RC=0
   STUB_STOP_STICKS=1
@@ -2630,8 +2652,10 @@ else
   # copy. Not "the format round-trips" — "this artifact is restorable".
   expect_has "the_shipped_reader_opens_the_finished_bundle" \
     "$BKT_OUT" "the reader carried inside the bundle opened it"
+  # S38 (2026-10-01): the browser profile is the third carried volume, so
+  # the bundle gained a member.
   expect_has "the_shipped_reader_reports_what_it_verified" "$BKT_OUT" \
-    "verified: 15 members, 2 volumes, 3 databases, all matching the manifest sealed inside"
+    "verified: 17 members, 3 volumes, 3 databases, all matching the manifest sealed inside"
   expect_has "step_20_runs_the_ctypes_path_a_bare_machine_would_take" \
     "$(cat "$BKT_LOG")" "NOVA_FORCE_CTYPES_GCM=1"
 
@@ -2744,12 +2768,14 @@ else
     "$BKT_OUT" "scrypt-key"
 
   # §9.1 step 22, routine: the writers came back and each was read as healthy.
+  # S38 (2026-10-01): browser is a writer too (it mounts v4_browser_profile
+  # read-write), so it joins the stop/restart set here and below.
   expect_has "the_writers_are_restarted_and_each_is_read_as_healthy" \
-    "$BKT_OUT" "restarted: core gateway memory, every one healthy"
+    "$BKT_OUT" "restarted: browser core gateway memory, every one healthy"
   expect_has "the_restart_names_exactly_what_was_stopped" \
-    "$(cat "$BK_WORLD/up.log")" "up -d core gateway memory"
+    "$(cat "$BK_WORLD/up.log")" "up -d browser core gateway memory"
   expect_str "postgres_is_never_stopped_by_a_routine_backup" \
-    "$(sed -n 's/.* stop //p' "$BK_WORLD/stop.log")" "core gateway memory"
+    "$(sed -n 's/.* stop //p' "$BK_WORLD/stop.log")" "browser core gateway memory"
 
   # §6.1's two sources, on the real render: the set is NAMED in the report,
   # so a reconciliation that passed because both sides came out empty is
@@ -2816,7 +2842,7 @@ else
   expect_has "the_cleanup_names_the_volume_it_could_not_remove" \
     "$BKT_ERR" "is still there. It holds the"
   expect_has "and_restarts_the_writers_anyway" \
-    "$(cat "$BK_WORLD/up.log")" "up -d core gateway memory"
+    "$(cat "$BK_WORLD/up.log")" "up -d browser core gateway memory"
   expect_str "and_leaves_no_part_file" \
     "$(find "$BK_WORLD/out" -maxdepth 1 -name '*.part' | wc -l | tr -d ' ')" "0"
 
@@ -2910,7 +2936,7 @@ else
   bkt_backup
   expect_str "refuses_when_a_writer_will_not_stop" "$BKT_RC" "1"
   expect_has "refuses_when_a_writer_will_not_stop" "$BKT_ERR" "could not confirm"
-  expect_has "and_restarts_what_it_stopped" "$(cat "$BK_WORLD/up.log")" "up -d core gateway memory"
+  expect_has "and_restarts_what_it_stopped" "$(cat "$BK_WORLD/up.log")" "up -d browser core gateway memory"
   expect_str "and_writes_no_bundle" "$(find "$BK_WORLD/out" -name 'nova-backup-*' | wc -l | tr -d ' ')" "0"
 
   # ── step 7: a writer with no container at all is a failure, not a pass ───
@@ -2935,7 +2961,7 @@ else
   bkt_backup
   expect_str "a_dead_server_after_the_stop_refuses" "$BKT_RC" "1"
   expect_str "the_exit_trap_restarts_exactly_what_step_7_stopped" \
-    "$(sed -n 's/.*up -d //p' "$BK_WORLD/up.log" | tr -d ' \n')" "coregatewaymemory"
+    "$(sed -n 's/.*up -d //p' "$BK_WORLD/up.log" | tr -d ' \n')" "browsercoregatewaymemory"
   # NOT the staging volume here: step 8 fails BEFORE it is created, so
   # asserting its absence would assert the absence of something that never
   # existed. That case lives at the round-trip failure below, where the volume
@@ -3675,9 +3701,10 @@ nova_memory|memory"
   fi
 
   # §9.2 step 16: the word `restored` is printed only with the three facts
-  # behind it.
+  # behind it. S38 (2026-10-01): the browser profile is the third carried
+  # volume, so a routine restore now diffs three listings, not two.
   expect_has "the_word_restored_carries_the_three_facts_behind_it" "$BKT_OUT" \
-    "restored: 7 tables compared across 3 databases, 2 volume listings diffed,"
+    "restored: 7 tables compared across 3 databases, 3 volume listings diffed,"
   expect_has "the_word_restored_carries_the_three_facts_behind_it" "$BKT_OUT" \
     "signing key fingerprint equal."
   expect_has "the_report_names_exactly_one_next_command" "$BKT_OUT" "next:
@@ -3996,9 +4023,11 @@ nova_memory|memory"
   expect_str "a_failed_restore_refuses" "$BKT_RC" "1"
   expect_has "a_failed_pg_restore_says_the_transaction_rolled_back" "$BKT_ERR" \
     "--single-transaction, so the whole transaction rolled back"
+  # S38 (2026-10-01): the browser profile is a carried volume too, so it is
+  # part of what a restore records itself creating.
   expect_has "a_failed_restore_writes_the_in_progress_marker" \
     "$(cat "$BK_WORLD/marker/.restore-in-progress" 2>/dev/null)" \
-    "volumes=nova_v4_memdata nova_v4_workspace"
+    "volumes=nova_v4_browser_profile nova_v4_memdata nova_v4_workspace"
   expect_str "the_in_progress_marker_is_owner_only" \
     "$(bk_mode_of "$BK_WORLD/marker/.restore-in-progress")" "600"
   # ...and the re-run, on a target the first run half filled.
@@ -4007,7 +4036,7 @@ nova_memory|memory"
   expect_str "the_rerun_refuses_on_the_state_the_first_run_created" "$BKT_RC" "1"
   expect_has "the_rerun_quotes_the_marker" "$BKT_ERR" \
     "A previous restore did not finish. It recorded exactly what it created"
-  expect_has "the_rerun_quotes_the_marker" "$BKT_ERR" "volumes=nova_v4_memdata"
+  expect_has "the_rerun_quotes_the_marker" "$BKT_ERR" "volumes=nova_v4_browser_profile"
   expect_has "nothing_is_discovered_the_marker_is_the_bound" "$BKT_ERR" \
     "that list is the bound"
 
@@ -4276,8 +4305,9 @@ RETAR
   expect_has "drill_restores_and_diffs_every_volume_listing" "$BKT_OUT" \
     "volume v4_workspace -> nova-drill-"
   expect_has "drill_restores_and_diffs_every_volume_listing" "$BKT_OUT" "listing identical"
+  # S38 (2026-10-01): the browser profile is the third carried volume.
   expect_has "the_drill_compares_every_table_and_the_key" "$BKT_OUT" \
-    "7 tables compared across 3 databases, 2 volume listings diffed"
+    "7 tables compared across 3 databases, 3 volume listings diffed"
   expect_has "the_drill_restores_into_its_own_nova_verify_databases" \
     "$(cat "$BK_WORLD/dbops.log")" "CREATE DATABASE \"nova_verify_"
   # shell-first m11: the drill's databases are NOT the backup's self-test
@@ -4655,8 +4685,9 @@ RETAR
   bkt_restore cmd_undo_move < "$BK_WORLD/answer"
   expect_str "undo_move_brings_the_machine_back" "$BKT_RC" "0"
   if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+  # S38 (2026-10-01): browser is a declared service like any other.
   expect_has "undo_move_starts_every_service_of_the_project" "$BKT_OUT" \
-    "started: core gateway memory ollama postgres searxng tailscale web"
+    "started: browser core gateway memory ollama postgres searxng tailscale web"
   expect_has "undo_move_says_the_machine_is_serving_again" "$BKT_OUT" \
     "no longer parked"
   expect_str "undo_move_removes_both_markers" \
@@ -4693,7 +4724,7 @@ RETAR
   expect_str "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_RC" "0"
   if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
   expect_has "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_OUT" \
-    "started: core gateway memory ollama postgres searxng tailscale web — every one"
+    "started: browser core gateway memory ollama postgres searxng tailscale web — every one"
   expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
     "$BKT_OUT$BKT_ERR" "bundle-job"
   expect_has "a_one_shot_job_is_neither_started_nor_waited_for" \

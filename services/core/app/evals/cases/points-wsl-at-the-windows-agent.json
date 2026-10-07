@@ -1,7 +1,7 @@
 {
   "id": "points-wsl-at-the-windows-agent",
   "suite": "agent_quality",
-  "suite_version": 19,
+  "suite_version": 20,
   "devices": [
     {
       "name": "eval_gaming_pc",

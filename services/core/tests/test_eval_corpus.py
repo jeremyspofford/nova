@@ -355,6 +355,35 @@ v19 (S42b, 2026-09-28; renumbered on top of S37a's v18 in Task 32):
     replay sets can ever fire (the scheduler never claims an eval person's
     timer). v17 and v18 rows were scored in the old frame and stay out of
     the v19 denominator.
+v20 (S38, 2026-10-05; renumbered on top of S42b's v19 when main came into
+  slice/s38-browser, 2026-10-07): three browser cases — reads-the-page-before-answering,
+  reports-what-a-click-changed, reads-a-long-page-in-parts — each declaring
+  the fake engine at http://browser:8931/mcp, listed nowhere (S37a's seam,
+  listed: false); her five browser tools reach it through the client. The
+  runner now plants that SAME origin unreachable for every OTHER case in the
+  corpus too (ruling G5): her browser engine is never a declared server (it
+  is called directly through app.browser.engine, never mcp_call), so a case
+  that declares none must not leave the real address free for the turn to
+  reach. A case that DOES declare it reachable gets the real engine's own
+  legacy refusal shape (ruling G21, FakeSpec(legacy_refusal="playwright")),
+  never the generic 200 shape an unrelated legacy fake defaults to.
+  reports-what-a-click-changed's guard_absent('narration') half was inert
+  until S38 Task 7 (the browser_acted claim kind it needs did not exist) —
+  the same vacuous, explicit state as the v18 MCP cases' guard_absent halves
+  before Task 12; Task 7 made it bite. The other two were NOT vacuous:
+  before Task 7, an honest reply phrased "I read/visited/accessed <url>"
+  after browser_open/browser_read FAILED guard_absent('narration'), because
+  the narration guard's fetched-url claim kind was backed only by fetch_url
+  — verified through runner.run_case. Task 7's Edit 1 backs it (_FETCH_TOOLS
+  gains the page tools), and tests/test_eval_browser.py's
+  test_an_honest_i_read_the_url_passes_the_case pins both cases passing.
+  S38 numbered this bump 18 -> 19 (34 -> 37) on slice/s38-browser. S42b's
+  v19 above reached main first, so S38's bump moved on top of it, the way
+  S42b's moved on top of S37a's v18: the next number, with the counts added.
+  The runner's unreachable plant of the engine origin (ruling G5) is a
+  frame change for S42b's two cases too, so they are re-scored under v20
+  with the rest; no v19 row is comparable with a v20 one.
+  suite_version 19 -> 20 for all THIRTY-NINE cases; count pin 36 -> 39.
 
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
@@ -531,13 +560,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S42b (2026-09-28): says-sent-until-the-agent-reconnects and
     # adds-a-mac-and-says-it-is-not-walked. 34 -> 36, on top of S37a's four
     # (Task 32 Phase A2; S42b counted 30 -> 32 before main's landed).
-    assert len(ids) == 36
-    assert len(set(ids)) == 36  # no duplicate ids
+    # S38 (2026-10-05): the three browser cases. 36 -> 39, on top of S42b's
+    # two (S38 counted 34 -> 37 before main's landed).
+    assert len(ids) == 39
+    assert len(set(ids)) == 39  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {19}
+    assert {c.suite_version for c in cases} == {20}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -555,9 +586,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
-#    case; v18: the S37a MCP cases; v19: the two S42b cases -- see the module
-#    docstring); the version assertion inside this test tracks the live
-#    value, 19, not "2".
+#    case; v18: the S37a MCP cases; v19: the two S42b cases; v20: the S38
+#    browser cases -- see the module docstring); the version assertion
+#    inside this test tracks the live value, 20, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -580,7 +611,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 19
+        assert case.suite_version == 20
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

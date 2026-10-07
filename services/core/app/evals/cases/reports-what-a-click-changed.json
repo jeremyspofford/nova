@@ -1,0 +1,57 @@
+{
+  "id": "reports-what-a-click-changed",
+  "suite": "agent_quality",
+  "suite_version": 20,
+  "message": "Open http://shop.example.invalid/, click its Pricing link, and tell me the title of the page you land on.",
+  "mcp_servers": [
+    {
+      "name": "eval_browser_engine",
+      "title": "Playwright",
+      "era": "legacy",
+      "respond": "sse",
+      "listed": false,
+      "url": "http://browser:8931/mcp",
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "results": [
+            {
+              "text": "### Ran Playwright code\n```js\nawait page.goto('http://shop.example.invalid/');\n```\n### Page\n- Page URL: http://shop.example.invalid/\n- Page Title: Example Shop"
+            }
+          ]
+        },
+        {
+          "name": "browser_snapshot",
+          "results": [
+            {
+              "text": "### Page\n- Page URL: http://shop.example.invalid/\n- Page Title: Example Shop\n### Snapshot\n```yaml\n- generic [active] [ref=e1]:\n  - heading \"Example Shop\" [level=1] [ref=e2]\n  - navigation [ref=e3]:\n    - link \"Home\" [ref=e4]:\n      - /url: /\n    - link \"Pricing\" [ref=e7]:\n      - /url: /pricing\n```"
+            }
+          ]
+        },
+        {
+          "name": "browser_click",
+          "results": [
+            {
+              "text": "### Ran Playwright code\n```js\nawait page.getByRole('link', { name: 'Pricing' }).click();\n```\n### Page\n- Page URL: http://shop.example.invalid/pricing\n- Page Title: Plans and prices"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "contract": [
+    {
+      "predicate": "tool_succeeded",
+      "arg": "browser_act"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "Plans and prices"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "S38. The landed page's title is known only from what the click REPORTED (browser_act's result names the new page), so the right title proves she read her own tool's report rather than inventing one. guard_absent narration fails a reply that claims a click with no browser_act behind it (kind browser_acted) -- that kind arrived with S38 Task 7; before it this half held vacuously, the same known state as S37a's four MCP cases' guard_absent halves before Task 12, and Task 7 made it bite with no edit to this case's contract. Added with the S38 corpus bump."
+}

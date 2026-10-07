@@ -100,6 +100,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import (
+    addresses,
     agents,
     attachments,
     conversations,
@@ -1832,6 +1833,18 @@ def _masked(value: object) -> str:
     return f"<masked:{len(text)} chars>"
 
 
+def _address_without_secrets(value: str) -> str:
+    """An address as the trace may hold it (S38): no user:password@, and the
+    query and fragment masked — a reset or sign-in link carries its token
+    there. Anything that is not an http(s) address is returned as it was.
+
+    A call to `app.addresses.masked` (ruling G16, fix round 1 m7): the one
+    parse of an address lives there now, shared with `app.tools.browser`'s
+    `address`, so the two renderings a reset link's token needs to stay out
+    of can never quietly drift apart again."""
+    return addresses.masked(value)
+
+
 def _leaves(value: object) -> list[str]:
     """Every string in `value` — its keys too — for `_SpanScrub`."""
     if isinstance(value, str):
@@ -1859,33 +1872,49 @@ class _SpanScrub:
 
     def __init__(self) -> None:
         self._pairs: dict[str, str] = {}
+        # The subset `tree` applies to the span's facts. Text she TYPED on a
+        # page is not in it (merge review round 2, 2026-10-07): a search she
+        # typed lands on /wiki/<it>, and the page fact's address and a
+        # download's name are the engine's words — scrubbing them turned an
+        # honest "I opened <that page>" into a correction and listed a file
+        # named "[masked]" that does not exist.
+        self._fact_pairs: dict[str, str] = {}
 
-    def add(self, value: object, replacement: str = "[masked]") -> None:
+    def add(self, value: object, replacement: str = "[masked]", *, in_facts: bool = True) -> None:
         for leaf in _leaves(value):
             if len(leaf) < mcp_client._MIN_CREDENTIAL_CHARS:
                 continue
             for form in (leaf, repr(leaf)[1:-1], json.dumps(leaf)[1:-1]):
                 self._pairs.setdefault(form, replacement)
+                if in_facts:
+                    self._fact_pairs.setdefault(form, replacement)
 
     def __call__(self, text: str) -> str:
-        for secret in sorted(self._pairs, key=len, reverse=True):
-            if secret in text:
-                text = text.replace(secret, self._pairs[secret])
-        return text
+        return _replace_all(text, self._pairs)
 
     def tree(self, value: object) -> object:
         """The same scrub over every string in a JSON-shaped value — the
         span's `facts`, where a refused connect still names what it was
         given (`mcp_server`)."""
-        if not self._pairs:
+        if not self._fact_pairs:
             return value
         if isinstance(value, str):
-            return self(value)
+            return _replace_all(value, self._fact_pairs)
         if isinstance(value, dict):
-            return {self(k) if isinstance(k, str) else k: self.tree(v) for k, v in value.items()}
+            return {
+                _replace_all(k, self._fact_pairs) if isinstance(k, str) else k: self.tree(v)
+                for k, v in value.items()
+            }
         if isinstance(value, list):
             return [self.tree(item) for item in value]
         return value
+
+
+def _replace_all(text: str, pairs: dict[str, str]) -> str:
+    for secret in sorted(pairs, key=len, reverse=True):
+        if secret in text:
+            text = text.replace(secret, pairs[secret])
+    return text
 
 
 def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
@@ -1912,6 +1941,10 @@ def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None 
                 out[key] = _masked(item)
                 if sink is not None:
                     sink.add(item)
+            elif isinstance(key, str) and key.strip().lower() == "url" and isinstance(item, str):
+                # S38: an address keeps its host and path; its query, fragment
+                # and user info are masked (a reset link's token lives there).
+                out[key] = _clip(_address_without_secrets(item), SPAN_ARG_HEAD_CHARS)
             else:
                 out[key] = _redact(
                     item,
@@ -2105,8 +2138,33 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
         # Masks a connection tool's `name` itself (N2).
         parsed = _off_schema_masked(parsed, tool, sink)
     else:
-        parsed = _server_names_masked(parsed, tool_name, sink)
+        parsed = _typed_text_masked(_server_names_masked(parsed, tool_name, sink), tool_name, sink)
     return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+# browser_act's actions whose `value` is text she typed — into a field, or as
+# a prompt dialog's answer. A select's option and a pressed key are not.
+_TYPED_BROWSER_ACTIONS = frozenset({"type", "accept"})
+
+
+def _typed_text_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) -> object:
+    """What she typed on a page is recorded as its length, never its text
+    (S38 plan: "typed text is never echoed"; merge review, 2026-10-07): a
+    password typed into a sign-in form would otherwise sit in turn_spans and
+    on Activity. Her result already says only "Typed N characters", and the
+    sink scrubs the same text out of the span's own result and error."""
+    if tool_name != "browser_act" or not isinstance(parsed, dict):
+        return parsed
+    value = parsed.get("value")
+    action = parsed.get("action")
+    # Read as the tool reads it (tools/browser.py: stripped, lower-cased), so
+    # "Type" — which the tool runs as a type — is masked as one.
+    if not isinstance(action, str) or action.strip().lower() not in _TYPED_BROWSER_ACTIONS:
+        return parsed
+    if not isinstance(value, str):
+        return parsed
+    sink.add(value, in_facts=False)
+    return {**parsed, "value": _masked(value)}
 
 
 # The arguments by which her MCP tools name a connection (`mcp_tools` and

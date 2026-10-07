@@ -31,6 +31,60 @@ services:
         source: v4_agent_build_cache
         target: /cache
         volume: {}
+  browser:
+    build:
+      context: /repo/deploy/browser
+      dockerfile: Dockerfile
+    command:
+      - --port
+      - "8931"
+      - --host
+      - 0.0.0.0
+      - --allowed-hosts
+      - browser:8931,127.0.0.1:8931
+      - --no-webmcp
+      - --shared-browser-context
+      - --user-data-dir
+      - /profile
+      - --output-dir
+      - /output
+      - --output-max-size
+      - "2147483648"
+      - --image-responses
+      - omit
+      - --snapshot-mode
+      - none
+      - --file-paths
+      - absolute
+      - --timeout-navigation
+      - "45000"
+      - --console-level
+      - error
+      - --idle-timeout
+      - "3600000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8931/mcp').then(r=>process.exit(r.status===400?0:1),()=>process.exit(1))
+      timeout: 5s
+      interval: 10s
+      retries: 6
+      start_period: 20s
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: v4_browser_profile
+        target: /profile
+        volume: {}
+      - type: volume
+        source: v4_browser_output
+        target: /output
+        volume: {}
   core:
     build:
       context: /repo/services/core
@@ -40,6 +94,8 @@ services:
         condition: service_healthy
         required: true
     environment:
+      BROWSER_MCP_URL: http://browser:8931/mcp
+      BROWSER_OUTPUT_DIR: /data/browser-output
       CORE_GATEWAY_TOKEN: ""
       CORE_MEMORY_TOKEN: ""
       DATABASE_URL: postgresql://core:@postgres:5432/nova_core
@@ -74,6 +130,10 @@ services:
       - type: volume
         source: v4_workspace
         target: /data/workspace
+        volume: {}
+      - type: volume
+        source: v4_browser_output
+        target: /data/browser-output
         volume: {}
       - type: volume
         source: v4_status
@@ -356,6 +416,18 @@ volumes:
     x-nova-backup: exclude-derived
     x-nova-backup-reason: Nova's agent built for six systems from the committed apps/novad
       tree; ./install rebuilds it from the same tree, byte for byte.
+  v4_browser_output:
+    name: nova_v4_browser_output
+    x-nova-backup: exclude-ephemeral
+    x-nova-backup-reason: 'the browser engine''s scratch: downloads and screenshots
+      before core copies them into v4_workspace (which carries them), and its console
+      logs.'
+  v4_browser_profile:
+    name: nova_v4_browser_profile
+    x-nova-backup: include
+    x-nova-backup-reason: 'her browser profile (S38): the sites she is signed in to.
+      The bundle is encrypted. Chromium''s caches ride along; they cost size, nothing
+      else.'
   v4_memdata:
     name: nova_v4_memdata
     x-nova-backup: include

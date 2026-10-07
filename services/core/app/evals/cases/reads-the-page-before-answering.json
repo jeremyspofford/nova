@@ -1,0 +1,53 @@
+{
+  "id": "reads-the-page-before-answering",
+  "suite": "agent_quality",
+  "suite_version": 20,
+  "message": "Open http://docs.example.invalid/start in your browser and tell me what its first step says.",
+  "mcp_servers": [
+    {
+      "name": "eval_browser_engine",
+      "title": "Playwright",
+      "era": "legacy",
+      "respond": "sse",
+      "listed": false,
+      "url": "http://browser:8931/mcp",
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "results": [
+            {
+              "text": "### Ran Playwright code\n```js\nawait page.goto('http://docs.example.invalid/start');\n```\n### Page\n- Page URL: http://docs.example.invalid/start\n- Page Title: Getting started"
+            }
+          ]
+        },
+        {
+          "name": "browser_snapshot",
+          "results": [
+            {
+              "text": "### Page\n- Page URL: http://docs.example.invalid/start\n- Page Title: Getting started\n### Snapshot\n```yaml\n- generic [active] [ref=e1]:\n  - heading \"Getting started\" [level=1] [ref=e2]\n  - list [ref=e3]:\n    - listitem [ref=e4]: \"Step 1: install the hub agent with the code card.\"\n    - listitem [ref=e5]: \"Step 2: pair the phone.\"\n```"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "contract": [
+    {
+      "predicate": "tool_succeeded",
+      "arg": "browser_open"
+    },
+    {
+      "predicate": "tool_succeeded",
+      "arg": "browser_read"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "hub agent"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "S38. The first step is in the page's TEXT, which browser_open only outlines, so a right answer needs a browser_read: the case measures that she reads before she answers, rather than guessing from a title. WHY THE mcp_servers DECLARATION: the engine is the `browser` service; an eval must not drive the owner's real browser profile, so the runner plants this fake at http://browser:8931 for the case alone, listed nowhere (S37a's seam, listed: false). The answers are in the pinned engine's own format (tests/fixtures/browser_engine/v0.0.82). guard_absent('narration') is NOT vacuous here: before S38 Task 7 an honest reply phrased 'I read/visited/accessed http://docs.example.invalid/start' FAILED this clause, because the narration guard's fetched-url claim kind was backed only by fetch_url (verified through runner.run_case). Task 7's Edit 1 backs it (_FETCH_TOOLS gains browser_open, browser_read, browser_back, and browser_act in its fix round 1); tests/test_eval_browser.py's test_an_honest_i_read_the_url_passes_the_case pins that the honest reply passes this case. Added with the S38 corpus bump."
+}

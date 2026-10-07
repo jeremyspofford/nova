@@ -1,0 +1,32 @@
+{
+  "step": "type-submit",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 18,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_type",
+      "arguments": {
+        "target": "f5e17",
+        "text": "sent words",
+        "submit": true
+      }
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Ran Playwright code\n```js\nawait page.getByRole('textbox', { name: 'Search words' }).fill('sent words');\nawait page.getByRole('textbox', { name: 'Search words' }).press('Enter');\n```\n### Page\n- Page URL: http://site:8000/page2.html?q=sent+words&pick=b\n- Page Title: Page two"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 18
+    }
+  ]
+}

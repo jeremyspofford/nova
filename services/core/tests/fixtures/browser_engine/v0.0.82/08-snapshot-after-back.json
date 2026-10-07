@@ -1,0 +1,28 @@
+{
+  "step": "snapshot-after-back",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+      "name": "browser_snapshot",
+      "arguments": {}
+    }
+  },
+  "status": 200,
+  "content_type": "text/event-stream",
+  "messages": [
+    {
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "### Page\n- Page URL: http://site:8000/index.html\n- Page Title: Capture index\n### Snapshot\n```yaml\n- generic [active] [ref=f5e1]:\n  - heading \"Capture index\" [level=1] [ref=f5e2]\n  - paragraph [ref=f5e3]:\n    - text: First paragraph of the index page, with\n    - link \"Page two\" [ref=f5e4] [cursor=pointer]:\n      - /url: page2.html\n    - text: in it.\n  - list [ref=f5e5]:\n    - listitem [ref=f5e6]: Alpha item\n    - listitem [ref=f5e7]: Beta item\n  - table [ref=f5e8]:\n    - rowgroup [ref=f5e9]:\n      - row [ref=f5e10]:\n        - columnheader \"Name\" [ref=f5e11]\n        - columnheader \"Size\" [ref=f5e12]\n      - row [ref=f5e13]:\n        - cell \"qwen3\" [ref=f5e14]\n        - cell \"4.9 GB\" [ref=f5e15]\n  - generic [ref=f5e16]:\n    - text: Search words\n    - textbox \"Search words\" [ref=f5e17]\n    - text: Pick one\n    - combobox \"Pick one\" [ref=f5e18]:\n      - option \"Option A\" [selected]\n      - option \"Option B\"\n    - button \"Send\" [ref=f5e19]\n  - paragraph [ref=f5e20]:\n    - link \"Download the report\" [ref=f5e21] [cursor=pointer]:\n      - /url: report.txt\n  - button \"Show alert\" [ref=f5e22]\n```"
+          }
+        ]
+      },
+      "jsonrpc": "2.0",
+      "id": 8
+    }
+  ]
+}

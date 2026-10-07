@@ -213,6 +213,10 @@ def test_the_dispositions_cover_every_v4_volume_by_name():
     assert sorted(declared_volumes()) == [
         "v4_agent_build_cache",
         "v4_agent_dist",
+        # S38 (2026-10-01): her browser's engine gained two volumes, its
+        # profile and its output.
+        "v4_browser_output",
+        "v4_browser_profile",
         "v4_memdata",
         "v4_models",
         "v4_ollama",
@@ -230,7 +234,12 @@ def test_exactly_one_volume_is_dump_pg_and_it_is_the_database_one():
             by_disposition.setdefault(disposition, []).append(name)
     assert by_disposition.get("dump-pg") == ["v4_pgdata"]
     assert by_disposition.get("move-only") == ["v4_tailscale"]
-    assert sorted(by_disposition.get("include", [])) == ["v4_memdata", "v4_workspace"]
+    # S38 (2026-10-01): her browser profile joins the carried set.
+    assert sorted(by_disposition.get("include", [])) == [
+        "v4_browser_profile",
+        "v4_memdata",
+        "v4_workspace",
+    ]
 
 
 # ── .env.example ────────────────────────────────────────────────────────────

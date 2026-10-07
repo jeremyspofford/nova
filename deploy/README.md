@@ -538,6 +538,83 @@ loading there is the check. The machine and model-server cards don't carry that 
 Every QR encodes the derived tailnet address (above), never `127.0.0.1` or a LAN address.
 With no address to give out, she says so and sends no card.
 
+## Her browser
+
+Nova has a web browser of her own: a headless Chromium (Microsoft's Playwright
+MCP server, pinned by digest in `deploy/browser/Dockerfile`) running as the
+`browser` service. Only core talks to it; it has no port on the host. Ask her
+to open a page, read it, click through it, fill in a form, download a file or
+take a screenshot, and she does it with five tools of hers:
+
+- `browser_open` opens an address and tells her what is on it: its headings,
+  how many links, buttons and fields it has, and how long its text is.
+- `browser_read` reads the page in parts of 24,000 characters, or finds the
+  lines that hold every word of a search.
+- `browser_act` clicks, types, picks from a list, presses a key, and accepts
+  or dismisses a dialog the page opened. Its answer says what the browser
+  reported: a new page, a dialog, a download, or none of those.
+- `browser_back` goes back a page.
+- `browser_screenshot` saves a picture of the page in her workspace's
+  `screenshots/`.
+
+A file a page downloads lands in her workspace's `downloads/`, copied and
+checked byte for byte before the browser's copy is removed. Nothing asks you
+first.
+
+**The browser agent.** An agent named `browser` ships with her browser tools,
+web search, `fetch_url` and her workspace. On Settings → Models → Routing, **Agent ·
+browser** picks the model it runs on: a cloud model for heavy browsing, or a
+local one. Until you set one, it runs on the chat chain. She hands it a
+browsing job ("have your browser agent read …"), it reads in a context of its
+own, and she reports what it found. Its downloads land in
+`agents/browser/downloads/`. Delete it on the Agents page and it stays
+deleted.
+
+**What is recorded.** Every call is a span on Activity, with the page's
+address and title. An address's query string and fragment (where reset and
+sign-in links carry their tokens), and anything before an `@`, are masked
+before the span is written. What she types into a field is never repeated in
+a tool's answer, but it is a span argument like any other: do not have her
+type a password yet. Sign-ups wait for the credential store.
+
+**Her logins persist.** Her browser profile (cookies, signed-in sessions)
+lives in the `v4_browser_profile` volume, and the encrypted backup carries
+it. Signing her in somewhere signs her browser in until you sign it out.
+
+**Known limits.**
+- CAPTCHAs, emailed codes and DRM video stop her. She sees the page's own
+  words, but nothing yet checks that she tells you she was stopped.
+- One browser reaches everything you can reach: the internet, your LAN, the
+  stack's own network, and tailnet addresses when this machine itself is on
+  the tailnet (the `tailscale` sidecar runs userspace networking, so it gives
+  the other containers no route of its own). Core, gateway and memory still need
+  their service token on every route; Ollama and SearXNG answer anything on
+  the stack's network, the browser included. A page can try to steer her;
+  what she does is recorded, never blocked.
+- The engine has no login of its own; anything on the stack's network could
+  drive it, and only core does. It also ships run-any-code tools that her
+  five tools never call. If she connects the engine as an MCP server herself
+  (`mcp_connect` to `http://browser:8931/mcp`), its whole tool set is hers
+  through `mcp_call`: recorded, never refused.
+- One page at a time. Two turns share the browser, and each answer names the
+  page it saw.
+- Dismissing a file-chooser dialog uses the engine's documented cancel, which
+  has not been seen working yet.
+- A download over 1 GiB is refused, and the browser's copy is removed;
+  nothing lands in her workspace.
+- An answer from the browser over 4 MiB (a page so large its text alone
+  passes that) is stopped there, and the call fails saying so: "browser
+  streamed more than 4 MiB for one answer; stopped reading". She cannot read
+  that page.
+- Tabs, drag and drop and file uploads are not built yet.
+
+**Moving the engine to a new version.** Change `FROM` in
+`deploy/browser/Dockerfile`, then re-run
+`services/core/tests/fixtures/browser_engine/capture.py` (its docstring has
+the steps), commit the new captures beside the old ones, point the tests at
+them, and read every failure before changing code. The health check expects a
+bare GET of `/mcp` to answer 400, as v0.0.82 does.
+
 ## Connections (MCP servers)
 
 Nova can use the tools other services publish over MCP (the Model Context

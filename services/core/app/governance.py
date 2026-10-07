@@ -43,6 +43,9 @@ DEVICE_REPAIRED = "device.repaired"
 AGENT_CREATED = "agent.created"
 AGENT_UPDATED = "agent.updated"
 AGENT_DELETED = "agent.deleted"
+# S38: an agent the product ships, made once. Its presence is what keeps a
+# deleted one deleted: app/browser/agent.py never makes it twice.
+AGENT_SEEDED = "agent.seeded"
 # MCP servers (S37a): a server connected (with what it replaced, when it
 # replaced one), removed (by whom, and who had added it), and a server's tool
 # list changing. Written by app/mcp/servers.py in the same transaction as the

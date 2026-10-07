@@ -702,6 +702,7 @@ expect_tn "tailnet off by default" "$TN_OFF" 0 6 "tailnet: off"
 expect_tn "tailnet off: names the switch" "$TN_OFF" 0 6 "NOVA_TAILNET=1 ./install"
 expect_tn_lacks "tailnet off: no --profile tailnet" "$TN_OFF" 2 "tailnet"
 expect_tn_lacks "tailnet off: tailscale not health-checked" "$TN_OFF" 3 "tailscale"
+expect_tn "the browser engine is always health-checked (S38)" "$TN_OFF" 0 3 "browser"
 expect_tn_lacks "tailnet off: COMPOSE_PROFILES untouched" "$TN_OFF" 4 "COMPOSE_PROFILES=tailnet"
 expect_tn_lacks "tailnet off: nothing prompted (really)" "$TN_OFF" 5 "PROMPTED"
 

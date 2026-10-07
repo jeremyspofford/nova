@@ -65,6 +65,7 @@
     "deploy/backup/tests/test_restore_reader.py": "tracked",
     "deploy/backup/tests/test_restore_sh.py": "tracked",
     "deploy/backup/uv.lock": "ignored",
+    "deploy/browser/Dockerfile": "tracked",
     "deploy/compose_read.sh": "tracked",
     "deploy/docker-compose.gpu.yml": "tracked",
     "deploy/docker-compose.yml": "tracked",

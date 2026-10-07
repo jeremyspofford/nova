@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from app import traces
+from app.browser import agent as browser_agent
 from app.main import app, lifespan
 from tests.conftest import OWNER, requires_db
 
@@ -119,7 +120,9 @@ async def test_a_turn_no_process_is_running_is_never_pending(owner_client, pool,
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) is None
 
 
-async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(owner_client, pool):
+async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(
+    owner_client, pool, monkeypatch
+):
     """The whole path, through the app's real lifespan: a NULL-status turn in
     the owner's active conversation left by a dead process is 'interrupted'
     once the app has started, and /conversations/active reports no pending
@@ -131,6 +134,14 @@ async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(own
         uuid.UUID(conversation),
     )
     assert orphan not in traces.INFLIGHT
+
+    # S38 fix round 1: owner_client already has a real owner, and this test
+    # leaves WORKSPACE_ROOT at its production default (/data, not writable
+    # here) — a test-environment artifact, not what this test is about.
+    async def already_settled(pool_, app_):
+        return True
+
+    monkeypatch.setattr(browser_agent, "ensure_browser_agent", already_settled)
 
     async with lifespan(app):
         row = await pool.fetchrow("SELECT status, ended_at FROM turns WHERE id = $1", orphan)

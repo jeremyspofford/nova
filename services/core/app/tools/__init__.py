@@ -37,6 +37,7 @@ from pathlib import Path
 
 from app.tools import (
     agents,
+    browser,
     devices,
     inference,
     machines,
@@ -90,6 +91,9 @@ REGISTRY: dict[str, Tool] = {
         *util.TOOLS,
         *web.TOOLS,
         *web_search.TOOLS,
+        # S38: her own browser (tools/browser.py) — five tools over the engine
+        # in the `browser` service, through app/browser/engine.py.
+        *browser.TOOLS,
         *devices.TOOLS,
         *models.TOOLS,
         # S22: one read of the GPU — free VRAM, what is resident, and this
