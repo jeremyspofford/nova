@@ -81,6 +81,17 @@ PROFILES_SWITCHED_OFF=""
 # refusal exists at both layers (design-verdict.md §9.5).
 MOVED_MARKER="$DEPLOY_DIR/.moved"
 
+# The tailnet sidecar's scripts (start.sh, serve_check.sh), bind-mounted
+# read-only at /config. start.sh runs ONCE, at container start, so a change
+# to it in git reaches nothing until the container is recreated — and compose
+# recreates only when the service's config changes, which a script edit does
+# not. record_tailscale_scripts puts their hash into the config (a label fed
+# from .env) and verify_tailscale_scripts reads it back off the running
+# container. Measured 2026-10-07 deploying PR #111: the sidecar kept running
+# a two-day-old start.sh behind "Nova is up".
+TAILSCALE_DIR="$DEPLOY_DIR/tailscale"
+TAILSCALE_SCRIPTS_LABEL="nova.tailscale-scripts"
+
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
@@ -2192,6 +2203,84 @@ record_repository() {
   fi
 }
 
+# ---- the tailnet sidecar's scripts, made part of its config ----------------
+#
+# The sidecar's scripts are files on a bind mount, not config: compose cannot
+# see them change, so `up` leaves a container running the old start.sh while
+# the new one sits unread in /config. The scripts' hash goes into .env
+# (NOVA_TAILSCALE_SCRIPTS), compose interpolates it into a label on the
+# service, and a changed hash is a changed config — compose recreates the
+# sidecar on that `up`, and on no other. Restarting it drops the tailnet URL
+# for a few seconds, so it happens exactly when a script changed, never on
+# every install.
+
+# sha256 of stdin, 64 hex. GNU has sha256sum, macOS has `shasum -a 256`.
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# One hash over every script the container can run: each *.sh in
+# TAILSCALE_DIR (a new one counts the day it is added), by name and content,
+# minus the *_test.sh files that only run here. Exit 1 when there is nothing
+# to hash or no way to hash it — never an empty answer that reads as a value.
+tailscale_scripts_hash() {
+  local f h manifest=""
+  for f in "$TAILSCALE_DIR"/*.sh; do
+    [ -f "$f" ] || continue
+    case "$f" in *_test.sh) continue ;; esac
+    h="$(sha256_stdin < "$f")" || return 1
+    [ -n "$h" ] || return 1
+    manifest="${manifest}${f##*/} $h
+"
+  done
+  [ -n "$manifest" ] || return 1
+  h="$(printf '%s' "$manifest" | sha256_stdin)" || return 1
+  [ -n "$h" ] || return 1
+  printf '%s' "$h"
+}
+
+record_tailscale_scripts() {
+  [ "$TAILNET_ENABLED" -eq 1 ] || return 0
+  local want have
+  want="$(tailscale_scripts_hash)" \
+    || die "could not hash the tailnet sidecar's scripts ($TAILSCALE_DIR/*.sh; needs sha256sum or shasum), so a change to them could not reach the running sidecar"
+  have="$(get_env_value NOVA_TAILSCALE_SCRIPTS)"
+  if [ "$have" = "$want" ]; then
+    log "tailnet: sidecar scripts unchanged (${want:0:12}) — the tailscale container is left running"
+    return 0
+  fi
+  set_env_value NOVA_TAILSCALE_SCRIPTS "$want"
+  log "tailnet: sidecar scripts changed (${have:0:12}${have:+ -> }${want:0:12}) — compose recreates the tailscale container so the new start.sh runs; the tailnet URL drops while it restarts"
+}
+
+# THE SEAM. The scripts hash on the running sidecar's label; exit 1 when
+# there is no sidecar to read it from.
+running_tailscale_scripts() {
+  local cid
+  cid="$(docker compose "${COMPOSE_ARGS[@]}" ps -q tailscale 2>/dev/null)" || return 1
+  [ -n "$cid" ] || return 1
+  docker inspect --format "{{index .Config.Labels \"$TAILSCALE_SCRIPTS_LABEL\"}}" "$cid" 2>/dev/null
+}
+
+# After `up`: the sidecar that is running must have been created from the
+# scripts in this checkout. Recomputed from the files, not read back from
+# .env, so the comparison is running-vs-repo, whatever wrote .env.
+verify_tailscale_scripts() {
+  [ "$TAILNET_ENABLED" -eq 1 ] || return 0
+  local want have
+  want="$(tailscale_scripts_hash)" \
+    || die "could not hash the tailnet sidecar's scripts ($TAILSCALE_DIR/*.sh) to check the running sidecar against them"
+  have="$(running_tailscale_scripts)" || have=""
+  [ "$have" = "$want" ] && return 0
+  die "the tailscale sidecar was created from scripts ${have:-(unknown: no running container, or no $TAILSCALE_SCRIPTS_LABEL label)}, but $TAILSCALE_DIR holds ${want} — it is not running this checkout's start.sh. Recreate it: docker compose --project-directory $DEPLOY_DIR up -d --force-recreate tailscale"
+}
+
 # ---- bring-up + status ----------------------------------------------------
 
 compose_up() {
@@ -2279,7 +2368,11 @@ cmd_install() {
   record_compose_profiles
   # Before compose_up, so the core container this run creates reads it.
   record_repository
+  # Before compose_up: the hash it writes is what makes compose recreate the
+  # sidecar when, and only when, one of its scripts changed.
+  record_tailscale_scripts
   compose_up
+  verify_tailscale_scripts
   wait_for_health || true
   print_status
   local unhealthy
