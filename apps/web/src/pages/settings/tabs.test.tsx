@@ -52,9 +52,9 @@ vi.mock('../../lib/api', async () => {
 const SECTIONS_BY_TAB: Record<string, string[]> = {
   general: ['General', 'Account'],
   appearance: ['Appearance', 'Display diagnostics'],
-  models: ['Machines', 'Models', 'Providers', 'Routing'],
+  models: ['Models', 'Providers', 'Routing'],
   behaviour: ['Response quality', 'Tool rounds'],
-  devices: ['Add to Nova', 'Devices'],
+  devices: ['Add to Nova', 'Devices', 'Machines'],
   connections: ['Connections'],
 }
 

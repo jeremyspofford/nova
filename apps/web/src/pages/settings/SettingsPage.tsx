@@ -233,8 +233,10 @@ export function SettingsPage() {
             {tab === 'models' && (
               <>
                 {/* First: which model answers — chat's order is the question
-                    this tab is opened for. Then images and setup, who
-                    provides the models, and where they run. */}
+                    this tab is opened for. Then images and setup, and who
+                    provides the models. Where they run (Machines) is on
+                    Devices, with the rest of what is known about each
+                    computer. */}
                 <RoutingSection
                   chatModel={chatModel}
                   onChatModelChanged={onChatModelChanged}
@@ -252,7 +254,6 @@ export function SettingsPage() {
                   chatModel={chatModel}
                   onModelChanged={onChatModelChanged}
                 />
-                <MachinesSection />
               </>
             )}
             {tab === 'behaviour' && (
@@ -288,6 +289,12 @@ export function SettingsPage() {
               <>
                 <AddToNovaSection />
                 <DevicesSection />
+                {/* The machines Nova's models run on, beside the paired
+                    devices (2026-10-07, owner): the hub is one computer, and
+                    its details belong in one place, not split across Models
+                    and Devices. Still two lists until S50 joins a device to
+                    its engine by machine_uid. */}
+                <MachinesSection />
               </>
             )}
             {tab === 'connections' && <ConnectionsSection />}
