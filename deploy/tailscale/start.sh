@@ -50,7 +50,9 @@
 #       write what tailscaled reports on that tick — BackendState, the DNS
 #       name, whether the serve mapping and an HTTPS certificate are there —
 #       to $NOVA_STATUS_DIR/tailscale.json (default /run/nova-status), for
-#       core (services/core/app/network.py). Atomic: a temp file, then mv.
+#       core (services/core/app/network.py), and the same tick's
+#       `tailscale status --json` verbatim to tailscale-status.json (the
+#       tailnet's peers and their addresses). Atomic: a temp file, then mv.
 #       Only after step 4 verified the mapping; a failed write is logged and
 #       retried, never fatal. Stopped when containerboot exits.
 #   5. `wait` on containerboot.
@@ -241,7 +243,9 @@ STATUS_INTERVAL="${NOVA_STATUS_INTERVAL:-15}"
 
 write_status() {
   mkdir -p "$STATUS_DIR" 2>/dev/null
-  st="$(tailscale status --json 2>/dev/null)"
+  # One `status --json` per tick feeds both files: the same snapshot.
+  st_rc=0
+  st="$(tailscale status --json 2>/dev/null)" || st_rc=$?
   ts_state="$(printf '%s\n' "$st" | json_string BackendState | tr -d '"\\')"
   ts_name="$(printf '%s\n' "$st" | json_string DNSName | sed 's/\.$//' | tr -d '"\\')"
   if serve_mapping_present; then ts_serve=true; else ts_serve=false; fi
@@ -250,17 +254,33 @@ write_status() {
   if [ -n "$ts_name" ]; then
     case "$ts_certs" in *"\"$ts_name\""*) ts_cert=true ;; esac
   fi
-  printf '{"version": 1, "backend_state": "%s", "dns_name": "%s", "serve_ok": %s, "https_cert": %s, "written_at": "%s"}\n' \
-    "$ts_state" "$ts_name" "$ts_serve" "$ts_cert" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > "$STATUS_DIR/.tailscale.json.tmp" 2>/dev/null \
-    && mv -f "$STATUS_DIR/.tailscale.json.tmp" "$STATUS_DIR/tailscale.json" 2>/dev/null
+  wrote=0
+  if ! { printf '{"version": 1, "backend_state": "%s", "dns_name": "%s", "serve_ok": %s, "https_cert": %s, "written_at": "%s"}\n' \
+      "$ts_state" "$ts_name" "$ts_serve" "$ts_cert" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      > "$STATUS_DIR/.tailscale.json.tmp" 2>/dev/null \
+      && mv -f "$STATUS_DIR/.tailscale.json.tmp" "$STATUS_DIR/tailscale.json" 2>/dev/null; }; then
+    log "could not write $STATUS_DIR/tailscale.json — core reads no address until this succeeds; retrying in ${STATUS_INTERVAL}s"
+    wrote=1
+  fi
+  # The whole tailnet answer, VERBATIM (no parsing here — core reads it):
+  # which peers exist, their names and tailnet addresses. Written only when
+  # tailscaled answered; a failed or empty answer leaves the last good file
+  # in place to go stale, which core's 45 s rule reads as "stopped writing",
+  # never an empty file that reads as "no peers". A failure here does not
+  # cost tailscale.json (written above) and is never fatal.
+  if [ "$st_rc" -eq 0 ] && [ -n "$st" ]; then
+    if ! { printf '%s\n' "$st" > "$STATUS_DIR/.tailscale-status.json.tmp" 2>/dev/null \
+        && mv -f "$STATUS_DIR/.tailscale-status.json.tmp" "$STATUS_DIR/tailscale-status.json" 2>/dev/null; }; then
+      log "could not write $STATUS_DIR/tailscale-status.json — core sees no tailnet peers until this succeeds; retrying in ${STATUS_INTERVAL}s"
+      wrote=1
+    fi
+  fi
+  return "$wrote"
 }
 
 status_loop() {
   while :; do
-    if ! write_status; then
-      log "could not write $STATUS_DIR/tailscale.json — core reads no address until this succeeds; retrying in ${STATUS_INTERVAL}s"
-    fi
+    write_status || :
     sleep "$STATUS_INTERVAL"
   done
 }

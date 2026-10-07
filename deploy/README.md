@@ -99,6 +99,46 @@ Nothing here links a specific engine to a specific agent by that identity
 yet — that join is S44's. A machine with no models still shows up, through
 its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
 
+**`machine_status` also lists "Remote model machines"** — between the engines
+and the agents. Each is a gateway provider whose URL host is a machine, not a
+cloud: a private, tailnet (100.64/10), loopback or link-local IP, a
+single-label name, or a name under `.ts.net`, `.local`, `.lan`, `.internal` or
+`.home.arpa` (decided from the host alone, no DNS lookup). Cloud providers are
+not listed, and neither is the bundled `hub`: the gateway serves it with its
+live URL (e.g. `http://ollama:11434`, a single-label name, so on a machine),
+and it is left out because the gateway marks its row `builtin` — never by its
+name or URL. Each line carries the gateway's last verdict, read live from
+`/admin/providers` and `/admin/routes` — never a call made now:
+
+- **answering** (the gateway lists its models), **failing** with the gateway's
+  own reason (its `listing_note`), **walled for another N min** with the
+  wall's reason (a live entry in the gateway's walls, whole minutes, floored),
+  or **state unknown** when the gateway has no verdict yet — never answering.
+- **Which paired device it runs on**, matched by ADDRESS, never by
+  `machine_uid` (so this is not S44's engine-to-agent join; `hub`, being
+  `builtin`, is not listed here and stays unlinked). Two live sources, both
+  tried and unioned:
+  1. **the agent's own addresses** — the IPv4 host addresses in its `facts`
+     frame (`net.ifaces[].ipv4_cidr`, loopback dropped): the URL's IP is one
+     of them;
+  2. **the tailnet peer list** — `tailscale-status.json` from the sidecar
+     (see "How the sidecar starts"): the URL's IP or MagicDNS name is a
+     peer's, and that peer's host name is a paired agent's hostname (narrowed
+     by OS when one machine runs two agents, e.g. Windows + WSL).
+
+  **Tailscale is not required**: with no sidecar, a LAN-only setup matches
+  through the agent's addresses alone; when nothing matches, the line also
+  says why the peer list was not used. The line says `runs on paired device
+  <name> (<how>)`; two devices matching say `ambiguous: ...` and name both;
+  none says `no paired device is known by <host>`; agents that could not be
+  read say so instead.
+- **Honest failure.** A gateway that cannot be read gives one line, `Remote
+  model machines could not be checked — <reason>`, and no fact — nothing
+  claims answering. No remote provider at all is said, never silence.
+- **The trace.** Each line leaves one fact in the span (`turn_spans`
+  `meta.facts`): `{machine, answering, checked_now: false, state, device}`.
+  `machine_status machine=<provider>` shows that provider's line alone.
+
 ## Which model answers chat
 
 - **One order.** Chat walks the pick (`chat.model`, link 1) and then chat's chain of
@@ -335,7 +375,17 @@ bind, which dies with exit 127 when Docker Desktop recycles its mount):
    without HTTPS certificates enabled the CLI blocks forever; on expiry it
    says so and exits non-zero;
 4. READS `tailscale serve status --json` and exits non-zero if the mapping is
-   not there;
+   not there; from then on, every `NOVA_STATUS_INTERVAL` seconds (default
+   15), writes two status files to `/run/nova-status` (`NOVA_STATUS_DIR`),
+   each atomically (a temp file, then `mv`), from one `tailscale status
+   --json` per tick: `tailscale.json` (BackendState, the node's DNS name,
+   whether the serve mapping and an HTTPS certificate are there — Nova's own
+   address for core) and `tailscale-status.json` (that `tailscale status
+   --json` verbatim — the tailnet's peers and their addresses, which
+   `machine_status` matches remote model machines against). A failed or empty
+   answer leaves the last good `tailscale-status.json` in place; core reads
+   either file as stale ("stopped writing") once it is older than 45 s. A
+   failed write is logged and retried, never fatal;
 5. waits on containerboot, whose exit status becomes the container's.
 
 Why not `TS_SERVE_CONFIG`: containerboot's own serve path clears the node's

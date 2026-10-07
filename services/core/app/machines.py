@@ -48,6 +48,8 @@ from app import agent_dist, agent_updates, db, device_facts, devices, devices_ws
 logger = logging.getLogger("core")
 
 ENGINES_PATH = "/admin/engines"
+PROVIDERS_PATH = "/admin/providers"
+ROUTES_PATH = "/admin/routes"
 # One read of a short list or of one machine's card: the gateway answers from
 # its per-engine cache (ready 30 s, failure 10 s) or one bounded observation.
 TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
@@ -141,6 +143,25 @@ class GatewayPlant:
                 f"the gateway refused to set {name}'s switch — {_error_of(response)}"
             )
         return await self.engine(app, name)
+
+    async def model_providers(self, app) -> tuple[list[dict], list[dict]]:
+        """The gateway's providers (/admin/providers) and live walls
+        (/admin/routes "walls"), each exactly as served. Providers are read
+        first; a failed read raises and the other is never returned alone."""
+        providers = await self._list(app, PROVIDERS_PATH, "providers", "provider list")
+        walls = await self._list(app, ROUTES_PATH, "walls", "route list's walls")
+        return providers, walls
+
+    async def _list(self, app, path: str, key: str, what: str) -> list[dict]:
+        """GET `path` and return its `key`: a list of objects, or PlantUnavailable
+        in words naming `what` was read."""
+        response = await self._request(app, "GET", path)
+        if response.status_code != 200:
+            raise PlantUnavailable(f"the gateway refused {path} — {_error_of(response)}")
+        found = self._object(response, what).get(key)
+        if not isinstance(found, list) or not all(isinstance(entry, dict) for entry in found):
+            raise PlantUnavailable(f"the gateway's {what} was not a list of objects")
+        return found
 
     async def hub_version(self) -> str | None:
         """The hub's build of Nova's agent, which every agent this plant lists

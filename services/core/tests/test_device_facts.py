@@ -250,6 +250,9 @@ def test_agent_view_is_the_one_shape():
         "last_update",
         "folders",
         "acting",
+        # Pin moved deliberately (model-machines T3): the IPv4 addresses its
+        # agent reported, which machine_status matches a provider URL against.
+        "addresses",
     }
     # Pin moved deliberately (Task 16b fix round 1, I1): "predates S42b and
     # does not say" claimed a cause the agent never reported — the probe
@@ -2012,3 +2015,127 @@ def test_only_a_frame_that_accounts_for_no_folder_shows_an_agent_predates_them(f
     reported, or filed unreadable — so only a frame that landed (net) and
     accounted for none shows it. Before a frame lands nothing does."""
     assert df.predates_folders(facts) is shows
+
+
+# -- model-machines T3: the addresses a paired device is known by -----------
+
+
+def _iface(name: str, cidrs: list[str], up: bool = True) -> dict:
+    return {"name": name, "mac": "", "ipv4_cidr": cidrs, "up": up}
+
+
+NETTED = {
+    **WINDOWS,
+    "net": {
+        "ifaces": [
+            _iface("Tailscale", ["100.122.40.93/32"]),
+            _iface("Ethernet", ["192.168.1.20/24", "192.168.1.20/24"]),
+        ]
+    },
+}
+
+
+def test_addresses_of_is_the_sorted_unique_host_addresses_without_prefix():
+    assert df.addresses_of(NETTED) == ("100.122.40.93", "192.168.1.20")
+
+
+def test_addresses_are_sorted_by_address_not_by_text():
+    facts = {**WINDOWS, "net": {"ifaces": [_iface("a", ["10.0.0.10/8", "9.0.0.1/8"])]}}
+    assert df.addresses_of(facts) == ("9.0.0.1", "10.0.0.10")
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [None, WINDOWS, {**WINDOWS, "net": {"ifaces": []}}],
+    ids=["no facts", "no net", "no interfaces"],
+)
+def test_addresses_of_nothing_reported_is_empty(facts):
+    assert df.addresses_of(facts) == ()
+
+
+def test_a_loopback_address_names_no_machine_and_is_left_out():
+    facts = {
+        **WINDOWS,
+        "net": {"ifaces": [_iface("lo", ["127.0.0.1/8"]), _iface("eth0", ["192.168.1.20/24"])]},
+    }
+    assert df.addresses_of(facts) == ("192.168.1.20",)
+
+
+def test_a_down_interface_still_names_its_address():
+    facts = {**WINDOWS, "net": {"ifaces": [_iface("Tailscale", ["100.122.40.93/32"], up=False)]}}
+    assert df.addresses_of(facts) == ("100.122.40.93",)
+
+
+@pytest.mark.parametrize(
+    "net",
+    ["x", {"ifaces": "x"}, {"ifaces": ["x"]}, {"ifaces": [{"ipv4_cidr": ["not-an-ip"]}]}],
+    ids=["net not a dict", "ifaces not a list", "iface not a dict", "bad cidr"],
+)
+def test_a_malformed_net_reads_as_no_addresses_never_raises(net):
+    assert df.addresses_of({**WINDOWS, "net": net}) == ()
+
+
+def _view(facts):
+    return df.agent_view(
+        name="DELL-XPS-8950",
+        platform="windows",
+        hostname="DELL-XPS-8950",
+        connected=True,
+        last_seen=AT,
+        facts=facts,
+        facts_at=AT,
+    )
+
+
+def test_the_agent_view_carries_its_addresses():
+    assert _view(NETTED)["addresses"] == ("100.122.40.93", "192.168.1.20")
+    assert _view(NETTED)["addresses"] == df.addresses_of(NETTED)
+
+
+def test_an_agent_without_facts_has_no_addresses():
+    assert _view(None)["addresses"] == ()
+
+
+def test_a_case_devices_view_still_builds_and_carries_addresses():
+    from app.evals import cases
+
+    device = cases.FixtureDevice(
+        name=cases.FIXTURE_AGENT_PREFIX + "dell",
+        platform="windows",
+        hostname="DELL-XPS-8950",
+        facts=WINDOWS,
+    )
+    assert device.as_view()["addresses"] == ()
+
+
+def test_a_bad_entry_drops_only_itself_and_the_good_addresses_stay():
+    """Total "for that part": one malformed interface or cidr never costs the
+    rest of the row its addresses."""
+    facts = {
+        **WINDOWS,
+        "net": {
+            "ifaces": [
+                "x",
+                {"ipv4_cidr": "100.1.1.1/32"},
+                _iface("bad", ["not-an-ip", "fe80::1/64", "192.168.1.20/24"]),
+                _iface("Tailscale", ["100.122.40.93/32"]),
+            ]
+        },
+    }
+    assert df.addresses_of(facts) == ("100.122.40.93", "192.168.1.20")
+
+
+@pytest.mark.parametrize("cidr", [5, None, ["10.0.0.1/8"]], ids=["int", "null", "list"])
+def test_a_cidr_that_is_not_text_names_no_address(cidr):
+    """ipaddress reads an int as an address (5 -> 0.0.0.5): a non-text cidr
+    must be skipped, not parsed into an address the device never had."""
+    facts = {**WINDOWS, "net": {"ifaces": [_iface("odd", [cidr, "192.168.1.20/24"])]}}
+    assert df.addresses_of(facts) == ("192.168.1.20",)
+
+
+def test_an_address_on_two_interfaces_is_listed_once():
+    facts = {
+        **WINDOWS,
+        "net": {"ifaces": [_iface("a", ["192.168.1.20/24"]), _iface("b", ["192.168.1.20/32"])]},
+    }
+    assert df.addresses_of(facts) == ("192.168.1.20",)

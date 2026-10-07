@@ -8,6 +8,7 @@ that opens nothing."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -306,3 +307,200 @@ def test_a_plain_mapping_keeps_the_relay_split_whatever_its_spelling(doors, spel
     assert network.bucket_of(WEB, funnel) == f"relayed via {SIDECAR}"
     person = {**funnel, "TAILSCALE-USER-LOGIN": "a@example.com"}
     assert network.bucket_of(WEB, person) == SIDECAR
+
+
+# -- model-machines T5: tailnet_peers reads the sidecar's peer list ----------
+
+PEER_DELL = {
+    "ID": "nDELL",
+    "HostName": "DELL-XPS-8950",
+    "DNSName": "dell-xps-8950-windows.tailba0abb.ts.net.",
+    "TailscaleIPs": ["100.122.40.93", "fd7a:115c:a1e0::1234:5678"],
+    "OS": "windows",
+    "Online": True,
+}
+PEER_WSL = {
+    "ID": "nWSL",
+    "HostName": "DELL-XPS-8950",
+    "DNSName": "Dell-XPS-8950.tailba0abb.ts.net.",
+    "TailscaleIPs": ["100.98.5.70"],
+    "OS": "linux",
+    "Online": False,
+}
+SELF = {
+    "HostName": "nova",
+    "DNSName": "nova.tailba0abb.ts.net.",
+    "TailscaleIPs": ["100.64.0.1"],
+    "OS": "linux",
+    "Online": True,
+}
+DELL_PEER_SEEN = {
+    "host_name": "DELL-XPS-8950",
+    "dns_name": "dell-xps-8950-windows.tailba0abb.ts.net",
+    "ips": ("100.122.40.93", "fd7a:115c:a1e0::1234:5678"),
+    "os": "windows",
+    "online": True,
+}
+
+
+@pytest.fixture
+def peer_status(tmp_path, monkeypatch):
+    path = tmp_path / "tailscale.json"
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(path))
+    peer_path = tmp_path / "tailscale-status.json"
+
+    def write(body, *, age_s: float = 5.0, raw: bytes | None = None) -> None:
+        if raw is not None:
+            peer_path.write_bytes(raw)
+        else:
+            peer_path.write_text(json.dumps(body))
+        at = (NOW - timedelta(seconds=age_s)).timestamp()
+        os.utime(peer_path, (at, at))
+
+    write.path = peer_path
+    return write
+
+
+def _live(peers) -> dict:
+    return {"Version": "1.102.3", "BackendState": "Running", "Self": SELF, "Peer": peers}
+
+
+def test_tailnet_peers_reads_the_file_beside_the_status_file(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}))
+    assert peer_status.path == network.status_path().with_name("tailscale-status.json")
+    got = network.tailnet_peers(NOW)
+    assert got == network.Peers(peers=(DELL_PEER_SEEN,), reason=None)
+
+
+def test_self_is_never_a_peer(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}))
+    got = network.tailnet_peers(NOW)
+    assert all(p["host_name"] != "nova" for p in got.peers)
+    assert len(got.peers) == 1
+
+
+def test_peers_are_normalised_and_sorted_by_dns_name(peer_status):
+    peer_status(_live({"nodekey:w": PEER_DELL, "nodekey:l": PEER_WSL}))
+    got = network.tailnet_peers(NOW)
+    assert [p["dns_name"] for p in got.peers] == [
+        "dell-xps-8950-windows.tailba0abb.ts.net",
+        "dell-xps-8950.tailba0abb.ts.net",
+    ]
+    wsl = got.peers[1]
+    assert wsl["ips"] == ("100.98.5.70",)
+    assert wsl["os"] == "linux"
+    assert wsl["online"] is False
+    assert got.reason is None
+
+
+def test_no_peer_file_is_no_peers_and_a_stated_reason_never_an_error(peer_status):
+    got = network.tailnet_peers(NOW)
+    assert got.peers == ()
+    assert "no tailnet sidecar status" in got.reason
+    assert "Nova runs without its tailnet" in got.reason
+
+
+def test_a_stale_peer_file_is_no_peers(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}), age_s=network.MAX_AGE_S + 1)
+    got = network.tailnet_peers(NOW)
+    assert got.peers == ()
+    assert "stopped writing" in got.reason
+
+
+def test_a_peer_file_44_seconds_old_is_still_read(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}), age_s=44)
+    got = network.tailnet_peers(NOW)
+    assert got.peers == (DELL_PEER_SEEN,)
+    assert got.reason is None
+
+
+def test_a_peer_file_dated_in_the_future_is_no_peers(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}), age_s=-(network.MAX_AGE_S + 60))
+    got = network.tailnet_peers(NOW)
+    assert got.peers == ()
+    assert "clocks disagree" in got.reason
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"{not json", b"\xff\xfe\x00garbage", b"[1, 2, 3]", b'"just a string"', b"null"],
+    ids=["invalid-json", "not-utf8", "list", "string", "null"],
+)
+def test_a_malformed_peer_file_is_no_peers_with_a_reason_never_raised(peer_status, raw):
+    peer_status(None, raw=raw)
+    got = network.tailnet_peers(NOW)
+    assert got.peers == ()
+    assert isinstance(got.reason, str) and got.reason
+
+
+@pytest.mark.parametrize("peer", ["absent", None, {}], ids=["no-key", "null", "empty"])
+def test_a_tailnet_with_no_other_machines_is_not_a_failure(peer_status, peer):
+    body = _live({})
+    if peer == "absent":
+        del body["Peer"]
+    else:
+        body["Peer"] = peer
+    peer_status(body)
+    got = network.tailnet_peers(NOW)
+    assert got == network.Peers(peers=(), reason=None)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not a dict",
+        {k: v for k, v in PEER_WSL.items() if k != "HostName"},
+        {**PEER_WSL, "TailscaleIPs": "100.98.5.70"},
+    ],
+    ids=["not-dict", "no-hostname", "ips-not-list"],
+)
+def test_one_malformed_peer_is_dropped_alone(peer_status, bad):
+    peer_status(_live({"nodekey:dell": PEER_DELL, "nodekey:bad": bad}))
+    got = network.tailnet_peers(NOW)
+    assert got.peers == (DELL_PEER_SEEN,)
+    assert got.reason is None
+
+
+def test_the_peer_file_never_changes_what_address_says(status, peer_status):
+    status()
+    peer_status(_live({"nodekey:dell": PEER_DELL}))
+    assert network.address(NOW).origin == "https://nova.fake-tailnet.ts.net"
+
+
+def test_tailnet_peers_defaults_to_the_current_time(tmp_path, monkeypatch):
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(tmp_path / "tailscale.json"))
+    (tmp_path / "tailscale-status.json").write_text(json.dumps(_live({"nodekey:dell": PEER_DELL})))
+    got = network.tailnet_peers()
+    assert got == network.Peers(peers=(DELL_PEER_SEEN,), reason=None)
+
+
+def test_a_peer_file_a_few_seconds_in_the_future_is_still_read(peer_status):
+    peer_status(_live({"nodekey:dell": PEER_DELL}), age_s=-10)
+    got = network.tailnet_peers(NOW)
+    assert got == network.Peers(peers=(DELL_PEER_SEEN,), reason=None)
+
+
+def test_an_unreadable_peer_file_is_no_peers_with_a_reason_never_raised(peer_status):
+    peer_status.path.mkdir()
+    got = network.tailnet_peers(NOW)
+    assert got.peers == ()
+    assert "could not be read" in got.reason
+
+
+def test_each_peer_field_is_normalised_on_its_own(peer_status):
+    odd = {
+        "HostName": "box",
+        "TailscaleIPs": ["100.70.0.9", 7, None, "fd7a::9"],
+        "Online": "yes",
+    }
+    peer_status(_live({"nodekey:odd": odd}))
+    got = network.tailnet_peers(NOW)
+    assert got.peers == (
+        {
+            "host_name": "box",
+            "dns_name": "",
+            "ips": ("100.70.0.9", "fd7a::9"),
+            "os": "",
+            "online": False,
+        },
+    )
