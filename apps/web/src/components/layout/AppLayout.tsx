@@ -82,6 +82,7 @@ export function AppLayout({
               type="button"
               data-testid="show-sidebar"
               onClick={() => setCollapsed(false)}
+              title="Show sidebar (Ctrl+B)"
               className="absolute top-3 left-3 z-40 inline-flex items-center gap-1.5 rounded-md p-1.5 text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast"
             >
               <PanelLeft size={16} className="shrink-0" />

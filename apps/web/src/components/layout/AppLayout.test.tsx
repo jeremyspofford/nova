@@ -268,6 +268,19 @@ describe('AppLayout — getting the sidebar back', () => {
     await waitFor(() => expect(screen.queryByTestId('show-sidebar')).toBeNull())
   })
 
+  it('the panel icon in the open sidebar hides it, and the same icon brings it back', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(screen.getByTestId('hide-sidebar'))
+    expect(await screen.findByTestId('show-sidebar')).toBeTruthy()
+    expect(screen.queryByTestId('hide-sidebar')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('show-sidebar'))
+    expect(await screen.findByTestId('hide-sidebar')).toBeTruthy()
+  })
+
   it('Ctrl+B toggles it, which is what the handle promises', async () => {
     setViewport('desktop')
     renderShell()
