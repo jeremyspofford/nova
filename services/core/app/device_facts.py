@@ -712,6 +712,43 @@ def folders_of(facts: dict | None) -> tuple[str, ...]:
     return tuple(name for name in FOLDER_NAMES if isinstance(folders, dict) and folders.get(name))
 
 
+def addresses_of(facts: dict | None) -> tuple[str, ...]:
+    """The IPv4 host addresses this machine's agent reported (facts.net),
+    sorted by address and unique, prefix dropped. What machine_status
+    matches a model provider's URL host against to say which paired device
+    it runs on.
+
+    Loopback is left out: every agent reports one, and 127.0.0.1 in a
+    provider URL is the hub's own host, never a paired device. A down
+    interface still contributes: an address a device is known by stays its
+    own while the link is down, and nothing here reaches it.
+
+    Reads stored facts, so it is total: a malformed net shape yields no
+    addresses for that part, never an exception — one bad row must not
+    crash machine_status."""
+    if not isinstance(facts, dict):
+        return ()
+    net = facts.get("net")
+    ifaces = net.get("ifaces") if isinstance(net, dict) else None
+    if not isinstance(ifaces, list):
+        return ()
+    found: set[ipaddress.IPv4Address] = set()
+    for iface in ifaces:
+        cidrs = iface.get("ipv4_cidr") if isinstance(iface, dict) else None
+        if not isinstance(cidrs, list):
+            continue
+        for cidr in cidrs:
+            if not isinstance(cidr, str):
+                continue
+            try:
+                address = ipaddress.IPv4Interface(cidr).ip
+            except ValueError:
+                continue
+            if not address.is_loopback:
+                found.add(address)
+    return tuple(str(address) for address in sorted(found))
+
+
 def folders_unread(facts: dict | None) -> dict[str, str]:
     """Why the agent could not report each known folder it filed under
     "folders.<name>" (Task 7: a folder its OS does not name, or a path too
@@ -1246,4 +1283,5 @@ def agent_view(
         "last_update": last_update,
         "folders": folders_of(facts),
         "acting": acting_lines(facts, platform),
+        "addresses": addresses_of(facts),
     }

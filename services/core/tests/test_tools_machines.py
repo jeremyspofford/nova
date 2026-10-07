@@ -1372,3 +1372,527 @@ def test_a_changed_job_schedule_changes_machine_updates_words():
     assert job == "{'kind': 'minutes', 'every': 5}"
     assert "one idle machine at a time every 5 minutes, so this is for now" in said
     assert "15 minutes" not in said
+
+
+# ------------------------------------------- T10 remote model machines (epic)
+#
+# machine_status names every model provider the gateway routes to that runs on
+# a machine (model_machines.on_a_machine), with its live state (state_of) and
+# the paired device it runs on (device_of). The gateway's providers and walls
+# come through plant().model_providers; these tests answer that read from a
+# list so the engines still come from the fake gateway's /admin/engines.
+
+import json  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+from app import network  # noqa: E402
+
+DELL_URL = "http://100.122.40.93:11435/v1"
+DELL_KEV_URL = "http://100.122.40.93:8009/v1"
+DELL_NOTE = (
+    "the last listing was refused (502): could not reach http://100.122.40.93:11435/v1 "
+    "— RemoteProtocolError: Server disconnected without sending a response."
+)
+DELL_KEV_NOTE = (
+    "the last listing was refused (502): could not reach http://100.122.40.93:8009/v1 "
+    "— ConnectError: connection refused"
+)
+DELL_WALL_REASON = (
+    "dell:qwen3:8b refused (502): could not reach dell at http://100.122.40.93:11435/v1 "
+    "— RemoteProtocolError: Server disconnected without sending a response."
+)
+DELL_FACTS = {
+    **WINDOWS,
+    "hostname": "DELL-XPS-8950",
+    "net": {
+        "ifaces": [
+            {"name": "Tailscale", "mac": "", "ipv4_cidr": ["100.122.40.93/32"], "up": True},
+        ]
+    },
+}
+DELL_PEER = {
+    "ID": "nWin",
+    "HostName": "DELL-XPS-8950",
+    "DNSName": "dell-xps-8950-windows.tailba0abb.ts.net.",
+    "TailscaleIPs": ["100.122.40.93"],
+    "OS": "windows",
+    "Online": True,
+}
+
+
+# The bundled engine's row exactly as GET /admin/providers serves it on the
+# live stack: providers.to_public reports base_url_of(row), which for the
+# builtin ollama row is the live OLLAMA_URL (http://ollama:11434, a
+# single-label host on_a_machine reads as a machine), never the stored "".
+# What marks it as the bundled engine is the gateway's own `builtin` column.
+HUB_URL = "http://ollama:11434"
+
+
+def _provider(name, base_url, listing="unknown", note=None, *, builtin=False) -> dict:
+    return {
+        "name": name,
+        "adapter": "ollama" if builtin else "openai-chat",
+        "base_url": base_url,
+        "builtin": builtin,
+        "listing": listing,
+        "listing_note": note,
+    }
+
+
+def _hub_provider() -> dict:
+    return _provider("hub", HUB_URL, "available", "3 models listed", builtin=True)
+
+
+def _providers() -> list[dict]:
+    return [
+        _hub_provider(),
+        _provider("dell", DELL_URL, note=DELL_NOTE),
+        _provider("dell-kev", DELL_KEV_URL, note=DELL_KEV_NOTE),
+        _provider("openrouter", "https://openrouter.ai/api/v1", "available", "300 models listed"),
+    ]
+
+
+def _walls() -> list[dict]:
+    # 28 min and 30 s left, so whole minutes floored read 28 whatever the
+    # call's own clock adds.
+    until = datetime.now(UTC) + timedelta(minutes=28, seconds=30)
+    return [
+        {
+            "provider": "dell",
+            "model": "qwen3:8b",
+            "walled_until": until.isoformat(),
+            "reason": DELL_WALL_REASON,
+            "status": 502,
+            "strikes": 66,
+        }
+    ]
+
+
+def _dell_agent(*, facts=DELL_FACTS) -> dict:
+    return device_facts.agent_view(
+        name="DELL-XPS-8950",
+        platform="windows",
+        hostname="DELL-XPS-8950",
+        connected=True,
+        last_seen=AT,
+        facts=facts,
+        facts_at=AT,
+    )
+
+
+class _RemotePlant(_AgentsPlant):
+    """Agents from a list, and the gateway's providers + walls from lists (or
+    the PlantUnavailable that read raised)."""
+
+    def __init__(self, agents=None, error=None, providers=None, walls=None, providers_error=None):
+        super().__init__(agents=agents, error=error)
+        self._providers = _providers() if providers is None else providers
+        self._walls = _walls() if walls is None else walls
+        self._providers_error = providers_error
+
+    async def model_providers(self, app):
+        if self._providers_error is not None:
+            raise self._providers_error
+        return [dict(p) for p in self._providers], [dict(w) for w in self._walls]
+
+
+@pytest.fixture
+def remote(monkeypatch, tmp_path, mount_peers):
+    """Install a _RemotePlant, mount the fake gateway's hub engine, and point
+    the tailnet status at an empty temp dir (no peer file) unless a test
+    writes one through the returned `peers` writer."""
+    status = tmp_path / "tailscale.json"
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(status))
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+
+    def install(**kw) -> None:
+        # Set from inside the test (its own context); the autouse _plant
+        # fixture resets machines.PLANT at teardown, as its own installs do.
+        machines.PLANT.set(_RemotePlant(**kw))
+
+    def peers(*entries: dict) -> None:
+        body = {
+            "Version": "1.102.3",
+            "BackendState": "Running",
+            "Self": {"HostName": "nova", "DNSName": "nova.tailba0abb.ts.net.", "OS": "linux"},
+            "Peer": {f"nodekey:{i}": peer for i, peer in enumerate(entries)},
+        }
+        status.with_name("tailscale-status.json").write_text(json.dumps(body))
+
+    install.peers = peers
+    return install
+
+
+def _remote_lines(said: str) -> list[str]:
+    return [line for line in said.splitlines() if line.startswith("- remote ")]
+
+
+def _remote_line(said: str, name: str) -> str:
+    found = [line for line in _remote_lines(said) if line.startswith(f"- remote {name} (")]
+    assert len(found) == 1, said
+    return found[0]
+
+
+def _remote_facts(sink: list[dict]) -> list[dict]:
+    return [fact for fact in sink if "machine" in fact and "state" in fact]
+
+
+async def test_status_lists_each_remote_model_machine_after_the_engines_before_the_agents(remote):
+    remote(agents=[_dell_agent()])
+    said = await _call("machine_status", {})
+    lines = said.splitlines()
+    engine = next(i for i, line in enumerate(lines) if line.startswith("hub: answering"))
+    headers = [i for i, line in enumerate(lines) if "Remote model machines" in line]
+    assert len(headers) == 1, said
+    header = headers[0]
+    agents = next(i for i, line in enumerate(lines) if line.startswith("Nova's agents, by machine"))
+    assert engine < header < agents, said
+    remote_lines = _remote_lines(said)
+    assert [line.split(" (", 1)[0] for line in remote_lines] == [
+        "- remote dell",
+        "- remote dell-kev",
+    ], said
+    assert all(header < lines.index(line) < agents for line in remote_lines)
+    assert not any("openrouter" in line for line in lines[header:agents])
+    assert not any(line.startswith("- remote hub") for line in lines)
+
+
+async def test_a_walled_remote_machine_says_its_host_wall_reason_and_time_left(remote):
+    remote(agents=[_dell_agent()])
+    said = await _call("machine_status", {})
+    dell = _remote_line(said, "dell")
+    assert dell.startswith("- remote dell (100.122.40.93): ")
+    assert "walled" in dell
+    assert DELL_WALL_REASON in dell
+    assert "28 min" in dell
+    assert "runs on paired device DELL-XPS-8950 (its agent's addresses)" in dell
+
+
+async def test_a_failing_remote_machine_says_the_gateways_listing_note(remote):
+    remote(agents=[_dell_agent()])
+    said = await _call("machine_status", {})
+    kev = _remote_line(said, "dell-kev")
+    assert kev.startswith("- remote dell-kev (100.122.40.93): ")
+    assert "failing" in kev
+    assert DELL_KEV_NOTE in kev
+    assert "walled" not in kev
+    assert "runs on paired device DELL-XPS-8950 (its agent's addresses)" in kev
+
+
+async def test_remote_lines_never_wear_the_agent_listing_prefixes_nor_the_unneeded_peer_reason(
+    remote,
+):
+    remote(agents=[_dell_agent()])
+    said = await _call("machine_status", {})
+    assert len(_remote_lines(said)) == 2, said
+    for line in _remote_lines(said):
+        assert not line.startswith(machines_tool._MACHINE_LINE)
+        assert not line.startswith(machines_tool._AGENT_LINE)
+        assert network.NO_PEERS_FILE not in line
+    assert network.NO_PEERS_FILE not in said
+
+
+async def test_each_remote_machine_leaves_one_fact_never_a_connectivity_fact(remote):
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    await _call("machine_status", {}, sink)
+    facts = _remote_facts(sink)
+    assert [
+        {k: f[k] for k in ("machine", "answering", "checked_now", "state", "device")} for f in facts
+    ] == [
+        {
+            "machine": "dell",
+            "answering": False,
+            "checked_now": False,
+            "state": "walled",
+            "device": "DELL-XPS-8950",
+        },
+        {
+            "machine": "dell-kev",
+            "answering": False,
+            "checked_now": False,
+            "state": "failing",
+            "device": "DELL-XPS-8950",
+        },
+    ]
+    for fact in facts:
+        assert set(fact) == {"machine", "answering", "checked_now", "state", "device", "at"}
+        assert "connected" not in fact
+        assert isinstance(fact["at"], str) and fact["at"]
+        assert not guards.is_connectivity_fact(fact)
+
+
+@pytest.mark.parametrize(
+    ("listing", "note", "answering"),
+    [("available", "7 models listed", True), ("unknown", None, None)],
+    ids=["answering", "unknown"],
+)
+async def test_a_remote_facts_answering_is_state_ofs_never_assumed(
+    remote, listing, note, answering
+):
+    remote(
+        agents=[_dell_agent()],
+        providers=[_provider("dell", DELL_URL, listing, note)],
+        walls=[],
+    )
+    sink: list[dict] = []
+    await _call("machine_status", {}, sink)
+    (fact,) = _remote_facts(sink)
+    assert fact["answering"] is answering
+
+
+async def test_the_hub_engine_and_agent_lines_and_facts_are_unchanged_by_the_remote_section(
+    remote, mount_peers
+):
+    remote(agents=[_dell_agent()], providers=[], walls=[])
+    before_sink: list[dict] = []
+    before = await _call("machine_status", {}, before_sink)
+    remote(agents=[_dell_agent()])
+    after_sink: list[dict] = []
+    after = await _call("machine_status", {}, after_sink)
+    kept = [
+        line
+        for line in after.splitlines()
+        if not line.startswith("- remote ")
+        and "Remote model machines" not in line
+        and "remote model machine" not in line
+    ]
+    old = [
+        line
+        for line in before.splitlines()
+        if "Remote model machines" not in line and "remote model machine" not in line
+    ]
+    assert kept == old
+    assert [f for f in after_sink if "state" not in f] == [
+        f for f in before_sink if "state" not in f
+    ]
+    assert machines_tool.device_line_shown("DELL-XPS-8950", after, len(after))
+
+
+async def test_a_remote_machine_no_paired_device_matches_says_so_plainly(remote):
+    remote(
+        agents=[_dell_agent()],
+        providers=[
+            _provider("nas", "http://192.168.1.50:11434/v1", note="the last listing was refused")
+        ],
+        walls=[],
+    )
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    nas = _remote_line(said, "nas")
+    assert "no paired device is known by 192.168.1.50" in nas
+    assert network.NO_PEERS_FILE in nas
+    (fact,) = _remote_facts(sink)
+    assert fact["device"] is None
+
+
+async def test_unreadable_agents_make_the_remote_device_words_say_so_never_no_device(remote):
+    remote(error=RuntimeError("database is down"))
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    dell = _remote_line(said, "dell")
+    assert "could not be read" in dell
+    assert "no paired device is known" not in dell
+    assert "runs on paired device" not in dell
+    facts = _remote_facts(sink)
+    assert facts and all(f["device"] is None for f in facts)
+
+
+async def test_a_tailnet_peer_names_the_device_when_its_agent_reported_no_addresses(remote):
+    no_net = {k: v for k, v in DELL_FACTS.items() if k != "net"}
+    remote(agents=[_dell_agent(facts=no_net)])
+    remote.peers(DELL_PEER)
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    dell = _remote_line(said, "dell")
+    assert (
+        "runs on paired device DELL-XPS-8950 "
+        "(the tailnet peer dell-xps-8950-windows.tailba0abb.ts.net)"
+    ) in dell
+    assert {f["machine"]: f["device"] for f in _remote_facts(sink)}["dell"] == "DELL-XPS-8950"
+
+
+async def test_a_gateway_providers_read_that_fails_is_stated_with_no_remote_fact(remote):
+    remote(
+        agents=[_dell_agent()],
+        providers_error=machines.PlantUnavailable("the gateway refused /admin/providers — boom"),
+    )
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert (
+        "Remote model machines could not be checked — the gateway refused /admin/providers — boom"
+        in said
+    )
+    assert _remote_lines(said) == []
+    assert _remote_facts(sink) == []
+    assert not any(f.get("answering") is True for f in sink if f.get("machine") != "hub")
+    assert "hub: answering" in said
+    assert "Nova's agents, by machine" in said
+    assert machines_tool.device_line_shown("DELL-XPS-8950", said, len(said))
+
+
+async def test_a_filter_naming_only_a_remote_provider_shows_that_line_alone(remote):
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "dell"}, sink)
+    assert [line.split(" (", 1)[0] for line in _remote_lines(said)] == ["- remote dell"]
+    assert "dell-kev" not in said
+    assert not any(line.startswith("hub:") for line in said.splitlines())
+    assert [f["machine"] for f in _remote_facts(sink)] == ["dell"]
+    assert not any(f.get("machine") == "hub" for f in sink)
+
+
+async def test_a_filter_naming_a_remote_provider_still_matches_its_paired_device(remote):
+    # The filter names the remote provider, not the agent: device matching
+    # must still see every paired device, never only the filter's agents.
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "dell"}, sink)
+    (line,) = _remote_lines(said)
+    assert "runs on paired device DELL-XPS-8950 (its agent's addresses)" in line
+    assert "no paired device is known" not in line
+    assert [f["device"] for f in _remote_facts(sink)] == ["DELL-XPS-8950"]
+
+
+async def test_a_filter_naming_the_hub_engine_shows_no_remote_line(remote):
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "hub"}, sink)
+    assert _remote_lines(said) == []
+    assert _remote_facts(sink) == []
+    assert any(line.startswith("hub: answering") for line in said.splitlines())
+
+
+@pytest.mark.parametrize("args", [{}, {"machine": "hub"}], ids=["unfiltered", "machine=hub"])
+async def test_the_builtin_engine_provider_is_never_a_remote_model_machine(remote, args):
+    # The live gateway serves the bundled engine's row with base_url
+    # http://ollama:11434 (on a machine by its URL) and builtin true: the
+    # gateway's own flag excludes it, never its name nor its URL.
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    said = await _call("machine_status", args, sink)
+    assert not any(line.startswith("- remote hub") for line in _remote_lines(said)), said
+    assert "ollama" not in "\n".join(_remote_lines(said)), said
+    assert not any(f["machine"] == "hub" for f in _remote_facts(sink)), sink
+    assert any(line.startswith("hub: answering") for line in said.splitlines())
+
+
+async def test_a_non_builtin_provider_at_the_bundled_engines_url_is_still_a_remote_machine(remote):
+    # Exclusion reads the `builtin` flag, never the URL: another row that
+    # happens to point at http://ollama:11434 is a remote model machine.
+    remote(
+        agents=[_dell_agent()],
+        providers=[_hub_provider(), _provider("side-ollama", HUB_URL, note="refused")],
+        walls=[],
+    )
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert [line.split(" (", 1)[0] for line in _remote_lines(said)] == ["- remote side-ollama"]
+    assert [f["machine"] for f in _remote_facts(sink)] == ["side-ollama"]
+
+
+async def test_only_the_builtin_field_marks_the_bundled_engine_never_its_name_adapter_or_local(
+    remote,
+):
+    # A builtin row not named "hub" is still the bundled engine; a non-builtin
+    # row with the ollama adapter and local true (live dell-kev is local) is
+    # still a remote machine. Name, adapter and `local` are not the marker.
+    bundled = _provider("bundled", HUB_URL, "available", builtin=True) | {"local": True}
+    kev = _provider("dell-kev", DELL_KEV_URL, note=DELL_KEV_NOTE) | {
+        "adapter": "ollama",
+        "local": True,
+    }
+    remote(agents=[_dell_agent()], providers=[bundled, kev], walls=[])
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert [line.split(" (", 1)[0] for line in _remote_lines(said)] == ["- remote dell-kev"], said
+    assert [f["machine"] for f in _remote_facts(sink)] == ["dell-kev"]
+
+
+async def test_a_filter_naming_nothing_known_still_fails(remote):
+    remote(agents=[_dell_agent()])
+    with pytest.raises(ToolFailure):
+        await _call("machine_status", {"machine": "nobody"})
+
+
+async def test_a_gateway_with_no_remote_machine_says_so_never_silence(remote):
+    remote(
+        agents=[_dell_agent()],
+        providers=[
+            _hub_provider(),
+            _provider("openrouter", "https://openrouter.ai/api/v1", "available", "300 models"),
+        ],
+        walls=[],
+    )
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert "lists no remote model machine" in said
+    assert _remote_lines(said) == []
+    assert _remote_facts(sink) == []
+
+
+async def test_a_walls_time_left_is_floored_to_whole_minutes_never_rounded_up(remote):
+    # 28 min 50 s left: floored reads 28, rounded would read 29.
+    walls = _walls()
+    walls[0]["walled_until"] = (datetime.now(UTC) + timedelta(minutes=28, seconds=50)).isoformat()
+    remote(agents=[_dell_agent()], walls=walls)
+    said = await _call("machine_status", {})
+    assert "walled for another 28 min — " in _remote_line(said, "dell")
+
+
+async def test_a_filter_naming_a_remote_provider_holds_while_the_agents_are_unreadable(remote):
+    remote(error=RuntimeError("database is down"))
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "dell"}, sink)
+    dell = _remote_line(said, "dell")
+    assert "could not be read" in dell
+    assert "no paired device is known" not in dell
+    assert [(f["machine"], f["device"]) for f in _remote_facts(sink)] == [("dell", None)]
+
+
+async def test_a_filter_naming_a_remote_provider_matches_its_device_through_a_tailnet_peer(remote):
+    # Same blind spot as the agents' addresses, through the peer source: the
+    # peer's host name is matched against EVERY agent, never the filter's.
+    no_net = {k: v for k, v in DELL_FACTS.items() if k != "net"}
+    remote(agents=[_dell_agent(facts=no_net)])
+    remote.peers(DELL_PEER)
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "dell"}, sink)
+    (line,) = _remote_lines(said)
+    assert (
+        "runs on paired device DELL-XPS-8950 "
+        "(the tailnet peer dell-xps-8950-windows.tailba0abb.ts.net)"
+    ) in line
+    assert [f["device"] for f in _remote_facts(sink)] == ["DELL-XPS-8950"]
+
+
+async def test_a_filter_naming_only_an_agent_shows_no_remote_section_never_a_false_none(remote):
+    # The filter names the paired device, not a provider: the remote section
+    # is left out whole — never "the gateway lists no remote model machine",
+    # which the filtered (empty) remote list would wrongly claim.
+    remote(agents=[_dell_agent()])
+    sink: list[dict] = []
+    said = await _call("machine_status", {"machine": "DELL-XPS-8950"}, sink)
+    assert "Remote model machines" not in said
+    assert _remote_lines(said) == []
+    assert _remote_facts(sink) == []
+    assert machines_tool.device_line_shown("DELL-XPS-8950", said, len(said))
+
+
+@pytest.mark.parametrize("agents_error", [None, RuntimeError("database is down")])
+async def test_a_filter_naming_nothing_says_the_remote_machines_were_not_checked(
+    remote, agents_error
+):
+    # The providers read failed, so "no machine named dell" would be a claim
+    # nobody checked: the refusal must say the remote half was never read.
+    remote(
+        agents=[_dell_agent()],
+        error=agents_error,
+        providers_error=machines.PlantUnavailable("the gateway refused /admin/providers — boom"),
+    )
+    with pytest.raises(ToolFailure) as failed:
+        await _call("machine_status", {"machine": "dell"})
+    assert (
+        "remote model machines could not be checked — the gateway refused /admin/providers — boom"
+        in str(failed.value)
+    )

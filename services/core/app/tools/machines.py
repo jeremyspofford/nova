@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from app import agent_updates, device_facts, machines, schedule
+from app import agent_updates, device_facts, machines, model_machines, network, schedule
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -127,13 +127,21 @@ def _describe(view: dict, checked_now: bool) -> str:
 async def machine_status(args: dict, ctx: ToolContext) -> str:
     wanted = str(args.get("machine") or "").strip()
     reader = machines.plant()
+    # The providers are read BEFORE the engines, so the engines' live read
+    # stays the gateway's last query; their failure is stated, never raised,
+    # and the engines failing still fails the whole call.
+    remotes, remotes_error = await _remotes(reader, ctx)
     try:
         views = await reader.engines(ctx.app, live=True)
     except machines.PlantUnavailable as exc:
         raise ToolFailure(f"could not ask the gateway where models run — {exc}") from exc
     agents, agents_error = await _agents(reader, ctx)
+    # Device matching reads EVERY agent: a filter naming a remote provider
+    # narrows the agents shown, never the agents its host is matched against.
+    all_agents = agents
     if wanted:
         named = [view for view in views if view["name"] == wanted]
+        named_remotes = [r for r in remotes if r["name"] == wanted]
         if agents_error is not None:
             # Fix round 1 (Important 1): Nova's agents could not be read AT
             # ALL, so their absence is not evidence of anything. Never say
@@ -142,11 +150,12 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
             # would assert no agent of this name exists. Only the gateway's
             # own list is asserted; the agents half states its own failure.
             named_agents: list[dict] = []
-            if not named:
+            if not named and not named_remotes:
                 engines_listed = ", ".join(view["name"] for view in views) or "none"
                 raise ToolFailure(
                     f"no machine named {wanted!r} runs models — the gateway lists: "
                     f"{engines_listed}; Nova's agents could not be read — {agents_error}"
+                    + _remotes_unread(remotes_error)
                 )
         else:
             named_agents = [
@@ -154,14 +163,18 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
                 for agent in agents
                 if wanted.casefold() in (agent["name"].casefold(), agent["hostname"].casefold())
             ]
-            if not named and not named_agents:
+            if not named and not named_agents and not named_remotes:
                 engines_listed = ", ".join(view["name"] for view in views) or "none"
                 agents_listed = ", ".join(agent["name"] for agent in agents) or "none"
                 raise ToolFailure(
                     f"no machine named {wanted!r} runs models or Nova's agent — the gateway "
                     f"lists: {engines_listed}; Nova's agents: {agents_listed}"
+                    + _remotes_unread(remotes_error)
                 )
-        views, agents = named, named_agents
+        # A filter naming an engine or an agent shows no remote section; one
+        # naming a remote model machine shows its line alone.
+        views, agents, remotes = named, named_agents, named_remotes
+    show_remotes = bool(remotes) or not wanted
     lines: list[str] = []
     if views:
         first = views[0]["name"]
@@ -183,8 +196,119 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
                     "at": view.get("observed_at") or _now(),
                 }
             )
+    if show_remotes:
+        lines.extend(_describe_remotes(remotes, remotes_error, all_agents, agents_error, ctx))
     lines.extend(_describe_agents(agents, agents_error, ctx, filtered=bool(wanted)))
     return "\n".join(lines)
+
+
+def _remotes_unread(error: str | None) -> str:
+    return "" if error is None else f"; remote model machines could not be checked — {error}"
+
+
+async def _remotes(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
+    """The gateway's providers that run on a machine (model_machines.
+    on_a_machine), each with its live state — or the reason they could not be
+    read. Stated, never raised: the engines and agents are still a true
+    reading. The bundled engine's own row is excluded by the gateway's
+    `builtin` field on that row: its URL is the bundled engine's live address
+    (e.g. http://ollama:11434), which is on a machine, so the URL cannot tell
+    it apart — and never by a list of built-in names."""
+    try:
+        providers, walls = await reader.model_providers(ctx.app)
+    except machines.PlantUnavailable as exc:
+        return [], str(exc)
+    now = datetime.now(UTC)
+    remotes = []
+    for provider in providers:
+        if not isinstance(provider, dict) or provider.get("builtin") is True:
+            continue
+        if not model_machines.on_a_machine(provider.get("base_url")):
+            continue
+        remotes.append(
+            {
+                "name": provider.get("name"),
+                "base_url": provider.get("base_url"),
+                "state": model_machines.state_of(provider, walls, now),
+            }
+        )
+    return remotes, None
+
+
+_AGENTS_UNREAD_DEVICE = (
+    "Nova's agents could not be read, so the paired device it runs on cannot be named"
+)
+
+
+def _state_words(state: dict) -> str:
+    """state_of's verdict as words: the state, a wall's time left in whole
+    minutes (floored), then the reason as the gateway gave it."""
+    kind = state["state"]
+    if kind == "walled":
+        left = state["walled_for_s"]
+        minutes = left // 60 if isinstance(left, int) else None
+        if minutes is None:
+            head = "walled by the gateway"
+        elif minutes < 1:
+            head = "walled for less than a minute more"
+        else:
+            head = f"walled for another {minutes} min"
+    elif kind == "failing":
+        head = "failing"
+    elif kind == "answering":
+        head = "answering"
+    else:
+        head = "state unknown"
+    return f"{head} — {state['reason']}"
+
+
+def _describe_remotes(
+    remotes: list[dict],
+    error: str | None,
+    agents: list[dict],
+    agents_error: str | None,
+    ctx: ToolContext,
+) -> list[str]:
+    """The remote model machines section: after the engines, BEFORE Nova's
+    agents (device_line_shown reads the agents section as the result's last).
+    One line per provider that runs on a machine — its own "- remote " prefix,
+    never an agent listing's — and one fact each, {"machine", "answering",
+    "checked_now", "state", "device", "at"}: answering is state_of's (never
+    assumed), checked_now False (the gateway's last verdict, not a call made
+    now), and never a "connected" key (that shape is a device connectivity
+    fact). A read that failed is stated and records no fact."""
+    if error is not None:
+        return [f"Remote model machines could not be checked — {error}."]
+    if not remotes:
+        return ["Remote model machines: the gateway lists no remote model machine."]
+    peers = network.tailnet_peers()
+    lines = [
+        f"Remote model machines — {len(remotes)} provider(s) the gateway routes to that run "
+        "on a machine, not a cloud, with the gateway's last verdict on each:"
+    ]
+    for remote in remotes:
+        base_url = remote["base_url"]
+        if agents_error is not None:
+            # A no-match then proves nothing: the agents were never read.
+            device, device_words = None, _AGENTS_UNREAD_DEVICE
+        else:
+            found = model_machines.device_of(base_url, agents, peers)
+            device, device_words = found["device"], found["said"]
+        state = remote["state"]
+        host = model_machines._host(base_url)
+        lines.append(f"- remote {remote['name']} ({host}): {_state_words(state)} — {device_words}")
+        if ctx.facts_sink is not None:
+            ctx.facts_sink.append(
+                {
+                    "machine": remote["name"],
+                    "answering": state["answering"],
+                    "checked_now": False,
+                    "state": state["state"],
+                    "device": device,
+                    "at": _now(),
+                }
+            )
+    return lines
 
 
 async def _agents(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:

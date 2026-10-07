@@ -142,6 +142,96 @@ def address(now: datetime | None = None) -> Address:
     return Address(f"https://{name}", None, now)
 
 
+# -- the tailnet's other machines (model-machines T5) ------------------------
+
+
+@dataclass(frozen=True)
+class Peers:
+    peers: tuple[dict, ...]
+    reason: str | None
+
+
+PEERS_FILE = "tailscale-status.json"
+NO_PEERS_FILE = "no tailnet sidecar status — Nova runs without its tailnet"
+
+
+def peers_path() -> Path:
+    return status_path().with_name(PEERS_FILE)
+
+
+def _peer(entry: object) -> dict | None:
+    """One `Peer` map entry as {host_name, dns_name, ips, os, online}, or None
+    when it cannot name a machine (not an object, no HostName, TailscaleIPs not
+    a list). Dropping it alone keeps one bad entry from costing the others."""
+    if not isinstance(entry, dict):
+        return None
+    host = entry.get("HostName")
+    if not isinstance(host, str) or not host.strip():
+        return None
+    ips = entry.get("TailscaleIPs")
+    if not isinstance(ips, list):
+        return None
+    dns = entry.get("DNSName")
+    os_name = entry.get("OS")
+    return {
+        "host_name": host,
+        "dns_name": dns.strip().rstrip(".").lower() if isinstance(dns, str) else "",
+        "ips": tuple(ip for ip in ips if isinstance(ip, str)),
+        "os": os_name if isinstance(os_name, str) else "",
+        "online": entry.get("Online") is True,
+    }
+
+
+def tailnet_peers(now: datetime | None = None) -> Peers:
+    """The tailnet's other machines, from the sidecar's verbatim
+    `tailscale status --json` (deploy/tailscale/start.sh, beside tailscale.json).
+
+    Tailscale is optional: no file is no peers and a stated reason, never an
+    error. The file carries no written_at, so freshness is its mtime, by
+    address()'s MAX_AGE_S rule — a stale list is no list, never the last one.
+    Self is never a peer. BackendState is not checked: the list only names a
+    device, it never claims one is reachable."""
+    now = now or datetime.now(UTC)
+
+    def none(reason: str) -> Peers:
+        return Peers((), reason)
+
+    path = peers_path()
+    try:
+        mtime = path.stat().st_mtime
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return none(NO_PEERS_FILE)
+    except UnicodeDecodeError:
+        return none("the tailnet peer list is not UTF-8 text")
+    except OSError as exc:
+        return none(f"the tailnet peer list could not be read ({exc.strerror or exc})")
+    age = now.timestamp() - mtime
+    if age > MAX_AGE_S:
+        return none(
+            f"the tailnet peer list is {_age(age)} old — the sidecar has stopped writing it"
+        )
+    if age < -MAX_AGE_S:
+        return none(
+            f"the tailnet peer list is dated {_age(-age)} in the future — "
+            "this host's clocks disagree"
+        )
+    try:
+        data = json.loads(raw)
+    except RecursionError:
+        return none("the tailnet peer list is nested too deeply to parse")
+    except ValueError:
+        return none("the tailnet peer list is not valid JSON")
+    if not isinstance(data, dict):
+        return none("the tailnet peer list is not a JSON object")
+    entries = data.get("Peer")
+    if not isinstance(entries, dict):
+        return Peers((), None)
+    seen = [p for p in (_peer(e) for e in entries.values()) if p is not None]
+    seen.sort(key=lambda p: (p["dns_name"], p["host_name"]))
+    return Peers(tuple(seen), None)
+
+
 # -- S42b: which door a device socket came through (P15) ---------------------
 
 # The stack's own addresses (deploy/docker-compose.yml; decide_subnet writes

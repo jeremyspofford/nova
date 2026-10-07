@@ -403,7 +403,11 @@ most once a minute), every ten minutes regardless, and on `facts.refresh`:
 Loopback interfaces are dropped; at most 32 interfaces are sent, and going
 over that is itself an `unreadable` entry rather than a silent cut — but a
 single interface's own IPv4 addresses are capped at 8 with no such note, so
-a multi-homed interface can lose addresses silently past the eighth. `net`
+a multi-homed interface can lose addresses silently past the eighth. Core
+reads the IPv4 host addresses in `net.ifaces[].ipv4_cidr` (prefix and
+loopback dropped) to say which device a model provider runs on:
+`machine_status` names this device when a gateway provider's URL host is one
+of them — on a LAN, with no Tailscale (see `deploy/README.md` "Machines"). `net`
 and `unreadable` are everything S42a fills in —
 power, ollama, compute, hold and overlay are later slices' sections (see the
 carries); a section this build does not know is dropped by core, never
