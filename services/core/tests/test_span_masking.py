@@ -505,3 +505,36 @@ async def test_a_token_as_the_server_name_through_the_chat_loop_stores_no_secret
     assert spans and spans[0]["meta"]["ok"] is False
     stored = await pool.fetch("SELECT meta::text AS m FROM turn_spans WHERE turn_id = $1", turn.id)
     assert _TOKEN not in "\n".join(r["m"] for r in stored)
+
+
+# -- S38 (merge review, 2026-10-07): what she types on a page ----------------
+
+
+@pytest.mark.parametrize("action", ["type", "accept"])
+def test_text_she_typed_on_a_page_is_recorded_as_its_length(action):
+    """A password typed into a sign-in form, or a prompt's answer, must never
+    sit in turn_spans or on Activity (the S38 plan: typed text is never
+    echoed). The span's own result and error are scrubbed of it too."""
+    raw = json.dumps({"action": action, "ref": "e4", "value": "hunter2-Secret!"})
+    recorded, scrub = chat._span_record(raw, "browser_act")
+    assert recorded == {"action": action, "ref": "e4", "value": "<masked:15 chars>"}
+    assert "hunter2-Secret!" not in scrub("Error: could not type hunter2-Secret! into e4")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"action": "select", "ref": "e7", "value": "Canada"},
+        {"action": "press", "value": "Enter"},
+        {"action": "click", "ref": "e3"},
+    ],
+)
+def test_what_she_chose_or_pressed_on_a_page_is_recorded_as_it_was(args):
+    """An option's label and a key's name are not hers to hide — the trace is
+    where the owner reads what she did."""
+    assert chat._span_record(json.dumps(args), "browser_act")[0] == args
+
+
+def test_another_tools_value_argument_is_left_as_it_was():
+    args = {"action": "type", "value": "hello"}
+    assert chat._span_record(json.dumps(args), "memory_save")[0] == args

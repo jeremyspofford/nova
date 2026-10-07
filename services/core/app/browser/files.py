@@ -40,6 +40,11 @@ logger = logging.getLogger("core")
 OUTPUT_DIR_ENV = "BROWSER_OUTPUT_DIR"
 DEFAULT_OUTPUT_DIR = "/data/browser-output"
 MAX_BRING_BYTES = 1024 * 1024 * 1024  # 1 GiB
+# What a copy must leave free on the workspace's disk (merge review,
+# 2026-10-07): the per-file cap bounds one download, not how many a page can
+# send, and v4_workspace shares its disk with postgres. A copy that would leave
+# less is a stated cannot, the engine's copy removed, as an oversize one is.
+MIN_FREE_BYTES_AFTER = 1024 * 1024 * 1024  # 1 GiB
 MAX_NAME_BYTES = 200
 
 # Every code point str.isspace() recognises (checked once over the full
@@ -357,6 +362,25 @@ def _bring_in(
             destination_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise HandoffError(f"could not create {folder}/: {exc.strerror or exc}") from exc
+        try:
+            disk = os.statvfs(destination_dir)
+        except OSError as exc:
+            raise HandoffError(
+                f"could not read the free space in {folder}/: {exc.strerror or exc}"
+            ) from exc
+        free = disk.f_bavail * disk.f_frsize
+        if free - info.st_size < MIN_FREE_BYTES_AFTER:
+            reason = _remove(source)
+            kept = (
+                "the engine's copy was removed"
+                if reason is None
+                else f"the engine's copy could not be removed: {reason}"
+            )
+            raise HandoffError(
+                f"{clip(source.name)} is {info.st_size:,} bytes and the workspace's disk has "
+                f"{free:,} bytes free; bringing it in would leave less than 1 GiB, so it was "
+                f"not copied, and {kept}"
+            )
         try:
             tmp_fd, tmp_name = tempfile.mkstemp(
                 dir=destination_dir, prefix=f".{wanted}.", suffix=".part"

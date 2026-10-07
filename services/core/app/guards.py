@@ -1491,15 +1491,20 @@ def _claims_in(
         if on_a_page:
             click_objects = click_objects | _BROWSER_PAGE_FIELD_TOKENS
             choice_objects = choice_objects | _BROWSER_PAGE_FIELD_TOKENS
+        # The nouns are read only up to the first condition word: one inside a
+        # later conditional ("I typed up the cover letter, so when you click
+        # the button it sends") is about what HE may do, and must not anchor
+        # the verb before it (merge review, 2026-10-07).
         last_click_object = last_choice_object = -1
         first_condition = len(lowered)
         for i, low in enumerate(lowered):
+            if low in _BROWSER_HYPOTHETICAL_TOKENS:
+                first_condition = i
+                break
             if low in click_objects:
                 last_click_object = i
             if low in choice_objects:
                 last_choice_object = i
-            if low in _BROWSER_HYPOTHETICAL_TOKENS and first_condition == len(lowered):
-                first_condition = i
         for vi, low in enumerate(lowered):
             if vi > first_condition or vi >= max(last_click_object, last_choice_object):
                 break
@@ -1972,6 +1977,45 @@ def _browser_downloaded(spans: Sequence[Any]) -> bool:
     )
 
 
+def _opened_by_another_tool(successful: Sequence[Any]) -> bool:
+    """Whether a tool that can itself open something succeeded this turn: an
+    MCP call ("I opened PR #121 at <url>" through a GitHub server) or a device
+    tool (`gh pr create`, `start <url>` on his machine). After one, a bare
+    "I opened/navigated <url>" with no browser span is that tool's work, not a
+    claim about her browser (merge review, 2026-10-07: the browser's two verbs
+    must not retract an honest report main never read as a fetch)."""
+    return any(
+        span.name == "mcp_call" or span.name.startswith(_DEVICE_SPAN_PREFIX) for span in successful
+    )
+
+
+def _failed_pages(spans: Sequence[Any]) -> list[Any]:
+    """Her FAILED browser calls that still put her on a page: browser_open on a
+    4xx/5xx files the page fact and then states the failure (ruling B7), so
+    "I opened <url> but it answered 404" has its record — "there is no record
+    of the action" would be false beside it (merge review, 2026-10-07). A call
+    refused before it ran, or one that reached no page (no page fact: DNS, the
+    engine down), backs nothing."""
+    out = []
+    names: frozenset[str] | None = None
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("ok") is True or any(str(key).startswith("refused") for key in meta):
+            continue
+        if names is None:
+            names = _browser_tool_names()
+        if getattr(span, "name", None) not in names:
+            continue
+        if any(
+            isinstance(fact, dict) and fact.get("browser") == "page"
+            for fact in meta.get("facts") or ()
+        ):
+            out.append(span)
+    return out
+
+
 def narration_check(
     reply_text: str, spans: Sequence[Any], device_names: Sequence[str] = ()
 ) -> Correction | None:
@@ -1995,6 +2039,7 @@ def narration_check(
     record: _UpdateRecord | None = None
     on_a_page = _browser_ran(spans)
     delegated: bool | None = None  # read on the first claim that asks
+    failed_pages: list[Any] | None = None  # read on the first unbacked fetch claim
     unbacked: list[UnbackedClaim] = []
     seen: set[tuple[str, str]] = set()
     reported: set[tuple[str, str | None]] = set()
@@ -2015,15 +2060,24 @@ def narration_check(
         key = (kind, (target or "").lower())
         if key in seen:
             continue
-        seen.add(key)
-        if kind in _BROWSER_DELEGABLE_KINDS or (
-            kind == "fetched_url" and phrase.lower() in _BROWSER_FETCH_VERBS
-        ):
+        browser_verb = kind == "fetched_url" and phrase.lower() in _BROWSER_FETCH_VERBS
+        if kind in _BROWSER_DELEGABLE_KINDS or browser_verb:
             # S38 (ruling G9): her browser agent may have done it on its
-            # own turn, which this turn's spans cannot show.
+            # own turn, which this turn's spans cannot show. The key is NOT
+            # recorded as seen (merge review, 2026-10-07): "I opened X; I
+            # fetched X." must still judge the older verb, as the reverse
+            # order always did.
             if delegated is None:
                 delegated = _a_delegation_ran(spans)
             if delegated:
+                continue
+        seen.add(key)
+        if browser_verb and not on_a_page and _opened_by_another_tool(successful):
+            continue
+        if kind == "fetched_url" and not _backed(kind, target, successful, record):
+            if failed_pages is None:
+                failed_pages = _failed_pages(spans)
+            if failed_pages and _backed(kind, target, failed_pages, record):
                 continue
         if kind == "browser_downloaded":
             # Fix round 1 (I1): judged only when her browser ran, or when

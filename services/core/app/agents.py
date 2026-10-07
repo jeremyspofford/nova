@@ -1465,6 +1465,17 @@ def run_facts(
         if span.kind != "tool":
             continue
         meta = span.meta or {}
+        # A file her browser brought into the folder (S38): a download or a
+        # screenshot, stated by the tool's own fact, path relative to the
+        # folder as a write's is. Read on a FAILED call too — a download that
+        # finished is brought in even when the call it rode on then failed
+        # (tools/browser.py _bring_downloads). Without it the line said
+        # "none" beside files core itself put there (merge review, 2026-10-07).
+        for fact in meta.get("facts") or ():
+            if isinstance(fact, dict) and fact.get("browser") in ("download", "screenshot"):
+                path = fact.get("path")
+                if isinstance(path, str) and path.strip() and path not in files:
+                    files.append(path)
         if meta.get("ok") is True:
             calls_ok += 1
             if span.name == WRITE_TOOL:

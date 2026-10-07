@@ -2122,8 +2122,28 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
         # Masks a connection tool's `name` itself (N2).
         parsed = _off_schema_masked(parsed, tool, sink)
     else:
-        parsed = _server_names_masked(parsed, tool_name, sink)
+        parsed = _typed_text_masked(_server_names_masked(parsed, tool_name, sink), tool_name, sink)
     return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
+
+
+# browser_act's actions whose `value` is text she typed — into a field, or as
+# a prompt dialog's answer. A select's option and a pressed key are not.
+_TYPED_BROWSER_ACTIONS = frozenset({"type", "accept"})
+
+
+def _typed_text_masked(parsed: object, tool_name: str | None, sink: _SpanScrub) -> object:
+    """What she typed on a page is recorded as its length, never its text
+    (S38 plan: "typed text is never echoed"; merge review, 2026-10-07): a
+    password typed into a sign-in form would otherwise sit in turn_spans and
+    on Activity. Her result already says only "Typed N characters", and the
+    sink scrubs the same text out of the span's own result and error."""
+    if tool_name != "browser_act" or not isinstance(parsed, dict):
+        return parsed
+    value = parsed.get("value")
+    if parsed.get("action") not in _TYPED_BROWSER_ACTIONS or not isinstance(value, str):
+        return parsed
+    sink.add(value)
+    return {**parsed, "value": _masked(value)}
 
 
 # The arguments by which her MCP tools name a connection (`mcp_tools` and

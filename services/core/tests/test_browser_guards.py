@@ -601,3 +601,164 @@ def test_round_two_false_denials_still_fire(reply):
     correction = guards.capability_claim_check(reply, TOOLS)
     assert correction is not None, reply
     assert [claim.target for claim in correction.claims] == ["browser_act"]
+
+
+# -- the merge review (2026-10-07): false corrections the slice brought in ----
+#
+# Each was an HONEST reply drawing "I did not actually do that", which the
+# guard's own precision rule ranks worse than a missed lie. Each fix is held to
+# its boundary below, so the cut never becomes a hole.
+
+CONDITIONAL_CONTROLS = [
+    "I typed up the form letter, if I clicked the button it would submit.",
+    "I typed up the cover letter, so when you click the button it sends.",
+    "I chose the annual plan, and if you click the button below it renews.",
+    "I selected the three best articles, and when you press the button they open.",
+    "I typed up a draft email, and when you're happy with it just click the Send button.",
+    "I filled in the template for you, so when you're ready press the Submit button.",
+    "I chose the cheaper flight, so when you book it pick economy from the dropdown.",
+]
+
+
+@pytest.mark.parametrize("reply", CONDITIONAL_CONTROLS)
+@pytest.mark.parametrize("ran", [[], ["workspace_write_file"], ["web_search"]])
+def test_a_control_inside_a_later_condition_anchors_no_page_action(reply, ran):
+    """The noun after "if"/"when" is about what HE may do; it must not make the
+    verb before it an action of hers on a page."""
+    correction = guards.narration_check(reply, [_span(name) for name in ran])
+    assert correction is None or "browser_acted" not in _kinds(correction), reply
+
+
+def test_a_page_action_before_a_condition_still_needs_its_act():
+    """The cut stops at the condition, not before it: a control named BEFORE
+    the condition still makes the claim."""
+    reply = "I clicked the Submit button, so if it asks again just wait."
+    assert _kinds(guards.narration_check(reply, [])) == ["browser_acted"]
+    assert guards.narration_check(reply, [_span("browser_act")]) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I opened https://x.example/a; I fetched https://x.example/a.",
+        "I fetched https://x.example/a; I opened https://x.example/a.",
+        "I opened https://x.example/a. I visited https://x.example/a.",
+    ],
+)
+def test_an_older_verb_is_judged_on_a_delegated_turn_in_either_order(reply):
+    """G9 exempts only the browser's two verbs. An exempted "opened" must not
+    record the address as already judged, or the older verb after it rides
+    through on the word order alone."""
+    assert _kinds(guards.narration_check(reply, [_delegation()])) == ["fetched_url"]
+
+
+OPENED_BY_ANOTHER_TOOL = [
+    (
+        "I opened a pull request at https://github.com/jeremyspofford/nova/pull/120 with the fix.",
+        _span("mcp_call", args={"server": "github", "tool": "create_pull_request"}),
+    ),
+    (
+        "I opened PR #121 at https://github.com/jeremyspofford/nova/pull/121 with the fix.",
+        _span("device_run", args={"device": "DELL-XPS-8950", "command": "gh pr create --fill"}),
+    ),
+    (
+        "I opened an issue for it: https://github.com/jeremyspofford/nova/issues/42",
+        _span("mcp_call", args={"server": "github", "tool": "create_issue"}),
+    ),
+    (
+        "I opened https://example.com/docs in your browser on DELL-XPS-8950.",
+        _span("device_run", args={"device": "DELL-XPS-8950", "command": "start https://x"}),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "reply,span", OPENED_BY_ANOTHER_TOOL, ids=[r for r, _ in OPENED_BY_ANOTHER_TOOL]
+)
+def test_an_open_by_another_tool_is_not_a_claim_about_her_browser(reply, span):
+    """Main never read "opened" as a fetch; the browser's verb must not retract
+    a pull request she really opened through GitHub's server or `gh`."""
+    assert guards.narration_check(reply, [span]) is None, reply
+
+
+@pytest.mark.parametrize("reply", [r for r, _ in OPENED_BY_ANOTHER_TOOL])
+def test_an_open_with_nothing_that_could_open_it_is_still_corrected(reply):
+    """The cut is the tools that open things — not any tool at all: after a
+    search alone, "I opened <url>" is still the fabrication it was."""
+    assert _kinds(guards.narration_check(reply, [])) == ["fetched_url"], reply
+    assert _kinds(guards.narration_check(reply, [_span("web_search")])) == ["fetched_url"], reply
+
+
+def test_when_her_browser_ran_an_unbacked_open_is_still_hers_to_back():
+    """On a page, "I opened <url>" is a claim about her browser whatever else
+    ran: an MCP call beside it does not back an address the browser never
+    reached."""
+    spans = [
+        _span(
+            "browser_open",
+            args={"url": "https://example.com/a"},
+            facts=[_page("https://example.com/a")],
+        ),
+        _span("mcp_call", args={"server": "github", "tool": "create_issue"}),
+    ]
+    reply = "I opened https://other.example/b and read it."
+    assert _kinds(guards.narration_check(reply, spans)) == ["fetched_url"]
+
+
+def _error_page(url: str, status: int = 404) -> dict:
+    return {"browser": "page", "url": url, "title": "Not Found", "status": status}
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I opened https://example.com/missing but it answered 404 Not Found.",
+        "I navigated to https://example.com/missing and got a 404.",
+        "I visited https://example.com/missing but it answered 404.",
+    ],
+)
+def test_an_error_page_her_browser_reached_backs_the_open(reply):
+    """Ruling B7 states a 4xx as a failure so she never treats an error page as
+    the page she wanted — but the browser did go there, and the page fact is
+    the record "there is no record of the action" would deny."""
+    spans = [
+        _span(
+            "browser_open",
+            ok=False,
+            args={"url": "https://example.com/missing"},
+            facts=[_error_page("https://example.com/missing")],
+        )
+    ]
+    assert guards.narration_check(reply, spans) is None, reply
+
+
+def test_an_error_page_backs_only_its_own_address():
+    spans = [
+        _span(
+            "browser_open",
+            ok=False,
+            args={"url": "https://example.com/missing"},
+            facts=[_error_page("https://example.com/missing")],
+        )
+    ]
+    reply = "I opened https://other.example/page and it loaded."
+    assert _kinds(guards.narration_check(reply, spans)) == ["fetched_url"]
+
+
+def test_a_refused_open_with_a_page_fact_backs_nothing():
+    span = _span(
+        "browser_open",
+        ok=False,
+        args={"url": "https://example.com/missing"},
+        facts=[_error_page("https://example.com/missing")],
+    )
+    span.meta["refused_markup"] = True
+    reply = "I opened https://example.com/missing."
+    assert _kinds(guards.narration_check(reply, [span])) == ["fetched_url"]
+
+
+def test_a_failed_fetch_url_still_backs_nothing():
+    """Main's fetch_url rule is unchanged: only her browser files a page fact."""
+    spans = [_span("fetch_url", ok=False, args={"url": "https://example.com/missing"})]
+    reply = "I fetched https://example.com/missing but it answered 404."
+    assert _kinds(guards.narration_check(reply, spans)) == ["fetched_url"]

@@ -362,6 +362,35 @@ def test_run_facts_are_derived_from_the_spans_never_the_words():
     assert agents.run_facts(agent, turn, status="ok", seconds=1, usage=None).cap_unreadable is None
 
 
+def test_files_her_browser_brought_in_are_files_on_the_facts_line():
+    """S38 (merge review, 2026-10-07): a download or a screenshot the browser
+    agent's tools put in its folder is stated by the tool's own fact. The line
+    said "none" beside files core itself put there — and Nova is told the
+    files it lists are the files that exist. A download brought in on a call
+    that then FAILED is in the folder too; a page fact names no file."""
+    agent = _agent_value()
+    turn = traces.Turn(id=uuid.UUID(int=4), started_at=datetime.now(UTC), agent_id=agent.id)
+    now = datetime.now(UTC)
+
+    def span(name, ok, *facts):
+        turn.spans.append(traces.Span("tool", name, now, 1, {"ok": ok, "facts": list(facts)}))
+
+    page = {"browser": "page", "url": "https://example.com/r", "title": "R", "status": None}
+    span("browser_open", True, page)
+    span("browser_act", True, page, {"browser": "download", "path": "downloads/r.pdf", "bytes": 9})
+    span("browser_act", False, {"browser": "download", "path": "downloads/late.csv", "bytes": 3})
+    span("browser_screenshot", True, {"browser": "screenshot", "path": "screenshots/1.png"})
+    span("browser_read", True, {"browser": "download", "path": "downloads/r.pdf", "bytes": 9})
+
+    facts = agents.run_facts(agent, turn, status="ok", seconds=1.0, usage=None)
+    assert facts.files == ("downloads/r.pdf", "downloads/late.csv", "screenshots/1.png")
+    assert (facts.calls_ok, facts.calls_failed) == (4, 1)
+    assert (
+        "Files written in agents/coder/: downloads/r.pdf, downloads/late.csv, screenshots/1.png"
+        in agents.compose_result(facts, "done")
+    )
+
+
 def test_rounds_are_the_span_count_and_a_part_priced_cost_says_so():
     """A metered round and a round that failed before the gateway stated
     anything: TWO gateway calls happened, so rounds is 2. turn_usage counts

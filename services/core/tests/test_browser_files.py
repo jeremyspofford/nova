@@ -724,3 +724,66 @@ def test_a_stuck_temp_file_after_a_successful_link_is_logged_not_a_failed_bring_
         and "Device or resource busy" in record.getMessage()
         for record in caplog.records
     ), [r.getMessage() for r in caplog.records]
+
+
+# -- the merge review (2026-10-07): the disk she shares with postgres --------
+
+
+def _free(monkeypatch, free_bytes: int) -> None:
+    real = os.statvfs
+
+    def fake(path):
+        real(path)  # the folder must still exist and be readable
+        return os.statvfs_result((4096, 4096, 0, 0, free_bytes // 4096, 0, 0, 0, 0, 255))
+
+    monkeypatch.setattr(files.os, "statvfs", fake)
+
+
+def test_a_download_that_would_leave_the_disk_short_is_stated_not_copied_and_removed(
+    dirs, monkeypatch
+):
+    """The per-file cap bounds ONE download, not how many a page can send; a
+    copy that would leave less than the floor free is a stated cannot."""
+    output, workspace = dirs
+    _put(output, "report.bin", b"x" * 8192)
+    _free(monkeypatch, files.MIN_FREE_BYTES_AFTER + 4096)
+    with pytest.raises(files.HandoffError) as caught:
+        files.bring_in(
+            "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert str(caught.value) == (
+        f"report.bin is 8,192 bytes and the workspace's disk has "
+        f"{files.MIN_FREE_BYTES_AFTER + 4096:,} bytes free; bringing it in would leave less "
+        "than 1 GiB, so it was not copied, and the engine's copy was removed"
+    )
+    assert not (output / "report.bin").exists()
+    assert list((workspace / "downloads").iterdir()) == []
+
+
+def test_a_download_that_leaves_the_floor_free_is_brought_in(dirs, monkeypatch):
+    output, workspace = dirs
+    _put(output, "report.bin", b"x" * 4096)
+    _free(monkeypatch, files.MIN_FREE_BYTES_AFTER + 4096)
+    brought = files.bring_in(
+        "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+    )
+    assert brought.path == "downloads/report.bin"
+    assert (workspace / "downloads" / "report.bin").read_bytes() == b"x" * 4096
+
+
+def test_free_space_that_cannot_be_read_is_stated_and_keeps_the_engines_copy(dirs, monkeypatch):
+    """Not knowing is not room: nothing is copied, and nothing is removed — the
+    engine's copy is still there for a retry once the disk can be read."""
+    output, workspace = dirs
+    _put(output, "report.bin")
+
+    def broken(path):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(files.os, "statvfs", broken)
+    with pytest.raises(files.HandoffError) as caught:
+        files.bring_in(
+            "/output/report.bin", output_dir=output, workspace_root=workspace, folder="downloads"
+        )
+    assert str(caught.value) == ("could not read the free space in downloads/: Input/output error")
+    assert (output / "report.bin").exists()
