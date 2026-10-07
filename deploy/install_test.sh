@@ -2416,7 +2416,6 @@ expect_tn "build: no commit says so" "$RB_NONE" 0 3 "no build stamp"
 # A re-run on the same commit writes nothing, so compose has no new config to
 # recreate core for: the first stamp's time stands.
 RB_SAME="$(run_build commit 'NOVA_INSTALLED_AT=2026-01-01T00:00:00Z\n')"
-RB_SAME_HEAD="$(tn_field "$RB_SAME" 4)"
 expect_tn "build: a new commit moves NOVA_INSTALLED_AT" "$RB_SAME" 0 2 "NOVA_INSTALLED_AT=20"
 expect_tn_lacks "build: (not left at the old time)" "$RB_SAME" 2 "2026-01-01T00:00:00Z"
 RB_RERUN="$(
