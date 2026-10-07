@@ -775,8 +775,11 @@ describe('RoutingSection', () => {
     await waitFor(() => {
       const toggle = within(screen.getByTestId('route-scheduled-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
       expect(toggle.checked).toBe(true)
+      // Inside the wait, not after it: the refusal is cleared by an effect
+      // that runs AFTER the render that checks the toggle, and on a slow
+      // runner an assertion outside the wait landed between the two.
+      expect(screen.queryByTestId('route-scheduled-router-error')).toBeNull()
     })
-    expect(screen.queryByTestId('route-scheduled-router-error')).toBeNull()
   })
 
   it('keeps the note when a later reload changes the router state', async () => {
