@@ -1,4 +1,4 @@
-import type { Attachment, Delegation, SetupCard } from '../../lib/api'
+import type { Attachment, Delegation, SetupCard, StoredRewind } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
 
 /**
@@ -137,6 +137,15 @@ export type MessageRow = {
    * introduces. Live-only, like `activity`: a stored row's corrections are
    * already paragraphs of its text. */
   paragraphNext?: boolean
+  /** The rewind this row IS, when it is a rewind marker (chat rewind,
+   * 2026-10-06): a role='user' row core composed, never something he typed.
+   * Only ever set from a fetched row; absent/null on every other row. */
+  rewind?: StoredRewind | null
+  /** True when this row came from core (GET .../messages), so its id is the
+   * stored message's own id (chat rewind). A row this store just sent keeps
+   * a client id until a load replaces it — core has never heard of that id,
+   * so nothing may address it (a rewind to it would only be refused). */
+  stored?: boolean
 }
 
 export type ErrorRow = {
@@ -273,6 +282,8 @@ export type FetchedMessage = {
   attachments?: Attachment[]
   /** S47: the setup QR cards this row carries, redrawn from the trace (never with a code). */
   cards?: SetupCard[]
+  /** Chat rewind: set on a rewind marker row, null/absent otherwise. */
+  rewind?: StoredRewind | null
 }
 
 export const NO_REPLY = 'the turn finished without a reply'
@@ -605,6 +616,9 @@ function serverRow(m: FetchedMessage): MessageRow {
     // S47: the cards this row carries, verbatim from the trace — absent (a
     // core older than S47, or a row with none) normalises to [] the same way.
     cards: Array.isArray(m.cards) ? m.cards : [],
+    // Chat rewind: the marker's stored rewinds row, verbatim.
+    rewind: m.rewind ?? null,
+    stored: true,
   })
 }
 

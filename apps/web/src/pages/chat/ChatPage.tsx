@@ -6,11 +6,14 @@ import {
   getConversationState as apiGetConversationState,
   getMessages as apiGetMessages,
   openThread as apiOpenThread,
+  rewind as apiRewind,
+  type RewindMode,
+  type RewindResult,
 } from '../../lib/api'
 import { useChatStore } from '../../stores/chat-store'
 import { ChatControls } from './ChatControls'
 import { ChatInput } from './ChatInput'
-import { ErrorBubble, MessageBubble } from './MessageBubble'
+import { ErrorBubble, MessageBubble, RewindFacts, withdrawnLine } from './MessageBubble'
 import type { Conversation, ThreadCounts } from '../../lib/api'
 import type { QueuedMessage } from './chatReducer'
 
@@ -67,6 +70,8 @@ interface ChatApi {
    *  attaches to a room the same way the page attaches to the hallway. */
   getConversationState: typeof apiGetConversationState
   openThread: typeof apiOpenThread
+  /** Chat rewind (T7): rewind this conversation to one of his messages. */
+  rewind: typeof apiRewind
 }
 
 const DEFAULT_API: ChatApi = {
@@ -74,6 +79,7 @@ const DEFAULT_API: ChatApi = {
   getMessages: apiGetMessages,
   getConversationState: apiGetConversationState,
   openThread: apiOpenThread,
+  rewind: apiRewind,
 }
 
 // How often to ask core whether the in-flight turn has landed. There is no
@@ -376,6 +382,47 @@ export function ChatPage({
     [api, state.conversationId, setSearch],
   )
 
+  /** The last rewind's result as core stated it (chat rewind, T7) — shown
+   *  until he dismisses it, so the not-undone list stays readable. The marker
+   *  divider carries the same facts after. */
+  const [rewound, setRewound] = useState<RewindResult | null>(null)
+  /** Core's stated reason a rewind was refused (409 busy, 400 refused). */
+  const [rewindError, setRewindError] = useState<string | null>(null)
+
+  /** Rewind to one of his messages. Core withdraws the later rows and (in
+   *  executions mode) reverts what it can; the transcript is then REPLACED
+   *  from core's own read — never an optimistic removal, and nothing at all
+   *  changes when core refuses. */
+  const rewindTo = useCallback(
+    async (messageId: string, mode: RewindMode) => {
+      const conversationId = state.conversationId
+      if (!conversationId) return
+      setRewindError(null)
+      let result: RewindResult
+      try {
+        result = await api.rewind(conversationId, messageId, mode)
+      } catch (err) {
+        setRewindError(`Rewind refused: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      setRewound(result)
+      try {
+        const { messages, threads: stubs } = await api.getMessages(conversationId)
+        setThreads(stubs)
+        // Authoritative replace: the store lived through the rows core has
+        // just withdrawn, so a reconcile would keep them.
+        resolveServerTurn(conversationId, messages)
+      } catch (err) {
+        setRewindError(
+          `the rewind ran, but the conversation could not be reloaded: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        )
+      }
+    },
+    [api, state.conversationId, resolveServerTurn],
+  )
+
   /** Back out to the hallway, remembering where to land. */
   const leaveThread = useCallback(() => {
     returnToRef.current = parentMessageId
@@ -509,10 +556,65 @@ export function ChatPage({
                 // room and draws no stub.
                 replies={threadId ? undefined : threads[row.id]}
                 onOpenThread={threadId ? undefined : enterThread}
+                // Chat rewind (T7): his stored messages in the hallway only.
+                // A just-sent row still holds a client id core never issued;
+                // a marker is core's row, not his; a room is a later call.
+                onRewind={
+                  !threadId && row.role === 'user' && row.stored && !row.rewind
+                    ? rewindTo
+                    : undefined
+                }
+                rewindDisabled={state.streaming || responding}
               />
             ) : (
               <ErrorBubble key={row.id} row={row} />
             ),
+          )}
+
+          {rewindError && (
+            <div
+              role="alert"
+              data-testid="rewind-error"
+              className="flex items-start justify-between gap-2 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+            >
+              <span>{rewindError}</span>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => setRewindError(null)}
+                className="shrink-0 -m-2 p-2 min-h-11 min-w-11 md:min-h-0 md:min-w-0 inline-flex items-center justify-center rounded-md hover:bg-danger/10"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          {rewound && (
+            <div
+              data-testid="rewind-result"
+              role="status"
+              className="rounded-lg border border-border bg-surface-elevated px-4 py-3 space-y-1.5"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-compact text-content-primary">
+                  {rewound.mode === 'executions' ? 'Rolled back the chat and her actions' : 'Rolled back the chat'}
+                  {' · '}
+                  {withdrawnLine(rewound.withdrawn)}
+                </p>
+                <button
+                  type="button"
+                  data-testid="rewind-result-dismiss"
+                  aria-label="Dismiss"
+                  onClick={() => setRewound(null)}
+                  className="shrink-0 -m-2 p-2 min-h-11 min-w-11 md:min-h-0 md:min-w-0 inline-flex items-center justify-center rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-card"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              {rewound.mode === 'executions' && (
+                <RewindFacts undone={rewound.undone} notUndone={rewound.not_undone} />
+              )}
+            </div>
           )}
 
           {responding && (
@@ -586,6 +688,13 @@ export function ChatPage({
           )}
           <ChatInput
             onSubmit={sendMessage}
+            // Up-arrow recall (chat rewind T6): his sent messages as this page
+            // holds them, oldest -> newest. A rewind marker is a role='user'
+            // row core composed, not something he typed, so it is not his to
+            // recall; withdrawn rows never reach the page at all.
+            history={state.rows.flatMap(row =>
+              row.kind === 'message' && row.role === 'user' && !row.rewind ? [row.text] : [],
+            )}
             // S28: which conversation a file belongs to. Absent until the
             // first one resolves, and attaching is not offered until then.
             conversationId={state.conversationId}

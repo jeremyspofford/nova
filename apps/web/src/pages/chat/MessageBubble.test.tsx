@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from './MessageBubble'
@@ -726,5 +726,184 @@ describe('MessageBubble — a message that carried a file (S28)', () => {
 
     expect(screen.getByTestId('attached-image')).toBeTruthy()
     expect(container.querySelector('.whitespace-pre-wrap')).toBeNull()
+  })
+})
+
+describe('MessageBubble — the Rewind control on his messages (chat rewind T7)', () => {
+  const MSG_ID = '6f1c2a8e-0000-4000-8000-000000000001'
+  function hisRow(): MessageRow {
+    return { ...userRow('rename notes.md to plan.md'), id: MSG_ID }
+  }
+  const rewindButton = () => screen.queryByRole('button', { name: /rewind/i })
+  /** The Rewind button, asserted present (an assertion failure, not a
+   *  "please provide a DOM element" crash, while it does not exist). */
+  function mustRewind(): HTMLElement {
+    const button = rewindButton()
+    expect(button, 'a Rewind button').not.toBeNull()
+    return button!
+  }
+
+  it('a stored user row offered a rewind shows a real, visible, thumb-sized Rewind button', () => {
+    render(<MessageBubble row={hisRow()} onRewind={() => {}} />)
+    const button = rewindButton()
+    expect(button).not.toBeNull()
+    expect(button!.tagName).toBe('BUTTON')
+    // A thumb-sized target on a phone, like ThreadStub — and never
+    // hover-only: no opacity-0 / invisible / group-hover reveal.
+    expect(button!.className).toContain('min-h-11')
+    expect(button!.className).not.toMatch(/opacity-0|invisible|hidden|group-hover/)
+  })
+
+  it('her replies show no Rewind control, even when one is offered', () => {
+    // Beside one of his rows, so "none" is measured against a control that
+    // exists rather than against a component that draws none at all.
+    render(
+      <>
+        <MessageBubble row={hisRow()} onRewind={() => {}} />
+        <MessageBubble row={assistantRow({ id: 'a1', text: 'done', streaming: false })} onRewind={() => {}} />
+      </>,
+    )
+    const buttons = screen.queryAllByRole('button', { name: /rewind/i })
+    expect(buttons).toHaveLength(1)
+    expect(screen.getByTestId('message-assistant').contains(buttons[0])).toBe(false)
+  })
+
+  it('a row offered no rewind (a just-sent client row, a room) shows none', () => {
+    render(
+      <>
+        <MessageBubble row={hisRow()} onRewind={() => {}} />
+        <MessageBubble row={{ ...hisRow(), id: 'u-1760000000000-1', text: 'just sent' }} />
+      </>,
+    )
+    const buttons = screen.queryAllByRole('button', { name: /rewind/i })
+    expect(buttons).toHaveLength(1)
+    const offered = screen.getAllByTestId('message-user').find(el => el.dataset.messageId === MSG_ID)!
+    expect(offered.contains(buttons[0])).toBe(true)
+  })
+
+  it('activating Rewind opens exactly two options, each saying what it does, and calls nothing yet', () => {
+    const onRewind = vi.fn()
+    render(<MessageBubble row={hisRow()} onRewind={onRewind} />)
+    expect(screen.queryByTestId('rewind-option-chat')).toBeNull()
+    fireEvent.click(mustRewind())
+    expect(screen.queryAllByTestId(/^rewind-option-/)).toHaveLength(2)
+    const chat = screen.getByTestId('rewind-option-chat')
+    const executions = screen.getByTestId('rewind-option-executions')
+    // Each states in a line what it does — two different statements.
+    expect(chat.textContent!.trim().length).toBeGreaterThan(10)
+    expect(executions.textContent!.trim().length).toBeGreaterThan(10)
+    expect(chat.textContent).not.toBe(executions.textContent)
+    expect(onRewind).not.toHaveBeenCalled()
+  })
+
+  it('choosing "chat only" calls onRewind once with this row and mode chat', () => {
+    const onRewind = vi.fn()
+    render(<MessageBubble row={hisRow()} onRewind={onRewind} />)
+    fireEvent.click(mustRewind())
+    fireEvent.click(screen.getByTestId('rewind-option-chat'))
+    expect(onRewind).toHaveBeenCalledTimes(1)
+    expect(onRewind).toHaveBeenCalledWith(MSG_ID, 'chat')
+  })
+
+  it('choosing "chat + her executions" calls onRewind once with this row and mode executions', () => {
+    const onRewind = vi.fn()
+    render(<MessageBubble row={hisRow()} onRewind={onRewind} />)
+    fireEvent.click(mustRewind())
+    fireEvent.click(screen.getByTestId('rewind-option-executions'))
+    expect(onRewind).toHaveBeenCalledTimes(1)
+    expect(onRewind).toHaveBeenCalledWith(MSG_ID, 'executions')
+  })
+
+  it('the choice can be dismissed without calling anything', () => {
+    const onRewind = vi.fn()
+    render(<MessageBubble row={hisRow()} onRewind={onRewind} />)
+    fireEvent.click(mustRewind())
+    fireEvent.click(screen.getByTestId('rewind-dismiss'))
+    expect(screen.queryByTestId('rewind-option-chat')).toBeNull()
+    expect(screen.queryByTestId('rewind-option-executions')).toBeNull()
+    expect(onRewind).not.toHaveBeenCalled()
+  })
+
+  it('is disabled while a turn runs, and opens no choice', () => {
+    const onRewind = vi.fn()
+    render(<MessageBubble row={hisRow()} onRewind={onRewind} rewindDisabled />)
+    const button = rewindButton()
+    expect(button).not.toBeNull()
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(button!)
+    expect(screen.queryByTestId('rewind-option-chat')).toBeNull()
+    expect(onRewind).not.toHaveBeenCalled()
+  })
+})
+
+describe('MessageBubble — a rewind marker is a divider, not his bubble (chat rewind T7)', () => {
+  function markerRow(rewind: NonNullable<MessageRow['rewind']>): MessageRow {
+    // The content deliberately says none of the facts: the divider must read
+    // them from row.rewind, never parse them out of the text.
+    return { ...userRow('(marker)'), id: 'm1', rewind }
+  }
+
+  it('renders a full-width divider with the mode and withdrawn count, no user bubble and no Rewind', () => {
+    render(
+      <MessageBubble
+        row={markerRow({
+          id: 'r1',
+          mode: 'chat',
+          target_message_id: 'u1',
+          withdrawn: 4,
+          undone: [],
+          not_undone: [],
+        })}
+        onRewind={() => {}}
+      />,
+    )
+    const divider = screen.queryByTestId('rewind-marker')
+    expect(divider, 'the rewind-marker divider').not.toBeNull()
+    expect(screen.queryByTestId('message-user')).toBeNull()
+    expect(screen.queryByRole('button', { name: /rewind/i })).toBeNull()
+    expect(divider!.textContent).toMatch(/chat/i)
+    expect(divider!.textContent).toContain('4')
+    expect(divider!.textContent).not.toContain('(marker)')
+  })
+
+  it('states each undone and not-undone action from the stored rewinds row, "unknown" for an unnamed tool', () => {
+    render(
+      <MessageBubble
+        row={markerRow({
+          id: 'r1',
+          mode: 'executions',
+          target_message_id: 'u1',
+          withdrawn: 2,
+          undone: [{ tool: 'workspace_write_file', action_id: 'a1', line: 'restored notes.md' }],
+          not_undone: [
+            { tool: 'device_run', action_id: 'a2', reason: 'a command already run cannot be taken back' },
+            { tool: null, turn_id: 't9', reason: 'that turn never closed; its actions were not recorded' },
+          ],
+        })}
+      />,
+    )
+    const divider = screen.queryByTestId('rewind-marker')
+    expect(divider, 'the rewind-marker divider').not.toBeNull()
+    const text = divider!.textContent!
+    expect(text).toContain('2')
+    expect(text).toContain('workspace_write_file')
+    expect(text).toContain('restored notes.md')
+    expect(text).toContain('device_run')
+    expect(text).toContain('a command already run cannot be taken back')
+    expect(text).toContain('unknown')
+    expect(text).toContain('that turn never closed; its actions were not recorded')
+  })
+
+  it('states which mode it was: a chat-only and an executions divider read differently on their own line', () => {
+    const base = { id: 'r1', target_message_id: 'u1', withdrawn: 4, undone: [], not_undone: [] }
+    const { unmount } = render(<MessageBubble row={markerRow({ ...base, mode: 'chat' })} />)
+    // The divider's own line (its first child), not the facts under it.
+    const chatLine = screen.getByTestId('rewind-marker').firstElementChild!.textContent
+    unmount()
+    render(<MessageBubble row={markerRow({ ...base, mode: 'executions' })} />)
+    const executionsLine = screen.getByTestId('rewind-marker').firstElementChild!.textContent
+    expect(chatLine).toContain('4')
+    expect(executionsLine).toContain('4')
+    expect(chatLine).not.toBe(executionsLine)
   })
 })

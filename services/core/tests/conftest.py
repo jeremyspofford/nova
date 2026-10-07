@@ -74,6 +74,13 @@ _TABLES = (
     # so its place is free; it must be here, or the second run of the suite
     # collides on its CREATE TABLE (conftest re-runs every migration).
     "mcp_servers",
+    # chat-rewind T1: turn_actions references turns, conversations AND
+    # rewinds; rewinds references conversations, people and messages while
+    # messages references rewinds back (withdrawn_by, rewind_id) — a cycle
+    # the CASCADE on the DROP and the TRUNCATE makes a non-issue. Both must
+    # be here or the re-migration collides on their CREATE TABLE.
+    "turn_actions",
+    "rewinds",
     "turn_spans",
     "turns",
     "messages",

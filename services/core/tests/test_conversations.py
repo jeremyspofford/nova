@@ -326,6 +326,11 @@ MESSAGE_KEYS = {
     # spans sent, redrawn from span facts that never carry a pairing code.
     # Always present, empty where the turn sent none.
     "cards",
+    # Chat rewind T5 (2026-10-06): `rewind` — null on an ordinary row; on a
+    # rollback marker, the stored rewinds row (mode, target, withdrawn count,
+    # undone, not_undone). Always present, so a client never has to tell "not a
+    # marker" apart from "this server does not say".
+    "rewind",
 }
 
 

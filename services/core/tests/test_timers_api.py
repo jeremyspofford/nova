@@ -596,6 +596,11 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         # sent, redrawn from span facts that never carry a pairing code — an
         # empty list when the turn sent none.
         "cards",
+        # Chat rewind T5/T8 (2026-10-06): `rewind` — null on an ordinary row; on
+        # a rollback marker, the stored rewinds row (mode, target, withdrawn
+        # count, undone, not_undone). Always present, so a client never has to
+        # tell "not a marker" apart from "this server does not say".
+        "rewind",
     }
 
 

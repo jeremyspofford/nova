@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -73,6 +73,9 @@ class Picked:
     note: str | None
     # chat.model before the pick ('' when none was set).
     previous: str
+    # Chat's fallbacks as stored BEFORE the pick, read under LOCK with
+    # `previous` — what a rewind puts back (chat-rewind).
+    previous_chain: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         answer: dict = {"chat_model": self.chat_model, "chain": self.chain}
@@ -128,13 +131,107 @@ async def _lists(app, provider: str, model: str) -> bool:
     return any(isinstance(m, dict) and m.get("id") == model for m in models or [])
 
 
-async def set_primary(app, model: str) -> Picked:
-    """Make `model` chat's pick, keeping the one it replaces as the first
-    fallback (the module docstring has the rules). Raises PickFailed."""
+async def _chat_row(app, current: str) -> dict:
+    """Chat's route as its turns walk it (chat.model stated, as GET /routes
+    reads it), refused with a 409 while Jev Router holds chat's cloud link.
+    Called under LOCK."""
     # Function-local: a cold `import app.tools` must not load app.chat
     # (tests/test_tools_agents.py), and her tool imports this module.
     from app import chat
 
+    params = (
+        {"chat_model": current, "chat_model_roles": ",".join(chat.CHAT_MODEL_ROLES)}
+        if current
+        else {}
+    )
+    listed = await _call(app, "GET", "/admin/routes", params=params)
+    if listed.status_code != 200:
+        raise PickFailed(
+            listed.status_code,
+            _words(listed),
+            body=listed.content,
+            media_type=listed.headers.get("content-type"),
+        )
+    try:
+        roles = listed.json().get("roles")
+    except (ValueError, AttributeError):
+        roles = None
+    chat_row = next(
+        (r for r in roles or [] if isinstance(r, dict) and r.get("role") == "chat"), None
+    )
+    if chat_row is None:
+        raise PickFailed(502, "the gateway listed no chat route")
+    router_state = chat_row.get("router") or {}
+    if router_state.get("on") is True and router_state.get("kept") is not None:
+        raise PickFailed(
+            409,
+            "Jev Router is picking chat's cloud model — switch it off in Settings → "
+            "Models → Routing to pick one yourself",
+        )
+    return chat_row
+
+
+async def restore(app, *, model: str, chain: list[str], landed: str) -> Picked:
+    """Put chat.model and chat's fallbacks back to a pair a pick replaced
+    (chat-rewind). Refused when chat.model is no longer `landed` (a later pick
+    is not this one's to overwrite) or while Jev Router holds chat; each write
+    is READ BACK, and one that does not read back is a failure, never a note.
+    Raises PickFailed."""
+    async with LOCK:
+        current = await _chat_model()
+        if current != landed:
+            raise PickFailed(
+                409,
+                f"chat.model has changed since that pick — it reads {current!r}, not "
+                f"{landed!r} — so it was not put back",
+            )
+        chat_row = await _chat_row(app, current)
+        stored = [link for link in chat_row.get("chain") or [] if isinstance(link, str)]
+        if current != model:
+            try:
+                await settings_store.write_setting(
+                    settings_store.SettingWrite(key="chat.model", value=model)
+                )
+            except Exception as exc:  # noqa: BLE001 - the reason is the answer
+                reason = peers.reason(exc)
+                raise PickFailed(502, f"chat.model could not be written — {reason}") from exc
+            written_model = await _chat_model()
+            if written_model != model:
+                raise PickFailed(
+                    502,
+                    f"chat.model reads {written_model!r} after writing {model!r} — the restore "
+                    "did not verify",
+                )
+        answered = stored
+        if list(chain) != stored:
+            written = await _call(app, "PUT", "/admin/routes/chat", json={"chain": list(chain)})
+            if written.status_code != 200:
+                raise PickFailed(
+                    written.status_code,
+                    f"chat.model is back to {model!r} but chat's fallbacks could not be "
+                    f"restored — {_words(written)}",
+                )
+            try:
+                said = written.json().get("chain")
+            except (ValueError, AttributeError):
+                said = None
+            answered = (
+                [link for link in said if isinstance(link, str)] if isinstance(said, list) else None
+            )
+            if answered != list(chain):
+                raise PickFailed(
+                    502,
+                    f"chat's fallbacks read {answered!r} after restoring {list(chain)!r} — the "
+                    "restore did not verify",
+                )
+    return Picked(
+        chat_model=model, chain=answered, note=None, previous=current, previous_chain=stored
+    )
+
+
+async def set_primary(app, model: str) -> Picked:
+    """Make `model` chat's pick, keeping the one it replaces as the first
+    fallback (the module docstring has the rules). Raises PickFailed."""
     model = model.strip()
     if not model:
         raise PickFailed(400, "name the model to pick: provider:model")
@@ -142,35 +239,7 @@ async def set_primary(app, model: str) -> Picked:
         # chat.model is read ONCE: the switch state below and the pick carried
         # are judged against the same value.
         current = await _chat_model()
-        params = (
-            {"chat_model": current, "chat_model_roles": ",".join(chat.CHAT_MODEL_ROLES)}
-            if current
-            else {}
-        )
-        listed = await _call(app, "GET", "/admin/routes", params=params)
-        if listed.status_code != 200:
-            raise PickFailed(
-                listed.status_code,
-                _words(listed),
-                body=listed.content,
-                media_type=listed.headers.get("content-type"),
-            )
-        try:
-            roles = listed.json().get("roles")
-        except (ValueError, AttributeError):
-            roles = None
-        chat_row = next(
-            (r for r in roles or [] if isinstance(r, dict) and r.get("role") == "chat"), None
-        )
-        if chat_row is None:
-            raise PickFailed(502, "the gateway listed no chat route")
-        router_state = chat_row.get("router") or {}
-        if router_state.get("on") is True and router_state.get("kept") is not None:
-            raise PickFailed(
-                409,
-                "Jev Router is picking chat's cloud model — switch it off in Settings → "
-                "Models → Routing to pick one yourself",
-            )
+        chat_row = await _chat_row(app, current)
         known = await _call(app, "GET", "/admin/providers")
         try:
             rows = known.json().get("providers") if known.status_code == 200 else None
@@ -255,4 +324,4 @@ async def set_primary(app, model: str) -> Picked:
                 note = f"chat's fallbacks could not be saved — {refused}; {kept_out}"
                 logger.warning("chat primary: %s", note)
                 chain = stored
-    return Picked(chat_model=model, chain=chain, note=note, previous=current)
+    return Picked(chat_model=model, chain=chain, note=note, previous=current, previous_chain=stored)
