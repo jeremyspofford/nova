@@ -160,6 +160,25 @@ name or URL. Each line carries the gateway's last verdict, read live from
   for 60 seconds, so a machine that is off does not hold every page that reads the list;
   the Models page's Refresh (`/admin/catalog?fresh=1`) dials every source again.
 
+## The tool-round limit
+
+A reply that ends with `[stopped after N tool rounds without finishing]` ran out of tool
+rounds. N is the limit it ran under: the setting `agents.max_tool_rounds`, or an agent's
+own rounds when an agent answered (below).
+
+- **Where it is set.** Settings → Behaviour → Tool rounds: put the new limit in
+  "Tool-round limit" and Save. It takes a whole number between 1 and 50; anything else
+  is refused with the reason, and the stored limit stands. The default is 6.
+- **What reaching it does.** A round is one call to the model while she is still asking
+  for tools. If the last allowed call asks for more, those tools do not run, so tools run
+  from at most N-1 calls. She then answers once more, with no tools offered, from what
+  the results give her, and the note follows. Raising it lets a reply do more before it
+  stops, and each extra round is one more model call: time, and spend on a cloud model.
+- **Which replies use it.** Her chat replies, scheduled tasks that no agent runs, and the
+  eval runner's turns read it as each one starts, so a saved limit applies from the next
+  one, with no restart. An agent made without rounds of its own copies this limit when it
+  is made, so a change here leaves existing agents alone.
+
 ## Decision models (Jev and Kev)
 
 Since the decision role (`docs/plans/rebuild/decision-role/spec.md`), before Nova
