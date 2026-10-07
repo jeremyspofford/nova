@@ -133,9 +133,30 @@ send_body() {
 }
 
 # Did the stub (core, in the forwarding block) receive the request tagged
-# $1? Its own access log says.
+# $1? Its own access log says. The log is read whole before it is searched:
+# piped straight into `grep -q`, grep exits at the first match, docker logs
+# can die of SIGPIPE writing the rest, and pipefail turns that hit into a
+# miss — a tag logged early was "never seen" now and then (CI, PR #111). A
+# log that cannot be read is a miss, never a hit.
 stub_saw() {
-  docker logs "$STUB" 2>&1 | grep -q "probe=$1 "
+  local log
+  log="$(docker logs "$STUB" 2>&1)" || return 1
+  grep -q "probe=$1 " <<<"$log"
+}
+
+# Polls the stub's log until it shows every tag given (20 tries, 0.25s
+# apart); fails if any is still missing. Each tag a check later asserts
+# present is waited for itself: the stub may log two requests out of the
+# order they were sent, so seeing the last one says nothing about the first.
+stub_wait_all() {
+  local tries=20 tag missing
+  while :; do
+    missing=0
+    for tag in "$@"; do stub_saw "$tag" || { missing=1; break; }; done
+    [ "$missing" -eq 0 ] && return 0
+    [ "$tries" -eq 0 ] && return 1
+    tries=$((tries - 1)); sleep 0.25
+  done
 }
 
 wait_for_nginx() {
@@ -436,8 +457,10 @@ else
   over_agent="$(send_body "$FWD_BASE" "/api/v1/agent/manifest" "$(bytes_of $((AGENT_BODY_MAX + 1)) x)" GET agent-over)"
   full="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$full_enroll" POST enroll-full)"
   at_max="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of "$ENROLL_BODY_MAX")" POST enroll-at-max)"
-  tries=20
-  until stub_saw enroll-at-max || [ "$tries" -eq 0 ]; do tries=$((tries - 1)); sleep 0.25; done
+  # Both controls are asserted present, so both are waited for; the
+  # over-limit probes' absence means something only once both have shown.
+  controls_seen=1
+  stub_wait_all enroll-full enroll-at-max || controls_seen=0
   if [ "$full" = "200" ] && stub_saw enroll-full; then
     report 0 "published port, no cookie: the agent's full-size enroll body (${#full_enroll} bytes) reaches core"
   else
@@ -451,9 +474,9 @@ else
   for probe in "enroll-over:$over_enroll:an enroll body of $((ENROLL_BODY_MAX + 1)) bytes" \
       "agent-over:$over_agent:a $((AGENT_BODY_MAX + 1))-byte body on /api/v1/agent/manifest"; do
     tag="${probe%%:*}"; rest="${probe#*:}"; code="${rest%%:*}"; what="${rest#*:}"
-    if ! stub_saw enroll-at-max; then
+    if [ "$controls_seen" -eq 0 ]; then
       report 1 "published port, no cookie: $what -> 413, and core never sees it" \
-        "the stub's log never showed the control sent after it, so its absence there proves nothing"
+        "the stub's log never showed both controls sent after it, so its absence there proves nothing"
     elif [ "$code" = "413" ] && ! stub_saw "$tag"; then
       report 0 "published port, no cookie: $what -> 413, and core never sees it"
     else
