@@ -4,7 +4,7 @@
 #                        up -d --build -> wait for health -> status table
 #                        -> ollama's own word on the GPU -> this machine's
 #                        own agent (built, checked, paired by environment)
-# ./install.sh update   stub — arrives in a later slice
+# ./install.sh update   pull the newest commit on the branch and reinstall
 # bash 3.2 compatible (no associative arrays, no ${var,,}, no mapfile).
 
 # Bash, or nothing. Everything below is bash's, and the entry guard at the
@@ -2218,12 +2218,13 @@ record_repository() {
 #   NOVA_COMMIT_DATE   HEAD's committer date, ISO 8601
 #   NOVA_DIRTY         1 when tracked files differ from HEAD, else 0
 #   NOVA_INSTALLED_AT  when THIS stamp was first written (UTC)
+#   NOVA_CHECKOUT      this checkout's path on the host (for ./install update)
 #
 # NOVA_INSTALLED_AT moves only when the stamp itself does: a re-run on the same
 # commit changes nothing in .env, so compose has no new config to recreate
 # core for. Not a checkout: every key blanked and one line saying so — a stamp
 # left over from an earlier install would name a build that is not this one.
-BUILD_KEYS="NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT"
+BUILD_KEYS="NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT NOVA_CHECKOUT"
 
 record_build() {
   local commit version date dirty=0 key
@@ -2247,6 +2248,9 @@ record_build() {
   [ "$(get_env_value NOVA_VERSION)" = "$version" ] || set_env_value NOVA_VERSION "$version"
   [ "$(get_env_value NOVA_COMMIT_DATE)" = "$date" ] || set_env_value NOVA_COMMIT_DATE "$date"
   [ "$(get_env_value NOVA_DIRTY)" = "$dirty" ] || set_env_value NOVA_DIRTY "$dirty"
+  # Where this checkout is on the host: what Nova's update tells the hub's own
+  # agent to run ./install update in (app/nova_updates.py).
+  [ "$(get_env_value NOVA_CHECKOUT)" = "$REPO_ROOT" ] || set_env_value NOVA_CHECKOUT "$REPO_ROOT"
   if [ "$dirty" -eq 1 ]; then
     log "build: ${commit:0:12} (${version:-no describe}) plus uncommitted changes — the About page says so"
   else
@@ -2464,16 +2468,112 @@ cmd_install() {
   fi
 }
 
+# ---- ./install update (the About page, part 2) ------------------------------
+#
+# Moves this hub to the newest commit on its branch. Run by hand, or started
+# by Nova (nova_update) through the hub's own agent with --attempt <id>, the
+# row core opened before sending. Fast-forward only, backup first, and a
+# reinstall that fails is rolled back to the commit that was running.
+#
+# Every ending is REPORTED to core (python -m app.updates_cli finish) — the
+# installer's own words about what happened. "installed" is confirmed by core
+# only when the core this run brought up runs the target commit
+# (app/nova_updates.finish), so a report cannot confirm what is not running.
+# A report core cannot take is said here and does not change the exit code:
+# the update's own outcome is the exit code.
+#
+# THE SEAMS, one line each, so the suite can run every path without a network,
+# a docker daemon or a real reinstall.
+update_git() { git -C "$REPO_ROOT" "$@"; }
+update_report() { docker compose "${COMPOSE_ARGS[@]}" exec -T core python -m app.updates_cli finish "$@"; }
+update_backup() { ( . "$DEPLOY_DIR/backup.sh"; cmd_backup ) </dev/null; }
+update_install() { ( cmd_install ); }
+
+UPDATE_ATTEMPT=""
+
+# report_update <outcome> <from> <to> <reason>
+report_update() {
+  local out
+  if out="$(update_report --attempt "$UPDATE_ATTEMPT" --outcome "$1" --from "$2" \
+    --to "$3" --reason "$4" 2>&1)"; then
+    log "update: reported to core: $out"
+  else
+    log "update: core did not record the outcome ($out) — the About page will say this update was not confirmed"
+  fi
+}
+
 cmd_update() {
-  log "update: arrives in a later slice"
-  exit 1
+  local from="" to="" branch head_branch reason
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --attempt)
+        [ $# -ge 2 ] || die "update: --attempt needs an attempt id"
+        printf '%s' "$2" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+          || die "update: --attempt $2 is not an attempt id"
+        UPDATE_ATTEMPT="$2"
+        shift 2
+        ;;
+      *) die "update: unknown argument $1 (expected: --attempt <id>)" ;;
+    esac
+  done
+  refuse_if_moved
+  from="$(update_git rev-parse --verify -q HEAD)" \
+    || die "update: $REPO_ROOT has no commit to update from"
+  # A refusal before anything changed: said, reported, exit 1.
+  update_refuse() {
+    report_update refused "$from" "$to" "$1"
+    die "update: $1"
+  }
+  branch="$(get_env_value NOVA_REPO_BRANCH)"
+  [ -n "$branch" ] || update_refuse "no NOVA_REPO_BRANCH in .env — run ./install once first; it records the branch from origin"
+  head_branch="$(update_git symbolic-ref --short -q HEAD)" || head_branch=""
+  [ "$head_branch" = "$branch" ] \
+    || update_refuse "the checkout is on ${head_branch:-a detached HEAD}, not $branch — an update only moves $branch"
+  [ -z "$(update_git status --porcelain --untracked-files=no)" ] \
+    || update_refuse "the checkout has uncommitted changes to tracked files — commit or stash them; an update never overwrites them"
+  log "update: fetching $branch from origin…"
+  update_git fetch --quiet origin "$branch" \
+    || update_refuse "git fetch origin $branch failed (above) — nothing was changed"
+  to="$(update_git rev-parse --verify -q "refs/remotes/origin/$branch")" \
+    || update_refuse "origin/$branch could not be read after the fetch"
+  if [ "$from" = "$to" ]; then
+    log "update: already at origin/$branch (${from:0:12}) — nothing to install"
+    report_update up_to_date "$from" "$to" ""
+    return 0
+  fi
+  update_git merge-base --is-ancestor "$from" "$to" \
+    || update_refuse "this checkout and origin/$branch have diverged — an update only fast-forwards; merge on the hub by hand"
+  log "update: ${from:0:12} -> ${to:0:12}; backing up first…"
+  update_backup \
+    || update_refuse "the backup before the update failed (above) — nothing was changed; ./install backup shows why"
+  update_git merge --ff-only --quiet "$to" \
+    || update_refuse "git merge --ff-only $to failed (above) — the checkout is unchanged"
+  log "update: checkout at ${to:0:12}; reinstalling…"
+  if update_install; then
+    report_update installed "$from" "$to" ""
+    log "update: installed ${to:0:12}"
+    return 0
+  fi
+  log "update: the install of ${to:0:12} failed (above) — rolling back to ${from:0:12}…"
+  if ! update_git reset --keep "$from"; then
+    reason="the install of ${to:0:12} failed, and the checkout could not be moved back to ${from:0:12} — the hub needs a person"
+    report_update failed "$from" "$to" "$reason"
+    die "update: $reason"
+  fi
+  if update_install; then
+    reason="the install of ${to:0:12} failed; rolled back to ${from:0:12}, which is running again"
+  else
+    reason="the install of ${to:0:12} failed, and reinstalling ${from:0:12} failed too — the hub needs a person"
+  fi
+  report_update failed "$from" "$to" "$reason"
+  die "update: $reason"
 }
 
 main() {
   local cmd="${1:-install}"
   case "$cmd" in
     install) cmd_install ;;
-    update) cmd_update ;;
+    update) shift; cmd_update "$@" ;;
     backup|restore|drill|undo-move)
       # S41's verbs live in deploy/backup.sh, which states in its own header
       # that it is sourced from here and run as `./install backup`. That

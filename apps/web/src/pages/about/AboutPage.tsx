@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ExternalLink, Laptop, MonitorSmartphone, RefreshCw, Server, Smartphone } from 'lucide-react'
+import { Download, ExternalLink, Laptop, MonitorSmartphone, RefreshCw, Server, Smartphone } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Badge, Button, Card, StatusDot } from '../../components/ui'
-import { getAbout as apiGetAbout, reasonOf, type About, type AboutAgent, type AboutClient } from '../../lib/api'
+import {
+  getAbout as apiGetAbout,
+  reasonOf,
+  startUpdate as apiStartUpdate,
+  type About,
+  type AboutAgent,
+  type AboutClient,
+} from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { agentState, buildLabel, machineState, plural, serviceColor, updateHeadline } from './aboutFormat'
+import { agentState, attemptState, buildLabel, canStartUpdate, machineState, plural, serviceColor, updateHeadline } from './aboutFormat'
 
 /**
  * What this instance of Nova is, read live from core (app/about.py): the
@@ -17,10 +24,20 @@ import { agentState, buildLabel, machineState, plural, serviceColor, updateHeadl
  * could not be taken says why instead of showing an empty list. `nova_about`
  * is the same read in her words, so the page and she cannot disagree.
  */
-export function AboutPage({ getAbout = apiGetAbout }: { getAbout?: typeof apiGetAbout } = {}) {
+/** How often the page re-reads while an update is in flight. */
+export const UPDATE_POLL_MS = 10_000
+
+export function AboutPage({
+  getAbout = apiGetAbout,
+  startUpdate = apiStartUpdate,
+}: { getAbout?: typeof apiGetAbout; startUpdate?: typeof apiStartUpdate } = {}) {
   const [about, setAbout] = useState<About | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  const [starting, setStarting] = useState(false)
+  // While an update runs, core restarts under the page: a read that fails
+  // then is the restart, said as such, not an error to alarm anyone with.
+  const [restarting, setRestarting] = useState(false)
 
   const load = useCallback(
     async (refresh: boolean) => {
@@ -40,6 +57,33 @@ export function AboutPage({ getAbout = apiGetAbout }: { getAbout?: typeof apiGet
   useEffect(() => {
     void load(false)
   }, [load])
+
+  const inFlight = about?.last_update?.outcome === 'sent'
+  useEffect(() => {
+    if (!inFlight) return
+    const id = setInterval(() => {
+      getAbout({ refresh: false })
+        .then(a => {
+          setRestarting(false)
+          setAbout(a)
+        })
+        .catch(() => setRestarting(true))
+    }, UPDATE_POLL_MS)
+    return () => clearInterval(id)
+  }, [inFlight, getAbout])
+
+  const update = useCallback(async () => {
+    setError(null)
+    setStarting(true)
+    try {
+      const { update: attempt } = await startUpdate()
+      setAbout(a => (a ? { ...a, last_update: attempt } : a))
+    } catch (err) {
+      setError(reasonOf(err))
+    } finally {
+      setStarting(false)
+    }
+  }, [startUpdate])
 
   return (
     <div className="space-y-6" data-testid="about-page">
@@ -69,7 +113,7 @@ export function AboutPage({ getAbout = apiGetAbout }: { getAbout?: typeof apiGet
         <>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <BuildCard about={about} />
-            <UpdatesCard about={about} />
+            <UpdatesCard about={about} onUpdate={update} starting={starting} restarting={restarting} />
           </div>
           <Architecture about={about} />
         </>
@@ -131,9 +175,16 @@ function BuildCard({ about }: { about: About }) {
 /** The newest few; the rest are a count and a link to GitHub's own list. */
 const SHOWN_COMMITS = 8
 
-function UpdatesCard({ about }: { about: About }) {
+function UpdatesCard({ about, onUpdate, starting, restarting }: {
+  about: About
+  onUpdate: () => void
+  starting: boolean
+  restarting: boolean
+}) {
   const u = about.updates
   const headline = updateHeadline(u, about.build.branch)
+  const last = about.last_update
+  const [confirming, setConfirming] = useState(false)
   return (
     <Card header={{ title: 'Updates' }} data-testid="about-updates">
       <div className="space-y-3 p-5">
@@ -168,13 +219,65 @@ function UpdatesCard({ about }: { about: About }) {
             See the changes on GitHub <ExternalLink size={11} />
           </a>
         )}
-        {(u.state === 'available' || u.state === 'diverged') && (
+        {last && <LastUpdate about={about} restarting={restarting} />}
+        {canStartUpdate(u, last) &&
+          (confirming ? (
+            <div className="space-y-2 rounded-md border border-border-subtle p-3" data-testid="about-update-confirm">
+              <p className="text-compact text-content-secondary">
+                The hub backs up, pulls {u.behind_by} {plural(u.behind_by ?? 0, 'commit')}, rebuilds and restarts
+                Nova. It takes a few minutes and Nova is unreachable while it restarts; a failed rebuild is rolled back.
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" icon={<Download size={12} />} onClick={() => { setConfirming(false); onUpdate() }}>
+                  Start the update
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="sm" icon={<Download size={12} />} onClick={() => setConfirming(true)} disabled={starting}>
+              {starting ? 'Starting…' : 'Update now'}
+            </Button>
+          ))}
+        {u.state === 'diverged' && (
           <p className="text-caption text-content-tertiary">
-            To update, on the hub: <code className="font-mono">git pull &amp;&amp; ./install</code>
+            An update only fast-forwards; a diverged checkout is merged by hand on the hub.
           </p>
         )}
       </div>
     </Card>
+  )
+}
+
+function LastUpdate({ about, restarting }: { about: About; restarting: boolean }) {
+  const last = about.last_update!
+  const state = attemptState(last)
+  return (
+    <div className="space-y-1 rounded-md bg-surface-elevated/40 px-3 py-2" data-testid="about-last-update">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge size="sm" color={state.color} dot>{state.text}</Badge>
+        <span className="text-caption text-content-tertiary">
+          asked by {last.requested_by}, <When iso={last.started_at} />
+        </span>
+      </div>
+      {last.outcome === 'sent' && (
+        <p className="text-caption text-content-tertiary">
+          {restarting
+            ? 'Nova is restarting — this page reads again every few seconds.'
+            : 'Backing up, pulling and rebuilding on the hub. It is confirmed only when the installer reports to the new Nova and that Nova runs the new commit.'}
+        </p>
+      )}
+      {last.reason && last.outcome !== 'sent' && last.outcome !== 'confirmed' && (
+        <p className="text-caption text-content-secondary">{last.reason}</p>
+      )}
+      {last.log_path && (last.outcome === 'failed' || last.outcome === 'not_confirmed') && (
+        <p className="text-caption text-content-tertiary">
+          Log on {last.device}: <code className="font-mono">{last.log_path}</code>
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -403,6 +403,13 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "facts_sink nova_about threads through (the page passes none — a page "
         "is no reply).",
     ),
+    ("nova_updates.py", "_hub_agent"): (
+        _RECORDS,
+        "About, part 2: whether the hub's own agent is connected before an update "
+        "is sent to it — its 'is not connected' cannot. Records {device, "
+        "connected} for every hub agent it read, on the facts_sink nova_update "
+        "threads through (the page's button passes none).",
+    ),
     ("tools/devices.py", "_require_connected"): (
         _RECORDS,
         "the ONE place core determines a device's connectivity during _admit; "

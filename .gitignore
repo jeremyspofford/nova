@@ -70,3 +70,7 @@ deploy/backups/
 # S41 move markers: local state of THIS machine, never committed.
 deploy/.moved
 deploy/tailscale/MOVED_TO
+
+# ./install update's log, written beside the installer when Nova starts an
+# update through the hub's own agent (app/nova_updates.py launch_script).
+deploy/.update-*.log

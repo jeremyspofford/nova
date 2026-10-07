@@ -2466,9 +2466,26 @@ export interface AboutClient {
   signed_in_at: string
 }
 
+/** One attempt to move the hub to a newer commit (app/nova_updates.py).
+ *  `sent` says it STARTED; only the installer's report to the new core,
+ *  checked against that core's own commit, makes it `confirmed`. */
+export interface AboutUpdateAttempt {
+  id: string
+  from_commit: string
+  to_commit: string | null
+  requested_by: string
+  device: string | null
+  log_path: string | null
+  outcome: 'sent' | 'confirmed' | 'failed' | 'refused' | 'up_to_date' | 'not_confirmed'
+  reason: string | null
+  started_at: string
+  decided_at: string | null
+}
+
 export interface About {
   build: AboutBuild
   updates: AboutUpdates
+  last_update: AboutUpdateAttempt | null
   hub: { address: string | null; address_reason: string | null; agent: AboutAgent | null }
   satellites: AboutAgent[]
   /** `machines` null: the gateway could not be asked, and `reason` says why. */
@@ -2479,4 +2496,10 @@ export interface About {
 
 export async function getAbout({ refresh = false }: { refresh?: boolean } = {}): Promise<About> {
   return apiGet<About>(`/api/v1/about${refresh ? '?refresh=true' : ''}`)
+}
+
+/** "Update now": starts ./install update on the hub's own agent. A 409 is
+ *  the stated reason it cannot run; success means STARTED, nothing more. */
+export async function startUpdate(): Promise<{ update: AboutUpdateAttempt }> {
+  return apiSend<{ update: AboutUpdateAttempt }>('/api/v1/about/update', 'POST')
 }

@@ -2446,7 +2446,7 @@ else
   report 1 "build: cmd_install records the build before compose_up" "order or call missing"
 fi
 RB_MISSING=""
-for RB_KEY in NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT; do
+for RB_KEY in NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT NOVA_CHECKOUT; do
   grep -q "^  *${RB_KEY}: \${${RB_KEY}:-}" "$SCRIPT_DIR/docker-compose.yml" \
     || RB_MISSING="$RB_MISSING docker-compose.yml:$RB_KEY"
   awk -v k="$RB_KEY" '
@@ -2460,6 +2460,107 @@ if [ -z "$RB_MISSING" ]; then
   report 0 "build: every key is passed to core and declared in .env.example"
 else
   report 1 "build: every key is passed to core and declared in .env.example" "missing:$RB_MISSING"
+fi
+
+# ── ./install update: fast-forward, back up, reinstall, roll back, report ───
+# A real bare "origin" and a real clone per case; only the report to core, the
+# backup and the reinstall are stubbed (they need docker). Every case prints
+#   "<exit>|<reports, ; separated>|<stderr>|<HEAD after>|<from>|<to>"
+#   $1 scenario: behind | same | diverged | dirty | branch | nobranch
+#   $2 backup rc   $3 first install rc   $4 second install rc   $5 extra args
+run_update() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g() { git -c user.name=t -c user.email=t@t "$@"; }
+    git init -q --bare -b main "$tmp/origin.git"
+    g clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
+    printf 'v1\n' > "$tmp/seed/f"
+    g -C "$tmp/seed" add f
+    g -C "$tmp/seed" commit -q -m one
+    g -C "$tmp/seed" push -q origin HEAD:main 2>/dev/null
+    g clone -q -b main "$tmp/origin.git" "$tmp/repo" 2>/dev/null
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf 'NOVA_REPO_BRANCH=main\n' > "$ENV_FILE"
+    case "$1" in
+      behind|diverged)
+        printf 'v2\n' > "$tmp/seed/f"; g -C "$tmp/seed" commit -q -am two
+        g -C "$tmp/seed" push -q origin HEAD:main 2>/dev/null ;;
+    esac
+    case "$1" in
+      diverged) printf 'mine\n' > "$REPO_ROOT/g"; g -C "$REPO_ROOT" add g; g -C "$REPO_ROOT" commit -q -m mine ;;
+      dirty) printf 'edited\n' > "$REPO_ROOT/f" ;;
+      branch) g -C "$REPO_ROOT" checkout -q -b side ;;
+      nobranch) printf 'A=1\n' > "$ENV_FILE" ;;
+    esac
+    from="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    to="$(git -C "$tmp/origin.git" rev-parse main)"
+    refuse_if_moved() { :; }
+    update_report() { printf '%s\n' "$*" >> "$tmp/reports"; }
+    update_backup() { return "$BACKUP_RC"; }
+    update_install() {
+      INSTALLS=$((INSTALLS + 1))
+      printf 'install %s at %s\n' "$INSTALLS" "$(git -C "$REPO_ROOT" rev-parse HEAD)" >> "$tmp/reports"
+      if [ "$INSTALLS" -eq 1 ]; then return "$FIRST_RC"; fi
+      return "$SECOND_RC"
+    }
+    BACKUP_RC="${2:-0}"; FIRST_RC="${3:-0}"; SECOND_RC="${4:-0}"; INSTALLS=0
+    # shellcheck disable=SC2086
+    err="$( ( set -e; cmd_update ${5:-} ) 2>&1 )"; code=$?
+    printf '%s|%s|%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/reports" 2>/dev/null)" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$(git -C "$REPO_ROOT" rev-parse HEAD)" "$from" "$to"
+  )
+}
+ATTEMPT=0b8f6b0e-5c1e-4b1a-9a57-2f0f1d2a3b4c
+UP_OK="$(run_update behind 0 0 0 "--attempt $ATTEMPT")"
+UP_OK_FROM="$(tn_field "$UP_OK" 5)"; UP_OK_TO="$(tn_field "$UP_OK" 6)"
+expect_tn "update: fast-forwards and installs, exit 0" "$UP_OK" 0 4 "$UP_OK_TO"
+expect_tn "update: the install ran at the NEW commit" "$UP_OK" 0 2 "install 1 at $UP_OK_TO;"
+expect_tn "update: reports installed with both commits and the attempt" "$UP_OK" 0 2 \
+  "--attempt $ATTEMPT --outcome installed --from $UP_OK_FROM --to $UP_OK_TO"
+expect_tn_lacks "update: installs exactly once" "$UP_OK" 2 "install 2"
+
+UP_ROLL="$(run_update behind 0 1 0)"
+UP_ROLL_FROM="$(tn_field "$UP_ROLL" 5)"
+expect_str "update: a failed install exits 1" "$(tn_field "$UP_ROLL" 1)" "1"
+expect_str "update: and rolls the checkout back" "$(tn_field "$UP_ROLL" 4)" "$UP_ROLL_FROM"
+expect_tn "update: the old commit is reinstalled" "$UP_ROLL" 1 2 "install 2 at $UP_ROLL_FROM;"
+expect_tn "update: reported failed, rolled back" "$UP_ROLL" 1 2 "--outcome failed"
+expect_tn "update: the reason names the rollback" "$UP_ROLL" 1 2 "rolled back to"
+expect_tn "update: a hand run reports with no attempt" "$UP_ROLL" 1 2 "--attempt  --outcome"
+
+UP_BOTH="$(run_update behind 0 1 1)"
+expect_tn "update: both installs failing says a person is needed" "$UP_BOTH" 1 3 "needs a person"
+expect_tn "update: and reports it" "$UP_BOTH" 1 2 "reinstalling"
+
+UP_BACKUP="$(run_update behind 1 0 0)"
+expect_tn "update: a failed backup refuses" "$UP_BACKUP" 1 2 "--outcome refused"
+expect_tn "update: and says so" "$UP_BACKUP" 1 3 "backup before the update failed"
+expect_str "update: and changes nothing" "$(tn_field "$UP_BACKUP" 4)" "$(tn_field "$UP_BACKUP" 5)"
+expect_tn_lacks "update: and installs nothing" "$UP_BACKUP" 2 "install 1"
+
+UP_SAME="$(run_update same)"
+expect_tn "update: nothing new exits 0" "$UP_SAME" 0 2 "--outcome up_to_date"
+expect_tn_lacks "update: nothing new installs nothing" "$UP_SAME" 2 "install 1"
+
+UP_DIV="$(run_update diverged)"
+expect_tn "update: diverged refuses" "$UP_DIV" 1 3 "diverged"
+expect_str "update: diverged changes nothing" "$(tn_field "$UP_DIV" 4)" "$(tn_field "$UP_DIV" 5)"
+expect_tn "update: uncommitted changes refuse" "$(run_update dirty)" 1 3 "uncommitted changes"
+expect_tn "update: another branch refuses" "$(run_update branch)" 1 3 "on side, not main"
+expect_tn "update: no recorded branch refuses" "$(run_update nobranch)" 1 3 "no NOVA_REPO_BRANCH"
+expect_tn "update: a malformed attempt id is refused" "$(run_update behind 0 0 0 '--attempt nope')" 1 3 "not an attempt id"
+expect_tn "update: an unknown argument is refused" "$(run_update behind 0 0 0 '--force')" 1 3 "unknown argument"
+if grep -q '^    update) shift; cmd_update "\$@" ;;$' "$SCRIPT_DIR/install.sh"; then
+  report 0 "update: main hands cmd_update its arguments"
+else
+  report 1 "update: main hands cmd_update its arguments" "no such dispatch line"
 fi
 
 # ── tripwire: the five keys decide_subnet writes have to MEAN something ─────

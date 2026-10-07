@@ -436,13 +436,18 @@ async def topology(app, facts_sink: list[dict] | None = None) -> dict:
 
 
 async def about(app, *, refresh: bool = False, facts_sink: list[dict] | None = None) -> dict:
+    # Function-local: nova_updates reads this module's build and check.
+    from app import nova_updates
+
     build = build_info()
-    top, updates, seen = await asyncio.gather(
+    pool = await db.get_pool()
+    top, updates, seen, last = await asyncio.gather(
         topology(app, facts_sink),
         check_updates(app, build, refresh=refresh),
-        clients(await db.get_pool()),
+        clients(pool),
+        nova_updates.latest(pool),
     )
-    return {"build": build, "updates": updates, **top, "clients": seen}
+    return {"build": build, "updates": updates, "last_update": last, **top, "clients": seen}
 
 
 # -- in words, for her ------------------------------------------------------
@@ -503,6 +508,10 @@ def render(data: dict, now: datetime | None = None) -> str:
         )
     else:
         lines.append(f"  unknown: {u['reason']}")
+
+    from app import nova_updates
+
+    lines.append(f"  last update: {nova_updates.words(data.get('last_update'))}")
 
     h = data["hub"]
     lines.append("HUB (this host: core, gateway, memory, postgres and the web app)")

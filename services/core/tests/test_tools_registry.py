@@ -158,6 +158,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # architecture she named the hub and the Dell and never the phone's
     # installed web app, and nothing could say which commit was running or
     # whether a newer one was on GitHub. A read; nothing waits on anyone.
+    # Deliberate snapshot update (About, part 2, 2026-10-07): nova_update
+    # (tools/about.py), so FIFTY-SEVEN -> FIFTY-EIGHT. The owner asked for her
+    # to pull, download and install an update herself. It starts the
+    # installer on the hub's own agent; only the installer's report and the
+    # new core's own commit decide it. Nothing waits on the owner.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -265,6 +270,8 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # The About page (2026-10-07): what this instance is, read live.
         # FIFTY-SIX -> FIFTY-SEVEN.
         "nova_about",
+        # About, part 2: she updates the hub. FIFTY-SEVEN -> FIFTY-EIGHT.
+        "nova_update",
     }
 
 
@@ -706,5 +713,7 @@ def test_every_tool_that_writes_says_it_changes_something():
         # answered is a change on the page; a screenshot writes a file.
         "browser_act",
         "browser_screenshot",
+        # About, part 2: it starts ./install update on the hub.
+        "nova_update",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

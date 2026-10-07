@@ -87,6 +87,9 @@ services:
       NOVA_COMMIT_DATE: ${NOVA_COMMIT_DATE:-}
       NOVA_DIRTY: ${NOVA_DIRTY:-}
       NOVA_INSTALLED_AT: ${NOVA_INSTALLED_AT:-}
+      # Where the checkout is on the host — what nova_update tells the hub's
+      # own agent to run ./install update in. Core never reads the path.
+      NOVA_CHECKOUT: ${NOVA_CHECKOUT:-}
       # Her browser (S38): where the engine listens, and where core sees the
       # files it writes (the same volume as its /output).
       BROWSER_MCP_URL: http://browser:8931/mcp

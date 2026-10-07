@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { AboutPage } from './AboutPage'
-import { updateHeadline } from './aboutFormat'
-import type { About, AboutUpdates } from '../../lib/api'
+import { attemptState, updateHeadline } from './aboutFormat'
+import type { About, AboutUpdateAttempt, AboutUpdates } from '../../lib/api'
 
 const COMMIT = '0123456789abcdef0123456789abcdef01234567'
 
@@ -56,6 +56,7 @@ function about(over: Partial<About> = {}): About {
       { name: 'gateway', state: 'up', reason: null },
       { name: 'memory', state: 'unreachable', reason: 'connection refused' },
     ],
+    last_update: null,
     clients: {
       clients: [{
         kind: 'installed app', device: 'iPhone', browser: 'Safari', label: 'Installed app (PWA) on iPhone',
@@ -77,7 +78,7 @@ describe('AboutPage', () => {
     expect((updates).textContent).toContain('2 new commits on main')
     const listed = within(screen.getByTestId('about-new-commits')).getAllByRole('listitem')
     expect(listed.map(li => li.textContent)).toEqual(['bbbbbbbfeat: the newer one', 'aaaaaaafix: the older one'])
-    expect((updates).textContent).toContain('git pull && ./install')
+    expect(within(updates).getByRole('button', { name: /update now/i })).toBeTruthy()
 
     expect((screen.getByTestId('about-clients')).textContent).toContain('Installed app (PWA) on iPhone')
     expect((screen.getByTestId('about-clients')).textContent).toContain('Plus 1 signed-in session not used')
@@ -98,7 +99,7 @@ describe('AboutPage', () => {
     expect((await screen.findByTestId('about-version')).textContent).toContain('Unknown build')
     expect((screen.getByTestId('about-build')).textContent).toContain(reason)
     expect((screen.getByTestId('about-updates')).textContent).toContain('Could not check for updates')
-    expect((screen.getByTestId('about-updates')).textContent).not.toContain('git pull')
+    expect(within(screen.getByTestId('about-updates')).queryByRole('button', { name: /update now/i })).toBeNull()
   })
 
   it('states an unreadable gateway rather than showing no machines', async () => {
@@ -135,5 +136,72 @@ describe('updateHeadline', () => {
     expect(updateHeadline({ ...base, state: 'diverged', behind_by: 1, ahead_by: 2 }, 'main').text).toBe(
       'Diverged: 1 to pull, 2 here that main does not have',
     )
+  })
+})
+
+const ATTEMPT: AboutUpdateAttempt = {
+  id: 'a1', from_commit: COMMIT, to_commit: 'b'.repeat(40), requested_by: 'jeremy', device: 'mini-pc',
+  log_path: '/home/jeremy/workspace/nova/deploy/.update-a1.log', outcome: 'sent', reason: 'started: systemd-run',
+  started_at: new Date().toISOString(), decided_at: null,
+}
+
+describe('AboutPage updates', () => {
+  it('starts an update only after the owner confirms what it does', async () => {
+    const startUpdate = vi.fn().mockResolvedValue({ update: ATTEMPT })
+    render(<AboutPage getAbout={vi.fn().mockResolvedValue(about())} startUpdate={startUpdate} />)
+    fireEvent.click(await screen.findByRole('button', { name: /update now/i }))
+    const confirm = screen.getByTestId('about-update-confirm')
+    expect(confirm.textContent).toContain('pulls 2 commits')
+    expect(startUpdate).not.toHaveBeenCalled()
+    fireEvent.click(within(confirm).getByRole('button', { name: /start the update/i }))
+    await waitFor(() => expect(startUpdate).toHaveBeenCalledTimes(1))
+    const last = await screen.findByTestId('about-last-update')
+    expect(last.textContent).toContain('started, not yet reported back')
+    // nothing to start while one is in flight
+    expect(screen.queryByRole('button', { name: /update now/i })).toBeNull()
+  })
+
+  it('shows why the hub refused to start one', async () => {
+    const startUpdate = vi.fn().mockRejectedValue(new Error("the hub's own agent (mini-pc) is not connected"))
+    render(<AboutPage getAbout={vi.fn().mockResolvedValue(about())} startUpdate={startUpdate} />)
+    fireEvent.click(await screen.findByRole('button', { name: /update now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /start the update/i }))
+    expect((await screen.findByRole('alert')).textContent).toContain('is not connected')
+  })
+
+  it('names a failed update, its reason and where its log is', async () => {
+    const failed = { ...ATTEMPT, outcome: 'failed' as const, reason: 'rolled back to 0123456, which is running again' }
+    render(<AboutPage getAbout={vi.fn().mockResolvedValue(about({ last_update: failed }))} />)
+    const last = await screen.findByTestId('about-last-update')
+    expect(last.textContent).toContain('failed')
+    expect(last.textContent).toContain('rolled back')
+    expect(last.textContent).toContain('.update-a1.log')
+  })
+
+  it('reads again while an update is in flight and calls a failed read the restart', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const getAbout = vi
+        .fn()
+        .mockResolvedValueOnce(about({ last_update: ATTEMPT }))
+        .mockRejectedValueOnce(new Error('could not reach Nova'))
+        .mockResolvedValue(about({ last_update: { ...ATTEMPT, outcome: 'confirmed', reason: null } }))
+      render(<AboutPage getAbout={getAbout} />)
+      await screen.findByTestId('about-last-update')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await waitFor(() => expect(screen.getByTestId('about-last-update').textContent).toContain('Nova is restarting'))
+      expect(screen.queryByRole('alert')).toBeNull()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await waitFor(() => expect(screen.getByTestId('about-last-update').textContent).toContain('Updated'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('attemptState', () => {
+  it('never calls a started update done', () => {
+    expect(attemptState(ATTEMPT).text).toContain('not yet reported back')
+    expect(attemptState({ ...ATTEMPT, outcome: 'not_confirmed' }).text).toContain('never confirmed')
   })
 })
