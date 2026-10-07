@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import type { SetupCard } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
-import { chatReducer, emptyChat, type ChatAction, type ChatState, type ChatRow } from './chatReducer'
+import {
+  chatReducer,
+  emptyChat,
+  type ChatAction,
+  type ChatState,
+  type ChatRow,
+  type FetchedMessage,
+} from './chatReducer'
 
 function started(): ChatState {
   return chatReducer(emptyChat(), {
@@ -1524,6 +1532,427 @@ describe('setup cards (S47)', () => {
       observedRows: state.rows,
     })
     expect(messages(carded)[1].cards).toEqual([REDRAWN])
+  })
+})
+
+// card-keeps-commands T1. A machine card's live frame carries more than its
+// code: the command for each OS (the code inside each), where each was walked,
+// one note per OS and the hub build's version. Core's redraw (conversations.py
+// _card_json) carries none of those, by design. While this tab holds the live
+// card, an idle poll must not cut it down to the redraw: the owner watched her
+// command vanish about 15 s after her reply (the first idle poll), with
+// "No command:" in its place.
+const CARD_ORIGIN = 'https://nova.example.com'
+
+/** The parts of a live machine card the tab keeps for as long as it holds the card. */
+const LIVE_PARTS = ['code', 'url', 'commands', 'walks', 'notes', 'version', 'machine', 'for_os', 'expires_at'] as const
+
+function liveParts(card: SetupCard): Record<string, unknown> {
+  return Object.fromEntries(LIVE_PARTS.map(key => [key, card[key]]))
+}
+
+/** `card` carries each of the nine parts exactly as `live`'s frame did. */
+function expectWhole(card: SetupCard | undefined, live: SetupCard) {
+  // A fixture missing a part would let the same part missing on `card` pass unseen.
+  for (const key of LIVE_PARTS) expect(live[key], `the live frame's ${key}`).toBeTruthy()
+  expect(card, 'the card').toBeDefined()
+  expect(liveParts(card as SetupCard)).toEqual(liveParts(live))
+}
+
+/** A machine card as its live frame carries it (services/core/app/tools/setup.py,
+ *  send_machine_card): the code in its url and in every command. Its walks and
+ *  notes name the machine, so two cards never share one. */
+function machineCard(code: string, expiresAt: string, machine: string, forOs: string): SetupCard {
+  return {
+    kind: 'setup_qr',
+    setup: 'add_machine',
+    address: CARD_ORIGIN,
+    url: `${CARD_ORIGIN}/add#${code}`,
+    code,
+    expires_at: expiresAt,
+    machine,
+    for_os: forOs,
+    commands: {
+      linux: `curl -fsSL -o novad ${CARD_ORIGIN}/api/v1/agent/dist/novad-linux-amd64 && ./novad install --hub ${CARD_ORIGIN} --code ${code}`,
+      macos: `curl -fsSL -o novad ${CARD_ORIGIN}/api/v1/agent/dist/novad-darwin-arm64 && ./novad install --hub ${CARD_ORIGIN} --code ${code}`,
+      windows: `curl.exe -fsSL -o novad.exe ${CARD_ORIGIN}/api/v1/agent/dist/novad-windows-amd64.exe; ./novad.exe install --hub ${CARD_ORIGIN} --code ${code}`,
+    },
+    walks: {
+      linux: `Linux: walked on real hardware (${machine})`,
+      macos: `macOS: built and tested in CI, not walked on a Mac (${machine})`,
+      windows: `Windows: walked on real hardware (${machine})`,
+    },
+    notes: {
+      linux: `The Linux note (${machine}).`,
+      macos: `The macOS note (${machine}).`,
+      windows: `The Windows note (${machine}).`,
+    },
+    version: '0.0.0-example',
+  }
+}
+
+/** Core's redraw of `live` (services/core/app/conversations.py _card_json): the
+ *  url without the code, code_shown, expires_at, machine, for_os and that OS's
+ *  walk. Never the code, commands, walks, notes or version. */
+function redrawOf(live: SetupCard) {
+  return {
+    kind: 'setup_qr' as const,
+    setup: live.setup,
+    address: live.address,
+    url: live.url.split('#')[0],
+    code_shown: true,
+    expires_at: live.expires_at,
+    machine: live.machine,
+    for_os: live.for_os,
+    walk: live.walks?.[live.for_os ?? ''],
+  }
+}
+
+/** GET .../messages for the one turn, as core lists it: his ask and her reply,
+ *  new objects on every call, as each fetch parses its own. */
+function turnRows(cards: SetupCard[], reply: Partial<FetchedMessage> = {}): FetchedMessage[] {
+  return JSON.parse(
+    JSON.stringify([
+      { id: 'srv-u', role: 'user', content: 'hello', served_by: null, cards: [] },
+      { id: 'srv-a', role: 'assistant', content: 'Scan the card.', turn_kind: 'chat', served_by: null, cards, ...reply },
+    ]),
+  )
+}
+
+/** This tab streams her reply with these card frames, then the turn ends. */
+function streamedWith(...cards: SetupCard[]): ChatState {
+  let state = chatReducer(withMeta(), { type: 'event', event: { type: 'delta', text: 'Scan the card.' } })
+  for (const card of cards) {
+    // A copy: streamChat builds each card afresh from its frame.
+    state = chatReducer(state, { type: 'event', event: { type: 'card', card: JSON.parse(JSON.stringify(card)) } })
+  }
+  return chatReducer(state, { type: 'event', event: { type: 'done' } })
+}
+
+function idlePoll(state: ChatState, rows: FetchedMessage[]): ChatState {
+  return chatReducer(state, { type: 'idlePolled', conversationId: 'c1', messages: rows, observedRows: state.rows })
+}
+
+/** Her reply as it streamed, tool-call markup and all. Core stores it without
+ *  the markup (without_markup), so the store's copy says something else. */
+const STREAMED_WITH_MARKUP = 'Scan the card. <tool_call>…</tool_call>'
+
+/** He typed /help, then asked, and this tab streamed her reply (with markup)
+ *  and `card`: the store holds local-0, u1, a1, so the card's row sits one
+ *  place further down the store than in core's list. */
+function streamedAfterHelp(card: SetupCard): ChatState {
+  let state = chatReducer(emptyChat(), { type: 'localMessage', id: 'local-0', text: '/help: the commands you can type' })
+  state = chatReducer(state, { type: 'send', userId: 'u1', assistantId: 'a1', text: 'hello' })
+  state = chatReducer(state, {
+    type: 'event',
+    event: { type: 'meta', conversationId: 'c1', model: 'qwen3:8b', turnId: 't1', agent: null },
+  })
+  state = chatReducer(state, { type: 'event', event: { type: 'delta', text: STREAMED_WITH_MARKUP } })
+  // A copy: streamChat builds each card afresh from its frame.
+  state = chatReducer(state, { type: 'event', event: { type: 'card', card: JSON.parse(JSON.stringify(card)) } })
+  state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+  expect(state.rows.map(row => row.id)).toEqual(['local-0', 'u1', 'a1'])
+  expect(messages(state)[2].text).toBe(STREAMED_WITH_MARKUP)
+  // A fixture whose stored reply said the same would not show a match by her text.
+  expect(turnRows([])[1].content).not.toBe(STREAMED_WITH_MARKUP)
+  return state
+}
+
+describe('setup cards (S47): a card this tab streamed stays whole through idle polls', () => {
+  const LIVE = machineCard('WXYZ2345', '2026-09-25T14:10:00.123456+00:00', 'EXAMPLE-DESKTOP', 'windows')
+
+  it('one idle poll that brings core\'s code-less redraw keeps every part the live frame carried', () => {
+    const polled = idlePoll(streamedWith(LIVE), turnRows([redrawOf(LIVE)]))
+    // The poll was adopted: the rows are core's now, and her reply is there once.
+    expect(polled.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a'])
+    const cards = messages(polled)[1].cards
+    expect(cards).toHaveLength(1)
+    expectWhole(cards[0], LIVE)
+  })
+
+  it('poll after poll: a second and a third identical poll are no news, and the card is still whole after each', () => {
+    const once = idlePoll(streamedWith(LIVE), turnRows([redrawOf(LIVE)]))
+    const twice = idlePoll(once, turnRows([redrawOf(LIVE)]))
+    const thrice = idlePoll(twice, turnRows([redrawOf(LIVE)]))
+    expect(twice).toBe(once)
+    expect(thrice).toBe(twice)
+    for (const state of [once, twice, thrice]) {
+      expect(messages(state)[1].cards).toHaveLength(1)
+      expectWhole(messages(state)[1].cards[0], LIVE)
+    }
+  })
+
+  it('a twin that lands late: the poll before it keeps the live card whole, and the poll that brings it, alone or with the row\'s served_by, leaves one whole card', () => {
+    // close_turn writes the turn's spans after [DONE], in one transaction: a
+    // poll can find her reply with no card and no served_by yet, and the next
+    // one brings both.
+    const before = idlePoll(streamedWith(LIVE), turnRows([]))
+    expect(before.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a'])
+    expect(messages(before)[1].cards).toHaveLength(1)
+    expectWhole(messages(before)[1].cards[0], LIVE)
+
+    const twinAlone = idlePoll(before, turnRows([redrawOf(LIVE)]))
+    expect(messages(twinAlone)[1].cards).toHaveLength(1)
+    expectWhole(messages(twinAlone)[1].cards[0], LIVE)
+
+    const twinAndServedBy = idlePoll(before, turnRows([redrawOf(LIVE)], { served_by: 'ollama:qwen3:8b' }))
+    // News on the row, so this poll is adopted rather than dropped as no news.
+    expect(messages(twinAndServedBy)[1].servedBy).toBe('ollama:qwen3:8b')
+    expect(messages(twinAndServedBy)[1].cards).toHaveLength(1)
+    expectWhole(messages(twinAndServedBy)[1].cards[0], LIVE)
+  })
+
+  it('two live cards in one row each keep their own parts, never crossed, whichever order core lists their twins in', () => {
+    const A = machineCard('AAAA2345', '2026-09-25T14:10:00.123456+00:00', 'EXAMPLE-LAPTOP', 'linux')
+    const B = machineCard('BBBB6789', '2026-09-25T15:00:00.654321+00:00', 'EXAMPLE-DESKTOP', 'windows')
+    const streamed = streamedWith(A, B)
+    for (const twins of [[redrawOf(A), redrawOf(B)], [redrawOf(B), redrawOf(A)]]) {
+      const cards = messages(idlePoll(streamed, turnRows(twins)))[1].cards
+      expect(cards).toHaveLength(2)
+      expectWhole(cards.find(card => card.code === A.code), A)
+      expectWhole(cards.find(card => card.code === B.code), B)
+    }
+  })
+
+  it('two live cards in one row each lie over their own twin (same expiry), in the place core lists it, never over the other\'s', () => {
+    // Every part a live frame carries wins over its twin, so a live card laid
+    // over the OTHER card's twin still shows its own nine parts. What gives a
+    // crossed pairing away is the twin's own parts (code_shown, and the walk
+    // core redrew for that card's OS) and the twin's place in core's list.
+    const A = machineCard('AAAA2345', '2026-09-25T14:10:00.123456+00:00', 'EXAMPLE-LAPTOP', 'linux')
+    const B = machineCard('BBBB6789', '2026-09-25T15:00:00.654321+00:00', 'EXAMPLE-DESKTOP', 'windows')
+    // A fixture whose two redraws shared a walk could not show a crossed one.
+    expect(redrawOf(A).walk).not.toBe(redrawOf(B).walk)
+    const streamed = streamedWith(A, B)
+    for (const [first, second] of [[A, B], [B, A]]) {
+      const cards = messages(idlePoll(streamed, turnRows([redrawOf(first), redrawOf(second)])))[1].cards
+      expect(cards).toEqual([
+        { ...redrawOf(first), ...first },
+        { ...redrawOf(second), ...second },
+      ])
+    }
+  })
+
+  it('a store that never streamed the card (a reload) draws core\'s redraw exactly, poll after poll, while the tab that streamed it keeps it whole', () => {
+    // A reload: the card reaches this store only as core's redraw.
+    let reloaded = chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages: turnRows([redrawOf(LIVE)]) })
+    for (let poll = 0; poll < 3; poll++) reloaded = idlePoll(reloaded, turnRows([redrawOf(LIVE)]))
+    const redrawn = messages(reloaded)[1].cards
+    expect(redrawn).toEqual([redrawOf(LIVE)])
+    for (const key of ['code', 'commands', 'walks', 'notes', 'version'] as const) {
+      expect(redrawn[0][key], `a reloaded card's ${key}`).toBeUndefined()
+    }
+    // The same rows, polled into the tab that streamed the card, leave it whole.
+    const streamed = idlePoll(streamedWith(LIVE), turnRows([redrawOf(LIVE)]))
+    expectWhole(messages(streamed)[1].cards[0], LIVE)
+  })
+
+  it('the card\'s row is found by his text and the reply right after it, then by its id, never by its place or her text: with a /help note before the turn and her reply stored without its markup, the card stays whole poll after poll', () => {
+    const streamed = streamedAfterHelp(LIVE)
+    const stored = turnRows([redrawOf(LIVE)])[1].content
+    const once = idlePoll(streamed, turnRows([redrawOf(LIVE)]))
+    const twice = idlePoll(once, turnRows([redrawOf(LIVE)]))
+    for (const [poll, state] of [['first poll', once], ['second poll', twice]] as const) {
+      // The note stays where it was, and the turn is core's now: her reply
+      // once, in core's words, one place further down than in core's list.
+      expect(state.rows.map(row => row.id), poll).toEqual(['local-0', 'srv-u', 'srv-a'])
+      expect(messages(state)[2].text, poll).toBe(stored)
+      expect(messages(state)[2].cards, poll).toHaveLength(1)
+      expectWhole(messages(state)[2].cards[0], LIVE)
+    }
+  })
+})
+
+// card-keeps-commands T2. pollResolved is the authoritative replace that a
+// rewind's reload and the pending-turn poll's resolve both dispatch (ChatPage
+// rewindTo and pollForReply, through chat-store's resolveServerTurn). Its rows
+// are core's, so her reply carries core's code-less redraw. A card this tab
+// streamed must stay whole on that row all the same, whether the store holds
+// the row under the client id it streamed it with or the server id an idle
+// poll gave it. A card whose row the fetch no longer holds goes with its row.
+
+/** A later turn as core lists it: his next message and her reply to it. */
+function laterTurn(): FetchedMessage[] {
+  return [
+    { id: 'srv-u2', role: 'user', content: 'and the laptop?', served_by: null, cards: [] },
+    { id: 'srv-a2', role: 'assistant', content: 'The laptop is next.', turn_kind: 'chat', served_by: null, cards: [] },
+  ]
+}
+
+/** Core's rewind marker (services/core/app/rewinds.py): a row core composes,
+ *  role 'user' with `rewind` set, listed right after the message it rewound
+ *  to. GET .../messages leaves out every row the rewind withdrew. */
+function rewindMarker(target: FetchedMessage, withdrawn: number): FetchedMessage {
+  return {
+    id: 'srv-m',
+    role: 'user',
+    content:
+      `[rewind] The owner rewound this conversation to his message "${target.content}"` +
+      ` - ${withdrawn} later ${withdrawn === 1 ? 'message' : 'messages'} withdrawn. Chat only: no actions were reverted.`,
+    served_by: null,
+    turn_kind: null,
+    cards: [],
+    rewind: { id: 'rw-1', mode: 'chat', target_message_id: target.id, withdrawn, undone: [], not_undone: [] },
+  }
+}
+
+function resolvePoll(state: ChatState, rows: FetchedMessage[]): ChatState {
+  return chatReducer(state, { type: 'pollResolved', conversationId: 'c1', messages: rows })
+}
+
+/** This tab streamed `cards` on her reply and holds that turn under its client
+ *  ids (u1/a1: no idle poll since the stream ended), or under its server ids
+ *  (srv-u/srv-a: an idle poll that brought `twins` on her reply re-keyed it). */
+function heldUnder(ids: 'client ids' | 'server ids', cards: SetupCard[], twins: SetupCard[]): ChatState {
+  const streamed = streamedWith(...cards)
+  const state = ids === 'client ids' ? streamed : idlePoll(streamed, turnRows(twins))
+  expect(state.rows.map(row => row.id), ids).toEqual(ids === 'client ids' ? ['u1', 'a1'] : ['srv-u', 'srv-a'])
+  return state
+}
+
+describe('setup cards (S47): a card this tab streamed stays whole through pollResolved', () => {
+  const CODE = 'WXYZ2345'
+  const LIVE = machineCard(CODE, '2026-09-25T14:10:00.123456+00:00', 'EXAMPLE-DESKTOP', 'windows')
+
+  it('a rewind to his later message, the card\'s row under its server id: the rows are core\'s, the card on its twin is whole, and an idle poll after it is no news', () => {
+    // An idle poll re-keyed the card's turn. He asked again, she answered, and
+    // the next idle poll re-keyed that turn too, so his later message is a
+    // stored row the rewind control can address.
+    let state = heldUnder('server ids', [LIVE], [redrawOf(LIVE)])
+    state = chatReducer(state, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'and the laptop?' })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'The laptop is next.' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    state = idlePoll(state, [...turnRows([redrawOf(LIVE)]), ...laterTurn()])
+    expect(state.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+    expectWhole(messages(state)[1].cards[0], LIVE)
+
+    // He rewinds to that later message: core withdraws her reply to it and
+    // lists its marker after it. The reload hands those rows to pollResolved.
+    const rewound = (): FetchedMessage[] => {
+      const [ask] = laterTurn()
+      return [...turnRows([redrawOf(LIVE)]), ask, rewindMarker(ask, 1)]
+    }
+    const fetched = rewound()
+    const resolved = resolvePoll(state, fetched)
+    expect(resolved.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-m'])
+    expect(messages(resolved).map(m => [m.role, m.text])).toEqual(fetched.map(m => [m.role, m.content]))
+    const cards = messages(resolved)[1].cards
+    expect(cards).toHaveLength(1)
+    expectWhole(cards[0], LIVE)
+
+    // The idle poll after it brings the same rows: no news, and the card is still whole.
+    const after = idlePoll(resolved, rewound())
+    expect(after).toBe(resolved)
+    expect(messages(after)[1].cards).toHaveLength(1)
+    expectWhole(messages(after)[1].cards[0], LIVE)
+  })
+
+  it('the pending-turn poll\'s resolve, the card\'s turn under its client ids: the rows are core\'s, her reply once, no client row left, and the card on its twin is whole', () => {
+    // He left /chat within 15 s of her reply, so no idle poll re-keyed the
+    // turn. A /help note and a send core did not take are client-only rows.
+    let state = heldUnder('client ids', [LIVE], [])
+    state = chatReducer(state, { type: 'localMessage', id: 'local-1', text: '/clear: clear this chat' })
+    state = chatReducer(state, { type: 'queueFailed', reason: 'could not reach Nova — Failed to fetch' })
+    expect(state.rows.map(row => row.id)).toEqual(['u1', 'a1', 'local-1', 'queue-err-3'])
+
+    // Back on /chat, the pending-turn poll resolves: the card's turn (his same
+    // text, core's redraw on her reply), then the turn core had pending.
+    const fetched = [...turnRows([redrawOf(LIVE)]), ...laterTurn()]
+    const resolved = resolvePoll(state, fetched)
+    expect(resolved.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+    expect(messages(resolved).map(m => [m.role, m.text])).toEqual(fetched.map(m => [m.role, m.content]))
+    expect(messages(resolved).filter(m => m.text === 'Scan the card.')).toHaveLength(1)
+    expect(errors(resolved)).toEqual([])
+    const cards = messages(resolved)[1].cards
+    expect(cards).toHaveLength(1)
+    expectWhole(cards[0], LIVE)
+  })
+
+  it('the card\'s row is found as the idle poll finds it, by its id or by his text and the reply right after it, never by its place or her text: a /help note before the turn and a reply core stored without its markup leave the card whole, under either id', () => {
+    // He typed /help before asking, so the store holds a row core never had and
+    // the card's row sits one place further down the store than in core's
+    // list. Core also stores her reply without the tool-call markup that
+    // streamed (without_markup), so the store's copy of it says something else.
+    const streamed = streamedAfterHelp(LIVE)
+    const stored = turnRows([redrawOf(LIVE)])[1].content
+    const held = {
+      'client ids': streamed,
+      // An idle poll re-keys the turn and keeps the /help note before it.
+      'server ids': idlePoll(streamed, turnRows([redrawOf(LIVE)])),
+    }
+    for (const ids of ['client ids', 'server ids'] as const) {
+      const state = held[ids]
+      expect(state.rows.map(row => row.id), ids).toEqual(
+        ids === 'client ids' ? ['local-0', 'u1', 'a1'] : ['local-0', 'srv-u', 'srv-a'],
+      )
+      expect(messages(state)[2].text, ids).toBe(ids === 'client ids' ? STREAMED_WITH_MARKUP : stored)
+      expectWhole(messages(state)[2].cards[0], LIVE)
+
+      const resolved = resolvePoll(state, [...turnRows([redrawOf(LIVE)]), ...laterTurn()])
+      expect(resolved.rows.map(row => row.id), ids).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+      expect(messages(resolved)[1].text, ids).toBe(stored)
+      const cards = messages(resolved)[1].cards
+      expect(cards, ids).toHaveLength(1)
+      expectWhole(cards[0], LIVE)
+    }
+  })
+
+  it('a card follows its row, under either id: a rewind that withdrew the row leaves no card and no code, and a row with no twin on it keeps the live card whole', () => {
+    for (const ids of ['client ids', 'server ids'] as const) {
+      // (a) He rewinds to his message in the card's turn: core withdraws her
+      // reply, so the fetch ends with his message and core's marker.
+      const [ask] = turnRows([redrawOf(LIVE)])
+      const withdrawn = resolvePoll(heldUnder(ids, [LIVE], [redrawOf(LIVE)]), [ask, rewindMarker(ask, 1)])
+      expect(withdrawn.rows.map(row => row.id), ids).toEqual(['srv-u', 'srv-m'])
+      expect(messages(withdrawn).flatMap(m => m.cards), ids).toEqual([])
+      expect(JSON.stringify(withdrawn.rows), ids).not.toContain(CODE)
+    }
+    for (const ids of ['client ids', 'server ids'] as const) {
+      // (b) Her reply is there with no twin on it. Only a failed close_turn
+      // leaves that, so no poll ever brought one, and the live card stays.
+      const held = heldUnder(ids, [LIVE], [])
+      expectWhole(messages(held)[1].cards[0], LIVE)
+      const kept = resolvePoll(held, [...turnRows([]), ...laterTurn()])
+      expect(kept.rows.map(row => row.id), ids).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+      const cards = messages(kept)[1].cards
+      expect(cards, ids).toHaveLength(1)
+      expectWhole(cards[0], LIVE)
+    }
+  })
+
+  it('two live cards in one row each lie over their own twin, in the place core lists it, whichever order core lists them and whichever id the store holds the row under', () => {
+    const A = machineCard('AAAA2345', '2026-09-25T14:10:00.123456+00:00', 'EXAMPLE-LAPTOP', 'linux')
+    const B = machineCard('BBBB6789', '2026-09-25T15:00:00.654321+00:00', 'EXAMPLE-DESKTOP', 'windows')
+    // A fixture whose two redraws shared a walk could not show a crossed one.
+    expect(redrawOf(A).walk).not.toBe(redrawOf(B).walk)
+    for (const [first, second] of [[A, B], [B, A]]) {
+      for (const ids of ['client ids', 'server ids'] as const) {
+        const held = heldUnder(ids, [A, B], [redrawOf(first), redrawOf(second)])
+        const resolved = resolvePoll(held, [...turnRows([redrawOf(first), redrawOf(second)]), ...laterTurn()])
+        expect(resolved.rows.map(row => row.id), ids).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+        expect(messages(resolved)[1].cards, `${ids}, ${first.machine}'s twin listed first`).toEqual([
+          { ...redrawOf(first), ...first },
+          { ...redrawOf(second), ...second },
+        ])
+      }
+    }
+  })
+
+  it('a store that never streamed the card (the S2c hard-refresh resolve) keeps core\'s redraw exactly, while the tab that streamed it keeps it whole', () => {
+    const fetched = () => [...turnRows([redrawOf(LIVE)]), ...laterTurn()]
+    // A hard refresh: the card reaches this store only as core's redraw, and
+    // the pending-turn poll then resolves the turn that was still running.
+    const reloaded = chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages: turnRows([redrawOf(LIVE)]) })
+    const resolvedReload = resolvePoll(reloaded, fetched())
+    expect(resolvedReload.rows.map(row => row.id)).toEqual(['srv-u', 'srv-a', 'srv-u2', 'srv-a2'])
+    const redrawn = messages(resolvedReload)[1].cards
+    expect(redrawn).toEqual([redrawOf(LIVE)])
+    for (const key of ['code', 'commands', 'walks', 'notes', 'version'] as const) {
+      expect(redrawn[0][key], `a reloaded card's ${key}`).toBeUndefined()
+    }
+    // The same rows, resolved into the tab that streamed the card, leave it whole.
+    const streamed = resolvePoll(heldUnder('client ids', [LIVE], []), fetched())
+    expectWhole(messages(streamed)[1].cards[0], LIVE)
   })
 })
 
