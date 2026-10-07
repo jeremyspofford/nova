@@ -473,6 +473,11 @@ Task 32 runs them.
 
 ### S44: the models role; engines over agents
 
+> **2026-10-07, owner:** a model machine is never Ollama only — vLLM, llama.cpp
+> and others too, picked by the user and set up by her on any device. Where this
+> section says Ollama, read "the machine's runtime". See ROADMAP.md,
+> "Any-runtime engines".
+
 - **Agent:**
   - `internal/models`: proxy, lease, `/agent/v1/{live,facts,ready}`, allowlist, pull-body validation;
   - `internal/pin`, `internal/compute`;
