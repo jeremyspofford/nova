@@ -184,7 +184,9 @@ export function MobileNav() {
             onTouchEnd={endDrag}
             className={clsx(
               'absolute left-0 top-0 bottom-0 flex flex-col',
-              'bg-surface-root glass-overlay border-r border-border-subtle',
+              // The same ground as the desktop sidebar (2026-10-07): a step darker
+              // than the page, so the drawer reads as the same panel.
+              'bg-surface-sidebar glass-nav border-r border-border-subtle dark:border-white/[0.06]',
               // A full-screen overlay sits outside <main>, so it pads the
               // insets itself — otherwise its header, and the only way out,
               // is drawn under the status bar. That trapped the owner in the
