@@ -376,6 +376,9 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
     except store.TimerRefused as exc:
         raise ToolFailure(exc.reason) from exc
 
+    if ctx.undo_sink is not None:
+        # The row this call created, by id: a rewind removes exactly it.
+        ctx.undo_sink.append({"timer_id": str(row["id"])})
     words = schedule.describe(row["schedule"], tz, row["next_fire_at"], now=now)
     if kind == "reminder":
         where = (
@@ -546,6 +549,37 @@ async def cancel_timer(args: dict, ctx: ToolContext) -> str:
     return f"Cancelled {row['kind']} {row['title']!r} (id {_short(row['id'])}; was {words})."
 
 
+async def revert_create_timer(payload: dict, ctx: ToolContext) -> str:
+    """Put back one create_timer call (chat-rewind): remove the row it created,
+    by the id it recorded, and VERIFY the row is absent from a fresh read. A
+    row already gone (fired once, cancelled) is refused — its delivered
+    reminders are not undone, and nothing is claimed for them."""
+    try:
+        timer_id = uuid.UUID(str(payload["timer_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ToolFailure(f"the recorded timer id is unreadable: {payload!r}"[:300]) from exc
+    pool = await db.get_pool()
+    store = _store()
+    row = await store.get(pool, timer_id)
+    if row is None:
+        raise ToolFailure(
+            f"timer {_short(timer_id)} is already gone (it fired or was cancelled) — "
+            "nothing to remove"
+        )
+    try:
+        await store.delete(pool, timer_id)
+    except store.TimerRefused as exc:
+        raise ToolFailure(f"timer {_short(timer_id)} is already gone — {exc.reason}") from exc
+    if await store.get(pool, timer_id) is not None:
+        raise ToolFailure(
+            f"timer {_short(timer_id)} is still there after the delete — the removal did not verify"
+        )
+    return (
+        f"Removed {row['kind']} {row['title']!r} (id {_short(timer_id)}); any firing that "
+        "already happened is not undone."
+    )
+
+
 # -- the tools ------------------------------------------------------------------------
 
 
@@ -628,6 +662,7 @@ TOOLS: tuple[Tool, ...] = (
             ["text"],
         ),
         executor=create_timer,
+        revert=revert_create_timer,
     ),
     Tool(
         name="list_timers",

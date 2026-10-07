@@ -88,6 +88,11 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # (a setup QR card) that never enters her context, a span or a message.
     # Bound only where there is a chat to show it in; nothing reads it to
     # decide anything.
+    # 2026-10-06 (chat-rewind T1): `undo_sink` joins the set. It is an OUTPUT
+    # channel like facts_sink: an executor appends what it would take to put
+    # back what it changed, and chat._run_tool copies that onto the turn's
+    # action ledger AFTER the call ran. Nothing reads it to decide whether a
+    # call may run; dispatch never touches it.
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
@@ -96,6 +101,7 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
         "progress",
         "step",
         "card",
+        "undo_sink",
     }
 
 
@@ -143,6 +149,10 @@ def test_tool_carries_no_precheck_or_gate_field():
     # by. chat._span_arguments reads it AFTER the call was already made, to
     # shape what gets WRITTEN to the trace; nothing reads it to decide
     # whether the call may run, and dispatch never does (below).
+    # 2026-10-06 (chat-rewind T1): `revert` joins the set. It is a fact about
+    # the tool — how to put back what a recorded call changed — read only by
+    # the rewind code, after the fact, when the owner rewinds. Nothing reads it
+    # to refuse a call, and dispatch never does (below).
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -155,6 +165,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "reads_machines",
         "device_line_shown",
         "traced_as_origin",
+        "revert",
     }
 
 
@@ -190,6 +201,12 @@ def test_dispatch_never_reads_reads_only():
     # span records — never dispatch, which decides nothing from it.
     assert "traced_as_origin" not in names, (
         "dispatch reads Tool.traced_as_origin — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+    # And for `revert` (chat-rewind T1): the rewind reads it after the owner
+    # asked for a rewind — never dispatch.
+    assert "revert" not in names, (
+        "dispatch reads Tool.revert — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

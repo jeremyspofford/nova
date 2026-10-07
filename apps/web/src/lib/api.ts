@@ -276,6 +276,16 @@ export interface Conversation {
   parent_message_id?: string | null
 }
 
+/** A rewinds row as GET .../messages states it on its marker (chat rewind). */
+export interface StoredRewind {
+  id: string
+  mode: 'chat' | 'executions'
+  target_message_id: string
+  withdrawn: number
+  undone: { tool: string; action_id: string; line: string }[]
+  not_undone: { tool: string | null; action_id?: string; turn_id?: string; reason: string }[]
+}
+
 export interface StoredMessage {
   id: string
   role: string
@@ -323,6 +333,10 @@ export interface StoredMessage {
   /** S47: the setup QR cards the turn sent, redrawn from the trace — never
    *  with a code. */
   cards?: SetupCard[]
+  /** The rewind this row IS, when it is a rewind marker (chat rewind,
+   * 2026-10-06): the stored rewinds row as GET .../messages states it. null
+   * (or absent on an older core) for every ordinary row. */
+  rewind?: StoredRewind | null
 }
 
 /**
@@ -511,6 +525,29 @@ export const openThread = (conversationId: string, messageId: string) =>
     'POST',
     {},
   )
+
+/** Which rewind he chose (chat rewind): the chat only, or the chat plus a
+ *  revert of what her turns did after the target message. */
+export type RewindMode = 'chat' | 'executions'
+
+/** POST .../rewind's answer, as core states it (services/core/app/rewinds.py). */
+export interface RewindResult {
+  rewind_id: string
+  marker_message_id: string
+  mode: RewindMode
+  withdrawn: number
+  undone: StoredRewind['undone']
+  not_undone: StoredRewind['not_undone']
+}
+
+/** Rewind this conversation to one of his messages (chat rewind T7). A
+ *  refusal (409 while a turn runs, 400 for a target core will not rewind to)
+ *  rejects through `request` with core's own stated reason. */
+export const rewind = (conversationId: string, messageId: string, mode: RewindMode) =>
+  apiSend<RewindResult>(`/api/v1/conversations/${conversationId}/rewind`, 'POST', {
+    message_id: messageId,
+    mode,
+  })
 
 export interface ClearedConversation {
   id: string

@@ -115,7 +115,9 @@ def _record_call(ctx: ToolContext, path: str, *, reached: bool) -> None:
         sink.append({MEMORY_CALL_FACT: path, "reached": reached})
 
 
-async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
+async def _call_memory(
+    ctx: ToolContext, path: str, payload: dict, *, missing: str | None = None
+) -> object:
     # THE SINGLE DOOR into the memory service from this process. A payload
     # carrying a `live_source` is checked against the live registry before it
     # is posted, so a caller that forgets to validate cannot write a note
@@ -127,6 +129,10 @@ async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
         async with peers.client(ctx.app, peers.MEMORY, MEMORY_TIMEOUT) as client:
             response = await client.post(path, json=payload)
             _record_call(ctx, path, reached=True)
+            if missing is not None and response.status_code == 404:
+                # The thing named is not there: said in the caller's words, so
+                # "already gone" is never read as an outage.
+                raise ToolFailure(missing)
             if response.status_code != 200:
                 detail = response.text[:200]
                 raise ToolFailure(
@@ -288,7 +294,31 @@ async def save_note(
 async def save(args: dict, ctx: ToolContext) -> str:
     title = args["title"]
     path = await save_note(ctx, title=title, content=args["content"])
+    if ctx.undo_sink is not None:
+        # The path memory CONFIRMED, so a rewind forgets exactly that note.
+        ctx.undo_sink.append({"path": path})
     return f"Saved {title!r} to memory at {path}."
+
+
+async def revert_save(payload: dict, ctx: ToolContext) -> str:
+    """Put back one memory_save call (chat-rewind): forget the note at the
+    path memory confirmed. Memory verifies the deletion before it answers, and
+    this checks that it SAID so; a note already gone is refused, never claimed."""
+    target = payload.get("path") if isinstance(payload, dict) else None
+    if not isinstance(target, str) or not target.strip():
+        raise ToolFailure(f"the recorded note path is unreadable: {payload!r}"[:300])
+    body = await _call_memory(
+        ctx,
+        "/forget",
+        {"person_id": _person_id(ctx), "path": target},
+        missing=f"the note {target} is already gone — nothing to forget",
+    )
+    if not isinstance(body, dict) or body.get("deleted") is not True:
+        raise ToolFailure(
+            f"memory answered without confirming the deletion of {target}, so the revert "
+            f"did not verify: {body!r}"[:300]
+        )
+    return f"Forgot the saved note {body.get('path') or target}."
 
 
 async def forget(args: dict, ctx: ToolContext) -> str:
@@ -380,6 +410,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=save,
+        revert=revert_save,
     ),
     Tool(
         name="memory_forget",

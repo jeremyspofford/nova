@@ -152,6 +152,14 @@ class ToolContext:
     # that needs one states that it cannot. Not a principal either: it is
     # where output goes, and nothing reads it to decide.
     card: Callable[[dict], None] | None = None
+    # The OUTPUT channel for what it would take to PUT BACK what a call changed
+    # (chat-rewind): an executor that can be undone appends one JSON-able
+    # payload here as it changes something, and chat._run_tool copies that
+    # call's slice onto the turn's action ledger (traces.Turn.actions) AFTER
+    # the call ran — by diffing the sink across the call, like facts_sink.
+    # None outside a turn; an executor with no sink records nothing, and its
+    # call can then never be claimed reverted. Nothing reads it to decide.
+    undo_sink: list | None = None
 
 
 @dataclass(frozen=True)
@@ -253,3 +261,12 @@ class Tool:
     # over it, and dispatch does not read it (test_no_approvals' pin that
     # dispatch is lookup, parse, validate, executor and nothing else).
     traced_as_origin: tuple[str, ...] = ()
+    # How to PUT BACK what one recorded call changed (chat-rewind): called with
+    # the undo payload the executor appended to ToolContext.undo_sink and a
+    # context, it restores the prior state, VERIFIES it, and returns a line
+    # saying what it put back — or raises ToolFailure with the reason it could
+    # not. None: the tool's changes cannot be undone, and a rewind lists its
+    # calls as not undone. A fact about the tool, read only by the rewind code
+    # after the owner asked for a rewind; dispatch never reads it, and nothing
+    # reads it to refuse a call.
+    revert: Callable[[Any, ToolContext], Awaitable[str]] | None = None

@@ -25,7 +25,9 @@ is what stops this function making it.
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import os
 import shutil
 import tempfile
@@ -116,6 +118,18 @@ async def write_file(args: dict, ctx: ToolContext) -> str:
     if path.is_dir():
         raise ToolFailure(f"{_display(root, path)!r} is a directory, not a file")
 
+    # What was there before, for the rewind ledger. Read BEFORE the write, and
+    # only kept when it is small enough to carry inline: prior bytes over the
+    # write cap are not captured at all, so the call records no payload and a
+    # rewind lists it as not undone rather than bloating the ledger.
+    prior: str | None = "absent"
+    if path.is_file():
+        try:
+            prior_bytes = path.read_bytes() if path.stat().st_size <= MAX_WRITE_BYTES else None
+        except OSError:
+            prior_bytes = None
+        prior = None if prior_bytes is None else base64.b64encode(prior_bytes).decode("ascii")
+
     try:
         _atomic_write(path, data)
     except OSError as exc:
@@ -132,6 +146,15 @@ async def write_file(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(
             f"the write of {_display(root, path)} did not verify — {landed} bytes on disk, "
             f"{len(data)} expected"
+        )
+    if ctx.undo_sink is not None and prior is not None:
+        ctx.undo_sink.append(
+            {
+                "workspace_root": str(root),
+                "path": _display(root, path),
+                "prior": prior,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
         )
     return f"Wrote {_display(root, path)} ({landed} bytes)"
 
@@ -343,6 +366,14 @@ async def delete(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(
             f"the delete of {display} did not verify — it is not in the trash afterwards"
         )
+    if ctx.undo_sink is not None:
+        ctx.undo_sink.append(
+            {
+                "workspace_root": str(root),
+                "path": display,
+                "trash": _display(root, destination),
+            }
+        )
 
     if was_dir:
         count = len(removed)
@@ -367,6 +398,120 @@ async def delete(args: dict, ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
+def _payload_root(payload: dict) -> Path:
+    """The root a recorded call acted in — the payload's, never the reverting
+    context's, so an agent turn's agents/<name>/ root reverts in place. A
+    missing or relative root is refused, not filled in from anywhere else."""
+    raw = payload.get("workspace_root") if isinstance(payload, dict) else None
+    if not isinstance(raw, str) or not Path(raw).is_absolute():
+        raise ToolFailure(f"the undo record names no absolute workspace root ({raw!r})")
+    return Path(raw).resolve()
+
+
+def _payload_rel(payload: dict, key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise ToolFailure(f"the undo record has no {key!r} path")
+    return value
+
+
+async def revert_write(payload: dict, ctx: ToolContext) -> str:
+    """Put back what one workspace_write_file call replaced, and verify it.
+
+    Refuses when the file is no longer what that write landed (missing, or a
+    different sha256): a change made since is never clobbered. Chained writes
+    to one path each match in turn when reverted newest first."""
+    root = _payload_root(payload)
+    path = _resolve_within(root, _payload_rel(payload, "path"))
+    display = _display(root, path)
+    prior = _payload_rel(payload, "prior")
+    expected = _payload_rel(payload, "sha256")
+
+    if not path.is_file():
+        raise ToolFailure(
+            f"cannot undo the write of {display} — the file is no longer there, so it "
+            "changed since and nothing was put back"
+        )
+    try:
+        current = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ToolFailure(f"cannot undo the write of {display} — could not read it: {exc}") from exc
+    if current != expected:
+        raise ToolFailure(
+            f"cannot undo the write of {display} — the file changed since that write, "
+            "so it was left as it is"
+        )
+
+    if prior == "absent":
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise ToolFailure(f"could not remove {display} — {exc}") from exc
+        if path.exists() or path.is_symlink():
+            raise ToolFailure(
+                f"the undo of {display} did not verify — the file is still there afterwards"
+            )
+        return f"Removed {display}, which that write had created."
+
+    try:
+        prior_bytes = base64.b64decode(prior, validate=True)
+    except ValueError as exc:
+        raise ToolFailure(
+            f"cannot undo the write of {display} — the prior bytes are unreadable"
+        ) from exc
+    try:
+        _atomic_write(path, prior_bytes)
+    except OSError as exc:
+        raise ToolFailure(f"could not restore {display} — {exc}") from exc
+    try:
+        restored = path.read_bytes() if path.is_file() else None
+    except OSError:
+        restored = None
+    if restored != prior_bytes:
+        raise ToolFailure(
+            f"the undo of {display} did not verify — the file does not hold its prior bytes "
+            "afterwards"
+        )
+    return f"Restored {display} to its prior {len(prior_bytes)} bytes."
+
+
+async def revert_delete(payload: dict, ctx: ToolContext) -> str:
+    """Move one workspace_delete call's trash entry back, and verify both ends."""
+    root = _payload_root(payload)
+    path = _resolve_within(root, _payload_rel(payload, "path"))
+    entry = _resolve_within(root, _payload_rel(payload, "trash"))
+    display = _display(root, path)
+    trash_root = root / TRASH_DIR
+    if trash_root not in entry.parents:
+        raise ToolFailure(
+            f"cannot undo the delete of {display} — the record's trash entry is not in the trash"
+        )
+    if path == root or path == trash_root or trash_root in path.parents:
+        raise ToolFailure(
+            f"cannot undo the delete of {display} — the record's path is not restorable"
+        )
+    if not entry.exists() and not entry.is_symlink():
+        raise ToolFailure(
+            f"cannot undo the delete of {display} — its trash entry is gone (emptied or removed)"
+        )
+    if path.exists() or path.is_symlink():
+        raise ToolFailure(
+            f"cannot undo the delete of {display} — something is at that path again, so it "
+            "was left as it is and the deleted copy stays in the trash"
+        )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(entry, path)
+    except OSError as exc:
+        raise ToolFailure(f"could not restore {display} — {exc}") from exc
+    if not path.exists() or entry.exists() or entry.is_symlink():
+        raise ToolFailure(
+            f"the undo of the delete of {display} did not verify — it is not back at its path "
+            "with the trash entry gone"
+        )
+    return f"Restored {display} from the trash."
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="workspace_write_file",
@@ -387,6 +532,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=write_file,
+        revert=revert_write,
     ),
     Tool(
         name="workspace_read_file",
@@ -455,5 +601,6 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=delete,
+        revert=revert_delete,
     ),
 )

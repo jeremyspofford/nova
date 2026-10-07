@@ -19,6 +19,7 @@ import {
   updateDevice,
   getMachines,
   setMachineServing,
+  rewind,
   type PullLine,
 } from './api'
 
@@ -453,5 +454,60 @@ describe('pullModel', () => {
     const lines = await collect(pullModel('qwen3:4b'))
     expect(lines).toHaveLength(1)
     expect(lines[0].error).toBeTruthy()
+  })
+})
+
+describe('rewind (chat rewind T7): the route, the body, and core\'s own words', () => {
+  function stubJson(body: unknown, status = 200) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: status < 400,
+        status,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+  const call = () => vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit | undefined]
+
+  it('POSTs {message_id, mode} to the conversation\'s rewind route and resolves to core\'s result verbatim', async () => {
+    const result = {
+      rewind_id: 'r1',
+      marker_message_id: 'm1',
+      mode: 'executions',
+      withdrawn: 3,
+      undone: [{ tool: 'workspace_write_file', action_id: 'a1', line: 'restored notes.md' }],
+      not_undone: [{ tool: 'device_run', action_id: 'a2', reason: 'a command already run cannot be taken back' }],
+    }
+    stubJson(result)
+    expect(await rewind('c1', 'u7', 'executions').catch(err => err)).toEqual(result)
+    const [url, init] = call()
+    expect(url).toBe('/api/v1/conversations/c1/rewind')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ message_id: 'u7', mode: 'executions' })
+  })
+
+  it('sends mode "chat" as given', async () => {
+    stubJson({ rewind_id: 'r1', marker_message_id: 'm1', mode: 'chat', withdrawn: 1, undone: [], not_undone: [] })
+    await rewind('c1', 'u7', 'chat').catch(() => undefined)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(call()[1]?.body as string)).toEqual({ message_id: 'u7', mode: 'chat' })
+  })
+
+  it('a 409 rejects with core\'s stated reason and status, never a generic message', async () => {
+    stubJson({ error: 'a turn is still running in this conversation' }, 409)
+    await expect(rewind('c1', 'u7', 'chat')).rejects.toMatchObject({
+      status: 409,
+      message: 'a turn is still running in this conversation',
+    })
+  })
+
+  it('a 400 refusal rejects with core\'s stated reason', async () => {
+    stubJson({ error: 'u7 is not one of his messages in this conversation' }, 400)
+    await expect(rewind('c1', 'u7', 'chat')).rejects.toMatchObject({
+      status: 400,
+      message: 'u7 is not one of his messages in this conversation',
+    })
   })
 })

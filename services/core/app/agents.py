@@ -1658,6 +1658,15 @@ async def delegate(ctx, args: dict) -> str:
         raise delegation_refused(
             ctx, agent.name, f"agent {agent.name} was deleted while the task was being handed over"
         ) from exc
+    # The rewind link (chat-rewind T9): the child turn lives in the agent's
+    # LOG conversation, so an executions rewind of the caller's conversation
+    # can only reach what the agent did through this entry, which
+    # chat._record_action stores as the delegate call's undo payload. Filed
+    # the moment the child turn exists and BEFORE it runs: a child that
+    # writes files and then fails (or a funnel that raises) is still linked.
+    undo_sink = getattr(ctx, "undo_sink", None)
+    if undo_sink is not None:
+        undo_sink.append({"agent_turn_id": str(turn.id)})
     # The brief is a user row in the agent's log conversation (the eval-runner
     # idiom), so the agent's page reads task → report pairs.
     await pool.execute(

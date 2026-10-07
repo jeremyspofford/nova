@@ -143,6 +143,17 @@ async def set_chat_model(args: dict, ctx: ToolContext) -> str:
         picked = await chat_pick.set_primary(ctx.app, model)
     except chat_pick.PickFailed as exc:
         raise ToolFailure(f"the pick did not run — {exc.detail}") from exc
+    if ctx.undo_sink is not None:
+        # The pair the pick replaced, read under the pick's own lock, and the
+        # model it landed — a rewind restores the pair only while chat.model
+        # still reads what this call wrote.
+        ctx.undo_sink.append(
+            {
+                "prior_model": picked.previous,
+                "prior_chain": list(picked.previous_chain),
+                "landed_model": picked.chat_model,
+            }
+        )
     order = [picked.chat_model, *picked.chain]
     moved = picked.previous != picked.chat_model
     lines = [
@@ -160,6 +171,36 @@ async def set_chat_model(args: dict, ctx: ToolContext) -> str:
         "route_explain's to say."
     )
     return "\n".join(lines)
+
+
+async def revert_set_chat_model(payload: dict, ctx: ToolContext) -> str:
+    """Put back one set_chat_model call (chat-rewind): chat.model and chat's
+    fallbacks as they were before the pick, through chat_pick.restore, which
+    refuses a later pick or Jev Router holding chat and reads every write back."""
+    from app import chat_pick
+
+    prior_model = payload.get("prior_model") if isinstance(payload, dict) else None
+    prior_chain = payload.get("prior_chain") if isinstance(payload, dict) else None
+    landed = payload.get("landed_model") if isinstance(payload, dict) else None
+    if (
+        not isinstance(prior_model, str)
+        or not isinstance(landed, str)
+        or not isinstance(prior_chain, list)
+        or not all(isinstance(link, str) for link in prior_chain)
+    ):
+        raise ToolFailure(f"the recorded pick is unreadable: {payload!r}"[:300])
+    if not prior_model:
+        raise ToolFailure("no chat model was set before that pick, so there is none to put back")
+    try:
+        restored = await chat_pick.restore(
+            ctx.app, model=prior_model, chain=prior_chain, landed=landed
+        )
+    except chat_pick.PickFailed as exc:
+        raise ToolFailure(exc.detail) from exc
+    order = "; ".join(
+        f"{i}. {link}" for i, link in enumerate([restored.chat_model, *restored.chain], 1)
+    )
+    return f"Put chat back to {restored.chat_model} first (read back). Chat's order now: {order}."
 
 
 TOOLS: tuple[Tool, ...] = (
@@ -230,5 +271,6 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=set_chat_model,
+        revert=revert_set_chat_model,
     ),
 )

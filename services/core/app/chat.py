@@ -889,7 +889,9 @@ async def thread_seed(conn, conversation_id: uuid.UUID) -> list[dict]:
         "FROM conversations c "
         "JOIN messages p ON p.id = c.parent_message_id "
         "LEFT JOIN turns t ON t.id = p.turn_id "
-        "WHERE c.id = $1",
+        # A withdrawn parent seeds nothing: rewinding past it took it out of
+        # every history, a room's included.
+        "WHERE c.id = $1 AND p.withdrawn_by IS NULL",
         conversation_id,
         tools.live_reading_tool_names(),
     )
@@ -2950,6 +2952,43 @@ async def _persist_assistant(
     )
 
 
+def _undo_mark(ctx: tools.ToolContext) -> int:
+    """Where the undo sink stood before a call — the mark _record_action
+    slices from, exactly as _run_tool diffs facts_sink."""
+    sink = ctx.undo_sink
+    return len(sink) if sink is not None else 0
+
+
+def _record_action(
+    turn: traces.Turn,
+    ctx: tools.ToolContext,
+    name: str,
+    ok: bool,
+    reached_executor: bool,
+    undo_before: int,
+) -> None:
+    """File one call on the turn's action ledger (chat-rewind), synchronously.
+
+    Mechanical and fail-closed: EVERY call whose executor was reached
+    (dispatch's own `reached` record) of a tool that is not reads_only lands
+    a row, whether or not the tool can be undone — no tool opts in. A call
+    refused before its executor changed nothing and lands none; a reads_only
+    tool changes nothing by definition. The undo payload is what the executor
+    appended to ctx.undo_sink during THIS call (the slice past the mark): one
+    entry is stored as-is, several as a list of them, none as None — and a
+    call with None can never be claimed reverted. traces.close_turn writes
+    the rows with the spans, in one transaction."""
+    if not reached_executor:
+        return
+    tool = tools.REGISTRY.get(name)
+    if tool is None or tool.reads_only:
+        return
+    sink = ctx.undo_sink
+    added = list(sink[undo_before:]) if sink is not None else []
+    undo = None if not added else added[0] if len(added) == 1 else added
+    turn.actions.append(traces.Action(tool=name, ok=ok, undo=undo))
+
+
 async def _run_tool(
     turn: traces.Turn,
     ctx: tools.ToolContext,
@@ -2988,6 +3027,7 @@ async def _run_tool(
     show the specialism was crossed. Nothing here decides whether it may.
     """
     facts = ctx.facts_sink
+    undo_before = _undo_mark(ctx)
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         if call.from_markup:
@@ -3016,6 +3056,7 @@ async def _run_tool(
         # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
+        _record_action(turn, ctx, call.name, ok, len(record) > reached_before, undo_before)
         head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
@@ -3061,8 +3102,11 @@ async def _run_script_step(
             span.meta["item"] = _redact(item)
         span.meta["ok"] = False
         span.meta["result_head"] = NEVER_RETURNED
-        result, ok = await tools.dispatch(name, args, tool_ctx)
+        undo_before = _undo_mark(tool_ctx)
+        reached: list[str] = []
+        result, ok = await tools.dispatch(name, args, tool_ctx, reached=reached)
         span.meta["ok"] = ok
+        _record_action(turn, tool_ctx, name, ok, bool(reached), undo_before)
         head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["result_head"] = head
         if not ok:
@@ -4980,6 +5024,9 @@ async def _run_turn(
                 # when it then refused, and _run_tool copies each call's
                 # slice onto its span.
                 facts_sink=[],
+                # The undo channel (chat-rewind): _run_tool slices each call's
+                # payload off it onto the turn's action ledger.
+                undo_sink=[],
                 card=card,
             )
         else:
@@ -4988,6 +5035,7 @@ async def _run_turn(
                 app,
                 person,
                 facts_sink=[],
+                undo_sink=[],
                 # The agent's folder is the containment boundary for every
                 # filesystem call this turn makes — the same gate as Nova's,
                 # rooted lower.
@@ -6857,7 +6905,10 @@ async def _open_turn(
                 "FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
-                "WHERE m.conversation_id = $1 AND m.id <> $2 "
+                # Chat rewind: a withdrawn row left her history with the
+                # rewind; the marker row (rewind_id set) is an ordinary row
+                # here, so she is told by a persisted fact, not a prompt.
+                "WHERE m.conversation_id = $1 AND m.id <> $2 AND m.withdrawn_by IS NULL "
                 "ORDER BY m.created_at DESC, m.id DESC LIMIT $3",
                 conversation_id,
                 message_id,

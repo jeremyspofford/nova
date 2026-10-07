@@ -136,6 +136,20 @@ class Span:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class Action:
+    """One call of a tool that CHANGES something (not reads_only) whose
+    executor was reached — the action ledger's row before close_turn files it
+    into turn_actions (chat-rewind). `undo` is the payload the executor
+    appended to ToolContext.undo_sink during this call, or None when it
+    appended nothing — and a call with no payload can never be claimed
+    reverted. Order on Turn.actions is call order; close_turn numbers it."""
+
+    tool: str
+    ok: bool
+    undo: Any = None
+
+
 class SpanRecorder:
     """Times a block and files the span on the turn, exception or not."""
 
@@ -180,6 +194,9 @@ class Turn:
     agent_id: uuid.UUID | None = None
     role: str | None = None
     spans: list[Span] = field(default_factory=list)
+    # chat-rewind: the action ledger, appended synchronously by chat._run_tool
+    # and chat._run_script_step, written by close_turn beside the spans.
+    actions: list[Action] = field(default_factory=list)
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
         return SpanRecorder(self, kind, name)
@@ -240,7 +257,10 @@ async def open_turn(
 
 
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
-    """All the spans and the final status, in one transaction or not at all.
+    """All the spans, the action ledger and the final status, in one
+    transaction or not at all — a turn that never closed has neither spans
+    nor turn_actions rows, so a rewind can name it as unrecorded rather than
+    trust a half-written ledger.
 
     Deliberately leaves DOING alone. The scheduler closes reminder and job
     turns here without ever running chat._run_turn (nothing set DOING for
@@ -262,6 +282,17 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 span.started_at,
                 span.duration_ms,
                 span.meta,
+            )
+        for seq, action in enumerate(turn.actions):
+            await conn.execute(
+                "INSERT INTO turn_actions (turn_id, conversation_id, seq, tool, ok, undo) "
+                "VALUES ($1, $2, $3, $4, $5, $6::jsonb)",
+                turn.id,
+                turn.conversation_id,
+                seq,
+                action.tool,
+                action.ok,
+                action.undo,
             )
         await conn.execute(
             "UPDATE turns SET status = $2, ended_at = now() WHERE id = $1", turn.id, status
