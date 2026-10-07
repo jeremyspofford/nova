@@ -27,16 +27,19 @@ export function isMachineSetup(setup: SetupKind): boolean {
 export const SETUP_TITLES: Record<SetupKind, string> = {
   add_machine: 'A machine Nova controls',
   add_model_server: 'A model server',
-  install_pwa: 'Nova on a phone',
-  get_app: 'The Nova app',
+  install_pwa: 'Nova on a phone (PWA)',
+  get_app: 'The Nova app (Android or iOS)',
 }
 
 export const SETUP_BLURBS: Record<SetupKind, string> = {
   add_machine: 'Pair a computer so Nova can act on it.',
   add_model_server: 'Pair a machine whose models Nova will use.',
-  install_pwa: 'Put Nova on a phone’s home screen.',
-  get_app: 'Send a phone to its app store.',
+  install_pwa: 'Install Nova’s web app (PWA) on a phone’s home screen.',
+  get_app: 'Get the native Android or iOS app from the phone’s app store.',
 }
+
+/** get_app's blurb while neither store lists a Nova app (hasNativeApp). */
+export const GET_APP_UNAVAILABLE = 'Native Android and iOS apps are planned, not available yet.'
 
 const PAGE: Record<SetupKind, string> = {
   install_pwa: '/install',
@@ -84,6 +87,10 @@ export function parseCodeFragment(hash: string): string | null {
 export const TAILSCALE_DOWNLOAD = 'https://tailscale.com/download'
 export const TAILSCALE_STEP =
   'First, the phone needs Tailscale, signed in to the same tailnet as Nova. Nova cannot check this from here: if the page opens on the phone, it is.'
+/** What the web app is not: a PWA runs inside the phone's browser, sandboxed
+ *  from the phone itself — no shell, no other apps, no system settings. */
+export const PWA_LIMIT =
+  'A PWA runs inside the phone’s browser, so it cannot manage the phone it runs on: no other apps, no system settings, no files outside the browser. Nova acting on the phone itself needs the Nova app.'
 export const MODEL_SERVER_NOTE =
   'Serving this machine’s models arrives with S44. Until then, this pairs it as a machine Nova controls.'
 export const NOVAD_README = 'https://github.com/jeremyspofford/nova/blob/main/apps/novad/README.md'

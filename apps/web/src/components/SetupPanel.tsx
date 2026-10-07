@@ -3,7 +3,7 @@ import { Copy } from 'lucide-react'
 import clsx from 'clsx'
 import { Button, Tabs } from './ui'
 import { QrCode } from './QrCode'
-import { NATIVE_APP_LINKS } from '../lib/nativeApp'
+import { hasNativeApp } from '../lib/nativeApp'
 import { currentPlatform, type DevicePlatform } from '../lib/devicePlatform'
 import {
   AGENT_STEPS,
@@ -12,6 +12,7 @@ import {
   NOVAD_README,
   OS_KEYS,
   OS_LABELS,
+  PWA_LIMIT,
   TAILSCALE_DOWNLOAD,
   TAILSCALE_STEP,
   defaultOs,
@@ -125,7 +126,7 @@ export function SetupPanel({
   const expired = Boolean(expiresAt) && new Date(expiresAt as string).getTime() <= now.getTime()
   const link = address ? setupLink(setup, address, live ? code : null) : null
   const phoneSetup = setup === 'install_pwa' || setup === 'get_app'
-  const hasApp = Boolean(NATIVE_APP_LINKS.ios || NATIVE_APP_LINKS.android)
+  const hasApp = hasNativeApp()
   return (
     <div
       data-testid="setup-panel"
@@ -156,6 +157,7 @@ export function SetupPanel({
       {setup === 'install_pwa' && link && (
         <p>Scan this with the phone, or open the link on it. The page shows that phone’s own steps.</p>
       )}
+      {setup === 'install_pwa' && <p data-testid="setup-pwa-limit">{PWA_LIMIT}</p>}
       {setup === 'get_app' && link && (
         <p>
           {hasApp

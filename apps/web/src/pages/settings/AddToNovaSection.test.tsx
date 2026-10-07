@@ -14,7 +14,7 @@ const MANIFEST = {
   notes: { linux: '', macos: '', windows: '' },
 }
 
-function renderSection(over: Record<string, unknown> = {}) {
+function renderSection(over: Record<string, unknown> = {}, links?: { ios: string | null; android: string | null }) {
   const api = {
     getNetworkAddress: vi.fn(async () => ADDRESS),
     mintPairingCode: vi.fn(async () => ({
@@ -28,16 +28,31 @@ function renderSection(over: Record<string, unknown> = {}) {
     })),
     ...over,
   }
-  render(<AddToNovaSection api={api as never} />)
+  render(<AddToNovaSection api={api as never} links={links} />)
   return api
 }
 
 describe('AddToNovaSection', () => {
   it('offers the four setups', () => {
     renderSection()
-    for (const name of [/A machine Nova controls/, /A model server/, /Nova on a phone/, /The Nova app/]) {
+    for (const name of [/A machine Nova controls/, /A model server/, /Nova on a phone \(PWA\)/, /The Nova app \(Android or iOS\)/]) {
       expect(screen.getByRole('button', { name })).toBeTruthy()
     }
+  })
+
+  it('the app tile says Coming soon while no store lists a Nova app', () => {
+    renderSection({}, { ios: null, android: null })
+    const tile = screen.getByTestId('setup-tile-get_app')
+    expect(within(tile).getByText('Coming soon')).toBeTruthy()
+    expect(within(tile).getByText(/planned, not available yet/)).toBeTruthy()
+    expect(within(screen.getByTestId('setup-tile-install_pwa')).queryByText('Coming soon')).toBeNull()
+  })
+
+  it('the Coming soon badge goes away by itself once a store lists the app', () => {
+    renderSection({}, { ios: 'https://apps.apple.com/app/nova/id1', android: null })
+    const tile = screen.getByTestId('setup-tile-get_app')
+    expect(within(tile).queryByText('Coming soon')).toBeNull()
+    expect(within(tile).getByText(/from the phone’s app store/)).toBeTruthy()
   })
 
   it('a machine tile reads the address and mints exactly one code', async () => {
