@@ -7415,6 +7415,50 @@ def accept_queued_turns_again() -> None:
     _SHUTTING_DOWN = False
 
 
+# How long the parallel check waits on the gateway before it settles for
+# "not known" — which queues, exactly as before chat sessions.
+PARALLEL_CHECK_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
+
+
+async def runs_beside(app, pool: asyncpg.Pool, message: str) -> bool:
+    """May this message's turn run WHILE another of the person's turns runs?
+
+    The person-wide gate (S24, `conversations.person_busy`) exists for one
+    GPU: two local turns at once contend for the same card, which is what
+    2026-09-12 and 09-14 measured. A turn served by a CLOUD provider does not
+    touch the card, so with chat sessions (owner, 2026-10-07: "let sessions
+    run in parallel when using cloud models") it runs beside the other one
+    instead of queueing behind it. Inside ONE conversation the S15 gate still
+    holds either way — two replies never interleave in a transcript.
+
+    DERIVED, never listed: the gateway's own explain walk for the role and
+    model this message would be sent with (an `@agent` turn walks the agent's
+    role with no model, exactly as `_open_turn` sends it), and the `local`
+    flag of the provider that would serve it. Only an explicit `local: false`
+    allows it. A gateway that cannot be asked, an answer without the flag, or
+    nothing runnable all mean "not known", and not known queues — the
+    behaviour before this existed, never a guess that might put two turns on
+    one GPU.
+    """
+    agent = await agents.mentioned(pool, message)
+    if agent is None:
+        role, model = "chat", await settings_store.read_value(pool, "chat.model")
+    else:
+        role, model = agent.role, ""
+    params = {"role": role}
+    if isinstance(model, str) and model.strip():
+        params["model"] = model
+    try:
+        async with peers.client(app, peers.GATEWAY, PARALLEL_CHECK_TIMEOUT) as client:
+            resp = await client.get("/admin/route/explain", params=params)
+        body = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, peers.PeerUnconfigured, ValueError) as exc:
+        logger.info("parallel check: the gateway could not say where %s runs — %s", role, exc)
+        return False
+    serve = body.get("would_serve") if isinstance(body, dict) else None
+    return isinstance(serve, dict) and serve.get("local") is False
+
+
 async def drain_queue(app, pool: asyncpg.Pool, conversation_id: uuid.UUID) -> None:
     """Run this conversation's next accepted message, if there is one.
 
@@ -7455,6 +7499,17 @@ async def drain_queue(app, pool: asyncpg.Pool, conversation_id: uuid.UUID) -> No
         if elsewhere is None:
             return
         conversation_id = elsewhere
+    # Chat sessions: may the next waiting message run beside a turn that is
+    # still going elsewhere? Asked BEFORE the lock (a gateway call never runs
+    # under one), and only when some turn of this person is running at all.
+    parallel = False
+    owner = await pool.fetchval(
+        "SELECT person_id FROM conversations WHERE id = $1", conversation_id
+    )
+    if owner is not None and await conversations.person_busy(pool, owner):
+        next_up = await queued.waiting(pool, conversation_id)
+        if next_up:
+            parallel = await runs_beside(app, pool, next_up[0]["body"])
     row = None
     started = None
     try:
@@ -7466,7 +7521,11 @@ async def drain_queue(app, pool: asyncpg.Pool, conversation_id: uuid.UUID) -> No
                 )
                 if person_id is not None:
                     await queued.hold_person(conn, person_id)
-                    if await conversations.person_busy(conn, person_id):
+                    if await (
+                        conversations.conversation_busy(conn, conversation_id)
+                        if parallel
+                        else conversations.person_busy(conn, person_id)
+                    ):
                         # Someone asked something new in the gap — anywhere.
                         # That turn's own ending will drain this row; two at
                         # once is the thing the gate exists to prevent, and
@@ -7534,6 +7593,14 @@ async def chat_stream(
     conversation = await conversations.resolve(pool, person, body.conversation_id)
     conversation_id = conversation["id"]
 
+    # Chat sessions: a turn on a cloud model runs beside one already going in
+    # another session (runs_beside). Asked BEFORE the lock — a gateway call
+    # never runs under one — and only when something is running at all, so an
+    # idle send costs nothing extra.
+    parallel = False
+    if await conversations.person_busy(pool, person.id):
+        parallel = await runs_beside(request.app, pool, message)
+
     queue: asyncio.Queue = asyncio.Queue()
     started: _Started | None = None
     accepted: dict | None = None
@@ -7553,7 +7620,14 @@ async def chat_stream(
                 # person, and no two sends racing inside one transcript.
                 await queued.hold_person(conn, person.id)
                 await queued.hold_conversation(conn, conversation_id)
-                if await conversations.person_busy(conn, person.id):
+                # On a cloud model the gate narrows to THIS conversation: two
+                # sessions answer at once, one transcript still never
+                # interleaves (S15). Otherwise it is per person, as before.
+                if await (
+                    conversations.conversation_busy(conn, conversation_id)
+                    if parallel
+                    else conversations.person_busy(conn, person.id)
+                ):
                     row = await queued.enqueue(conn, conversation_id, person.id, message)
                     ahead = len(await queued.waiting(conn, conversation_id)) - 1
                     accepted = queued.as_json(row, ahead=max(ahead, 0))

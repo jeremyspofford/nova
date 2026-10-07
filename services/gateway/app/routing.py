@@ -205,6 +205,11 @@ class Decision:
             "reason": self.reason,
             "served_by": providers.served_by(self.row, self.model),
             "standby": self.standby,
+            # Where the serving provider sits — its own `local` flag, the same
+            # fact the decision kinds read. Core reads it to decide whether a
+            # turn can run beside another one (chat sessions): a cloud turn
+            # does not share the GPU.
+            "local": bool(self.row.get("local")),
         }
 
 

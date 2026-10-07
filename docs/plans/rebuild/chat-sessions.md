@@ -78,27 +78,47 @@ nothing.
 - **The phone has one pane.** The side panes are kept for a wider screen but
   not shown.
 
-## Running at once: the decision left open
+## Running at once: in parallel on a cloud model
 
-The panes are independent, but **turns are still one at a time per person**.
-`person_busy` (S24) queues a message typed in session B while session A is
-mid-turn, and B's turn starts when A's ends. That gate was built after the
-2026-09-12 and 09-14 measurements of two turns on one GPU, and this change
-leaves it alone.
+**Owner, 2026-10-07:** "let sessions run in parallel when using cloud models."
 
-What this change fixes is how that looks. A send that core answers with 202
-(queued) now becomes the queued chip (`sendQueued` in `chatReducer`). It used
-to leave an empty bubble that settled into "the turn finished without a
-reply". When the queued message's turn starts, the pane picks it up ("still
-responding", with Stop) without waiting for the 15-second idle poll.
+A message sent in session B while a turn is running in session A now goes by
+where B's turn would run:
 
-**If sessions should really run in parallel** (for example, when the chat model
-is a cloud one and the GPU is not the constraint), the change is to scope that
-gate. That is the owner's decision, not part of this change.
+- **A cloud model:** B's turn starts at once, beside A's.
+- **A local model:** B's message is queued behind A's turn, as before. The
+  person-wide gate (`person_busy`, S24) exists for one GPU, after the
+  2026-09-12 and 09-14 measurements of two turns sharing a card.
+- **Either way, one session answers one message at a time.** A second message
+  in the same session always queues (S15), so two replies never interleave in
+  one transcript.
+
+Where a turn runs is **derived, never listed**. `chat.runs_beside` asks the
+gateway's explain walk for the role and model the message would be sent with:
+`chat` and `chat.model`, or for an `@agent` turn the agent's role and no
+model, exactly as `_open_turn` sends it. It then reads `local` on the link
+that would serve. That flag is the serving provider's own `local` flag, the
+one the decision role's switches already read; `as_route` now carries it.
+Only an explicit `local: false` lets the turn run beside another. A gateway
+that can't be reached, an answer without the flag, or nothing runnable all
+count as not known, and not known queues. The check runs before the lock is
+taken, and only when some turn is already running, so a send with nothing in
+flight costs no extra call. `drain_queue` applies the same rule to the next
+waiting message.
+
+One thing is not counted: the decision role's local model (Kev, off by
+default) asks its question on the local GPU even when the turn itself is on a
+cloud model.
+
+How a queued message looks was fixed in the first commit. A send that core
+answers with 202 (queued) becomes the queued chip (`sendQueued` in
+`chatReducer`). It used to leave an empty bubble that settled into "the turn
+finished without a reply". When the queued turn starts, the pane picks it up
+("still responding", with Stop) without waiting for the 15-second idle poll.
 
 ## Verified
 
-- core: `tests/test_chat_sessions.py` (13), plus the full suite: 9375 passed.
+- core: `tests/test_chat_sessions.py` (16, with the parallel cases: cloud runs at once, local queues, an unknown answer queues, and one session still answers one at a time), plus the full suite. gateway: the full suite, 789 passed.
 - web: `paneLayout.test.ts`, `sessions-store.test.tsx`, the per-slot tests in
   `chat-store.test.tsx`, the `sendQueued` reducer tests and the pane tests in
   `ChatPage.test.tsx`, plus the full suite: 1579 passed.

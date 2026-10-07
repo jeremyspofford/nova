@@ -191,6 +191,7 @@ async def test_a_decision_goes_to_the_first_link_with_its_own_model_id_and_key(
         "reason": None,
         "served_by": f"openrouter:{JEV}",
         "standby": False,
+        "local": False,
     }
     # Unchanged but for `model`, which is the LINK's own id.
     assert _asked(jev) == [{"state": STATE, "questions": QUESTIONS, "model": JEV}]

@@ -9,13 +9,15 @@ lands back in that session.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
-from app import tools, traces
+from app import chat, tools, traces
 from app.identity import Person
 from app.main import app
 from app.tools.base import ToolContext
 from tests.conftest import requires_db
+from tests.fakes import FakeGateway, FakeMemory
 
 pytestmark = requires_db
 
@@ -235,3 +237,111 @@ async def test_a_reminder_from_outside_a_session_still_lands_in_the_hallway(
         "SELECT conversation_id FROM timers WHERE person_id = $1", owner.id
     )
     assert str(landed) == hallway
+
+
+# -- running at once (owner, 2026-10-07: "let sessions run in parallel when
+# using cloud models") -------------------------------------------------------
+
+
+def _serving(local: bool | None) -> dict:
+    """What the gateway's explain walk answers: which link would serve, and
+    whether its provider is local. None leaves the flag out (an older
+    gateway), which must be read as "not known"."""
+    serve = {"role": "chat", "link": 1, "reason": None, "served_by": "p:m", "standby": False}
+    if local is not None:
+        serve["local"] = local
+    return {"role": "chat", "chain": [], "would_serve": serve, "reason": None}
+
+
+def _completions(gateway: FakeGateway) -> int:
+    return sum(1 for path, _ in gateway.seen if path.endswith("/chat/completions"))
+
+
+async def _second_session_send(owner_client, pool, mount_peers, explain: dict | None):
+    """Hold a turn in the hallway, then send in a second session. Returns the
+    second send's response, or None if it opened a stream (it is then still
+    held, so it cannot have returned) — and how many turns were running."""
+    hold = asyncio.Event()
+    gateway = FakeGateway(deltas=("working",), hold=hold, explain_body=explain)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    assert (
+        await owner_client.put("/api/v1/settings", json={"key": "chat.model", "value": "m"})
+    ).status_code == 200
+    side = (await owner_client.post(BASE, json={})).json()["id"]
+
+    first = asyncio.create_task(
+        owner_client.post("/api/v1/chat/stream", json={"message": "in the hallway"})
+    )
+    while _completions(gateway) < 1:
+        await asyncio.sleep(0.01)
+    second = asyncio.create_task(
+        owner_client.post(
+            "/api/v1/chat/stream", json={"message": "in the side session", "conversation_id": side}
+        )
+    )
+    try:
+        for _ in range(300):
+            if second.done() or _completions(gateway) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        running = _completions(gateway)
+        answered = second.result() if second.done() else None
+    finally:
+        hold.set()
+    await asyncio.wait_for(first, timeout=10)
+    await asyncio.wait_for(second, timeout=10)
+    await asyncio.wait_for(chat.drain_background(), timeout=15)
+    return answered, running, side
+
+
+async def test_on_a_cloud_model_a_second_session_runs_at_once(owner_client, pool, mount_peers):
+    answered, running, _ = await _second_session_send(
+        owner_client, pool, mount_peers, _serving(local=False)
+    )
+    # Not queued: the second turn reached the model while the first was held.
+    assert answered is None
+    assert running == 2
+
+
+async def test_on_a_local_model_a_second_session_still_queues(owner_client, pool, mount_peers):
+    answered, running, side = await _second_session_send(
+        owner_client, pool, mount_peers, _serving(local=True)
+    )
+    assert answered is not None and answered.status_code == 202, answered
+    assert running == 1
+    # And it ran once the first turn let go (S15's promise, unchanged).
+    rows = await pool.fetch(
+        "SELECT role FROM messages WHERE conversation_id = $1 ORDER BY created_at",
+        uuid.UUID(side),
+    )
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+
+
+async def test_when_the_gateway_cannot_say_where_it_runs_it_queues(owner_client, pool, mount_peers):
+    # No `local` flag at all: not known, and not known is the old behaviour.
+    answered, running, _ = await _second_session_send(
+        owner_client, pool, mount_peers, _serving(local=None)
+    )
+    assert answered is not None and answered.status_code == 202
+    assert running == 1
+
+
+async def test_on_a_cloud_model_one_session_still_answers_one_at_a_time(
+    owner_client, pool, mount_peers
+):
+    """Parallel is ACROSS sessions. Two sends into the same transcript would
+    interleave two replies — S15's gate holds there whatever the model."""
+    hold = asyncio.Event()
+    gateway = FakeGateway(deltas=("working",), hold=hold, explain_body=_serving(local=False))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await owner_client.put("/api/v1/settings", json={"key": "chat.model", "value": "m"})
+    first = asyncio.create_task(owner_client.post("/api/v1/chat/stream", json={"message": "one"}))
+    while _completions(gateway) < 1:
+        await asyncio.sleep(0.01)
+    try:
+        again = await owner_client.post("/api/v1/chat/stream", json={"message": "two"})
+        assert again.status_code == 202, again.text
+    finally:
+        hold.set()
+    await asyncio.wait_for(first, timeout=10)
+    await asyncio.wait_for(chat.drain_background(), timeout=15)
