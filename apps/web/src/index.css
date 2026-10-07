@@ -77,6 +77,10 @@ input[type="number"] {
   --surface-card-hover: var(--neutral-100);
   --surface-elevated: var(--neutral-100);
   --surface-input: var(--card, 255 255 255);
+  /* The sidebar sits a step DARKER than the ground, as Claude's does (its
+     ivory 100 step beside a 50-step page). It used to be the card colour — white —
+     which made the nav brighter than the content it navigates. */
+  --surface-sidebar: var(--neutral-100);
   /* Every text tier clears WCAG AA on the ground AND on a card in every
      built-in theme (color-palettes.test.ts computes it): secondary is the
      600 step, tertiary a derived 550 — the 400 that used to be tertiary was
@@ -111,6 +115,7 @@ html.dark {
   --surface-card-hover: var(--neutral-800);
   --surface-elevated: var(--neutral-800);
   --surface-input: var(--neutral-900);
+  --surface-sidebar: var(--neutral-950);
   --text-primary: var(--neutral-50);
   /* --tier-*: the store proves these against the ground, the card and an
      input for the palette in play (a community grey that misses gets
@@ -193,8 +198,14 @@ html.dark .glass-card {
               inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+/* Darker than the ground, not tinted lighter than it (2026-10-07): the
+   glow-1 wash this had made the sidebar read as a raised panel. A black veil
+   over the palette's darkest step sits below the page in every theme, as
+   Claude's sidebar does beside its chat column. */
 html.dark .glass-nav {
-  background: rgb(var(--glow-1) / 0.30);
+  background:
+    linear-gradient(rgb(0 0 0 / 0.22), rgb(0 0 0 / 0.22)),
+    rgb(var(--surface-sidebar) / 0.92);
   backdrop-filter: blur(40px) saturate(1.6);
   -webkit-backdrop-filter: blur(40px) saturate(1.6);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);

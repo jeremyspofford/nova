@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { BookOpen, Bot, Boxes, CalendarClock, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, ScrollText } from 'lucide-react'
+import { BookOpen, Bot, Boxes, CalendarClock, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, PanelLeft, ScrollText } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -265,7 +265,7 @@ export function Sidebar({
         // tooltip appearing behind the Settings page while dragging the
         // edge. Raising the aside lifts its whole context, once, instead of
         // escalating z-indexes inside it forever.
-        'hidden md:flex flex-col h-full bg-surface shrink-0 glass-nav relative z-20',
+        'hidden md:flex flex-col h-full bg-surface-sidebar shrink-0 glass-nav relative z-20',
         // No border and no content when closed: a 1px line down the left of
         // the window is the icon rail's ghost.
         collapsed ? 'overflow-hidden' : 'border-r border-border-subtle dark:border-white/[0.06]',
@@ -338,7 +338,8 @@ export function Sidebar({
           belong to a solid shape, and drawn behind art that fades to
           transparency they read as a square halo around a round orb. The
           choice declares which it is; this does not keep a list. */}
-      <div className={clsx('flex items-center gap-2.5 px-3 h-14 shrink-0 cursor-pointer', collapsed && 'justify-center')} onClick={() => navigate('/chat')} title="Nova">
+      <div className="flex items-center gap-2 px-3 h-14 shrink-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 cursor-pointer" onClick={() => navigate('/chat')} title="Nova">
         <img
           src={appIconHref(brandIcon, mode, preset, customAccent)}
           alt=""
@@ -353,6 +354,25 @@ export function Sidebar({
         {!collapsed && (
           <span className="text-h3 text-content-primary tracking-tight">Nova</span>
         )}
+      </div>
+      {/* THE PANEL ICON, as Claude has it (2026-10-07): the edge handle
+          works but says nothing until you hover the exact pixel, so nobody
+          could tell the sidebar folds away. This is the visible half of the
+          control — the shell's show-sidebar button draws the same glyph at
+          the top-left once it is shut, so one icon means "the panel" in both
+          states. */}
+      {!collapsed && (
+        <button
+          type="button"
+          data-testid="hide-sidebar"
+          onClick={() => onCollapsedChange(true)}
+          title="Hide sidebar (Ctrl+B)"
+          className="shrink-0 inline-flex items-center rounded-md p-1.5 text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast"
+        >
+          <PanelLeft size={16} className="shrink-0" />
+          <span className="sr-only">Hide sidebar (Ctrl+B)</span>
+        </button>
+      )}
       </div>
 
       {/* Navigation */}

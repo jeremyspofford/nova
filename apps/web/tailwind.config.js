@@ -20,6 +20,7 @@ export default {
           'card-hover': 'rgb(var(--surface-card-hover) / <alpha-value>)',
           elevated: 'rgb(var(--surface-elevated) / <alpha-value>)',
           input: 'rgb(var(--surface-input) / <alpha-value>)',
+          sidebar: 'rgb(var(--surface-sidebar) / <alpha-value>)',
         },
         // Semantic border tokens
         border: {
