@@ -86,6 +86,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Sequence
@@ -509,6 +510,15 @@ OUT_OF_ROUNDS_NUDGE = (
     "You have used every tool round for this turn and no further tool will run. "
     "Answer now with what the tool results above already give you, and say "
     "plainly what is still unknown."
+)
+# The circling stop's nudge (turn-cap T4). OUT_OF_ROUNDS_NUDGE would be false
+# here: a turn stopped for going in circles has rounds left, it is stopped
+# because the last ones got nowhere. Still only a request: the statement of what
+# the tools returned (T2) is what holds when the model ignores it.
+CIRCLING_NUDGE = (
+    "No further tool will run this turn: the last tool rounds repeated a call or "
+    "brought nothing new. Answer now with what the tool results above already give "
+    "you, and say plainly what is still unknown."
 )
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
@@ -2363,6 +2373,207 @@ def _ran_clause(spans: Sequence[traces.Span]) -> str:
     if failed:
         pieces.append(f"{_names(failed)} failed")
     return f"Before that, {' and '.join(pieces)}."
+
+
+# The backend's statement of what a turn's tools returned (capped-turn-answers).
+# The owner's turn, 2026-10-07: the tool rounds ran out, the one narration round
+# answered with a tool call and no prose, and the stored reply was ONLY the cap
+# note, while device_run had already found why the Dell's model went unused. A
+# result her tools found must not depend on the model choosing to say it.
+TOOL_RESULTS_HEADER = "What this turn's tools returned, as far as its trace recorded each result:"
+# One call per line. The "> " makes it a blockquote, which the persist
+# boundary's markup scan masks as quotation BY CONSTRUCTION
+# (markup_calls._QUOTE_LINE): whatever a tool returned, tool-call markup
+# included, is stored exactly as written, and never earns without_markup's
+# first-person "[I tried to run …]" note for a call nobody wrote.
+_TOOL_RESULT_LINE = "> {name} {args} returned: {head}"
+# A line break inside a recorded value, shown as one character per break: a
+# multi-line result still reads as lines, its call stays one line of the
+# statement, and the value never grows longer than it was recorded.
+_LINE_BREAK_SHOWN = "⏎"
+# A value the span holds no record of. Only a hand-built span lacks one:
+# `_run_tool` records all three.
+_NOT_RECORDED = "(not recorded)"
+
+
+def _clip_note_chars() -> int:
+    """The most `_clip` ever adds past its limit: its own words, measured off
+    a real cut so the two cannot drift, and two counts as long as a str's
+    length can be written (sys.maxsize)."""
+    one_digit_counts = len(_clip("ab", 1)) - len("a")  # "… (+1 more chars, 2 total)"
+    return one_digit_counts + 2 * (len(str(sys.maxsize)) - 1)
+
+
+# The longest line a call can take, derived from what `_run_tool` records: the
+# name and the arguments cut like one argument string (SPAN_ARG_HEAD_CHARS),
+# the head never cut short of the most a span holds (SPAN_RESULT_HEAD_CHARS),
+# each with room for `_clip`'s stated cut.
+TOOL_RESULTS_LINE_CHARS = (
+    len(_TOOL_RESULT_LINE.format(name="", args="", head=""))
+    + 2 * (SPAN_ARG_HEAD_CHARS + _clip_note_chars())
+    + SPAN_RESULT_HEAD_CHARS
+    + _clip_note_chars()
+)
+
+
+def _on_one_line(text: str) -> str:
+    """`text` with every line break `str.splitlines` breaks on (CRLF counts
+    once) shown as _LINE_BREAK_SHOWN. Derived from splitlines itself rather
+    than a list of characters, so it breaks exactly where a reader of lines
+    would, and it is linear."""
+    shown = []
+    for line in text.splitlines(keepends=True):
+        bare = line.splitlines()[0]
+        shown.append(line if bare == line else bare + _LINE_BREAK_SHOWN)
+    return "".join(shown)
+
+
+def _recorded_arguments(span: traces.Span) -> str:
+    """The span's `args_redacted` as compact JSON, or as itself when the
+    record is already a string (`_bounded`'s stated cut, or text that did not
+    parse), cut like one argument string."""
+    record = (span.meta or {}).get("args_redacted")
+    if record is None:
+        return _NOT_RECORDED
+    if not isinstance(record, str):
+        record = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+    return _clip(record, SPAN_ARG_HEAD_CHARS)
+
+
+def _tool_result_line(span: traces.Span) -> str:
+    """One call's line: its name, its recorded arguments and its recorded
+    result head, at most TOOL_RESULTS_LINE_CHARS long. A head `_run_tool`
+    recorded (at most SPAN_RESULT_HEAD_CHARS) is never cut; a longer one, or
+    a long name or argument record, is cut by `_clip`, which says so."""
+    head = (span.meta or {}).get("result_head")
+    line = _TOOL_RESULT_LINE.format(
+        name=_clip(span.name, SPAN_ARG_HEAD_CHARS) if isinstance(span.name, str) else _NOT_RECORDED,
+        args=_recorded_arguments(span),
+        head=_clip(head, SPAN_RESULT_HEAD_CHARS) if isinstance(head, str) else _NOT_RECORDED,
+    )
+    return _on_one_line(line)
+
+
+def _reached_its_executor(span: traces.Span) -> bool:
+    """A tool call whose executor ran, by dispatch's own record (`_run_tool`'s
+    `reached_executor`, never the result text), and that returned. A refused
+    call, a call dispatch refused, a scripted step and an unasked check carry
+    no True; a call cut off mid-dispatch still holds NEVER_RETURNED."""
+    return (
+        span.kind == "tool"
+        and (span.meta or {}).get("reached_executor") is True
+        and not _was_interrupted(span)
+    )
+
+
+def tool_results_statement(spans: Sequence[traces.Span]) -> str | None:
+    """What this turn's tools returned, read off its tool spans and nothing
+    else: no model, no prose, no guess. None when no call reached its
+    executor, so a turn that ran nothing states nothing.
+
+    The header names the source, then each call whose executor ran gets one
+    line, in span order: its name, its recorded arguments, and the head of
+    its result exactly as the span recorded it. A call that failed is listed
+    like one that succeeded, with no word of the backend's own: dispatch
+    already opened its result with `Error: `. Two calls of one tool are two
+    lines. A scripted step is left out at no loss, because the skill's own
+    call ran through `_run_tool` and is listed with its result. This is not
+    `_tool_outcomes`, which counts an ok scripted step or unasked check as
+    something that ran.
+
+    The words around the values are fixed and never first person: this is
+    the backend speaking about the trace, not her claiming anything. It has
+    no leading or trailing separator, so the caller places it.
+    """
+    lines = [_tool_result_line(span) for span in spans if _reached_its_executor(span)]
+    if not lines:
+        return None
+    return "\n".join([TOOL_RESULTS_HEADER, *lines])
+
+
+# The circling stop (turn-cap T3): the normal end of a turn that is getting
+# nowhere, so the round ceiling is only a runaway backstop.
+#
+# SAME_CALL_LIMIT: one repeat of a call is a legitimate re-check after a change
+# (ps before and after a start); the third identical ask is a loop even when its
+# output drifts (timestamps).
+SAME_CALL_LIMIT = 3
+# STALE_ROUNDS_LIMIT: one round that learns nothing is how a turn adapts (the
+# 2026-09-02 walk went from tree to find after a failure); three in a row is
+# circling.
+STALE_ROUNDS_LIMIT = 3
+STOP_REPEATED_CALL = "repeated_call"
+STOP_NO_NEW_RESULTS = "no_new_results"
+# The round ceiling's reason, as the `round_stop` span files it (turn-cap T4):
+# every stopped turn states why in its trace, the backstop included.
+STOP_CEILING = "ceiling"
+# What a circling stop's note says, after "[stopped after N tool rounds: ".
+# The ceiling keeps its own words ("without finishing"), unchanged.
+CIRCLING_NOTE_WORDS = {
+    STOP_REPEATED_CALL: "the same call was repeated",
+    STOP_NO_NEW_RESULTS: "the last rounds brought nothing new",
+}
+
+
+def _call_key(call: ToolCall) -> tuple[str, str]:
+    """A call's identity for the circling check: its name plus its arguments,
+    canonical (sorted-key, compact JSON) when they parse, else the raw string.
+    The call id and the markup flag are not part of it."""
+    arguments = call.arguments
+    if isinstance(arguments, str):
+        try:
+            canonical = json.dumps(json.loads(arguments), sort_keys=True, separators=(",", ":"))
+        except ValueError:
+            canonical = arguments
+    else:
+        canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+    return call.name, canonical
+
+
+class RoundProgress:
+    """Circling detector for one turn: fed each dispatched round's calls and
+    the text of their role "tool" messages, it says when the turn should stop.
+
+    STOP_REPEATED_CALL when one call key reaches its SAME_CALL_LIMIT-th
+    dispatch this turn (refused calls count). STOP_NO_NEW_RESULTS after
+    STALE_ROUNDS_LIMIT consecutive stale rounds, where a round is stale when
+    none of its results is news: every result is text already returned
+    earlier this turn by any call (whitespace-normalised). The "Error:"
+    prefix decides nothing: a new error text (a different missing binary)
+    is a finding, and the same text again, error or not, is not.
+    Pure: no I/O, inputs untouched, state per instance."""
+
+    def __init__(self) -> None:
+        self._dispatches: dict[tuple[str, str], int] = {}
+        self._seen: set[str] = set()
+        self._stale_run = 0
+
+    def after_round(self, calls: Sequence[ToolCall], results: Sequence[str]) -> str | None:
+        if len(calls) != len(results):
+            raise ValueError(
+                f"after_round got {len(calls)} calls but {len(results)} results — "
+                "each call must have exactly one tool result"
+            )
+        if not calls:
+            return None
+        repeated = False
+        news = False
+        for call, result in zip(calls, results, strict=True):
+            key = _call_key(call)
+            count = self._dispatches.get(key, 0) + 1
+            self._dispatches[key] = count
+            if count >= SAME_CALL_LIMIT:
+                repeated = True
+            text = " ".join(result.split())
+            if text not in self._seen:
+                self._seen.add(text)
+                news = True
+        self._stale_run = 0 if news else self._stale_run + 1
+        if repeated:
+            return STOP_REPEATED_CALL
+        if self._stale_run >= STALE_ROUNDS_LIMIT:
+            return STOP_NO_NEW_RESULTS
+        return None
 
 
 def _consent_correction(spans: Sequence[traces.Span]) -> str:
@@ -5271,6 +5482,12 @@ async def _run_turn(
         rounds_allowed = max(1, max_tool_rounds)
         failure: str | None = None
         out_of_rounds = False
+        # Why the round loop stopped the turn (STOP_CEILING or a RoundProgress
+        # reason) and the round it stopped at; None while nothing stopped it.
+        # One detector per turn, so no other turn's calls count here.
+        progress = RoundProgress()
+        stop_reason: str | None = None
+        stop_rounds = 0
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
@@ -5387,6 +5604,8 @@ async def _run_turn(
                 break
             if round_number == rounds_allowed:
                 out_of_rounds = True
+                stop_reason = STOP_CEILING
+                stop_rounds = round_number
                 break
 
             messages.append(
@@ -5400,10 +5619,22 @@ async def _run_turn(
                     "tool_calls": [call.as_openai() for call in calls],
                 }
             )
+            before = len(messages)
             ran_ephemeral = await _dispatch_calls(
                 turn, tool_ctx, calls, messages, emit, subset=subset
             )
             read_ephemeral = read_ephemeral or ran_ephemeral
+            # The circling stop: this round's calls and the FULL text of the
+            # role "tool" message each one got (one per call, in call order,
+            # refusals included; a mismatch raises in after_round rather than
+            # being skipped). Never span heads: those are cut and alias.
+            results = [message["content"] for message in messages[before:]]
+            reason = progress.after_round(calls, results)
+            if reason is not None:
+                out_of_rounds = True
+                stop_reason = reason
+                stop_rounds = round_number
+                break
 
         if failure is not None:
             stated = failure
@@ -5442,6 +5673,12 @@ async def _run_turn(
         # is shown live where it is stored (said-not-done fix round 4, R6: emit
         # what persists).
         redirect_note_unshown = False
+        # The backend's statement of what a stopped turn's tools returned (and
+        # the blank line after it), when its narration round did not answer:
+        # streamed in front of the note, kept out of `text` so no guard judges
+        # it as hers, and spliced into the durable reply in front of the note
+        # (`statement_at`) after the guards and redirects have run.
+        pending_statement: str | None = None
 
         # Tool-call MARKUP in what streamed. _gateway_round already parsed it out
         # of each round's returned text (and dispatched or refused what it
@@ -5472,6 +5709,11 @@ async def _run_turn(
         ]
 
         if out_of_rounds:
+            # The trace says why the turn stopped and after how many tool rounds:
+            # one span per stopped turn, filed before the narration round.
+            with turn.span("round_stop", stop_reason) as stop_span:
+                stop_span.meta.update({"reason": stop_reason, "rounds": stop_rounds})
+            circling = stop_reason != STOP_CEILING
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
             # already earned must not be swallowed by the cap (see
@@ -5481,7 +5723,13 @@ async def _run_turn(
                 app,
                 turn,
                 model,
-                [*messages, {"role": "system", "content": OUT_OF_ROUNDS_NUDGE}],
+                [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": CIRCLING_NUDGE if circling else OUT_OF_ROUNDS_NUDGE,
+                    },
+                ],
                 (),
                 round_number=0,
                 on_delta=_stream_delta,
@@ -5510,11 +5758,43 @@ async def _run_turn(
                     result = _refuse_out_of_rounds(turn, call)
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
+            if circling:
+                backend_note = (
+                    f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
+                )
+            else:
+                backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
             note = f"\n\n{backend_note}" if parts else backend_note
+            # Did the narration round ANSWER? Read off its own outcome, never
+            # off `parts` (earlier rounds' text and its raw markup) and never
+            # off what its words mean: a round that failed, asked for any tool
+            # (on the wire or as markup) or said nothing once markup is gone
+            # did not. Then the reply is the BACKEND's statement of what this
+            # turn's tools returned, read off its spans (after the refusals
+            # above, which add no line), so the findings are never discarded
+            # with only the note left: the line of code that holds whatever
+            # the model writes, not a nudge asking it to.
+            answered = (
+                final_failure is None
+                and not final_calls
+                and bool(without_markup(final_text).strip())
+            )
+            statement = None if answered else tool_results_statement(turn.spans)
+            if statement is not None:
+                # The statement rides with the note as one backend block: it
+                # streams now, before the note, and every REPLACE composition
+                # re-adds it with backend_note. It stays OUT of `text`, which
+                # every honesty guard reads as hers (a tool's result is not her
+                # claim), and is spliced in front of the note once the guards
+                # and redirects are done (`statement_at`).
+                cap_note = backend_note
+                backend_note = f"{statement}\n\n{cap_note}"
+                pending_statement = f"{statement}\n\n"
+                emit(_frame({"t": f"\n\n{backend_note}" if parts else backend_note}))
+            else:
+                emit(_frame({"t": note}))
             parts.append(note)
             text_note = note
-            emit(_frame({"t": note}))
         elif (
             streamed_scan.found
             and not "".join(parts).strip()
@@ -6160,6 +6440,23 @@ async def _run_turn(
             persisted = "\n\n".join([text, *(c.text for c in appended_corrections)])
         else:
             persisted = text
+        # Where the stopped turn's statement goes: in front of the note, which
+        # is `text`'s tail in the two branches above that keep `text` as the
+        # head of `persisted`, by position, never by searching for the note's
+        # words. Every later write either appends or replaces the whole reply
+        # (and then clears this). The REPLACE branches need none: backend_note
+        # already carries the statement and is re-added below.
+        statement_at: int | None = None
+        if (
+            pending_statement is not None
+            and not consent_redirected
+            and not state_redirected
+            and not listing_redirected
+            and not replace_corrections
+            and text_note
+            and text.endswith(text_note)
+        ):
+            statement_at = len(text) - len(text_note.removeprefix("\n\n"))
         # `text` carries the backend note, so the two branches above keep it by
         # construction. The three that DROP the model's prose have to put it
         # back — mechanically, off the same flag, never by looking for the note
@@ -6508,6 +6805,14 @@ async def _run_turn(
             )
             if refocused:
                 said_prose = persisted  # the refocused answer replaced it whole
+                statement_at = None  # and the note the statement went in front of
+        # The stopped turn's statement joins the durable reply in front of the
+        # note, as it streamed. Here, after every guard and redirect has judged
+        # the reply without it (only the deferral, offer and bare-intent
+        # redirects could have replaced `persisted`, and a stopped turn runs
+        # none of them), and before the said-not-done pair appends after it.
+        if statement_at is not None and pending_statement is not None:
+            persisted = f"{persisted[:statement_at]}{pending_statement}{persisted[statement_at:]}"
 
         # The SAID-NOT-DONE pair (the owner's test, 2026-09-28): a call to one of
         # her own tools written as text (guards.written_call_check), and a claim

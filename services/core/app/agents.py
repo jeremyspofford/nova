@@ -91,7 +91,9 @@ EVAL_FIXTURE_PREFIX = "eval_"
 RESERVED_PREFIXES = frozenset({EVAL_FIXTURE_PREFIX})
 MENTION_RE = re.compile(r"^@([a-z][a-z_]{0,25})\b")
 CREATED_VIA = ("chat", "page")
-MIN_ROUNDS, MAX_ROUNDS = 1, 50
+# The range is settings_store's (the agents.max_tool_rounds default is its
+# top, and that module cannot import this one at load): one place for 50.
+MIN_ROUNDS, MAX_ROUNDS = settings_store.TOOL_ROUNDS_RANGE
 
 # What a skill file IS — the name rule, the character budget, the directory
 # and the read — lives in app/skills.py (S17), because the skills table and

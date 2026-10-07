@@ -147,6 +147,18 @@ describe('ToolRoundsSection: what it shows', () => {
     expect(onChanged).not.toHaveBeenCalled()
   })
 
+  it("says the limit is the backstop in its own sentence, not the count Nova stops at (turn-cap T5)", () => {
+    // The def's description is core's to say; the section's own sentence is
+    // the page's. A turn going in circles is stopped before the limit, so the
+    // page must not state the count as the stop.
+    const elsewhere = 'Words only this test wrote, so only the def can have brought them.'
+    const { container } = render(<Harness api={fakeCore()} value={20} description={elsewhere} />)
+    const own = (container.textContent ?? '').replace(elsewhere, '')
+    expect(own).not.toContain('How many rounds of tool calls one reply may take before Nova stops.')
+    expect(own).not.toMatch(/before Nova stops/i)
+    expect(own).toMatch(/backstop|safety ceiling/i)
+  })
+
   it('rendering writes nothing, even a minute later', async () => {
     // A write put off past the render (a mount timer, an autosave that waits)
     // is still a write the render made, so the clock runs a minute first.

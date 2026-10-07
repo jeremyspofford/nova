@@ -156,6 +156,20 @@ def test_the_section_says_what_reaching_the_limit_does():
         assert _says(section, fact), f"the section does not say `{fact}`"
 
 
+# What a stopped reply shows when her last answer is no answer (turn-cap T2):
+# that answer has no words of its own or asks for a tool, so the reply lists
+# what the tools returned (chat.tool_results_statement, read off the turn's
+# tool spans), then the note. test_capped_turn_answers.py pins the loop.
+STOPPED_REPLY = ("no words of its own", "asks for a tool", "what the tools returned")
+
+
+def test_the_section_says_what_a_stopped_reply_shows_when_she_does_not_answer():
+    assert callable(chat.tool_results_statement)
+    section = _section()
+    for fact in STOPPED_REPLY:
+        assert _says(section, fact), f"the section does not say `{fact}`"
+
+
 def test_the_section_states_the_range_and_the_default_the_code_has():
     problem = _numbers_problem(_section())
     assert problem is None, problem
@@ -163,8 +177,8 @@ def test_the_section_states_the_range_and_the_default_the_code_has():
 
 def test_a_section_saying_another_number_instead_fails_the_pin():
     """The criterion's three, built from the code's numbers: with the code at
-    1..50 and 6 they are `between 1 and 500`, `between 0 and 50` and
-    `default is 60`, each written where the section says the right one."""
+    1..50 and 50 they are `between 1 and 500`, `between 0 and 50` and
+    `default is 500`, each written where the section says the right one."""
     section = _section()
     problem = _numbers_problem(section)
     assert problem is None, problem
@@ -228,3 +242,38 @@ def test_the_default_it_must_state_moves_with_the_defs_default(monkeypatch):
     problem = _numbers_problem(section)
     assert problem is not None, "the README's default still passed with the def's default at 7"
     assert "`default is 7`" in problem, problem
+
+
+# The circling stop (turn-cap T4): a turn that repeats the same call or gets
+# nothing new for several rounds is stopped before the limit, with a note that
+# names why. The README quotes each note with N where core writes the rounds
+# used; chat.py must still write each reason's words. test_turn_progress.py
+# pins the loop and the exact notes (its T4 section).
+CIRCLING_REASONS = ("the same call was repeated", "the last rounds brought nothing new")
+CIRCLING = ("the same call", "nothing new", "before the limit")
+
+
+def test_the_section_says_how_a_circling_turn_is_stopped_and_quotes_its_notes():
+    source = Path(chat.__file__).read_text(encoding="utf-8")
+    section = _section()
+    for why in CIRCLING_REASONS:
+        assert why in source, f"chat.py writes no note saying `{why}`"
+        note = f"{NOTE_HEAD}N tool rounds: {why}]"
+        assert _says(section, note), f"the section does not quote `{note}`"
+    for fact in CIRCLING:
+        assert _says(section, fact), f"the section does not say `{fact}`"
+
+
+# turn-cap T5: the limit is the runaway/cost backstop, its default the top of
+# the range (agents.MAX_ROUNDS, read here), and the circling stop is the normal
+# one. The circling bullet itself is pinned above.
+BACKSTOP = ("backstop", "runaway")
+
+
+def test_the_section_says_the_default_is_the_top_of_the_range_and_a_backstop():
+    section = _section()
+    said = DEFAULTS.findall(section)
+    assert said == [str(agents.MAX_ROUNDS)], f"the section says the default is {said}"
+    assert settings_store.DEFS_BY_KEY[KEY].default == agents.MAX_ROUNDS
+    for fact in BACKSTOP:
+        assert _says(section.lower(), fact), f"the section does not say `{fact}`"
