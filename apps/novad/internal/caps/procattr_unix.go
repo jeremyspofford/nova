@@ -26,7 +26,14 @@ import (
 // converts ITS OWN ESRCH into os.ErrProcessDone (os.convertESRCH), so no
 // mapping of that is needed here.
 func prepareCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Setsid (S42b P30): the child leads a new session with no controlling
+	// terminal, so a program that would ask on one (sudo, ssh) fails at
+	// once in its own words instead of waiting on the terminal of whoever
+	// started a hand-run agent. A new session is also a new process group
+	// (pgid = pid), which the group kill below relies on. (Setpgid is gone:
+	// a session leader cannot also call setpgid.) Input stays nil —
+	// /dev/null, end of file at once.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil

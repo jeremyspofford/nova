@@ -387,12 +387,11 @@ The owner's verdict: "the walk worked flawlessly. All 4 worked."
 ### The Dell (owner steps)
 
 - The Windows agent enrolled 14:07 UTC as **DELL-XPS-8950** (platform
-  windows; facts: Windows 11 Pro 25H2 (build 26200); agent `dcde74c4b9a8`),
+  windows; facts: Windows 11 Pro 25H2 (build 26200); agent `bbbbbbbbbbbb`),
   running in a PowerShell window (`novad run`; the Run key is S42b).
 - D13: a local build of `novad.exe` (go1.27.1, windows/amd64) has sha256
-  `2633c29db753db7374faafee9d86e149c495d88116d14eb22b560d318e0076a6`,
-  identical to CI's `novad-windows-amd64.exe` artifact from main's run
-  `36428974635`. The owner verified the same hash on the Dell with
+  `<BUILD-SHA256>`, identical to CI's `novad-windows-amd64.exe` artifact from
+  main's run `36428974635`. The owner verified the same hash on the Dell with
   `Get-FileHash` after a Taildrop transfer.
 - The old WSL agent had not connected since 2026-09-22 19:09 UTC (the day
   the hub moved to the mini PC); core saw no attempt from it. The owner
@@ -433,7 +432,7 @@ model reaches for `device_list` first.
   11 Pro 25H2 (build 26200) · DELL-X…" (hostname and agent rev hidden).
   Fixed by PR #82 (`d9cfadde`: the subtitle now wraps, `truncate` ->
   `min-w-0 break-words`), redeployed; re-shot: "Windows 11 Pro 25H2 (build
-  26200) · DELL-XPS-8950 · agent dcde74c4b9a8" in full, over two lines.
+  26200) · DELL-XPS-8950 · agent bbbbbbbbbbbb" in full, over two lines.
 - **PR #81** (`7d703286`, owner-requested): revoked devices are hidden by
   default in Settings, behind a "Show revoked (N)" button — display only,
   API/DB/audit unchanged. Web suite: 1,260 passed.

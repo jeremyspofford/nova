@@ -16,6 +16,13 @@
 # passed through as the TLS hop sent it; identity headers dropped unless
 # from the sidecar) is asserted on what ARRIVED, never on the conf alone.
 #
+# Since S42b it also pins the agent's carve-outs (`/api/v1/agent/` and
+# `/api/v1/devices/enroll` pass the gate; nothing beside them does, a dot
+# segment included) and their body limits, the update route's own location
+# (still gated), and
+# that every proxied location forwards X-Real-IP as nginx's own $remote_addr
+# and Cf-Connecting-IP as sent — the facts core counts its rate limits by.
+#
 # No stack needs to be running. Leaves nothing behind — every container,
 # network and temp dir this script creates is removed on exit, success or
 # failure. Names carry GATE_TEST_PREFIX (default nova-gate-test) so a run can
@@ -40,6 +47,14 @@ NET="${PREFIX}-net-$$"
 SUBNET="10.99.0.0/24"
 SIDECAR_IP="10.99.0.50"
 OTHER_IP="10.99.0.60"
+# A device id for the update route's location (any one segment matches it).
+DEVICE_ID="00000000-0000-4000-8000-000000000001"
+# The two carve-outs' body limits in bytes: the enroll location's
+# client_max_body_size (8k — its derivation is in the template, at that
+# location) and the agent paths' (1k: they take no body). Pinned here, so
+# changing either number is a deliberate change to both files.
+ENROLL_BODY_MAX=8192
+AGENT_BODY_MAX=1024
 STUB_DIR=""
 PASS=0
 FAIL=0
@@ -95,6 +110,55 @@ client_headers() {
     -S -T 5 -O /dev/null "$@" "$url" 2>&1
 }
 
+# $1 bytes of the letter $2.
+bytes_of() {
+  printf '%*s' "$1" '' | tr ' ' "$2"
+}
+
+# A JSON enroll body of exactly $1 bytes: the agent's five keys, the host
+# name padded to the size. nginx counts the bytes; it never parses them.
+enroll_body_of() {
+  local size="$1" head tail
+  head='{"code":"ZZZZZZZZ","hostname":"'
+  tail='","name":"probe","platform":"linux","pubkey":"'"$(bytes_of 64 a)"'"}'
+  printf '%s%s%s' "$head" "$(bytes_of $((size - ${#head} - ${#tail})) h)" "$tail"
+}
+
+# Sends the body $3 to $2 on $1 with the method $4, the request tagged
+# ?probe=$5 so the stub's own log can be searched for it; prints the status.
+send_body() {
+  local base="$1" path="$2" body="$3" method="$4" tag="$5"
+  printf '%s' "$body" | curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+    -H 'Content-Type: application/json' --data-binary @- "${base}${path}?probe=${tag}"
+}
+
+# Did the stub (core, in the forwarding block) receive the request tagged
+# $1? Its own access log says. The log is read whole before it is searched:
+# piped straight into `grep -q`, grep exits at the first match, docker logs
+# can die of SIGPIPE writing the rest, and pipefail turns that hit into a
+# miss — a tag logged early was "never seen" now and then (CI, PR #111). A
+# log that cannot be read is a miss, never a hit.
+stub_saw() {
+  local log
+  log="$(docker logs "$STUB" 2>&1)" || return 1
+  grep -q "probe=$1 " <<<"$log"
+}
+
+# Polls the stub's log until it shows every tag given (20 tries, 0.25s
+# apart); fails if any is still missing. Each tag a check later asserts
+# present is waited for itself: the stub may log two requests out of the
+# order they were sent, so seeing the last one says nothing about the first.
+stub_wait_all() {
+  local tries=20 tag missing
+  while :; do
+    missing=0
+    for tag in "$@"; do stub_saw "$tag" || { missing=1; break; }; done
+    [ "$missing" -eq 0 ] && return 0
+    [ "$tries" -eq 0 ] && return 1
+    tries=$((tries - 1)); sleep 0.25
+  done
+}
+
 wait_for_nginx() {
   # $1 base url — polls / until nginx answers with ANY status (401 counts),
   # rather than a fixed sleep.
@@ -136,8 +200,8 @@ else
       || report 1 "gate on, no cookie: $path -> 401" "got $code"
   done
 
-  # /api/v1/devices/ws is the OTHER deliberate carve-out (see the nginx
-  # template's own comment on that location): a paired device sends no
+  # /api/v1/devices/ws is a deliberate carve-out (see the nginx template's
+  # own comment on that location): a paired device sends no
   # cookie, and the socket authenticates itself by ed25519 challenge, so
   # gating it would only take real daemons offline. With no cookie at all it
   # must NOT be blocked by the gate (not 401) — core is never started in
@@ -147,6 +211,34 @@ else
   code="$(status_of "$ON_BASE" "/api/v1/devices/ws")"
   [ "$code" != "401" ] && report 0 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" \
     || report 1 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" "got 401, expected the gate to let this through"
+
+  # S42b: the agent downloads and the enroll call are carved out too — the
+  # signed manifest and the one-time code are their own credentials. Core is
+  # not running here, so "not gated" shows up as 502 (nginx reached the
+  # proxy_pass), never 401.
+  for path in "/api/v1/agent/manifest" "/api/v1/agent/dist/novad-linux-amd64" "/api/v1/devices/enroll"; do
+    code="$(status_of "$ON_BASE" "$path")"
+    [ "$code" = "502" ] && report 0 "gate on, no cookie: $path is NOT gated (502: reaches the proxy, core absent)" \
+      || report 1 "gate on, no cookie: $path is NOT gated (502: reaches the proxy, core absent)" "got $code"
+  done
+  # ...and nothing beside them: the device list, the code mint, near-misses
+  # and the update route (an owner action, in a location of its own) stay
+  # gated.
+  for path in "/api/v1/devices" "/api/v1/devices/pairing-code" "/api/v1/devices/enrollx" \
+      "/api/v1/agentx" "/api/v1/devices/$DEVICE_ID/update" "/api/v1/devices/$DEVICE_ID/updatex"; do
+    code="$(status_of "$ON_BASE" "$path")"
+    [ "$code" = "401" ] && report 0 "gate on, no cookie: $path -> 401" \
+      || report 1 "gate on, no cookie: $path -> 401" "got $code"
+  done
+  # A dot segment cannot walk out of the carve-out: nginx resolves `..` (and
+  # its percent-encoded spelling) BEFORE it picks a location, so these are
+  # gated as the path they resolve to. --path-as-is: curl would otherwise
+  # resolve them itself and the request would prove nothing.
+  for path in "/api/v1/agent/../devices/pairing-code" "/api/v1/agent/%2e%2e/devices/pairing-code"; do
+    code="$(status_of "$ON_BASE" "$path" --path-as-is)"
+    [ "$code" = "401" ] && report 0 "gate on, no cookie, as sent: $path -> 401" \
+      || report 1 "gate on, no cookie, as sent: $path -> 401" "got $code"
+  done
 
   code="$(status_of "$ON_BASE" "/gate?token=$WRONG")"
   [ "$code" = "401" ] && report 0 "gate on: /gate?token=wrong -> 401" \
@@ -238,18 +330,19 @@ fi
 # ── gate ON, trusted sidecar address, upstream stub: who is exempt ────────
 # A private network with a declared subnet, a stub that answers as `core`
 # (the name the template's proxy_pass resolves through docker's embedded
-# DNS, which only a user-defined network provides) and echoes the four
-# headers this split cares about, and a web container told the sidecar
-# lives at $SIDECAR_IP. Clients are then placed AT that address and at
-# another one — the source address is the claim under test, so it is made
-# for real, not simulated with a header.
+# DNS, which only a user-defined network provides) and echoes the headers
+# this split cares about — plus X-Real-IP and Cf-Connecting-IP, which core
+# counts its rate limits by (S42b), and the request target as it arrived —
+# and a web container told the sidecar lives at $SIDECAR_IP. Clients are
+# then placed AT that address and at another one — the source address is
+# the claim under test, so it is made for real, not simulated with a header.
 STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/default.conf" <<'STUB'
 server {
     listen 8000;
     location / {
         default_type text/plain;
-        return 200 "proto=$http_x_forwarded_proto\nlogin=$http_tailscale_user_login\nname=$http_tailscale_user_name\npic=$http_tailscale_user_profile_pic\n";
+        return 200 "proto=$http_x_forwarded_proto\nlogin=$http_tailscale_user_login\nname=$http_tailscale_user_name\npic=$http_tailscale_user_profile_pic\nrealip=$http_x_real_ip\ncf=$http_cf_connecting_ip\nuri=$request_uri\n";
     }
 }
 STUB
@@ -312,6 +405,112 @@ else
   code="$(client_status "$SIDECAR_IP" "http://$FWD/api/v1/devices/ws")"
   [ "$code" = "200" ] && report 0 "from $SIDECAR_IP, no header, no cookie: /api/v1/devices/ws is NOT gated (200 from core)" \
     || report 1 "from $SIDECAR_IP, no header, no cookie: /api/v1/devices/ws is NOT gated (200 from core)" "got '$code'"
+  # S42b: so do the agent's downloads and the enroll call (a machine added
+  # through funnel has no header and no cookie either).
+  for path in "/api/v1/agent/manifest" "/api/v1/devices/enroll"; do
+    code="$(client_status "$SIDECAR_IP" "http://$FWD$path")"
+    [ "$code" = "200" ] && report 0 "from $SIDECAR_IP, no header, no cookie: $path reaches core" \
+      || report 1 "from $SIDECAR_IP, no header, no cookie: $path reaches core" "got '$code'"
+  done
+
+  # The carve-outs overwrite the identity headers like every other location:
+  # a forged login from anywhere but the sidecar never reaches core, and
+  # serve's own copy from the sidecar does.
+  for path in "/api/v1/agent/manifest" "/api/v1/devices/enroll"; do
+    body="$(client_body "$OTHER_IP" "http://$FWD$path" --header "Tailscale-User-Login: forged@example.com")"
+    if printf '%s' "$body" | grep -qx 'login='; then
+      report 0 "from $OTHER_IP + forged Tailscale-User-Login, no cookie: $path reaches core with no login"
+    else
+      report 1 "from $OTHER_IP + forged Tailscale-User-Login, no cookie: $path reaches core with no login" "$body"
+    fi
+    body="$(client_body "$SIDECAR_IP" "http://$FWD$path" --header "Tailscale-User-Login: a@b")"
+    if printf '%s' "$body" | grep -qx 'login=a@b'; then
+      report 0 "from $SIDECAR_IP + Tailscale-User-Login: $path reaches core with serve's login"
+    else
+      report 1 "from $SIDECAR_IP + Tailscale-User-Login: $path reaches core with serve's login" "$body"
+    fi
+    # What core counts a request by: X-Real-IP is nginx's own $remote_addr,
+    # written over the caller's copy, and Cf-Connecting-IP passes as sent
+    # (core reads only whether it is there).
+    body="$(client_body "$OTHER_IP" "http://$FWD$path" --header "X-Real-IP: 198.51.100.7" \
+      --header "Cf-Connecting-IP: 203.0.113.9")"
+    if printf '%s' "$body" | grep -qx "realip=$OTHER_IP" && printf '%s' "$body" | grep -qx 'cf=203.0.113.9'; then
+      report 0 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent"
+    else
+      report 1 "from $OTHER_IP + forged X-Real-IP + Cf-Connecting-IP: $path -> core sees realip=$OTHER_IP and the Cf-Connecting-IP as sent" "$body"
+    fi
+  done
+
+  # The carve-outs' bodies (fix rounds 0 and 1, controller rulings): no
+  # cookie reaches them, so a body is held to what Nova's agent sends. Its
+  # realistic full-size enroll body — the five keys, a code typed with its
+  # separator, and a 255-character host name sent twice, as the hostname and
+  # as the name it defaults to — and one of exactly ENROLL_BODY_MAX bytes
+  # reach core; one byte more is nginx's 413 and core never sees it (the
+  # 8k's derivation, from the agent's worst case, is in the template). The
+  # agent's paths take no body at all. The over-limit requests go first, so
+  # the controls the stub logs after them make their absence from its log
+  # mean something.
+  host_255="$(bytes_of 255 h)"
+  full_enroll='{"code":"ZZZZ-ZZZZ","hostname":"'"$host_255"'","name":"'"$host_255"'","platform":"windows","pubkey":"'"$(bytes_of 64 a)"'"}'
+  over_enroll="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of $((ENROLL_BODY_MAX + 1)))" POST enroll-over)"
+  over_agent="$(send_body "$FWD_BASE" "/api/v1/agent/manifest" "$(bytes_of $((AGENT_BODY_MAX + 1)) x)" GET agent-over)"
+  full="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$full_enroll" POST enroll-full)"
+  at_max="$(send_body "$FWD_BASE" "/api/v1/devices/enroll" "$(enroll_body_of "$ENROLL_BODY_MAX")" POST enroll-at-max)"
+  # Both controls are asserted present, so both are waited for; the
+  # over-limit probes' absence means something only once both have shown.
+  controls_seen=1
+  stub_wait_all enroll-full enroll-at-max || controls_seen=0
+  if [ "$full" = "200" ] && stub_saw enroll-full; then
+    report 0 "published port, no cookie: the agent's full-size enroll body (${#full_enroll} bytes) reaches core"
+  else
+    report 1 "published port, no cookie: the agent's full-size enroll body (${#full_enroll} bytes) reaches core" "got $full"
+  fi
+  if [ "$at_max" = "200" ] && stub_saw enroll-at-max; then
+    report 0 "published port, no cookie: an enroll body of exactly $ENROLL_BODY_MAX bytes reaches core"
+  else
+    report 1 "published port, no cookie: an enroll body of exactly $ENROLL_BODY_MAX bytes reaches core" "got $at_max"
+  fi
+  for probe in "enroll-over:$over_enroll:an enroll body of $((ENROLL_BODY_MAX + 1)) bytes" \
+      "agent-over:$over_agent:a $((AGENT_BODY_MAX + 1))-byte body on /api/v1/agent/manifest"; do
+    tag="${probe%%:*}"; rest="${probe#*:}"; code="${rest%%:*}"; what="${rest#*:}"
+    if [ "$controls_seen" -eq 0 ]; then
+      report 1 "published port, no cookie: $what -> 413, and core never sees it" \
+        "the stub's log never showed both controls sent after it, so its absence there proves nothing"
+    elif [ "$code" = "413" ] && ! stub_saw "$tag"; then
+      report 0 "published port, no cookie: $what -> 413, and core never sees it"
+    else
+      report 1 "published port, no cookie: $what -> 413, and core never sees it" \
+        "got $code$(stub_saw "$tag" && printf ', and core received it')"
+    fi
+  done
+
+  # The update route's own location (S42b: a longer read timeout than
+  # /api/'s, since an update waits on the agent) is an owner action and
+  # stays gated: no cookie from another address is a 401; the cookie, or a
+  # tailnet peer, reaches core.
+  code="$(client_status "$OTHER_IP" "http://$FWD/api/v1/devices/$DEVICE_ID/update")"
+  [ "$code" = "401" ] && report 0 "from $OTHER_IP, no cookie: /api/v1/devices/<id>/update -> 401" \
+    || report 1 "from $OTHER_IP, no cookie: /api/v1/devices/<id>/update -> 401" "got '$code'"
+  code="$(status_of "$FWD_BASE" "/api/v1/devices/$DEVICE_ID/update" -b "nova_gate=$TOKEN")"
+  [ "$code" = "200" ] && report 0 "published port + cookie: /api/v1/devices/<id>/update reaches core" \
+    || report 1 "published port + cookie: /api/v1/devices/<id>/update reaches core" "got $code"
+  code="$(client_status "$SIDECAR_IP" "http://$FWD/api/v1/devices/$DEVICE_ID/update" --header "Tailscale-User-Login: a@b")"
+  [ "$code" = "200" ] && report 0 "from $SIDECAR_IP + Tailscale-User-Login, no cookie: /api/v1/devices/<id>/update reaches core" \
+    || report 1 "from $SIDECAR_IP + Tailscale-User-Login, no cookie: /api/v1/devices/<id>/update reaches core" "got '$code'"
+
+  # The prefix carve-out's backstop is core: nginx resolves dot segments to
+  # pick a location, but forwards the target AS SENT ($request_uri). So a
+  # path that resolves INTO /api/v1/agent/ reaches core unresolved — where
+  # only an exact identity.PUBLIC_PATHS entry is served without an identity
+  # (pinned on core's side by test_agent_dist.py). This pins nginx's half.
+  raw="/api/v1/devices/pairing-code/../../agent/manifest"
+  body="$(curl -s --path-as-is "$FWD_BASE$raw")"
+  if printf '%s' "$body" | grep -qxF "uri=$raw"; then
+    report 0 "published port, no cookie, as sent: $raw reaches core unresolved"
+  else
+    report 1 "published port, no cookie, as sent: $raw reaches core unresolved" "$body"
+  fi
 
   # From ANOTHER address with the header: the header is worth nothing, and
   # even with a valid cookie core sees none of the identity headers.
@@ -338,8 +537,10 @@ else
   else
     report 1 "published port + cookie + forged Tailscale-User-{Login,Name,Profile-Pic}: core sees NONE of them" "$body"
   fi
-  # ...on the streaming and WS locations too (each has its own header set).
-  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/devices/ws"; do
+  # ...on the streaming, WS, carve-out and update locations too (each has its
+  # own header set).
+  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/devices/ws" \
+      "/api/v1/agent/manifest" "/api/v1/devices/enroll" "/api/v1/devices/$DEVICE_ID/update"; do
     body="$(curl -s -b "nova_gate=$TOKEN" -H "Tailscale-User-Login: forged@example.com" "$FWD_BASE$path")"
     if printf '%s' "$body" | grep -qx 'login='; then
       report 0 "published port + forged Tailscale-User-Login on $path: core sees no login"
@@ -399,6 +600,15 @@ else
   n_name="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header Tailscale-User-Name \$ts_user_name_upstream;')"
   n_pic="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header Tailscale-User-Profile-Pic \$ts_user_pic_upstream;')"
   n_scheme="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header X-Forwarded-Proto \$scheme;')"
+  n_realip="$(printf '%s\n' "$rendered_fwd" | grep -cE '^\s*proxy_set_header X-Real-IP \$remote_addr;')"
+  # Core believes X-Real-IP from web only because nginx writes its own
+  # $remote_addr over the caller's copy: a proxied location without this
+  # line would hand a caller's header to core as nginx's word (S42b).
+  if [ "$n_pass" -gt 0 ] && [ "$n_realip" -eq "$n_pass" ]; then
+    report 0 "rendered conf: every proxied location ($n_pass) sets X-Real-IP \$remote_addr"
+  else
+    report 1 "rendered conf: every proxied location ($n_pass) sets X-Real-IP \$remote_addr" "proxy_pass=$n_pass x_real_ip=$n_realip"
+  fi
   if [ "$n_pass" -gt 0 ] && [ "$n_fwd" -eq "$n_pass" ] && [ "$n_scheme" -eq 0 ]; then
     report 0 "rendered conf: every proxied location ($n_pass) forwards X-Forwarded-Proto \$fwd_proto, none forwards bare \$scheme"
   else

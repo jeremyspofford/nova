@@ -110,7 +110,7 @@ Every correction, with its evidence.
 | Structured span facts exist for two things | Six kinds now: device connectivity, machine status (`answering`, `checked_now`), Nova's address, the setup card, the resolved model id, agent delegation. Still none for a command's exit code, a file, or a probe | `tools/devices.py:102`; `tools/machines.py:161-166`; `tools/setup.py:75-77, 149-153`; `tools/models.py:651, 764`; `agents.py:1410` |
 | Registry 39, `reads_only` 20, `Tool` 8 fields, `ToolContext` 6 | Registry 43, `reads_only` 22, `Tool` 10 fields, `ToolContext` 7. S42b takes the registry to 44 | `tests/test_no_approvals.py:139-150`; S42b plan line 40 |
 | Corpus 23 cases, `suite_version` 13 | 30 cases, `suite_version` 17. S42b: 32 cases, 18 | `tests/test_eval_corpus.py:471-477`; S42b plan line 40 |
-| Next core migration 035 | `main`'s last is `037`; S42b takes `038_agent_lifecycle`; this lane starts at 039 | `services/core/migrations/`; S42b Task 14 |
+| Next core migration 035 | `main`'s last is `038` (S37a's `038_mcp_servers`, 2026-10-06); S42b takes `039_agent_lifecycle`; this lane starts at 040 | `services/core/migrations/`; S42b Task 14 |
 | `live_facts.AUTO_RUN`: sixteen reads | Eighteen | `live_facts.py:82` |
 | Twelve typed settings, one with a writer tool | Fourteen, still one writer tool (`model_pull` sets `chat.model`). The decision switches added 2026-09-29 have no tool | `settings_store.py`; `tools/models.py:777` |
 | Item 0, the core suite wedge, blocks S32 | Resolved 2026-09-18 | `ROADMAP.md:48`; `docs/incidents/2026-09-16-core-suite-wedge.md` |

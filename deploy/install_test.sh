@@ -72,6 +72,88 @@ expect_case() {
   esac
 }
 
+# ── the entry guard: install.sh runs under bash, or not at all ─────────────
+# Sourced from a shell that is not bash, install.sh read "executed" off
+# BASH_SOURCE (only bash sets it) and ran main: from zsh, cmd_install's
+# preflight ran against the live docker (S42b Task 27). Its first lines now
+# refuse, one line on stderr — `return` when sourced, so the shell that
+# sourced it lives on, `exit` when run.
+#
+# These cases stay harmless if the guard is ever gone. They run a COPY in a
+# temp dir (nothing it writes can land in this checkout), with a PATH whose
+# first directory stubs every program that reaches outside (each records
+# that it was reached, and fails), and they hand the script an unknown verb,
+# so a main that is reached refuses the verb instead of installing — a fact
+# the bash control below shows is visible. Nothing reached outside, main
+# never reached: both asserted, not assumed.
+GUARD_T="$(mktemp -d)"
+mkdir -p "$GUARD_T/deploy" "$GUARD_T/stub"
+cp "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/subnet.sh" "$GUARD_T/deploy/"
+for GUARD_TOOL in docker curl wget git openssl sudo systemctl nvidia-smi lsof ss; do
+  cat > "$GUARD_T/stub/$GUARD_TOOL" <<EOF
+#!/bin/sh
+echo "$GUARD_TOOL \$*" >> "$GUARD_T/reached"
+exit 1
+EOF
+  chmod +x "$GUARD_T/stub/$GUARD_TOOL"
+done
+GUARD_PATH="$GUARD_T/stub:/usr/bin:/bin"
+GUARD_COPY="$GUARD_T/deploy/install.sh"
+GUARD_SAYS="— run ./install, or bash deploy/install.sh"
+GUARD_MAIN="ERROR: unknown subcommand: not-a-verb (expected: install, update, backup, restore, drill, undo-move)"
+# Runs "$@" under the guard PATH. Prints "<exit>|<stdout>|<stderr's line
+# count>|<stderr>|<what the stubs saw>", newlines as spaces — stderr's count
+# beside it, so "one line" is checked too.
+guard_run() {
+  local rc=0
+  : > "$GUARD_T/reached"
+  PATH="$GUARD_PATH" "$@" > "$GUARD_T/out" 2> "$GUARD_T/err" || rc=$?
+  printf '%s|%s|%s|%s|%s' "$rc" "$(tr '\n' ' ' < "$GUARD_T/out")" "$(grep -c '' < "$GUARD_T/err")" \
+    "$(tr '\n' ' ' < "$GUARD_T/err")" "$(tr '\n' ' ' < "$GUARD_T/reached")"
+}
+guard_is() { # $1 name  $2 got  $3 wanted
+  if [ "$2" = "$3" ]; then report 0 "$1"; else report 1 "$1" "got '$2', wanted '$3'"; fi
+}
+# A POSIX shell that is not bash: dash where there is one (Debian's /bin/sh;
+# /bin/dash on macOS), else a /bin/sh that is not bash (busybox).
+GUARD_SH="$(command -v dash || true)"
+if [ -z "$GUARD_SH" ] && [ "$(/bin/sh -c 'echo "${BASH_VERSION:-not bash}"' 2>/dev/null)" = "not bash" ]; then
+  GUARD_SH=/bin/sh
+fi
+GUARD_ZSH="$(command -v zsh || true)"
+
+if [ -n "$GUARD_SH" ]; then
+  guard_is "entry guard: sourced from sh ($GUARD_SH), it refuses in one line and returns — that shell lives on" \
+    "$(guard_run "$GUARD_SH" -c 'PATH="$2"; . "$1"; echo "back in the sourcing shell, status $?"' sh "$GUARD_COPY" "$GUARD_PATH")" \
+    "0|back in the sourcing shell, status 1 |1|install.sh: cannot run under sh $GUARD_SAYS |"
+  guard_is "entry guard: run by sh ($GUARD_SH), it refuses in one line and exits non-zero" \
+    "$(guard_run "$GUARD_SH" "$GUARD_COPY" not-a-verb)" \
+    "1||1|install.sh: cannot run under sh $GUARD_SAYS |"
+else
+  report 1 "entry guard: sourced from and run by sh" \
+    "no POSIX sh other than bash on this runner (no dash, and /bin/sh is bash) — the guard was NOT checked"
+fi
+if [ -n "$GUARD_ZSH" ]; then
+  guard_is "entry guard: sourced from zsh, it refuses in one line and returns — that shell lives on" \
+    "$(guard_run "$GUARD_ZSH" -f -c 'PATH="$2"; . "$1" not-a-verb; print -r -- "back in the sourcing shell, status $?"' zsh "$GUARD_COPY" "$GUARD_PATH")" \
+    "0|back in the sourcing shell, status 1 |1|install.sh: cannot run under zsh $GUARD_SAYS |"
+  guard_is "entry guard: run by zsh, it refuses in one line and exits non-zero" \
+    "$(guard_run "$GUARD_ZSH" -f "$GUARD_COPY" not-a-verb)" \
+    "1||1|install.sh: cannot run under zsh $GUARD_SAYS |"
+else
+  NOT_RUN="${NOT_RUN:-}${NOT_RUN:+; }the entry guard under zsh (2 cases: no zsh on this runner)"
+  printf 'NOT RUN the entry guard under zsh: there is no zsh on this runner, so its two cases did not run here (the sh cases did)\n'
+fi
+# bash itself: sourced, the file only defines (main is not run); run, main
+# answers — the control that shows "main was reached" would be seen above.
+guard_is "entry guard: sourced from bash, nothing is refused and main is not run" \
+  "$(guard_run "$BASH" -c 'PATH="$2"; . "$1"; echo "sourced, status $?"' bash "$GUARD_COPY" "$GUARD_PATH")" \
+  "0|sourced, status 0 |0||"
+guard_is "entry guard: run by bash, main is reached (it refuses the unknown verb)" \
+  "$(guard_run "$BASH" "$GUARD_COPY" not-a-verb)" \
+  "1||1|$GUARD_MAIN |"
+rm -rf "$GUARD_T"
+
 # ── a free port is the ordinary case ────────────────────────────────────────
 expect_case "free port: the bundled engine is used" \
   "$(run_decide "" 1 "")" 0 "free (bundled ollama will publish it)"
@@ -260,6 +342,12 @@ run_wiring() {
     HARDWARE_JSON="$tmp/hardware.json"
     # shellcheck disable=SC2034
     BUNDLED_INFERENCE="$1"
+    # The two seams that ask the machine: the real ones run `docker info` and
+    # nvidia-smi, and this suite runs neither (S42b Task 27, fix round 0: the
+    # real `docker info` was measured reached from here, twice a run). The
+    # profile this case is about depends on neither.
+    detect_gpu_runtime() { printf 'false'; }
+    detect_gpus_json() { printf '[]'; }
     detect_hardware >/dev/null 2>&1
     printf '%s|%s' "${COMPOSE_ARGS[*]}" "$HEALTH_CHECKED_SERVICES"
   )
@@ -452,6 +540,37 @@ expect_case "openssl present: preflight passes" "$(run_openssl_check 0)" 0 "open
 expect_case "openssl missing: refuses instead of failing later inside generate_secrets" \
   "$(run_openssl_check 1)" 1 "openssl not found"
 expect_case "openssl missing: states a remedy" "$(run_openssl_check 1)" 1 "install"
+
+# ── preflight: git, since ./install builds the agent from the committed tree ──
+# (S42b P23). Refused in preflight, before anything is pulled or started —
+# not after the stack is up, inside install_hub_agent.
+run_git_check() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    GIT_RC="$1"
+    have_git() { return "$GIT_RC"; }
+    if [ "${2:-}" = preflight ]; then
+      check_docker() { :; }; check_compose() { :; }; check_foreign_project() { :; }
+      check_openssl() { :; }; check_disk() { log "disk: checked"; }; check_ports() { :; }
+      decide_inference() { :; }
+      err="$(preflight 2>&1)"; code=$?
+    else
+      err="$(check_git 2>&1)"; code=$?
+    fi
+    printf '%s|%s' "$code" "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+expect_case "git present: preflight passes" "$(run_git_check 0)" 0 "git: present"
+expect_case "git missing: refused, saying why ./install needs it" "$(run_git_check 1)" 1 \
+  "git is needed: ./install builds Nova's agent from this checkout's committed tree"
+GIT_PREFLIGHT="$(run_git_check 1 preflight)"
+expect_case "git missing: preflight itself refuses" "$GIT_PREFLIGHT" 1 "git is needed"
+case "$GIT_PREFLIGHT" in
+  *"disk: checked"*) report 1 "git missing: refused before the disk check" "$GIT_PREFLIGHT" ;;
+  *) report 0 "git missing: refused before the disk check" ;;
+esac
 
 
 # ── tailnet: the profile refuses an engine it cannot start ──────────────────
@@ -1052,6 +1171,10 @@ expect_str "matching COMPOSE_FILE: still exactly one line" \
 # function works alone: delete the call from cmd_install and the cpu case
 # below prints "Nova is up".
 #   $1 does `docker info` name the nvidia runtime (1/0)   $2 ollama's log
+#   $3 how the hub machine's own agent goes (ok/fail; default ok) — its own
+#      cases are further down; here it is a marker, so the ORDER is what is
+#      tested: after the compute check, before "Nova is up", and its failure
+#      fails ./install with nothing taken down.
 # Prints "<exit>|<.env with ;>|<combined output>".
 run_install() {
   (
@@ -1070,7 +1193,11 @@ run_install() {
     ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
     # shellcheck disable=SC2034
     INFERENCE_COMPUTE_TIMEOUT=0
-    NVIDIA="$1"; FAKE_LOG="$2"
+    NVIDIA="$1"; FAKE_LOG="$2"; HUB_AGENT="${3:-ok}"
+    install_hub_agent() {
+      log "HUB AGENT REACHED"
+      [ "$HUB_AGENT" = ok ] || die "the hub's agent was not installed (stub) — the stack is up"
+    }
     docker() {
       case "$*" in
         info)
@@ -1112,11 +1239,25 @@ expect_tn "install, gpu + CUDA: COMPOSE_PROFILES lists inference" "$INST_OK" 0 2
 expect_tn "install: the subnet decision reaches .env" "$INST_OK" 0 2 "NOVA_SUBNET=172.18.0.0/16;"
 expect_tn "install: and the derived web address with it" "$INST_OK" 0 2 "NOVA_WEB_ADDR=172.18.128.10;"
 
+# The hub machine's own agent (S42b P23) is REACHED from cmd_install: after
+# the compute check, before "Nova is up". Delete the call and these go red.
+case "$(tn_field "$INST_OK" 3)" in
+  *"ollama reports library=CUDA"*"HUB AGENT REACHED"*"Nova is up"*)
+    report 0 "install: the hub machine's agent comes after the compute check, before 'Nova is up'" ;;
+  *) report 1 "install: the hub machine's agent comes after the compute check, before 'Nova is up'" "$INST_OK" ;;
+esac
+INST_HUBFAIL="$(run_install 1 "$DECOY_LINE\n$CUDA_LINE\n" fail)"
+expect_tn "install, hub agent fails: ./install fails" "$INST_HUBFAIL" 1 3 "the hub's agent was not installed"
+expect_tn_lacks "install, hub agent fails: never says Nova is up" "$INST_HUBFAIL" 3 "Nova is up"
+expect_tn_lacks "install, hub agent fails: nothing is taken down (no other docker call)" "$INST_HUBFAIL" 3 \
+  "unexpected docker call"
+
 INST_CPU="$(run_install 1 "$DECOY_LINE\n$CPU_LINE\n")"
 expect_tn "install, gpu + cpu: refuses after a green table" "$INST_CPU" 1 3 "came up WITHOUT the GPU"
 expect_tn "install, gpu + cpu: the table WAS green (the point)" "$INST_CPU" 1 3 "ollama     healthy"
 expect_tn "install, gpu + cpu: names the overlay" "$INST_CPU" 1 3 "docker-compose.gpu.yml"
 expect_tn_lacks "install, gpu + cpu: never says Nova is up" "$INST_CPU" 3 "Nova is up"
+expect_tn_lacks "install, gpu + cpu: the hub's agent is never reached" "$INST_CPU" 3 "HUB AGENT REACHED"
 
 INST_NOLINE="$(run_install 1 "$DECOY_LINE\n")"
 expect_tn "install, gpu + no line: refuses" "$INST_NOLINE" 1 3 "could not read ollama's inference compute line"
@@ -1344,6 +1485,9 @@ run_moved() {
     detect_gpus_json() { printf '[]'; }
     detect_disk_free_gb() { printf '100'; }
     port_holder() { printf ''; }
+    # The hub machine's own agent has its own cases (run_hub_agent); here it
+    # must not reach out — its real seams would build and fetch.
+    install_hub_agent() { :; }
     unset NOVA_TAILNET NOVA_SKIP_INFERENCE
     out="$(cmd_install 2>&1)"; code=$?
     printf '%s|%s|%s' "$code" "$(grep -c . "$tmp/docker-calls" 2>/dev/null)" \
@@ -1942,6 +2086,286 @@ expect_tn "foreign: nothing foreign ⇒ one line and no offer" "$FG_CLEAN" 0 3 "
 expect_tn_lacks "foreign: nothing foreign ⇒ no refusal block" "$FG_CLEAN" 3 "REFUSED"
 expect_str "foreign: nothing foreign ⇒ nothing removed" "$(tn_field "$FG_CLEAN" 2)" ""
 
+# ── the tailnet sidecar runs THIS checkout's start.sh ───────────────────────
+# Deploying PR #111 (2026-10-07): start.sh changed in git, ./install ran,
+# compose saw no config change and left nova-tailscale-1 on a two-day-old
+# start.sh, and install said "Nova is up". The scripts' hash now goes into
+# .env and from there into a label on the service, so a script change is a
+# config change. cmd_install runs for real against a real temp copy of
+# deploy/tailscale; `docker` is a function that answers as compose does on
+# that one point — `up` recreates the sidecar when the label's interpolated
+# value differs from the running container's, and only then (measured with
+# `docker compose config --hash`: same value, same hash; new value, new
+# hash for tailscale alone) — and records every recreate. COMPOSE=stuck is a
+# compose that never recreates: the PR #111 shape.
+#   $1 world dir (persists across calls: .env, the scripts, the container)
+#   $2 compose behaviour: honest | stuck
+# Prints "<exit>|<.env with ;>|<combined output>|<recreates so far>".
+run_ts_install() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    W="$1"; COMPOSE="$2"
+    # shellcheck disable=SC2034
+    DATA_DIR="$W/data"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$W/data/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$W/.env"
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    TAILSCALE_DIR="$W/tailscale"
+    install_hub_agent() { log "HUB AGENT REACHED"; }
+    tailnet_dns_name() { printf 'nova.example.ts.net'; }
+    docker() {
+      case "$*" in
+        info) printf 'Runtimes: runc\n' ;;
+        "compose version") ;;
+        *" up -d --build")
+          local wanted
+          wanted="$(get_env_value NOVA_TAILSCALE_SCRIPTS)"
+          if [ "$COMPOSE" = honest ] && [ "$wanted" != "$(cat "$W/label" 2>/dev/null)" ]; then
+            printf '%s' "$wanted" > "$W/label"
+            echo recreate >> "$W/recreates"
+          fi ;;
+        *" ps -q tailscale") printf 'tscid\n' ;;
+        *" ps -q "*) printf 'cid\n' ;;
+        "inspect --format {{index .Config.Labels \"nova.tailscale-scripts\"}} tscid")
+          cat "$W/label" 2>/dev/null; printf '\n' ;;
+        "inspect "*) printf 'healthy\n' ;;
+        *) printf 'unexpected docker call: %s\n' "$*" >&2; return 1 ;;
+      esac
+    }
+    detect_gpus_json() { printf '[]'; }
+    detect_disk_free_gb() { printf '100'; }
+    port_holder() { printf ''; }
+    check_foreign_project() { :; }
+    docker_network_ids() { :; }
+    have_cmd() { [ "$1" = ip ]; }
+    have_tty() { return 1; }
+    ip_route_text() { printf '%s\n' '172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1'; }
+    compose_project_name() { printf '%s' nova; }
+    unset NOVA_SKIP_INFERENCE NOVA_SUBNET
+    export NOVA_TAILNET=1
+    out="$(cmd_install 2>&1)"; code=$?
+    printf '%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" "$(printf '%s' "$out" | tr '\n' ' ')" \
+      "$(grep -c recreate "$W/recreates" 2>/dev/null || echo 0)"
+  )
+}
+# A world whose sidecar was created from the scripts as they are now: the
+# shipped scripts copied in, .env already carrying their hash, the running
+# container labelled with it. Prints the world dir.
+ts_world() {
+  local w h
+  w="$(mktemp -d)"
+  mkdir -p "$w/tailscale" "$w/data"
+  cp "$SCRIPT_DIR"/tailscale/*.sh "$w/tailscale/"
+  h="$( . "$SCRIPT_DIR/install.sh"; TAILSCALE_DIR="$w/tailscale"; tailscale_scripts_hash )"
+  { sed 's/^TS_AUTHKEY=$/TS_AUTHKEY=tskey-auth-x/' "$SCRIPT_DIR/.env.example"
+    printf 'NOVA_TAILSCALE_SCRIPTS=%s\n' "$h"; } > "$w/.env"
+  printf '%s' "$h" > "$w/label"
+  printf '%s' "$w"
+}
+
+# Unchanged scripts: the sidecar is left alone, and install says so.
+TSW="$(ts_world)"
+TS_SAME="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet scripts unchanged: install succeeds" "$TS_SAME" 0 3 "Nova is up"
+expect_str "tailnet scripts unchanged: the sidecar is NOT recreated" "$(tn_field "$TS_SAME" 4)" 0
+expect_tn "tailnet scripts unchanged: says it left the sidecar running" "$TS_SAME" 0 3 "sidecar scripts unchanged"
+expect_tn_lacks "tailnet scripts unchanged: no 'changed' line" "$TS_SAME" 3 "sidecar scripts changed"
+
+# A test file beside the scripts is not one the container runs.
+printf '\n# edited\n' >> "$TSW/tailscale/start_test.sh"
+TS_TESTONLY="$(run_ts_install "$TSW" honest)"
+expect_str "tailnet: editing start_test.sh recreates nothing" "$(tn_field "$TS_TESTONLY" 4)" 0
+
+# A changed start.sh: exactly one recreate, one line saying so, success.
+printf '\n# a change that has to reach the running sidecar\n' >> "$TSW/tailscale/start.sh"
+TS_CHANGED="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet start.sh changed: install succeeds" "$TS_CHANGED" 0 3 "Nova is up"
+expect_str "tailnet start.sh changed: exactly one recreate" "$(tn_field "$TS_CHANGED" 4)" 1
+expect_str "tailnet start.sh changed: one log line says so" \
+  "$(tn_field "$TS_CHANGED" 3 | grep -o 'sidecar scripts changed' | grep -c .)" 1
+expect_str "tailnet start.sh changed: .env carries the new hash" \
+  "$(env_key_value "$TS_CHANGED" 2 NOVA_TAILSCALE_SCRIPTS)" \
+  "$( . "$SCRIPT_DIR/install.sh"; TAILSCALE_DIR="$TSW/tailscale"; tailscale_scripts_hash )"
+expect_str "tailnet start.sh changed: still exactly one NOVA_TAILSCALE_SCRIPTS line" \
+  "$(tn_field "$TS_CHANGED" 2 | tr ';' '\n' | grep -c '^NOVA_TAILSCALE_SCRIPTS=')" 1
+# ...and the install after it does not recreate it again.
+TS_AGAIN="$(run_ts_install "$TSW" honest)"
+expect_str "tailnet: the next install leaves it alone (still one recreate in all)" "$(tn_field "$TS_AGAIN" 4)" 1
+expect_tn "tailnet: the next install says unchanged" "$TS_AGAIN" 0 3 "sidecar scripts unchanged"
+
+# serve_check.sh is the healthcheck's script, and counts the same.
+printf '\n# edited\n' >> "$TSW/tailscale/serve_check.sh"
+expect_str "tailnet serve_check.sh changed: one more recreate" \
+  "$(tn_field "$(run_ts_install "$TSW" honest)" 4)" 2
+rm -rf "$TSW"
+
+# A first install after this change: .env has no hash yet, the container has
+# no label. One recreate, and from then on the label is the repo's.
+TSW="$(ts_world)"
+TS_ENV_BODY="$(grep -v '^NOVA_TAILSCALE_SCRIPTS=' "$TSW/.env")"; printf '%s\n' "$TS_ENV_BODY" > "$TSW/.env"
+: > "$TSW/label"
+TS_FIRST="$(run_ts_install "$TSW" honest)"
+expect_tn "tailnet, no hash recorded yet: install succeeds" "$TS_FIRST" 0 3 "Nova is up"
+expect_str "tailnet, no hash recorded yet: exactly one recreate" "$(tn_field "$TS_FIRST" 4)" 1
+rm -rf "$TSW"
+
+# PR #111's shape: the script changed and compose did not recreate the
+# sidecar. Install must fail, name it, and never say "Nova is up".
+TSW="$(ts_world)"
+printf '\n# changed\n' >> "$TSW/tailscale/start.sh"
+TS_STUCK="$(run_ts_install "$TSW" stuck)"
+expect_tn "tailnet, sidecar not recreated: install fails" "$TS_STUCK" 1 3 "not running this checkout's start.sh"
+expect_tn "tailnet, sidecar not recreated: gives the command that fixes it" "$TS_STUCK" 1 3 \
+  "up -d --force-recreate tailscale"
+expect_tn_lacks "tailnet, sidecar not recreated: never says Nova is up" "$TS_STUCK" 3 "Nova is up"
+expect_tn_lacks "tailnet, sidecar not recreated: the hub's agent is never reached" "$TS_STUCK" 3 "HUB AGENT REACHED"
+# A sidecar the label cannot be read from is not one that was checked.
+: > "$TSW/label"
+TS_NOLABEL="$(run_ts_install "$TSW" stuck)"
+expect_tn "tailnet, no label on the sidecar: install fails" "$TS_NOLABEL" 1 3 "not running this checkout's start.sh"
+rm -rf "$TSW"
+
+# No way to hash is a refusal, never an empty value that compose would
+# read as "no change".
+TS_NOHASH="$(
+  . "$SCRIPT_DIR/install.sh"; set +e
+  # shellcheck disable=SC2034
+  TAILNET_ENABLED=1
+  TAILSCALE_DIR="$(mktemp -d)"
+  out="$( (record_tailscale_scripts) 2>&1 )"; code=$?
+  rmdir "$TAILSCALE_DIR"
+  printf '%s|%s' "$code" "$(printf '%s' "$out" | tr '\n' ' ')"
+)"
+expect_case "tailnet: no scripts to hash is a refusal" "$TS_NOHASH" 1 "could not hash the tailnet sidecar's scripts"
+
+# Tripwires: the label install.sh reads back is the one the compose file sets
+# on the tailscale service, fed from the .env key install.sh writes; the key
+# is declared for the backup; and cmd_install records before `up` and
+# verifies after it.
+TS_LABEL_LINE="$(awk '
+  /^  tailscale:$/ { f = 1; next }
+  f && /^  [a-z]/ { f = 0 }
+  f && /^    labels:$/ { l = 1; next }
+  f && l && /^      / { print; next }
+  { l = 0 }
+' "$SCRIPT_DIR/docker-compose.yml" | sed 's/^ *//')"
+expect_str "tripwire: the tailscale service carries the scripts label, fed from .env" \
+  "$TS_LABEL_LINE" "$( . "$SCRIPT_DIR/install.sh"; printf '%s' "$TAILSCALE_SCRIPTS_LABEL"): \${NOVA_TAILSCALE_SCRIPTS:-}"
+if awk '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    /^(# )?NOVA_TAILSCALE_SCRIPTS=/ { if (d) ok = 1 }
+    { d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example"; then
+  report 0 "tripwire: .env.example declares NOVA_TAILSCALE_SCRIPTS for the backup"
+else
+  report 1 "tripwire: .env.example declares NOVA_TAILSCALE_SCRIPTS for the backup" "no declared line"
+fi
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  record_tailscale_scripts$/{r=NR} f&&/^  compose_up$/{u=NR} f&&/^  verify_tailscale_scripts$/{v=NR}
+        END{exit !(r && u && v && r < u && u < v)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "tailnet: cmd_install records the scripts hash before up and verifies it after"
+else
+  report 1 "tailnet: cmd_install records the scripts hash before up and verifies it after" "order or call missing"
+fi
+
+# ── record_repository: she is told which GitHub repository is her own ───────
+# Walk finding (turn 641f312e): asked "why is CI red on main?", she spent all
+# six tool rounds hunting for WHICH repository is hers. The installer runs
+# from the checkout, so the checkout's own `origin` is the answer — derived,
+# never typed in. A real throwaway git repo per case, real `git`, real
+# set_env_value; only REPO_ROOT and ENV_FILE are pointed at a temp dir.
+#   $1 origin url ("" = no origin)   $2 default branch for origin/HEAD ("" = none)
+#   $3 initial .env body
+# Prints "<exit>|<.env with ;>|<stderr>".
+run_repo() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${3:-}" > "$ENV_FILE"
+    git init -q "$REPO_ROOT"
+    if [ -n "$1" ]; then git -C "$REPO_ROOT" remote add origin "$1"; fi
+    if [ -n "$2" ]; then
+      git -C "$REPO_ROOT" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+      git -C "$REPO_ROOT" update-ref "refs/remotes/origin/$2" HEAD
+      git -C "$REPO_ROOT" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$2"
+    fi
+    err="$( ( set -e; record_repository ) 2>&1 )"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+RP_HTTPS="$(run_repo https://github.com/jeremyspofford/nova main 'A=1\n')"
+expect_tn "repo: https remote gives owner/repo" "$RP_HTTPS" 0 2 "NOVA_REPO=jeremyspofford/nova;"
+expect_tn "repo: the default branch is written" "$RP_HTTPS" 0 2 "NOVA_REPO_BRANCH=main;"
+expect_tn "repo: other keys untouched" "$RP_HTTPS" 0 2 "A=1;"
+expect_tn "repo: says what it wrote" "$RP_HTTPS" 0 3 "jeremyspofford/nova"
+expect_tn "repo: https with .git is stripped" \
+  "$(run_repo https://github.com/o-1/r.x_y.git main '')" 0 2 "NOVA_REPO=o-1/r.x_y;"
+RP_SSH="$(run_repo git@github.com:jeremyspofford/nova.git trunk '')"
+expect_tn "repo: ssh git@github.com:o/r.git gives owner/repo" "$RP_SSH" 0 2 "NOVA_REPO=jeremyspofford/nova;"
+expect_tn "repo: the branch is origin/HEAD's, not assumed main" "$RP_SSH" 0 2 "NOVA_REPO_BRANCH=trunk;"
+expect_tn "repo: ssh:// form too" \
+  "$(run_repo ssh://git@github.com/o/r.git main '')" 0 2 "NOVA_REPO=o/r;"
+RP_NOHEAD="$(run_repo https://github.com/o/r '' '')"
+expect_tn "repo: no origin/HEAD still writes the repo" "$RP_NOHEAD" 0 2 "NOVA_REPO=o/r;"
+expect_tn_lacks "repo: no origin/HEAD writes no branch" "$RP_NOHEAD" 2 "NOVA_REPO_BRANCH"
+RP_GITLAB="$(run_repo git@gitlab.com:o/r.git main 'A=1\n')"
+expect_tn "repo: a non-GitHub remote writes nothing" "$RP_GITLAB" 0 2 "A=1;"
+expect_tn_lacks "repo: a non-GitHub remote writes no NOVA_REPO" "$RP_GITLAB" 2 "NOVA_REPO"
+expect_tn "repo: a non-GitHub remote says so" "$RP_GITLAB" 0 3 "not a GitHub repository"
+RP_LOOKALIKE="$(run_repo https://github.com.evil.example/o/r main '')"
+expect_tn_lacks "repo: a github.com look-alike host writes nothing" "$RP_LOOKALIKE" 2 "NOVA_REPO"
+RP_NONE="$(run_repo '' '' 'A=1\n')"
+expect_tn_lacks "repo: no origin writes nothing" "$RP_NONE" 2 "NOVA_REPO"
+expect_tn "repo: no origin says so" "$RP_NONE" 0 3 "no git remote"
+# A stale value from an earlier install is a guess once the remote stops
+# answering for it: blanked, never left standing.
+RP_STALE="$(run_repo '' '' 'NOVA_REPO=old/one\nNOVA_REPO_BRANCH=main\n')"
+expect_tn "repo: a stale NOVA_REPO is blanked when there is no remote" "$RP_STALE" 0 2 "NOVA_REPO=;"
+expect_tn "repo: a stale NOVA_REPO_BRANCH is blanked too" "$RP_STALE" 0 2 "NOVA_REPO_BRANCH=;"
+RP_SAME="$(run_repo https://github.com/o/r main 'NOVA_REPO=o/r\nNOVA_REPO_BRANCH=main\n')"
+expect_str "repo: a re-run leaves exactly one NOVA_REPO line" \
+  "$(tn_field "$RP_SAME" 2 | tr ';' '\n' | grep -c '^NOVA_REPO=')" "1"
+# cmd_install reaches it (delete the call and this goes red).
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit} f&&/^  record_repository$/{found=1} END{exit !found}' \
+  "$SCRIPT_DIR/install.sh"; then
+  report 0 "repo: cmd_install calls record_repository"
+else
+  report 1 "repo: cmd_install calls record_repository" "no call in cmd_install"
+fi
+# Both keys are declared for the backup (an undeclared .env key refuses every
+# backup by name) and handed to core by compose.
+RP_MISSING=""
+for RP_KEY in NOVA_REPO NOVA_REPO_BRANCH; do
+  grep -q "^  *${RP_KEY}: \${${RP_KEY}:-}" "$SCRIPT_DIR/docker-compose.yml" \
+    || RP_MISSING="$RP_MISSING docker-compose.yml:$RP_KEY"
+  awk -v k="$RP_KEY" '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    $0 ~ ("^(# )?" k "=") { if (d) ok = 1 }
+    { d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example" || RP_MISSING="$RP_MISSING .env.example:$RP_KEY"
+done
+if [ -z "$RP_MISSING" ]; then
+  report 0 "repo: both keys are passed to core and declared in .env.example"
+else
+  report 1 "repo: both keys are passed to core and declared in .env.example" "missing:$RP_MISSING"
+fi
+
 # ── tripwire: the five keys decide_subnet writes have to MEAN something ─────
 # It writes NOVA_SUBNET, NOVA_SUBNET_RANGE, NOVA_SUBNET_GATEWAY, NOVA_WEB_ADDR
 # and NOVA_TAILSCALE_ADDR. Two of those are already read by
@@ -1977,5 +2401,666 @@ else
     "missing:$SUB_MISSING"
 fi
 
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+# ── the hub machine's own agent (S42b P23) ──────────────────────────────────
+# install_hub_agent runs for real, with errexit on as ./install runs it.
+# Stubbed is every seam that reaches outside: the version, the build, the
+# loopback door (hub_request: one GET, answered from the case's script for
+# that path — a status, a Retry-After, a body), the parser's interpreter (the
+# host's python3 runs the very program install.sh hands core's Python), the
+# mint, the WSL check, the sleep, the hostname and the binary itself: a
+# script that records its argv and whether the one env var it may read held
+# the minted code, then exits as told. sha256_of is the real one, over the
+# bytes the stub door served.
+#
+# The pairing code is a credential, so nothing here PRINTS it, even when a
+# case fails: the fake novad records env=minted (or none/other), never the
+# value, and a failing case shows its output with the code masked.
+#   $1 novad's first exit   $2 the build core serves   $3 WSL (0/1)
+#   $4 the hostname         $5 shell run just before the call (a case's own
+#                              stubs and knobs; optional)
+# Prints "<exit>|<calls>|<GETs>|<novad runs>|<output>" (the output last: it
+# is the one field that may hold a '|').
+HA_CODE="ABCD-2345"
+# The card's Windows line as core's JSON carries it (its quotes escaped), and
+# as a person must see it.
+HA_WINDOWS_JSON='& $f install --hub http://127.0.0.1:3000 --code {CODE}; if($LASTEXITCODE -ne 0){throw \"novad install failed (exit $LASTEXITCODE)\"}'
+HA_WINDOWS_LINE='& $f install --hub http://127.0.0.1:3000 --code {CODE}; if($LASTEXITCODE -ne 0){throw "novad install failed (exit $LASTEXITCODE)"}'
+
+# A served manifest in core's own compact shape: the signed body, the
+# version beside it, the card's commands.
+#   $1 the version   $2 linux-amd64's sha256   [$3 the commands JSON]
+#   [$4 commands_reason JSON]
+ha_manifest() {
+  local cmds="${3:-}"
+  [ -n "$cmds" ] || cmds="{\"linux\":\"l\",\"macos\":\"m\",\"windows\":\"$HA_WINDOWS_JSON\"}"
+  printf '{"manifest":{"v":1,"version":"%s","built_at":"x","go":"go1.27.1","files":{"linux-amd64":{"name":"novad-linux-amd64","sha256":"%s","size":1},"linux-arm64":{"name":"novad-linux-arm64","sha256":"%064d","size":1}}},"sig":"x","version":"%s","commands":%s,"commands_reason":%s,"walks":{},"notes":{}}' \
+    "$1" "$2" 7 "$1" "$cmds" "${4:-null}"
+}
+
+# C3: the same manifest as a re-serializer might write it — top-level keys,
+# entries and each entry's keys in other orders, pretty-printed — with a
+# decoy linux-amd64 object AFTER the real one (a greedy pattern over the
+# text takes the last match). $1 linux-amd64's sha256.
+ha_manifest_reordered() {
+  printf '%s\n' \
+    '{' \
+    '  "sig": "x",' \
+    '  "version": "aaaaaaaaaaaa",' \
+    '  "manifest": {' \
+    '    "files": {' \
+    "      \"windows-arm64\": {\"size\": 1, \"sha256\": \"$(printf '%064d' 3)\", \"name\": \"novad-windows-arm64.exe\"}," \
+    "      \"linux-arm64\": {\"sha256\": \"$(printf '%064d' 2)\", \"size\": 1, \"name\": \"novad-linux-arm64\"}," \
+    "      \"linux-amd64\": {\"size\": 1, \"sha256\": \"$1\", \"name\": \"novad-linux-amd64\"}" \
+    '    },' \
+    '    "version": "aaaaaaaaaaaa",' \
+    '    "v": 1' \
+    '  },' \
+    '  "commands": null,' \
+    "  \"walks\": {\"linux-amd64\": {\"name\": \"novad-linux-amd64\", \"sha256\": \"$(printf '%064d' 9)\", \"size\": 1}}" \
+    '}'
+}
+
+run_hub_agent() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    HUB_T="$(mktemp -d)"
+    # The run's own TMPDIR: whatever install_hub_agent leaves there is listed
+    # in the calls field as LEFT:, so every exact calls check also asserts
+    # that no download folder stays behind.
+    mkdir "$HUB_T/tmp"
+    export TMPDIR="$HUB_T/tmp"
+    NOVAD_FIRST="$1"; SERVED="$2"; IN_WSL="$3"; HOST_NAME="$4"
+    # The fake also reads its own environment: a variable called code or
+    # minted there, or the code anywhere but NOVA_PAIRING_CODE, is a leak,
+    # listed in the calls field as LEAK: — so every exact calls check asserts
+    # none (J3).
+    cat > "$HUB_T/fake-novad" <<EOF
+#!/bin/sh
+case "\${NOVA_PAIRING_CODE:-}" in
+  "") env=none ;;
+  "$HA_CODE") env=minted ;;
+  *) env=other ;;
+esac
+leak=""
+if env | grep -q '^code='; then leak="\$leak code"; fi
+if env | grep -q '^minted='; then leak="\$leak minted"; fi
+if env | grep -v '^NOVA_PAIRING_CODE=' | grep -qF '$HA_CODE'; then leak="\$leak the-code-elsewhere"; fi
+if [ -n "\$leak" ]; then echo "LEAK:\$leak" >> "$HUB_T/calls"; fi
+printf 'argv=%s env=%s\n' "\$*" "\$env" >> "$HUB_T/novad"
+n=\$(wc -l < "$HUB_T/novad")
+if [ "\$n" -eq 1 ]; then exit $NOVAD_FIRST; fi
+exit 0
+EOF
+    HA_SUM="$(sha256_of "$HUB_T/fake-novad")"
+    HA_MANIFEST="$(ha_manifest "$SERVED" "$HA_SUM")"
+    # Per path, the answers in turn ("STATUS" or "STATUS:RETRY-AFTER"), the
+    # last one repeating.
+    HA_MANIFEST_SCRIPT=200
+    HA_DIST_SCRIPT=200
+    HA_DNS=""
+    HA_TRACE=0
+    # A Retry-After line to send as it stands on every 429 (an HTTP-date, an
+    # empty value), in place of the script's STATUS:SECONDS one.
+    HA_RA_LINE=""
+    agent_version_of() { printf 'aaaaaaaaaaaa'; }
+    build_agent_dist() { printf 'built %s\n' "$1" >> "$HUB_T/calls"; }
+    hub_request() { # $1 path  $2 body file  $3 header file  $4 seconds
+      local which script n i t tok status after
+      printf 'GET %s\n' "$1" >> "$HUB_T/gets"
+      case "$1" in
+        /api/v1/agent/manifest*) which=manifest; script="$HA_MANIFEST_SCRIPT" ;;
+        /api/v1/agent/dist/*) which=dist; script="$HA_DIST_SCRIPT" ;;
+        *) printf '000'; return 7 ;;
+      esac
+      n=$(( $(cat "$HUB_T/n.$which" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\n' "$n" > "$HUB_T/n.$which"
+      i=0; tok=""
+      for t in $script; do i=$((i + 1)); tok="$t"; [ "$i" -lt "$n" ] || break; done
+      status="${tok%%:*}"; after=""
+      case "$tok" in *:*) after="${tok#*:}" ;; esac
+      {
+        printf 'HTTP/1.1 %s Stub\r\n' "$status"
+        if [ -n "$HA_RA_LINE" ] && [ "$status" = 429 ]; then printf '%s\r\n' "$HA_RA_LINE"
+        elif [ -n "$after" ]; then printf 'Retry-After: %s\r\n' "$after"; fi
+        printf '\r\n'
+      } > "$3"
+      if [ "$status" = 200 ]; then
+        if [ "$which" = manifest ]; then printf '%s' "$HA_MANIFEST" > "$2"; else cat "$HUB_T/fake-novad" > "$2"; fi
+      else
+        printf '{"error":"the stub answered %s"}' "$status" > "$2"
+      fi
+      printf '%s' "$status"
+    }
+    hub_python() { python3 "$@"; }
+    hub_mint() {
+      printf 'mint %s\n' "$1" >> "$HUB_T/calls"
+      printf '{"code": "%s", "expires_at": "x", "repair": false}\n' "$HA_CODE"
+    }
+    hub_sleep() { printf 'slept %s\n' "$1" >> "$HUB_T/calls"; }
+    running_in_wsl() { [ "$IN_WSL" = 1 ]; }
+    hub_os_arch() { printf 'linux amd64'; }
+    hub_hostname() { printf '%s' "$HOST_NAME"; }
+    tailnet_dns_name() { [ -n "$HA_DNS" ] || return 1; printf '%s' "$HA_DNS"; }
+    unset NOVA_HUB_AGENT_NAME NOVA_PAIRING_CODE
+    if [ -n "${5:-}" ]; then eval "$5"; fi
+    # `exec 2>&1` holds for the subshell's whole life, so what its EXIT trap
+    # says (hub_cleanup) is captured too, not printed past the result.
+    if [ "$HA_TRACE" = 1 ]; then
+      err="$(exec 2>&1; set -e; set -x; install_hub_agent)"; code=$?
+    else
+      err="$(exec 2>&1; set -e; install_hub_agent)"; code=$?
+    fi
+    left="$(ls -A "$HUB_T/tmp" 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$left" ]; then printf 'LEFT: %s\n' "$left" >> "$HUB_T/calls"; fi
+    # 2>/dev/null BEFORE the input: a file a case never wrote is "nothing
+    # happened", and the shell says so on the stderr in force when it opens it.
+    # The run's folder reads as <HUB_T> in the output, the same on every machine.
+    printf '%s|%s|%s|%s|%s' "$code" \
+      "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/calls")" \
+      "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/gets")" \
+      "$(tr '\n' ' ' 2>/dev/null < "$HUB_T/novad")" \
+      "$(printf '%s' "$err" | sed "s#$HUB_T#<HUB_T>#g" | tr '\n' ' ')"
+    rm -rf "$HUB_T"
+  )
+}
+
+# A result fit to print: the code masked.
+ha_masked() { printf '%s' "$1" | sed "s/$HA_CODE/<the minted code>/g"; }
+# Field $2 of a result: 1 exit, 2 calls, 3 GETs, 4 novad runs, 5 the output.
+ha_field() {
+  if [ "$2" = 5 ]; then printf '%s' "$1" | cut -d'|' -f5-; else printf '%s' "$1" | cut -d'|' -f"$2"; fi
+}
+# $1 name  $2 result  $3 field  $4 what the field must be exactly
+ha_is() {
+  if [ "$(ha_field "$2" "$3")" = "$4" ]; then report 0 "$1"; else
+    report 1 "$1" "field $3 is not '$4' — $(ha_masked "$2")"; fi
+}
+# $1 name  $2 result  $3 field  $4 what the field must hold
+ha_has() {
+  case "$(ha_field "$2" "$3")" in
+    *"$4"*) report 0 "$1" ;;
+    *) report 1 "$1" "field $3 lacks '$4' — $(ha_masked "$2")" ;;
+  esac
+}
+ha_lacks() {
+  case "$(ha_field "$2" "$3")" in
+    *"$4"*) report 1 "$1" "field $3 holds '$4' — $(ha_masked "$2")" ;;
+    *) report 0 "$1" ;;
+  esac
+}
+# The minted code is nowhere in the result: not in an argv, not in a line of
+# output, not in a trace.
+ha_never() {
+  case "$2" in
+    *"$HA_CODE"*) report 1 "$1" "$(ha_masked "$2")" ;;
+    *) report 0 "$1" ;;
+  esac
+}
+# The reason ./install ENDED with: the output from the last "ERROR: " (die's
+# prefix) to the end. A progress line saying 429 is not that reason — a run
+# that went on past its 429s and failed on something else ends with
+# something else (review a7374986a9ff4fbb4, J1). $3 is how it must begin.
+ha_final() {
+  local final
+  final="$(ha_field "$2" 5 | sed 's/.*ERROR: /ERROR: /')"
+  case "$final" in
+    "$3"*) report 0 "$1" ;;
+    *) report 1 "$1" "it ends: $(ha_masked "$final") — wanted it to begin: $3" ;;
+  esac
+}
+
+LOOP_ARGV="argv=install --if-missing --hub http://127.0.0.1:3000 env=none "
+MANIFEST_GET="GET /api/v1/agent/manifest?origin=loopback "
+
+# The ordinary re-run: this machine's agent is installed and running.
+HA_OK="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc)"
+ha_is "hub agent installed and running: left alone, exit 0" "$HA_OK" 1 0
+ha_is "hub agent installed and running: built first, no code minted" "$HA_OK" 2 "built aaaaaaaaaaaa "
+ha_is "hub agent: the manifest (as the machine running the stack) and its build come through the loopback door" \
+  "$HA_OK" 3 "${MANIFEST_GET}GET /api/v1/agent/dist/novad-linux-amd64 "
+ha_is "hub agent installed and running: one run, --if-missing, nothing in its environment" "$HA_OK" 4 "$LOOP_ARGV"
+ha_has "hub agent installed and running: says so" "$HA_OK" 5 "installed and running"
+
+# Exit 3: not paired. A code named after the machine (lowercased) is minted
+# and handed to the second run by environment — never argv, never output.
+HA_PAIR="$(run_hub_agent 3 aaaaaaaaaaaa 0 MiniPC)"
+ha_is "exit 3: pairs, exit 0" "$HA_PAIR" 1 0
+ha_is "exit 3: a code named after the machine is minted" "$HA_PAIR" 2 "built aaaaaaaaaaaa mint minipc "
+ha_is "exit 3: the second run gets the minted code by env, not argv" "$HA_PAIR" 4 \
+  "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+ha_never "exit 3: the pairing code is in no argv and no line of output" "$HA_PAIR"
+
+# A traced run (`bash -x deploy/install.sh`) prints every assignment and
+# command line. Tracing is off from the mint until the code is gone, and on
+# again after it.
+HA_TRACED="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'HA_TRACE=1')"
+ha_is "set -x: still pairs" "$HA_TRACED" 1 0
+ha_has "set -x: the trace was on before the code (it shows the build)" "$HA_TRACED" 5 "+ build_agent_dist aaaaaaaaaaaa"
+ha_has "set -x: and on again after it (it shows the last line)" "$HA_TRACED" 5 "+ log 'Nova'"
+ha_never "set -x: the pairing code is in no trace line" "$HA_TRACED"
+
+# A NOVA_PAIRING_CODE already in ./install's own environment is not this
+# run's: only the code ./install minted reaches the agent.
+HA_STRAY="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'export NOVA_PAIRING_CODE=STRAY-CODE')"
+ha_is "a stray NOVA_PAIRING_CODE reaches neither run; the minted one reaches the second" "$HA_STRAY" 4 \
+  "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+
+# J3 (review): neither the code nor the mint's answer reaches a child's
+# environment. An exported code or minted stays exported under bash's
+# `local`, and with `export -n` on the local alone the stray copy it shadows
+# is what children get (measured under 5.2.21 and 3.2.57). The fake novad
+# reads its own environment on both runs; a leak shows as LEAK: in calls.
+HA_J3="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'export code=stray-code minted=stray-minted')"
+ha_is "code and minted exported by the environment: no run sees either, stray or real" "$HA_J3" 2 \
+  "built aaaaaaaaaaaa mint minipc "
+ha_is "code and minted exported by the environment: the code reaches novad by NOVA_PAIRING_CODE alone" \
+  "$HA_J3" 4 "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+HA_J3A="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'set -a')"
+ha_is "set -a (allexport): no run sees code or minted" "$HA_J3A" 2 "built aaaaaaaaaaaa mint minipc "
+ha_is "set -a (allexport): the code reaches novad by NOVA_PAIRING_CODE alone" "$HA_J3A" 4 \
+  "${LOOP_ARGV}argv=install --hub http://127.0.0.1:3000 env=minted "
+
+# C1: never `hub`. A machine whose name resolves to it — any case, any
+# padding — is refused before a code is minted, naming the word and the way.
+for HA_HOST in hub HUB; do
+  HA_HUB="$(run_hub_agent 3 aaaaaaaaaaaa 0 "$HA_HOST")"
+  ha_is "a machine called $HA_HOST: refused" "$HA_HUB" 1 1
+  ha_is "a machine called $HA_HOST: no code is minted" "$HA_HUB" 2 "built aaaaaaaaaaaa "
+  ha_is "a machine called $HA_HOST: no second run" "$HA_HUB" 4 "$LOOP_ARGV"
+  ha_has "a machine called $HA_HOST: names the reserved word" "$HA_HUB" 5 "cannot be named 'hub'"
+  ha_has "a machine called $HA_HOST: says what to do" "$HA_HUB" 5 "NOVA_HUB_AGENT_NAME=<a name> ./install"
+done
+HA_HUB_ENV="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'export NOVA_HUB_AGENT_NAME=" Hub "')"
+ha_is "NOVA_HUB_AGENT_NAME=' Hub ': refused" "$HA_HUB_ENV" 1 1
+ha_is "NOVA_HUB_AGENT_NAME=' Hub ': no code is minted" "$HA_HUB_ENV" 2 "built aaaaaaaaaaaa "
+HA_NAMED="$(run_hub_agent 3 aaaaaaaaaaaa 0 hub 'export NOVA_HUB_AGENT_NAME=Office-Box')"
+ha_is "NOVA_HUB_AGENT_NAME names the machine (a host called hub is fine then)" "$HA_NAMED" 2 \
+  "built aaaaaaaaaaaa mint office-box "
+ha_is "NOVA_HUB_AGENT_NAME: pairs" "$HA_NAMED" 1 0
+
+# The hub must serve the build agent-dist just made, or nothing is installed.
+HA_OTHER="$(run_hub_agent 0 bbbbbbbbbbbb 0 minipc)"
+ha_is "core serves another build: refused" "$HA_OTHER" 1 1
+ha_has "core serves another build: said, naming both" "$HA_OTHER" 5 \
+  "core serves a build other than aaaaaaaaaaaa, the one agent-dist just built (it serves bbbbbbbbbbbb)"
+ha_is "core serves another build: nothing downloaded" "$HA_OTHER" 3 "$MANIFEST_GET"
+ha_is "core serves another build: nothing run" "$HA_OTHER" 4 ""
+
+# C4 (F9): a WSL hub installs nothing. It prints the Windows line core serves
+# for the machine running the stack, and where the code comes from.
+HA_WSL="$(run_hub_agent 0 aaaaaaaaaaaa 1 minipc)"
+ha_is "WSL hub: exit 0" "$HA_WSL" 1 0
+ha_is "WSL hub: built, nothing minted" "$HA_WSL" 2 "built aaaaaaaaaaaa "
+ha_is "WSL hub: reads ?origin=loopback, downloads nothing" "$HA_WSL" 3 "$MANIFEST_GET"
+ha_is "WSL hub: runs nothing" "$HA_WSL" 4 ""
+ha_has "WSL hub: prints commands.windows exactly as a person must run it" "$HA_WSL" 5 "$HA_WINDOWS_LINE"
+ha_has "WSL hub: says where the code comes from" "$HA_WSL" 5 "Settings → Devices → Pair a device"
+ha_has "WSL hub: says where the Windows line runs" "$HA_WSL" 5 "Windows line"
+HA_WSL_NONE="$(run_hub_agent 0 aaaaaaaaaaaa 1 minipc \
+  'HA_MANIFEST="$(ha_manifest aaaaaaaaaaaa "$HA_SUM" null "\"no origin is known yet\"")"')"
+ha_is "WSL hub, no Windows line served: refused" "$HA_WSL_NONE" 1 1
+ha_has "WSL hub, no Windows line served: says why, in core's words" "$HA_WSL_NONE" 5 "no origin is known yet"
+
+HA_FAILED="$(run_hub_agent 1 aaaaaaaaaaaa 0 minipc)"
+ha_is "novad install failing: fails ./install" "$HA_FAILED" 1 1
+ha_has "novad install failing: says novad's exit" "$HA_FAILED" 5 \
+  "the hub's agent was not installed (novad install exited 1"
+ha_has "novad install failing: and that the stack is up" "$HA_FAILED" 5 "the stack is up"
+
+HA_SUMBAD="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST="$(ha_manifest aaaaaaaaaaaa "$(printf "%064d" 1)")"')"
+ha_is "a download whose sha256 is not the manifest's: refused" "$HA_SUMBAD" 1 1
+ha_has "a download whose sha256 is not the manifest's: said" "$HA_SUMBAD" 5 \
+  "sha256 is not the manifest's — nothing was run"
+ha_is "a download whose sha256 is not the manifest's: never run" "$HA_SUMBAD" 4 ""
+
+# C3: a real JSON parser reads the served manifest, never a pattern.
+HA_ORDER="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST="$(ha_manifest_reordered "$HA_SUM")"')"
+ha_is "a manifest in another order and shape, a decoy after the real entry: read right" "$HA_ORDER" 1 0
+ha_is "a manifest in another order and shape: the build it names is what ran" "$HA_ORDER" 4 "$LOOP_ARGV"
+HA_NOENTRY="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc \
+  'HA_MANIFEST="$(ha_manifest aaaaaaaaaaaa "$HA_SUM" | sed "s/\"linux-amd64\"/\"linux-amd65\"/")"')"
+ha_is "a manifest with no entry for this machine: refused" "$HA_NOENTRY" 1 1
+ha_has "a manifest with no entry for this machine: says which" "$HA_NOENTRY" 5 "no linux-amd64 entry"
+ha_is "a manifest with no entry for this machine: nothing downloaded" "$HA_NOENTRY" 3 "$MANIFEST_GET"
+HA_MISNAMED="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc \
+  'HA_MANIFEST="$(ha_manifest aaaaaaaaaaaa "$HA_SUM" | sed "s/\"name\":\"novad-linux-amd64\"/\"name\":\"novad-linux-arm64\"/")"')"
+ha_is "an entry that names another file: refused" "$HA_MISNAMED" 1 1
+ha_has "an entry that names another file: said" "$HA_MISNAMED" 5 "is not novad-linux-amd64"
+HA_NOTJSON="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST="<html>gate</html>"')"
+ha_is "a manifest that is not JSON: refused" "$HA_NOTJSON" 1 1
+ha_has "a manifest that is not JSON: said" "$HA_NOTJSON" 5 "not JSON"
+HA_NOPY="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'hub_python() { echo "service \"core\" is not running" >&2; return 1; }')"
+ha_is "the parser cannot run: refused" "$HA_NOPY" 1 1
+ha_has "the parser cannot run: in its own words" "$HA_NOPY" 5 "service \"core\" is not running"
+
+# C2 (Task 18's ruling): a 429 is a 429 — said as one, its Retry-After
+# waited (the sleep is stubbed and recorded), the ask repeated, within a
+# bound on asks and on the whole wait. Never a checksum failure, never "did
+# not arrive".
+HA_429="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:7 200"')"
+ha_is "429 then 200 on the manifest: installs" "$HA_429" 1 0
+ha_is "429 then 200 on the manifest: waits what Retry-After says, once" "$HA_429" 2 "built aaaaaaaaaaaa slept 7 "
+ha_is "429 then 200 on the manifest: asks again" "$HA_429" 3 \
+  "${MANIFEST_GET}${MANIFEST_GET}GET /api/v1/agent/dist/novad-linux-amd64 "
+ha_has "429 then 200 on the manifest: says it was a 429" "$HA_429" 5 "429"
+ha_has "429 then 200 on the manifest: and the Retry-After it waited" "$HA_429" 5 "Retry-After"
+HA_429D="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_DIST_SCRIPT="429:3 200"')"
+ha_is "429 then 200 on the download: installs" "$HA_429D" 1 0
+ha_is "429 then 200 on the download: waits, once" "$HA_429D" 2 "built aaaaaaaaaaaa slept 3 "
+HA_429X="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_ASK_TRIES=3; HA_MANIFEST_SCRIPT="429:5"')"
+ha_is "429 every time: gives up" "$HA_429X" 1 1
+ha_is "429 every time: after HUB_ASK_TRIES asks (3 here) and the waits between" "$HA_429X" 2 \
+  "built aaaaaaaaaaaa slept 5 slept 5 "
+ha_final "429 every time: it ENDS with the 429, not a progress line saying one" "$HA_429X"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 3 ask(s)"
+ha_lacks "429 every time: never as a checksum failure" "$HA_429X" 5 "sha256"
+ha_lacks "429 every time: never as unreachable" "$HA_429X" 5 "unreachable"
+ha_lacks "429 every time: never as did not arrive" "$HA_429X" 5 "did not arrive"
+ha_is "429 every time: nothing run" "$HA_429X" 4 ""
+# The same on the DOWNLOAD, where the step after the fetch is the checksum: a
+# 429 there must end as a 429 and run nothing — never fall through to "the
+# download's sha256 is not the manifest's" (C2; review J1).
+HA_429DX="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_ASK_TRIES=3; HA_DIST_SCRIPT="429:5"')"
+ha_is "429 every time on the download: gives up" "$HA_429DX" 1 1
+ha_is "429 every time on the download: after HUB_ASK_TRIES asks and the waits between" "$HA_429DX" 2   "built aaaaaaaaaaaa slept 5 slept 5 "
+ha_final "429 every time on the download: it ENDS with the 429" "$HA_429DX"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for novad-linux-amd64 after 3 ask(s)"
+ha_lacks "429 every time on the download: no sha256 anywhere in the output" "$HA_429DX" 5 "sha256"
+ha_is "429 every time on the download: nothing ran" "$HA_429DX" 4 ""
+HA_429SUM="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_WAIT_MAX_S=10; HA_MANIFEST_SCRIPT="429:4"')"
+ha_is "429s whose waits would pass HUB_WAIT_MAX_S: stops before the wait that would" "$HA_429SUM" 2 \
+  "built aaaaaaaaaaaa slept 4 slept 4 "
+ha_is "429s past the wait bound: exit 1" "$HA_429SUM" 1 1
+ha_final "429s past the wait bound: it ENDS with the 429" "$HA_429SUM"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 3 ask(s) and 8 s of waiting"
+HA_429LONG="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:600"')"
+ha_is "a Retry-After past the bound: gives up without waiting" "$HA_429LONG" 2 "built aaaaaaaaaaaa "
+ha_has "a Retry-After past the bound: says 429 and the wait asked for" "$HA_429LONG" 5 "600 s"
+ha_final "a Retry-After past the bound: it ENDS with the 429" "$HA_429LONG"   "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 1 ask(s) and 0 s of waiting, and its Retry-After asks 600 s more"
+HA_429BARE="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429')"
+ha_is "a 429 with no Retry-After: gives up without guessing a wait" "$HA_429BARE" 2 "built aaaaaaaaaaaa "
+ha_has "a 429 with no Retry-After: says so" "$HA_429BARE" 5 "no Retry-After"
+ha_final "a 429 with no Retry-After: it ENDS with the 429" "$HA_429BARE"   "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with no Retry-After to wait for"
+HA_503="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=503')"
+ha_is "a 503: refused at once, nothing waited" "$HA_503" 2 "built aaaaaaaaaaaa "
+ha_has "a 503: says core's status and words" "$HA_503" 5 "HTTP 503"
+ha_has "a 503: core's words" "$HA_503" 5 "the stub answered 503"
+HA_DOWN="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'hub_request() { printf 000; return 7; }')"
+ha_is "nothing answering the loopback door: refused" "$HA_DOWN" 1 1
+ha_has "nothing answering the loopback door: says curl's exit" "$HA_DOWN" 5 "curl exit 7"
+# J2 (review): Retry-After is read in base 10 — "08" and "09" are 8 and 9 s,
+# never bash's "value too great for base", and "010" is 10 s wherever it is
+# counted — and one that is there but cannot be read is said as exactly
+# that, never as no Retry-After.
+HA_RA08="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:08 200"')"
+ha_is "Retry-After 08: installs" "$HA_RA08" 1 0
+ha_is "Retry-After 08: waits 8 s" "$HA_RA08" 2 "built aaaaaaaaaaaa slept 8 "
+HA_RA09="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:09 200"')"
+ha_is "Retry-After 09: waits 9 s" "$HA_RA09" 2 "built aaaaaaaaaaaa slept 9 "
+HA_RA010="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT="429:010 200"')"
+ha_is "Retry-After 010: waits 10 s" "$HA_RA010" 2 "built aaaaaaaaaaaa slept 10 "
+HA_RA010B="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HUB_WAIT_MAX_S=9; HA_MANIFEST_SCRIPT="429:010"')"
+ha_is "Retry-After 010 against a 9 s bound: counted as 10, so it does not wait" "$HA_RA010B" 2 \
+  "built aaaaaaaaaaaa "
+ha_final "Retry-After 010 against a 9 s bound: it ENDS with the 429, asking 10 s" "$HA_RA010B" \
+  "ERROR: the hub's agent: core still answers 429 Too Many Requests for the agent manifest after 1 ask(s) and 0 s of waiting, and its Retry-After asks 10 s more"
+HA_RADATE="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429; HA_RA_LINE="Retry-After: Wed, 21 Oct 2015 07:28:00 GMT"')"
+ha_is "an HTTP-date Retry-After: no wait is guessed" "$HA_RADATE" 2 "built aaaaaaaaaaaa "
+ha_final "an HTTP-date Retry-After: it ENDS saying it could not read it, and what it was" "$HA_RADATE" \
+  "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with a Retry-After it could not read (Wed, 21 Oct 2015 07:28:00 GMT)"
+HA_RAEMPTY="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_MANIFEST_SCRIPT=429; HA_RA_LINE="Retry-After: "')"
+ha_is "an empty Retry-After: no wait is guessed" "$HA_RAEMPTY" 2 "built aaaaaaaaaaaa "
+ha_final "an empty Retry-After: it ENDS saying it could not read it — never that there was none" "$HA_RAEMPTY" \
+  "ERROR: the hub's agent: core answered 429 Too Many Requests for the agent manifest, with a Retry-After it could not read (empty)"
+# retry_after_of alone, on each form: the seconds (exit 0); nothing (exit 1,
+# no Retry-After); or the value as it came (exit 2, unreadable).
+ra_of() { # $1 a Retry-After line ("" = none) → "<exit>:<printed>"
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    f="$(mktemp)"
+    { printf 'HTTP/1.1 429 Stub\r\n'; [ -z "$1" ] || printf '%s\r\n' "$1"; printf '\r\n'; } > "$f"
+    out="$(retry_after_of "$f")"; rc=$?
+    rm -f "$f"
+    printf '%s:%s' "$rc" "$out"
+  )
+}
+for RA_ROW in "Retry-After: 7|0:7" "Retry-After: 08|0:8" "Retry-After: 010|0:10" \
+  "Retry-After: 000|0:0" "retry-after:   12  |0:12" "Retry-After: 999999|0:999999" \
+  "Retry-After: 1234567|2:1234567" "Retry-After: -3|2:-3" "Retry-After: 1.5|2:1.5" \
+  "Retry-After: |2:" "|1:"; do
+  expect_str "retry_after_of: [${RA_ROW%%|*}] → ${RA_ROW#*|}" "$(ra_of "${RA_ROW%%|*}")" "${RA_ROW#*|}"
+done
+# The bounds themselves are finite and small: never waits forever.
+HA_BOUNDS="$( ( . "$SCRIPT_DIR/install.sh"; printf '%s %s' "$HUB_ASK_TRIES" "$HUB_WAIT_MAX_S" ) )"
+case "$HA_BOUNDS" in
+  [2-9]" "[1-9][0-9] | [2-9]" "[1-5][0-9][0-9]) report 0 "the 429 bounds are finite: 2-9 asks, at most 599 s of waiting ($HA_BOUNDS)" ;;
+  *) report 1 "the 429 bounds are finite: 2-9 asks, at most 599 s of waiting" "got '$HA_BOUNDS'" ;;
+esac
+
+# C5 (Task 26): the doors. ./install reaches core through the loopback door
+# as itself: the real hub_request, with curl replaced by a recorder. And no
+# -f, which would make a 429 curl's exit 22: a 429 said as "did not arrive".
+# (No comment inside the $( ) below: bash 3.2 reads a quote in one as a quote.)
+HA_CURL="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    t="$(mktemp -d)"
+    curl() { printf '%s\n' "$@" > "$t/argv"; printf '200'; }
+    hub_request "/api/v1/agent/manifest?origin=loopback" "$t/body" "$t/headers" 30 > /dev/null
+    printf 'url=%s headers=%s proxy=%s fail=%s' \
+      "$(grep -c '^http://127\.0\.0\.1:3000/api/v1/agent/manifest?origin=loopback$' "$t/argv")" \
+      "$(grep -ciE '^(-H|--header)' "$t/argv")" \
+      "$(grep -c '^--noproxy$' "$t/argv")" \
+      "$(grep -cE '^(-[A-Za-z]*f[A-Za-z]*|--fail.*)$' "$t/argv")"
+    rm -rf "$t"
+  )
+)"
+expect_str "the door: the manifest is asked of http://127.0.0.1:3000, directly, with no header added and no -f" \
+  "$HA_CURL" "url=1 headers=0 proxy=1 fail=0"
+HA_RELAY_LINES="$(grep -niE 'cf-connecting-ip|tailscale-user-|x-forwarded-for|x-real-ip' "$SCRIPT_DIR/install.sh" \
+  | grep -vE '^[0-9]+:[[:space:]]*#')"
+expect_str "the door: no line of install.sh that runs sends a relay's header (Cf-Connecting-IP or the like)" \
+  "$HA_RELAY_LINES" ""
+
+# J4 (review): the real seams the cases above stub, their commands pinned.
+# docker, git and uname are recorders here — functions in the subshell that
+# sources the real install.sh — so a typo in any seam's command turns its
+# line red, and nothing reaches the real docker.
+SEAM_MINT="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    docker() { printf '%s\n' "$@"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml --profile inference)
+    hub_mint office-box < /dev/null | tr '\n' ' '
+  )
+)"
+expect_str "the real hub_mint: devices_cli mint --name, in core, through this run's compose files" \
+  "$SEAM_MINT" \
+  "compose -f /fixture/deploy/docker-compose.yml --profile inference exec -T core python -m app.devices_cli mint --name office-box "
+SEAM_PY="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    docker() { printf '%s\n' "$@"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml)
+    hub_python -c 'print(1)' version < /dev/null | tr '\n' ' '
+  )
+)"
+expect_str "the real hub_python: core's own python, given the program and its ask" "$SEAM_PY" \
+  "compose -f /fixture/deploy/docker-compose.yml exec -T core python -c print(1) version "
+SEAM_BUILD="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    t="$(mktemp -d)"
+    git() { printf '%s\n' "$@" > "$t/git"; printf 'TAR-BYTES'; }
+    docker() { printf '%s\n' "$@" > "$t/docker"; cat > "$t/stdin"; }
+    COMPOSE_ARGS=(-f /fixture/deploy/docker-compose.yml)
+    # shellcheck disable=SC2034
+    REPO_ROOT=/fixture
+    build_agent_dist aaaaaaaaaaaa
+    printf 'git: %s| docker: %s| piped: %s' "$(tr '\n' ' ' < "$t/git")" "$(tr '\n' ' ' < "$t/docker")" \
+      "$(cat "$t/stdin")"
+    rm -rf "$t"
+  )
+)"
+expect_str "the real build_agent_dist: HEAD's apps/novad archived and piped into agent-dist" "$SEAM_BUILD" \
+  "git: -C /fixture archive --format=tar HEAD apps/novad | docker: compose -f /fixture/deploy/docker-compose.yml --profile build run --rm -T agent-dist aaaaaaaaaaaa | piped: TAR-BYTES"
+seam_os_arch() { # $1 what uname -s says  $2 what uname -m says → "<exit>:<printed>"
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    UN_S="$1"; UN_M="$2"
+    uname() { case "$1" in -s) printf '%s\n' "$UN_S" ;; -m) printf '%s\n' "$UN_M" ;; *) return 1 ;; esac; }
+    out="$(hub_os_arch)"; rc=$?
+    printf '%s:%s' "$rc" "$out"
+  )
+}
+while read -r OA_S OA_M OA_WANT; do
+  expect_str "the real hub_os_arch: $OA_S $OA_M → ${OA_WANT#*:}" "$(seam_os_arch "$OA_S" "$OA_M")" "$OA_WANT"
+done <<'OAEOF'
+Linux x86_64 0:linux amd64
+Linux amd64 0:linux amd64
+Linux aarch64 0:linux arm64
+Linux arm64 0:linux arm64
+Darwin x86_64 0:darwin amd64
+Darwin amd64 0:darwin amd64
+Darwin aarch64 0:darwin arm64
+Darwin arm64 0:darwin arm64
+FreeBSD amd64 1:
+Linux riscv64 1:
+OAEOF
+seam_wsl() { # $1 the kernel's osrelease ("" = no such file) → wsl | not wsl
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    t="$(mktemp -d)"
+    if [ -n "$1" ]; then printf '%s\n' "$1" > "$t/osrelease"; fi
+    # shellcheck disable=SC2034
+    WSL_OSRELEASE="$t/osrelease"
+    if running_in_wsl; then printf 'wsl'; else printf 'not wsl'; fi
+    rm -rf "$t"
+  )
+}
+expect_str "the real running_in_wsl: a WSL2 kernel" "$(seam_wsl 6.6.87.2-microsoft-standard-WSL2)" "wsl"
+expect_str "the real running_in_wsl: a WSL1 kernel" "$(seam_wsl 4.4.0-19041-Microsoft)" "wsl"
+expect_str "the real running_in_wsl: a kernel that is not WSL's" "$(seam_wsl 6.8.0-45-generic)" "not wsl"
+expect_str "the real running_in_wsl: no osrelease at all (macOS)" "$(seam_wsl "")" "not wsl"
+
+HA_TN="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'TAILNET_ENABLED=1; HA_DNS=nova.fake-tailnet.ts.net')"
+ha_is "tailnet on: its name is the agent's second hub, the loopback door first" "$HA_TN" 4 \
+  "argv=install --if-missing --hub http://127.0.0.1:3000 --hub https://nova.fake-tailnet.ts.net env=none argv=install --hub http://127.0.0.1:3000 --hub https://nova.fake-tailnet.ts.net env=minted "
+HA_TN_OFF="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'HA_DNS=nova.fake-tailnet.ts.net')"
+ha_is "tailnet off: the loopback door alone" "$HA_TN_OFF" 4 "$LOOP_ARGV"
+
+HA_NOVER="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'agent_version_of() { echo "agent_version: cannot: dirty" >&2; return 1; }')"
+ha_is "an unreadable version: refused" "$HA_NOVER" 1 1
+ha_is "an unreadable version: nothing built" "$HA_NOVER" 2 ""
+ha_has "an unreadable version: in agent_version's words" "$HA_NOVER" 5 "agent_version: cannot: dirty"
+HA_NOBUILD="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'build_agent_dist() { return 2; }')"
+ha_is "agent-dist failing: refused" "$HA_NOBUILD" 1 1
+ha_is "agent-dist failing: nothing fetched" "$HA_NOBUILD" 3 ""
+ha_has "agent-dist failing: names the build" "$HA_NOBUILD" 5 "agent-dist did not build aaaaaaaaaaaa"
+HA_NOMINT="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'hub_mint() { echo "devices_cli: cannot: stub" >&2; return 1; }')"
+ha_is "a mint that fails: refused" "$HA_NOMINT" 1 1
+ha_is "a mint that fails: no second run" "$HA_NOMINT" 4 "$LOOP_ARGV"
+ha_has "a mint that fails: in devices_cli's words" "$HA_NOMINT" 5 "devices_cli: cannot: stub"
+HA_NOCODE="$(run_hub_agent 3 aaaaaaaaaaaa 0 minipc 'hub_mint() { printf "{\"expires_at\": \"x\", \"repair\": false}\n"; }')"
+ha_is "a mint that prints no code: refused" "$HA_NOCODE" 1 1
+ha_is "a mint that prints no code: no second run" "$HA_NOCODE" 4 "$LOOP_ARGV"
+ha_has "a mint that prints no code: said" "$HA_NOCODE" 5 "the mint returned no code"
+
+# J5 (review): a tool that fails is said, never a bare errexit. mktemp and
+# chmod each end with a stated cannot; a sha256 that could not be computed is
+# said as that, never as "not the manifest's" — a claim about the bytes,
+# made only of a checksum that was computed.
+HA_NOTMP="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'mktemp() { echo "mktemp: cannot create directory: Read-only file system" >&2; return 1; }')"
+ha_is "mktemp failing: refused" "$HA_NOTMP" 1 1
+ha_is "mktemp failing: nothing fetched" "$HA_NOTMP" 3 ""
+ha_final "mktemp failing: it ENDS with a stated cannot naming mktemp and the folder" "$HA_NOTMP" \
+  "ERROR: the hub's agent: cannot make a folder to download it into under <HUB_T>/tmp (mktemp failed; its words are above) — nothing was downloaded"
+HA_NOCHMOD="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'chmod() { return 1; }')"
+ha_is "chmod failing: refused, no download left behind" "$HA_NOCHMOD" 2 "built aaaaaaaaaaaa "
+ha_is "chmod failing: nothing ran" "$HA_NOCHMOD" 4 ""
+ha_final "chmod failing: it ENDS with a stated cannot naming chmod" "$HA_NOCHMOD" \
+  "ERROR: the hub's agent: cannot make the download runnable (chmod failed; its words are above) — nothing was run"
+HA_NOSUM="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'sha256sum() { return 127; }; shasum() { return 127; }')"
+ha_is "neither sha256 tool runs: refused" "$HA_NOSUM" 1 1
+ha_is "neither sha256 tool runs: nothing ran" "$HA_NOSUM" 4 ""
+ha_final "neither sha256 tool runs: it ENDS saying exactly that" "$HA_NOSUM" \
+  "ERROR: the hub's agent: cannot check the download: neither sha256sum nor shasum could compute its sha256 here — nothing was run"
+ha_lacks "neither sha256 tool runs: never says the sha256 is not the manifest's" "$HA_NOSUM" 5 \
+  "is not the manifest's"
+SEAM_SUM="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    f="$(mktemp)"
+    printf 'x' > "$f"
+    # shellcheck disable=SC2123
+    PATH=/nonexistent
+    out="$(sha256_of "$f")"; rc=$?
+    /bin/rm -f "$f"
+    printf '%s:%s' "$rc" "$out"
+  )
+)"
+expect_str "sha256_of with neither tool on PATH: non-zero, printing nothing" "$SEAM_SUM" "1:"
+
+# J6 (review): 126 is the shell refusing to run the download. When a script
+# put in the same folder is refused too, the folder is named and the way out
+# given (TMPDIR); when the folder does run programs, that is said instead —
+# a binary that is not this machine's gives 126 as well.
+HA_NOEXEC="$(run_hub_agent 126 aaaaaaaaaaaa 0 minipc 'hub_dir_runs() { return 1; }')"
+ha_is "novad exits 126 in a folder that runs nothing: refused" "$HA_NOEXEC" 1 1
+ha_is "novad exits 126 in a folder that runs nothing: no download left behind" "$HA_NOEXEC" 2 \
+  "built aaaaaaaaaaaa "
+ha_final "novad exits 126 in a folder that runs nothing: names the folder and the TMPDIR way out" \
+  "$HA_NOEXEC" \
+  "ERROR: the hub's agent: <HUB_T>/tmp does not allow running programs (novad install exited 126, and a test script there was refused too, as on a noexec mount) — run ./install again with TMPDIR set to a folder that does, e.g. mkdir -p ~/.cache && TMPDIR=~/.cache ./install — the stack is up"
+HA_126="$(run_hub_agent 126 aaaaaaaaaaaa 0 minipc)"
+ha_final "novad exits 126 where programs do run (the real check): not blamed on the folder" "$HA_126" \
+  "ERROR: the hub's agent: the download could not be run (novad install exited 126; the shell's words are above), though <HUB_T>/tmp does run programs — a test script there ran — the stack is up"
+ha_is "novad exits 126 where programs do run: no download left behind" "$HA_126" 2 "built aaaaaaaaaaaa "
+
+# The EXIT trap: a run that ends where nothing expected it to still leaves
+# no download folder behind (calls would carry LEFT: otherwise).
+HA_ABORT="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'running_in_wsl() { exit 9; }')"
+ha_is "a run cut short by something unforeseen: ends as it did" "$HA_ABORT" 1 9
+ha_is "a run cut short by something unforeseen: no download folder left behind" "$HA_ABORT" 2 \
+  "built aaaaaaaaaaaa "
+
+# ── install.ps1 (D20): a Windows hub is told cannot, and the one step ────────
+# Its parse is CI's (pwsh). What a shell can hold it to: Windows PowerShell
+# 5.1 reads a script that has no BOM in the ANSI code page, so one non-ASCII
+# character prints as mojibake — the file is ASCII; and it installs nothing,
+# so it never exits 0.
+PS1_FILE="$SCRIPT_DIR/../install.ps1"
+if [ -f "$PS1_FILE" ] && ! LC_ALL=C grep -q '[^ -~	]' "$PS1_FILE"; then
+  report 0 "install.ps1: present, and ASCII (PowerShell 5.1 reads a BOM-less script as ANSI)"
+else
+  report 1 "install.ps1: present, and ASCII (PowerShell 5.1 reads a BOM-less script as ANSI)" \
+    "$(LC_ALL=C grep -n '[^ -~	]' "$PS1_FILE" 2>&1 | head -3)"
+fi
+if grep -q 'cannot' "$PS1_FILE" 2>/dev/null && grep -q 'wsl --install' "$PS1_FILE" 2>/dev/null \
+   && ! grep -qE 'exit[[:space:]]+0' "$PS1_FILE" 2>/dev/null; then
+  report 0 "install.ps1: says cannot, gives wsl --install, never exits 0"
+else
+  report 1 "install.ps1: says cannot, gives wsl --install, never exits 0" "see $PS1_FILE"
+fi
+
+if [ -n "${NOT_RUN:-}" ]; then
+  printf '\n%d passed, %d failed — NOT RUN: %s\n' "$PASS" "$FAIL" "$NOT_RUN"
+else
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+fi
 [ "$FAIL" -eq 0 ]

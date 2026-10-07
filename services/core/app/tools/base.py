@@ -28,6 +28,35 @@ ERROR_PREFIX = "Error: "
 RESULT_KIND_LISTING = "listing"
 
 
+def listing_line_shown(head: str, result: str, shown: int, follows: tuple[str, ...]) -> bool:
+    """Did the first `shown` characters of `result` hold the WHOLE line that
+    begins, at a line start, with `head`? The one reading behind each listing
+    tool's Tool.device_line_shown (machine_status's agent lines, device_list's
+    device lines): each passes the head its format writes for a device and
+    the starts a line after one can have in that format (`follows`).
+
+    It fails closed — False — when there is no such line; when a line runs on
+    past a newline into text that starts none of `follows` (text an agent
+    reported can carry a newline the format never writes); and when ANY line
+    with that head ends past `shown`: "dell"'s head also begins the line of a
+    device named "dell (old)", and a line that cannot be told apart from
+    another is not confirmed shown."""
+    found = False
+    start = result.find(head)
+    while start != -1:
+        if start == 0 or result[start - 1] == "\n":
+            end = result.find("\n", start + len(head))
+            if end == -1:
+                end = len(result)
+            elif not result.startswith(follows, end + 1):
+                return False
+            if end > shown:
+                return False
+            found = True
+        start = result.find(head, start + 1)
+    return found
+
+
 class ToolFailure(Exception):
     """A refusal an executor states on purpose: containment, a missing
     file, an unreachable peer, a cap exceeded. dispatch() turns it into an
@@ -123,6 +152,14 @@ class ToolContext:
     # that needs one states that it cannot. Not a principal either: it is
     # where output goes, and nothing reads it to decide.
     card: Callable[[dict], None] | None = None
+    # The OUTPUT channel for what it would take to PUT BACK what a call changed
+    # (chat-rewind): an executor that can be undone appends one JSON-able
+    # payload here as it changes something, and chat._run_tool copies that
+    # call's slice onto the turn's action ledger (traces.Turn.actions) AFTER
+    # the call ran — by diffing the sink across the call, like facts_sink.
+    # None outside a turn; an executor with no sink records nothing, and its
+    # call can then never be claimed reverted. Nothing reads it to decide.
+    undo_sink: list | None = None
 
 
 @dataclass(frozen=True)
@@ -224,3 +261,12 @@ class Tool:
     # over it, and dispatch does not read it (test_no_approvals' pin that
     # dispatch is lookup, parse, validate, executor and nothing else).
     traced_as_origin: tuple[str, ...] = ()
+    # How to PUT BACK what one recorded call changed (chat-rewind): called with
+    # the undo payload the executor appended to ToolContext.undo_sink and a
+    # context, it restores the prior state, VERIFIES it, and returns a line
+    # saying what it put back — or raises ToolFailure with the reason it could
+    # not. None: the tool's changes cannot be undone, and a rewind lists its
+    # calls as not undone. A fact about the tool, read only by the rewind code
+    # after the owner asked for a rewind; dispatch never reads it, and nothing
+    # reads it to refuse a call.
+    revert: Callable[[Any, ToolContext], Awaitable[str]] | None = None

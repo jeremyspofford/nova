@@ -187,6 +187,52 @@ describe('RoutingSection', () => {
     expect(within(chat).getByRole('button', { name: /save/i })).toBeTruthy()
   })
 
+  it('a Remove clicked the moment the chain is drawn is kept', async () => {
+    // rebuild-ci run 37620571487. A render that outlasts the Scheduler's 5 ms
+    // slice (any render on a slow runner) makes it yield after the commit, so
+    // the commit's effects run in a later task, and a click can land first.
+    // The draft's reset was an effect that also ran on mount: it queued
+    // behind the click and put the removed link back. Here the render is slow
+    // on purpose and a MutationObserver clicks the moment the commit is in.
+    //
+    // `window.event` is pinned to what a browser has when a fetch resolves —
+    // none. jsdom under vitest keeps the last fired click there, and React
+    // reads it to pick an update's lane: every load after a test's first
+    // click rendered as a click would, effects flushed at once, and the
+    // window this test needs never opened. That is why the race only ever
+    // hit the first test in this file that clicks.
+    const eventProp = Object.getOwnPropertyDescriptor(window, 'event')
+    Object.defineProperty(window, 'event', { configurable: true, get: () => undefined })
+    let clicked = false
+    const observer = new MutationObserver(() => {
+      const remove = document.querySelector('[aria-label="remove chat hub:qwen3:8b"]')
+      if (remove && !clicked) {
+        clicked = true
+        fireEvent.click(remove)
+      }
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    try {
+      const slowRoutes = {
+        ...ROUTES,
+        // Read only while the page renders: a render that costs 6 ms.
+        get walls() {
+          for (const until = performance.now() + 6; performance.now() < until; );
+          return ROUTES.walls
+        },
+      }
+      renderSection({ getRoutes: vi.fn(async () => slowRoutes), getCatalog: vi.fn(() => new Promise(() => {})) })
+      await waitFor(() => expect(clicked).toBe(true))
+      await new Promise(r => setTimeout(r, 20))
+      const chat = screen.getByTestId('route-chat')
+      expect(within(chat).queryByTestId('route-chat-link-2')).toBeNull()
+      expect(within(chat).getByRole('button', { name: /save/i })).toBeTruthy()
+    } finally {
+      observer.disconnect()
+      if (eventProp) Object.defineProperty(window, 'event', eventProp)
+    }
+  })
+
   it('an unsaved edit to chat\'s order survives another role being saved', async () => {
     // The re-review's find: every reload parses a new routes object, and the
     // draft reset on the ARRAY — another role's save wiped chat's edit. A

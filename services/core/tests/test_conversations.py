@@ -337,6 +337,11 @@ MESSAGE_KEYS = {
     # spans sent, redrawn from span facts that never carry a pairing code.
     # Always present, empty where the turn sent none.
     "cards",
+    # Chat rewind T5 (2026-10-06): `rewind` — null on an ordinary row; on a
+    # rollback marker, the stored rewinds row (mode, target, withdrawn count,
+    # undone, not_undone). Always present, so a client never has to tell "not a
+    # marker" apart from "this server does not say".
+    "rewind",
 }
 
 
@@ -599,7 +604,11 @@ async def test_cards_derive_from_the_turns_successful_show_setup_qr_spans(owner_
         "INSERT INTO turn_spans (turn_id, kind, name, started_at, meta) "
         "VALUES ($1, 'tool', 'nova_address', now() + make_interval(secs => 2), $2::jsonb)",
         turn,
-        {"ok": True, "args_redacted": {}, "facts": [{"nova_address": "https://nova.fake-tailnet.ts.net"}]},
+        {
+            "ok": True,
+            "args_redacted": {},
+            "facts": [{"nova_address": "https://nova.fake-tailnet.ts.net"}],
+        },
     )
 
     user, nova = await _messages(owner_client, conversation)
@@ -614,6 +623,45 @@ async def test_cards_derive_from_the_turns_successful_show_setup_qr_spans(owner_
             "expires_at": "2026-09-25T14:10:00+00:00",
         }
     ]
+
+
+def test_a_reloaded_card_says_only_what_its_fact_may_say():
+    """S42b (Task 19): a re-pair card's reload names its machine, the OS it
+    opened on and that OS's walk, read from the FIRST fact that names a setup.
+    Nothing outside that list is ever copied: a fact that somehow held the
+    code, or the commands (which carry it), still redraws without them."""
+    from app import conversations
+
+    origin = "https://nova.fake-tailnet.ts.net"
+    base = {
+        "setup": "add_machine",
+        "address": origin,
+        "url": f"{origin}/add",
+        "expires_at": "2026-09-25T14:10:00+00:00",
+        "code_shown": True,
+    }
+    walk = "Windows: walked on real hardware (S42a, 2026-09-28, amd64 as foreground)"
+    fact = {
+        **base,
+        "machine": "OFFICE-PC",
+        "for_os": "windows",
+        "walk": walk,
+        "code": "ABCD-2345",
+        "commands": {"windows": "... --code ABCD-2345"},
+    }
+    redrawn = {
+        "kind": "setup_qr",
+        **base,
+        "machine": "OFFICE-PC",
+        "for_os": "windows",
+        "walk": walk,
+    }
+    assert conversations._card_json([{"other": "a fact of another kind"}, fact]) == redrawn
+    # A card for no machine and no OS states them as None in its fact; the
+    # reload leaves them out, as it always did.
+    plain = {**base, "machine": None, "for_os": None, "walk": None}
+    assert conversations._card_json([plain]) == {"kind": "setup_qr", **base}
+    assert conversations._card_json([{"other": 1}]) is None
 
 
 async def test_messages_json_reads_one_conversation_and_the_route_still_scopes(owner_client, pool):

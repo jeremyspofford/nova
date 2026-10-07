@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ChatPage } from './ChatPage'
 import { ChatProvider } from '../../stores/chat-store'
-import type { ClearedConversation, Conversation, StoredMessage } from '../../lib/api'
+import { ApiError } from '../../lib/api'
+import type {
+  ClearedConversation,
+  Conversation,
+  RewindMode,
+  RewindResult,
+  StoredMessage,
+  StoredRewind,
+} from '../../lib/api'
 
 /**
  * The durable-turn recovery path (S2c): after a HARD REFRESH mid-reply the
@@ -914,5 +922,377 @@ describe('ChatPage — rooms', () => {
     )
     await screen.findByText('Two timers have failed.')
     expect(screen.queryByTestId('thread-header')).toBeNull()
+  })
+})
+
+/**
+ * Up-arrow recall (chat rewind T6): ChatPage hands the composer his live user
+ * messages from what it loaded — never an assistant row, never a rewind
+ * marker (a role='user' row core composed, carrying `rewind`) — and a message
+ * just sent is recallable on the next ArrowUp.
+ */
+describe('ChatPage — up-arrow recall reads his sent messages', () => {
+  function marker(id: string): StoredMessage {
+    return {
+      ...stored(id, 'user', 'The owner rewound this conversation to "first ask".'),
+      rewind: {
+        id: 'r1',
+        mode: 'chat',
+        target_message_id: 'u1',
+        withdrawn: 2,
+        undone: [],
+        not_undone: [],
+      },
+    }
+  }
+
+  it('recalls his loaded user rows newest first, skipping replies and the rewind marker', async () => {
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [
+        stored('u1', 'user', 'first ask'),
+        stored('a1', 'assistant', 'first answer'),
+        stored('u2', 'user', 'second ask'),
+        stored('a2', 'assistant', 'second answer'),
+        marker('m1'),
+      ]),
+    }
+    renderChat(api)
+    await screen.findByText('second answer')
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(textarea.value).toBe('second ask')
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(textarea.value).toBe('first ask')
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(textarea.value).toBe('first ask')
+  })
+
+  it('a message just sent is recallable on the next ArrowUp', async () => {
+    // A stream that never finishes, so the sent row stays exactly as sent.
+    const fetchImpl = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [stored('u1', 'user', 'an older ask')]),
+    }
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByText('an older ask')
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'list my timers' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(textarea.value).toBe(''))
+
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(textarea.value).toBe('list my timers')
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(textarea.value).toBe('an older ask')
+  })
+})
+
+/**
+ * Chat rewind (T7): a Rewind control on each of his stored messages, a
+ * two-option choice, core's result shown after the transcript reloads, and a
+ * refusal that changes nothing. `api.rewind` is injected beside the rest.
+ */
+describe('ChatPage — rewinding to one of his messages (chat rewind T7)', () => {
+  const U1 = '0b6f8f1e-0000-4000-8000-0000000000a1'
+  const A1 = '0b6f8f1e-0000-4000-8000-0000000000b1'
+  const U2 = '0b6f8f1e-0000-4000-8000-0000000000a2'
+  const A2 = '0b6f8f1e-0000-4000-8000-0000000000b2'
+  const M1 = '0b6f8f1e-0000-4000-8000-0000000000c1'
+
+  const before = () => [
+    stored(U1, 'user', 'first ask'),
+    stored(A1, 'assistant', 'first answer'),
+    stored(U2, 'user', 'second ask'),
+    stored(A2, 'assistant', 'second answer'),
+  ]
+
+  function markerRow(rewind: Partial<StoredRewind> = {}): StoredMessage {
+    return {
+      ...stored(M1, 'user', '(the marker core composed)'),
+      rewind: {
+        id: 'r1',
+        mode: 'chat',
+        target_message_id: U1,
+        withdrawn: 3,
+        undone: [],
+        not_undone: [],
+        ...rewind,
+      },
+    }
+  }
+
+  function result(overrides: Partial<RewindResult> = {}): RewindResult {
+    return {
+      rewind_id: 'r1',
+      marker_message_id: M1,
+      mode: 'chat',
+      withdrawn: 3,
+      undone: [],
+      not_undone: [],
+      ...overrides,
+    }
+  }
+
+  /** The page wired to fakes: `before()` on the first load, `after` on every
+   *  load after it (the reload a rewind does). */
+  function renderRewind({
+    after = [stored(U1, 'user', 'first ask'), stored(A1, 'assistant', 'first answer'), markerRow()],
+    rewind = vi.fn(async (_c: string, _m: string, mode: RewindMode) => result({ mode })),
+    active = conversation(),
+    fetchImpl = noopFetch,
+    entries = ['/chat'],
+  }: {
+    after?: StoredMessage[]
+    rewind?: (c: string, m: string, mode: RewindMode) => Promise<RewindResult>
+    active?: Conversation
+    fetchImpl?: unknown
+    entries?: string[]
+  } = {}) {
+    let loads = 0
+    const fake = {
+      getActiveConversation: vi.fn(async () => active),
+      getConversationState: vi.fn(async () => active),
+      getMessages: vi.fn(async () => {
+        loads += 1
+        return { messages: loads === 1 ? before() : after, threads: {} }
+      }),
+      openThread: vi.fn(async () => {
+        throw new Error('this test did not expect a room to be opened')
+      }),
+      rewind: vi.fn(rewind),
+    }
+    render(
+      <MemoryRouter initialEntries={entries}>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fake as never} pollIntervalMs={5} idlePollMs={60_000} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    return fake
+  }
+
+  function bubble(id: string): HTMLElement {
+    const el = document.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+    expect(el, `the bubble for ${id}`).not.toBeNull()
+    return el!
+  }
+  function rewindIn(id: string): HTMLButtonElement | null {
+    return within(bubble(id)).queryByRole('button', { name: /rewind/i }) as HTMLButtonElement | null
+  }
+  function mustRewindIn(id: string): HTMLButtonElement {
+    const button = rewindIn(id)
+    expect(button, `a Rewind button on ${id}`).not.toBeNull()
+    return button!
+  }
+  async function choose(id: string, mode: RewindMode) {
+    fireEvent.click(mustRewindIn(id))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId(`rewind-option-${mode}`))
+    })
+  }
+
+  it('every loaded message of his offers Rewind; her replies and the marker offer none', async () => {
+    renderRewind()
+    await screen.findByText('second answer')
+    const all = screen.queryAllByRole('button', { name: /rewind/i })
+    expect(all).toHaveLength(2)
+    expect(rewindIn(U1)).not.toBeNull()
+    expect(rewindIn(U2)).not.toBeNull()
+    expect(rewindIn(A1)).toBeNull()
+    expect(rewindIn(A2)).toBeNull()
+  })
+
+  it('a message just sent offers no Rewind until a reload gives it its server id', async () => {
+    const neverEnds = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    renderRewind({ fetchImpl: neverEnds })
+    await screen.findByText('second answer')
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'list my timers' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    const sent = (await screen.findByText('list my timers')).closest<HTMLElement>('[data-testid="message-user"]')!
+    // His stored rows still offer one (disabled under the running turn)...
+    expect(screen.queryAllByRole('button', { name: /rewind/i })).toHaveLength(2)
+    // ...the client-id row does not: core has never heard of that id.
+    expect(within(sent).queryByRole('button', { name: /rewind/i })).toBeNull()
+  })
+
+  it('"chat only" calls core once with that message and mode, reloads, and shows the result without an undo section', async () => {
+    const fake = renderRewind()
+    await screen.findByText('second answer')
+    await choose(U1, 'chat')
+
+    expect(fake.rewind).toHaveBeenCalledTimes(1)
+    expect(fake.rewind).toHaveBeenCalledWith('c1', U1, 'chat')
+    // The transcript reloads from core: the withdrawn rows leave, the marker arrives.
+    await waitFor(() => expect(screen.queryByText('second ask')).toBeNull())
+    expect(screen.queryByText('second answer')).toBeNull()
+    expect(fake.getMessages).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('rewind-marker')).toBeDefined()
+    const panel = await screen.findByTestId('rewind-result')
+    expect(panel.textContent).toContain('3')
+    expect(within(panel).queryByTestId('rewind-undone')).toBeNull()
+    expect(within(panel).queryByTestId('rewind-not-undone')).toBeNull()
+  })
+
+  it('"chat + her executions" shows each undone action (tool + line) and each not-undone one (tool or "unknown" + reason)', async () => {
+    const fake = renderRewind({
+      after: [stored(U1, 'user', 'first ask'), markerRow({ mode: 'executions' })],
+      rewind: async () =>
+        result({
+          mode: 'executions',
+          undone: [{ tool: 'workspace_write_file', action_id: 'x1', line: 'restored notes.md to its prior bytes' }],
+          not_undone: [
+            { tool: 'device_run', action_id: 'x2', reason: 'a command already run on a device cannot be taken back' },
+            { tool: null, turn_id: 't9', reason: 'that turn never closed; its actions were not recorded' },
+          ],
+        }),
+    })
+    await screen.findByText('second answer')
+    await choose(U2, 'executions')
+
+    expect(fake.rewind).toHaveBeenCalledWith('c1', U2, 'executions')
+    const panel = await screen.findByTestId('rewind-result')
+    const undone = within(panel).getByTestId('rewind-undone')
+    expect(undone.textContent).toContain('workspace_write_file')
+    expect(undone.textContent).toContain('restored notes.md to its prior bytes')
+    const notUndone = within(panel).getByTestId('rewind-not-undone')
+    expect(notUndone.textContent).toContain('device_run')
+    expect(notUndone.textContent).toContain('a command already run on a device cannot be taken back')
+    expect(notUndone.textContent).toContain('unknown')
+    expect(notUndone.textContent).toContain('that turn never closed; its actions were not recorded')
+  })
+
+  it('"chat + her executions" that undid and listed nothing says "nothing to undo"', async () => {
+    renderRewind({ after: [stored(U1, 'user', 'first ask'), markerRow({ mode: 'executions' })] })
+    await screen.findByText('second answer')
+    await choose(U1, 'executions')
+    const panel = await screen.findByTestId('rewind-result')
+    expect(panel.textContent).toMatch(/nothing to undo/i)
+  })
+
+  it('a refused rewind shows core\'s stated reason and changes the transcript not at all', async () => {
+    const reason = 'a turn is still running in this conversation; rewind when it ends'
+    const fake = renderRewind({
+      rewind: async () => {
+        throw new ApiError(409, reason)
+      },
+    })
+    await screen.findByText('second answer')
+    await choose(U1, 'chat')
+
+    await waitFor(() => expect(screen.getByTestId('chat-page').textContent).toContain(reason))
+    // No reload-as-success and no optimistic removal.
+    expect(fake.getMessages).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('second ask')).toBeDefined()
+    expect(screen.getByText('second answer')).toBeDefined()
+    expect(screen.queryByTestId('rewind-result')).toBeNull()
+    expect(screen.queryByTestId('rewind-marker')).toBeNull()
+  })
+
+  it('while this tab streams a turn, every Rewind control is disabled', async () => {
+    const neverEnds = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    renderRewind({ fetchImpl: neverEnds })
+    await screen.findByText('second answer')
+    expect(mustRewindIn(U1).disabled).toBe(false)
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'list my timers' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByTestId('chat-page').dataset.streaming).toBe('true'))
+    expect(mustRewindIn(U1).disabled).toBe(true)
+    expect(mustRewindIn(U2).disabled).toBe(true)
+  })
+
+  it('while a turn this tab reloaded into is still responding, every Rewind control is disabled', async () => {
+    renderRewind({ active: conversation({ pending_turn: true, pending_turn_id: 't-running' }) })
+    await screen.findByTestId('chat-responding')
+    await screen.findByText('second answer')
+    expect(mustRewindIn(U1).disabled).toBe(true)
+    expect(mustRewindIn(U2).disabled).toBe(true)
+  })
+
+  it('the result stays until he dismisses it; the divider keeps the facts after', async () => {
+    renderRewind()
+    await screen.findByText('second answer')
+    await choose(U1, 'chat')
+    await screen.findByTestId('rewind-result')
+    fireEvent.click(screen.getByTestId('rewind-result-dismiss'))
+    expect(screen.queryByTestId('rewind-result')).toBeNull()
+    expect(screen.getByTestId('rewind-marker')).toBeDefined()
+  })
+
+  it('a room offers no Rewind, though the hallway does', async () => {
+    const room: Conversation = { ...conversation({ id: 'room-1' }), parent_message_id: A1 }
+    // The hallway first, as a positive control...
+    renderRewind()
+    await screen.findByText('second answer')
+    expect(screen.queryAllByRole('button', { name: /rewind/i })).toHaveLength(2)
+    cleanup()
+    // ...then the same rows inside a room.
+    renderRewind({ active: room, entries: ['/chat?thread=room-1'] })
+    await screen.findByTestId('thread-header')
+    await screen.findByText('second answer')
+    expect(screen.queryAllByRole('button', { name: /rewind/i })).toHaveLength(0)
+  })
+
+  it('"chat only" states no undo facts at all, not even "nothing to undo", in the panel or the divider', async () => {
+    renderRewind()
+    await screen.findByText('second answer')
+    await choose(U1, 'chat')
+    const panel = await screen.findByTestId('rewind-result')
+    expect(panel.textContent).not.toMatch(/nothing to undo/i)
+    expect(screen.getByTestId('rewind-marker').textContent).not.toMatch(/nothing to undo/i)
+  })
+
+  it('a rewind that ran but whose reload failed says so with the reason, and still states what core did', async () => {
+    const fake = renderRewind()
+    await screen.findByText('second answer')
+    fake.getMessages.mockImplementation(async () => {
+      throw new ApiError(502, 'core did not answer the messages read')
+    })
+    await choose(U1, 'chat')
+
+    // Core DID rewind: its result is shown, never hidden behind the failure...
+    await screen.findByTestId('rewind-result')
+    expect(fake.rewind).toHaveBeenCalledTimes(1)
+    expect(fake.getMessages).toHaveBeenCalledTimes(2)
+    // ...and the failed reload is stated, with its reason — a stale
+    // transcript must never read as the reloaded one.
+    const page = screen.getByTestId('chat-page')
+    await waitFor(() => expect(page.textContent).toContain('core did not answer the messages read'))
+    expect(page.textContent).toMatch(/could not be reloaded/i)
+    expect(page.textContent).not.toMatch(/Rewind refused/i)
   })
 })

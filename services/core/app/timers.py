@@ -597,3 +597,17 @@ async def ensure_jobs(pool: asyncpg.Pool) -> list[str]:
             seeded.append(name)
             logger.info("seeded job timer %r (%s)", name, schedule.describe(spec, "UTC", None))
     return seeded
+
+
+# S42b (decision 2): keeping Nova's agents on the hub's build, one idle machine
+# at a time, the hub's own first (app/agent_updates.py). Every 15 minutes: 96
+# small `job` turns a day on the trace (P10). The schedule is
+# agent_updates.JOB_SCHEDULE, which machine_update's description also says.
+# Imported here so JOBS is whole before ensure_jobs reads it.
+from app import agent_updates  # noqa: E402
+
+JOBS["agent_updates"] = agent_updates.reconcile
+JOB_SCHEDULES["agent_updates"] = agent_updates.JOB_SCHEDULE
+JOB_TITLES["agent_updates"] = (
+    "Keep Nova's agents on the hub's build — one idle machine at a time, the hub's own first"
+)

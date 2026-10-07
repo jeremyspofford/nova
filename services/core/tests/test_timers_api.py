@@ -339,24 +339,30 @@ async def test_someone_elses_timer_is_404_on_every_route_and_absent_from_the_lis
 async def test_jobs_are_visible_to_every_person_with_their_own_history(owner_client, pool):
     stranger, theirs = await _stranger(pool)
     await _reminder(pool, stranger, theirs, title="theirs")
-    assert await timers.ensure_jobs(pool) == ["retention"]
-    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    # S42b (decision 2): two jobs now — retention and agent_updates. The row
+    # this test fires is retention's, selected by its handler: `kind = 'job'`
+    # alone names two rows.
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    job_id = await pool.fetchval(
+        "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
+    )
     firing = await _closed_firing(pool, job_id, status="ok")
 
     for client in (owner_client, await _client_for(pool, stranger)):
         listed = (await client.get("/api/v1/timers")).json()["timers"]
-        jobs = [t for t in listed if t["kind"] == "job"]
-        assert [j["id"] for j in jobs] == [str(job_id)]
-        assert jobs[0]["payload"] == {"handler": "retention"}
-        assert jobs[0]["created_via"] == "system"
-        assert jobs[0]["last_firing"]["status"] == "ok"
+        jobs = {t["payload"]["handler"]: t for t in listed if t["kind"] == "job"}
+        assert set(jobs) == {"retention", "agent_updates"}
+        assert jobs["retention"]["id"] == str(job_id)
+        assert all(j["created_via"] == "system" for j in jobs.values())
+        assert jobs["retention"]["last_firing"]["status"] == "ok"
         firings = (await client.get(f"/api/v1/timers/{job_id}/firings")).json()["firings"]
         assert [f["id"] for f in firings] == [str(firing)]
-    # The stranger sees THEIR timer beside the job; the owner does not.
+    # The stranger sees THEIR timer beside the jobs; the owner does not.
     stranger_rows = (await (await _client_for(pool, stranger)).get("/api/v1/timers")).json()
-    assert sorted(t["kind"] for t in stranger_rows["timers"]) == ["job", "reminder"]
+    assert sorted(t["kind"] for t in stranger_rows["timers"]) == ["job", "job", "reminder"]
     assert [t["kind"] for t in (await owner_client.get("/api/v1/timers")).json()["timers"]] == [
-        "job"
+        "job",
+        "job",
     ]
 
 
@@ -590,6 +596,11 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         # sent, redrawn from span facts that never carry a pairing code — an
         # empty list when the turn sent none.
         "cards",
+        # Chat rewind T5/T8 (2026-10-06): `rewind` — null on an ordinary row; on
+        # a rollback marker, the stored rewinds row (mode, target, withdrawn
+        # count, undone, not_undone). Always present, so a client never has to
+        # tell "not a marker" apart from "this server does not say".
+        "rewind",
     }
 
 
@@ -697,8 +708,10 @@ async def test_bind_agent_binds_unbinds_and_refuses_in_words(owner_client, pool)
     assert refused.value.reason == (
         "only a scheduled turn can be bound to an agent — this is a reminder"
     )
-    assert await timers.ensure_jobs(pool) == ["retention"]
-    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    job_id = await pool.fetchval(
+        "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
+    )
     with pytest.raises(timers.TimerRefused) as refused:
         await timers.bind_agent(pool, person, job_id, coder)
     assert refused.value.reason == "only a scheduled turn can be bound to an agent — this is a job"
@@ -769,8 +782,10 @@ async def test_put_agent_refusals_name_the_agents_the_kind_and_the_owner(owner_c
     row = await _scheduled(pool, person, conversation)
     reminder = await _reminder(pool, person, conversation)
     foreign = await _scheduled(pool, stranger, theirs, title="theirs")
-    assert await timers.ensure_jobs(pool) == ["retention"]
-    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    job_id = await pool.fetchval(
+        "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
+    )
 
     # An unknown name: 404, naming what exists (read live).
     resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={"agent": "nobody"})

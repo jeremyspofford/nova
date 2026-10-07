@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestSaveThenLoadRoundTripsTheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got != cfg {
+	if !reflect.DeepEqual(got, cfg) {
 		t.Errorf("config round-trip differs: %+v vs %+v", got, cfg)
 	}
 	if !gotPriv.Public().(ed25519.PublicKey).Equal(pub) {
@@ -136,5 +137,107 @@ func TestWipeDoesNotClobberAnExistingSetAside(t *testing.T) {
 	moved, err := os.ReadFile(existing + "-1")
 	if err != nil || !strings.Contains(string(moved), `"live":true`) {
 		t.Fatalf("the live audit log must move to the next free name (-1): %q %v", moved, err)
+	}
+}
+
+// Task 32, L223: Save rewrites the config and the key on every keep (each
+// update), so a write that fails partway — a crash, a full disk — must leave
+// the pairing on disk exactly as it was, never a torn config or key that
+// even `install --code` cannot read past. Nothing half-written is left
+// beside them either.
+func TestASaveThatFailsPartwayLeavesThePairingWhole(t *testing.T) {
+	p := testPaths(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d1", Name: "laptop", Server: "https://a.example", CorePubKey: strings.Repeat("ab", 32)}, priv); err != nil {
+		t.Fatal(err)
+	}
+	cfgBefore, keyBefore := readFile(t, p.ConfigFile), readFile(t, p.KeyFile)
+
+	was := writeAll
+	t.Cleanup(func() { writeAll = was })
+	writeAll = func(f *os.File, body []byte) error {
+		_, _ = f.Write(body[:len(body)/2])
+		return errors.New("no space left on device")
+	}
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d2", Name: "laptop", Server: "https://b.example", CorePubKey: strings.Repeat("cd", 32)}, other); err == nil {
+		t.Fatal("a write that failed must be an error")
+	}
+	if got := readFile(t, p.ConfigFile); !bytes.Equal(got, cfgBefore) {
+		t.Fatalf("the config was torn by a failed write:\n%s", got)
+	}
+	if got := readFile(t, p.KeyFile); !bytes.Equal(got, keyBefore) {
+		t.Fatalf("the key was torn by a failed write: %q", got)
+	}
+	if _, _, err := Load(p); err != nil {
+		t.Fatalf("the pairing no longer loads: %v", err)
+	}
+	entries, err := os.ReadDir(p.ConfigDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.json" && e.Name() != "key" {
+			t.Errorf("left behind beside the pairing: %s", e.Name())
+		}
+	}
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestHubsAreTheLocatorsElseTheServer(t *testing.T) {
+	c := Config{Server: "https://a.example"}
+	if got := c.Hubs(); !reflect.DeepEqual(got, []string{"https://a.example"}) {
+		t.Fatalf("a pre-S42b config: got %v", got)
+	}
+	c.Locators = []string{"http://127.0.0.1:3000", "https://a.example"}
+	got := c.Hubs()
+	if !reflect.DeepEqual(got, c.Locators) {
+		t.Fatalf("got %v", got)
+	}
+	got[0] = "mutated"
+	if c.Locators[0] == "mutated" {
+		t.Fatal("Hubs must return a copy")
+	}
+}
+
+func TestSetAsideRenamesTheIdentityAndNeverOverwrites(t *testing.T) {
+	p := testPaths(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d1", Server: "https://a.example", CorePubKey: strings.Repeat("ab", 32)}, priv); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.AuditFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_790_000_000, 0)
+	moved, err := SetAside(p, now, "replaced")
+	if err != nil || len(moved) != 3 {
+		t.Fatalf("SetAside = %v, %v", moved, err)
+	}
+	for _, f := range []string{p.ConfigFile, p.KeyFile, p.AuditFile} {
+		if _, err := os.Lstat(f); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is still in place", f)
+		}
+	}
+	if _, err := os.Lstat(p.ConfigFile + ".replaced-1790000000"); err != nil {
+		t.Errorf("config was not set aside by name: %v", err)
+	}
+	// A second identity set aside in the same second keeps the first.
+	if err := Save(p, Config{DeviceID: "d2", Server: "https://a.example", CorePubKey: strings.Repeat("ab", 32)}, priv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetAside(p, now, "replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(p.ConfigFile + ".replaced-1790000000-1"); err != nil {
+		t.Errorf("the second set-aside overwrote the first: %v", err)
 	}
 }

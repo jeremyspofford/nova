@@ -4,16 +4,23 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,8 +29,27 @@ import (
 	"novad/internal/audit"
 	"novad/internal/config"
 	"novad/internal/facts"
+	"novad/internal/platform"
+	"novad/internal/state"
 	"novad/internal/wire"
 )
+
+// No test in this package runs the probes' real programs (S42b Task 10b,
+// ruling 3): an agent any test Configures probes through a FakeRunner, which
+// runs nothing — `sudo -n true` and wsl.exe included.
+func init() { probeRunner = &platform.FakeRunner{} }
+
+// hermeticFrame stands in for facts.GatherFrame in every agent these tests
+// build. GatherFrame reads this host's folders ($HOME, the XDG user-dirs
+// file) and interfaces, and no test's outcome may turn on the machine it
+// runs on (PR #106's CI: a runner with no user-dirs file). It is
+// GatherFrame's shape, fixed, with the carried entries repeated as
+// GatherFrame repeats them.
+func hermeticFrame(carried []facts.Unreadable) facts.Frame {
+	return facts.Frame{Type: "facts",
+		Net:        facts.Net{Ifaces: []facts.Iface{{Name: "eth0", MAC: "02:00:00:00:00:01", IPv4CIDR: []string{"192.0.2.10/24"}, Up: true}}},
+		Unreadable: append([]facts.Unreadable{}, carried...)}
+}
 
 // A full protocol walk over a REAL websocket against an in-process fake core:
 // challenge -> auth (raw-nonce signature) -> ready -> a core-signed system.info
@@ -131,10 +157,11 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.gatherFrame = hermeticFrame
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	var obs observed
 	select {
@@ -205,7 +232,36 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.gatherFrame = hermeticFrame
 	return agent, auditLog
+}
+
+// runAgent runs agent.Run(ctx) on a goroutine of its own and hands back what
+// it returns. At the test's end it stops the agent and waits for Run to
+// return — and Run returns only once nothing it started can still write —
+// so nothing the agent writes (its audit log, its state dir) is still being
+// written when t.TempDir's cleanup removes it. PR #106's windows-11-arm run
+// failed exactly there: a refused replay's audit append was still writing
+// audit.jsonl as RemoveAll ran. Cleanups run last-registered first, so this
+// one runs before the TempDir cleanup buildAgent registered.
+func runAgent(t *testing.T, ctx context.Context, agent *Agent) <-chan error {
+	t.Helper()
+	ctx, stop := context.WithCancel(ctx)
+	runErr := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		runErr <- agent.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-returned:
+		case <-time.After(10 * time.Second):
+			t.Errorf("Run had not returned 10s after the agent was stopped")
+		}
+	})
+	return runErr
 }
 
 // I1: a command that FAILS verification must produce BOTH a result{ok:false}
@@ -282,7 +338,7 @@ func TestARefusedCommandIsAResultOkFalseAndAnAuditEntry(t *testing.T) {
 	agent, auditLog := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	var obs observed
 	select {
@@ -352,8 +408,7 @@ func TestAChangedCoreKeyIsFatalAndDoesNotReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	runErr := make(chan error, 1)
-	go func() { runErr <- agent.Run(ctx) }()
+	runErr := runAgent(t, ctx, agent)
 
 	select {
 	case err := <-runErr:
@@ -474,7 +529,7 @@ func TestAReplayIsRefusedAcrossAReconnect(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 
 	got := map[int]outcome{}
 	for len(got) < 2 {
@@ -564,7 +619,7 @@ func TestTheAuthFrameCarriesFactsAndAFactsFrameFollowsReady(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, "dev-facts-1", hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	var got seen
 	select {
 	case got = <-ch:
@@ -628,7 +683,7 @@ func TestAHungFactsGatherDoesNotBlockTheHandshake(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case ok := <-readySeen:
 		if !ok {
@@ -705,7 +760,7 @@ func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
 	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	select {
 	case got := <-order:
 		if len(got.types) != 2 || got.types[0] != "facts" || got.types[1] != "result" {
@@ -810,7 +865,7 @@ func TestTheBackoffResetsAfterASessionThatAuthenticated(t *testing.T) {
 	agent.backoffs = []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond, 10 * time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	// Seven authenticated sessions: without the reset, the sixth waits 10 s.
 	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 7 })
 }
@@ -824,7 +879,7 @@ func TestAPingThatGoesUnansweredEndsTheSession(t *testing.T) {
 	agent.backoffs = []time.Duration{20 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
 }
 
@@ -855,7 +910,7 @@ func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
 	agent.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(offset) }
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
+	runAgent(t, ctx, agent)
 	waitFor(t, 2*time.Second, func() bool { return len(arrivals()) >= 1 })
 	time.Sleep(120 * time.Millisecond) // let the session settle before jumping
 	mu.Lock()
@@ -1093,7 +1148,7 @@ func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
 			agent.backoffs = []time.Duration{20 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			go func() { _ = agent.Run(ctx) }()
+			runAgent(t, ctx, agent)
 			waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
 		})
 	}
@@ -1226,8 +1281,7 @@ func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
 			agent.backoffs = []time.Duration{20 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			runErr := make(chan error, 1)
-			go func() { runErr <- agent.Run(ctx) }()
+			runErr := runAgent(t, ctx, agent)
 			waitFor(t, 2*time.Second, func() bool { return attempts() >= 2 })
 			cancel()
 			select {
@@ -1239,5 +1293,1030 @@ func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
 				t.Fatalf("%s: Run did not return after ctx was cancelled", c.name)
 			}
 		})
+	}
+}
+
+// buildAgentWithHubs is buildAgent with an ordered locator list (S42b).
+func buildAgentWithHubs(t *testing.T, hubs []string, deviceID, corePubHex string, devPriv ed25519.PrivateKey) *Agent {
+	t.Helper()
+	home := t.TempDir()
+	auditLog, err := audit.Open(filepath.Join(home, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: hubs[0], CorePubKey: corePubHex, Locators: hubs}
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.gatherFrame = hermeticFrame
+	return agent
+}
+
+// acceptingCore answers the challenge with corePub and reports each device
+// that authenticated on it. Before signaling, it reads one more frame — the
+// facts frame serve() sends as its first act (sendFacts, before the read
+// loop) — rather than signaling the instant its own "ready" write returns.
+// Without this, a caller that waits on authed and then reads agent.Server()
+// races the client's own post-handshake bookkeeping (current.Store, in
+// sessionAt, which happens strictly before serve() and so strictly before
+// that facts write): the server's write of "ready" returning is not
+// ordered against the client having processed it at all, and measurement
+// (30/30 runs failing under go test -count=30) showed the client losing
+// that race almost every time. Reading a frame the client can only have
+// sent from inside serve() — reachable only after current.Store — makes the
+// wait, and so the assertion after it, deterministic.
+func acceptingCore(t *testing.T, corePub, devPub ed25519.PublicKey, authed chan<- string, label string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) != nil {
+			_, _ = coreRead(r.Context(), c) // the facts frame serve() sends first
+			authed <- label
+		}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestTheAgentFallsThroughToTheNextLocatorWhenTheFirstDoesNotAnswer(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	second := acceptingCore(t, corePub, devPub, authed, "second")
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", second.URL}, "dev-loc-1", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	select {
+	case got := <-authed:
+		if got != "second" {
+			t.Fatalf("authenticated on %s", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the agent never tried its second locator")
+	}
+	if agent.Server() != second.URL {
+		t.Fatalf("Server() = %q, want the locator in use %q", agent.Server(), second.URL)
+	}
+}
+
+// The loopback of a machine that no longer hosts THIS Nova (the hub moved)
+// can answer with another Nova's key: that locator is skipped, not fatal,
+// while another locator remains.
+func TestALocatorPresentingAnotherCoreKeyIsSkippedWhileAnotherRemains(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	stranger := acceptingCore(t, otherPub, devPub, authed, "stranger")
+	ours := acceptingCore(t, corePub, devPub, authed, "ours")
+	agent := buildAgentWithHubs(t, []string{stranger.URL, ours.URL}, "dev-loc-2", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runErr := runAgent(t, ctx, agent)
+	select {
+	case got := <-authed:
+		if got != "ours" {
+			t.Fatalf("authenticated on %s — the pinned key must decide", got)
+		}
+	case err := <-runErr:
+		t.Fatalf("Run returned %v — a stranger's key must not be fatal while another locator remains", err)
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+}
+
+func TestEveryLocatorPresentingAnotherKeyIsFatal(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	a := acceptingCore(t, otherPub, devPub, authed, "a")
+	b := acceptingCore(t, otherPub, devPub, authed, "b")
+	agent := buildAgentWithHubs(t, []string{a.URL, b.URL}, "dev-loc-3", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("Run = %v, want a fatal naming the pin", err)
+	}
+}
+
+// Controller ruling (preflight F1, item 2): the brief's own connectOnce kept
+// lastErr = err (the fatal{KeyMismatch} wrapper) for a skipped mismatch, so
+// a mismatch tried LAST beside a locator that merely failed to dial would
+// itself look fatal to Run's own errors.As(err, &fatal{}) check, and Run
+// would stop instead of retrying. The fix keeps lastErr = f.err (the
+// unwrapped *KeyMismatch), which Run's fatal check does not match, so Run
+// keeps retrying (backoff, never a return) until ctx ends the test.
+func TestATrailingMismatchBesideADialFailureDoesNotEndRun(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	authed := make(chan string, 4)
+	// The dial failure comes FIRST, the mismatch LAST — the order that
+	// exposed the defect.
+	stranger := acceptingCore(t, otherPub, devPub, authed, "stranger")
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", stranger.URL}, "dev-loc-4", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want context.DeadlineExceeded — a trailing mismatch beside a dial failure must keep retrying, not end Run", err)
+	}
+}
+
+// P7: the result and its audit entry are on the wire BEFORE the agent leaves
+// for the swap; Run then returns ErrRestartForUpdate (main exits 75).
+func TestAnUpdateReplyIsWrittenBeforeTheAgentLeavesForTheSwap(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-update-1"
+	build := []byte("the hub's new build")
+	sum := sha256.Sum256(build)
+	name := "novad-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	type observed struct {
+		result, audit map[string]any
+		closeErr      error
+	}
+	results := make(chan observed, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/agent/dist/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(build) })
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "upd-e1", "device_id": deviceID, "capability": "daemon.update",
+			"args":      map[string]any{"version": "aaaaaaaaaaaa", "sha256": hex.EncodeToString(sum[:]), "path": "/api/v1/agent/dist/" + name},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		// Keep reading past the result: the audit entry (Minor 4, fix round
+		// 1) follows it, and then the agent closes the socket itself
+		// (Minor 5) to leave for the swap — that close is what ends this
+		// loop, so its status/reason is observable too.
+		var obs observed
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				obs.closeErr = err
+				results <- obs
+				return
+			}
+			switch f["type"] {
+			case "result":
+				obs.result = f
+			case "audit":
+				if raw, ok := f["entries"].([]any); ok && len(raw) > 0 {
+					if m, ok := raw[0].(map[string]any); ok {
+						obs.audit = m
+					}
+				}
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "novad")
+	if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runErr := runAgent(t, ctx, agent)
+	select {
+	case obs := <-results:
+		if ok, _ := obs.result["ok"].(bool); !ok {
+			t.Fatalf("result = %v", obs.result)
+		}
+		if ok, _ := obs.audit["ok"].(bool); !ok {
+			t.Fatalf("audit entry = %v", obs.audit)
+		}
+		if code := websocket.CloseStatus(obs.closeErr); code != websocket.StatusNormalClosure {
+			t.Errorf("close status = %v (%v), want StatusNormalClosure — a graceful close, not the deferred CloseNow", code, obs.closeErr)
+		}
+		if obs.closeErr == nil || !strings.Contains(obs.closeErr.Error(), "restarting into a new build") {
+			t.Errorf("close reason missing %q, got %v", "restarting into a new build", obs.closeErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result+audit frame")
+	}
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, ErrRestartForUpdate) {
+			t.Fatalf("Run = %v, want ErrRestartForUpdate", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the agent never left for the swap")
+	}
+}
+
+// F1 pin (fix round 1, Minor 4): daemon.update downloads from the locator
+// THIS session is actually connected through (Server(), Task 6's F1
+// ruling), never blindly the first configured locator. The first locator
+// here is a black hole; only the second answers, so if BaseURL were wired
+// to anything but a.Server() the download would try the dead address and
+// the result would never come back ok.
+func TestDaemonUpdateDownloadsFromTheLocatorThisSessionIsActuallyOn(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-update-locator-1"
+	build := []byte("the hub's new build")
+	sum := sha256.Sum256(build)
+	name := "novad-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	results := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/agent/dist/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(build) })
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "upd-loc-e1", "device_id": deviceID, "capability": "daemon.update",
+			"args":      map[string]any{"version": "aaaaaaaaaaaa", "sha256": hex.EncodeToString(sum[:]), "path": "/api/v1/agent/dist/" + name},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "result" {
+				results <- f
+				return
+			}
+		}
+	})
+	live := httptest.NewServer(mux)
+	defer live.Close()
+	agent := buildAgentWithHubs(t, []string{"http://127.0.0.1:1", live.URL}, deviceID, hex.EncodeToString(corePub), devPriv)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "novad")
+	if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent.Configure(Options{StateDir: dir, Supervised: true, Binary: bin})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	select {
+	case res := <-results:
+		if ok, _ := res["ok"].(bool); !ok {
+			t.Fatalf("result = %v — the download must succeed against the SECOND (live) locator, the one this session is actually on", res)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result frame — daemon.update likely tried the dead first locator instead of Server()")
+	}
+}
+
+// I2 (fix round 1), Run's own half: a restart flagged before Run ever
+// starts — standing in for a now-dead session's daemon.update finishing its
+// download only after ITS OWN connection died, so sessionCancel no longer
+// names anything useful — is caught at the TOP of the loop, before even
+// dialing. Proven by counting connection ARRIVALS at a live, otherwise-
+// perfectly-answering fake core: a timing bound alone would not isolate
+// this from the (also-present) after-connectOnce check, since a refused
+// dial can be just as fast as never dialing at all.
+func TestRunNeverDialsWhenARestartIsAlreadyPending(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, false, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-restart-race-1", hex.EncodeToString(corePub), devPriv)
+	agent.restart.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, ErrRestartForUpdate) {
+		t.Fatalf("Run = %v, want ErrRestartForUpdate", err)
+	}
+	if n := len(arrivals()); n != 0 {
+		t.Fatalf("Run dialed the hub %d time(s) — it must never dial at all once a restart is already pending", n)
+	}
+}
+
+// I2 (fix round 1), serve's own half: a restart already pending when a NEW
+// session starts is caught right after sessionCancel.Store, before this
+// session serves anything — not even the facts frame. Proven directly
+// against serve() with a connection whose write lock is already held
+// forever: without the fix, sendFacts's write would block on it until
+// pingTimeout; with the fix, serve returns long before that write is ever
+// attempted.
+func TestServeRefusesToStartASessionWhenARestartIsAlreadyPending(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-restart-race-2", hex.EncodeToString(corePub), devPriv)
+	agent.pingTimeout = 100 * time.Millisecond
+	agent.restart.Store(true)
+
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() { errCh <- agent.serve(context.Background(), conn) }()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrRestartForUpdate) {
+			t.Fatalf("serve = %v, want ErrRestartForUpdate", err)
+		}
+		if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+			t.Fatalf("serve took %s — it must return before ever attempting to write (a write would block on this connection's held lock until pingTimeout)", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve never returned — a pending restart did not stop it from trying to serve this session")
+	}
+}
+
+// P29, Review Focus 11: the slow probes run once at connect — after the
+// first frame, off the reader's path — and again on facts.refresh; never on
+// the minute cadence. Every frame between carries the last result.
+func TestTheProbesRunAtConnectAndOnRefreshOnly(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-1"
+	pidOf := func(f map[string]any) string {
+		s, _ := f["service"].(map[string]any)
+		n, _ := s["pid"].(json.Number)
+		return n.String()
+	}
+	type seen struct{ before, after []string }
+	got := make(chan seen, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		var s seen
+		// The ready frame, the probe's frame, and at least two on the cadence.
+		for len(s.before) < 4 || !slices.Contains(s.before, "1") {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "facts" {
+				s.before = append(s.before, pidOf(f))
+			}
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "probe-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				s.after = append(s.after, pidOf(f))
+			case "audit":
+				got <- s
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	var probes atomic.Int32
+	agent.probe = func(context.Context) facts.Probed {
+		n := probes.Add(1)
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service", PID: int(n)}}
+	}
+	agent.factsMinGap, agent.factsEvery, agent.heartbeatEvery = 10*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	var s seen
+	select {
+	case s = <-got:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	if s.before[0] != "" {
+		t.Fatalf("the frame at ready waited for the probe: %v", s.before)
+	}
+	for _, pid := range s.before {
+		if pid != "" && pid != "1" {
+			t.Fatalf("frames before the refresh = %v: the cadence probed again", s.before)
+		}
+	}
+	if len(s.after) == 0 || s.after[len(s.after)-1] != "2" || probes.Load() != 2 {
+		t.Fatalf("after the refresh = %v with %d probes, want exactly one more probe, carried", s.after, probes.Load())
+	}
+}
+
+// Ruling 4: at connect the probes run at most once per ProbeMaxAge across
+// reconnects. A reconnect while one is still running starts no second one
+// beside it, and a probe whose session ended before it finished is neither
+// cut short nor lost: the next session's frames carry it.
+func TestTheConnectProbeRunsOnceAcrossReconnects(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	readyPIDs := make(chan string, 64)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		f, err := coreRead(ctx, c) // the frame at ready; then the session ends
+		if err != nil {
+			return
+		}
+		s, _ := f["service"].(map[string]any)
+		n, _ := s["pid"].(json.Number)
+		select {
+		case readyPIDs <- n.String():
+		default:
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-probe-2", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	release := make(chan struct{})
+	var probes atomic.Int32
+	agent.probe = func(ctx context.Context) facts.Probed {
+		n := probes.Add(1)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service", PID: int(n)}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	next := func() string {
+		t.Helper()
+		select {
+		case pid := <-readyPIDs:
+			return pid
+		case <-ctx.Done():
+			t.Fatal("timed out")
+			return ""
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if pid := next(); pid != "" {
+			t.Fatalf("session %d's frame at ready carried pid %q before any probe finished", i+1, pid)
+		}
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("%d probes after three sessions while the first still ran — a reconnect started another", n)
+	}
+	close(release)
+	for next() != "1" {
+	}
+	for i := 0; i < 3; i++ {
+		if pid := next(); pid != "1" {
+			t.Fatalf("a later session's frame at ready carried pid %q, want the kept probe's 1", pid)
+		}
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("%d probes — a reconnect within ProbeMaxAge probed again", n)
+	}
+}
+
+// Configure wires the probes to what main hands the agent — its binary and
+// config file — and runs their programs through probeRunner, which this
+// package's tests replace so no test runs sudo or wsl.exe.
+func TestConfigureProbesThroughTheRunnerWithTheAgentsOwnFiles(t *testing.T) {
+	old := probeRunner
+	r := &platform.FakeRunner{Outputs: map[string]string{"sudo": ""}}
+	probeRunner = r
+	t.Cleanup(func() { probeRunner = old })
+	a := &Agent{}
+	bin, cfg := filepath.Join(t.TempDir(), "novad"), filepath.Join(t.TempDir(), "config.json")
+	a.Configure(Options{Binary: bin, Config: cfg})
+	p := a.probe(context.Background())
+	if p.Service.Binary != bin || p.Service.Config != cfg || p.Service.Process != "novad" || p.At.IsZero() {
+		t.Fatalf("got %+v", p)
+	}
+	if runtime.GOOS != "windows" {
+		if p.Elevation == nil || p.Elevation.Sudo != "no_password" || len(r.Calls) != 1 || r.Calls[0].Name != "sudo" {
+			t.Fatalf("elevation %+v after calls %+v — sudo -n true through the runner Configure was given", p.Elevation, r.Calls)
+		}
+	}
+}
+
+// nextFacts reads frames until a facts frame; nil when the socket ends.
+func nextFacts(ctx context.Context, c *websocket.Conn) map[string]any {
+	for {
+		f, err := coreRead(ctx, c)
+		if err != nil {
+			return nil
+		}
+		if f["type"] == "facts" {
+			return f
+		}
+	}
+}
+
+// saidOf is what a frame's unreadable list says about item.
+func saidOf(f map[string]any, item string) string {
+	list, _ := f["unreadable"].([]any)
+	for _, u := range list {
+		if m, _ := u.(map[string]any); m["item"] == item {
+			s, _ := m["reason"].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// Fix round 1, I1: a probe program that ignores its kill — sudo, once root,
+// answers an unprivileged agent's SIGKILL with EPERM — holds nothing past
+// the probe's bound. The probe returns then and says so, probing clears, the
+// next connection probes again (a probe cut short is not kept), and
+// facts.refresh answers within the bound instead of waiting on sudo.
+func TestAProbeWhoseProgramIgnoresItsKillIsLeftAtItsBound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the probe runs no program unless WSL lists distributions; facts' tests hand one in")
+	}
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-bound-1"
+	type seen struct {
+		probeAfter    time.Duration
+		probeSaid     string
+		elevation     map[string]any
+		kept, again   bool
+		refreshTook   time.Duration
+		refreshSaid   string
+		refreshResult map[string]any
+	}
+	got, first := make(chan seen, 1), make(chan seen, 1)
+	var sessions atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		n := sessions.Add(1)
+		if n > 2 {
+			<-ctx.Done() // nothing is asked of a later session; it waits for the agent to leave
+			return
+		}
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		ready := nextFacts(ctx, c)
+		start := time.Now()
+		if n == 1 {
+			probe := nextFacts(ctx, c)
+			elevation, _ := probe["elevation"].(map[string]any)
+			first <- seen{probeAfter: time.Since(start), probeSaid: saidOf(probe, "elevation"), elevation: elevation}
+			return // the session ends; the next one must probe again
+		}
+		var s seen
+		select {
+		case s = <-first:
+		case <-ctx.Done():
+			return
+		}
+		_, s.kept = ready["service"].(map[string]any)
+		s.again = nextFacts(ctx, c) != nil
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "bound-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		sent := time.Now()
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				s.refreshSaid = saidOf(f, "elevation")
+			case "result":
+				s.refreshTook, s.refreshResult = time.Since(sent), f
+				got <- s
+				// Held open until the agent leaves at the test's end: while
+				// this session lives no later one connects, so no connect
+				// probe can run a fourth sudo under the count below.
+				<-ctx.Done()
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	hold := make(chan struct{})
+	defer close(hold)
+	r := &platform.FakeRunner{Hold: hold}
+	old := probeRunner
+	probeRunner = r
+	defer func() { probeRunner = old }()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	agent.Configure(Options{Binary: filepath.Join(t.TempDir(), "novad"), Config: filepath.Join(t.TempDir(), "config.json")})
+	// The programs are cut at 500 ms; reprobe waits until 1.5 s — a second
+	// to spare, so the probe's own answer always wins under load.
+	agent.probeBudget, agent.probeGrace = 1500*time.Millisecond, time.Second
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	var s seen
+	select {
+	case s = <-got:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	if s.probeAfter > 5*time.Second || s.probeSaid != "sudo: gave no answer in time" {
+		t.Fatalf("the probe frame came %s after ready, saying %q", s.probeAfter, s.probeSaid)
+	}
+	// Fix round 2: what the agent knows is kept — elevated is its own read —
+	// and sudo is unknown, with the reason.
+	if _, ok := s.elevation["elevated"].(bool); !ok || s.elevation["sudo"] != "unknown" || s.elevation["sudo_said"] != "sudo: gave no answer in time" {
+		t.Fatalf("elevation = %v", s.elevation)
+	}
+	if !s.kept || !s.again {
+		t.Fatalf("carried at the next connect %v, probed again there %v", s.kept, s.again)
+	}
+	if ok, _ := s.refreshResult["ok"].(bool); !ok || s.refreshTook > 5*time.Second || s.refreshSaid != "sudo: gave no answer in time" {
+		t.Fatalf("facts.refresh answered %v after %s, its frame saying %q", s.refreshResult, s.refreshTook, s.refreshSaid)
+	}
+	sudo := 0
+	for _, c := range r.Recorded() {
+		if c.Name == "sudo" {
+			sudo++
+		}
+	}
+	agent.factsMu.Lock()
+	probing := agent.probing
+	agent.factsMu.Unlock()
+	if sudo != 3 || probing {
+		t.Fatalf("%d sudo runs (want connect, connect again, refresh), probing %v", sudo, probing)
+	}
+}
+
+// Fix round 1, I1: whatever a probe does — even ignore its ctx outright — it
+// is waited for at most probeBudget. probing clears, nothing it answers later
+// is kept, the next connection probes again, and facts.refresh says so.
+func TestAProbeThatNeverAnswersIsLeftAtItsBudget(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-probe-budget-1"
+	results := make(chan map[string]any, 1)
+	var sessions atomic.Int32
+	var sawProbe atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if sessions.Add(1) > 1 {
+			for f := nextFacts(ctx, c); f != nil; f = nextFacts(ctx, c) {
+				if _, ok := f["service"]; ok {
+					sawProbe.Store(true)
+				}
+			}
+			return
+		}
+		nextFacts(ctx, c)                  // the frame at ready
+		time.Sleep(600 * time.Millisecond) // four budgets: the connect probe was given up on
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "budget-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		sent := time.Now()
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			switch f["type"] {
+			case "facts":
+				if _, ok := f["service"]; ok {
+					sawProbe.Store(true)
+				}
+			case "result":
+				f["took"] = time.Since(sent)
+				results <- f
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	release := make(chan struct{})
+	defer close(release)
+	var probes atomic.Int32
+	agent.probe = func(context.Context) facts.Probed {
+		probes.Add(1)
+		<-release // deaf to its ctx
+		return facts.Probed{At: time.Now(), Service: facts.Service{Name: "late"}}
+	}
+	agent.probeBudget, agent.probeGrace = 150*time.Millisecond, 50*time.Millisecond
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runAgent(t, ctx, agent)
+	var res map[string]any
+	select {
+	case res = <-results:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	took, _ := res["took"].(time.Duration)
+	errText, _ := res["error"].(string)
+	if ok, _ := res["ok"].(bool); ok || took > 3*time.Second || !strings.Contains(errText, "the probes gave no answer within 150ms") {
+		t.Fatalf("facts.refresh = %v after %s", res, took)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for probes.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := probes.Load(); n != 3 || sawProbe.Load() {
+		t.Fatalf("%d probes (want connect, refresh, next connect), a late answer carried %v", n, sawProbe.Load())
+	}
+}
+
+// Fix round 1, Minor 3: findings that would take the frame over core's cap
+// are left out, and the frame says so — they never stop every facts frame.
+func TestAProbeThatWouldOverfillTheFrameIsLeftOutAndSaid(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-probe-cap-1", hex.EncodeToString(corePub), devPriv)
+	long := strings.Repeat("x", 255)
+	distros := make([]facts.Distro, 8)
+	for i := range distros {
+		distros[i] = facts.Distro{Name: fmt.Sprintf("%d%s", i, long[1:]), Running: true, Looked: true, PID1: long, User: long,
+			Sudo: "refused", SudoSaid: long, Unit: &facts.Unit{Active: long, File: long, Restart: long, Said: long}, PIDs: []int{1}}
+	}
+	agent.probed = &facts.Probed{At: time.Now(), Service: facts.Service{Name: long, Binary: long, Config: long},
+		WSL: &facts.WSLDistros{Distros: distros}}
+	data, err := agent.frameBytes()
+	if err != nil {
+		t.Fatalf("the frame was not built: %v", err)
+	}
+	var f map[string]any
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	_, hasNet := f["net"]
+	if len(data) > facts.MaxFrameBytes || f["service"] != nil || f["wsl_distros"] != nil || f["probed_at"] != nil || !hasNet ||
+		!strings.Contains(saidOf(f, "probe"), "over the 16384-byte cap; they are left out") {
+		t.Fatalf("%d bytes: %s", len(data), data)
+	}
+	agent.probed = &facts.Probed{At: time.Now(), Service: facts.Service{Name: "novad.service"}}
+	if data, err = agent.frameBytes(); err != nil || !strings.Contains(string(data), `"service":`) {
+		t.Fatalf("a probe that fits is carried: %s, %v", data, err)
+	}
+}
+
+// probeRunnerAtLoad is probeRunner as the package set it up — package-level
+// variables are initialized before any init() — so the test below reads the
+// wiring itself, not the fake this package's init() puts in its place.
+var probeRunnerAtLoad = probeRunner
+
+// Fix round 1, I1 (fix round 2: the wiring itself): the probes' real
+// programs run through probeExec, which has a WaitDelay.
+func TestTheProbesRealRunnerHasAWaitDelay(t *testing.T) {
+	if probeRunnerAtLoad != platform.Runner(probeExec) || probeExec.WaitDelay <= 0 {
+		t.Fatalf("probeRunner starts as %#v; probeExec = %+v", probeRunnerAtLoad, probeExec)
+	}
+	if _, fake := probeRunner.(*platform.FakeRunner); !fake {
+		t.Fatalf("this package's tests must run with the fake, got %#v", probeRunner)
+	}
+}
+
+// New gathers the facts frame through facts.GatherFrame. Every agent the
+// tests here build reads hermeticFrame instead, so this holds the one line
+// that stands in for.
+func TestNewGathersTheFactsFrameThroughGatherFrame(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	cfg := config.Config{DeviceID: "dev-wiring-1", Server: "http://unused.invalid", CorePubKey: hex.EncodeToString(corePub)}
+	a, err := New(cfg, devPriv, nil, t.TempDir(), "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(a.gatherFrame).Pointer() != reflect.ValueOf(facts.GatherFrame).Pointer() {
+		t.Fatal("New must read the facts frame through facts.GatherFrame")
+	}
+}
+
+// stateDirNow is every file under dir and what it holds, read now. A dir
+// not made yet holds nothing.
+func stateDirNow(dir string) (map[string]string, error) {
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == dir && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(rel)] = string(body)
+		return nil
+	})
+	return files, err
+}
+
+// PR #106's windows-11-arm run: t.TempDir's cleanup found the state dir
+// still being written — a refused replay's audit append, from a command
+// handler Run had never waited for. Run returns only once every worker it
+// started is done. Here a facts.refresh is held mid-command (its frame's
+// gather waits on the test, deaf to every context) when the agent is
+// stopped: Run must not return while it runs, the command's audit entry is
+// on disk the moment Run returns, and nothing in the state dir — the audit
+// log, the status file OnState writes — changes after.
+func TestNothingTheAgentStartedWritesItsStateDirAfterRunReturns(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-stop-1"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil || nextFacts(ctx, c) == nil {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{"v": int64(1), "envelope_id": "stop-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{}, "issued_at": now, "expires_at": now + 60}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		for {
+			if _, err := coreRead(ctx, c); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	stateDir := filepath.Join(agent.deps.Home, ".local", "state", "novad")
+	// What main's agentStatusWriter does at each change of connection state.
+	// Set without Configure: no connect probe sends a frame of its own.
+	agent.opts = Options{StateDir: stateDir, OnState: func(st, server string, _ error) {
+		if err := state.WriteJSON(filepath.Join(stateDir, state.AgentStatusFile), state.AgentStatus{V: 1, State: st, Server: server}); err != nil {
+			t.Errorf("writing the status: %v", err)
+		}
+	}}
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	var gathers atomic.Int32
+	agent.gatherFrame = func(carried []facts.Unreadable) facts.Frame {
+		if gathers.Add(1) == 2 { // the refresh's frame; the first went out at ready
+			close(held)
+			<-release
+		}
+		return hermeticFrame(carried)
+	}
+
+	type stopped struct {
+		files map[string]string
+		err   error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	returned, done := make(chan stopped, 1), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = agent.Run(ctx)
+		files, err := stateDirNow(stateDir) // the state dir as it is the moment Run returns
+		returned <- stopped{files, err}
+	}()
+	t.Cleanup(func() { // whatever failed: the held gather let go, and Run waited for
+		cancel()
+		free()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Errorf("Run never returned")
+		}
+	})
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the refresh never reached its frame")
+	}
+
+	cancel()
+	var at stopped
+	early := false
+	select {
+	case at = <-returned:
+		early = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	free()
+	if !early {
+		select {
+		case at = <-returned:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not return once the command it was waiting for had finished")
+		}
+	}
+	if at.err != nil {
+		t.Fatalf("reading the state dir when Run returned: %v", at.err)
+	}
+	// A writer still running when Run returned writes within moments of being
+	// let go: watch for it.
+	after := at.files
+	for deadline := time.Now().Add(300 * time.Millisecond); maps.Equal(after, at.files) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		files, err := stateDirNow(stateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after = files
+	}
+
+	if early {
+		t.Error("Run returned while a command it started was still running")
+	}
+	if !strings.Contains(at.files["audit.jsonl"], `"envelope_id":"stop-e1"`) {
+		t.Errorf("when Run returned, the audit log held no entry for the command it stopped: %q", at.files["audit.jsonl"])
+	}
+	if !maps.Equal(after, at.files) {
+		t.Errorf("the state dir changed after Run returned:\nat return: %q\nafter:     %q", at.files, after)
 	}
 }

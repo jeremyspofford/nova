@@ -139,7 +139,13 @@ export function MobileNav() {
           inside the panel, where it is read rather than glanced at.
 
           Hidden while the panel is open — the panel has its own close — so
-          two controls for one state never sit on screen together. */}
+          two controls for one state never sit on screen together.
+
+          ITS OWN CHIP (2026-10-06, UI review R1): a bare icon was drawn
+          straight over whatever scrolled under it, so page titles read
+          through the button. bg-surface-root/90 + backdrop-blur makes it
+          opaque at rest, not only on hover; h-9 at safe-top + 0.75rem fits
+          the 3rem <main> reserves below the inset. */}
       <button
         type="button"
         aria-label="Open menu"
@@ -148,7 +154,7 @@ export function MobileNav() {
         onClick={() => setOpen(true)}
         className={clsx(
           'md:hidden fixed left-3 z-[60] inline-flex items-center justify-center',
-          'h-9 w-9 rounded-md text-content-secondary',
+          'h-9 w-9 rounded-md text-content-secondary bg-surface-root/90 backdrop-blur',
           'hover:text-content-primary hover:bg-surface-card transition-colors duration-fast',
           (hidden || open) && 'opacity-0 pointer-events-none',
         )}

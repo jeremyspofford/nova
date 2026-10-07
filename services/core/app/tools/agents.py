@@ -25,6 +25,8 @@ the page could. Both tools build their schema from ONE field table below.
 
 from __future__ import annotations
 
+import json
+
 from app import db
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
@@ -187,7 +189,39 @@ async def create_agent(args: dict, ctx: ToolContext) -> str:
         )
     except agents.AgentError as exc:
         raise ToolFailure(str(exc)) from exc
+    if ctx.undo_sink is not None:
+        # The row this call created, by id as well as name: a rewind deletes
+        # exactly it, never a later agent that reused the name.
+        ctx.undo_sink.append({"name": result.agent.name, "agent_id": str(result.agent.id)})
     return result.text
+
+
+# The columns an undo payload carries for update_agent, and the ones the
+# create ledger event records the spec by. `model_chain` is not a column (it
+# is the gateway route), so it is in neither: an update that carries a chain
+# records no undo payload at all, and a rewind lists that call as not undone
+# rather than restoring the fields and claiming the call put back.
+_COLUMN_FIELDS = (
+    "purpose",
+    "instructions",
+    "tools",
+    "skills",
+    "monthly_cap_usd",
+    "max_tool_rounds",
+    "read_shared_memory",
+)
+
+
+def _field_value(agent, key: str):
+    """One column of an agent row, JSON-able: lists for the name tuples, a
+    float for the Decimal cap (None stays None) — the same shape the ledger's
+    _spec_meta records, so a value read back compares with a value stored."""
+    value = getattr(agent, key)
+    if key in ("tools", "skills"):
+        return list(value)
+    if key == "monthly_cap_usd":
+        return None if value is None else float(value)
+    return value
 
 
 async def update_agent(args: dict, ctx: ToolContext) -> str:
@@ -201,11 +235,116 @@ async def update_agent(args: dict, ctx: ToolContext) -> str:
             f"{', '.join(sorted(agents.UPDATABLE))}"
         )
     pool = await db.get_pool()
+    before = await agents.by_name(pool, name) if ctx.undo_sink is not None else None
     try:
         result = await agents.update(pool, ctx.app, name, changes, actor=actor)
     except agents.AgentError as exc:
         raise ToolFailure(str(exc)) from exc
+    if ctx.undo_sink is not None and before is not None and "model_chain" not in changes:
+        fields = sorted(key for key in changes if key in _COLUMN_FIELDS)
+        ctx.undo_sink.append(
+            {
+                "name": name,
+                "prior": {key: _field_value(before, key) for key in fields},
+                "landed": {key: _field_value(result.agent, key) for key in fields},
+            }
+        )
     return result.text
+
+
+async def _agent_or_gone(pool, name: str, agent_id: str | None = None):
+    agent = await _agents().by_name(pool, name)
+    if agent is None or (agent_id is not None and str(agent.id) != agent_id):
+        raise ToolFailure(f"agent {name} is already gone — nothing to put back")
+    return agent
+
+
+async def _created_spec(pool, agent_id) -> dict | None:
+    """The spec the agent was CREATED with, from the governance ledger's
+    agent.created event (written in the create's own transaction)."""
+    meta = await pool.fetchval(
+        "SELECT meta FROM governance_events WHERE kind = $1 AND subject_ref = $2 "
+        "ORDER BY created_at DESC LIMIT 1",
+        _agents().governance.AGENT_CREATED,
+        agent_id,
+    )
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    return meta if isinstance(meta, dict) else None
+
+
+async def revert_create_agent(payload: dict, ctx: ToolContext) -> str:
+    """Put back one create_agent call (chat-rewind): delete the agent it
+    created, through the one delete path, and VERIFY it is absent by name. An
+    agent changed since its creation (its row no longer matches the spec the
+    ledger recorded at create) is refused — deleting it would destroy changes
+    this call did not make. The folder is kept by design and the line says so."""
+    agents = _agents()
+    name, agent_id = payload.get("name"), payload.get("agent_id")
+    if not isinstance(name, str) or not isinstance(agent_id, str):
+        raise ToolFailure(f"the recorded agent is unreadable: {payload!r}"[:300])
+    actor = _actor(ctx)
+    pool = await db.get_pool()
+    agent = await _agent_or_gone(pool, name, agent_id)
+    created = await _created_spec(pool, agent.id)
+    if created is None:
+        raise ToolFailure(
+            f"agent {name} has no creation record in the ledger, so whether it changed since "
+            "cannot be checked — not deleted"
+        )
+    moved = [key for key in _COLUMN_FIELDS if _field_value(agent, key) != created.get(key)]
+    if moved:
+        raise ToolFailure(
+            f"agent {name} has changed since it was created ({', '.join(moved)}) — "
+            "not deleted, so those changes are kept"
+        )
+    try:
+        await agents.delete(pool, ctx.app, name, actor=actor)
+    except agents.AgentError as exc:
+        raise ToolFailure(str(exc)) from exc
+    if await agents.by_name(pool, name) is not None:
+        raise ToolFailure(f"agent {name} is still there after the delete — it did not verify")
+    return (
+        f"Deleted agent {name}; its folder agents/{name}/ was kept, as were its memory notes "
+        "and log conversation."
+    )
+
+
+async def revert_update_agent(payload: dict, ctx: ToolContext) -> str:
+    """Put back one update_agent call (chat-rewind): write the changed
+    fields' prior values back through the one writer, and VERIFY they read
+    back. Refused when the agent is gone or any of those fields moved since
+    the call landed — the later change is not this call's to overwrite."""
+    agents = _agents()
+    name, prior, landed = payload.get("name"), payload.get("prior"), payload.get("landed")
+    if not isinstance(name, str) or not isinstance(prior, dict) or not isinstance(landed, dict):
+        raise ToolFailure(f"the recorded agent update is unreadable: {payload!r}"[:300])
+    unknown = sorted(set(prior) - set(_COLUMN_FIELDS))
+    if unknown or set(prior) != set(landed):
+        raise ToolFailure(f"the recorded agent update names fields it cannot put back: {unknown}")
+    actor = _actor(ctx)
+    pool = await db.get_pool()
+    agent = await _agent_or_gone(pool, name)
+    moved = [key for key in landed if _field_value(agent, key) != landed[key]]
+    if moved:
+        raise ToolFailure(
+            f"agent {name} has changed since that update ({', '.join(sorted(moved))}) — "
+            "not put back, so the later change is kept"
+        )
+    try:
+        await agents.update(pool, ctx.app, name, dict(prior), actor=actor)
+    except agents.AgentError as exc:
+        raise ToolFailure(str(exc)) from exc
+    fresh = await agents.by_name(pool, name)
+    if fresh is None:
+        raise ToolFailure(f"agent {name} could not be read back after the restore")
+    wrong = [key for key in prior if _field_value(fresh, key) != prior[key]]
+    if wrong:
+        raise ToolFailure(
+            f"agent {name}'s {', '.join(sorted(wrong))} did not read back as the prior "
+            "value — the restore did not verify"
+        )
+    return f"Put agent {name}'s {', '.join(sorted(prior))} back to what it was before."
 
 
 async def delete_agent(args: dict, ctx: ToolContext) -> str:
@@ -320,6 +459,7 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=_obj(dict(_FIELDS), CREATE_REQUIRED),
         executor=create_agent,
+        revert=revert_create_agent,
     ),
     Tool(
         name="update_agent",
@@ -330,6 +470,7 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=_obj(dict(_FIELDS), ["name"]),
         executor=update_agent,
+        revert=revert_update_agent,
     ),
     Tool(
         name="delete_agent",

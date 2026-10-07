@@ -3,16 +3,13 @@
 // one-use signed command envelopes it verifies on-device. The LLM never talks
 // to novad; only core does.
 //
-// Subcommands: enroll | repoint | run | status | version.
+// Subcommands: enroll | repoint | run | status | version | install | uninstall | supervise.
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,7 +19,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,7 +28,10 @@ import (
 	"novad/internal/audit"
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/install"
 	"novad/internal/platform"
+	"novad/internal/state"
+	"novad/internal/supervise"
 )
 
 // version is the build stamp: builds set it with
@@ -49,6 +50,12 @@ func main() {
 		cmdRepoint(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "install":
+		cmdInstall(os.Args[2:])
+	case "uninstall":
+		cmdUninstall(os.Args[2:])
+	case "supervise":
+		cmdSupervise(os.Args[2:])
 	case "status":
 		cmdStatus(os.Args[2:])
 	case "version":
@@ -59,13 +66,18 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `novad %s — the Nova agent daemon
+func usage() { fmt.Fprint(os.Stderr, usageText()) }
+
+func usageText() string {
+	return fmt.Sprintf(`novad %s — the Nova agent daemon
 
 usage:
   novad enroll --server <url> --code <code> [--name <name>] [--force]
   novad repoint --server <url> [--check]
   novad run
+  novad install [--hub <url>]... [--code <code>] [--name <name>] [--if-missing] [--restart-later]
+  novad uninstall [--forget]
+  novad supervise --mode <systemd-user|launch-agent|run-key>
   novad status
   novad version
 `, version)
@@ -109,41 +121,14 @@ func cmdEnroll(argv []string) {
 		fail("could not generate a device key: %v", err)
 	}
 
-	reqBody, err := enrollBody(*code, hex.EncodeToString(pub), devName, hostname)
+	// install.Enroll is the one enroll call (S42b): its errors are this
+	// command's own words — "could not reach <url>: …", the hub's stated
+	// reason verbatim as "enrollment refused (<status>): <reason>"
+	// (spent/expired code, name taken), "<url> answered <status>" for a
+	// status that is not the hub's stated refusal, or an unreadable answer.
+	ok, err := install.Enroll(context.Background(), *server, *code, devName, hostname, pub)
 	if err != nil {
-		fail("could not build the enroll request: %v", err)
-	}
-	enrollURL := strings.TrimRight(*server, "/") + "/api/v1/devices/enroll"
-
-	httpc := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpc.Post(enrollURL, "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		fail("could not reach %s: %v", enrollURL, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-
-	if resp.StatusCode != http.StatusOK {
-		// Surface the server's own reason verbatim (spent/expired code, name taken).
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(body, &e) == nil && e.Error != "" {
-			fail("enrollment refused (%d): %s", resp.StatusCode, e.Error)
-		}
-		fail("enrollment refused (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var ok struct {
-		DeviceID   string `json:"device_id"`
-		Name       string `json:"name"`
-		CorePubKey string `json:"core_pubkey"`
-	}
-	if err := json.Unmarshal(body, &ok); err != nil {
-		fail("enrollment response was unreadable: %v", err)
-	}
-	if ok.DeviceID == "" || ok.CorePubKey == "" {
-		fail("enrollment response was missing device_id or core_pubkey")
+		fail("%v", err)
 	}
 
 	cfg := config.Config{
@@ -165,6 +150,21 @@ func cmdEnroll(argv []string) {
 // inWSL is platform.WSL, a variable so a test can say "inside WSL".
 var inWSL = func() bool { in, _ := platform.WSL(); return in }
 
+// executablePath is os.Executable, a variable so a test can make it fail.
+var executablePath = os.Executable
+
+// selfBinary is cmdRun's own path — daemon.update stages a build beside it,
+// so it must be a real, absolute path, never a silently empty Binary that
+// only surfaces much later as a mysterious daemon.update refusal (fix round
+// 1, Minor 2: main.go used to discard os.Executable's error).
+func selfBinary() (string, error) {
+	self, err := executablePath()
+	if err != nil {
+		return "", fmt.Errorf("could not determine this executable's own path: %w", err)
+	}
+	return self, nil
+}
+
 // enrollPreflight refuses to enroll inside WSL (hub decision D1): on Windows,
 // Nova's agent runs on Windows itself and reaches WSL through wsl.exe and
 // \\wsl.localhost. An agent inside WSL cannot reach Windows' desktop,
@@ -179,15 +179,11 @@ func enrollPreflight() error {
 
 // enrollBody is the POST /api/v1/devices/enroll payload: the pairing code and
 // the identity this machine will be known by. Nothing else travels — core has
-// no per-device settings to seed.
+// no per-device settings to seed. It is install.Body, the one builder `enroll`
+// and `install` share; the S42a pin (TestEnrollBodyCarriesIdentityOnly) stays
+// here.
 func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
-	return json.Marshal(map[string]string{
-		"code":     code,
-		"pubkey":   pubkeyHex,
-		"name":     name,
-		"platform": runtime.GOOS,
-		"hostname": hostname,
-	})
+	return install.Body(code, pubkeyHex, name, hostname)
 }
 
 // exitConfig (EX_CONFIG, 78) is the exit status for "this daemon has no
@@ -197,6 +193,13 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 // this is the ONE status novad.service's RestartPreventExitStatus names, and
 // systemd stops instead of restarting a daemon that can never get in.
 const exitConfig = 78
+
+// exitUpdateStaged is `novad run`'s exit after daemon.update staged a build:
+// the supervisor (internal/supervise) swaps it in and confirms or rolls it
+// back. Fix round 1, Minor 1: named FROM supervise.ExitUpdateStaged (the
+// value that code actually consumes at the OS boundary), not a second
+// literal 75 that could quietly drift from it.
+const exitUpdateStaged = supervise.ExitUpdateStaged
 
 // afterFailedWipe turns a config.Wipe failure into an instruction built from
 // what is ACTUALLY still on disk, checked fresh rather than assumed from
@@ -260,34 +263,11 @@ func afterRun(paths config.Paths, err error, now time.Time) (int, string) {
 		}
 		msg += "). Pair it again with `novad enroll`."
 		return exitConfig, msg
+	case errors.Is(err, client.ErrRestartForUpdate):
+		return exitUpdateStaged, "a new build is staged — exiting so the supervisor swaps it in"
 	default:
 		return 1, fmt.Sprintf("run stopped: %v", err)
 	}
-}
-
-// errNotEnrolled is checkEnrolled's return when the config or key is simply
-// MISSING — never enrolled, or wiped after a revoke. Any OTHER error
-// checkEnrolled returns is the real cause (permission, I/O, a config dir
-// that is itself unreadable) and must never be folded into the same "not
-// enrolled" message: re-enrolling cannot fix a real error, so cmdRun exits 1
-// on it, never 78.
-var errNotEnrolled = errors.New("not enrolled")
-
-// checkEnrolled distinguishes confirmed-missing (errNotEnrolled) from every
-// other Lstat failure (returned as itself). Paths.Enrolled is a plain bool
-// cmdEnroll uses only to decide whether --force is needed; cmdRun needs this
-// finer distinction because a real error and "run novad enroll" are not the
-// same advice, and printing the wrong one hides the real problem.
-func checkEnrolled(paths config.Paths) error {
-	for _, f := range []string{paths.ConfigFile, paths.KeyFile} {
-		if _, err := os.Lstat(f); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return errNotEnrolled
-			}
-			return err
-		}
-	}
-	return nil
 }
 
 func cmdRun(argv []string) {
@@ -298,8 +278,11 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	if err := checkEnrolled(paths); err != nil {
-		if errors.Is(err, errNotEnrolled) {
+	// config.ErrNotEnrolled only when the config or key is confirmed MISSING
+	// (exit 78: re-enrolling is the fix); any other failure to check is the
+	// real cause and exits 1 — re-enrolling cannot fix it.
+	if err := paths.CheckEnrolled(); err != nil {
+		if errors.Is(err, config.ErrNotEnrolled) {
 			fmt.Fprintf(os.Stderr, "novad: not enrolled — run `novad enroll` first (config dir: %s)\n", paths.ConfigDir)
 			os.Exit(exitConfig)
 		}
@@ -309,24 +292,42 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
+
+	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
+	writeStatus := agentStatusWriter(paths.StateDir, logger)
+
+	lock, err := holdIdentity(paths.StateDir, writeStatus)
+	if err != nil {
+		// Exit 1, never 78: the other copy may stop, and a supervisor retries.
+		fail("%v — this identity is already running; stop that copy first", err)
+	}
+	defer lock.Release()
+	writeStatus(state.StateStarting, cfg.Server, nil)
+
 	auditLog, err := audit.Open(paths.AuditFile)
 	if err != nil {
 		fail("could not open the audit log: %v", err)
 	}
 
-	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
 	agent, err := client.New(cfg, priv, auditLog, paths.Home, version, func(format string, a ...any) {
 		logger.Printf(format, a...)
 	})
 	if err != nil {
 		fail("%v", err)
 	}
+	self, err := selfBinary()
+	if err != nil {
+		fail("%v", err)
+	}
+	agent.Configure(client.Options{StateDir: paths.StateDir, Supervised: platform.Supervised(), Binary: self,
+		Config: paths.ConfigFile, OnState: writeStatus})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	logger.Printf("device %s connecting to %s", cfg.DeviceID, cfg.Server)
 	runErr := agent.Run(ctx)
+	writeStatus(state.StateStopped, "", runErr)
 	if ctx.Err() != nil {
 		logger.Printf("stopped")
 		return
@@ -336,6 +337,55 @@ func cmdRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "novad: %s\n", msg)
 	}
 	os.Exit(code)
+}
+
+// agentStatusWriter is `novad run`'s writer of agent-status.json: each call
+// writes the whole status, as this process, now.
+func agentStatusWriter(stateDir string, logger *log.Logger) func(st, server string, e error) {
+	statusPath := filepath.Join(stateDir, state.AgentStatusFile)
+	return func(st, server string, e error) {
+		s := state.AgentStatus{V: 1, PID: os.Getpid(), Version: version, Mode: platform.Mode(),
+			State: st, Server: server, Since: time.Now().UTC()}
+		if e != nil {
+			s.Error = e.Error()
+		}
+		if err := state.WriteJSON(statusPath, s); err != nil {
+			logger.Printf("could not write %s: %v", statusPath, err)
+		}
+	}
+}
+
+// holdIdentity takes run.lock, one copy per identity (P5). Refused, the
+// supervisor's own child writes the refusal into agent-status.json before it
+// is returned: that child is the one install's restart started, and install
+// names the copy holding the identity from it (Review Focus 4). Any other
+// copy writes nothing there — the file is the running holder's, and
+// supervise's swap confirmation and install --if-missing decide on it — so
+// its refusal, naming the holder's pid, is only on its own stderr (fix round
+// 1, controller ruling).
+func holdIdentity(stateDir string, writeStatus func(st, server string, e error)) (*state.Lock, error) {
+	lock, err := state.Acquire(filepath.Join(stateDir, state.RunLockFile))
+	if err != nil {
+		if supervisorsChild() {
+			writeStatus(state.StateStopped, "", err)
+		}
+		return nil, err
+	}
+	return lock, nil
+}
+
+// supervisorsChild is whether this process is the child a supervisor
+// started: platform.Supervised() — NOVA_SUPERVISOR_PID is set — and that
+// supervisor is this process's parent, as supervise starts its agent
+// directly. The variable alone is not enough: every program the agent runs
+// for her inherits it, so a `novad run` started through her hands would pass
+// for the supervisor's own child.
+func supervisorsChild() bool {
+	if !platform.Supervised() {
+		return false
+	}
+	pid, err := strconv.Atoi(os.Getenv(platform.SupervisorEnv))
+	return err == nil && pid > 0 && pid == os.Getppid()
 }
 
 func cmdStatus(argv []string) {
@@ -377,6 +427,61 @@ func cmdStatus(argv []string) {
 	} else {
 		fmt.Printf("server:      NOT reachable (%s)\n", detail)
 	}
+
+	for _, line := range statusLines(paths.StateDir) {
+		fmt.Println(line)
+	}
+}
+
+// statusLines says what the status files in stateDir say — and that there is
+// none when there is none, never a guess. A file that is there but cannot be
+// read is said to be unreadable, with why: it is never read as one that was
+// never written (Task 32, L61). A "ready" is what the agent last wrote, not a
+// live probe; the reachability line above it is the probe.
+func statusLines(stateDir string) []string {
+	var out []string
+	var a state.AgentStatus
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.AgentStatusFile), &a); {
+	case errors.Is(err, fs.ErrNotExist):
+		out = append(out, "agent:       no status yet (it has not run since S42b's build)")
+	case err != nil:
+		out = append(out, "agent:       status unknown — "+err.Error())
+	default:
+		line := fmt.Sprintf("agent:       %s since %s (pid %d, %s, build %s)", a.State,
+			a.Since.UTC().Format(time.RFC3339), a.PID, a.Mode, a.Version)
+		if a.Server != "" {
+			line += " via " + a.Server
+		}
+		out = append(out, line)
+		if a.Error != "" {
+			out = append(out, "             last error: "+a.Error)
+		}
+	}
+	var s state.SupervisorStatus
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.SupervisorStatusFile), &s); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		out = append(out, "supervisor:  status unknown — "+err.Error())
+	default:
+		line := fmt.Sprintf("supervisor:  pid %d, %d restarts", s.PID, s.Restarts)
+		if s.LastExit != nil {
+			line += fmt.Sprintf(", last exit %d", *s.LastExit)
+		}
+		out = append(out, line)
+	}
+	var u state.Update
+	switch err := state.ReadJSON(filepath.Join(stateDir, state.UpdateFile), &u); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		out = append(out, "last update: unknown — "+err.Error())
+	default:
+		line := fmt.Sprintf("last update: %s %s at %s", u.Outcome, u.Version, u.At.UTC().Format(time.RFC3339))
+		if u.Reason != "" {
+			line += " — " + u.Reason
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // probe does a short HTTP GET to the server root; any HTTP answer (even 401/404)

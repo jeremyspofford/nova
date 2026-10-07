@@ -189,6 +189,46 @@ describe('createSseParser', () => {
     expect(events.map(e => e.type)).toEqual(['error'])
   })
 
+  it('keeps a machine card’s commands, walks, notes and the OS it opens on', () => {
+    const card = {
+      kind: 'setup_qr',
+      setup: 'add_machine',
+      address: 'https://n',
+      url: 'https://n/add#ABCD-2345',
+      code: 'ABCD-2345',
+      expires_at: '2026-09-28T12:10:00Z',
+      machine: 'dell',
+      for_os: 'windows',
+      version: 'aaaaaaaaaaaa',
+      commands: { linux: 'l', macos: 'm', windows: 'w' },
+      walks: { linux: 'L', macos: 'M', windows: 'W' },
+      notes: { linux: '', macos: '', windows: 'n' },
+    }
+    const [event] = parseAll([`data: {"card":${JSON.stringify(card)}}\n\n`])
+    expect(event).toEqual({ type: 'card', card })
+  })
+
+  it('drops commands/walks/notes unless all three OS keys are strings — never {}, a missing key, or an array (S42b K12)', () => {
+    for (const bad of [{}, { linux: 'l' }, ['l', 'm', 'w']]) {
+      const [event] = parseAll([
+        `data: {"card":{"kind":"setup_qr","setup":"add_machine","address":"https://n","url":"https://n/add#ABCD-2345","commands":${JSON.stringify(bad)}}}\n\n`,
+      ])
+      expect(event?.type).toBe('card')
+      const card = (event as Extract<StreamEvent, { type: 'card' }>).card
+      expect(card.commands).toBeUndefined()
+    }
+  })
+
+  it('a card whose commands carry all three OS keys as strings is kept, even with empty notes/walks elsewhere (regression)', () => {
+    const [event] = parseAll([
+      'data: {"card":{"kind":"setup_qr","setup":"add_machine","address":"https://n","url":"https://n/add#ABCD-2345",' +
+        '"commands":{"linux":"l","macos":"m","windows":"w"},"notes":{"linux":"","macos":"","windows":""}}}\n\n',
+    ])
+    const card = (event as Extract<StreamEvent, { type: 'card' }>).card
+    expect(card.commands).toEqual({ linux: 'l', macos: 'm', windows: 'w' })
+    expect(card.notes).toEqual({ linux: '', macos: '', windows: '' })
+  })
+
   it('turns a usage frame into a usage event, defaulting what the server left out', () => {
     expect(
       parseAll([

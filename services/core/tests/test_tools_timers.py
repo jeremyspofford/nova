@@ -12,6 +12,7 @@ candidates rather than guess.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import time
 import uuid
@@ -19,7 +20,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app import schedule, timers, tools
+from app import devices, machines, schedule, timers, tools
+from app.evals.cases import FixtureDevice
 from app.identity import Person
 from app.main import app
 from app.tools import timers as timer_tools
@@ -179,6 +181,88 @@ async def test_a_device_with_none_paired_says_so_and_names_the_way_out(pool, tmp
     assert ok is False
     assert "device is empty" in result
     assert await _rows(pool, person) == []
+
+
+# -- S42b Task 24: inside an eval replay, the paired devices are the replay's --------------
+
+
+@contextlib.contextmanager
+def _replay(*declared: str):
+    """An eval replay's plant, as runner._install_fixture_plant builds it: the
+    case's declared devices are the only paired machines its world holds."""
+    views = {
+        name: FixtureDevice(name=name, platform="linux", hostname=name.upper()).as_view()
+        for name in declared
+    }
+    token = machines.PLANT.set(machines.FixturePlant({}, devices=views))
+    try:
+        yield
+    finally:
+        machines.PLANT.reset(token)
+
+
+@pytest.fixture
+def registry_alarm(monkeypatch):
+    """A read of the real devices table is an alarm: a replay reads none."""
+
+    async def alarm(*args, **kwargs):
+        raise AssertionError("create_timer read the real devices table inside a replay")
+
+    for name in ("get_live_by_name", "list_devices", "rows_with_last_update"):
+        monkeypatch.setattr(devices, name, alarm)
+
+
+async def test_inside_a_replay_a_declared_device_is_a_paired_one(pool, tmp_path, registry_alarm):
+    """The case's declared device is the replay's paired machine, so a reminder
+    for it is set — and, being a scratch person's row, never fires (the
+    scheduler's claim; test_scheduler pins that half)."""
+    person, _ = await _person(pool)
+    await _pair(pool, "desk")
+    with _replay("eval_laptop"):
+        result, ok = await _create(
+            _ctx(person, tmp_path), text="stand up", in_minutes=1, device="eval_laptop"
+        )
+    assert ok is True, result
+    (row,) = await _rows(pool, person)
+    assert row["payload"] == {"message": "stand up", "device": "eval_laptop"}
+    assert "as a notification on 'eval_laptop'" in result
+
+
+async def test_inside_a_replay_a_real_device_is_refused_with_the_replays_own_listing(
+    pool, tmp_path, registry_alarm
+):
+    """SAFETY: a real paired machine is not in a replay's world. Named, it is
+    refused in the words a real hub uses, listing the case's devices alone —
+    a real machine's name never reaches the scored turn, and no row naming
+    one is ever written."""
+    person, _ = await _person(pool)
+    await _pair(pool, "desk")
+    await _pair(pool, "office-pc")
+    for asked in ("desk", "nope"):
+        with _replay("eval_laptop"):
+            result, ok = await _create(
+                _ctx(person, tmp_path), text="stand up", in_minutes=1, device=asked
+            )
+        assert ok is False
+        assert result == (
+            f"Error: no paired device named {asked!r} — paired devices are: 'eval_laptop'"
+        )
+        assert "office-pc" not in result
+    assert await _rows(pool, person) == []
+
+
+async def test_a_replay_that_declares_no_device_has_none_paired(pool, tmp_path, registry_alarm):
+    person, _ = await _person(pool)
+    await _pair(pool, "desk")
+    with _replay():
+        result, ok = await _create(
+            _ctx(person, tmp_path), text="stand up", in_minutes=1, device="desk"
+        )
+    assert ok is False
+    assert result == (
+        "Error: no paired device named 'desk' — no device is paired at all; omit device and "
+        "the reminder lands in chat"
+    )
 
 
 # -- the fall-back hour: a duration is a duration -----------------------------------------
@@ -535,9 +619,11 @@ async def test_list_shows_the_persons_own_timers_and_the_jobs_never_another_pers
     assert timers.timer_spec(row)["schedule_words"] in result
     assert "homework" not in result
     # The install's jobs are hers to see (the Schedules page shows them too),
-    # stated as system rows.
-    assert "1 housekeeping job (system):" in result
+    # stated as system rows. S42b (decision 2): two — retention and
+    # agent_updates.
+    assert "2 housekeeping jobs (system):" in result
     assert f"job {timers.JOB_TITLES['retention']!r}" in result
+    assert f"job {timers.JOB_TITLES['agent_updates']!r}" in result
     assert "PAUSED" not in result
 
 
@@ -647,7 +733,9 @@ async def test_cancel_refuses_what_is_not_hers_by_name(pool, tmp_path):
     await _create(_ctx(other, tmp_path), text="homework", in_minutes=5)
     (theirs,) = await _rows(pool, other)
     await timers.ensure_jobs(pool)
-    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    job_id = await pool.fetchval(
+        "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
+    )
     ctx = _ctx(jeremy, tmp_path)
 
     # Another person's timer, by id and by title: not hers, so not found.
@@ -662,7 +750,8 @@ async def test_cancel_refuses_what_is_not_hers_by_name(pool, tmp_path):
         assert ok is False
         assert "no timer of yours matches" in result
     assert len(await _rows(pool, other)) == 1
-    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 1
+    # Both of the install's jobs are still there (S42b: retention and agent_updates).
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 2
 
 
 async def test_cancel_with_no_timers_at_all_says_so(pool, tmp_path):
@@ -869,12 +958,13 @@ async def test_list_timers_from_an_agent_turn_lists_the_timers_bound_to_it(pool,
     assert ok is True
     assert result == "no timers are bound to you"
 
-    # The owner's set is unchanged by the binding: both rows and the job.
+    # The owner's set is unchanged by the binding: both rows and the jobs
+    # (S42b: retention and agent_updates).
     result, ok = await tools.dispatch("list_timers", "", ctx)
     assert ok is True
     assert result.startswith("2 timers of yours")
     assert "'stretch'" in result and "'review the diffs'" in result
-    assert "1 housekeeping job (system):" in result
+    assert "2 housekeeping jobs (system):" in result
 
 
 async def test_list_bound_is_the_store_projection_newest_first(pool, tmp_path):

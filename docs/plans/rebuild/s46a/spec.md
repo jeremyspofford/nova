@@ -297,8 +297,9 @@ replaces it:
 - **`wake_attempts`** and **`machine_overrides`** (MAC and relay overrides)
   move here from S46's planned `038_wake`.
 - **Migration.** This slice takes the next free core migration when its plan
-  is written (`037` when this was first written; main had reached `037` and
-  S42b adds `038` by 2026-10-06). Whichever lands second renumbers.
+  is written (`037` when this was first written; by 2026-10-06 main had
+  reached `038` with S37a's `mcp_servers`, and S42b adds `039`). Whichever
+  lands second renumbers.
 - **Drift.** On every facts report, core compares each verified change that is
   not undone against the fresh fact. A mismatch (say, a driver update reset a
   setting):

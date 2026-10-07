@@ -93,6 +93,11 @@ func repoint(paths config.Paths, server string, check bool, out io.Writer) error
 	old := cfg.Server
 	saved := cfg
 	saved.Server = candidate.Server
+	// The just-proven address leads; the device's other locators (e.g. the
+	// hub's own loopback, or the address just superseded) stay behind it as
+	// fallbacks, unproven either way — a hub can move again without
+	// stranding this device a second time.
+	saved.Locators = withFirst(cfg.Hubs(), candidate.Server)
 	if err := config.Save(paths, saved, priv); err != nil {
 		return fmt.Errorf("could not write %s: %w (the enrolment still points at %s)", paths.ConfigFile, err, old)
 	}
@@ -103,6 +108,10 @@ func repoint(paths config.Paths, server string, check bool, out io.Writer) error
 	if back.Server != candidate.Server {
 		return fmt.Errorf("%s did not read back as written: server is %q, wanted %q — the enrolment was NOT repointed",
 			paths.ConfigFile, back.Server, candidate.Server)
+	}
+	if len(back.Locators) == 0 || back.Locators[0] != candidate.Server {
+		return fmt.Errorf("%s did not read back the new address first in locators: got %v, wanted %q first — the enrolment was NOT repointed",
+			paths.ConfigFile, back.Locators, candidate.Server)
 	}
 	if back.CorePubKey != cfg.CorePubKey {
 		return fmt.Errorf("%s read back a DIFFERENT pinned core key (%s…, was %s…) — the enrolment was NOT repointed",
@@ -122,4 +131,15 @@ func repoint(paths config.Paths, server string, check bool, out io.Writer) error
 	fmt.Fprintf(out, "then `novad status` says whether the new server answers. This command does not\n")
 	fmt.Fprintf(out, "claim the daemon reconnected — it only proved the URL and wrote it down.\n")
 	return nil
+}
+
+// withFirst puts first at the front of hubs, once.
+func withFirst(hubs []string, first string) []string {
+	out := []string{first}
+	for _, h := range hubs {
+		if h != first {
+			out = append(out, h)
+		}
+	}
+	return out
 }

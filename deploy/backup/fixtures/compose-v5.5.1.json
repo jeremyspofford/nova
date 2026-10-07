@@ -15,6 +15,47 @@
     }
   },
   "services": {
+    "agent-dist": {
+      "profiles": [
+        "build"
+      ],
+      "command": null,
+      "entrypoint": [
+        "sh",
+        "/build/build.sh"
+      ],
+      "environment": {
+        "CGO_ENABLED": "0",
+        "DIST_DIR": "/dist",
+        "GOCACHE": "/cache/build",
+        "GOMODCACHE": "/cache/mod",
+        "GOTOOLCHAIN": "local"
+      },
+      "image": "golang:1.27.1@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244",
+      "networks": {
+        "default": null
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/repo/deploy/agent-dist",
+          "target": "/build",
+          "read_only": true
+        },
+        {
+          "type": "volume",
+          "source": "v4_agent_dist",
+          "target": "/dist",
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "v4_agent_build_cache",
+          "target": "/cache",
+          "volume": {}
+        }
+      ]
+    },
     "browser": {
       "build": {
         "context": "/repo/deploy/browser",
@@ -102,6 +143,9 @@
         "DATABASE_URL": "postgresql://core:@postgres:5432/nova_core",
         "GATEWAY_URL": "http://gateway:8001",
         "MEMORY_URL": "http://memory:8002",
+        "NOVA_SUBNET_GATEWAY": "172.18.0.1",
+        "NOVA_TAILSCALE_ADDR": "172.18.128.20",
+        "NOVA_WEB_ADDR": "172.18.128.10",
         "SEARXNG_URL": "http://searxng:8080",
         "SERVICE_TOKEN": "",
         "WORKSPACE_ROOT": "/data/workspace"
@@ -148,6 +192,12 @@
           "type": "volume",
           "source": "v4_status",
           "target": "/run/nova-status",
+          "read_only": true
+        },
+        {
+          "type": "volume",
+          "source": "v4_agent_dist",
+          "target": "/dist",
           "read_only": true
         }
       ]
@@ -488,6 +538,12 @@
     }
   },
   "volumes": {
+    "v4_agent_build_cache": {
+      "name": "nova_v4_agent_build_cache"
+    },
+    "v4_agent_dist": {
+      "name": "nova_v4_agent_dist"
+    },
     "v4_browser_output": {
       "name": "nova_v4_browser_output"
     },

@@ -186,6 +186,17 @@ cat > "$TMP/fakes/tailscale" <<'FAKE'
 #                       the flip has to happen mid-run, after the container
 #                       is already up, which no env var set at `docker run`
 #                       time can do.
+#   FAKE_PEERS          "yes" adds a `Peer` map (one Windows peer, the shape
+#                       the live sidecar reports) AFTER Self, so the wrapper's
+#                       first-match greps still read Self's fields
+#   FAKE_FLIP_EMPTY     once flipped, how `status --json` misbehaves:
+#                       "yes" prints nothing and exits 1 (tailscaled not
+#                       answering on a tick); "silent" prints nothing and
+#                       exits 0; "fail" prints the (flipped) answer and
+#                       exits 1 — each half of "answered" pinned on its own
+# Every `status --json` answer that printed something is also copied to
+# $FAKE_DIR/status.last, so a test can compare a file the wrapper wrote with
+# what the CLI actually printed, byte for byte.
 printf '%s\n' "$*" >> "$FAKE_DIR/tailscale.calls"
 case "${1:-}" in
   status)
@@ -196,11 +207,32 @@ case "${1:-}" in
     fi
     certs='    "nova.fake-tailnet.ts.net"'
     if [ -f "$FAKE_DIR/flip" ]; then
+      [ "${FAKE_FLIP_EMPTY:-}" = "yes" ] && exit 1
+      [ "${FAKE_FLIP_EMPTY:-}" = "silent" ] && exit 0
       state="${FAKE_FLIP_STATE:-Stopped}"
       certs=""
     fi
-    printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n%s\n  ],\n  "Health": [\n    "%s"\n  ]\n}\n' \
-      "$state" "${FAKE_AUTH_URL:-}" "$certs" "${FAKE_HEALTH:-Tailscale is stopped.}"
+    peers=""
+    if [ "${FAKE_PEERS:-}" = "yes" ]; then
+      peers=',
+  "Peer": {
+    "nodekey:fakedell": {
+      "HostName": "DELL-XPS-8950",
+      "DNSName": "dell-xps-8950-windows.fake-tailnet.ts.net.",
+      "TailscaleIPs": [
+        "100.122.40.93",
+        "fd7a:115c:a1e0::5a01:285d"
+      ],
+      "OS": "windows",
+      "Online": true
+    }
+  }'
+    fi
+    out="$(printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n%s\n  ],\n  "Health": [\n    "%s"\n  ]%s\n}\n' \
+      "$state" "${FAKE_AUTH_URL:-}" "$certs" "${FAKE_HEALTH:-Tailscale is stopped.}" "$peers")"
+    printf '%s\n' "$out" > "$FAKE_DIR/status.last.$$" && mv -f "$FAKE_DIR/status.last.$$" "$FAKE_DIR/status.last"
+    printf '%s\n' "$out"
+    if [ -f "$FAKE_DIR/flip" ] && [ "${FAKE_FLIP_EMPTY:-}" = "fail" ]; then exit 1; fi
     ;;
   serve)
     case "${2:-}" in
@@ -313,6 +345,10 @@ case "$CASE" in
     echo "real_serve=$(tailscale serve status --json 2>/dev/null | tr -d ' \n')"
     ;;
   status-loop)
+    # PRE_MKDIR=<path>: a directory placed before the wrapper starts — set to
+    # the peer file's temp path, it makes that one write fail while
+    # tailscale.json's still can succeed.
+    [ -n "${PRE_MKDIR:-}" ] && mkdir -p "$PRE_MKDIR"
     sh /config/start.sh > "$FAKE_DIR/out" 2>&1 &
     W=$!
     SD="${NOVA_STATUS_DIR:-/run/nova-status}"
@@ -323,6 +359,13 @@ case "$CASE" in
     second="$(sed -n 's/.*"written_at": "\([^"]*\)".*/\1/p' "$SD/tailscale.json" 2>/dev/null)"
     if [ -n "$first" ] && [ "$first" != "$second" ]; then echo "rewritten=yes"; else echo "rewritten=no"; fi
     echo "status_dir_entries=$(ls -A "$SD" 2>/dev/null | tr '\n' ' ')"
+    # T4: the tailnet's own status, verbatim, beside tailscale.json.
+    echo "peer_file=$(tr -d '\n' < "$SD/tailscale-status.json" 2>/dev/null)"
+    if [ -s "$SD/tailscale-status.json" ] && cmp -s "$SD/tailscale-status.json" "$FAKE_DIR/status.last"; then
+      echo "peer_file_verbatim=yes"
+    else
+      echo "peer_file_verbatim=no"
+    fi
     if kill -0 "$W" 2>/dev/null; then echo "wrapper_alive=yes"; else echo "wrapper_alive=no"; fi
     # D17 (S47): every field is read from tailscaled on THAT tick, never
     # carried over. Proof, not assertion by construction: flip what the fake
@@ -339,6 +382,11 @@ case "$CASE" in
         sleep 0.5; j=$((j + 1))
       done
       echo "status_file_after_flip=$(tr -d '\n' < "$SD/tailscale.json" 2>/dev/null)"
+      # The peer file may be written after tailscale.json on a tick: give it
+      # two more ticks, all of them after the flip.
+      sleep 2
+      echo "peer_file_after_flip=$(tr -d '\n' < "$SD/tailscale-status.json" 2>/dev/null)"
+      if kill -0 "$W" 2>/dev/null; then echo "wrapper_alive_after_flip=yes"; else echo "wrapper_alive_after_flip=no"; fi
     fi
     kill -TERM "$W"
     wait "$W"
@@ -446,7 +494,9 @@ expect_contains "TERM while waiting: TERM reached containerboot" "$(field "$OUT"
 expect_contains "TERM while waiting: says containerboot exited" "$OUT" "containerboot exited (status 37) before tailscaled reported Running"
 
 # ── 1d''. the status file core reads (D17, S47) ──────────────────────────────
-OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1)"
+# FAKE_PEERS: tailscaled also reports a peer — tailscale.json's fields must
+# still be Self's (the first-match greps), and T4's peer file carries it.
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_PEERS=yes)"
 SF="$(field "$OUT" status_file)"
 expect_contains "status: version 1" "$SF" '"version": 1'
 expect_contains "status: the state tailscaled reports" "$SF" '"backend_state": "Running"'
@@ -455,7 +505,14 @@ expect_contains "status: the mapping, read on the tick" "$SF" '"serve_ok": true'
 expect_contains "status: the certificate domain" "$SF" '"https_cert": true'
 expect_contains "status: a UTC timestamp" "$SF" '"written_at": "20'
 expect_eq "status: rewritten on the next tick" "$(field "$OUT" rewritten)" yes
-expect_eq "status: the atomic write leaves no temp file" "$(field "$OUT" status_dir_entries)" "tailscale.json "
+# Moved deliberately (T4): the peer file sits beside tailscale.json; still no
+# temp file of either.
+expect_eq "status: the atomic writes leave no temp file" "$(field "$OUT" status_dir_entries)" "tailscale-status.json tailscale.json "
+PF="$(field "$OUT" peer_file)"
+expect_contains "peers: tailscale-status.json carries the peer's HostName" "$PF" '"HostName": "DELL-XPS-8950"'
+expect_contains "peers: ...and its TailscaleIPs" "$PF" '"100.122.40.93"'
+expect_contains "peers: ...and its MagicDNS name" "$PF" '"DNSName": "dell-xps-8950-windows.fake-tailnet.ts.net."'
+expect_eq "peers: tailscale-status.json is byte-identical to what status --json printed" "$(field "$OUT" peer_file_verbatim)" yes
 expect_eq "status: the wrapper is still up while it writes" "$(field "$OUT" wrapper_alive)" yes
 expect_eq "status: containerboot's status is still the wrapper's" "$(field "$OUT" rc)" 37
 
@@ -467,11 +524,45 @@ expect_contains "status, unwritable: says it could not write" "$OUT" "could not 
 # values: the fake starts Running/certified/mapped (proving the happy tick
 # above), then flips all three to their opposite AFTER the loop has already
 # written once, and this checks the NEXT write reflects the flip.
-OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_STATE=Stopped)"
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_STATE=Stopped -e FAKE_PEERS=yes)"
 SF2="$(field "$OUT" status_file_after_flip)"
 expect_contains "status: a later tick reports the backend going Stopped" "$SF2" '"backend_state": "Stopped"'
 expect_contains "status: a later tick reports the certificate dropping" "$SF2" '"https_cert": false'
 expect_contains "status: a later tick reports the mapping disappearing" "$SF2" '"serve_ok": false'
+PF2="$(field "$OUT" peer_file_after_flip)"
+expect_contains "peers: a later tick rewrites tailscale-status.json with the new answer" "$PF2" '"BackendState": "Stopped"'
+expect_lacks "peers: ...not the first tick's" "$PF2" '"BackendState": "Running"'
+
+# A tick where `status --json` prints nothing must NOT blank the peer file:
+# the old file stays (and goes stale, which core's 45 s rule reads as
+# "stopped writing"), never an empty file that reads as "no peers".
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_EMPTY=yes -e FAKE_PEERS=yes)"
+PF3="$(field "$OUT" peer_file_after_flip)"
+expect_contains "peers, empty answer: the last good file stays" "$PF3" '"HostName": "DELL-XPS-8950"'
+expect_contains "peers, empty answer: ...still the pre-failure answer" "$PF3" '"BackendState": "Running"'
+expect_eq "peers, empty answer: the wrapper stays up" "$(field "$OUT" wrapper_alive_after_flip)" yes
+
+# Each half of "tailscaled answered" on its own: an exit 0 that printed
+# nothing, and a failed call that still printed something. Neither replaces
+# the last good file.
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_EMPTY=silent -e FAKE_PEERS=yes)"
+PF4="$(field "$OUT" peer_file_after_flip)"
+expect_contains "peers, silent answer (exit 0, nothing printed): the last good file stays" "$PF4" '"BackendState": "Running"'
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_EMPTY=fail -e FAKE_PEERS=yes)"
+PF5="$(field "$OUT" peer_file_after_flip)"
+expect_contains "peers, failed call that printed: the last good file stays" "$PF5" '"BackendState": "Running"'
+expect_lacks "peers, failed call that printed: ...not the failed call's output" "$PF5" '"BackendState": "Stopped"'
+
+# The peer file failing to write is said, and costs neither tailscale.json
+# nor the wrapper: its temp path is a directory, so only that write fails.
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_PEERS=yes -e PRE_MKDIR=/run/nova-status/.tailscale-status.json.tmp)"
+expect_contains "peers, unwritable: says it could not write the peer file" "$OUT" "could not write /run/nova-status/tailscale-status.json"
+expect_eq "peers, unwritable: the wrapper stays up" "$(field "$OUT" wrapper_alive)" yes
+expect_contains "peers, unwritable: tailscale.json is still written" "$(field "$OUT" status_file)" '"backend_state": "Running"'
+# Non-fatal means the loop goes on, not just the wrapper: a peer-file
+# failure that ended the status loop would leave tailscale.json frozen at its
+# first tick while the wrapper (waiting on containerboot) still looked fine.
+expect_eq "peers, unwritable: tailscale.json is still rewritten on later ticks" "$(field "$OUT" rewritten)" yes
 
 # ── 1e. containerboot dies before Running ───────────────────────────────────
 OUT="$(CASE_BOUND=60 run_wrapper cb-dies -e FAKE_STATE=NeedsLogin -e FAKE_CB_EXIT=3)"

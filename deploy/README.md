@@ -32,6 +32,20 @@ command line REPLACES the `.env` list rather than adding to it — so after
 installing, prefer `docker compose up -d` with no flag, or re-run
 `./install`.
 
+**Her own repository.** The installer runs from the checkout, so it reads
+the checkout's own `origin` remote and writes `NOVA_REPO` (`owner/repo`) and,
+when `origin/HEAD` names one, `NOVA_REPO_BRANCH` to `deploy/.env`. Compose
+hands both to core, which adds one sentence to her prompt ("Your own source
+code is the GitHub repository owner/repo (default branch main).") — so a
+question like "why is CI red on main?" goes straight to GitHub instead of a
+hunt for which repository is hers. Only github.com remotes count (https,
+`ssh://` or `git@github.com:`, with or without `.git`); with no `origin`, or
+one that is not GitHub, nothing is written, the installer says so in one
+line, and a value an earlier run wrote is blanked. Core shape-checks both
+values and drops the sentence, with a logged reason, on anything that is not
+a GitHub `owner/repo`. To refresh it on a running install: re-run
+`./install` (core is recreated because its environment changed).
+
 **The deploy rule (2026-09-04).** Run compose from this directory — `cd
 deploy && docker compose …`, or `docker compose --project-directory deploy …`
 from the repo root — and never with a bare `-f deploy/docker-compose.yml`.
@@ -84,6 +98,46 @@ agents **among themselves** by machine identity (an agent's `machine_uid`).
 Nothing here links a specific engine to a specific agent by that identity
 yet — that join is S44's. A machine with no models still shows up, through
 its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
+
+**`machine_status` also lists "Remote model machines"** — between the engines
+and the agents. Each is a gateway provider whose URL host is a machine, not a
+cloud: a private, tailnet (100.64/10), loopback or link-local IP, a
+single-label name, or a name under `.ts.net`, `.local`, `.lan`, `.internal` or
+`.home.arpa` (decided from the host alone, no DNS lookup). Cloud providers are
+not listed, and neither is the bundled `hub`: the gateway serves it with its
+live URL (e.g. `http://ollama:11434`, a single-label name, so on a machine),
+and it is left out because the gateway marks its row `builtin` — never by its
+name or URL. Each line carries the gateway's last verdict, read live from
+`/admin/providers` and `/admin/routes` — never a call made now:
+
+- **answering** (the gateway lists its models), **failing** with the gateway's
+  own reason (its `listing_note`), **walled for another N min** with the
+  wall's reason (a live entry in the gateway's walls, whole minutes, floored),
+  or **state unknown** when the gateway has no verdict yet — never answering.
+- **Which paired device it runs on**, matched by ADDRESS, never by
+  `machine_uid` (so this is not S44's engine-to-agent join; `hub`, being
+  `builtin`, is not listed here and stays unlinked). Two live sources, both
+  tried and unioned:
+  1. **the agent's own addresses** — the IPv4 host addresses in its `facts`
+     frame (`net.ifaces[].ipv4_cidr`, loopback dropped): the URL's IP is one
+     of them;
+  2. **the tailnet peer list** — `tailscale-status.json` from the sidecar
+     (see "How the sidecar starts"): the URL's IP or MagicDNS name is a
+     peer's, and that peer's host name is a paired agent's hostname (narrowed
+     by OS when one machine runs two agents, e.g. Windows + WSL).
+
+  **Tailscale is not required**: with no sidecar, a LAN-only setup matches
+  through the agent's addresses alone; when nothing matches, the line also
+  says why the peer list was not used. The line says `runs on paired device
+  <name> (<how>)`; two devices matching say `ambiguous: ...` and name both;
+  none says `no paired device is known by <host>`; agents that could not be
+  read say so instead.
+- **Honest failure.** A gateway that cannot be read gives one line, `Remote
+  model machines could not be checked — <reason>`, and no fact — nothing
+  claims answering. No remote provider at all is said, never silence.
+- **The trace.** Each line leaves one fact in the span (`turn_spans`
+  `meta.facts`): `{machine, answering, checked_now: false, state, device}`.
+  `machine_status machine=<provider>` shows that provider's line alone.
 
 ## Which model answers chat
 
@@ -184,6 +238,74 @@ still decides, and every guard still judges what she writes.
   and switching Jev Router on asks you to pick a chat model or give chat a chain first.
   The model it picked is on the round's `llm_call` span as `upstream_model`.
 
+## The hub machine's own agent
+
+`./install` ends by installing novad on the hub machine itself (S42b), so
+the hub shows up in Devices like any other machine Nova controls — see
+`apps/novad/README.md` for what the agent does once paired.
+
+1. It builds `agent-dist` from the **committed** `apps/novad` tree
+   (`git archive HEAD apps/novad`, stamped with that tree's own version).
+   This step runs against the stack that is already up — after the health
+   table and the inference-compute check — so a dirty `apps/novad` tree is
+   refused there, by `deploy/agent_version.sh`, with its own stated reason
+   ("apps/novad has uncommitted changes — commit them first"), never
+   earlier in preflight. `./install` fails and names it; the stack itself
+   is left running.
+2. It downloads the build through this machine's own loopback door
+   (`http://127.0.0.1:3000`) and runs `novad install --if-missing`.
+3. A running agent is left exactly as it is (`--if-missing`): keeping it on
+   the hub's build afterward is Nova's job (see "Updates" in
+   `apps/novad/README.md`), not `./install`'s.
+4. A machine with no pairing gets one: `./install` mints a pairing code
+   through `devices_cli`, named after this machine —
+   `NOVA_HUB_AGENT_NAME=<name> ./install` to choose the name yourself, else
+   the hostname, lowercased. The name can never be `hub`: that is the
+   bundled engine's own name (decision D8), and `./install` refuses before
+   pairing rather than silently picking another one. The code travels to
+   `novad install` only through the environment, never a command line or a
+   log line.
+5. Its hubs, in order: this machine's own loopback first, then the tailnet
+   address when the tailnet is on.
+
+**The door is not identity.** Anything that reaches the hub machine's own
+loopback port counts as having come in through its door — the owner's own
+tunnel or an `ssh -L` on the hub arrives the same way. So the tile for an
+agent paired this way never claims to BE the hub: it reads **"Hub's
+door"**, both as its badge and as that badge's hover title. Core says the
+same fact the same way (`services/core/app/network.py`'s `door_of`).
+
+**Rate limits are per door too, not global** (Task 26). The agent
+downloads (`/api/v1/agent/dist/...`, which `./install` and every OS card
+use) are limited to 30 a minute per door — the hub's own loopback, the
+tailnet, and any other address core sees — so traffic through one door can
+never hold up `./install` or a pairing walk through another. Enroll has its
+own, tighter limit: 5 wrong codes per 15 minutes per bucket, counted before
+an attempt even finishes, so a burst cannot spend more than 5 at once. A
+visitor arriving through a relay (the owner's own tunnel, or funnel) is
+counted apart from that door's own traffic, per door, never against the
+hub's own loopback or the tailnet.
+
+A WSL hub installs nothing here: `./install` detects it is running inside
+WSL and instead prints the Windows card's one-line command, with a fresh
+code, to run in PowerShell on that same PC — Nova's agent runs on Windows
+itself, never inside WSL.
+
+**A native Windows machine (no WSL yet)** has no `./install` to run at all:
+the hub itself needs WSL. `install.ps1` at the repo root states exactly
+that and gives the one step (`wsl --install`), then exits. PowerShell's
+default execution policy blocks a `.ps1` file before it can even print its
+own words, so run it as `powershell -ExecutionPolicy Bypass -File
+.\install.ps1` — or just read the one step above instead of running it.
+
+**The two volumes.** `agent-dist`'s build profile (`--profile build`, never
+started by a plain `up`) writes into `v4_agent_dist` — the six builds and
+the manifest core serves and signs — and caches Go's build and module
+state in `v4_agent_build_cache`. Neither is backed up: `./install` rebuilds
+`v4_agent_dist` from the same committed tree, byte for byte, and
+`v4_agent_build_cache` only makes that rebuild faster — losing it costs
+time, nothing else.
+
 ## Tailnet access
 
 One durable HTTPS origin on your tailnet — `https://<node>.<tailnet>.ts.net`
@@ -253,7 +375,17 @@ bind, which dies with exit 127 when Docker Desktop recycles its mount):
    without HTTPS certificates enabled the CLI blocks forever; on expiry it
    says so and exits non-zero;
 4. READS `tailscale serve status --json` and exits non-zero if the mapping is
-   not there;
+   not there; from then on, every `NOVA_STATUS_INTERVAL` seconds (default
+   15), writes two status files to `/run/nova-status` (`NOVA_STATUS_DIR`),
+   each atomically (a temp file, then `mv`), from one `tailscale status
+   --json` per tick: `tailscale.json` (BackendState, the node's DNS name,
+   whether the serve mapping and an HTTPS certificate are there — Nova's own
+   address for core) and `tailscale-status.json` (that `tailscale status
+   --json` verbatim — the tailnet's peers and their addresses, which
+   `machine_status` matches remote model machines against). A failed or empty
+   answer leaves the last good `tailscale-status.json` in place; core reads
+   either file as stale ("stopped writing") once it is older than 45 s. A
+   failed write is logged and retried, never fatal;
 5. waits on containerboot, whose exit status becomes the container's.
 
 Why not `TS_SERVE_CONFIG`: containerboot's own serve path clears the node's
@@ -751,9 +883,11 @@ bringing this node up while the other is online will flap the node key, and
 acts only after you type `undo`.
 
 It then **brings this machine back**: `MOVED_TO` is removed first, because the
-sidecar refuses to start while it exists; the project is started; **every
-service is read back** rather than trusting that `up` returned 0; and
-`deploy/.moved` is removed only once that has passed. A run that cannot finish
+sidecar refuses to start while it exists; the project is started, every
+service of it but a one-shot job (`agent-dist`, the agent build `./install`
+runs by itself, which exits by design and is never started here); **every
+service it started is read back** rather than trusting that `up` returned 0;
+and `deploy/.moved` is removed only once that has passed. A run that cannot finish
 names the half-done state it is leaving and exits 4 — it never reports a
 recovery it did not verify.
 

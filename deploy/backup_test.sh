@@ -3168,6 +3168,13 @@ else
     "$(cat "$BK_WORLD/up.log")" "up -d"
   expect_has "a_failed_park_names_the_tailnet_sidecar_it_brought_back" \
     "$BKT_OUT" "tailscale"
+  # ...every profile the stack runs in and never `--profile '*'`: the one-shot
+  # agent-dist job is neither started nor read back (Task 32, MF3).
+  expect_has "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$(cat "$BK_WORLD/up.log")" "--profile inference --profile tailnet up -d"
+  expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$(cat "$BK_WORLD/up.log")" "--profile *"
+  expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_OUT" "agent-dist"
 
   # ...and `up -d` exiting 0 is not "it came back". A failed park that cannot
   # restore the machine says THAT, naming what is still down — including the
@@ -3415,6 +3422,35 @@ nova_memory|memory"
     "$BKT_ERR" "the two sources disagree"
   expect_has "the_refusal_says_which_side_has_the_extra_one" \
     "$BKT_ERR" "no service names it: nova_leftover"
+
+  # Task 32, the MF6 twin: the exact same sort/comm collation bug MF6 fixed
+  # in bk_fill_volume, here in this reconciliation's own comm calls. Both
+  # dbs.carried and dbs.named are sorted LC_ALL=C; comm must read them back
+  # in that same collation. "Zephyr_db" is a database no service names
+  # (same shape as nova_leftover above), chosen because under a real
+  # locale's collation it sorts relative to the three real names
+  # differently than LC_ALL=C does — so an unprefixed comm here does not
+  # just miss Zephyr_db, it also calls nova_core, nova_gateway and
+  # nova_memory extra AND missing even though both sources agree on them.
+  # This is the same test as the one just above it, with a name picked to
+  # expose that collation bug rather than to miss it by chance.
+  bkt_reset
+  STUB_DATABASES="nova_core|core
+nova_gateway|gateway
+nova_memory|memory
+Zephyr_db|postgres"
+  bkt_backup
+  STUB_DATABASES="nova_core|core
+nova_gateway|gateway
+nova_memory|memory"
+  expect_str "a_collation_sensitive_extra_database_still_refuses" \
+    "$BKT_RC" "1"
+  expect_has "the_three_agreed_databases_are_read_as_agreeing_not_missing" \
+    "$BKT_ERR" "a service names it and this run would NOT carry it: nothing"
+  expect_has "the_refusal_names_only_the_collation_sensitive_extra_one" \
+    "$BKT_ERR" "no service names it: Zephyr_db"
+  expect_lacks "the_agreed_databases_are_never_bundled_into_the_extra_line" \
+    "$BKT_ERR" "no service names it: Zephyr_db nova_core"
 
   # ── the zero-database refusal, reachable at last (M14) ───────────────────
   #
@@ -4662,9 +4698,42 @@ RETAR
   # back.
   expect_str "the_sidecar_marker_is_gone_and_the_install_marker_is_not_when_the_stack_starts" \
     "$(cat "$BK_WORLD/up-markers.log")" "up-with-markers: MOVED_TO=gone .moved=present"
+  # Every profile the stack runs in — the whole project, not just the writers
+  # — and never `--profile '*'`, which starts the one-shot agent-dist job too
+  # (Task 32, MF3; the case below).
   expect_has "undo_move_restarts_the_whole_project_not_just_the_writers" \
-    "$(cat "$BK_WORLD/up.log")" "--profile * up -d"
+    "$(cat "$BK_WORLD/up.log")" "--profile inference --profile tailnet up -d"
   expect_str "undo_move_names_no_service_so_every_one_comes_back" \
+    "$(sed -n 's/.* up -d//p' "$BK_WORLD/up.log" | tr -d ' ')" ""
+
+  # ── 5b. a one-shot job is neither started nor waited for (Task 32, MF3) ──
+  #
+  # agent-dist (S42b Task 25) builds Nova's agent and exits, under the `build`
+  # profile. `--profile '*' up -d` started it on every undo-move, and the
+  # read-back then waited 240 s for a job that had already exited — so the
+  # verb never finished. Which service is such a job is read off the render
+  # (no restart policy, and only under profiles no long-running service is
+  # in), never off its name: this render renames the job AND its profile,
+  # and neither reaches `up` or the read-back.
+  bkt_reset
+  bkt_park
+  STUB_COMPOSE_SED='s/^  agent-dist:$/  bundle-job:/;s/^      - build$/      - tooling/'
+  bkt_answer undo
+  bkt_restore cmd_undo_move < "$BK_WORLD/answer"
+  STUB_COMPOSE_SED=""
+  expect_str "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+  expect_has "a_one_shot_job_is_neither_started_nor_waited_for" "$BKT_OUT" \
+    "started: core gateway memory ollama postgres searxng tailscale web — every one"
+  expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$BKT_OUT$BKT_ERR" "bundle-job"
+  expect_has "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$(cat "$BK_WORLD/up.log")" "--profile inference --profile tailnet up -d"
+  expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$(cat "$BK_WORLD/up.log")" "--profile tooling"
+  expect_lacks "a_one_shot_job_is_neither_started_nor_waited_for" \
+    "$(cat "$BK_WORLD/up.log")" "--profile *"
+  expect_str "a_one_shot_job_is_neither_started_nor_waited_for" \
     "$(sed -n 's/.* up -d//p' "$BK_WORLD/up.log" | tr -d ' ')" ""
 
   # ── 6. it cannot finish: a state it NAMES, never one it assumes ──────────

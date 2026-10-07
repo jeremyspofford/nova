@@ -4,14 +4,65 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	"novad/internal/platform"
 )
+
+// folderOf resolves a known folder; a variable so a test points it at a
+// temp dir.
+var folderOf = platform.Folder
+
+// resolvePath turns "@desktop", "@desktop/notes.txt" or "@documents\a" into a
+// path under that folder as THIS machine names it (S42b P16) — so "my
+// desktop" is read on the device, never guessed by the model. Any other path
+// is returned as given: core already checked it is absolute for this OS.
+//
+// An @folder token is a LOCATOR, not a boundary (Task 32, L77b). fs.list,
+// fs.read and fs.write take any absolute path — core checks only its shape —
+// so a token reaches nothing an absolute path does not already reach, and v4
+// keeps no fs_roots or deny-roots (owner ruling 2026-09-03,
+// docs/plans/rebuild/no-approvals.md); a containment check here would be
+// exactly one. The lexical ".." check below is about what the words say: it
+// keeps "@desktop/../x" from being read, or reported, as a path inside the
+// desktop folder when it names one outside it. A symlink inside the folder
+// is followed like any other path, wherever it leads.
+func resolvePath(path string) (string, error) {
+	if !strings.HasPrefix(path, "@") {
+		return path, nil
+	}
+	name, tail := path[1:], ""
+	if i := strings.IndexAny(name, `/\`); i >= 0 {
+		name, tail = name[:i], name[i+1:]
+	}
+	if !platform.KnownFolder(name) {
+		return "", fmt.Errorf("cannot: @%s names no folder this agent knows (it knows @%s)",
+			name, strings.Join(platform.FolderNames, ", @"))
+	}
+	base, err := folderOf(name)
+	if err != nil {
+		return "", fmt.Errorf("cannot: %v", err)
+	}
+	if tail == "" {
+		return base, nil
+	}
+	clean := filepath.Clean(filepath.FromSlash(tail))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+		return "", fmt.Errorf("cannot: a path under @%s must stay inside it (got %q)", name, tail)
+	}
+	return filepath.Join(base, clean), nil
+}
 
 func fsList(args map[string]any, d Deps) Outcome {
 	path, ok := strArg(args, "path")
 	if !ok || path == "" {
 		return fail("fs.list needs a 'path'")
+	}
+	path, err := resolvePath(path)
+	if err != nil {
+		return fail("%v", err)
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -38,6 +89,10 @@ func fsRead(args map[string]any, d Deps) Outcome {
 	path, ok := strArg(args, "path")
 	if !ok || path == "" {
 		return fail("fs.read needs a 'path'")
+	}
+	path, err := resolvePath(path)
+	if err != nil {
+		return fail("%v", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -76,6 +131,10 @@ func fsWrite(args map[string]any, d Deps) Outcome {
 	content, ok := strArg(args, "content")
 	if !ok {
 		return fail("fs.write needs 'content'")
+	}
+	path, err := resolvePath(path)
+	if err != nil {
+		return fail("%v", err)
 	}
 	// The cap is MECHANICAL and defence-in-depth: the daemon refuses an oversize
 	// write even for a fully-verified, core-signed envelope (core caps it too).

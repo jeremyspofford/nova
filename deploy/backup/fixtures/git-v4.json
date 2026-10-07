@@ -4,6 +4,7 @@
   "scan_roots": [
     "/repo/data",
     "/repo/deploy",
+    "/repo/deploy/agent-dist",
     "/repo/deploy/postgres-init",
     "/repo/deploy/tailscale",
     "/repo/searxng"
@@ -11,6 +12,7 @@
   "roots": {
     "data": "ignored",
     "deploy": "tracked",
+    "deploy/agent-dist": "tracked",
     "deploy/postgres-init": "tracked",
     "deploy/tailscale": "tracked",
     "searxng": "tracked"
@@ -21,6 +23,8 @@
     "deploy/backup/.ruff_cache": "ignored",
     "deploy/backup/tests/__pycache__": "ignored",
     "deploy/backup/.venv": "ignored",
+    "deploy/agent_version.sh": "tracked",
+    "deploy/agent_version_test.sh": "tracked",
     "deploy/backup/fixtures/bindsrc/.keep": "tracked",
     "deploy/backup/fixtures/compose-v5.5.1.json": "tracked",
     "deploy/backup/fixtures/compose-v5.5.1.yaml": "tracked",
@@ -60,6 +64,7 @@
     "deploy/backup/tests/test_raw_compose.py": "tracked",
     "deploy/backup/tests/test_restore_reader.py": "tracked",
     "deploy/backup/tests/test_restore_sh.py": "tracked",
+    "deploy/backup/uv.lock": "ignored",
     "deploy/browser/Dockerfile": "tracked",
     "deploy/compose_read.sh": "tracked",
     "deploy/docker-compose.gpu.yml": "tracked",

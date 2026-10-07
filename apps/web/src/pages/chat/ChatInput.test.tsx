@@ -477,3 +477,177 @@ describe('ChatInput — attaching a file (S28)', () => {
     expect(screen.queryByLabelText('Attach a file')).toBeNull()
   })
 })
+
+/**
+ * Up-arrow recall (chat rewind T6, 2026-10-06). The owner asked for "the up
+ * key gives me the previous message back like claude does, so I can rerun it
+ * or adjust it". `history` is his sent messages in this conversation, oldest
+ * -> newest; ArrowUp in an EMPTY composer (or while already recalling, with
+ * the caret on the first line) steps back through it, ArrowDown steps forward
+ * and, past the newest, puts back what was in the box before recall began.
+ */
+describe('ChatInput — up-arrow recall of his sent messages', () => {
+  const HISTORY = ['first thing', 'second thing', 'third thing']
+
+  function renderRecall(history: string[] = HISTORY, draftKey?: string) {
+    const onSubmit = vi.fn()
+    render(<ChatInput onSubmit={onSubmit} disabled={false} history={history} draftKey={draftKey} />)
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+    const type = (value: string) => fireEvent.change(textarea, { target: { value } })
+    // fireEvent.keyDown returns false when the handler called preventDefault.
+    const up = () => fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    const down = () => fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    return { onSubmit, textarea, type, up, down }
+  }
+
+  it('ArrowUp in an empty composer recalls the newest, then each older one, stopping at the oldest', () => {
+    const { textarea, up } = renderRecall()
+    expect(up()).toBe(false) // recalled: default prevented
+    expect(textarea.value).toBe('third thing')
+    up()
+    expect(textarea.value).toBe('second thing')
+    up()
+    expect(textarea.value).toBe('first thing')
+    up() // no wrap
+    expect(textarea.value).toBe('first thing')
+  })
+
+  it('ArrowDown while recalling steps newer, and past the newest restores the empty draft', () => {
+    const { textarea, up, down } = renderRecall()
+    up()
+    up()
+    expect(textarea.value).toBe('second thing')
+    expect(down()).toBe(false)
+    expect(textarea.value).toBe('third thing')
+    down()
+    expect(textarea.value).toBe('')
+  })
+
+  it('ArrowDown with nothing being recalled does nothing special', () => {
+    const { textarea, down } = renderRecall()
+    expect(down()).toBe(true) // default NOT prevented
+    expect(textarea.value).toBe('')
+  })
+
+  it('ArrowUp in a non-empty composer that is not recalling keeps the native behaviour', () => {
+    const { textarea, type, up } = renderRecall()
+    type('half a thought')
+    expect(up()).toBe(true)
+    expect(textarea.value).toBe('half a thought')
+  })
+
+  it('while recalling a multi-line message, ArrowUp with the caret below the first line moves the caret, not the history', () => {
+    const { textarea, up } = renderRecall(['older', 'line one\nline two'])
+    up()
+    expect(textarea.value).toBe('line one\nline two')
+    // Caret on the second line: native caret movement, no recall.
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    expect(up()).toBe(true)
+    expect(textarea.value).toBe('line one\nline two')
+    // Caret on the first line: recall steps older.
+    textarea.setSelectionRange(0, 0)
+    expect(up()).toBe(false)
+    expect(textarea.value).toBe('older')
+  })
+
+  it('while recalling a multi-line message, ArrowDown with the caret above the last line moves the caret, not the history', () => {
+    const { textarea, up, down } = renderRecall(['line one\nline two', 'newest'])
+    up()
+    up()
+    expect(textarea.value).toBe('line one\nline two')
+    // Caret on the first line: native caret movement, no recall.
+    textarea.setSelectionRange(0, 0)
+    expect(down()).toBe(true)
+    expect(textarea.value).toBe('line one\nline two')
+    // Caret on the last line: recall steps newer.
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    expect(down()).toBe(false)
+    expect(textarea.value).toBe('newest')
+  })
+
+  it('a recalled slash command does not open the popover, so the next ArrowUp still steps older', () => {
+    const { textarea, up } = renderRecall(['older', '/help'])
+    up()
+    expect(textarea.value).toBe('/help')
+    expect(screen.queryByTestId('command-option-/help')).toBeNull()
+    expect(up()).toBe(false)
+    expect(textarea.value).toBe('older')
+  })
+
+  it('editing a recalled text ends recall: the edit stays and the arrows move the caret', () => {
+    const { textarea, type, up, down } = renderRecall()
+    up()
+    expect(textarea.value).toBe('third thing')
+    type('third thing, but louder')
+    expect(up()).toBe(true)
+    expect(textarea.value).toBe('third thing, but louder')
+    expect(down()).toBe(true)
+    expect(textarea.value).toBe('third thing, but louder')
+  })
+
+  it('Enter sends a recalled text unchanged (rerun), and recall restarts from the newest', () => {
+    const { onSubmit, textarea, up } = renderRecall()
+    up()
+    up()
+    up()
+    expect(textarea.value).toBe('first thing')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('first thing', [])
+    expect(textarea.value).toBe('')
+    up()
+    expect(textarea.value).toBe('third thing')
+  })
+
+  it('Enter sends a recalled text as edited', () => {
+    const { onSubmit, textarea, type, up } = renderRecall()
+    up()
+    type('third thing, adjusted')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('third thing, adjusted', [])
+  })
+
+  it('with an empty history ArrowUp does nothing', () => {
+    const { textarea, up } = renderRecall([])
+    expect(up()).toBe(true)
+    expect(textarea.value).toBe('')
+  })
+
+  it('a recalled text is not written to the stored draft until he edits it', () => {
+    const KEY = 'nova-chat-draft:p1:recall'
+    localStorage.removeItem(KEY)
+    const { up } = renderRecall(HISTORY, KEY)
+    up()
+    expect(localStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('with the slash-command popover open, the arrows move its highlight and never recall', () => {
+    const { textarea, type, up, down } = renderRecall()
+    type('/')
+    expect(screen.getByTestId('command-option-/clear').getAttribute('aria-selected')).toBe('true')
+    down()
+    expect(screen.getByTestId('command-option-/help').getAttribute('aria-selected')).toBe('true')
+    up()
+    expect(screen.getByTestId('command-option-/clear').getAttribute('aria-selected')).toBe('true')
+    expect(textarea.value).toBe('/')
+  })
+
+  it('with the @mention popover open, the arrows move its highlight and never recall', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <ChatInput
+        onSubmit={onSubmit}
+        disabled={false}
+        history={HISTORY}
+        api={{ listAgents: vi.fn(async () => AGENTS), uploadAttachment: vi.fn() }}
+      />,
+    )
+    const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '@' } })
+    await screen.findByTestId('mention-autocomplete')
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    expect(screen.getByTestId('mention-option-mailer').getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    expect(screen.getByTestId('mention-option-coder').getAttribute('aria-selected')).toBe('true')
+    expect(textarea.value).toBe('@')
+  })
+})

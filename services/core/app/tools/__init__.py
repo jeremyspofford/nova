@@ -183,6 +183,7 @@ def context_for(
     person,
     *,
     facts_sink: list[dict] | None = None,
+    undo_sink: list | None = None,
     workspace_root: Path | None = None,
     card: Callable[[dict], None] | None = None,
 ) -> ToolContext:
@@ -200,7 +201,9 @@ def context_for(
     that knows why it is where it is. `facts_sink` collects the facts a call
     DETERMINED even when it refused (see ToolContext). `card` is the UI-only
     card channel (S47): the stream route binds it, and every other caller
-    leaves it None.
+    leaves it None. `undo_sink` is the undo channel (chat-rewind): the turn
+    binds a list, and chat._run_tool files each call's slice on the turn's
+    action ledger.
 
     `person` must be a real identity: every route resolves one before a turn
     starts (identity.require_person) and the memory tools scope to it. A None
@@ -213,6 +216,7 @@ def context_for(
         person=person,
         workspace_root=workspace.root_from_env() if workspace_root is None else workspace_root,
         facts_sink=facts_sink,
+        undo_sink=undo_sink,
         card=card,
     )
 

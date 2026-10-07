@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  ApiError,
   parsePullLine,
   pullModel,
   getActivity,
@@ -15,8 +16,10 @@ import {
   listSkills,
   listTools,
   updateAgent,
+  updateDevice,
   getMachines,
   setMachineServing,
+  rewind,
   type PullLine,
 } from './api'
 
@@ -302,6 +305,99 @@ describe('machines (S40): the routes and the bodies, verbatim', () => {
   })
 })
 
+describe('updateDevice (S42b D4/K4, carried from Task 26): a dead or slow gateway is typed, never thrown', () => {
+  function stubStatus(status: number, body = '') {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status,
+        text: async () => body,
+      }) as unknown as Response),
+    )
+  }
+
+  it.each([502, 504, 524])('status %i comes back as not_known_yet, never thrown', async status => {
+    // Cloudflare's own error page — not JSON, exactly the body statedReason
+    // would otherwise just quote verbatim as if it were a real refusal.
+    stubStatus(status, '<html><body>Bad Gateway</body></html>')
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.version).toBeNull()
+    expect(outcome.from_version).toBeNull()
+    expect(outcome.needs_card).toBe(false)
+    expect(outcome.in_flight).toBeNull()
+    expect(outcome.reason).toContain('sent or not, not known yet')
+    expect(outcome.reason).not.toContain('<html>')
+  })
+
+  it('a network failure says "may or may not" — status 0 happens BEFORE sending too, so it never claims the request was sent (K4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network error')
+      }),
+    )
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.reason).toContain('may or may not have received it')
+    expect(outcome.reason).not.toContain('after the request was sent')
+  })
+
+  it('a 200 whose body cannot be read is not_known_yet too — core certainly got the request (K4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => {
+          throw new TypeError('network error')
+        },
+      }) as unknown as Response),
+    )
+    const outcome = await updateDevice('d-1')
+    expect(outcome.outcome).toBe('not_known_yet')
+    expect(outcome.reason).toContain('its body could not be read')
+  })
+
+  it('a real refusal (404, unpaired device) is thrown verbatim, never absorbed into not_known_yet', async () => {
+    stubStatus(404, JSON.stringify({ error: 'no paired device with that id' }))
+    await expect(updateDevice('d-1')).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringContaining('no paired device with that id'),
+    })
+  })
+
+  it.each([500, 503])('status %i reads as itself — thrown with core’s own reason, never not_known_yet (K10)', async status => {
+    stubStatus(status, JSON.stringify({ error: `core said ${status}` }))
+    const err: unknown = await updateDevice('d-1').then(
+      v => v,
+      e => e,
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(status)
+    expect((err as ApiError).message).toContain(`core said ${status}`)
+  })
+
+  it('a real answer passes through verbatim, including in_flight (K9), to the fixed path, as a POST', async () => {
+    const body = { outcome: 'sent', version: 'abcdef123456', from_version: '111111111111', reason: null, needs_card: false, in_flight: 2 }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+    expect(await updateDevice('d 1')).toEqual(body)
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/v1/devices/d%201/update')
+    expect(init.method).toBe('POST')
+  })
+})
+
 describe('pullModel', () => {
   it('yields one object per line when several arrive in one chunk', async () => {
     stubPullResponse([
@@ -358,5 +454,60 @@ describe('pullModel', () => {
     const lines = await collect(pullModel('qwen3:4b'))
     expect(lines).toHaveLength(1)
     expect(lines[0].error).toBeTruthy()
+  })
+})
+
+describe('rewind (chat rewind T7): the route, the body, and core\'s own words', () => {
+  function stubJson(body: unknown, status = 200) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: status < 400,
+        status,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+  const call = () => vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit | undefined]
+
+  it('POSTs {message_id, mode} to the conversation\'s rewind route and resolves to core\'s result verbatim', async () => {
+    const result = {
+      rewind_id: 'r1',
+      marker_message_id: 'm1',
+      mode: 'executions',
+      withdrawn: 3,
+      undone: [{ tool: 'workspace_write_file', action_id: 'a1', line: 'restored notes.md' }],
+      not_undone: [{ tool: 'device_run', action_id: 'a2', reason: 'a command already run cannot be taken back' }],
+    }
+    stubJson(result)
+    expect(await rewind('c1', 'u7', 'executions').catch(err => err)).toEqual(result)
+    const [url, init] = call()
+    expect(url).toBe('/api/v1/conversations/c1/rewind')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ message_id: 'u7', mode: 'executions' })
+  })
+
+  it('sends mode "chat" as given', async () => {
+    stubJson({ rewind_id: 'r1', marker_message_id: 'm1', mode: 'chat', withdrawn: 1, undone: [], not_undone: [] })
+    await rewind('c1', 'u7', 'chat').catch(() => undefined)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(call()[1]?.body as string)).toEqual({ message_id: 'u7', mode: 'chat' })
+  })
+
+  it('a 409 rejects with core\'s stated reason and status, never a generic message', async () => {
+    stubJson({ error: 'a turn is still running in this conversation' }, 409)
+    await expect(rewind('c1', 'u7', 'chat')).rejects.toMatchObject({
+      status: 409,
+      message: 'a turn is still running in this conversation',
+    })
+  })
+
+  it('a 400 refusal rejects with core\'s stated reason', async () => {
+    stubJson({ error: 'u7 is not one of his messages in this conversation' }, 400)
+    await expect(rewind('c1', 'u7', 'chat')).rejects.toMatchObject({
+      status: 400,
+      message: 'u7 is not one of his messages in this conversation',
+    })
   })
 })

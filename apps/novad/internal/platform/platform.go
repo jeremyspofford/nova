@@ -17,8 +17,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner runs one program, argv form, and returns what it wrote to stdout.
@@ -27,30 +29,76 @@ type Runner interface {
 	Run(ctx context.Context, name string, args []string, stdin string) (string, error)
 }
 
-// Exec is the Runner that runs real programs.
-type Exec struct{}
+// EnvRunner is a Runner that can also add to one program's environment —
+// how wsl.exe gets WSL_UTF8=1 (RunWSL). Exec and FakeRunner are both one.
+type EnvRunner interface {
+	Runner
+	RunEnv(ctx context.Context, env []string, name string, args []string, stdin string) (string, error)
+}
+
+// Exec is the Runner that runs real programs. WaitDelay, when set, bounds
+// how long a call waits, once its program has exited or been killed at ctx's
+// end, for the program's output pipes to close: a grandchild still holding
+// them (one wsl.exe started) cannot hold the call open (exec.Cmd.WaitDelay).
+type Exec struct {
+	WaitDelay time.Duration
+}
 
 // Run runs name with args. A failure carries the program's own stderr, so a
 // caller states the reason the program gave, not just "exit status 1".
-func (Exec) Run(ctx context.Context, name string, args []string, stdin string) (string, error) {
+func (e Exec) Run(ctx context.Context, name string, args []string, stdin string) (string, error) {
+	return e.RunEnv(ctx, nil, name, args, stdin)
+}
+
+// RunEnv is Run with env ("KEY=value" entries) added to the environment the
+// program inherits from the agent. A failure is a *RunError.
+func (e Exec) RunEnv(ctx context.Context, env []string, name string, args []string, stdin string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = e.WaitDelay
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return stdout.String(), fmt.Errorf("%s: %w: %s", name, err, msg)
-		}
-		return stdout.String(), fmt.Errorf("%s: %w", name, err)
+	if err := cmd.Start(); err != nil {
+		return "", &RunError{Name: name, Err: err, NotStarted: true}
+	}
+	if err := cmd.Wait(); err != nil {
+		return stdout.String(), &RunError{Name: name, Err: err, Stderr: stderr.String()}
 	}
 	return stdout.String(), nil
 }
+
+// RunError is a program that failed: its name, how (an exit status, not
+// found, killed), and its stderr exactly as it wrote it — so a caller that
+// knows the program's encoding decodes its words alone (RunWSL), never the
+// prefix this adds. NotStarted is a program that never ran: it could not be
+// started (not found, not allowed), or its bound had already passed.
+type RunError struct {
+	Name       string
+	Err        error
+	Stderr     string
+	NotStarted bool
+}
+
+// Error is "name: how: stderr", stderr trimmed, or "name: how" when the
+// program wrote none.
+func (e *RunError) Error() string {
+	if msg := strings.TrimSpace(e.Stderr); msg != "" {
+		return fmt.Sprintf("%s: %v: %s", e.Name, e.Err, msg)
+	}
+	return fmt.Sprintf("%s: %v", e.Name, e.Err)
+}
+
+// Unwrap is how the program failed (exec.ErrNotFound, *exec.ExitError).
+func (e *RunError) Unwrap() error { return e.Err }
 
 // Mem is the machine's memory as the OS reports it. AvailableKnown is false
 // where the OS gives only the total; the caller then says "available

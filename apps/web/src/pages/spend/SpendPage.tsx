@@ -178,7 +178,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                 <span className="text-caption text-content-tertiary">local models cost no dollars — switch to Calls to see them</span>
               )}
             </div>
-            <div className="flex h-40 items-end gap-1 border-b border-l border-line pl-1" data-testid="spend-days">
+            <div className="flex h-40 items-end gap-1 border-b border-l border-border pl-1" data-testid="spend-days">
               {bars.map(b => {
                 const total = dayTotal(b)
                 const height = maxDay > 0 ? Math.max(total > 0 ? 3 : 0, Math.round((total / maxDay) * 100)) : 0
@@ -236,7 +236,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
               {cloudProviders.map(p => {
                 const pct = capPercent(p.month_usd, p.cap_usd)
                 return (
-                  <div key={p.provider} className="rounded-md border border-line px-4 py-3" data-testid={`spend-provider-${p.provider}`}>
+                  <div key={p.provider} className="rounded-md border border-border px-4 py-3" data-testid={`spend-provider-${p.provider}`}>
                     <div className="flex flex-wrap items-center gap-2 text-compact">
                       <span className="font-medium">{p.provider}</span>
                       <span>{usd(p.usd, 4)} in this window</span>
@@ -260,13 +260,13 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                 )
               })}
               {localProviders.map(p => (
-                <div key={p.provider} className="rounded-md border border-line px-4 py-3 text-compact" data-testid={`spend-provider-${p.provider}`}>
+                <div key={p.provider} className="rounded-md border border-border px-4 py-3 text-compact" data-testid={`spend-provider-${p.provider}`}>
                   <span className="font-medium">{p.provider}</span>{' '}
                   <Badge size="sm" color="neutral">local</Badge>{' '}
                   <span>{gpuMinutes(p.gpu_seconds)} of GPU time over {p.calls} calls — not money</span>
                 </div>
               ))}
-              <div className="rounded-md border border-line px-4 py-3" data-testid="spend-provider-total">
+              <div className="rounded-md border border-border px-4 py-3" data-testid="spend-provider-total">
                 <div className="text-compact font-medium">All cloud providers</div>
                 <CapEditor
                   provider="*"

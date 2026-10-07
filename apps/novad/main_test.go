@@ -1,19 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/install"
+	"novad/internal/platform"
+	"novad/internal/state"
+	"novad/internal/supervise"
 )
 
 // The enroll body is identity only: the pairing code plus what this machine
@@ -97,13 +106,25 @@ func TestAfterRunWipesARevokedDeviceAndExits78(t *testing.T) {
 // [Service] — not merely somewhere in the file's bytes, where a comment
 // naming it (novad.service carries one) or a line in the wrong section would
 // pass a bare substring check without the directive doing anything.
+//
+// S42b (Task 8): supervise, not `novad run`, is now the parent ExecStart
+// starts, and P3 moves the restart-suppression itself onto Restart=on-failure
+// (supervise exits 0 — not a systemd "failure" — when the agent can never get
+// in), with RestartPreventExitStatus=78 kept as a second line of defense for
+// an agent from before S42b that a hand-written unit still runs directly. Both
+// new checks stay in this test's own section-aware style — never a bare
+// strings.Contains over the whole file — so the same "wrong section, or just
+// a comment" false pass this test was written to close cannot reopen for
+// them.
 func TestTheServiceUnitDoesNotRestartARevokedDevice(t *testing.T) {
 	body, err := os.ReadFile("novad.service")
 	if err != nil {
 		t.Fatal(err)
 	}
 	section := ""
-	found := false
+	foundPreventExit := false
+	foundExecStartsSupervise := false
+	foundRestartOnFailure := false
 	for _, line := range strings.Split(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
@@ -112,11 +133,21 @@ func TestTheServiceUnitDoesNotRestartARevokedDevice(t *testing.T) {
 		case trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";"):
 			// blank or comment: not an active directive
 		case section == "[Service]" && trimmed == "RestartPreventExitStatus=78":
-			found = true
+			foundPreventExit = true
+		case section == "[Service]" && strings.HasPrefix(trimmed, "ExecStart=") && strings.HasSuffix(trimmed, "supervise --mode systemd-user"):
+			foundExecStartsSupervise = true
+		case section == "[Service]" && trimmed == "Restart=on-failure":
+			foundRestartOnFailure = true
 		}
 	}
-	if !found {
+	if !foundPreventExit {
 		t.Fatal("novad.service must carry an ACTIVE RestartPreventExitStatus=78 line inside [Service] (exitConfig) — not merely the text somewhere in the file")
+	}
+	if !foundExecStartsSupervise {
+		t.Errorf("novad.service must carry an ACTIVE ExecStart line inside [Service] that starts supervise --mode systemd-user:\n%s", body)
+	}
+	if !foundRestartOnFailure {
+		t.Errorf("novad.service must carry an ACTIVE Restart=on-failure line inside [Service] — Restart=always would restart a supervisor that stopped for good:\n%s", body)
 	}
 }
 
@@ -210,3 +241,258 @@ func TestAfterRunNamesWhereTheAuditLogWentOnlyWhenOneExisted(t *testing.T) {
 // main_unix_test.go (CI follow-up): its ENOTDIR fault-injection technique is
 // Unix-only — see that file's comment for why, and main_windows_test.go for
 // the Windows twin.
+
+func TestStatusLinesSayWhatTheStatusFilesSay(t *testing.T) {
+	dir := t.TempDir()
+	since := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	exit1 := 1
+	for name, v := range map[string]any{
+		state.AgentStatusFile:      state.AgentStatus{PID: 7, Version: "0123456789ab", Mode: "run-key", State: state.StateReady, Server: "https://nova.fake-tailnet.ts.net", Since: since},
+		state.SupervisorStatusFile: state.SupervisorStatus{PID: 6, Version: "0123456789ab", Restarts: 2, LastExit: &exit1, Since: since},
+		state.UpdateFile:           state.Update{Version: "fedcba987654", Outcome: state.UpdateRolledBack, Reason: "the new build did not connect within 2m0s", At: since},
+	} {
+		if err := state.WriteJSON(filepath.Join(dir, name), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joined := strings.Join(statusLines(dir), "\n")
+	for _, want := range []string{
+		"agent:       ready since 2026-09-28T12:00:00Z (pid 7, run-key, build 0123456789ab) via https://nova.fake-tailnet.ts.net",
+		"supervisor:  pid 6, 2 restarts, last exit 1",
+		"last update: rolled_back fedcba987654 at 2026-09-28T12:00:00Z — the new build did not connect within 2m0s",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in:\n%s", want, joined)
+		}
+	}
+	none := strings.Join(statusLines(t.TempDir()), "\n")
+	if none != "agent:       no status yet (it has not run since S42b's build)" {
+		t.Errorf("no status file must be said, and nothing else, got:\n%s", none)
+	}
+}
+
+// Task 32, L61: a status file that is there but cannot be read is said to be
+// unreadable, with why — never "no status yet (it has not run since S42b's
+// build)", the confident cause of a file that was never written. The
+// supervisor's and the update's files are not left out silently either.
+func TestAnUnreadableStatusFileIsNeverReadAsOneNeverWritten(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{state.AgentStatusFile, state.SupervisorStatusFile, state.UpdateFile} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not json\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joined := strings.Join(statusLines(dir), "\n")
+	if strings.Contains(joined, "no status yet") || strings.Contains(joined, "has not run") {
+		t.Fatalf("an unreadable status file was read as one never written:\n%s", joined)
+	}
+	for _, want := range []string{
+		"agent:       status unknown — " + filepath.Join(dir, state.AgentStatusFile) + " is unreadable: ",
+		"supervisor:  status unknown — " + filepath.Join(dir, state.SupervisorStatusFile) + " is unreadable: ",
+		"last update: unknown — " + filepath.Join(dir, state.UpdateFile) + " is unreadable: ",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestAStagedUpdateExitsSeventyFiveForTheSupervisor(t *testing.T) {
+	code, msg := afterRun(config.Paths{}, client.ErrRestartForUpdate, time.Now())
+	if code != exitUpdateStaged || !strings.Contains(msg, "the supervisor") {
+		t.Fatalf("afterRun = %d %q", code, msg)
+	}
+}
+
+// Fix round 1, Minor 1: exitUpdateStaged is named FROM
+// supervise.ExitUpdateStaged — the value supervise itself consumes at the
+// OS boundary — so a pin on the literal here would never catch it drifting
+// from what supervise actually expects.
+func TestExitUpdateStagedIsTheSupervisorsOwnConstant(t *testing.T) {
+	if exitUpdateStaged != supervise.ExitUpdateStaged {
+		t.Fatalf("exitUpdateStaged = %d, supervise.ExitUpdateStaged = %d", exitUpdateStaged, supervise.ExitUpdateStaged)
+	}
+}
+
+// Fix round 1, Minor 2: main.go used to discard os.Executable's error and
+// hand daemon.update a silently empty Binary — surfaced now as a real
+// failure at startup instead of a mysterious later refusal.
+func TestSelfBinarySurfacesAFailedExecutablePathLookup(t *testing.T) {
+	old := executablePath
+	t.Cleanup(func() { executablePath = old })
+
+	executablePath = func() (string, error) { return "", errors.New("boom") }
+	if _, err := selfBinary(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("selfBinary() error = %v, want it to surface the underlying failure", err)
+	}
+
+	executablePath = func() (string, error) { return "/opt/novad/novad", nil }
+	self, err := selfBinary()
+	if err != nil || self != "/opt/novad/novad" {
+		t.Fatalf("selfBinary() = %q, %v", self, err)
+	}
+}
+
+func TestInstallExitCodes(t *testing.T) {
+	if installExit(nil) != 0 || installExit(fmt.Errorf("x: %w", install.ErrNeedsCode)) != 3 || installExit(errors.New("boom")) != 1 {
+		t.Fatal("install exits 0, 3 (a code is needed) or 1")
+	}
+}
+
+// Controller ruling: the usage names every install flag, --restart-later
+// included (P11 runs it; a person reading the usage should find it).
+func TestTheUsageNamesTheInstallVerbsAndTheirFlags(t *testing.T) {
+	for _, want := range []string{
+		"novad install [--hub <url>]... [--code <code>] [--name <name>] [--if-missing] [--restart-later]\n",
+		"novad uninstall [--forget]\n",
+	} {
+		if !strings.Contains(usageText(), want) {
+			t.Errorf("the usage is missing %q:\n%s", want, usageText())
+		}
+	}
+}
+
+// Review focus 4: a second copy of one identity is refused by run.lock, and
+// when it is the child a supervisor started — the one install's restart
+// started — the refusal is written into the agent's status before run fails:
+// install waits on that file, and names the holder from it.
+func TestARefusedRunLockIsWrittenIntoTheStatusForInstallToName(t *testing.T) {
+	t.Setenv(platform.SupervisorEnv, strconv.Itoa(os.Getppid())) // this process is its supervisor's child
+	dir := t.TempDir()
+	first, err := state.Acquire(filepath.Join(dir, state.RunLockFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	t.Cleanup(func() { // a held lock would stop Windows removing dir
+		if !released {
+			_ = first.Release()
+		}
+	})
+	var said string
+	var why error
+	record := func(st, _ string, e error) { said, why = st, e }
+	if lock, err := holdIdentity(dir, record); err == nil {
+		_ = lock.Release()
+		t.Fatal("a second holder of the identity must be refused")
+	}
+	var held *state.HeldError
+	if said != state.StateStopped || !errors.As(why, &held) || held.PID != os.Getpid() {
+		t.Fatalf("status %q, error %v — the refusal must reach the status, naming the holder", said, why)
+	}
+
+	_ = first.Release()
+	released = true
+	said, why = "", nil
+	lock, err := holdIdentity(dir, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lock.Release()
+	if said != "" || why != nil {
+		t.Fatalf("a lock that was taken wrote a status: %q %v", said, why)
+	}
+}
+
+// Fix round 1 (controller ruling; P5): agent-status.json is the running
+// holder's. Supervise's swap confirmation and install --if-missing decide on
+// it, so a copy started by hand that is refused the lock writes NOTHING
+// there — its refusal, naming the holder's pid, is on its own stderr. That
+// holds for a copy started from a terminal, and for one started through the
+// agent's own hands, which inherits NOVA_SUPERVISOR_PID but is not that
+// supervisor's child. The control proves the same writer does rewrite the
+// file for the supervisor's own child, so the byte-identical check is not
+// vacuous.
+func TestAHandStartedCopyRefusedTheLockLeavesTheHoldersStatusAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name, supervisorPID string
+	}{
+		{"started from a terminal", ""},
+		{"started through the agent's hands, the variable inherited", strconv.Itoa(os.Getpid())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(platform.SupervisorEnv, tc.supervisorPID)
+			dir, statusPath := heldIdentity(t)
+			before := readFile(t, statusPath)
+			lock, err := holdIdentity(dir, agentStatusWriter(dir, log.New(io.Discard, "", 0)))
+			if err == nil {
+				_ = lock.Release()
+				t.Fatal("a second holder of the identity must be refused")
+			}
+			var held *state.HeldError
+			if !errors.As(err, &held) || held.PID != os.Getpid() {
+				t.Fatalf("the refusal must name the holder's pid for stderr: %v", err)
+			}
+			if after := readFile(t, statusPath); !bytes.Equal(before, after) {
+				t.Fatalf("a copy started by hand rewrote the holder's status:\nbefore %s\nafter  %s", before, after)
+			}
+		})
+	}
+
+	t.Run("control: the supervisor's own child", func(t *testing.T) {
+		t.Setenv(platform.SupervisorEnv, strconv.Itoa(os.Getppid()))
+		dir, statusPath := heldIdentity(t)
+		before := readFile(t, statusPath)
+		if lock, err := holdIdentity(dir, agentStatusWriter(dir, log.New(io.Discard, "", 0))); err == nil {
+			_ = lock.Release()
+			t.Fatal("a second holder of the identity must be refused")
+		}
+		var got state.AgentStatus
+		if err := state.ReadJSON(statusPath, &got); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(before, readFile(t, statusPath)) || got.State != state.StateStopped ||
+			!strings.Contains(got.Error, fmt.Sprintf("another novad (pid %d)", os.Getpid())) {
+			t.Fatalf("the supervisor's child must write its refusal, naming the holder: %+v", got)
+		}
+	})
+}
+
+// heldIdentity is a state dir whose run.lock this test process holds, with
+// the holder's own status in it: connected.
+func heldIdentity(t *testing.T) (dir, statusPath string) {
+	t.Helper()
+	dir = t.TempDir()
+	first, err := state.Acquire(filepath.Join(dir, state.RunLockFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Release() }) // a held lock would stop Windows removing dir
+	statusPath = filepath.Join(dir, state.AgentStatusFile)
+	holder := state.AgentStatus{V: 1, PID: os.Getpid(), Version: "aaaaaaaaaaaa", Mode: "systemd-user",
+		State: state.StateReady, Server: "https://nova.fake-tailnet.ts.net", Since: time.Now().UTC()}
+	if err := state.WriteJSON(statusPath, holder); err != nil {
+		t.Fatal(err)
+	}
+	return dir, statusPath
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// The code reaches install by --code or NOVA_PAIRING_CODE, and never goes
+// further: the variable leaves this process's environment, so no program
+// install starts (on Windows the supervisor it starts detached, and every
+// command the agent runs after it) inherits it.
+func TestThePairingCodeFromTheEnvironmentGoesNoFurther(t *testing.T) {
+	t.Setenv(pairingCodeEnv, "ABCD-2345")
+	if got := pairingCode(""); got != "ABCD-2345" {
+		t.Fatalf("pairingCode = %q", got)
+	}
+	if v, set := os.LookupEnv(pairingCodeEnv); set {
+		t.Fatalf("%s is still in the environment: %q", pairingCodeEnv, v)
+	}
+	t.Setenv(pairingCodeEnv, "WXYZ-6789")
+	if got := pairingCode("ABCD-2345"); got != "ABCD-2345" {
+		t.Fatalf("--code must win over the environment, got %q", got)
+	}
+	if _, set := os.LookupEnv(pairingCodeEnv); set {
+		t.Fatalf("%s is still in the environment after --code", pairingCodeEnv)
+	}
+}

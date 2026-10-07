@@ -120,7 +120,7 @@ export function ModelDetails({ row }: { row: CatalogRow }) {
                   data-basis={chip.basis}
                   className={`inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-micro ${
                     !chip.value
-                      ? 'border border-line text-content-tertiary line-through'
+                      ? 'border border-border text-content-tertiary line-through'
                       : chip.basis === 'inferred'
                         ? 'border border-dashed border-warning text-warning'
                         : 'bg-success-dim text-emerald-700 dark:text-emerald-400'

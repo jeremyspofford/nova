@@ -211,6 +211,8 @@ def test_the_dispositions_cover_every_v4_volume_by_name():
     """Not a restatement of the two-direction test: this pins the SET, so a
     volume quietly dropped from the compose file is as loud as one added."""
     assert sorted(declared_volumes()) == [
+        "v4_agent_build_cache",
+        "v4_agent_dist",
         # S38 (2026-10-01): her browser's engine gained two volumes, its
         # profile and its output.
         "v4_browser_output",

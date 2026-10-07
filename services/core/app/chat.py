@@ -80,9 +80,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
 import math
+import os
 import re
 import time
 import uuid
@@ -104,10 +106,10 @@ from app import (
     conversations,
     db,
     decisions,
-    devices,
     guards,
     identity,
     live_facts,
+    machines,
     markup_calls,
     model_speed,
     network,
@@ -888,7 +890,9 @@ async def thread_seed(conn, conversation_id: uuid.UUID) -> list[dict]:
         "FROM conversations c "
         "JOIN messages p ON p.id = c.parent_message_id "
         "LEFT JOIN turns t ON t.id = p.turn_id "
-        "WHERE c.id = $1",
+        # A withdrawn parent seeds nothing: rewinding past it took it out of
+        # every history, a room's included.
+        "WHERE c.id = $1 AND p.withdrawn_by IS NULL",
         conversation_id,
         tools.live_reading_tool_names(),
     )
@@ -955,6 +959,49 @@ def history_window(
     return kept
 
 
+# Her own repository (walk finding, turn 641f312e): asked "why is CI red on
+# main?" she spent every tool round hunting for WHICH repository is hers.
+# install.sh derives it from the checkout's origin (record_repository) and
+# compose hands it here. Both values land in a system prompt, so each is
+# shape-checked against GitHub's own characters — an owner is letters, digits
+# and hyphens; a repository adds dots and underscores — and a value that is
+# not that shape is no line plus a logged reason, never prompt text.
+REPO_ENV = "NOVA_REPO"
+REPO_BRANCH_ENV = "NOVA_REPO_BRANCH"
+_REPO_SHAPE = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+_BRANCH_SHAPE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}")
+
+
+@functools.cache
+def repository_line(repo: str, branch: str) -> str | None:
+    """The sentence naming her own repository, or None.
+
+    Cached on the values so a bad one is logged once per value, not once per
+    turn."""
+    if not repo:
+        return None
+    if not _REPO_SHAPE.fullmatch(repo) or repo.split("/", 1)[1] in (".", ".."):
+        logger.warning(
+            "%s=%r is not a GitHub owner/repo; her prompt names no repository", REPO_ENV, repo
+        )
+        return None
+    line = f"Your own source code is the GitHub repository {repo}"
+    if branch and (not _BRANCH_SHAPE.fullmatch(branch) or ".." in branch):
+        logger.warning(
+            "%s=%r is not a branch name; her prompt names the repository without it",
+            REPO_BRANCH_ENV,
+            branch,
+        )
+        branch = ""
+    return f"{line} (default branch {branch})." if branch else f"{line}."
+
+
+def _repository_sentence() -> str:
+    """Read live from the environment each prompt — derived, never a constant."""
+    line = repository_line(os.environ.get(REPO_ENV, ""), os.environ.get(REPO_BRANCH_ENV, ""))
+    return f" {line}" if line else ""
+
+
 def stable_system_prompt(
     model: str, tool_names: Sequence[str], *, agent_block: str | None = None
 ) -> str:
@@ -986,7 +1033,8 @@ def stable_system_prompt(
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
         f"This turn asks the gateway for {model or 'its default model'}; its routing decides "
         "which model actually answers. Be direct and concrete, "
-        "and say plainly when you do not know something.\n\n"
+        "and say plainly when you do not know something."
+        f"{_repository_sentence()}\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
         "When the user asks for something a tool can do, call the tool in THIS "
@@ -2675,8 +2723,12 @@ def _queue_ingest(
         span.meta["queued"] = True
 
 
-async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
-    """Every LIVE paired device's name, from the registry itself.
+async def _paired_device_names(app) -> list[str]:
+    """Every paired machine's name in this turn's world, read through the
+    plant (machines.plant().paired_machines): the registry's LIVE rows — or,
+    inside an eval replay, the case's declared devices alone (S42b Task 24,
+    the replay-hermeticity ruling: a replay's state guard and update claims
+    read the machines its own listing shows, never the owner's real ones).
 
     Revoked rows are excluded: a revoked machine is not paired, so a claim about
     it is not a claim about anything this household has. Returns [] on ANY
@@ -2685,11 +2737,7 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
     becomes a correction).
     """
     try:
-        return [
-            device["name"]
-            for device in await devices.list_devices(pool)
-            if not device.get("revoked_at")
-        ]
+        return [machine["name"] for machine in await machines.plant().paired_machines(app)]
     except Exception:
         logger.exception(
             "device registry read failed; the state-claim guard stays silent this turn"
@@ -2731,15 +2779,20 @@ async def _mcp_server_refs(pool: asyncpg.Pool) -> list[guards.McpServerRef]:
     return refs
 
 
-async def _paired_machines(pool: asyncpg.Pool) -> dict[str, str | None] | None:
-    """Every LIVE paired device's name and the machine its agent reported
-    (devices.live_machines), for the said-not-done device claim: a call on
-    another agent of the same machine is a call on that machine (fix round 4,
-    R5). Read from the rows, never a list. None on ANY failure — no grouping
-    can then be read, and the guard stays silent for a claim that a call on
-    another device might back (a blip costs a sentence, never a false one)."""
+async def _paired_machines(app) -> dict[str, str | None] | None:
+    """Every paired device's name and the machine its agent reported, for the
+    said-not-done device claim: a call on another agent of the same machine is
+    a call on that machine (fix round 4, R5). Read through the plant
+    (machines.plant().machine_groups): the LIVE rows (devices.live_machines) —
+    or, inside an eval replay, the case's declared devices alone (Task 32,
+    MF5), the world its paired names come from (_paired_device_names): a
+    declared name that matches a real device's never picks up that real
+    machine. Read from the rows, never a list. None on ANY failure — no
+    grouping can then be read, and the guard stays silent for a claim that a
+    call on another device might back (a blip costs a sentence, never a false
+    one)."""
     try:
-        return await devices.live_machines(pool)
+        return await machines.plant().machine_groups(app)
     except Exception:
         logger.exception("device machine read failed; the device claim reads no grouping")
         return None
@@ -2916,6 +2969,43 @@ async def _persist_assistant(
     )
 
 
+def _undo_mark(ctx: tools.ToolContext) -> int:
+    """Where the undo sink stood before a call — the mark _record_action
+    slices from, exactly as _run_tool diffs facts_sink."""
+    sink = ctx.undo_sink
+    return len(sink) if sink is not None else 0
+
+
+def _record_action(
+    turn: traces.Turn,
+    ctx: tools.ToolContext,
+    name: str,
+    ok: bool,
+    reached_executor: bool,
+    undo_before: int,
+) -> None:
+    """File one call on the turn's action ledger (chat-rewind), synchronously.
+
+    Mechanical and fail-closed: EVERY call whose executor was reached
+    (dispatch's own `reached` record) of a tool that is not reads_only lands
+    a row, whether or not the tool can be undone — no tool opts in. A call
+    refused before its executor changed nothing and lands none; a reads_only
+    tool changes nothing by definition. The undo payload is what the executor
+    appended to ctx.undo_sink during THIS call (the slice past the mark): one
+    entry is stored as-is, several as a list of them, none as None — and a
+    call with None can never be claimed reverted. traces.close_turn writes
+    the rows with the spans, in one transaction."""
+    if not reached_executor:
+        return
+    tool = tools.REGISTRY.get(name)
+    if tool is None or tool.reads_only:
+        return
+    sink = ctx.undo_sink
+    added = list(sink[undo_before:]) if sink is not None else []
+    undo = None if not added else added[0] if len(added) == 1 else added
+    turn.actions.append(traces.Action(tool=name, ok=ok, undo=undo))
+
+
 async def _run_tool(
     turn: traces.Turn,
     ctx: tools.ToolContext,
@@ -2954,6 +3044,7 @@ async def _run_tool(
     show the specialism was crossed. Nothing here decides whether it may.
     """
     facts = ctx.facts_sink
+    undo_before = _undo_mark(ctx)
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
         if call.from_markup:
@@ -2982,6 +3073,7 @@ async def _run_tool(
         # an explicit True or False (said-not-done final review, M-2).
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
+        _record_action(turn, ctx, call.name, ok, len(record) > reached_before, undo_before)
         head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
@@ -3027,8 +3119,11 @@ async def _run_script_step(
             span.meta["item"] = _redact(item)
         span.meta["ok"] = False
         span.meta["result_head"] = NEVER_RETURNED
-        result, ok = await tools.dispatch(name, args, tool_ctx)
+        undo_before = _undo_mark(tool_ctx)
+        reached: list[str] = []
+        result, ok = await tools.dispatch(name, args, tool_ctx, reached=reached)
         span.meta["ok"] = ok
+        _record_action(turn, tool_ctx, name, ok, bool(reached), undo_before)
         head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["result_head"] = head
         if not ok:
@@ -4319,7 +4414,9 @@ def _regen_rejected_by(
             "address_claim",
             lambda: guards.address_claim_check(corrected, user_message, origin, reason),
         ),
-        ("narration", lambda: guards.narration_check(corrected, turn.spans)),
+        # The paired names give an update claim its machine (S42b Task 23 fix
+        # round 1, I2) — the same live read the state guard below is judged by.
+        ("narration", lambda: guards.narration_check(corrected, turn.spans, device_names)),
         (
             "delegation_claim",
             lambda: guards.delegation_claim_check(
@@ -4944,6 +5041,9 @@ async def _run_turn(
                 # when it then refused, and _run_tool copies each call's
                 # slice onto its span.
                 facts_sink=[],
+                # The undo channel (chat-rewind): _run_tool slices each call's
+                # payload off it onto the turn's action ledger.
+                undo_sink=[],
                 card=card,
             )
         else:
@@ -4952,6 +5052,7 @@ async def _run_turn(
                 app,
                 person,
                 facts_sink=[],
+                undo_sink=[],
                 # The agent's folder is the containment boundary for every
                 # filesystem call this turn makes — the same gate as Nova's,
                 # rooted lower.
@@ -5463,13 +5564,14 @@ async def _run_turn(
         # {correction} frame, in order, so the live screen shows the
         # contradiction. Only the durable text is composed, once, below.
 
-        # The paired-device names, read LIVE from the registry — the fact the
+        # The paired-device names, read LIVE through the plant — the registry,
+        # or an eval replay's declared devices (S42b Task 24) — the fact the
         # state-claim guard is derived from. Never a list kept in the guard: a
         # household with nothing paired can make no claim about "the device",
         # and pairing a machine arms the check by itself. FAIL-OPEN to no names,
         # which makes the guard silent — a registry read that blips must never
         # turn an honest reply into a false correction.
-        device_names = await _paired_device_names(pool)
+        device_names = await _paired_device_names(app)
         # And the agents' names (S12), the same way — the fact the
         # delegation-claim guard is derived from. Read once here and threaded
         # into every redirect's vetting, exactly like device_names. The
@@ -5505,7 +5607,9 @@ async def _run_turn(
         )
 
         try:
-            correction = guards.narration_check(text, turn.spans)
+            # device_names (read above): the only words an update claim's
+            # machine can be — derived, never a list (S42b Task 23 fix round 1).
+            correction = guards.narration_check(text, turn.spans, device_names)
         except Exception:
             logger.exception("narration guard raised; shipping the reply uncorrected")
             correction = None
@@ -6401,9 +6505,11 @@ async def _run_turn(
         said_claims: list[tuple[str, Any]] = []
         if said_prose is not None and said_prose.strip():
             said = without_markup(said_prose)
-            machines = await _paired_machines(pool)
+            # Not `machines`: that is the module S42b reads the plant through,
+            # and a local of the same name would shadow it in all of _run_turn.
+            machine_groups = await _paired_machines(app)
             # The connected MCP servers, read HERE, after every redirect, like
-            # `machines` (fix round 1, item 1): read before the redirects, a
+            # `machine_groups` (fix round 1, item 1): read before the redirects, a
             # server a redirect's mcp_disconnect removed was still "connected".
             mcp_refs = await _mcp_server_refs(pool)
             reachable_refs = mcp_refs if "mcp_call" in persona.tool_names else []
@@ -6415,7 +6521,11 @@ async def _run_turn(
                 (
                     "device_completion",
                     lambda: guards.device_completion_check(
-                        said, turn.spans, persona.tool_names, device_names, machines=machines
+                        said,
+                        turn.spans,
+                        persona.tool_names,
+                        device_names,
+                        machines=machine_groups,
                     ),
                 ),
                 (
@@ -6508,6 +6618,19 @@ async def _run_turn(
             # replaced the prose, and its regeneration was vetted by both
             # rewrite guards.
             or (bool(rewrite_claims) and not prose_replaced)
+            # And an agent update claimed with nothing confirming it (S42b Task
+            # 23 fix round 1, I4): "I updated eval_laptop's agent" ingested
+            # beside its correction is how recall would hand a later turn an
+            # update that never took as a fact — the said-not-done lane keeps
+            # its device completions out of memory for the same reason. A
+            # confirmed update leaves no such claim, so that turn is knowledge;
+            # and a redirect that stood replaced the prose the claim was in
+            # (its regeneration was vetted by narration too).
+            or (
+                correction is not None
+                and not prose_replaced
+                and any(claim.kind == "updated_machine" for claim in correction.claims)
+            )
             or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what
@@ -6799,7 +6922,10 @@ async def _open_turn(
                 "FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
-                "WHERE m.conversation_id = $1 AND m.id <> $2 "
+                # Chat rewind: a withdrawn row left her history with the
+                # rewind; the marker row (rewind_id set) is an ordinary row
+                # here, so she is told by a persisted fact, not a prompt.
+                "WHERE m.conversation_id = $1 AND m.id <> $2 AND m.withdrawn_by IS NULL "
                 "ORDER BY m.created_at DESC, m.id DESC LIMIT $3",
                 conversation_id,
                 message_id,

@@ -26,9 +26,12 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
+	"time"
 	"unicode/utf8"
 
 	"novad/internal/platform"
+	"novad/internal/state"
 )
 
 const (
@@ -59,6 +62,18 @@ type AgentInfo struct {
 	Version            string `json:"version"`
 	Mode               string `json:"mode"`
 	SessionInteractive bool   `json:"session_interactive"`
+	// Update is the last update's outcome, omitted unless there is one to
+	// report (a staged update is transient and never reported here).
+	Update *UpdateFact `json:"update,omitempty"`
+}
+
+// UpdateFact is the last update's outcome, as the supervisor recorded it:
+// core confirms or rolls back its record from this (S42b P8).
+type UpdateFact struct {
+	Version string `json:"version"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	At      string `json:"at"`
 }
 
 // OSInfo is the OS as Go and the OS name it. WSL is nil (null on the wire)
@@ -77,9 +92,19 @@ type WSL struct {
 
 // Frame is the facts frame.
 type Frame struct {
-	Type       string       `json:"type"`
-	Net        Net          `json:"net"`
-	Unreadable []Unreadable `json:"unreadable"`
+	Type string `json:"type"`
+	Net  Net    `json:"net"`
+	// Folders are the known folders as this OS names them (S42b P16); core
+	// admits an @folder path only for a folder listed here.
+	Folders    map[string]string `json:"folders,omitempty"`
+	Unreadable []Unreadable      `json:"unreadable"`
+
+	// The probes' last findings and when they ran (S42b P29): sent in
+	// every frame between probes, so core always holds the latest.
+	Service    *Service    `json:"service,omitempty"`
+	Elevation  *Elevation  `json:"elevation,omitempty"`
+	WSLDistros *WSLDistros `json:"wsl_distros,omitempty"`
+	ProbedAt   string      `json:"probed_at,omitempty"`
 }
 
 // Net is this machine's network interfaces, loopback excluded.
@@ -103,9 +128,12 @@ type Unreadable struct {
 }
 
 // GatherAuth reads this machine's auth facts. version is the build stamp
-// (main.version). What could not be read is returned so the caller carries
-// it into the facts frames.
-func GatherAuth(ctx context.Context, r platform.Runner, version string) (Auth, []Unreadable) {
+// (main.version). last is update.json's last outcome, or nil when there is
+// none — GatherAuth reports it only when it is applied or rolled_back
+// (never staged, which is transient and confirmed a different way: by the
+// next connection's own reported version). What could not be read is
+// returned so the caller carries it into the facts frames.
+func GatherAuth(ctx context.Context, r platform.Runner, version string, last *state.Update) (Auth, []Unreadable) {
 	var unread []Unreadable
 	host, err := os.Hostname()
 	if err != nil {
@@ -133,6 +161,14 @@ func GatherAuth(ctx context.Context, r platform.Runner, version string) (Auth, [
 	if in, distro := platform.WSL(); in {
 		a.OS.WSL = &WSL{Distro: clip(distro)}
 	}
+	if last != nil && (last.Outcome == state.UpdateApplied || last.Outcome == state.UpdateRolledBack) {
+		// Reason can carry an agent's own last error (supervise's
+		// lastError) — collapsed to one line BEFORE clipping (cross-task,
+		// fix round 1): core's Task 16 refuses a control character
+		// outright, and this is meant to render as one line regardless.
+		a.Agent.Update = &UpdateFact{Version: clip(last.Version), Outcome: last.Outcome,
+			Reason: clip(collapseControl(last.Reason)), At: last.At.UTC().Format(time.RFC3339)}
+	}
 	return a, unread
 }
 
@@ -146,6 +182,9 @@ type ifaceInfo struct {
 	CIDRs    []string
 	AddrErr  error
 }
+
+// readFolder is the real reader; a variable so a test replaces it.
+var readFolder = platform.Folder
 
 // readIfaces is the real reader; a variable so a test replaces it.
 var readIfaces = func() ([]ifaceInfo, error) {
@@ -179,6 +218,36 @@ var readIfaces = func() ([]ifaceInfo, error) {
 // entries, repeated so every frame states them.
 func GatherFrame(carried []Unreadable) Frame {
 	f := Frame{Type: "facts", Net: Net{Ifaces: []Iface{}}, Unreadable: append([]Unreadable{}, carried...)}
+	folders := map[string]string{}
+	for _, name := range platform.FolderNames {
+		p, err := readFolder(name)
+		if err != nil {
+			f.Unreadable = append(f.Unreadable, Unreadable{Item: "folders." + name, Reason: clip(err.Error())})
+			continue
+		}
+		// Every platform.Folder pairs "" with an error, but nothing enforces
+		// that across files (Task 32, L76): an empty path is no folder, and
+		// listed as one it would resolve against wherever the agent runs.
+		if p == "" {
+			f.Unreadable = append(f.Unreadable, Unreadable{Item: "folders." + name, Reason: "an empty path was read for it"})
+			continue
+		}
+		// RULING (S42b Task 7 preflight, overriding the brief's clip(p)):
+		// clipping a too-long folder path would silently truncate it into a
+		// WRONG path she would then act on. Too long is omitted and reported
+		// unreadable, never guessed-by-truncation.
+		if len(p) > maxText {
+			f.Unreadable = append(f.Unreadable, Unreadable{
+				Item:   "folders." + name,
+				Reason: fmt.Sprintf("path is %d bytes, over the %d limit", len(p), maxText),
+			})
+			continue
+		}
+		folders[name] = p
+	}
+	if len(folders) > 0 {
+		f.Folders = folders
+	}
 	ifs, err := readIfaces()
 	if err != nil {
 		f.Unreadable = append(f.Unreadable, Unreadable{Item: "net.ifaces", Reason: clip(err.Error())})
@@ -212,6 +281,13 @@ func GatherFrame(carried []Unreadable) Frame {
 	return capUnreadable(f)
 }
 
+// AddUnreadable names one more fact that could not be read, keeping the
+// list within core's cap: one over it and core drops the whole frame.
+func (f *Frame) AddUnreadable(u Unreadable) {
+	f.Unreadable = append(f.Unreadable, u)
+	*f = capUnreadable(*f)
+}
+
 // capUnreadable keeps the list within core's cap, saying so when it cut.
 func capUnreadable(f Frame) Frame {
 	if len(f.Unreadable) > maxUnreadable {
@@ -231,4 +307,59 @@ func clip(s string) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// collapseControl replaces every character core refuses in a line
+// (isControl: the control characters — newlines, tabs, a program's raw
+// stderr, … — and the line and paragraph separators) with a single space and
+// squeezes the runs that leaves, so text built from another program's output
+// — supervise's lastError, folded into a rolled-back/applied
+// UpdateFact.Reason — still reads as ONE line (cross-task, fix round 1:
+// core's Task 16 refuses such a character in this field outright).
+func collapseControl(s string) string {
+	var b strings.Builder
+	spaced := false
+	for _, r := range s {
+		if isControl(r) {
+			r = ' '
+		}
+		if r == ' ' {
+			if spaced {
+				continue
+			}
+			spaced = true
+		} else {
+			spaced = false
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// lineBreaks is the class of characters core refuses in text it renders into
+// a line, range by range: core's LINE_BREAKS (services/core/app/
+// device_facts.py) — the C0 controls (newline among them), DEL, the C1
+// controls (U+0085 NEL among them), and U+2028 LINE SEPARATOR and U+2029
+// PARAGRAPH SEPARATOR, which Python's str.splitlines() also splits on. A
+// character core refuses that this class let through drops the WHOLE facts
+// frame there — net, the MACs — and, in agent.update.reason, every auth-frame
+// fact (Task 32, MF2: it was C0 and DEL only). One class on both sides:
+// services/core/tests/test_device_facts.py reads this table and compares it
+// with LINE_BREAKS at every code point, and TestIsControlIsTheLineBreaksTable
+// holds isControl to it.
+var lineBreaks = [...][2]rune{
+	{0x00, 0x1f},
+	{0x7f, 0x9f},
+	{0x2028, 0x2029},
+}
+
+// isControl is a character core refuses in text it renders into a line: one
+// in lineBreaks.
+func isControl(r rune) bool {
+	for _, span := range lineBreaks {
+		if span[0] <= r && r <= span[1] {
+			return true
+		}
+	}
+	return false
 }

@@ -603,11 +603,20 @@ function RoleEditor({
   // save of this role, or a change made elsewhere. Every reload parses a new
   // routes object, and keying on the array reset an unsaved Up or Remove
   // whenever another role saved, a switch flipped or Re-check ran.
+  //
+  // Reset DURING render, against the key the draft was taken from — never in
+  // an effect. An effect keyed on chainKey also runs on mount, and React
+  // flushes a commit's passive effects lazily: when the Scheduler yields
+  // after the commit (a slow machine, a render over its 5 ms slice), a click
+  // can land first, and the mount's setDraft(chain) then queues behind it
+  // and undoes it — a Remove the owner just made, reverted
+  // (rebuild-ci run 37620571487).
   const chainKey = chain.join('\n')
-  useEffect(() => {
+  const [draftKey, setDraftKey] = useState(chainKey)
+  if (draftKey !== chainKey) {
+    setDraftKey(chainKey)
     setDraft(chain)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chainKey])
+  }
   const dirty = JSON.stringify(draft) !== JSON.stringify(chain)
   // A reserved role has no user; an orphan's PUT is refused by core (no such
   // agent) — neither gets controls whose call cannot run.
@@ -667,7 +676,7 @@ function RoleEditor({
   )
 
   return (
-    <div className="rounded-md border border-line px-4 py-3" data-testid={`route-${role}`}>
+    <div className="rounded-md border border-border px-4 py-3" data-testid={`route-${role}`}>
       <div className="flex flex-wrap items-center gap-2">
         {label}
         {reserved && <Badge size="sm" color="neutral">no user yet</Badge>}

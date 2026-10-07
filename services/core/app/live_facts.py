@@ -38,11 +38,14 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from app import guards, tools
+from app.tools import devices as device_tools
 from app.tools import schema
+from app.tools.base import ToolContext, ToolFailure, TurnStopped
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,18 @@ AUTO_RUN = frozenset(
         "workspace_read_file",
     }
 )
+
+# What an unasked check runs IN PLACE of a tool whose own call does more than
+# read what is on record (S42b Task 21 fix round 1, I1). device_info asks the
+# agent to look again first — up to 45 s on Windows with WSL, past
+# CHECK_TIMEOUT, so every such check came back "NOT checked" while the
+# cancelled refresh still set the agent probing for nobody. The look again
+# belongs to HER call; the check reads the probe on record and says how old it
+# is. device_info cannot tell the two apart itself (its context and its schema
+# are hers), so the choice is made here, where the backend runs a check unasked.
+UNASKED_READERS: dict[str, Callable[[dict, ToolContext], Awaitable[str]]] = {
+    "device_info": device_tools.device_info_on_record,
+}
 
 # reads_only, and deliberately NOT auto-run — each with the reason, because an
 # exclusion nobody can explain gets deleted by the next person who reads it.
@@ -240,8 +255,9 @@ def _clip(text: str) -> str:
 
 
 def _shown_facts(tool_name: str, facts: list[dict], result: str | None) -> list[dict]:
-    """The facts a check keeps: all of them, except a device's connectivity
-    whose line she was never shown (S42a final review I2).
+    """The facts a check keeps: all of them, except an agent line's own —
+    its connectivity (S42a final review I2) and its last update (S42b Task 23
+    fix round 1, I3) — when she was never shown that line.
 
     `_clip` hands her the first MAX_RESULT_CHARS of a result, and a tool whose
     one result lists many devices records {"device", "connected"} for every one
@@ -275,9 +291,45 @@ def _shown_facts(tool_name: str, facts: list[dict], result: str | None) -> list[
     return [
         fact
         for fact in facts
-        if not guards.is_connectivity_fact(fact)
-        or (shown > 0 and line_shown(fact["device"], text, shown))
+        if (agent := _agent_of(fact)) is None or (shown > 0 and line_shown(agent, text, shown))
     ]
+
+
+def _agent_of(fact: object) -> str | None:
+    """The agent an agent line's fact is about — its connectivity
+    ({"device", "connected"}) or its last update ({"machine_update", …,
+    "confirmed"}, which the line states) — or None for any other fact. Read by
+    the guards' own shape tests, so what is withheld here and what backs a
+    claim there cannot drift apart."""
+    if guards.is_connectivity_fact(fact):
+        return fact["device"]
+    if guards.is_update_fact(fact):
+        return fact["machine_update"]
+    return None
+
+
+async def _check(call: LiveCall, ctx) -> tuple[str, bool]:
+    """One check's (result, ok): through dispatch — or, for a tool with an
+    unasked reader (UNASKED_READERS), through that reader, in dispatch's own
+    shape: a stated refusal is `Error: <reason>` with ok False, and a bug is
+    logged and said in one line, never raised into the turn. `runnable`
+    already held the arguments to the tool's own schema before the check
+    was started, as dispatch would have."""
+    reader = UNASKED_READERS.get(call.tool)
+    if reader is None:
+        return await tools.dispatch(call.tool, call.args, ctx)
+    try:
+        return await reader(dict(call.args), ctx), True
+    except TurnStopped:
+        raise
+    except ToolFailure as exc:
+        return f"{tools.ERROR_PREFIX}{exc}", False
+    except Exception as exc:  # noqa: BLE001 — a bug, said in one line as dispatch says it
+        logger.exception("live check %s raised", call.tool)
+        return (
+            f"{tools.ERROR_PREFIX}{call.tool} failed unexpectedly — {type(exc).__name__}: {exc}",
+            False,
+        )
 
 
 async def _run_one(call: LiveCall, turn, ctx) -> Checked:
@@ -330,7 +382,7 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
         span.meta["result_head"] = "(the turn ended before this check returned)"
         try:
             async with asyncio.timeout(CHECK_TIMEOUT):
-                result, ok = await tools.dispatch(call.tool, call.args, call_ctx)
+                result, ok = await _check(call, call_ctx)
         except TimeoutError:
             problem = f"the check did not answer within {CHECK_TIMEOUT:g}s"
             span.meta["error"] = problem

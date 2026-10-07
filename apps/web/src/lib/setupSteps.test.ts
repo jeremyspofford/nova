@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { formatCode, installSteps, parseCodeFragment, setupLink } from './setupSteps'
+import {
+  defaultOs,
+  fillCode,
+  fillCommands,
+  formatCode,
+  installSteps,
+  MISSING_OS_REASON,
+  NOT_CANONICAL_REASON,
+  OS_KEYS,
+  parseCodeFragment,
+  setupLink,
+} from './setupSteps'
 
 const ADDRESS = 'https://nova.fake-tailnet.ts.net'
 
@@ -55,5 +66,91 @@ describe('installSteps', () => {
     expect(installSteps({ os: 'android', browser: 'firefox', phone: true }).map(s => s.label)).toEqual([
       'Android, another browser',
     ])
+  })
+})
+
+describe('the one-liners (S42b P18)', () => {
+  it('fills the code slot core left, dashed, and nothing else', () => {
+    expect(fillCode('curl … && "$d/novad" install --hub https://x --code {CODE}', 'abcd2345')).toBe(
+      'curl … && "$d/novad" install --hub https://x --code ABCD-2345',
+    )
+    expect(fillCode('no slot here', 'ABCD2345')).toBe('no slot here')
+  })
+  it('opens on the OS that was asked for, else the one this browser runs, else Linux', () => {
+    expect(OS_KEYS).toEqual(['linux', 'macos', 'windows'])
+    expect(defaultOs({ os: 'linux', browser: 'chrome', phone: false }, 'wsl')).toBe('windows')
+    expect(defaultOs({ os: 'mac', browser: 'safari', phone: false })).toBe('macos')
+    expect(defaultOs({ os: 'windows', browser: 'edge', phone: false })).toBe('windows')
+    expect(defaultOs({ os: 'ios', browser: 'safari', phone: true })).toBe('linux')
+  })
+})
+
+describe('fillCode — never fills anything but a canonical pairing code (S42b D3)', () => {
+  const LINE = 'install --code {CODE}'
+
+  it('refuses a value carrying shell injection, whatever shape it takes', () => {
+    expect(fillCode(LINE, 'ABCD-2345"; rm -rf ~; "')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345$(rm -rf ~)')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345`rm -rf ~`')).toBe(LINE)
+    expect(fillCode(LINE, 'ABCD2345\nrm -rf ~')).toBe(LINE)
+    for (const bad of [
+      'ABCD-2345"; rm -rf ~; "',
+      'ABCD2345$(rm -rf ~)',
+      'ABCD2345`rm -rf ~`',
+      'ABCD2345\nrm -rf ~',
+    ]) {
+      expect(fillCode(LINE, bad)).not.toContain('rm')
+      expect(fillCode(LINE, bad)).not.toContain('$(')
+      expect(fillCode(LINE, bad)).not.toContain('`')
+    }
+  })
+
+  it('a lower-case code with no dash is filled in its canonical form', () => {
+    expect(fillCode(LINE, 'abcd2345')).toBe('install --code ABCD-2345')
+  })
+
+  it('a real code from each source (the /add fragment, already dashed; the mint response, undashed) fills all three OS lines', () => {
+    const commands = {
+      linux: 'L --code {CODE}',
+      macos: 'M --code {CODE}',
+      windows: 'W --code {CODE}',
+    }
+    for (const code of ['ABCD-2345', 'K7PQ9XYZ']) {
+      const dashed = code.includes('-') ? code : `${code.slice(0, 4)}-${code.slice(4)}`
+      expect(fillCode(commands.linux, code)).toBe(`L --code ${dashed}`)
+      expect(fillCode(commands.macos, code)).toBe(`M --code ${dashed}`)
+      expect(fillCode(commands.windows, code)).toBe(`W --code ${dashed}`)
+    }
+  })
+})
+
+describe('fillCommands — the one helper that fills every OS line (S42b K3/K5)', () => {
+  const COMMANDS = { linux: 'L --code {CODE}', macos: 'M --code {CODE}', windows: 'W --code {CODE}' }
+
+  it('fills all three lines with a canonical code', () => {
+    expect(fillCommands(COMMANDS, 'abcd2345')).toEqual({
+      commands: { linux: 'L --code ABCD-2345', macos: 'M --code ABCD-2345', windows: 'W --code ABCD-2345' },
+      reason: null,
+    })
+  })
+
+  it('a non-canonical code (the reviewer’s probe value) fills nothing, with a stated reason — never {CODE} left in a line', () => {
+    const result = fillCommands(COMMANDS, 'ABC0-2345')
+    expect(result).toEqual({ commands: null, reason: NOT_CANONICAL_REASON })
+  })
+
+  it('no commands, or no code yet, is a quiet null — nothing is wrong, there is just nothing yet', () => {
+    expect(fillCommands(null, 'ABCD2345')).toEqual({ commands: null, reason: null })
+    expect(fillCommands(COMMANDS, null)).toEqual({ commands: null, reason: null })
+    expect(fillCommands(COMMANDS, undefined)).toEqual({ commands: null, reason: null })
+  })
+
+  it('a commands map missing an OS key states a reason instead of throwing (S42b Task 32, L680)', () => {
+    const partial = { linux: 'L --code {CODE}', macos: 'M --code {CODE}' } as unknown as Record<
+      (typeof OS_KEYS)[number],
+      string
+    >
+    const result = fillCommands(partial, 'ABCD2345')
+    expect(result).toEqual({ commands: null, reason: MISSING_OS_REASON })
   })
 })

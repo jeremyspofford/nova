@@ -86,6 +86,29 @@ Three properties are enforced mechanically, not by intention:
     every other frame. There is no orphan sweep for it because there is nothing
     to orphan.
 
+    THE BUILD FIXTURE (S42b fix round 1), beside it. A machine card carries a
+    command per OS made from the hub's agent build; inside a case it is made
+    from runner._fixture_build instead — machines.FIXTURE_HUB_VERSION, the
+    one hub build a replay names (F11), with sums no download can match — so
+    no case reads /dist, and a hub with no build still makes the case's card.
+    A re-pair card's `machine` is read through the plant, whose replay
+    overlay answers with the case's declared devices alone, never a real one.
+
+    THE PAIRED NAMES AND THE TIMERS (S42b Task 24). The rest of what a turn
+    reads about paired machines goes through the plant too: the names the
+    state guard and an update claim are read against
+    (chat._paired_device_names) and the device a reminder names
+    (tools.timers create_timer) are a replay's declared devices, never the
+    real registry's. And a timer is the one thing a turn makes that acts
+    LATER, outside the replay's ContextVars: a reminder notifies a real
+    machine (or every connected one), a scheduled turn runs a whole real turn.
+    So no timer a replay sets ever fires — every one belongs to the case's
+    scratch person, and the scheduler's claim never takes a timer an eval
+    person owns (scheduler.tick_once and the orphan sweep below both read
+    app/evals/scratch.py's one definition of such a person). That holds
+    while the case runs and after a teardown that never ran; the rows go
+    with the person.
+
     THE DECISION ROLE (decision-role spec §2). A chat turn he types asks a
     decision model which tool his message needs and which recalled notes still
     hold, so every case's turn does too (`decide=True`): a measurement of her
@@ -151,6 +174,7 @@ startup (a fresh process runs no jobs by construction), one WARNING per row.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shutil
@@ -164,10 +188,11 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agents, chat, devices, machines, peers, settings_store, skills, traces
+from app import agent_dist, agents, chat, devices, machines, peers, settings_store, skills, traces
 from app.browser import engine as browser_engine
 from app.evals import cases as cases_mod
-from app.evals import predicates
+from app.evals import predicates, scratch
+from app.evals.scratch import SCRATCH_PERSON_NAME, SCRATCH_PERSON_ROLE
 from app.identity import Person
 from app.mcp import client as mcp_client
 from app.mcp import fake as mcp_fake
@@ -187,9 +212,10 @@ EVAL_TURN_KIND = "eval"
 # isolation boundary. role 'guest' keeps it off the one-owner unique index and
 # out of any owner-scoped query. The name carries no meaning beyond
 # uniqueness: SCRATCH_PERSON_NAME plus a fresh uuid4 hex, so two cases (or two
-# runs) can never collide on it.
-SCRATCH_PERSON_NAME = "__eval_scratch__"
-SCRATCH_PERSON_ROLE = "guest"
+# runs) can never collide on it. Both values, and the SQL that recognises such
+# a person, are app/evals/scratch.py's — the one definition the orphan sweep
+# below deletes by and scheduler.tick_once never claims a timer for (S42b
+# Task 24), so no timer a replay sets can fire on the real system.
 
 # Best-effort timeout for the memory /forget call _cleanup_scratch_person
 # makes — short, because a slow/unreachable memory service must never hang
@@ -376,9 +402,7 @@ async def _sweep_orphan_scratch_people(pool: asyncpg.Pool) -> int:
     exact name matches too). starts_with(), never LIKE, so the name's own
     literal underscores are never read back as SQL wildcards."""
     rows = await pool.fetch(
-        "DELETE FROM people WHERE role = $1 AND starts_with(name, $2) RETURNING id",
-        SCRATCH_PERSON_ROLE,
-        SCRATCH_PERSON_NAME,
+        f"DELETE FROM people WHERE {scratch.is_scratch_person('people')} RETURNING id"
     )
     if rows:
         logger.info("evals: swept %d orphaned scratch person row(s)", len(rows))
@@ -420,20 +444,26 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     ContextVar, so the turn (and every task it spawns, which copies the
     context) sees it, and nothing else in the process ever does.
 
-    S42a: a case's declared devices (agents) are overlaid on the plant's
-    agent listing the same way, for machine_status to read."""
+    S42a: a case's declared devices (agents) are the plant's agent listing,
+    for machine_status and device_list to read — S42b Task 22 (the
+    replay-hermeticity ruling): ALONE, never beside the real ones, and with
+    no real knock; machine_update acts only on them, and answers each with
+    the outcome its declaration names (cases.FixtureDevice.update — S42b
+    Task 24), sending nothing anywhere."""
     return machines.PLANT.set(
         machines.FixturePlant(
             {m.name: m.as_row() for m in case.machines},
             devices={d.name: d.as_view() for d in case.devices},
+            updates={d.name: d.update for d in case.devices if d.update},
         )
     )
 
 
-async def _fixture_mint(person) -> dict:
+async def _fixture_mint(person, **_kwargs) -> dict:
     """What show_setup_qr mints inside a case, instead of a real code (S47).
     The code is all zeros, and 0 is not in the pairing alphabet, so it can never
-    enroll a machine; nothing is written anywhere."""
+    enroll a machine; nothing is written anywhere. It takes the seam's keywords
+    (S42b: device_id, for a re-pair card) and binds nothing to anything."""
     expires = datetime.now(UTC) + timedelta(seconds=devices.PAIRING_CODE_TTL_SECONDS)
     return {"code": "00000000", "expires_at": expires.isoformat()}
 
@@ -443,6 +473,34 @@ def _install_fixture_pairing() -> Token:
     back the token that removes it. A ContextVar, like the plant: the turn sees
     it, and nothing else in the process ever does."""
     return setup_tools.PAIRING.set(_fixture_mint)
+
+
+async def _fixture_build() -> agent_dist.Build:
+    """What a machine card reads inside a case, instead of the hub's agent
+    build (S42b fix round 1). Its version is machines.FIXTURE_HUB_VERSION —
+    the one hub build a replay names, the one its agents are compared with
+    (F11) — and its sums are of no build at all, so a command on a case's
+    card could install nothing, as its code (_fixture_mint) can enroll
+    nothing. Nothing is read from /dist: a hub with no build still makes the
+    case's card."""
+    files = {
+        agent_dist.file_key(goos, arch): {
+            "name": agent_dist.file_name(goos, arch),
+            "sha256": hashlib.sha256(
+                f"an eval fixture, not a build: {goos}-{arch}".encode()
+            ).hexdigest(),
+            "size": 0,
+        }
+        for goos, arch in agent_dist.TARGETS
+    }
+    return agent_dist.Build(version=machines.FIXTURE_HUB_VERSION, built_at="", go="", files=files)
+
+
+def _install_fixture_build() -> Token:
+    """Make _fixture_build THIS task's build seam for the turn, beside the
+    pairing seam, and hand back the token that removes it — the same
+    ContextVar discipline: the turn sees it, nothing else ever does."""
+    return setup_tools.BUILD.set(_fixture_build)
 
 
 def _install_fixture_mcp(case: cases_mod.Case) -> tuple[Token, Token]:
@@ -1092,6 +1150,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # None only until it is installed: a world that failed to build before it
     # leaves nothing.
     pairing_token: Token | None = None
+    # The case's build seam (S42b fix round 1), installed and reset beside the
+    # pairing seam: a machine card inside the case reads _fixture_build.
+    build_token: Token | None = None
     # The case's MCP overlay and plant (S37a) — every case runs with both
     # installed (empty when it declares no servers), reset the same way,
     # beside the plant and the pairing seam, in the finally below. None only
@@ -1118,6 +1179,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             fixture_skills = await _build_fixture_skills(pool, case)
             plant_token = _install_fixture_plant(case)
             pairing_token = _install_fixture_pairing()
+            build_token = _install_fixture_build()
             mcp_tokens = _install_fixture_mcp(case)
         except Exception as exc:
             logger.exception(
@@ -1266,6 +1328,8 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # fixture.
         if pairing_token is not None:
             setup_tools.PAIRING.reset(pairing_token)
+        if build_token is not None:
+            setup_tools.BUILD.reset(build_token)
         # The MCP overlay and its fakes leave the same way (S37a): nothing after
         # this point can reach a declared server, or miss the owner's.
         if mcp_tokens is not None:

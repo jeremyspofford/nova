@@ -144,6 +144,11 @@ SEGMENT_POLICY = {
         "disposition": "exclude-ephemeral",
         "reason": "installed packages, rebuilt from the lockfile.",
     },
+    "uv.lock": {
+        "disposition": "exclude-ephemeral",
+        "reason": "a uv dependency lock; where this repo does not track it, it "
+        "regenerates from pyproject.toml.",
+    },
     ".ruff_cache": {"disposition": "exclude-ephemeral", "reason": "a linter cache."},
     ".pytest_cache": {"disposition": "exclude-ephemeral", "reason": "a test-runner cache."},
     ".mypy_cache": {"disposition": "exclude-ephemeral", "reason": "a type-checker cache."},

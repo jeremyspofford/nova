@@ -2,9 +2,30 @@
 # Nova v4 installer. Idempotent: safe to re-run.
 # ./install.sh          preflight -> hardware detect -> secrets -> compose
 #                        up -d --build -> wait for health -> status table
-#                        -> ollama's own word on the GPU
+#                        -> ollama's own word on the GPU -> this machine's
+#                        own agent (built, checked, paired by environment)
 # ./install.sh update   stub — arrives in a later slice
 # bash 3.2 compatible (no associative arrays, no ${var,,}, no mapfile).
+
+# Bash, or nothing. Everything below is bash's, and the entry guard at the
+# foot of this file reads BASH_SOURCE, which only bash sets: under any other
+# shell it reads "executed" even when the file was sourced, and main runs.
+# Measured 2026-10-06 (S42b Task 27): sourced from zsh, this file ran
+# cmd_install's preflight against the live docker. So before anything else
+# runs, a shell that is not bash is told so in one line on stderr and goes no
+# further — `return` when it sourced the file (that shell lives on), `exit`
+# when it ran it. The one block in this file written for any POSIX shell.
+if [ -z "${BASH_VERSION:-}" ]; then
+  if [ -n "${ZSH_VERSION:-}" ]; then _nova_shell="zsh"
+  elif [ -n "${KSH_VERSION:-}" ]; then _nova_shell="ksh"
+  else _nova_shell="sh"; fi
+  printf '%s\n' "install.sh: cannot run under $_nova_shell — run ./install, or bash deploy/install.sh" >&2
+  unset _nova_shell
+  # In a file that was run, not sourced, `return` either ends it (dash,
+  # busybox, zsh) or fails, and then `exit` does: status 1 either way.
+  # shellcheck disable=SC2317
+  return 1 2>/dev/null || exit 1
+fi
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -62,6 +83,17 @@ PROFILES_SWITCHED_OFF=""
 # refusal exists at both layers (design-verdict.md §9.5).
 MOVED_MARKER="$DEPLOY_DIR/.moved"
 
+# The tailnet sidecar's scripts (start.sh, serve_check.sh), bind-mounted
+# read-only at /config. start.sh runs ONCE, at container start, so a change
+# to it in git reaches nothing until the container is recreated — and compose
+# recreates only when the service's config changes, which a script edit does
+# not. record_tailscale_scripts puts their hash into the config (a label fed
+# from .env) and verify_tailscale_scripts reads it back off the running
+# container. Measured 2026-10-07 deploying PR #111: the sidecar kept running
+# a two-day-old start.sh behind "Nova is up".
+TAILSCALE_DIR="$DEPLOY_DIR/tailscale"
+TAILSCALE_SCRIPTS_LABEL="nova.tailscale-scripts"
+
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
@@ -102,6 +134,21 @@ check_openssl() {
     die "openssl not found on PATH — install it (e.g. 'apt install openssl' on Debian/Ubuntu, 'brew install openssl' on macOS) — generate_secrets needs it to create this instance's tokens"
   fi
   log "openssl: present"
+}
+
+# The same seam split as have_openssl. Checked in preflight, before anything
+# is pulled or started: install_hub_agent needs git only after the stack is
+# up, and finding it missing there would be a failure that could have been
+# said first.
+have_git() {
+  command -v git >/dev/null 2>&1
+}
+
+check_git() {
+  if ! have_git; then
+    die "git is needed: ./install builds Nova's agent from this checkout's committed tree"
+  fi
+  log "git: present"
 }
 
 detect_disk_free_gb() {
@@ -1059,6 +1106,7 @@ preflight() {
   check_compose
   check_foreign_project
   check_openssl
+  check_git
   check_disk
   check_ports
   decide_inference
@@ -1358,6 +1406,339 @@ tailnet_dns_name() {
   status="$(docker compose "${COMPOSE_ARGS[@]}" exec -T tailscale tailscale status --json 2>/dev/null)" \
     || return 1
   printf '%s\n' "$status" | grep -o -m1 '"DNSName": *"[^"]*"' | sed 's/^[^:]*: *"//; s/\.\{0,1\}"$//'
+}
+
+# ---- the hub machine's own agent (S42b P23) ---------------------------------
+#
+# ./install always installs Nova's agent on the machine it runs on (owner
+# decision 6): built here from the committed apps/novad tree (agent-dist),
+# fetched through the hub's own loopback door — so its tile says Hub — and
+# checked against the manifest before it runs. A running agent is left alone:
+# updating it is Nova's job, one idle machine at a time, this one first.
+#
+# The pairing code minted for it is a credential. It reaches the agent in
+# NOVA_PAIRING_CODE, in that one process's environment, and nowhere else:
+# never a command line (ps shows those to every user), never a line of this
+# script's output, and never a trace line — tracing is off from the mint
+# until the code is gone, even when this script runs traced
+# (`bash -x deploy/install.sh`, or SHELLOPTS=xtrace in its environment).
+HUB_LOOPBACK="http://127.0.0.1:3000"
+# Core limits its agent paths per client and answers 429 with a Retry-After
+# (Task 18). That is waited out and the path asked again, within these
+# bounds, never forever. Since Task 26 a visitor through a relay is counted
+# apart from this door, so a 429 here means this machine's own door spent
+# its minute.
+HUB_ASK_TRIES=4
+HUB_WAIT_MAX_S=150
+# The download directory while install_hub_agent runs; hub_fail removes it.
+HUB_TMP=""
+
+# Seams, each one thing the tests stub.
+agent_version_of() { bash "$DEPLOY_DIR/agent_version.sh" "$REPO_ROOT"; }
+build_agent_dist() {
+  git -C "$REPO_ROOT" archive --format=tar HEAD apps/novad \
+    | docker compose "${COMPOSE_ARGS[@]}" --profile build run --rm -T agent-dist "$1"
+}
+# One GET of $1 through the loopback door: the body to the file $2, the
+# response's headers to the file $3, at most $4 seconds; prints the HTTP
+# status, non-zero only when no whole response arrived. No -f, so a 429 is
+# read as one. No header of its own and no proxy, so the request reaches the
+# door as this machine and nothing else: core counts a request that carries
+# a relay's mark apart from the loopback's own (Task 26).
+hub_request() {
+  curl -sS --noproxy '*' --max-time "$4" -o "$2" -D "$3" -w '%{http_code}' "$HUB_LOOPBACK$1"
+}
+hub_sleep() { sleep "$1"; }
+# The JSON parser: core's own Python, in the container this run has just
+# brought up healthy — the interpreter hub_mint runs in too. Input on stdin.
+hub_python() { docker compose "${COMPOSE_ARGS[@]}" exec -T core python "$@"; }
+hub_mint() { docker compose "${COMPOSE_ARGS[@]}" exec -T core python -m app.devices_cli mint --name "$1"; }
+# WSL's kernels name themselves (microsoft-standard-WSL2; WSL1's Microsoft).
+WSL_OSRELEASE=/proc/sys/kernel/osrelease
+running_in_wsl() { grep -qi microsoft "$WSL_OSRELEASE" 2>/dev/null; }
+hub_hostname() { hostname -s 2>/dev/null || hostname; }
+# The sha256 of the file $1: sha256sum's, else shasum's (macOS). Non-zero,
+# printing nothing, when neither can run — a checksum never computed is
+# never compared, so it can never read as "not the manifest's".
+sha256_of() {
+  local out
+  out="$(sha256sum "$1" 2>/dev/null)" || out="$(shasum -a 256 "$1" 2>/dev/null)" || return 1
+  printf '%s' "${out%% *}"
+}
+# Can a program run from the folder $1? A two-line script is put there and
+# run: a folder on a noexec mount refuses it with 126, as it refused the agent.
+hub_dir_runs() {
+  printf '#!/bin/sh\nexit 0\n' > "$1/runs-here" 2>/dev/null \
+    && chmod 0755 "$1/runs-here" 2>/dev/null \
+    && "$1/runs-here" >/dev/null 2>&1
+}
+hub_os_arch() {
+  local os arch
+  case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) return 1 ;; esac
+  case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) return 1 ;; esac
+  printf '%s %s' "$os" "$arch"
+}
+
+# What hub_python runs over the served manifest. Core re-serializes what
+# agent-dist wrote, so no pattern over the text is trusted to find an entry:
+# this reads the keys. A field that is missing, or not the shape it must
+# have, is a stated cannot on stderr — never an empty answer.
+#   version               the signed manifest's version
+#   sha256 <key> <name>   files[<key>].sha256, when that entry is <name>
+#   windows               commands.windows: the card's Windows line
+manifest_reader() {
+  cat <<'PY'
+import json, re, sys
+
+def cannot(why):
+    sys.stderr.write("the agent manifest core served " + why + "\n")
+    sys.exit(1)
+
+try:
+    doc = json.loads(sys.stdin.read())
+except ValueError:
+    cannot("is not JSON")
+man = doc.get("manifest") if isinstance(doc, dict) else None
+if not isinstance(man, dict):
+    cannot("carries no signed manifest")
+ask = sys.argv[1:]
+if ask == ["version"]:
+    v = man.get("version")
+    if not (isinstance(v, str) and re.fullmatch("[0-9a-f]{12}", v)):
+        cannot("names no version")
+    print(v)
+elif len(ask) == 3 and ask[0] == "sha256":
+    key, name = ask[1], ask[2]
+    files = man.get("files")
+    entry = files.get(key) if isinstance(files, dict) else None
+    if not isinstance(entry, dict):
+        cannot("has no " + key + " entry")
+    if entry.get("name") != name:
+        cannot("has a " + key + " entry that is not " + name)
+    s = entry.get("sha256")
+    if not (isinstance(s, str) and re.fullmatch("[0-9a-f]{64}", s)):
+        cannot("gives " + name + " no sha256")
+    print(s)
+elif ask == ["windows"]:
+    cmds = doc.get("commands")
+    line = cmds.get("windows") if isinstance(cmds, dict) else None
+    if not (isinstance(line, str) and line.strip() and line.isprintable()):
+        why = doc.get("commands_reason")
+        cannot("carries no Windows line" + (" (" + why + ")" if isinstance(why, str) and why else ""))
+    print(line)
+else:
+    cannot("was asked for what this reader does not read: " + " ".join(ask))
+PY
+}
+
+# $@ as manifest_reader takes them, the manifest on stdin. When it cannot
+# answer, the reason is on stderr: the reader's own, or docker's when core's
+# Python could not be reached.
+manifest_field() { hub_python -c "$(manifest_reader)" "$@"; }
+
+# What the reader said on stderr, as one line.
+hub_why() {
+  local why
+  why="$(tr '\n' ' ' 2>/dev/null < "$HUB_TMP/why" | sed 's/[[:space:]]*$//')"
+  printf '%s' "${why:-the manifest reader stopped without saying why}"
+}
+
+# The seconds a response's Retry-After asks for, from the header file $1, in
+# the delta-seconds form core sends (Task 18): one to six digits, read in
+# base 10 — "08" is 8, never octal, and "010" is 10 wherever it is counted.
+# Exit 1, printing nothing, when there is no Retry-After. Exit 2 when there
+# is one this cannot read (an HTTP-date, a sign, an empty value), printing
+# it as it came: trimmed, printable ASCII only, cut at 64.
+retry_after_of() {
+  tr -d '\r' 2>/dev/null < "$1" | awk '
+    tolower(substr($0, 1, 12)) == "retry-after:" {
+      found = 1
+      v = substr($0, 13); gsub(/^[ \t]+|[ \t]+$/, "", v)
+      if (v ~ /^[0-9]+$/ && length(v) <= 6) { print v + 0; readable = 1 }
+      else { gsub(/[^ -~]/, "", v); print substr(v, 1, 64) }
+      exit
+    }
+    END { exit (found ? (readable ? 0 : 2) : 1) }'
+}
+
+# A body that was not the 200 asked for, fit for one line of output: core's
+# own words ({"error": …}) or whatever answered in its place, cut at 200
+# bytes, every byte outside printable ASCII a space. A range, not
+# [:print:]: busybox's tr reads a class there as its letters.
+hub_body_excerpt() {
+  head -c 200 "$1" 2>/dev/null | LC_ALL=C tr -c ' -~' ' '
+}
+
+# Every failure once the download directory exists: it goes, and ./install
+# fails with the reason — the stack up (cmd_install runs this after health).
+hub_fail() {
+  if [ -n "$HUB_TMP" ]; then rm -rf "$HUB_TMP"; HUB_TMP=""; fi
+  die "$@"
+}
+
+# One path through the loopback door into the file $2 — $3 seconds an ask,
+# $4 what it is, in words — or ./install fails saying what answered. A 429
+# is said as a 429: its Retry-After is waited and the path asked again, at
+# most HUB_ASK_TRIES asks and HUB_WAIT_MAX_S seconds of waiting in all, and
+# one past either bound, or with no Retry-After to wait for, stops here as
+# what it is — never as a failed checksum, never as unreachable.
+hub_fetch() {
+  local path="$1" out="$2" max="$3" what="$4" status rc after ask=1 waited=0
+  while :; do
+    rc=0
+    status="$(hub_request "$path" "$out" "$out.headers" "$max")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      hub_fail "the hub's agent: $what did not arrive from $HUB_LOOPBACK$path (curl exit $rc; its words are above)"
+    fi
+    case "$status" in
+      200) return 0 ;;
+      429) ;;
+      *) hub_fail "the hub's agent: core answered HTTP $status for $what at $HUB_LOOPBACK$path: $(hub_body_excerpt "$out")" ;;
+    esac
+    rc=0; after="$(retry_after_of "$out.headers")" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) hub_fail "the hub's agent: core answered 429 Too Many Requests for $what, with no Retry-After to wait for — run ./install again in a minute" ;;
+      *) hub_fail "the hub's agent: core answered 429 Too Many Requests for $what, with a Retry-After it could not read (${after:-empty}) — run ./install again in a minute" ;;
+    esac
+    if [ "$ask" -ge "$HUB_ASK_TRIES" ] || [ $((waited + after)) -gt "$HUB_WAIT_MAX_S" ]; then
+      hub_fail "the hub's agent: core still answers 429 Too Many Requests for $what after $ask ask(s) and ${waited} s of waiting, and its Retry-After asks ${after} s more (./install asks at most $HUB_ASK_TRIES times and waits at most $HUB_WAIT_MAX_S s) — run ./install again in a minute"
+    fi
+    log "the hub's agent: core answered 429 Too Many Requests for $what — requests through this machine's loopback door used up their minute; waiting the ${after} s its Retry-After asks, then asking again"
+    hub_sleep "$after"
+    waited=$((waited + after))
+    ask=$((ask + 1))
+  done
+}
+
+# The name this machine's agent pairs under: NOVA_HUB_AGENT_NAME when set
+# (read from this run's environment, never written to .env: it matters only
+# the first time), else the hostname — lowercased and trimmed, as core folds
+# a name to see whether it is `hub`.
+hub_agent_name() {
+  local name="${NOVA_HUB_AGENT_NAME:-}"
+  [ -n "$name" ] || name="$(hub_hostname)" || name=""
+  lowercase "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# The download folder goes however the run ends: hub_fail removes it on every
+# stated failure, and this, set as the EXIT trap, on anything unforeseen — so
+# no run leaves an agent binary behind in $TMPDIR.
+hub_cleanup() {
+  if [ -n "$HUB_TMP" ]; then rm -rf "$HUB_TMP"; HUB_TMP=""; fi
+}
+
+install_hub_agent() {
+  # The code, and the mint's answer that holds it, live in `code` and
+  # `minted`, and neither may reach a child's environment. A name the
+  # environment exported stays exported under `local`, and the copy it
+  # shadows is still handed to children (measured under bash 5.2.21 and
+  # 3.2.57): so both names stop being exported here — the inherited ones
+  # before `local`, the locals after it — and `set -a` is off while they
+  # hold anything. Neither name is exported again by this run.
+  export -n code minted
+  local version served os_arch os arch file want got line dns rc name minted code xtrace=0 allexport=0 hub_dir
+  export -n code minted
+  # Only a code this run mints ever reaches the agent: one already in
+  # ./install's own environment is not this run's to pass on.
+  unset NOVA_PAIRING_CODE
+  version="$(agent_version_of)" || die "the hub's agent: its version could not be read (above) — nothing was built"
+  log "Building Nova's agent $version for six systems (agent-dist)..."
+  build_agent_dist "$version" >&2 || die "the hub's agent: agent-dist did not build $version (its words are above)"
+  hub_dir="${TMPDIR:-/tmp}"
+  HUB_TMP="$(mktemp -d "$hub_dir/nova-agent.XXXXXX")" \
+    || die "the hub's agent: cannot make a folder to download it into under $hub_dir (mktemp failed; its words are above) — nothing was downloaded"
+  trap hub_cleanup EXIT
+  # One manifest, read as the machine running the stack (?origin=loopback,
+  # F9): for the build it names and, on a WSL hub, the Windows line.
+  hub_fetch "/api/v1/agent/manifest?origin=loopback" "$HUB_TMP/manifest.json" 30 "the agent manifest"
+  served="$(manifest_field version < "$HUB_TMP/manifest.json" 2> "$HUB_TMP/why")" \
+    || hub_fail "the hub's agent: $(hub_why)"
+  [ "$served" = "$version" ] \
+    || hub_fail "the hub's agent: core serves a build other than $version, the one agent-dist just built (it serves $served) — nothing was installed"
+  if running_in_wsl; then
+    # The agent for a Windows PC is the Windows one (D1): nothing installs
+    # here, and the Windows line is said where it is run, with its code.
+    line="$(manifest_field windows < "$HUB_TMP/manifest.json" 2> "$HUB_TMP/why")" \
+      || hub_fail "the hub's agent: $(hub_why)"
+    rm -rf "$HUB_TMP"; HUB_TMP=""
+    log "This hub runs inside WSL, so this PC's agent is the Windows one (D1); nothing was installed here."
+    log "In Nova, get a code: Settings → Devices → Pair a device. Then run this Windows line in"
+    log "PowerShell on this PC, with that code in place of {CODE}:"
+    log ""
+    log "$line"
+    log ""
+    return 0
+  fi
+  os_arch="$(hub_os_arch)" \
+    || hub_fail "the hub's agent: Nova has no build for this machine ($(uname -s) $(uname -m))"
+  os="${os_arch% *}"; arch="${os_arch#* }"
+  file="novad-$os-$arch"
+  want="$(manifest_field sha256 "$os-$arch" "$file" < "$HUB_TMP/manifest.json" 2> "$HUB_TMP/why")" \
+    || hub_fail "the hub's agent: $(hub_why)"
+  hub_fetch "/api/v1/agent/dist/$file" "$HUB_TMP/novad" 300 "$file"
+  # A mismatch is a claim about the bytes, so it is made only of a sha256
+  # that was computed: 64 hex characters, or no claim at all.
+  got="$(sha256_of "$HUB_TMP/novad")" || got=""
+  case "$got" in
+    "" | *[!0123456789abcdef]*) got="" ;;
+  esac
+  [ "${#got}" -eq 64 ] \
+    || hub_fail "the hub's agent: cannot check the download: neither sha256sum nor shasum could compute its sha256 here — nothing was run"
+  [ "$got" = "$want" ] \
+    || hub_fail "the hub's agent: the download's sha256 is not the manifest's — nothing was run"
+  chmod 0755 "$HUB_TMP/novad" \
+    || hub_fail "the hub's agent: cannot make the download runnable (chmod failed; its words are above) — nothing was run"
+  # Its hubs in order: this machine's loopback door first — so its tile says
+  # Hub — then the tailnet name, when the tailnet is on.
+  set -- --hub "$HUB_LOOPBACK"
+  if [ "$TAILNET_ENABLED" -eq 1 ]; then
+    dns="$(tailnet_dns_name)" || dns=""
+    [ -z "$dns" ] || set -- "$@" --hub "https://$dns"
+  fi
+  rc=0; "$HUB_TMP/novad" install --if-missing "$@" >&2 || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    # Not paired: a code, named after the machine — never `hub` (D8).
+    name="$(hub_agent_name)"
+    [ -n "$name" ] \
+      || hub_fail "the hub's agent: this machine's name could not be read — run NOVA_HUB_AGENT_NAME=<a name> ./install"
+    if [ "$name" = hub ]; then
+      hub_fail "this machine's agent cannot be named 'hub' — that is the bundled engine's name (hub decision D8); name it after the machine: NOVA_HUB_AGENT_NAME=<a name> ./install"
+    fi
+    log "Pairing this machine's agent as '$name' (a code minted for it, handed over in its environment)..."
+    # No trace and no export from the mint until the code is gone: `bash -x`
+    # would print the mint's answer and the line that hands the code over,
+    # and `set -a` would export both to every child.
+    case "$-" in *x*) xtrace=1; { set +x; } 2>/dev/null ;; esac
+    case "$-" in *a*) allexport=1; set +a ;; esac
+    minted="$(hub_mint "$name")" \
+      || hub_fail "the hub's agent: a pairing code could not be minted (devices_cli's words are above)"
+    code="$(printf '%s\n' "$minted" | sed -n 's/.*"code": *"\([^"]*\)".*/\1/p' | head -n 1)"
+    minted=""
+    case "$code" in
+      "" | *[![:alnum:]-]*) hub_fail "the hub's agent: the mint returned no code it could hand over — nothing was paired" ;;
+    esac
+    # By environment only: never a command line and never a log line. novad
+    # unsets it before anything it starts could inherit it.
+    rc=0; NOVA_PAIRING_CODE="$code" "$HUB_TMP/novad" install "$@" >&2 || rc=$?
+    code=""
+    if [ "$allexport" -eq 1 ]; then set -a; fi
+    if [ "$xtrace" -eq 1 ]; then set -x; fi
+  fi
+  # 126: the shell found the download and could not run it. That is said as
+  # a folder that does not allow running programs only when it is one — a
+  # script put in the same folder is refused too. A binary that is not this
+  # machine's gives 126 as well, and is not the folder's fault.
+  if [ "$rc" -eq 126 ]; then
+    if hub_dir_runs "$HUB_TMP"; then
+      hub_fail "the hub's agent: the download could not be run (novad install exited 126; the shell's words are above), though $hub_dir does run programs — a test script there ran — the stack is up"
+    fi
+    hub_fail "the hub's agent: $hub_dir does not allow running programs (novad install exited 126, and a test script there was refused too, as on a noexec mount) — run ./install again with TMPDIR set to a folder that does, e.g. mkdir -p ~/.cache && TMPDIR=~/.cache ./install — the stack is up"
+  fi
+  rm -rf "$HUB_TMP"; HUB_TMP=""
+  [ "$rc" -eq 0 ] \
+    || die "the hub's agent was not installed (novad install exited $rc; its words are above) — the stack is up"
+  log "Nova's agent on this machine is installed and running (novad status says how)."
 }
 
 # ---- hardware detect ------------------------------------------------------
@@ -1753,6 +2134,155 @@ record_compose_profiles() {
   fi
 }
 
+# ---- her own repository ----------------------------------------------------
+#
+# Walk finding (turn 641f312e): asked "why is CI red on main?" with GitHub's
+# MCP server connected, she spent every tool round hunting for WHICH
+# repository is hers and never asked GitHub. The installer runs from the
+# checkout, so the checkout's own `origin` IS the answer — derived here,
+# never typed in, and handed to core (NOVA_REPO, NOVA_REPO_BRANCH), which
+# states it in her prompt.
+
+# owner/repo from a github.com remote URL, or exit 1. https, ssh:// and the
+# scp-like git@github.com:o/r form, with or without .git. The host must be
+# exactly github.com (a look-alike such as github.com.example is not), and
+# both halves must be GitHub's own characters — core shape-checks again,
+# since the value ends up in a prompt.
+github_repo_from_url() {
+  local url="$1" path
+  case "$url" in
+    https://github.com/*) path="${url#https://github.com/}" ;;
+    https://*@github.com/*) path="${url#https://*@github.com/}" ;;
+    ssh://git@github.com/*) path="${url#ssh://git@github.com/}" ;;
+    git@github.com:*) path="${url#git@github.com:}" ;;
+    *) return 1 ;;
+  esac
+  path="${path%/}"
+  path="${path%.git}"
+  printf '%s' "$path" | grep -Eq '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' || return 1
+  case "${path#*/}" in . | ..) return 1 ;; esac
+  printf '%s' "$path"
+}
+
+# Writes NOVA_REPO, and NOVA_REPO_BRANCH when origin/HEAD names one. No
+# origin, or one that is not GitHub: nothing written, one line saying so —
+# and a value an earlier install wrote is blanked, because once the remote
+# no longer answers for it, keeping it would be a guess.
+record_repository() {
+  local url repo="" branch="" why=""
+  url="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null)" || url=""
+  if [ -z "$url" ]; then
+    why="no git remote named origin in $REPO_ROOT"
+  elif ! repo="$(github_repo_from_url "$url")"; then
+    repo=""
+    why="origin ($url) is not a GitHub repository"
+  fi
+  if [ -z "$repo" ]; then
+    log "repository: $why — NOVA_REPO not written; Nova is not told which repository is hers"
+    local key
+    for key in NOVA_REPO NOVA_REPO_BRANCH; do
+      if [ -n "$(get_env_value "$key")" ]; then
+        set_env_value "$key" ""
+        log "            (cleared the $key an earlier install wrote)"
+      fi
+    done
+    return 0
+  fi
+  branch="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || branch=""
+  branch="${branch#origin/}"
+  if ! printf '%s' "$branch" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+    branch=""
+  fi
+  [ "$(get_env_value NOVA_REPO)" = "$repo" ] || set_env_value NOVA_REPO "$repo"
+  if [ -n "$branch" ]; then
+    [ "$(get_env_value NOVA_REPO_BRANCH)" = "$branch" ] || set_env_value NOVA_REPO_BRANCH "$branch"
+    log "repository: NOVA_REPO=$repo, NOVA_REPO_BRANCH=$branch (from this checkout's origin)"
+  else
+    if [ -n "$(get_env_value NOVA_REPO_BRANCH)" ]; then
+      set_env_value NOVA_REPO_BRANCH ""
+    fi
+    log "repository: NOVA_REPO=$repo (from this checkout's origin); origin/HEAD names no default branch, so none is written"
+  fi
+}
+
+# ---- the tailnet sidecar's scripts, made part of its config ----------------
+#
+# The sidecar's scripts are files on a bind mount, not config: compose cannot
+# see them change, so `up` leaves a container running the old start.sh while
+# the new one sits unread in /config. The scripts' hash goes into .env
+# (NOVA_TAILSCALE_SCRIPTS), compose interpolates it into a label on the
+# service, and a changed hash is a changed config — compose recreates the
+# sidecar on that `up`, and on no other. Restarting it drops the tailnet URL
+# for a few seconds, so it happens exactly when a script changed, never on
+# every install.
+
+# sha256 of stdin, 64 hex. GNU has sha256sum, macOS has `shasum -a 256`.
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# One hash over every script the container can run: each *.sh in
+# TAILSCALE_DIR (a new one counts the day it is added), by name and content,
+# minus the *_test.sh files that only run here. Exit 1 when there is nothing
+# to hash or no way to hash it — never an empty answer that reads as a value.
+tailscale_scripts_hash() {
+  local f h manifest=""
+  for f in "$TAILSCALE_DIR"/*.sh; do
+    [ -f "$f" ] || continue
+    case "$f" in *_test.sh) continue ;; esac
+    h="$(sha256_stdin < "$f")" || return 1
+    [ -n "$h" ] || return 1
+    manifest="${manifest}${f##*/} $h
+"
+  done
+  [ -n "$manifest" ] || return 1
+  h="$(printf '%s' "$manifest" | sha256_stdin)" || return 1
+  [ -n "$h" ] || return 1
+  printf '%s' "$h"
+}
+
+record_tailscale_scripts() {
+  [ "$TAILNET_ENABLED" -eq 1 ] || return 0
+  local want have
+  want="$(tailscale_scripts_hash)" \
+    || die "could not hash the tailnet sidecar's scripts ($TAILSCALE_DIR/*.sh; needs sha256sum or shasum), so a change to them could not reach the running sidecar"
+  have="$(get_env_value NOVA_TAILSCALE_SCRIPTS)"
+  if [ "$have" = "$want" ]; then
+    log "tailnet: sidecar scripts unchanged (${want:0:12}) — the tailscale container is left running"
+    return 0
+  fi
+  set_env_value NOVA_TAILSCALE_SCRIPTS "$want"
+  log "tailnet: sidecar scripts changed (${have:0:12}${have:+ -> }${want:0:12}) — compose recreates the tailscale container so the new start.sh runs; the tailnet URL drops while it restarts"
+}
+
+# THE SEAM. The scripts hash on the running sidecar's label; exit 1 when
+# there is no sidecar to read it from.
+running_tailscale_scripts() {
+  local cid
+  cid="$(docker compose "${COMPOSE_ARGS[@]}" ps -q tailscale 2>/dev/null)" || return 1
+  [ -n "$cid" ] || return 1
+  docker inspect --format "{{index .Config.Labels \"$TAILSCALE_SCRIPTS_LABEL\"}}" "$cid" 2>/dev/null
+}
+
+# After `up`: the sidecar that is running must have been created from the
+# scripts in this checkout. Recomputed from the files, not read back from
+# .env, so the comparison is running-vs-repo, whatever wrote .env.
+verify_tailscale_scripts() {
+  [ "$TAILNET_ENABLED" -eq 1 ] || return 0
+  local want have
+  want="$(tailscale_scripts_hash)" \
+    || die "could not hash the tailnet sidecar's scripts ($TAILSCALE_DIR/*.sh) to check the running sidecar against them"
+  have="$(running_tailscale_scripts)" || have=""
+  [ "$have" = "$want" ] && return 0
+  die "the tailscale sidecar was created from scripts ${have:-(unknown: no running container, or no $TAILSCALE_SCRIPTS_LABEL label)}, but $TAILSCALE_DIR holds ${want} — it is not running this checkout's start.sh. Recreate it: docker compose --project-directory $DEPLOY_DIR up -d --force-recreate tailscale"
+}
+
 # ---- bring-up + status ----------------------------------------------------
 
 compose_up() {
@@ -1838,7 +2368,13 @@ cmd_install() {
   # exactly this run's set — and a refusal above leaves .env as it was.
   record_compose_files
   record_compose_profiles
+  # Before compose_up, so the core container this run creates reads it.
+  record_repository
+  # Before compose_up: the hash it writes is what makes compose recreate the
+  # sidecar when, and only when, one of its scripts changed.
+  record_tailscale_scripts
   compose_up
+  verify_tailscale_scripts
   wait_for_health || true
   print_status
   local unhealthy
@@ -1856,6 +2392,9 @@ cmd_install() {
   fi
   # Healthy is not the same as on the GPU. Read ollama's own word for it.
   check_inference_compute
+  # This machine's own agent (S42b P23), once the stack is healthy: a
+  # failure here fails ./install and leaves the stack up.
+  install_hub_agent
   log "Nova is up. Open http://127.0.0.1:3000 to finish setup."
   if [ "$BUNDLED_INFERENCE" -eq 0 ]; then
     log "No bundled engine is running — pick 'Remote endpoint' at the engine step."

@@ -15,8 +15,9 @@ What this module DECIDES, and nothing else:
     the one wall time a year the zone cannot name unambiguously, the DST
     fall-back hour — see _relative_spec), and the store never holds the
     duration (app/schedule.py's rule);
-  * a named `device` must be a PAIRED device now (devices.get_live_by_name) —
-    the confirmation names it, so something has to have checked it;
+  * a named `device` must be a PAIRED device now (machines.plant().
+    paired_machines — inside an eval replay, the case's declared devices
+    alone) — the confirmation names it, so something has to have checked it;
   * an ABSOLUTE `at` or a `repeat` names a wall clock, and a wall clock needs a
     zone: with `nova.timezone` still unset (no stored value — the default 'UTC'
     would silently make 07:00 mean 07:00 UTC, which is the wrong time for
@@ -44,7 +45,7 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 
-from app import conversations, db, devices, schedule, settings_store
+from app import conversations, db, machines, schedule, settings_store
 from app.identity import Person
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
@@ -238,20 +239,25 @@ def _repeat_spec(repeat: Any) -> dict:
         raise ToolFailure(str(exc)) from exc
 
 
-async def _paired_device_or_refuse(pool: asyncpg.Pool, name: Any) -> None:
-    """A named device must be a paired, unrevoked row NOW — otherwise the tool
-    would confirm "as a notification on 'dsek'" and nothing would check the
-    promise until the firing. Connected-ness is transient and is the firing's
+async def _paired_device_or_refuse(app, name: Any) -> None:
+    """A named device must be a paired machine NOW — otherwise the tool would
+    confirm "as a notification on 'dsek'" and nothing would check the promise
+    until the firing. Connected-ness is transient and is the firing's
     business; pairing is the fact that can be checked at creation. The
-    alternatives offered are the live rows, never a list someone maintains."""
+    alternatives offered are the paired machines as read now, never a list
+    someone maintains.
+
+    Read through the plant (machines.plant().paired_machines): the live,
+    unrevoked rows by name — or, inside an eval replay, the case's declared
+    devices alone (S42b Task 24, the replay-hermeticity ruling), so a scored
+    turn is never shown a real machine's name and no replay's row ever names
+    one. A replay's timer never fires anyway: the scheduler's claim never
+    takes a timer an eval person owns (scheduler.tick_once)."""
     if not isinstance(name, str) or not name.strip():
         raise ToolFailure("device is empty — name a paired device, or omit it to notify them all")
-    if await devices.get_live_by_name(pool, name) is not None:
+    names = [machine["name"] for machine in await machines.plant().paired_machines(app)]
+    if name in names:
         return
-    names = [
-        r["name"]
-        for r in await pool.fetch("SELECT name FROM devices WHERE revoked_at IS NULL ORDER BY name")
-    ]
     if not names:
         raise ToolFailure(
             f"no paired device named {name!r} — no device is paired at all; omit device "
@@ -328,7 +334,7 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             f"time) or repeat (a recurring schedule) — you gave {have}"
         )
     if device is not None:
-        await _paired_device_or_refuse(pool, device)
+        await _paired_device_or_refuse(ctx.app, device)
     agent = await _agent_or_refuse(pool, agent_name) if agent_name is not None else None
     zone, zone_set = await household_timezone(pool)
     now = await pool.fetchval("SELECT now()")
@@ -370,6 +376,9 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
     except store.TimerRefused as exc:
         raise ToolFailure(exc.reason) from exc
 
+    if ctx.undo_sink is not None:
+        # The row this call created, by id: a rewind removes exactly it.
+        ctx.undo_sink.append({"timer_id": str(row["id"])})
     words = schedule.describe(row["schedule"], tz, row["next_fire_at"], now=now)
     if kind == "reminder":
         where = (
@@ -540,6 +549,37 @@ async def cancel_timer(args: dict, ctx: ToolContext) -> str:
     return f"Cancelled {row['kind']} {row['title']!r} (id {_short(row['id'])}; was {words})."
 
 
+async def revert_create_timer(payload: dict, ctx: ToolContext) -> str:
+    """Put back one create_timer call (chat-rewind): remove the row it created,
+    by the id it recorded, and VERIFY the row is absent from a fresh read. A
+    row already gone (fired once, cancelled) is refused — its delivered
+    reminders are not undone, and nothing is claimed for them."""
+    try:
+        timer_id = uuid.UUID(str(payload["timer_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ToolFailure(f"the recorded timer id is unreadable: {payload!r}"[:300]) from exc
+    pool = await db.get_pool()
+    store = _store()
+    row = await store.get(pool, timer_id)
+    if row is None:
+        raise ToolFailure(
+            f"timer {_short(timer_id)} is already gone (it fired or was cancelled) — "
+            "nothing to remove"
+        )
+    try:
+        await store.delete(pool, timer_id)
+    except store.TimerRefused as exc:
+        raise ToolFailure(f"timer {_short(timer_id)} is already gone — {exc.reason}") from exc
+    if await store.get(pool, timer_id) is not None:
+        raise ToolFailure(
+            f"timer {_short(timer_id)} is still there after the delete — the removal did not verify"
+        )
+    return (
+        f"Removed {row['kind']} {row['title']!r} (id {_short(timer_id)}); any firing that "
+        "already happened is not undone."
+    )
+
+
 # -- the tools ------------------------------------------------------------------------
 
 
@@ -622,6 +662,7 @@ TOOLS: tuple[Tool, ...] = (
             ["text"],
         ),
         executor=create_timer,
+        revert=revert_create_timer,
     ),
     Tool(
         name="list_timers",

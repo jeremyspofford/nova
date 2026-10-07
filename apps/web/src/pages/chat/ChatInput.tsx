@@ -74,7 +74,10 @@ interface Pending {
   error?: string
 }
 
+const NO_HISTORY: string[] = []
+
 export function ChatInput({
+  history = NO_HISTORY,
   onSubmit,
   disabled,
   draftKey,
@@ -82,6 +85,9 @@ export function ChatInput({
   api = DEFAULT_API,
   conversationId,
 }: {
+  /** His sent messages in this conversation, oldest -> newest (chat rewind
+   * T6): what ArrowUp recalls into an empty composer. */
+  history?: string[]
   onSubmit: (text: string, attachmentIds?: string[]) => void
   disabled: boolean
   draftKey?: string
@@ -109,6 +115,11 @@ export function ChatInput({
   const [highlight, setHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isMobile = useIsMobile()
+  // Up-arrow recall (chat rewind T6): which of `history` the box is showing,
+  // or null when it is not recalling. Recall only ever starts from an EMPTY
+  // box, so stepping past the newest puts back exactly that: nothing. Any
+  // edit or send ends it, so an edited recall is an ordinary draft.
+  const recallIndex = useRef<number | null>(null)
 
   // The draft. Written on every edit and removed the moment the message is
   // sent, so storage only ever holds text that was NOT sent — a draft cannot
@@ -198,6 +209,7 @@ export function ChatInput({
     // A file alone is a message: "here, look at this" with no words is a
     // thing people send. Text is required only when nothing is attached.
     if ((!text && ready.length === 0) || disabled || uploading) return
+    recallIndex.current = null
     saveDraft('')
     setInput('')
     setPending([])
@@ -261,6 +273,7 @@ export function ChatInput({
   }
 
   const changeInput = (value: string) => {
+    recallIndex.current = null
     setInput(value)
     saveDraft(value)
     setDismissed(false)
@@ -279,6 +292,46 @@ export function ChatInput({
    * trailing space closes the token, so the menu stands down by itself. */
   const chooseMention = (agent: AgentSummary) => {
     changeInput(completeMention(agent.name))
+  }
+
+  /** Show one recalled message (or, with null, the empty box recall began
+   * from). Not saved as a draft: a recalled-then-abandoned text is something
+   * he already sent, not something he was writing. The popover stays down so
+   * a recalled "/help" does not hijack the next arrow; an edit re-opens it. */
+  const showRecalled = (index: number | null) => {
+    recallIndex.current = index
+    setInput(index === null ? '' : history[index])
+    setDismissed(true)
+    setHighlight(0)
+    requestAnimationFrame(resize)
+  }
+
+  /** ArrowUp/ArrowDown through his sent messages. Returns true when it acted
+   * (and prevented the key's default); false leaves the textarea's own caret
+   * movement alone. */
+  const recall = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false
+    const el = e.currentTarget
+    const current = recallIndex.current
+    // History can shrink under a recall (a rewind reloads the transcript).
+    const recalling = current !== null && current < history.length
+    if (e.key === 'ArrowUp') {
+      if (history.length === 0) return false
+      if (!recalling && input !== '') return false
+      // Caret below the first line: the arrow moves the caret, not history.
+      if (el.value.slice(0, el.selectionStart ?? 0).includes('\n')) return false
+      e.preventDefault()
+      showRecalled(recalling ? Math.max(0, current - 1) : history.length - 1)
+      return true
+    }
+    if (e.key === 'ArrowDown') {
+      if (!recalling) return false
+      if (el.value.slice(el.selectionEnd ?? el.value.length).includes('\n')) return false
+      e.preventDefault()
+      showRecalled(current + 1 < history.length ? current + 1 : null)
+      return true
+    }
+    return false
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -318,7 +371,9 @@ export function ChatInput({
         }
       }
     }
-    // Dropdown closed: the ordinary composer behaviour, Enter sends.
+    // Dropdown closed: the arrows may recall (chat rewind T6)...
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && recall(e)) return
+    // ...and the ordinary composer behaviour, Enter sends.
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()

@@ -1,0 +1,81 @@
+{
+  "type": "facts",
+  "net": {
+    "ifaces": [
+      {
+        "name": "Ethernet",
+        "mac": "02:00:00:00:00:01",
+        "ipv4_cidr": [
+          "192.0.2.10/24"
+        ],
+        "up": true
+      },
+      {
+        "name": "Wi-Fi",
+        "mac": "02:00:00:00:00:02",
+        "ipv4_cidr": [],
+        "up": false
+      }
+    ]
+  },
+  "folders": {
+    "documents": "C:\\Users\\fixture\\Documents",
+    "downloads": "C:\\Users\\fixture\\Downloads",
+    "home": "C:\\Users\\fixture"
+  },
+  "unreadable": [
+    {
+      "item": "machine_uid",
+      "reason": "the machine id could not be read: fixture"
+    },
+    {
+      "item": "folders.desktop",
+      "reason": "this machine names no desktop folder"
+    },
+    {
+      "item": "elevation",
+      "reason": "reading whether this account is in Administrators: fixture"
+    },
+    {
+      "item": "wsl_distros.Ubuntu-Fixture",
+      "reason": "the look printed no answer"
+    }
+  ],
+  "service": {
+    "name": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Nova agent",
+    "binary": "C:\\Users\\fixture\\AppData\\Local\\Programs\\Nova\\novad.exe",
+    "config": "C:\\Users\\fixture\\AppData\\Roaming\\novad\\config.json",
+    "process": "novad.exe",
+    "pid": 4321,
+    "supervisor_pid": 4300,
+    "user": "FIXTURE-PC\\fixture"
+  },
+  "elevation": {
+    "elevated": false,
+    "sudo": "unknown",
+    "sudo_said": "the sudo setting could not be read: fixture"
+  },
+  "wsl_distros": {
+    "distros": [
+      {
+        "name": "Ubuntu-Fixture",
+        "default": true,
+        "version": 2,
+        "running": true,
+        "looked": false,
+        "root": false,
+        "novad_pids": null
+      },
+      {
+        "name": "Stopped-Fixture",
+        "default": false,
+        "version": 2,
+        "running": false,
+        "looked": false,
+        "root": false,
+        "novad_pids": []
+      }
+    ]
+  },
+  "probed_at": "2026-10-06T12:00:00Z"
+}

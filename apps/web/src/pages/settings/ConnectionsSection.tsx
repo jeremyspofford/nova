@@ -180,7 +180,7 @@ function ServerRow({
   }
 
   return (
-    <div className="rounded-md border border-line p-3" data-testid={`connection-${server.name}`}>
+    <div className="rounded-md border border-border p-3" data-testid={`connection-${server.name}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-content-primary">{server.name}</span>
         {server.title && server.title.toLowerCase() !== server.name && (
@@ -314,7 +314,7 @@ function AddServerForm({
     // smaller number than the "and N more" line below it.
     const count = added.rejected.length + (added.rejected_more ?? 0)
     return (
-      <div className="space-y-3 rounded-md border border-line p-3" data-testid="connection-form">
+      <div className="space-y-3 rounded-md border border-border p-3" data-testid="connection-form">
         <p className="text-compact text-content-primary">
           Connected {added.server.name}.
           {added.rejected.length > 0 && ` ${count} ${count === 1 ? 'tool' : 'tools'} could not be used:`}
@@ -355,7 +355,7 @@ function AddServerForm({
   return (
     <form
       onSubmit={event => void submit(event)}
-      className="space-y-3 rounded-md border border-line p-3"
+      className="space-y-3 rounded-md border border-border p-3"
       data-testid="connection-form"
     >
       <Select

@@ -137,10 +137,22 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # note and never remove one: asked to forget something, the only way was
     # a person editing her files by hand.
     #
+    # Deliberate snapshot update (slice 42b, 2026-09-28): machine_update
+    # (tools/machines.py), so FIFTY -> FIFTY-ONE, renumbered each time main
+    # came into slice/s42b (Task 32). Main's set is FIFTY: the base's
+    # FORTY-THREE, set_chat_model (2026-10-05), notice_seen_all and
+    # memory_forget (above) and S37a's four MCP tools (below). Main's
+    # paragraphs for those each count from FORTY-THREE or FORTY-FOUR because
+    # they were written on parallel branches; the set itself is the count.
+    # Nova keeps her agents on the hub's build, and the owner's "update it
+    # now". It sends; only the agent's reconnect confirms (P8), and nothing
+    # waits on the owner, which is why test_no_approvals stays green beside
+    # this.
     # Deliberate snapshot update (S38, 2026-10): her browser's five tools
     # joined (tools/browser.py — browser_open, browser_read, browser_act,
-    # browser_back, browser_screenshot), so this set moved by five: FIFTY
-    # (main's set at the merge, S37a's four MCP tools included) -> FIFTY-FIVE.
+    # browser_back, browser_screenshot), so this set moved by five: FIFTY-ONE
+    # (main's set at the 2026-10-07 merge, machine_update included) ->
+    # FIFTY-SIX.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -233,9 +245,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "mcp_disconnect",
         "mcp_tools",
         "mcp_call",
+        # S42b (2026-09-28): "update it now" — sent until the agent's
+        # reconnect confirms it (P8). FIFTY -> FIFTY-ONE, on top of main's
+        # notice_seen_all, memory_forget and the four MCP tools above.
+        "machine_update",
         # S38 (2026-10): her own browser (tools/browser.py), over the pinned
-        # Playwright MCP engine through app/browser/engine.py. FORTY-SEVEN ->
-        # FIFTY-TWO.
+        # Playwright MCP engine through app/browser/engine.py. FIFTY-ONE ->
+        # FIFTY-SIX, on top of main's machine_update above.
         "browser_open",
         "browser_read",
         "browser_act",
@@ -669,6 +685,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "delegate_to_agent",
         "machine_configure",
         "show_setup_qr",
+        # S42b: it sends a build and restarts an agent.
+        "machine_update",
         "mcp_connect",
         "mcp_disconnect",
         "mcp_call",

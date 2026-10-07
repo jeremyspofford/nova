@@ -11,13 +11,15 @@ import {
   Cpu,
   Loader2,
   Radar,
+  RotateCcw,
   Square,
   Unplug,
+  X,
 } from 'lucide-react'
 import { Badge, ProgressBar } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
 import { SetupPanel } from '../../components/SetupPanel'
-import type { Attachment, Delegation } from '../../lib/api'
+import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
 import { isSetupKind } from '../../lib/setupSteps'
 import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
@@ -367,21 +369,190 @@ function ThreadStub({ replies, onOpen }: { replies: number; onOpen: () => void }
   )
 }
 
+/** The two rewinds he can choose (chat rewind), each saying in one line what
+ *  it does. The mode is what core acts on; the words are only for him. */
+const REWIND_OPTIONS: { mode: RewindMode; title: string; detail: string }[] = [
+  {
+    mode: 'chat',
+    title: 'Chat only',
+    detail: 'Removes the messages after this one. What she did stays done.',
+  },
+  {
+    mode: 'executions',
+    title: 'Chat + her actions',
+    detail: 'Also undoes what she did after this one, and lists what could not be undone.',
+  },
+]
+
+/**
+ * The Rewind control under one of his stored messages (chat rewind, T7): a
+ * real button — thumb-sized on a phone like ThreadStub, never hover-only —
+ * that opens an inline choice of the two modes. Choosing one IS the
+ * instruction: there is no second "are you sure" (v4 makes no approval
+ * gates). Disabled while a turn runs, because core would refuse with a 409.
+ */
+function RewindControl({
+  onChoose,
+  disabled,
+}: {
+  onChoose: (mode: RewindMode) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const isOpen = open && !disabled
+  return (
+    <div className="flex flex-col items-end">
+      <button
+        type="button"
+        aria-label="Rewind to this message"
+        aria-expanded={isOpen}
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        className="mt-1.5 inline-flex items-center gap-1.5 rounded-md px-2 py-2.5 min-h-11 md:min-h-0 md:px-1.5 md:py-1 text-caption text-content-tertiary hover:text-accent hover:bg-accent-dim transition-colors duration-fast disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-content-tertiary disabled:hover:bg-transparent"
+      >
+        <RotateCcw size={12} className="shrink-0" />
+        Rewind
+      </button>
+      {isOpen && (
+        <div
+          role="group"
+          aria-label="Choose what to roll back"
+          className="mt-1 w-full max-w-sm rounded-lg border border-border bg-surface-elevated p-1.5 flex flex-col gap-1"
+        >
+          {REWIND_OPTIONS.map(option => (
+            <button
+              key={option.mode}
+              type="button"
+              data-testid={`rewind-option-${option.mode}`}
+              onClick={() => {
+                setOpen(false)
+                onChoose(option.mode)
+              }}
+              className="text-left rounded-md px-3 py-2.5 min-h-11 hover:bg-accent-dim transition-colors duration-fast"
+            >
+              <span className="block text-compact font-medium text-content-primary">{option.title}</span>
+              <span className="block text-caption text-content-secondary">{option.detail}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            data-testid="rewind-dismiss"
+            onClick={() => setOpen(false)}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 min-h-11 md:min-h-0 text-caption text-content-tertiary hover:text-content-primary transition-colors duration-fast"
+          >
+            <X size={12} className="shrink-0" />
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One rewind's facts, as core stated them: what was undone (tool + line) and
+ *  what was not (tool, or "unknown" when core could not name one, + reason).
+ *  Shared by the marker divider and ChatPage's result panel. */
+export function RewindFacts({
+  undone,
+  notUndone,
+}: {
+  undone: StoredRewind['undone']
+  notUndone: StoredRewind['not_undone']
+}) {
+  if (undone.length === 0 && notUndone.length === 0) {
+    return <p className="text-caption text-content-secondary">Nothing to undo: no action of hers was recorded after that message.</p>
+  }
+  return (
+    <>
+      {undone.length > 0 && (
+        <div data-testid="rewind-undone">
+          <p className="text-caption font-medium text-content-secondary">Undone</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {undone.map(entry => (
+              <li key={entry.action_id} className="text-caption text-content-secondary break-words">
+                <Check size={11} className="inline mr-1 text-success" aria-hidden="true" />
+                <span className="font-mono text-content-primary">{entry.tool}</span> {entry.line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {notUndone.length > 0 && (
+        <div data-testid="rewind-not-undone">
+          <p className="text-caption font-medium text-content-secondary">Not undone</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {notUndone.map((entry, i) => (
+              <li key={entry.action_id ?? entry.turn_id ?? i} className="text-caption text-content-secondary break-words">
+                <AlertTriangle size={11} className="inline mr-1 text-warning" aria-hidden="true" />
+                <span className="font-mono text-content-primary">{entry.tool ?? 'unknown'}</span> {entry.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  )
+}
+
+/** How many messages a rewind withdrew, in words. */
+export function withdrawnLine(withdrawn: number): string {
+  return `${withdrawn} later ${withdrawn === 1 ? 'message' : 'messages'} removed`
+}
+
+/**
+ * A rewind marker (chat rewind): the row core wrote when he rewound, drawn as
+ * a full-width divider rather than as his bubble. Every fact comes from the
+ * stored rewinds row (row.rewind), never parsed out of the content text —
+ * that text is for her history window.
+ */
+function RewindMarker({ rewind }: { rewind: StoredRewind }) {
+  return (
+    <div data-testid="rewind-marker" className="w-full py-1">
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-border" />
+        <span className="inline-flex items-center gap-1.5 text-caption text-content-tertiary">
+          <RotateCcw size={12} className="shrink-0" aria-hidden="true" />
+          {rewind.mode === 'executions' ? 'Rolled back: chat + her actions' : 'Rolled back: chat only'}
+          {' · '}
+          {withdrawnLine(rewind.withdrawn)}
+        </span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+      {rewind.mode === 'executions' && (
+        <div className="mt-1.5 mx-auto max-w-xl space-y-1">
+          <RewindFacts undone={rewind.undone} notUndone={rewind.not_undone} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const MessageBubble = memo(function MessageBubble({
   row,
   replies,
   onOpenThread,
+  onRewind,
+  rewindDisabled = false,
 }: {
   row: MessageRow
   /** How many messages the room off this message holds. undefined means it
    *  offers no room — counted by the server, never stored. */
   replies?: number
   onOpenThread?: (messageId: string) => void
+  /** Chat rewind (T7): rewind the conversation to this row in the chosen
+   *  mode. undefined means this row offers no Rewind control. */
+  onRewind?: (messageId: string, mode: RewindMode) => void
+  /** Chat rewind (T7): true while a turn runs (core would answer 409). */
+  rewindDisabled?: boolean
 }) {
   const stub =
     replies !== undefined && onOpenThread ? (
       <ThreadStub replies={replies} onOpen={() => onOpenThread(row.id)} />
     ) : null
+
+  if (row.role === 'user' && row.rewind) {
+    return <RewindMarker rewind={row.rewind} />
+  }
 
   if (row.role === 'user') {
     return (
@@ -396,7 +567,14 @@ export const MessageBubble = memo(function MessageBubble({
               look at this" was the whole message. An empty bubble above a
               picture is a thing he did not send. */}
           <Attached files={row.attachments ?? []} />
-          {stub && <div className="flex justify-end">{stub}</div>}
+          {(stub || onRewind) && (
+            <div className="flex justify-end items-start gap-1">
+              {stub}
+              {onRewind && (
+                <RewindControl disabled={rewindDisabled} onChoose={mode => onRewind(row.id, mode)} />
+              )}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -473,6 +651,11 @@ export const MessageBubble = memo(function MessageBubble({
                     address={card.address}
                     code={card.code ?? null}
                     expiresAt={card.expires_at ?? null}
+                    commands={card.commands}
+                    walks={card.walks}
+                    notes={card.notes}
+                    forOs={card.for_os}
+                    machine={card.machine}
                   />
                 </div>
               ) : (

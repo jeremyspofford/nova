@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
 
 from app import db, identity, queued, traces
 from app.identity import Person
@@ -21,6 +24,17 @@ def as_json(row: asyncpg.Record) -> dict:
         "title": row["title"],
         "created_at": row["created_at"].isoformat(),
     }
+
+
+# Chat rewind (T10): conversations whose rewind is between its withdrawal
+# commit and its marker write. Added inside the locked transaction that
+# withdraws (so a send waiting on the conversation's lock reads it the moment
+# that commits), discarded in rewinds.rewind's finally once the marker has
+# landed or the rewind has failed. Both gates below read it, so a send or a
+# drain in that window QUEUES instead of opening a turn that would read a
+# history with the later rows gone and no marker saying why. Process-local
+# for exactly INFLIGHT's reason: one core process.
+REWINDING: set[uuid.UUID] = set()
 
 
 async def conversation_busy(
@@ -44,6 +58,8 @@ async def conversation_busy(
     turn it runs — chat, scheduled, beat, eval, agent — which makes this derived
     from the live work rather than from a set someone remembered to join.
     """
+    if conversation_id in REWINDING:
+        return True
     rows = await pool.fetch(
         "SELECT id FROM turns WHERE conversation_id = $1 AND status IS NULL", conversation_id
     )
@@ -73,6 +89,12 @@ async def person_busy(
     maps, so every kind of turn counts — chat, scheduled, beat, agent — and
     nothing has to remember to join a set.
     """
+    if REWINDING and await pool.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM conversations WHERE person_id = $1 AND id = ANY($2::uuid[]))",
+        person_id,
+        list(REWINDING),
+    ):
+        return True
     rows = await pool.fetch(
         "SELECT t.id FROM turns t "
         "JOIN conversations c ON c.id = t.conversation_id "
@@ -309,8 +331,17 @@ def _card_json(facts: object) -> dict | None:
 
     Built from the span's FACTS, which never carry a pairing code: a machine
     card comes back as "shown once", with its link and expiry and no code.
-    A span with no readable fact redraws nothing rather than a guessed card."""
-    fact = facts[0] if isinstance(facts, list) and facts and isinstance(facts[0], dict) else None
+    A span with no readable fact redraws nothing rather than a guessed card.
+
+    S42b: read from the first fact that names a setup; a machine card also
+    redraws which machine it re-paired, the OS it opened on and that OS's
+    walk, each when its fact states one. Only these keys are ever copied —
+    never a code, and never the commands, which carry it."""
+    fact = (
+        next((f for f in facts if isinstance(f, dict) and "setup" in f), None)
+        if isinstance(facts, list)
+        else None
+    )
     if fact is None:
         return None
     setup, address, url = fact.get("setup"), fact.get("address"), fact.get("url")
@@ -325,7 +356,32 @@ def _card_json(facts: object) -> dict | None:
     }
     if isinstance(fact.get("expires_at"), str):
         card["expires_at"] = fact["expires_at"]
+    for key in ("machine", "for_os", "walk"):
+        if isinstance(fact.get(key), str) and fact[key]:
+            card[key] = fact[key]
     return card
+
+
+def _rewind_json(row: asyncpg.Record) -> dict | None:
+    if row["rewind_id"] is None:
+        return None
+    return {
+        "id": str(row["rewind_id"]),
+        "mode": row["rewind_mode"],
+        "target_message_id": _or_none(row["rewind_target"]),
+        "withdrawn": row["rewind_withdrawn"],
+        "undone": _stored_list(row["rewind_undone"]),
+        "not_undone": _stored_list(row["rewind_not_undone"]),
+    }
+
+
+def _stored_list(value: object) -> list:
+    # rewinds.py writes these as json.dumps(...)::jsonb through a pool whose
+    # jsonb codec json.dumps again, so the stored value is a jsonb STRING
+    # holding the list; decode that layer rather than hand the page a string.
+    if isinstance(value, str):
+        value = json.loads(value)
+    return value if isinstance(value, list) else []
 
 
 async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[dict]:
@@ -397,10 +453,18 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
         # just its facts — _card_json turns each into the card a reload redraws.
         "  (SELECT COALESCE(jsonb_agg(s.meta->'facts' ORDER BY s.started_at, s.id), '[]'::jsonb) "
         "    FROM turn_spans s WHERE s.turn_id = m.turn_id AND s.kind = 'tool' AND s.name = $3 "
-        "    AND s.meta->>'ok' = 'true') AS card_spans "
+        "    AND s.meta->>'ok' = 'true') AS card_spans, "
+        # Chat rewind: the marker's stated rewind, read from the stored rewinds
+        # row (never re-derived from the marker's text); `withdrawn` counts the
+        # rows that rewind flagged.
+        "  r.id AS rewind_id, r.mode AS rewind_mode, "
+        "  r.target_message_id AS rewind_target, r.undone AS rewind_undone, "
+        "  r.not_undone AS rewind_not_undone, "
+        "  (SELECT count(*) FROM messages w WHERE w.withdrawn_by = r.id) AS rewind_withdrawn "
         "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
         "LEFT JOIN agents a ON a.id = t.agent_id "
-        "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
+        "LEFT JOIN rewinds r ON r.id = m.rewind_id "
+        "WHERE m.conversation_id = $1 AND m.withdrawn_by IS NULL ORDER BY m.created_at, m.id",
         conversation_id,
         agents.DELEGATE_TOOL,
         setup_tools.SHOW_SETUP_QR.name,
@@ -437,6 +501,9 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
             # for every row that carried nothing — a client should not have
             # to tell "no files" apart from "this server does not say".
             "attachments": [attachments.as_json(file) for file in carried.get(row["id"], [])],
+            # Chat rewind: null for every ordinary row; for a marker, the
+            # rewind it records.
+            "rewind": _rewind_json(row),
         }
         for row in rows
     ]
@@ -582,7 +649,10 @@ async def thread_reply_counts(
         "  FROM messages m "
         "  LEFT JOIN conversations room ON room.parent_message_id = m.id "
         "  LEFT JOIN messages child ON child.conversation_id = room.id "
-        " WHERE m.conversation_id = $1 "
+        "        AND child.withdrawn_by IS NULL "
+        # Chat rewind: a withdrawn row offers no stub, and a room counts only
+        # the rows still in it.
+        " WHERE m.conversation_id = $1 AND m.withdrawn_by IS NULL "
         "   AND (room.id IS NOT NULL "
         "        OR EXISTS (SELECT 1 FROM notices n WHERE n.delivered_message_id = m.id)) "
         " GROUP BY m.id",
@@ -610,4 +680,44 @@ async def open_thread_route(
         **as_json(row),
         "parent_message_id": str(row["parent_message_id"]),
         "created": created,
+    }
+
+
+class RewindBody(BaseModel):
+    message_id: uuid.UUID
+    # Not an enum here on purpose: rewinds.rewind states the refusal for an
+    # unknown mode, so a bad mode is a 400 with its reason, not a 422.
+    mode: str
+
+
+@router.post("/{conversation_id}/rewind")
+async def rewind_route(
+    conversation_id: uuid.UUID,
+    body: RewindBody,
+    request: Request,
+    person: Person = Depends(identity.require_person),
+) -> dict:
+    """Rewind this conversation to one of his messages (chat-rewind epic).
+
+    The door to rewinds.rewind and nothing more: ownership here, every other
+    decision (target, mode, busy) and the stated refusal there. Busy is a
+    409; any other refusal a 400 carrying its own reason.
+    """
+    # Function-local: app.rewinds imports this module at top level.
+    from app import rewinds
+
+    pool = await db.get_pool()
+    await owned_conversation(pool, person, conversation_id)
+    try:
+        result = await rewinds.rewind(
+            pool, request.app, person, conversation_id, body.message_id, body.mode
+        )
+    except rewinds.RewindBusy as exc:
+        raise HTTPException(status_code=409, detail=exc.reason) from exc
+    except rewinds.RewindRefused as exc:
+        raise HTTPException(status_code=400, detail=exc.reason) from exc
+    return {
+        **jsonable_encoder(result),
+        "rewind_id": str(result["rewind_id"]),
+        "marker_message_id": str(result["marker_message_id"]),
     }

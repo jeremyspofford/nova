@@ -138,6 +138,23 @@ MUST_FIRE = [
         "device_run",
     ),
     ("cannot_control_macs", "I cannot control Macs.", "device_run"),
+    # S42b: updating her agents is machine_update's.
+    ("cant_update_the_agents", "I can't update the agents on your machines.", "machine_update"),
+    ("unable_to_upgrade_novad", "I'm unable to upgrade novad.", "machine_update"),
+    ("cant_update_your_agents", "I can't update your agents.", "machine_update"),
+    (
+        "no_ability_to_update_agents",
+        "I don't have the ability to update agents.",
+        "machine_update",
+    ),
+    ("not_able_to_update_any_agent", "I'm not able to update any agent.", "machine_update"),
+    ("cant_update_agents_for_you", "I can't update agents for you.", "machine_update"),
+    ("cant_upgrade_novad_yet", "I can't upgrade novad yet.", "machine_update"),
+    (
+        "updating_agents_trailing_denial",
+        "Updating agents isn't something I can do.",
+        "machine_update",
+    ),
 ]
 
 
@@ -282,6 +299,53 @@ MUST_NOT_FIRE = [
     ),
     ("no_windows_pc_as_a_model_server_yet", "I can't use a Windows PC as a model server yet."),
     ("no_macs_for_local_models_yet", "I can't use Macs for local models yet."),
+    # S42b: one agent's present state, and a stated reason — honest reports, not the ability.
+    (
+        "update_offline_right_now",
+        "I can't update the agent on the laptop right now — it's offline.",
+    ),
+    (
+        "update_hand_started_because",
+        "I can't update eval_laptop's agent because it was started by hand.",
+    ),
+    # S42b (Task 23): machine_update's own cannots, relayed — about one agent, a
+    # kind of agent, a place or a moment. The correction is REPLACE-class, so
+    # each of these corrected would drop a true reply for "I can do that".
+    (
+        "update_the_agent_hand_started_dash",
+        "I can't update the agent on eval_laptop — it was started by hand, so nothing "
+        "would start a new build.",
+    ),
+    ("update_the_agent_singular", "I can't update the agent."),
+    ("update_its_agent_offline", "I can't update its agent: it is offline."),
+    ("update_agents_started_by_hand", "I can't update agents that were started by hand."),
+    (
+        "update_agents_on_named_machines",
+        "I can't update the agents on minipc and eval_laptop: both are offline.",
+    ),
+    # A machine's own name is never the general place, even where the denial
+    # ends there: minipc's agent may be the one that cannot take the build.
+    ("update_agents_on_one_named_machine", "I can't update the agents on minipc."),
+    (
+        "update_agents_while_in_flight",
+        "I can't update your agents while another update is in flight.",
+    ),
+    (
+        "update_agents_yet_no_build",
+        "I can't update your agents yet: the hub has no agent build to send.",
+    ),
+    ("update_agents_on_32_bit_machines", "I can't update agents on 32-bit machines."),
+    (
+        "update_novad_on_one_machine",
+        "I can't update novad on eval_laptop: it predates Nova-managed updates.",
+    ),
+    ("update_agents_in_a_replay", "I can't update agents during an eval replay."),
+    ("update_the_hubs_agent", "I can't update the hub's agent — 'hub' names the bundled engine."),
+    ("update_agents_on_other_machines", "I can't update agents on other machines."),
+    (
+        "update_agents_to_another_build",
+        "I can't update your agents to a build the hub does not have.",
+    ),
 ]
 
 
@@ -629,6 +693,18 @@ def test_a_machine_denial_is_false_only_while_machine_status_is_registered():
     assert fired is not None and tgt(fired) == ["machine_status"]
     without = [name for name in ALL_TOOLS if name != "machine_status"]
     assert guards.capability_claim_check(denial, without) is None
+
+
+def test_an_update_denial_is_false_only_while_machine_update_is_registered():
+    """S42b: derived from the live tool set, like every row — the day
+    machine_update leaves the registry, "I can't update your agents" is true
+    again and the row is silent by itself."""
+    reply = "I can't update your agents."
+    fired = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert fired is not None and tgt(fired) == ["machine_update"]
+    without = [t for t in ALL_TOOLS if t != "machine_update"]
+    assert guards.capability_claim_check(reply, without) is None
+    assert guards.capability_claim_check(fired.text, ALL_TOOLS) is None
 
 
 # -- her MCP client (S37a) ---------------------------------------------------

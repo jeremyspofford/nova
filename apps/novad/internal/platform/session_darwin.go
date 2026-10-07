@@ -19,8 +19,8 @@ func Interactive() bool {
 	return ok && int(st.Uid) == os.Getuid()
 }
 
-// Mode is launch-agent when launchd (pid 1) started this process.
-func Mode() string {
+// osMode is launch-agent when launchd (pid 1) started this process.
+func osMode() string {
 	if os.Getppid() == 1 {
 		return "launch-agent"
 	}

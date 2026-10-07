@@ -389,18 +389,49 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     merging main (2026-10-06) kept #97's rewrite of the same function
     instead, which adds none, so those three are gone.
 
-    S38 (2026-10): +2 module patterns (_CAP_BROWSER_ACT, _CAP_BROWSER_SCREENSHOT),
-    each also reached as a _CAPABILITY_TOOLS pair: old +2, new +4, difference
-    +2. Measured 205 -> 207, 272 -> 276, 67 -> 69 on S38 while X1 stood; after
-    merging S37a's final head (#97 in place of X1) the same +2/+4/+2 on top of
-    203/270/67 gives 205 -> 274, 69 (measured). The two rows sit after the S47
-    rows, at `_CAPABILITY_TOOLS[21][0]` and `[22][0]`, so the device_run and
-    MCP rows named above moved to [23]..[25]; no id the fossil holds moved."""
+    S42b (Task 23, the update guards) moved all three, deliberately — built
+    beside the pair and the linear-filenames fix, and measured again on the
+    merged file each time main came into slice/s42b (Task 32; last in Phase
+    A2, on top of S37a's numbers above):
+       4  new BARE module Patterns, reached by both walks — `_UPDATED_MACHINE`
+          and `_UPDATE_RECAP` (narration's update claim), `_NAME_WORD` (a word
+          of a machine's name) and `_CAP_UPDATE_AGENTS` (the capability row):
+          203 -> 207, 270 -> 274.
+       1  `_CAPABILITY_TOOLS` grew a row — the same `_CAP_UPDATE_AGENTS` under
+          a second id, reached by the live walk only: 274 -> 275, and the
+          difference 67 -> 68. The row sits at [21], before the S42a
+          device_run row (now [22]), so on the merged file S37a's mcp_connect
+          and mcp_call rows are [23] and [24]; this walk names ids by index,
+          so the id that is new is `_CAPABILITY_TOOLS[24][0]`.
+
+    Task 32 Phase B round 2 (the MF4 gap) moved the two totals again,
+    deliberately, and not the difference: 1 new BARE module Pattern, reached
+    by both walks — `_UPDATE_TOOK`, an update's RESULT said as done (her
+    install of the build, the build it runs, the update done): 207 -> 208,
+    275 -> 276. Its cuts (`_TookCuts`) reuse patterns already counted.
+
+    Task 32 Phase B round 3 (CORE's concern 1) moved the two totals again,
+    deliberately, and not the difference: 1 new BARE module Pattern, reached
+    by both walks — `_SENT_BUILD`, the hub's build as a send's object, which
+    makes "I sent the hub's build to minipc" device_completion's install kind
+    rather than a notification: 208 -> 209, 276 -> 277. The recipient a send
+    names first is read by the device anchor already counted.
+
+    S38 (her browser, 2026-10) moved all three, deliberately: 2 new BARE
+    module Patterns, `_CAP_BROWSER_ACT` and `_CAP_BROWSER_SCREENSHOT`, reached
+    by both walks, each also reached as a `_CAPABILITY_TOOLS` row by the live
+    walk only: old +2, new +4, difference +2. Measured on slice/s38-browser on
+    top of S37a's numbers (203/270/67 -> 205/274/69), and again when main came
+    into slice/s38-browser (2026-10-07) on top of S42b's above:
+    209 -> 211, 277 -> 281, 68 -> 70 (measured). The two rows sit after S42b's update row, at
+    `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, so the device_run row is [24]
+    and the mcp_connect and mcp_call rows are [25] and [26]; no id the fossil
+    holds moved."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 205, len(old)
-    assert len(new) == 274, len(new)
-    assert len(new) - len(old) == 69
+    assert len(old) == 211, len(old)
+    assert len(new) == 281, len(new)
+    assert len(new) - len(old) == 70
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -559,6 +590,197 @@ def test_the_sweep_reaches_the_in_use_and_line_patterns():
         "_machine_patterns[1]",
     ):
         assert name in swept, name
+
+
+# S42b (Task 23): the update guards' patterns, on the shapes that ENTER them —
+# "I updated" and a possessive agent before padding, "update the agents" before
+# padding — and on the one shape the restart class needs: a long run of name
+# characters ("a.a.a…"), which an unanchored `\b[\w.-]+'s` re-enters at every
+# word boundary inside it. The brief's first form of the possessive branch was
+# exactly that: 0.28 ms at 200 characters, 14.7 ms at 1,500 and 238 ms at
+# 6,000 (measured), so 1,500 alone could not tell it from a linear one and the
+# third width is here. The run is NOT among the global sweep's inputs: Task 23
+# found _CONTENT_CLAIM and _PASSIVE_CLAIM quadratic on it too (about 90 ms at
+# 1,500), and main's linear-filenames fix (#96) made them linear, with its own
+# runs (FILENAME_RUNS, below). Since that fix, the guards below read the run as
+# well.
+UPDATE_PATTERNS = (
+    "_UPDATED_MACHINE",
+    "_UPDATE_RECAP",
+    "_NAME_WORD",
+    "_CAP_UPDATE_AGENTS",
+    "_UPDATE_TOOK",
+    "_SENT_BUILD",
+)
+
+
+def _update_shapes(n: int) -> dict[str, str]:
+    pad = " " * n
+    return {
+        "update_claim_then_spaces": "I updated" + pad + "x",
+        "update_name_then_spaces": "I updated eval_laptop" + pad + "x",
+        "update_onto_then_spaces": "I upgraded eval_laptop to the" + pad + "x",
+        "possessive_agent_then_spaces": "eval_laptop's agent is" + pad + "x",
+        "dotted_name_run": "a." * (n // 2) + "!",
+        "dashed_name_run": "a-" * (n // 2) + "!",
+        "name_run_then_possessive": "a." * (n // 2) + "'s agent is" + pad + "x",
+        "many_update_claims": "I updated a's agent. " * (n // 21) + "x",
+        "update_agents_then_spaces": "update the agents" + pad + "x",
+        "update_agents_on_then_spaces": "update the agents on your" + pad + "machines x",
+        "many_update_verbs": "update " * (n // 7) + "agents x",
+        # Task 32 (the MF4 gap): the shapes that enter _UPDATE_TOOK — her
+        # install, the build installed, the update done, the build it runs —
+        # each before padding, a name run before each name slot's tail, a long
+        # word after "done" (its "-ing" lookahead), and many claims in a row.
+        "installed_then_spaces": "I installed the new build on" + pad + "x",
+        "installed_object_then_spaces": "I installed the hub's" + pad + "build",
+        "build_installed_then_spaces": "the new build has been" + pad + "installed",
+        "update_done_then_spaces": "the update is" + pad + "complete",
+        "update_on_then_spaces": "the update on" + pad + "x",
+        "update_done_then_word": "the update is done " + "a" * n + "ing",
+        "agent_on_then_spaces": "the agent on" + pad + "x",
+        "name_on_build_then_spaces": "eval_laptop is now on the" + pad + "x",
+        "name_run_then_copula": "a." * (n // 2) + " is now on the hub's" + pad + "x",
+        "name_run_then_update": "a." * (n // 2) + "'s update is" + pad + "x",
+        "many_result_claims": "eval_laptop is on the hub's build. " * (n // 35) + "x",
+        # Task 32 Phase B round 3: the shapes that enter _SENT_BUILD — each of
+        # its openings before padding, its trailing lookahead ("of", "for", a
+        # notice's noun…) after a run, and sends in a row, of the object and to
+        # a recipient written first.
+        "sent_build_then_spaces": "I sent the hub's" + pad + "build",
+        "sent_new_build_then_spaces": "I sent a new" + pad + "build",
+        "sent_agent_build_then_spaces": "I sent an agent" + pad + "build",
+        "sent_update_then_spaces": "I sent the update" + pad + "of",
+        "many_sends": "I sent the hub's build to eval_laptop. " * (n // 39) + "x",
+        "many_recipient_sends": "I sent eval_laptop the update. " * (n // 31) + "x",
+    }
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+@pytest.mark.parametrize("pattern_name", UPDATE_PATTERNS)
+def test_the_update_patterns_walk_the_shapes_that_enter_them_in_milliseconds(pattern_name, width):
+    pattern = getattr(guards, pattern_name)
+    for label, text in _update_shapes(width).items():
+        for method in (pattern.search, pattern.match, pattern.fullmatch):
+            took = _best_of(lambda method=method, text=text: method(text), runs=2)
+            assert took < BUDGET_S, (
+                f"{pattern_name}.{method.__name__}({label}, {width}): {took * 1000:.1f} ms"
+            )
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+def test_the_update_guards_judge_the_shapes_that_enter_them_in_milliseconds(width):
+    """Through the guards themselves: narration (the update claim) and the
+    capability guard (the update row), on every shape — the dotted and dashed
+    name runs too, now that narration enters a filename once per token (#96;
+    before it, narration took 171 ms on 1,500 characters of "a.")."""
+    from app import tools
+
+    available = tools.tool_names()
+    for label, text in _update_shapes(width).items():
+        for check in (
+            lambda text=text: guards.narration_check(text, []),
+            lambda text=text: guards.capability_claim_check("I can't " + text, available),
+        ):
+            took = _best_of(check)
+            assert took < BUDGET_S, f"{label} ({width}): {took * 1000:.1f} ms"
+
+
+# Task 23 fix round 2 (N3): an update claim's machine is read against the LIVE
+# paired names, and the timing test above passes none. Walking every name for
+# every claim took 64-94 ms at 6,000 characters beside 500 names (the
+# re-review's measurement); the names are now indexed once per reply. These
+# shapes enter that path: a name slot holding a word that names nothing (the
+# word lookup), a word of every paired name, a machine named on every claim,
+# and file claims between update claims — beside no spans, and beside
+# machine_status's read of every paired agent's confirmed row (each named
+# claim then looks its machine up among the rows, which are read once too).
+PAIRED_COUNTS = (5, 50, 500)
+
+
+def _paired_names(count: int) -> tuple[str, ...]:
+    return tuple(f"eval-machine-{i}" for i in range(count))
+
+
+def _status_of_agents(count: int):
+    facts = []
+    for name in _paired_names(count):
+        facts.append({"device": name, "connected": True})
+        facts.append(
+            {"machine_update": name, "outcome": "confirmed", "version": "a" * 12, "confirmed": True}
+        )
+    return _span("tool", "machine_status", ok=True, facts=facts)
+
+
+def _paired_shapes(n: int) -> dict[str, str]:
+    return {
+        "word_slot": "I updated workstation's agent. " * (n // 31) + "x",
+        "distinct_word_slots": "".join(f"I updated wkst{i}'s agent. " for i in range(n // 25))
+        + "x",
+        "on_slot": "I updated the agent on workstation. " * (n // 36) + "x",
+        "word_of_every_name": "I updated the agent on eval. " * (n // 29) + "x",
+        "each_names_a_machine": "".join(
+            f"I updated eval-machine-{i}'s agent. " for i in range(n // 36)
+        )
+        + "x",
+        "files_and_updates": "".join(
+            f"I wrote f{i}.md and I updated wkst{i}'s agent. " for i in range(n // 45)
+        )
+        + "x",
+    }
+
+
+@pytest.mark.parametrize("width", [200, 1500, 6000])
+@pytest.mark.parametrize("count", PAIRED_COUNTS)
+def test_an_update_claim_reads_the_paired_names_in_milliseconds(count, width):
+    names = _paired_names(count)
+    for spans_label, spans in (("no spans", []), ("every row", [_status_of_agents(count)])):
+        for label, text in _paired_shapes(width).items():
+            took = _best_of(
+                lambda text=text, spans=spans: guards.narration_check(text, spans, names)
+            )
+            assert took < BUDGET_S, (
+                f"{label} ({width}, {count} names, {spans_label}): {took * 1000:.1f} ms"
+            )
+
+
+# Task 23 fix round 2 (N2): narration reports each unbacked claim once, and its
+# dedupe walked every claim reported before — quadratic in the DISTINCT
+# unbacked claims of any kind (74.7 ms against 28.1 ms for 1,500 file claims at
+# 24,000 characters, the re-review's measurement). A reply of distinct claims
+# is timed against its twin of the same length that repeats ONE claim: the twin
+# never reaches the dedupe, so the ratio is the dedupe's own cost, and a slower
+# runner slows both alike. Measured on the N150: 1.06 with a set, 3.3 with the
+# walk; at 2,400 claims 1.09 against 5.5.
+def _passive_file_claims(count: int, *, distinct: bool) -> str:
+    return ", ".join(f"f{i if distinct else 0:04d}.md was written" for i in range(count)) + "."
+
+
+def test_many_distinct_unbacked_claims_cost_what_one_repeated_claim_does():
+    distinct = _passive_file_claims(1200, distinct=True)
+    repeated = _passive_file_claims(1200, distinct=False)
+    assert len(distinct) == len(repeated)
+    correction = guards.narration_check(distinct, [])
+    assert correction is not None and len(correction.claims) == 1200
+    took = base = float("inf")
+    for _ in range(5):
+        start = time.perf_counter()
+        guards.narration_check(distinct, [])
+        took = min(took, time.perf_counter() - start)
+        start = time.perf_counter()
+        guards.narration_check(repeated, [])
+        base = min(base, time.perf_counter() - start)
+    assert took < 2 * base, f"{took * 1000:.1f} ms against {base * 1000:.1f} ms"
+
+
+def test_the_global_sweep_reaches_the_update_patterns():
+    """They are module constants, so the derived sweep times them on every
+    padding input too — and the capability row under its table id as well."""
+    swept = _every_pattern()
+    for name in UPDATE_PATTERNS:
+        assert name in swept, name
+    assert any(p is guards._CAP_UPDATE_AGENTS for p in swept.values())
+    assert sum(p is guards._CAP_UPDATE_AGENTS for p in swept.values()) == 2
 
 
 def test_the_sweep_walks_the_said_not_done_legs():
@@ -855,6 +1077,13 @@ _ONE_SEARCH_IN_THIRTY = [
     *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
 ]
 _THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range(30)]
+# (Task 32 Phase B round 3) An update of the Dell among thirty recorded spans,
+# and the only call that performs an install: every send of the hub's build on
+# the Dell is read as far as its object, then silenced by it.
+_AN_UPDATE_IN_THIRTY = [
+    *(_recorded("device_info", {"device": "DELL-XPS-8950"}) for _ in range(29)),
+    _recorded("machine_update", {"machine": "DELL-XPS-8950"}),
+]
 
 
 @pytest.mark.parametrize(
@@ -915,6 +1144,35 @@ _THIRTY_SEARCHES = [_recorded("web_search", {"query": "x" * 200}) for _ in range
             "distinct unanchored pronouns beside thirty searches",
             _distinct("I launched it. Item {i}. "),
             _THIRTY_SEARCHES,
+        ),
+        # Task 32 Phase B round 3: a send's object read for its kind — after
+        # the verb, after a recipient written first, as the subject of "was
+        # sent", naming no machine beside another tool's work, and a
+        # notification ABOUT the update, whose recipient scan finds none.
+        (
+            "distinct backed sends of the hub's build",
+            _distinct("I sent the hub's build {i} to your DELL-XPS-8950. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct backed sends to a recipient",
+            _distinct("I sent DELL-XPS-8950 the update, part {i}. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct backed subjects sent",
+            _distinct("Item {i}: the hub's build was sent to your DELL-XPS-8950. "),
+            _AN_UPDATE_IN_THIRTY,
+        ),
+        (
+            "distinct sends naming no machine beside one search",
+            _distinct("I sent the update {i}. "),
+            _ONE_SEARCH,
+        ),
+        (
+            "distinct notifications about the update",
+            _distinct("I sent a note about the update {i} to your DELL-XPS-8950. "),
+            _THIRTY_OK,
         ),
     ],
 )

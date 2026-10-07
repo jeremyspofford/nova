@@ -25,7 +25,8 @@ Fixture JSON (one file per case, under app/evals/cases/):
                   "instructions": "...", "tools": ["workspace_write_file"]}],
       "machines": [{"name": "eval_box", "serving": true}],   # optional; default []
       "devices": [{"name": "eval_pc", "platform": "windows",  # optional; default [] (S42a)
-                   "hostname": "EVAL-PC", "connected": true, "facts": {...}}],
+                   "hostname": "EVAL-PC", "connected": true, "facts": {...},
+                   "update": "sent"}],                  # optional (S42b): machine_update's answer
       "mcp_servers": [{"name": "eval_github",  # optional; default [] (S37a)
                        "title": "GitHub", "tools": [...]}],
       "message": "what's the latest on the pixel camera?",
@@ -60,7 +61,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from app import agents, device_facts
+from app import agents, device_facts, machines
 from app.mcp import client as mcp_client
 from app.mcp import fake as mcp_fake
 from app.mcp import servers as mcp_servers
@@ -419,20 +420,31 @@ class FixtureDevice:
 
     Like FixtureMachine, never built: a device row is the owner's pairing —
     enrolling one would spend a pairing code, write a device.enrolled event and
-    take a name — so the runner overlays this declaration on the plant's agent
-    listing (machines.FixturePlant.agents) for this case alone. machine_status
-    reads it; the device TOOLS do not (a declared device is for her to READ —
-    acting on one gets the ordinary "no paired device named …" refusal, since
-    no key exists to sign for).
+    take a name — so the runner makes the case's declarations the plant's
+    agent listing (machines.FixturePlant.agents) for this case alone — the
+    only agents a replay holds (S42b Task 22, the replay-hermeticity ruling).
+    machine_status and device_list (S42b Task 21) read it, and machine_update
+    answers for it without sending anything; the device tools that act on a
+    machine do not (a declared device is for her to READ — acting on one gets
+    the ordinary "no paired device named …" refusal, since no key exists to
+    sign for).
 
     `facts` go through device_facts.validate_auth at load, so a case can never
-    describe an agent a real one could not."""
+    describe an agent a real one could not.
+
+    `update` (S42b Task 24) is what machine_update answers for this device in
+    the replay — machines.FixturePlant.update_agent, which sends nothing; the
+    plant answers "sent" for a device that declares none. It is one of the
+    plant's own outcomes (machines.FIXTURE_UPDATE_OUTCOMES), refused at LOAD
+    otherwise — never device_facts.UPDATE_OUTCOMES, the agent's own report of
+    an update, which is another set under a similar name."""
 
     name: str
     platform: str
     hostname: str
     connected: bool = True
     facts: dict | None = None
+    update: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name.startswith(FIXTURE_AGENT_PREFIX):
@@ -453,6 +465,11 @@ class FixtureDevice:
                     f"a case device's facts are not what an agent sends — {exc.reason}"
                 ) from exc
             object.__setattr__(self, "facts", clean)
+        if self.update is not None and self.update not in machines.FIXTURE_UPDATE_OUTCOMES:
+            raise CaseError(
+                f"a case device's update must be one of "
+                f"{', '.join(machines.FIXTURE_UPDATE_OUTCOMES)}, got {self.update!r}"
+            )
 
     def as_view(self) -> dict:
         """device_facts.agent_view, fresh on every call, stamped now."""
@@ -476,6 +493,8 @@ class FixtureDevice:
         }
         if self.facts is not None:
             out["facts"] = copy.deepcopy(self.facts)
+        if self.update is not None:
+            out["update"] = self.update
         return out
 
 
@@ -498,12 +517,16 @@ def device_from_dict(raw: object) -> FixtureDevice:
     facts = raw.get("facts")
     if facts is not None and not isinstance(facts, dict):
         raise CaseError(f"a case device's facts must be an object, got {facts!r}")
+    update = raw.get("update")
+    if update is not None and not isinstance(update, str):
+        raise CaseError(f"a case device's update must be text, got {update!r}")
     return FixtureDevice(
         name=_require(raw, "name", str),
         platform=_require(raw, "platform", str),
         hostname=_require(raw, "hostname", str),
         connected=connected,
         facts=facts,
+        update=update,
     )
 
 
