@@ -9,3 +9,9 @@ export const NATIVE_APP_LINKS: { ios: string | null; android: string | null } = 
   ios: null,
   android: null,
 }
+
+/** Whether either store lists a Nova app — read from the links above, so the
+ *  Devices tile's "Coming soon" badge goes away by itself the day one does. */
+export function hasNativeApp(links: { ios: string | null; android: string | null } = NATIVE_APP_LINKS): boolean {
+  return Boolean(links.ios || links.android)
+}

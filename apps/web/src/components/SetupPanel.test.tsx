@@ -24,6 +24,14 @@ describe('SetupPanel', () => {
     expect(screen.getByText(/signed in to the same tailnet/)).toBeTruthy()
   })
 
+  it('the PWA setup says a PWA cannot manage the phone it runs on; the app setup does not', () => {
+    const { unmount } = render(<SetupPanel setup="install_pwa" address={ADDRESS} />)
+    expect(screen.getByTestId('setup-pwa-limit').textContent).toContain('cannot manage the phone it runs on')
+    unmount()
+    render(<SetupPanel setup="get_app" address={ADDRESS} />)
+    expect(screen.queryByTestId('setup-pwa-limit')).toBeNull()
+  })
+
   it('an add_machine setup uses the derived address for the QR, never this browser’s own origin — the command is whatever core generated (Review Focus 1)', () => {
     render(
       <SetupPanel

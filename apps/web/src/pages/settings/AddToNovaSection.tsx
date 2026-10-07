@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { AppWindow, Laptop, QrCode as QrIcon, Server, Smartphone } from 'lucide-react'
-import { Section } from '../../components/ui'
-import { SETUP_BLURBS, SETUP_KINDS, SETUP_TITLES, type SetupKind } from '../../lib/setupSteps'
+import { Badge, Section } from '../../components/ui'
+import { hasNativeApp, NATIVE_APP_LINKS } from '../../lib/nativeApp'
+import { GET_APP_UNAVAILABLE, SETUP_BLURBS, SETUP_KINDS, SETUP_TITLES, type SetupKind } from '../../lib/setupSteps'
 import { SetupModal, type SetupModalApi } from './SetupModal'
 
 const ICONS: Record<SetupKind, React.ElementType> = {
@@ -12,8 +13,17 @@ const ICONS: Record<SetupKind, React.ElementType> = {
 }
 
 /** Settings → Devices, first (S47): a QR code for each of the four setups. */
-export function AddToNovaSection({ api }: { api?: SetupModalApi }) {
+export function AddToNovaSection({
+  api,
+  links = NATIVE_APP_LINKS,
+}: {
+  api?: SetupModalApi
+  links?: { ios: string | null; android: string | null }
+}) {
   const [open, setOpen] = useState<SetupKind | null>(null)
+  // The app tile is "Coming soon" exactly while neither store lists one —
+  // read from the links, never a flag someone has to remember to flip.
+  const appComing = !hasNativeApp(links)
   return (
     <Section
       icon={QrIcon}
@@ -23,6 +33,7 @@ export function AddToNovaSection({ api }: { api?: SetupModalApi }) {
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {SETUP_KINDS.map(kind => {
           const Icon = ICONS[kind]
+          const coming = kind === 'get_app' && appComing
           return (
             <button
               key={kind}
@@ -33,8 +44,17 @@ export function AddToNovaSection({ api }: { api?: SetupModalApi }) {
             >
               <Icon size={18} className="mt-0.5 shrink-0 text-accent" />
               <span className="min-w-0">
-                <span className="block text-compact font-medium text-content-primary">{SETUP_TITLES[kind]}</span>
-                <span className="block text-caption text-content-secondary">{SETUP_BLURBS[kind]}</span>
+                <span className="flex flex-wrap items-center gap-1.5 text-compact font-medium text-content-primary">
+                  {SETUP_TITLES[kind]}
+                  {coming && (
+                    <Badge size="sm" color="info">
+                      Coming soon
+                    </Badge>
+                  )}
+                </span>
+                <span className="block text-caption text-content-secondary">
+                  {coming ? GET_APP_UNAVAILABLE : SETUP_BLURBS[kind]}
+                </span>
               </span>
             </button>
           )
