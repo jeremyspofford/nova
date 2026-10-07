@@ -35,6 +35,9 @@ export function AboutPage({
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [starting, setStarting] = useState(false)
+  // Why an update did not start is said in the Updates card, next to the
+  // button that was pressed — not at the top of the page, out of sight.
+  const [startError, setStartError] = useState<string | null>(null)
   // While an update runs, core restarts under the page: a read that fails
   // then is the restart, said as such, not an error to alarm anyone with.
   const [restarting, setRestarting] = useState(false)
@@ -73,13 +76,13 @@ export function AboutPage({
   }, [inFlight, getAbout])
 
   const update = useCallback(async () => {
-    setError(null)
+    setStartError(null)
     setStarting(true)
     try {
       const { update: attempt } = await startUpdate()
       setAbout(a => (a ? { ...a, last_update: attempt } : a))
     } catch (err) {
-      setError(reasonOf(err))
+      setStartError(reasonOf(err))
     } finally {
       setStarting(false)
     }
@@ -90,17 +93,6 @@ export function AboutPage({
       <PageHeader
         title="About Nova"
         description="What this instance is, read live: the build it runs, whether there is anything newer, and the machines and apps it is made of."
-        actions={
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={<RefreshCw size={12} className={clsx(checking && 'animate-spin')} />}
-            onClick={() => void load(true)}
-            disabled={checking}
-          >
-            Check for updates
-          </Button>
-        }
       />
 
       {error && (
@@ -112,8 +104,16 @@ export function AboutPage({
       {about && (
         <>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <UpdatesCard
+              about={about}
+              onUpdate={update}
+              onCheck={() => void load(true)}
+              checking={checking}
+              starting={starting}
+              startError={startError}
+              restarting={restarting}
+            />
             <BuildCard about={about} />
-            <UpdatesCard about={about} onUpdate={update} starting={starting} restarting={restarting} />
           </div>
           <Architecture about={about} />
         </>
@@ -175,18 +175,50 @@ function BuildCard({ about }: { about: About }) {
 /** The newest few; the rest are a count and a link to GitHub's own list. */
 const SHOWN_COMMITS = 8
 
-function UpdatesCard({ about, onUpdate, starting, restarting }: {
+function UpdatesCard({ about, onUpdate, onCheck, checking, starting, startError, restarting }: {
   about: About
   onUpdate: () => void
+  onCheck: () => void
+  checking: boolean
   starting: boolean
+  startError: string | null
   restarting: boolean
 }) {
   const u = about.updates
   const headline = updateHeadline(u, about.build.branch)
   const last = about.last_update
   const [confirming, setConfirming] = useState(false)
+  const canStart = canStartUpdate(u, last)
+  // The card's own header carries both actions: checking and updating are
+  // the two things this card is for, so they sit where the eye lands first.
+  const actions = (
+    <div className="flex items-center gap-1.5">
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<RefreshCw size={12} className={clsx(checking && 'animate-spin')} />}
+        onClick={onCheck}
+        disabled={checking}
+        className="whitespace-nowrap"
+        aria-label="Check for updates"
+      >
+        Check<span className="hidden sm:inline">&nbsp;for updates</span>
+      </Button>
+      {canStart && !confirming && (
+        <Button
+          size="sm"
+          icon={<Download size={12} />}
+          onClick={() => setConfirming(true)}
+          disabled={starting}
+          className="whitespace-nowrap"
+        >
+          {starting ? 'Starting…' : 'Update now'}
+        </Button>
+      )}
+    </div>
+  )
   return (
-    <Card header={{ title: 'Updates' }} data-testid="about-updates">
+    <Card header={{ title: 'Updates', action: actions }} data-testid="about-updates">
       <div className="space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <Badge color={headline.color} dot>
@@ -196,6 +228,28 @@ function UpdatesCard({ about, onUpdate, starting, restarting }: {
             checked <When iso={u.checked_at} />
           </span>
         </div>
+        {canStart && confirming && (
+          <div className="space-y-2 rounded-md border border-border-subtle p-3" data-testid="about-update-confirm">
+            <p className="text-compact text-content-secondary">
+              The hub backs up, pulls {u.behind_by} {plural(u.behind_by ?? 0, 'commit')}, rebuilds and restarts
+              Nova. It takes a few minutes and Nova is unreachable while it restarts; a failed rebuild is rolled back.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" icon={<Download size={12} />} onClick={() => { setConfirming(false); onUpdate() }}>
+                Start the update
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+        {startError && (
+          <div role="alert" className="rounded-sm border border-danger/30 bg-danger-dim px-3 py-2 text-compact text-danger">
+            The update did not start: {startError}
+          </div>
+        )}
+        {last && <LastUpdate about={about} restarting={restarting} />}
         {u.reason && <p className="text-compact text-content-secondary">{u.reason}</p>}
         {u.commits.length > 0 && (
           <ul className="space-y-1.5" data-testid="about-new-commits">
@@ -219,28 +273,6 @@ function UpdatesCard({ about, onUpdate, starting, restarting }: {
             See the changes on GitHub <ExternalLink size={11} />
           </a>
         )}
-        {last && <LastUpdate about={about} restarting={restarting} />}
-        {canStartUpdate(u, last) &&
-          (confirming ? (
-            <div className="space-y-2 rounded-md border border-border-subtle p-3" data-testid="about-update-confirm">
-              <p className="text-compact text-content-secondary">
-                The hub backs up, pulls {u.behind_by} {plural(u.behind_by ?? 0, 'commit')}, rebuilds and restarts
-                Nova. It takes a few minutes and Nova is unreachable while it restarts; a failed rebuild is rolled back.
-              </p>
-              <div className="flex gap-2">
-                <Button size="sm" icon={<Download size={12} />} onClick={() => { setConfirming(false); onUpdate() }}>
-                  Start the update
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <Button size="sm" icon={<Download size={12} />} onClick={() => setConfirming(true)} disabled={starting}>
-              {starting ? 'Starting…' : 'Update now'}
-            </Button>
-          ))}
         {u.state === 'diverged' && (
           <p className="text-caption text-content-tertiary">
             An update only fast-forwards; a diverged checkout is merged by hand on the hub.

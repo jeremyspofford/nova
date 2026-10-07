@@ -2503,7 +2503,7 @@ report_update() {
 }
 
 cmd_update() {
-  local from="" to="" branch head_branch reason
+  local from="" to="" branch head_branch reason dirty n named
   while [ $# -gt 0 ]; do
     case "$1" in
       --attempt)
@@ -2529,8 +2529,15 @@ cmd_update() {
   head_branch="$(update_git symbolic-ref --short -q HEAD)" || head_branch=""
   [ "$head_branch" = "$branch" ] \
     || update_refuse "the checkout is on ${head_branch:-a detached HEAD}, not $branch — an update only moves $branch"
-  [ -z "$(update_git status --porcelain --untracked-files=no)" ] \
-    || update_refuse "the checkout has uncommitted changes to tracked files — commit or stash them; an update never overwrites them"
+  # Named, so the page says WHICH files instead of sending someone to the hub
+  # to find out: the first few, then a count.
+  dirty="$(update_git status --porcelain --untracked-files=no | sed 's/^...//')"
+  if [ -n "$dirty" ]; then
+    n="$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')"
+    named="$(printf '%s\n' "$dirty" | head -n 5 | paste -sd ',' - | sed 's/,/, /g')"
+    [ "$n" -le 5 ] || named="$named and $((n - 5)) more"
+    update_refuse "the checkout on the hub has uncommitted changes to tracked files ($named) — commit or stash them on the hub, then update again; an update never overwrites them"
+  fi
   log "update: fetching $branch from origin…"
   update_git fetch --quiet origin "$branch" \
     || update_refuse "git fetch origin $branch failed (above) — nothing was changed"
