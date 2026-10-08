@@ -244,7 +244,7 @@ def _empty_topology() -> dict:
     return {
         "hub": {"address": None, "address_reason": "no tailnet", "agent": None},
         "satellites": [],
-        "model_machines": {"machines": [], "reason": None},
+        "model_machines": {"machines": [], "reason": None, "remotes": [], "remotes_reason": None},
         "services": [],
         "clients": {"clients": [], "unseen": 0, "window_days": 30},
     }
@@ -350,7 +350,12 @@ def test_render_names_what_it_could_not_read():
         **_empty_topology(),
         "build": {**about.build_info(), "commit": None, "reason": about.NOT_STAMPED},
         "updates": about._unknown("no build stamp", now),
-        "model_machines": {"machines": None, "reason": "the gateway is down"},
+        "model_machines": {
+            "machines": None,
+            "reason": "the gateway is down",
+            "remotes": [],
+            "remotes_reason": None,
+        },
     }
     text = about.render(data, now + timedelta(seconds=1))
     assert "unknown: " + about.NOT_STAMPED in text
@@ -413,3 +418,608 @@ async def test_nova_about_records_what_it_read_of_each_agent(
     _text, ok = await tools.dispatch("nova_about", {}, ctx)
     assert ok
     assert {"device": "dell", "connected": False} in sink
+
+
+# -- T3: the remote model machines (the same selection machine_status uses) --
+#
+# The gateway's providers (/admin/providers) and live walls (/admin/routes) are
+# served by the fake gateway's admin echo ({"providers": ..., "walls": ...}),
+# so About reads them through the real GatewayPlant.model_providers; the hub's
+# engines come from /admin/engines. Each part is made to fail on its own.
+
+from app import machines, model_machines, network  # noqa: E402
+
+DELL_URL = "http://100.122.40.93:11435/v1"
+DELL_NAME = "DELL-XPS-8950"
+DELL_FACTS = {
+    "hostname": DELL_NAME,
+    "net": {
+        "ifaces": [
+            {"name": "Tailscale", "mac": "", "ipv4_cidr": ["100.122.40.93/32"], "up": True},
+        ]
+    },
+}
+REMOTE_KEYS = {
+    "name",
+    "host",
+    "state",
+    "reason",
+    "walled_for_s",
+    "answering",
+    "models",
+    "device",
+    "device_said",
+}
+
+
+def _row(name, base_url, listing="unknown", note=None, *, builtin=False) -> dict:
+    return {
+        "name": name,
+        "adapter": "ollama" if builtin else "openai-chat",
+        "base_url": base_url,
+        "builtin": builtin,
+        "listing": listing,
+        "listing_note": note,
+    }
+
+
+def _dell_row(listing="available", note="16 models listed") -> dict:
+    return _row("dell", DELL_URL, listing, note)
+
+
+def _gateway_rows(dell: dict | None = None) -> list[dict]:
+    return [
+        _row("hub", "http://ollama:11434", "available", "3 models listed", builtin=True),
+        dell or _dell_row(),
+        _row("openrouter", "https://openrouter.ai/api/v1", "available", "300 models listed"),
+    ]
+
+
+def _remote_gateway(*, engines=True, providers_fail=False, dell=None, walls=()):
+    gateway = fakes.FakeGateway()
+    gateway.engines = [fakes.engine_view("hub")] if engines else None
+    gateway.admin_body = {"providers": _gateway_rows(dell), "walls": list(walls)}
+    if providers_fail:
+        gateway.admin_status = 500
+        gateway.admin_body = {"error": "providers boom"}
+    return gateway
+
+
+@pytest.fixture
+def no_peers(monkeypatch, tmp_path):
+    """No tailnet status file: tailnet_peers is () with its stated reason."""
+    monkeypatch.setenv(network.STATUS_FILE_ENV, str(tmp_path / "tailscale.json"))
+
+
+async def _pair_dell(pool, facts=DELL_FACTS) -> None:
+    await pool.execute(
+        "INSERT INTO devices (name, platform, hostname, pubkey, facts, facts_at, last_transport) "
+        "VALUES ($1, 'windows', $1, $2, $3, now(), 'tailnet')",
+        DELL_NAME,
+        "d" * 64,
+        facts,
+    )
+
+
+def _dell_entry(mm: dict) -> dict:
+    remotes = mm.get("remotes")
+    assert isinstance(remotes, list), mm
+    found = [r for r in remotes if r.get("name") == "dell"]
+    assert len(found) == 1, mm
+    return found[0]
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "dell",
+    [
+        _dell_row(),
+        _dell_row("unknown", "the last listing was refused (502): ConnectTimeout"),
+        _dell_row("unknown", None),
+    ],
+    ids=["answering", "failing", "unknown"],
+)
+async def test_T3_C1_topology_lists_each_remote_model_machine_with_the_gateways_verdict(
+    pool, mount_peers, no_peers, dell
+):
+    mount_peers(gateway=_remote_gateway(dell=dell), memory=fakes.FakeMemory())
+    top = await about.topology(app)
+    mm = top["model_machines"]
+    assert {"machines", "reason", "remotes", "remotes_reason"} <= set(mm), mm
+    assert mm["remotes_reason"] is None
+    assert [r["name"] for r in mm["remotes"]] == ["dell"]  # not hub (builtin), not the cloud
+    entry = _dell_entry(mm)
+    assert set(entry) == REMOTE_KEYS
+    assert "base_url" not in entry
+    assert entry["host"] == "100.122.40.93"
+    state = model_machines.state_of(dell, [], datetime.now(UTC))
+    assert {k: entry[k] for k in ("state", "reason", "walled_for_s", "answering")} == state
+    # answering is True only when state_of says "answering"; unknown is None (never unverified)
+    assert (entry["answering"] is True) == (state["state"] == "answering")
+    assert entry["models"] == model_machines.listed_models(dell)
+    if state["state"] == "answering":
+        assert entry["models"] == 16
+
+
+@requires_db
+async def test_T3_C1_a_live_wall_is_the_remotes_state_with_its_time_left(
+    pool, mount_peers, no_peers
+):
+    until = datetime.now(UTC) + timedelta(minutes=28, seconds=30)
+    wall = {
+        "provider": "dell",
+        "model": "qwen3:8b",
+        "walled_until": until.isoformat(),
+        "reason": "dell:qwen3:8b refused (502)",
+    }
+    mount_peers(gateway=_remote_gateway(walls=[wall]), memory=fakes.FakeMemory())
+    entry = _dell_entry((await about.topology(app))["model_machines"])
+    assert entry["state"] == "walled"
+    assert entry["answering"] is False
+    assert entry["reason"] == "dell:qwen3:8b refused (502)"
+    assert 28 * 60 <= entry["walled_for_s"] <= 28 * 60 + 30
+
+
+@requires_db
+async def test_T3_C1_no_remote_machine_is_an_empty_list_never_null(pool, mount_peers, no_peers):
+    gateway = _remote_gateway()
+    gateway.admin_body = {"providers": [_gateway_rows()[0], _gateway_rows()[2]], "walls": []}
+    mount_peers(gateway=gateway, memory=fakes.FakeMemory())
+    mm = (await about.topology(app))["model_machines"]
+    assert mm.get("remotes") == [] and "remotes" in mm
+    assert mm["remotes_reason"] is None
+
+
+@requires_db
+async def test_T3_C2_a_paired_row_whose_facts_carry_the_host_is_the_remotes_device(
+    pool, mount_peers, no_peers
+):
+    await _pair_dell(pool)
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    entry = _dell_entry((await about.topology(app))["model_machines"])
+    assert entry["device"] == DELL_NAME
+    assert entry["device_said"] == f"runs on paired device {DELL_NAME} (its agent's addresses)"
+
+
+@requires_db
+async def test_T3_C2_no_matching_row_names_no_device_in_device_ofs_words(
+    pool, mount_peers, no_peers
+):
+    await _pair_dell(pool, facts={"hostname": DELL_NAME})  # reported no addresses
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    entry = _dell_entry((await about.topology(app))["model_machines"])
+    expected = model_machines.device_of(DELL_URL, [], network.tailnet_peers())
+    assert entry["device"] is None
+    assert entry["device_said"] == expected["said"]
+    assert entry["device_said"].startswith("no paired device is known by 100.122.40.93")
+
+
+@requires_db
+async def test_T3_C2_C6_placement_goes_through_place_with_agents_built_from_the_rows(
+    pool, mount_peers, no_peers, monkeypatch
+):
+    """place() gets identity-only agents from topology's own device rows,
+    agents_error None, and the tailnet peers; remotes_of does the selection."""
+    await _pair_dell(pool)
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    placed: list = []
+    selected: list = []
+    real_place, real_remotes_of = model_machines.place, model_machines.remotes_of
+
+    def place_spy(base_url, agents, agents_error, peers):
+        placed.append((base_url, agents, agents_error, peers))
+        return real_place(base_url, agents, agents_error, peers)
+
+    def remotes_spy(providers, walls, now):
+        selected.append((providers, walls, now))
+        return real_remotes_of(providers, walls, now)
+
+    monkeypatch.setattr(model_machines, "place", place_spy)
+    monkeypatch.setattr(model_machines, "remotes_of", remotes_spy)
+    await about.topology(app)
+    assert len(selected) == 1
+    assert [p["name"] for p in selected[0][0]] == ["hub", "dell", "openrouter"]
+    assert len(placed) == 1
+    base_url, agents, agents_error, peers = placed[0]
+    assert base_url == DELL_URL
+    assert agents_error is None
+    assert agents == [
+        {
+            "name": DELL_NAME,
+            "hostname": DELL_NAME,
+            "platform": "windows",
+            "addresses": ("100.122.40.93",),
+        }
+    ]
+    assert isinstance(peers, network.Peers)
+
+
+@requires_db
+async def test_T3_C3_a_failed_providers_read_states_its_reason_and_keeps_the_engines(
+    pool, mount_peers, no_peers
+):
+    mount_peers(gateway=_remote_gateway(providers_fail=True), memory=fakes.FakeMemory())
+    mm = (await about.topology(app))["model_machines"]
+    assert "remotes" in mm and mm["remotes"] is None, mm
+    try:
+        await machines.plant().model_providers(app)
+    except machines.PlantUnavailable as exc:
+        expected = str(exc)
+    else:  # pragma: no cover - the fake must refuse
+        raise AssertionError("the fake gateway did not refuse /admin/providers")
+    assert mm["remotes_reason"] == expected
+    assert [m["name"] for m in mm["machines"]] == ["hub"]
+    assert mm["reason"] is None
+
+
+@requires_db
+async def test_T3_C3_a_failed_engines_read_keeps_the_remotes(pool, mount_peers, no_peers):
+    mount_peers(gateway=_remote_gateway(engines=False), memory=fakes.FakeMemory())
+    mm = (await about.topology(app))["model_machines"]
+    assert mm["machines"] is None and mm["reason"]
+    assert [r["name"] for r in (mm.get("remotes") or [])] == ["dell"], mm
+    assert mm["remotes_reason"] is None
+
+
+@requires_db
+async def test_T3_C4_each_remote_leaves_the_machine_status_fact_on_the_sink(
+    pool, mount_peers, no_peers
+):
+    await _pair_dell(pool)
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    sink: list[dict] = []
+    top = await about.topology(app, sink)
+    remote_facts = [f for f in sink if "machine" in f]
+    assert len(remote_facts) == 1, sink
+    [fact] = remote_facts
+    entry = _dell_entry(top["model_machines"])
+    remote = {"name": "dell", "state": model_machines.state_of(_dell_row(), [], datetime.now(UTC))}
+    assert fact == model_machines.fact_of(remote, DELL_NAME, fact["at"])
+    assert fact["answering"] is entry["answering"] is True
+    assert datetime.fromisoformat(fact["at"]).tzinfo is not None
+    assert {"device": DELL_NAME, "connected": False} in sink  # the existing agent fact stays
+
+
+@requires_db
+async def test_T3_C4_an_empty_sink_with_no_paired_device_still_gets_the_remote_fact(
+    pool, mount_peers, no_peers
+):
+    """No device rows -> nothing else lands on the sink first; an empty list
+    is still a turn's sink (only None is the page), so the fact is recorded."""
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    sink: list[dict] = []
+    await about.topology(app, sink)
+    remote_facts = [f for f in sink if "machine" in f]
+    assert len(remote_facts) == 1, sink
+    assert remote_facts[0]["machine"] == "dell"
+    assert remote_facts[0]["device"] is None
+
+
+@requires_db
+async def test_T3_C4_unread_remotes_leave_no_remote_fact(pool, mount_peers, no_peers):
+    mount_peers(gateway=_remote_gateway(providers_fail=True), memory=fakes.FakeMemory())
+    sink: list[dict] = []
+    top = await about.topology(app, sink)
+    assert "remotes_reason" in top["model_machines"] and top["model_machines"]["remotes_reason"]
+    assert [f for f in sink if "machine" in f] == []
+
+
+@requires_db
+async def test_T3_C4_the_page_passes_no_sink_and_records_nothing(pool, mount_peers, no_peers):
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    top = await about.topology(app, None)
+    assert _dell_entry(top["model_machines"])["name"] == "dell"
+
+
+@requires_db
+async def test_T3_C5_the_about_api_returns_the_remotes(
+    owner_client, mount_peers, no_peers, monkeypatch
+):
+    _stamp(monkeypatch)
+    _github(body=_compare_body("identical", 0, 0))
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    resp = await owner_client.get("/api/v1/about")
+    assert resp.status_code == 200, resp.text
+    mm = resp.json()["model_machines"]
+    assert mm.get("remotes_reason", "missing") is None, mm
+    entry = _dell_entry(mm)
+    assert set(entry) == REMOTE_KEYS
+    assert entry["state"] == "answering" and entry["answering"] is True
+    assert entry["models"] == 16 and entry["host"] == "100.122.40.93"
+    assert [m["name"] for m in mm["machines"]] == ["hub"]
+
+
+# -- T4: about.render prints the remote model machines under MODEL MACHINES --
+
+_SAID = "runs on DELL-XPS-8950 (its agent's addresses)"
+
+
+def _remote(
+    name="dell",
+    state="answering",
+    reason="16 models listed",
+    *,
+    walled_for_s=None,
+    models=16,
+    host="100.122.40.93",
+    device=DELL_NAME,
+    said=_SAID,
+) -> dict:
+    return {
+        "name": name,
+        "host": host,
+        "state": state,
+        "reason": reason,
+        "walled_for_s": walled_for_s,
+        "answering": {"answering": True, "unknown": None}.get(state, False),
+        "models": models,
+        "device": device,
+        "device_said": said,
+    }
+
+
+def _engine(name="hub") -> dict:
+    return {
+        "name": name,
+        "state": "running",
+        "serving": True,
+        "runtime": "ollama",
+        "compute": "gpu",
+        "models": 3,
+        "reason": None,
+    }
+
+
+def _rendered(machines, remotes, *, reason=None, remotes_reason=None) -> list[str]:
+    """The MODEL MACHINES section's lines (header excluded, up to CLIENTS)."""
+    now = datetime.now(UTC)
+    data = {
+        **_empty_topology(),
+        "build": {**about.build_info(), "commit": None, "reason": about.NOT_STAMPED},
+        "updates": about._unknown("no build stamp", now),
+        "model_machines": {
+            "machines": machines,
+            "reason": reason,
+            "remotes": remotes,
+            "remotes_reason": remotes_reason,
+        },
+    }
+    lines = about.render(data, now + timedelta(seconds=1)).split("\n")
+    start = lines.index("MODEL MACHINES (the gateway's last reading)") + 1
+    end = next(i for i, line in enumerate(lines) if line.startswith("CLIENTS"))
+    return lines[start:end]
+
+
+def test_T4_C1_each_remote_prints_one_line_after_the_engines():
+    got = _rendered(
+        [_engine()],
+        [
+            _remote(),
+            _remote(
+                "dell-kev",
+                "failing",
+                "ConnectTimeout",
+                models=None,
+                said="no paired device matches",
+            ),
+        ],
+    )
+    # T8 C7 deliberate update: state; device. Reason: ... (was state — reason — device).
+    assert got[0].startswith("  hub: ")
+    assert got[1:] == [
+        "  dell (remote, 100.122.40.93): answering, 16 models listed; " + _SAID,
+        "  dell-kev (remote, 100.122.40.93): failing; no paired device matches. "
+        "Reason: ConnectTimeout",
+    ]
+
+
+@pytest.mark.parametrize("models", [1, 0, None])
+def test_T4_C1_the_count_prints_only_when_the_listing_gave_one(models):
+    """T8 C7 deliberate update (A3): the count is said once, from the
+    listing note in the reason; no separate ", N model(s)" tail whatever
+    `models` holds."""
+    [line] = _rendered([], [_remote(models=models)])
+    assert line == f"  dell (remote, 100.122.40.93): answering, 16 models listed; {_SAID}"
+    assert "model(s)" not in line
+
+
+def test_T4_C1_a_remote_with_no_host_says_remote_never_none():
+    [line] = _rendered([], [_remote(host=None)])
+    assert line.startswith("  dell (remote): answering")
+    assert "None" not in line
+
+
+@pytest.mark.parametrize(
+    ("remote", "words"),
+    [
+        (_remote("dell", "failing", "ConnectTimeout"), f"failing; {_SAID}. Reason: ConnectTimeout"),
+        (
+            _remote("dell", "walled", "429", walled_for_s=28 * 60 + 59),
+            f"walled for another 28 min; {_SAID}. Reason: 429",
+        ),
+        (
+            _remote("dell", "walled", "429", walled_for_s=30),
+            f"walled for less than a minute more; {_SAID}. Reason: 429",
+        ),
+        (
+            _remote("dell", "walled", "429", walled_for_s=None),
+            f"walled by the gateway; {_SAID}. Reason: 429",
+        ),
+        (
+            _remote("dell", "unknown", "the gateway has no verdict yet"),
+            f"state unknown; {_SAID}. Reason: the gateway has no verdict yet",
+        ),
+    ],
+    ids=["failing", "walled", "walled-under-a-minute", "walled-no-time", "unknown"],
+)
+def test_T4_C2_the_state_words_are_model_machines_and_never_answering_unverified(remote, words):
+    """T8 C7 deliberate update: no ", 16 model(s)" tail; state; device. Reason: ..."""
+    [line] = _rendered([], [remote])
+    assert line == f"  dell (remote, 100.122.40.93): {words}"
+    assert "answering" not in line
+    assert "model(s)" not in line
+
+
+def test_T4_C3_unread_remotes_are_one_stated_line_and_the_engines_still_print():
+    got = _rendered([_engine()], None, remotes_reason="GatewayError: providers boom")
+    assert got[0].startswith("  hub: ")
+    assert got[1:] == ["  remote model machines could not be read: GatewayError: providers boom"]
+
+
+def test_T4_C3_unread_engines_still_print_every_remote():
+    got = _rendered(
+        None,
+        [_remote(), _remote("dell-kev", "failing", "x", models=None)],
+        reason="the gateway is down",
+    )
+    assert got[0] == "  could not be read: the gateway is down"
+    assert [line.split(" (")[0] for line in got[1:]] == ["  dell", "  dell-kev"]
+
+
+def test_T4_C3_both_unread_state_both_reasons():
+    got = _rendered(None, None, reason="engines boom", remotes_reason="providers boom")
+    assert got == [
+        "  could not be read: engines boom",
+        "  remote model machines could not be read: providers boom",
+    ]
+
+
+def test_T4_C4_none_only_when_both_lists_are_read_and_empty():
+    assert _rendered([], []) == ["  none"]
+
+
+def test_T4_C4_no_engines_with_a_remote_is_never_none():
+    got = _rendered([], [_remote()])
+    assert "  none" not in got
+    assert len(got) == 1 and got[0].startswith("  dell (remote, ")
+
+
+def test_T4_C3_C4_no_engines_with_unread_remotes_is_never_none():
+    """An unread remote list is stated, never folded into "none"."""
+    assert _rendered([], None, remotes_reason="providers boom") == [
+        "  remote model machines could not be read: providers boom"
+    ]
+
+
+def test_T4_C2_render_words_each_remote_through_model_machines_state_words(monkeypatch):
+    """T8 C7 deliberate update: the one copy is model_machines.remote_words(entry,
+    device_said) — the whole text after "<name> (remote, <host>): ", so render
+    adds no count and no device words of its own."""
+    seen: list[tuple[str, str]] = []
+
+    def remote_words(entry, device_said):
+        seen.append((entry["name"], device_said))
+        return f"WORDS<{entry['name']}>"
+
+    monkeypatch.setattr(model_machines, "remote_words", remote_words, raising=False)
+    got = _rendered(
+        [], [_remote(), _remote("dell-kev", "failing", "x", models=None, said="kev words")]
+    )
+    assert seen == [("dell", _SAID), ("dell-kev", "kev words")]
+    assert got == [
+        "  dell (remote, 100.122.40.93): WORDS<dell>",
+        "  dell-kev (remote, 100.122.40.93): WORDS<dell-kev>",
+    ]
+
+
+def test_T4_C4_no_remotes_adds_no_line():
+    """Guard: holds before T4 (remotes [] prints nothing)."""
+    got = _rendered([_engine()], [])
+    assert len(got) == 1 and got[0].startswith("  hub: ")
+
+
+def test_T4_C4_unread_engines_and_no_remotes_is_never_none():
+    """Guard: an unread part is stated, never 'none'."""
+    assert _rendered(None, [], reason="down") == ["  could not be read: down"]
+
+
+@requires_db
+async def test_T4_C6_nova_about_carries_the_remote_lines_and_only_t3s_facts(
+    owner_client, pool, mount_peers, no_peers, monkeypatch
+):
+    _stamp(monkeypatch)
+    _github(body=_compare_body("identical", 0, 0))
+    await _pair_dell(pool)
+    mount_peers(gateway=_remote_gateway(), memory=fakes.FakeMemory())
+    sink: list[dict] = []
+    ctx = tools.context_for(app, await identity.owner(pool), facts_sink=sink)
+    text, ok = await tools.dispatch("nova_about", {}, ctx)
+    assert ok, text
+    lines = text.split("\n")
+    found = [x for x in lines if x.startswith("  dell (remote")]
+    assert len(found) == 1, text
+    [line] = found
+    # T8 C7 deliberate update: count once, device clause after "; ".
+    assert line == (
+        "  dell (remote, 100.122.40.93): answering, 16 models listed; "
+        f"runs on paired device {DELL_NAME} (its agent's addresses)"
+    )
+    assert lines.index(line) > lines.index("MODEL MACHINES (the gateway's last reading)")
+    assert lines.index(line) < next(i for i, x in enumerate(lines) if x.startswith("CLIENTS"))
+    remote_facts = [f for f in sink if "machine" in f]
+    assert [(f["machine"], f["device"], f["answering"]) for f in remote_facts] == [
+        ("dell", DELL_NAME, True)
+    ]
+
+
+# -- T8: the remote line reads as state; device. Reason: ... (live-shaped) --
+
+_T8_SAID = f"runs on paired device {DELL_NAME} (its agent's addresses)"
+_T8_KEV_NOTE = (
+    "the last listing was refused (502): could not reach http://100.122.40.93:8009/v1 "
+    "— ConnectTimeout"
+)
+
+
+@pytest.mark.parametrize(
+    ("remote", "line"),
+    [
+        (
+            _remote(said=_T8_SAID),
+            f"  dell (remote, 100.122.40.93): answering, 16 models listed; {_T8_SAID}",
+        ),
+        (
+            _remote("dell-kev", "failing", _T8_KEV_NOTE, models=None, said=_T8_SAID),
+            f"  dell-kev (remote, 100.122.40.93): failing; {_T8_SAID}. Reason: {_T8_KEV_NOTE}",
+        ),
+        (
+            _remote(
+                "dell", "walled", "429 from upstream", walled_for_s=28 * 60 + 59, said=_T8_SAID
+            ),
+            f"  dell (remote, 100.122.40.93): walled for another 28 min; {_T8_SAID}. "
+            "Reason: 429 from upstream",
+        ),
+        (
+            _remote(
+                "dell", "walled", "walled by the gateway", walled_for_s=28 * 60 + 59, said=_T8_SAID
+            ),
+            f"  dell (remote, 100.122.40.93): walled for another 28 min; {_T8_SAID}",
+        ),
+        (
+            _remote("dell", "walled", "walled by the gateway", walled_for_s=None, said=_T8_SAID),
+            f"  dell (remote, 100.122.40.93): walled by the gateway; {_T8_SAID}",
+        ),
+    ],
+    ids=["C2-answering", "C3-failing", "C4-walled-reason", "C5-walled-no-reason", "C5-no-time"],
+)
+def test_T8_C2_C5_about_render_lines_exact(remote, line):
+    [got] = _rendered([], [remote])
+    assert got == line
+    assert got.count("walled") <= 1
+    assert got.count("16 model") <= 1
+    assert "model(s)" not in got
+
+
+def test_T8_C3_the_reasons_own_em_dash_is_the_only_one_and_comes_after_the_device():
+    [got] = _rendered([], [_remote("dell-kev", "failing", _T8_KEV_NOTE, said=_T8_SAID)])
+    assert got.count("—") == 1
+    assert got.index(_T8_SAID) < got.index("Reason: ") < got.index("—")
+
+
+def test_T8_C1_render_and_machine_status_share_one_wording(monkeypatch):
+    """The text after the prefix is model_machines.remote_words(entry, device_said)."""
+    entry = _remote("dell-kev", "failing", _T8_KEV_NOTE, said=_T8_SAID)
+    fn = getattr(model_machines, "remote_words", None)
+    assert callable(fn), "model_machines.remote_words is missing"
+    [got] = _rendered([], [entry])
+    assert got == "  dell-kev (remote, 100.122.40.93): " + fn(entry, _T8_SAID)

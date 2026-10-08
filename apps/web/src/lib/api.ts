@@ -2499,6 +2499,21 @@ export interface AboutModelMachine {
   reason: string | null
 }
 
+/** A remote model machine: a non-builtin gateway provider on a machine
+ *  (app/model_machines.py remotes_of + place). `state` is the gateway's last
+ *  verdict and the one source for the badge; `answering` only mirrors it. */
+export interface AboutRemoteModelMachine {
+  name: string
+  host: string | null
+  state: 'answering' | 'failing' | 'walled' | 'unknown'
+  reason: string
+  walled_for_s: number | null
+  answering: boolean | null
+  models: number | null
+  device: string | null
+  device_said: string
+}
+
 export interface AboutService {
   name: string
   state: 'up' | 'unhealthy' | 'unreachable'
@@ -2538,7 +2553,13 @@ export interface About {
   hub: { address: string | null; address_reason: string | null; agent: AboutAgent | null }
   satellites: AboutAgent[]
   /** `machines` null: the gateway could not be asked, and `reason` says why. */
-  model_machines: { machines: AboutModelMachine[] | null; reason: string | null }
+  /** `remotes` null: the gateway's providers could not be read, `remotes_reason` says why. */
+  model_machines: {
+    machines: AboutModelMachine[] | null
+    reason: string | null
+    remotes: AboutRemoteModelMachine[] | null
+    remotes_reason: string | null
+  }
   services: AboutService[]
   clients: { clients: AboutClient[]; unseen: number; window_days: number }
 }

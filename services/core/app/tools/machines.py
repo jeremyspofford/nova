@@ -218,48 +218,7 @@ async def _remotes(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
         providers, walls = await reader.model_providers(ctx.app)
     except machines.PlantUnavailable as exc:
         return [], str(exc)
-    now = datetime.now(UTC)
-    remotes = []
-    for provider in providers:
-        if not isinstance(provider, dict) or provider.get("builtin") is True:
-            continue
-        if not model_machines.on_a_machine(provider.get("base_url")):
-            continue
-        remotes.append(
-            {
-                "name": provider.get("name"),
-                "base_url": provider.get("base_url"),
-                "state": model_machines.state_of(provider, walls, now),
-            }
-        )
-    return remotes, None
-
-
-_AGENTS_UNREAD_DEVICE = (
-    "Nova's agents could not be read, so the paired device it runs on cannot be named"
-)
-
-
-def _state_words(state: dict) -> str:
-    """state_of's verdict as words: the state, a wall's time left in whole
-    minutes (floored), then the reason as the gateway gave it."""
-    kind = state["state"]
-    if kind == "walled":
-        left = state["walled_for_s"]
-        minutes = left // 60 if isinstance(left, int) else None
-        if minutes is None:
-            head = "walled by the gateway"
-        elif minutes < 1:
-            head = "walled for less than a minute more"
-        else:
-            head = f"walled for another {minutes} min"
-    elif kind == "failing":
-        head = "failing"
-    elif kind == "answering":
-        head = "answering"
-    else:
-        head = "state unknown"
-    return f"{head} — {state['reason']}"
+    return model_machines.remotes_of(providers, walls, datetime.now(UTC)), None
 
 
 def _describe_remotes(
@@ -288,26 +247,13 @@ def _describe_remotes(
     ]
     for remote in remotes:
         base_url = remote["base_url"]
-        if agents_error is not None:
-            # A no-match then proves nothing: the agents were never read.
-            device, device_words = None, _AGENTS_UNREAD_DEVICE
-        else:
-            found = model_machines.device_of(base_url, agents, peers)
-            device, device_words = found["device"], found["said"]
+        placed = model_machines.place(base_url, agents, agents_error, peers)
         state = remote["state"]
         host = model_machines._host(base_url)
-        lines.append(f"- remote {remote['name']} ({host}): {_state_words(state)} — {device_words}")
+        words = model_machines.remote_words(state, placed["said"])
+        lines.append(f"- remote {remote['name']} ({host}): {words}")
         if ctx.facts_sink is not None:
-            ctx.facts_sink.append(
-                {
-                    "machine": remote["name"],
-                    "answering": state["answering"],
-                    "checked_now": False,
-                    "state": state["state"],
-                    "device": device,
-                    "at": _now(),
-                }
-            )
+            ctx.facts_sink.append(model_machines.fact_of(remote, placed["device"], _now()))
     return lines
 
 

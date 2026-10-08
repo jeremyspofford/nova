@@ -1832,12 +1832,16 @@ async def test_a_gateway_with_no_remote_machine_says_so_never_silence(remote):
 
 
 async def test_a_walls_time_left_is_floored_to_whole_minutes_never_rounded_up(remote):
-    # 28 min 50 s left: floored reads 28, rounded would read 29.
+    # 28 min 50 s left: floored reads 28, rounded would read 29. T8 moved the
+    # separator after the minutes from " — " to "; " (C4); the pin is still the
+    # whole-minute count closed by the separator, so 28 passes and 29 never can.
     walls = _walls()
     walls[0]["walled_until"] = (datetime.now(UTC) + timedelta(minutes=28, seconds=50)).isoformat()
     remote(agents=[_dell_agent()], walls=walls)
     said = await _call("machine_status", {})
-    assert "walled for another 28 min — " in _remote_line(said, "dell")
+    line = _remote_line(said, "dell")
+    assert "walled for another 28 min; " in line
+    assert "29 min" not in line
 
 
 async def test_a_filter_naming_a_remote_provider_holds_while_the_agents_are_unreadable(remote):
@@ -1895,4 +1899,194 @@ async def test_a_filter_naming_nothing_says_the_remote_machines_were_not_checked
     assert (
         "remote model machines could not be checked — the gateway refused /admin/providers — boom"
         in str(failed.value)
+    )
+
+
+# ------------------------------------------- about-models T1: _remotes calls the shared remotes_of
+
+
+async def test_remotes_returns_the_shared_remotes_of_selection(monkeypatch):
+    seen = []
+    shared = [{"name": "from-remotes-of"}]
+
+    def spy(providers, walls, now):
+        seen.append((providers, walls, now))
+        return shared
+
+    monkeypatch.setattr(machines_tool.model_machines, "remotes_of", spy)
+    reader = _RemotePlant(providers=_providers(), walls=_walls())
+    got = await machines_tool._remotes(reader, SimpleNamespace(app=None))
+    assert got == (shared, None)
+    assert len(seen) == 1
+    providers, walls, now = seen[0]
+    assert [p["name"] for p in providers] == [p["name"] for p in _providers()]
+    assert [w["provider"] for w in walls] == ["dell"]
+    assert isinstance(now, datetime) and now.tzinfo is not None
+
+
+async def test_remotes_unreadable_is_an_empty_list_and_the_reason(monkeypatch):
+    def spy(providers, walls, now):  # never reached when the read failed
+        raise AssertionError("remotes_of called without providers")
+
+    monkeypatch.setattr(machines_tool.model_machines, "remotes_of", spy)
+    reader = _RemotePlant(providers_error=machines.PlantUnavailable("the gateway is down"))
+    got = await machines_tool._remotes(reader, SimpleNamespace(app=None))
+    assert got == ([], "the gateway is down")
+
+
+# ------------------------------------- about-models T2: _describe_remotes calls place + fact_of
+
+
+@pytest.mark.parametrize("agents_error", [None, "RuntimeError: the database is gone"])
+def test_describe_remotes_uses_the_shared_place_and_fact_of(monkeypatch, agents_error):
+    peers = network.Peers((), None)
+    placed, made = [], []
+
+    def place(base_url, agents, error, got_peers):
+        placed.append((base_url, agents, error, got_peers))
+        return {"device": "SPY-DEVICE", "said": "spy device words"}
+
+    def fact_of(remote, device, at):
+        made.append((remote["name"], device, at))
+        return {"spy-fact": remote["name"]}
+
+    monkeypatch.setattr(machines_tool.network, "tailnet_peers", lambda: peers)
+    monkeypatch.setattr(machines_tool.model_machines, "place", place)
+    monkeypatch.setattr(machines_tool.model_machines, "fact_of", fact_of)
+    state = {
+        "state": "answering",
+        "reason": "16 models listed",
+        "walled_for_s": None,
+        "answering": True,
+    }
+    remotes = [
+        {
+            "name": "dell",
+            "base_url": "http://100.122.40.93:11435/v1",
+            "host": "100.122.40.93",
+            "state": state,
+            "models": 16,
+        }
+    ]
+    agents = [{"name": "DELL-XPS-8950"}]
+    ctx = SimpleNamespace(facts_sink=[])
+    lines = machines_tool._describe_remotes(remotes, None, agents, agents_error, ctx)
+    assert placed == [("http://100.122.40.93:11435/v1", agents, agents_error, peers)]
+    assert [(n, d) for n, d, _ in made] == [("dell", "SPY-DEVICE")]
+    assert isinstance(made[0][2], str) and made[0][2]
+    assert ctx.facts_sink == [{"spy-fact": "dell"}]
+    # T8 C7 deliberate update: the count is said once and the device clause
+    # follows the state after "; " (was "answering — 16 models listed — ...").
+    assert (
+        lines[-1] == "- remote dell (100.122.40.93): answering, 16 models listed; spy device words"
+    )
+
+
+# --------------------------- about-models T8: remote_words (T4's state_words, re-pointed)
+# T8 C7 deliberate update: the two T4_C5 tests now pin remote_words — the whole
+# text after "- remote <name> (<host>): ", device clause included — in place of
+# state_words, which is gone from model_machines like _state_words before it.
+
+
+def test_T4_C5_the_state_words_live_in_model_machines_only():
+    assert not hasattr(machines_tool, "_state_words")
+    assert not hasattr(machines_tool.model_machines, "state_words")
+    assert callable(getattr(machines_tool.model_machines, "remote_words", None))
+
+
+def test_T4_C5_describe_remotes_words_the_state_through_model_machines(monkeypatch):
+    seen = []
+
+    def remote_words(entry, device_said):
+        seen.append((entry, device_said))
+        return "SPY REMOTE WORDS"
+
+    monkeypatch.setattr(machines_tool.network, "tailnet_peers", lambda: network.Peers((), None))
+    monkeypatch.setattr(machines_tool.model_machines, "remote_words", remote_words, raising=False)
+    state = {
+        "state": "failing",
+        "reason": "ConnectTimeout",
+        "walled_for_s": None,
+        "answering": False,
+    }
+    remotes = [
+        {
+            "name": "dell",
+            "base_url": "http://100.122.40.93:11435/v1",
+            "host": "100.122.40.93",
+            "state": state,
+            "models": None,
+        }
+    ]
+    ctx = SimpleNamespace(facts_sink=None)
+    lines = machines_tool._describe_remotes(remotes, None, [], None, ctx)
+    assert seen == [(state, "no paired device is known by 100.122.40.93")]
+    assert lines[-1] == "- remote dell (100.122.40.93): SPY REMOTE WORDS"
+
+
+# ------------------------- about-models T8: machine_status's exact remote lines (live-shaped)
+
+T8_SAID = "runs on paired device DELL-XPS-8950 (its agent's addresses)"
+T8_KEV_NOTE = (
+    "the last listing was refused (502): could not reach http://100.122.40.93:8009/v1 "
+    "— ConnectTimeout"
+)
+
+
+def _t8_providers() -> list[dict]:
+    return [
+        _hub_provider(),
+        _provider("dell", DELL_URL, "available", "16 models listed"),
+        _provider("dell-kev", DELL_KEV_URL, "unknown", T8_KEV_NOTE),
+    ]
+
+
+def _t8_wall(reason) -> list[dict]:
+    until = datetime.now(UTC) + timedelta(minutes=28, seconds=59)
+    return [
+        {
+            "provider": "dell",
+            "model": "qwen3:8b",
+            "walled_until": until.isoformat(),
+            "reason": reason,
+            "status": 429,
+            "strikes": 1,
+        }
+    ]
+
+
+async def test_T8_C2_C3_answering_and_failing_lines_exact(remote):
+    remote(agents=[_dell_agent()], providers=_t8_providers(), walls=[])
+    said = await _call("machine_status", {})
+    dell = _remote_line(said, "dell")
+    kev = _remote_line(said, "dell-kev")
+    assert dell == f"- remote dell (100.122.40.93): answering, 16 models listed; {T8_SAID}"
+    assert dell.count("16 model") == 1 and "model(s)" not in dell
+    assert kev == (f"- remote dell-kev (100.122.40.93): failing; {T8_SAID}. Reason: {T8_KEV_NOTE}")
+    assert kev.count("—") == 1
+
+
+async def test_T8_C4_walled_with_a_reason_line_exact(remote):
+    remote(agents=[_dell_agent()], providers=_t8_providers(), walls=_t8_wall("429 from upstream"))
+    dell = _remote_line(await _call("machine_status", {}), "dell")
+    assert dell == (
+        f"- remote dell (100.122.40.93): walled for another 28 min; {T8_SAID}. "
+        "Reason: 429 from upstream"
+    )
+
+
+async def test_T8_C5_walled_with_no_reason_says_walled_once(remote):
+    remote(agents=[_dell_agent()], providers=_t8_providers(), walls=_t8_wall(None))
+    dell = _remote_line(await _call("machine_status", {}), "dell")
+    assert dell == f"- remote dell (100.122.40.93): walled for another 28 min; {T8_SAID}"
+    assert dell.count("walled") == 1
+    assert "Reason:" not in dell
+
+
+async def test_T8_C6_unreadable_agents_sit_in_the_device_slot(remote):
+    remote(error=RuntimeError("database is down"), providers=_t8_providers(), walls=[])
+    kev = _remote_line(await _call("machine_status", {}), "dell-kev")
+    assert kev == (
+        "- remote dell-kev (100.122.40.93): failing; "
+        f"{machines_tool.model_machines.AGENTS_UNREAD_DEVICE}. Reason: {T8_KEV_NOTE}"
     )

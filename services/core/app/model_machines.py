@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import re
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -173,6 +174,7 @@ def device_of(base_url: str | None, agents: list[dict], peers: object) -> dict:
 
 
 NO_VERDICT = "the gateway has no verdict yet on whether it answers"
+WALL_NO_REASON = "walled by the gateway"
 
 
 def _instant(value: object) -> datetime | None:
@@ -223,7 +225,7 @@ def state_of(provider: object, walls: object, now: object) -> dict:
         reason = wall.get("reason")
         return {
             "state": "walled",
-            "reason": reason if isinstance(reason, str) and reason else "walled by the gateway",
+            "reason": reason if isinstance(reason, str) and reason else WALL_NO_REASON,
             "walled_for_s": math.floor((until - now_at).total_seconds()),
             "answering": False,
         }
@@ -247,3 +249,116 @@ def state_of(provider: object, walls: object, now: object) -> dict:
             "answering": False,
         }
     return unknown
+
+
+_LISTED = re.compile(r"(\d+) models listed(?:;|$)")
+
+
+def listed_models(provider: object) -> int | None:
+    """N when the gateway's last listing answered with "N models listed"; else None.
+
+    Reads the leading count of the gateway's Listing.summary() sentence
+    ("N models listed", optionally "; <note>"). Only an "available" listing
+    carries a count; any other shape is None — never 0, never a guess."""
+    if not isinstance(provider, dict) or provider.get("listing") != "available":
+        return None
+    note = provider.get("listing_note")
+    if not isinstance(note, str):
+        return None
+    match = _LISTED.match(note.strip())
+    return int(match.group(1)) if match else None
+
+
+def remotes_of(providers: object, walls: object, now: object) -> list[dict]:
+    """[{name, base_url, host, state, models}] per non-builtin provider on a machine.
+
+    The one selection machine_status and About share: dict rows whose
+    `builtin` is not True and whose URL is on a machine, in input order.
+    No I/O; the caller supplies `now`."""
+    remotes: list[dict] = []
+    for provider in providers if isinstance(providers, (list, tuple)) else ():
+        if not isinstance(provider, dict) or provider.get("builtin") is True:
+            continue
+        base_url = provider.get("base_url")
+        if not on_a_machine(base_url):
+            continue
+        remotes.append(
+            {
+                "name": provider.get("name"),
+                "base_url": base_url,
+                "host": _host(base_url),
+                "state": state_of(provider, walls, now),
+                "models": listed_models(provider),
+            }
+        )
+    return remotes
+
+
+AGENTS_UNREAD_DEVICE = (
+    "Nova's agents could not be read, so the paired device it runs on cannot be named"
+)
+
+
+def place(
+    base_url: str | None, agents: list[dict], agents_error: str | None, peers: object
+) -> dict:
+    """{device, said}: the paired device a remote runs on, or why none is named.
+
+    When the agents could not be read, a no-match proves nothing, so no match
+    is attempted: device None with AGENTS_UNREAD_DEVICE. Otherwise device_of's
+    device and words. No I/O."""
+    if agents_error is not None:
+        return {"device": None, "said": AGENTS_UNREAD_DEVICE}
+    found = device_of(base_url, agents, peers)
+    return {"device": found["device"], "said": found["said"]}
+
+
+def fact_of(remote: dict, device: str | None, at: str) -> dict:
+    """The machine_status remote fact for one remote model machine.
+
+    answering is state_of's own value (never assumed); checked_now is False
+    (the gateway's last verdict, not a call made now); never a "connected"
+    key, which is a device connectivity fact's shape."""
+    state = remote["state"]
+    return {
+        "machine": remote["name"],
+        "answering": state["answering"],
+        "checked_now": False,
+        "state": state["state"],
+        "device": device,
+        "at": at,
+    }
+
+
+def remote_words(entry: dict, device_said: str) -> str:
+    """One remote model machine as words: everything after "<name> (<host>): ".
+
+    The one wording machine_status and About share. Order is state, device,
+    reason: the state (a wall's time left in whole minutes, floored), then
+    "; <device_said>", then ". Reason: <the gateway's reason>" last, since that
+    reason is foreign text that may carry its own punctuation. Answering's
+    reason is its listing note, joined by ", " (the model count is said once,
+    from the note). A wall with no reason of its own (WALL_NO_REASON) says
+    "walled" once and no reason. Takes any dict carrying state/walled_for_s/
+    reason — state_of's own, or About's flattened entry. Never "answering"
+    unless the state is "answering"."""
+    kind = entry["state"]
+    reason = entry["reason"]
+    if kind == "answering":
+        return f"answering, {reason}; {device_said}"
+    if kind == "walled":
+        left = entry["walled_for_s"]
+        minutes = left // 60 if isinstance(left, int) else None
+        if minutes is None:
+            head = WALL_NO_REASON
+        elif minutes < 1:
+            head = "walled for less than a minute more"
+        else:
+            head = f"walled for another {minutes} min"
+        if reason == WALL_NO_REASON:
+            return f"{head}; {device_said}"
+    elif kind == "failing":
+        head = "failing"
+    else:
+        head = "state unknown"
+    return f"{head}; {device_said}. Reason: {reason}"
