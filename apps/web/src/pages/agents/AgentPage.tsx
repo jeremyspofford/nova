@@ -353,7 +353,7 @@ export function AgentPage({
             <dd className="text-content-secondary">
               <span className="font-mono">{agent.role}</span>
               <span className="text-content-tertiary"> · </span>
-              <Link to="/settings" className="text-accent hover:underline">
+              <Link to="/settings/models" className="text-accent hover:underline">
                 model chain on Settings → Routing
               </Link>
             </dd>

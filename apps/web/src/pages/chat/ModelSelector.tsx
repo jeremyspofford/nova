@@ -272,7 +272,7 @@ export function ModelSelector({
   const groupLabel = (text: string) => (
     <div className="px-3 pb-1 pt-2 text-micro font-semibold uppercase tracking-wider text-content-tertiary">{text}</div>
   )
-  const settingsLink = 'Chat order lives in Settings → Models'
+  const settingsLink = 'Chat order lives in Settings → Routing'
 
   return (
     <div ref={rootRef} className="relative">

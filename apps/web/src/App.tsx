@@ -16,6 +16,7 @@ import { Login } from './pages/Login'
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
 import { ChatWorkspace } from './pages/chat/ChatWorkspace'
 import { SettingsPage } from './pages/settings/SettingsPage'
+import { SettingsShell } from './pages/settings/SettingsShell'
 import { ModelsPage } from './pages/models/ModelsPage'
 import { SpendPage } from './pages/spend/SpendPage'
 import { AboutPage } from './pages/about/AboutPage'
@@ -141,24 +142,32 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         {/* One or more chat sessions side by side (ChatWorkspace); with one
             pane it is the ChatPage it always was. */}
         <Route path="/chat" element={<ChatWorkspace initialModel={chatModel} />} />
-        <Route path="/governance" element={<GovernancePage />} />
-        <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityRoute />} />
         <Route path="/schedules" element={<SchedulesRoute />} />
-        <Route path="/agents" element={<AgentsRoute />} />
-        <Route path="/agents/:name" element={<AgentRoute />} />
-        <Route path="/skills" element={<SkillsRoute />} />
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/files" element={<FilesRoute />} />
-        <Route path="/models" element={<ModelsPage />} />
         <Route path="/spend" element={<SpendPage />} />
         <Route path="/about" element={<AboutPage />} />
-        {/* The tab is in the PATH, not in component state: a settings
-            page you cannot link to is one you have to give directions to
-            ("scroll down past Models..."), and a refresh drops you back at
-            the top. `/settings` alone lands on the first tab. */}
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/settings/:tab" element={<SettingsPage />} />
+        {/* SETTINGS, and the pages that moved into it out of the sidebar
+            (2026-10-08): one shell with its own nav around all of them
+            (SettingsShell). Each page keeps its address — the Inbox, chat
+            and bookmarks link to /agents/<name> and /skills?from_notice=,
+            and none of those had to change. The list and its order are
+            settingsNav.ts. */}
+        <Route element={<SettingsShell />}>
+          {/* The tab is in the PATH, not in component state: a settings
+              page you cannot link to is one you have to give directions to
+              ("scroll down past Models..."), and a refresh drops you back at
+              the top. `/settings` alone lands on the first tab. */}
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/:tab" element={<SettingsPage />} />
+          <Route path="/agents" element={<AgentsRoute />} />
+          <Route path="/agents/:name" element={<AgentRoute />} />
+          <Route path="/skills" element={<SkillsRoute />} />
+          <Route path="/models" element={<ModelsPage />} />
+          <Route path="/quality" element={<AIQualityPage />} />
+          <Route path="/governance" element={<GovernancePage />} />
+        </Route>
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Routes>

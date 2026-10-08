@@ -142,7 +142,8 @@ describe('AgentPage — the header', () => {
     expect(screen.getByText('writes code')).toBeDefined()
     expect(within(facts).getByTestId('state-pill').textContent).toBe('working · reviewing')
     expect(within(facts).getByText('agent_coder')).toBeDefined()
-    expect(within(facts).getByRole('link', { name: /settings → routing/i }).getAttribute('href')).toBe('/settings')
+    // The tab the words name (2026-10-08): bare /settings opened General.
+    expect(within(facts).getByRole('link', { name: /settings → routing/i }).getAttribute('href')).toBe('/settings/models')
     expect(within(facts).getByTestId('spend').textContent).toBe('$1.50')
     expect(within(facts).getByText(/of \$5\.00 \/ month/)).toBeDefined()
     expect(within(facts).getByTestId('agent-rounds').textContent).toBe('up to 8 tool rounds a turn')

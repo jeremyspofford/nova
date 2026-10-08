@@ -216,8 +216,9 @@ describe('AgentsPage — New agent', () => {
     expect(within(form).getByLabelText(/workspace_write_file/)).toBeDefined()
     expect(within(form).queryByLabelText(/delegate_to_agent/)).toBeNull()
     expect(await within(form).findByLabelText(/review/)).toBeDefined()
-    // The chain is set on Routing, not here.
-    expect(within(form).getByRole('link', { name: /settings → routing/i }).getAttribute('href')).toBe('/settings')
+    // The chain is set on Routing, not here — and the link opens that tab
+    // (2026-10-08), not bare /settings, which is General.
+    expect(within(form).getByRole('link', { name: /settings → routing/i }).getAttribute('href')).toBe('/settings/models')
   })
 
   it('creates the agent with what was typed, closes the sheet and re-reads the roster', async () => {

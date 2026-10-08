@@ -718,9 +718,15 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   ].filter(Boolean) as string[]
 
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    // No padding of its own: the shell's container pads every page, and this
+    // one's extra `p-4 md:p-6` set its title 24px lower and further right than
+    // any other (UI review R10) — beside the Settings nav, out of line with it.
+    <div className="space-y-4">
+      {/* "Model catalog" since it moved into Settings (2026-10-08), where
+          its nav entry is Catalog under Models and the tab beside it — which
+          model answers — is Routing. */}
       <PageHeader
-        title="Models"
+        title="Model catalog"
         description="Every model Nova can run or reach, from live sources. Facts are labelled with where they came from; a dashed ? tag is inferred, not stated."
         actions={
           <>
