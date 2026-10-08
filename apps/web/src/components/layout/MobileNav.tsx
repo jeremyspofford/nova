@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { Menu, X } from 'lucide-react'
 import clsx from 'clsx'
@@ -25,10 +25,19 @@ export const moreItems: NavSection[] = navSections.filter(section => section.lab
 
 const SURFACE_PRESET: SurfacePreset = 'advanced'
 
-/** The panel's width. A fixed number rather than a percentage because the
- *  drag maths is in pixels and a panel that changes width mid-gesture makes
- *  the finger and the edge disagree. */
-const PANEL_W = 300
+/** The panel's width: the whole screen (2026-10-08, owner's call — it used
+ *  to be a fixed 300px that came most of the way out). Still read as a pixel
+ *  number rather than `100%`, because the drag maths is in pixels; it tracks
+ *  the viewport so a rotation re-sizes it instead of leaving a gap. */
+function useViewportWidth() {
+  const [w, setW] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setW(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return w
+}
 
 /** Past this fraction of the panel, releasing opens; below it, it snaps
  *  back. Half is the least surprising place for it. */
@@ -52,6 +61,7 @@ export function MobileNav() {
   const dragFrom = useRef<DragStart | null>(null)
   /** Did the last touch actually travel? Read by `tap`, below. */
   const dragged = useRef(false)
+  const panelW = useViewportWidth()
 
   const location = useLocation()
   const { user } = useAuth()
@@ -64,8 +74,8 @@ export function MobileNav() {
 
   // Where the panel sits right now. During a drag it follows the finger;
   // otherwise CSS moves it and the transition below animates the change.
-  const panelX = dragX !== null ? Math.min(0, dragX - PANEL_W) : open ? 0 : -PANEL_W
-  const progress = (panelX + PANEL_W) / PANEL_W
+  const panelX = dragX !== null ? Math.min(0, dragX - panelW) : open ? 0 : -panelW
+  const progress = (panelX + panelW) / panelW
 
   const beginDrag = (e: React.TouchEvent) => {
     const t = e.touches[0]
@@ -90,7 +100,7 @@ export function MobileNav() {
       start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
       dragged.current = true
     }
-    setDragX(Math.max(0, Math.min(PANEL_W, from + dx)))
+    setDragX(Math.max(0, Math.min(panelW, from + dx)))
   }
 
   const endDrag = () => {
@@ -181,13 +191,13 @@ export function MobileNav() {
           <div
             data-testid="mobile-drawer-panel"
             onTouchStart={beginDrag}
-            onTouchMove={e => moveDrag(e, PANEL_W)}
+            onTouchMove={e => moveDrag(e, panelW)}
             onTouchEnd={endDrag}
             className={clsx(
               'absolute left-0 top-0 bottom-0 flex flex-col',
               // The same ground as the desktop sidebar (2026-10-07): a step darker
               // than the page, so the drawer reads as the same panel.
-              'bg-surface-sidebar glass-nav border-r border-border-subtle dark:border-white/[0.06]',
+              'bg-surface-sidebar glass-nav',
               // A full-screen overlay sits outside <main>, so it pads the
               // insets itself — otherwise its header, and the only way out,
               // is drawn under the status bar. That trapped the owner in the
@@ -195,7 +205,7 @@ export function MobileNav() {
               'pt-[var(--nova-safe-top,0px)] pb-[var(--nova-safe-bottom,0px)]',
             )}
             style={{
-              width: PANEL_W,
+              width: panelW,
               transform: `translateX(${panelX}px)`,
               // No transition while a finger is down: the panel IS the
               // finger then. The curve only runs on release and on tap.

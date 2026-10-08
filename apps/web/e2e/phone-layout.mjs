@@ -18,8 +18,8 @@
  * that cannot scroll makes both structurally impossible — and this asserts
  * it, because "structurally impossible" is a belief until something checks.
  *
- * It also pins the grip's geometry, which is a per-pixel claim about where a
- * touch target sits and therefore equally invisible to jsdom.
+ * It also pins the menu's geometry — full screen on a phone — a per-pixel claim
+ * about layout and therefore equally invisible to jsdom.
  *
  * NOT a screenshot comparison. Every assertion is a number with a reason.
  * Run it with e2e/phone-layout.sh, which supplies the browser.
@@ -27,7 +27,6 @@
 import { webkit, devices } from 'playwright'
 
 const BASE = process.env.NOVA_E2E_URL ?? 'http://web'
-const PANEL_W = 300
 
 // A logged-in shell by intercepting the API, rather than with real
 // credentials: this checks layout, and a fixture keeps it runnable against
@@ -64,6 +63,8 @@ const FIXTURES = [
     throughput: null,
     model: 'qwen3:8b',
   }],
+  // The sessions list: without it SessionsProvider throws and nothing renders.
+  [/\/conversations\?archived=/, { sessions: [] }],
   [/\/conversations\/active/, { id: 'c1', title: 'Chat', created_at: NOW, pending_turn: false, pending_turn_id: null, queued: [] }],
 ]
 
@@ -101,7 +102,7 @@ await page.waitForTimeout(1000)
 if (out) await page.screenshot({ path: `${out}/phone-chat.png` })
 
 const fit = await page.evaluate(() => {
-  const shell = document.querySelector('#root > div > div') ?? document.querySelector('#root > div')
+  const shell = document.querySelector('[data-testid="app-shell"]')
   const r = shell.getBoundingClientRect()
   window.scrollTo(0, 500) // try to shift the app, the way a finger would
   const scrolledTo = window.scrollY
@@ -120,41 +121,30 @@ if (fit.gapBelowShell !== 0) failures.push(`${fit.gapBelowShell}px of dead space
 if (fit.scrollableBy > 0) failures.push(`the document is ${fit.scrollableBy}px taller than the viewport — the app can be scrolled`)
 if (fit.scrolledTo !== 0) failures.push(`the document scrolled to ${fit.scrolledTo} — the whole app moves`)
 
-await page.click('[data-testid="edge-handle"]')
+await page.click('[data-testid="menu-button"]')
 await page.waitForTimeout(600)
 if (out) await page.screenshot({ path: `${out}/phone-menu.png` })
 
 const panel = await page.evaluate(() => {
   const drawer = document.querySelector('[data-testid="mobile-drawer"]')
-  const grip = document.querySelector('[data-testid="edge-handle"]')
-  const tab = document.querySelector('[data-testid="edge-handle-tab"]')
-  const g = grip.getBoundingClientRect()
-  const t = tab.getBoundingClientRect()
+  const el = document.querySelector('[data-testid="mobile-drawer-panel"]')
+  const r = el ? el.getBoundingClientRect() : null
   return {
-    links: [...drawer.querySelectorAll('a')].map(a => a.getAttribute('href')),
-    expanded: grip.getAttribute('aria-expanded'),
-    // What the browser will PAINT. Headless WebKit does not reliably
-    // recompute a fixed element's rect here, so the declared transform is
-    // the authoritative read and the rects below are corroboration.
-    transform: grip.style.transform,
-    gripLeft: Math.round(g.left),
-    gripRight: Math.round(g.right),
-    tabLeft: Math.round(t.left),
-    tabWidth: Math.round(t.width),
-    tabOffsetInButton: Math.round(t.left - g.left),
+    links: drawer ? [...drawer.querySelectorAll('a')].map(a => a.getAttribute('href')) : [],
+    open: !!el,
+    left: r ? Math.round(r.left) : null,
+    width: r ? Math.round(r.width) : null,
+    viewport: window.innerWidth,
   }
 })
-// The touch target is wider than the drawn tab. That slack must extend
-// AWAY from the panel — bleeding it back over the menu swallows taps on
-// whichever nav row it covers.
-if (panel.expanded !== 'true') failures.push('the menu did not open')
-if (!panel.transform.includes(`translate(${PANEL_W}px`)) {
-  failures.push(`the grip is at ${panel.transform}, not on the ${PANEL_W}px panel's edge`)
-}
-// The drawn tab must sit at the BUTTON's leading edge, so the wider touch
-// target extends away from the panel rather than back over the nav rows.
-if (panel.tabOffsetInButton !== 0) {
-  failures.push(`the drawn tab is ${panel.tabOffsetInButton}px into its button — the touch target overhangs the menu`)
+// The menu is the whole screen on a phone (2026-10-08), not a panel that
+// comes most of the way out.
+if (!panel.open) failures.push('the menu did not open')
+else {
+  if (panel.left !== 0) failures.push(`the menu starts at x=${panel.left}, not 0`)
+  if (panel.width !== panel.viewport) {
+    failures.push(`the menu is ${panel.width}px wide on a ${panel.viewport}px screen — not full screen`)
+  }
 }
 // Deleting the bottom tab bar once deleted the only route back to chat.
 if (!panel.links.includes('/chat')) failures.push('no route back to chat in the menu')
@@ -210,4 +200,4 @@ if (failures.length) {
   for (const f of failures) console.error('  -', f)
   process.exit(1)
 }
-console.log('\nOK: the shell is the viewport, the document cannot scroll, the grip clears the menu')
+console.log('\nOK: the shell is the viewport, the document cannot scroll, the menu fills the screen')
