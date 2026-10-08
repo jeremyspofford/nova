@@ -1,7 +1,7 @@
 {
   "id": "adds-a-mac-and-says-it-is-not-walked",
   "suite": "agent_quality",
-  "suite_version": 20,
+  "suite_version": 21,
   "message": "I want to add my Mac mini to Nova. Has your agent actually been tested on a Mac?",
   "contract": [
     {"predicate": "tool_called", "arg": "show_setup_qr"},

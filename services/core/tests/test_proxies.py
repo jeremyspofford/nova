@@ -320,8 +320,8 @@ async def _chat_model_is(owner_client, value: str) -> None:
 async def _agent_coder(pool) -> None:
     """A live agent `coder`, so `agent_coder` passes the no-such-agent check."""
     await pool.execute(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
-        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page')"
+        "INSERT INTO agents (name, purpose, instructions, tools, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['workspace_write_file'], 'page')"
     )
 
 

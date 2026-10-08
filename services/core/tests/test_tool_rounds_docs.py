@@ -1,75 +1,53 @@
-"""deploy/README.md's section on the tool-round limit, pinned to the code it
-describes (tool-rounds-setting epic, T4).
+"""deploy/README.md's section on how a turn stops, pinned to the code it
+describes (no-ceiling T8; was the tool-round-limit section, tool-rounds-setting
+T4 / turn-cap T4-T5).
 
-The owner kept seeing "[stopped after 6 tool rounds without finishing]" and
-chose a Settings field for the limit over a new default. The README is where
-an operator who sees that note learns where the limit is set, what reaching it
-does, its range and its default. Each of those is a fact the code owns, so each
-is checked against the code here rather than trusted:
+The owner removed the tool-round limit (2026-10-08: "I'd prefer to not have a
+limit at all"): no count of rounds stops a turn, the circling stop is the only
+round-based stop, and a round that comes back thinking only is re-asked, then
+passed to the next link. The README is where an operator who sees a stop note
+learns what it means. Each fact it states is one the code owns, so each is
+checked against the code here rather than trusted:
 
-- the names: the ones the app draws (the Behaviour tab, the "Tool rounds"
-  section, its "Tool-round limit" field) and the key the field stores, read
-  from the checkout as text, the way test_native_app.py reads nativeApp.ts;
-- the note: the one chat.py writes, quoted with N where core writes the limit;
-- what reaching it does: the two facts chat.py's loop makes true, said in the
-  section (tools run from at most N-1 calls; she then answers with no tools
-  offered). Here only as words: test_chat_tools.py pins the loop itself
-  (test_the_round_cap_stops_and_says_so,
-  test_the_cap_gets_one_toolless_narration_round_that_answers);
-- the numbers: agents.MIN_ROUNDS..agents.MAX_ROUNDS and the def's default,
-  read from the code on every check (as T1's hook reads the bounds at write
-  time), never typed here, and no other number beside them. The day the code
-  moves one, this file turns red until the README says the new number.
+- no count: chat.py writes no "without finishing" note, the setting and its
+  Settings field are gone, and the section names neither;
+- the circling stop: its two notes, quoted with N where core writes the rounds
+  used, from chat.CIRCLING_NOTE_WORDS; its two numbers from
+  chat.SAME_CALL_LIMIT and chat.STALE_ROUNDS_LIMIT, read on every check, and
+  no other number beside them;
+- what a stopped reply shows: chat.TOOL_RESULTS_HEADER, quoted;
+- a thinking-only round: chat.THINKING_ONLY_REASON and the trace step's name
+  and actions, as chat.py files them;
+- what bounds a runaway, and that a scheduled firing has no wall-clock cut
+  (scheduler.firing_timeout_s), with the read timeout from chat.GATEWAY_TIMEOUT.
 
+The loops themselves are pinned elsewhere (test_turn_progress.py,
+test_capped_turn_answers.py, test_thinking_only_round.py, test_scheduler.py).
 No database: these read files and module attributes only.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import re
 from pathlib import Path
 
-from app import agents, chat, settings_store
+from app import chat, scheduler, settings_store
 
 REPO = Path(__file__).resolve().parents[3]
 README = REPO / "deploy" / "README.md"
 SETTINGS_PAGES = REPO / "apps" / "web" / "src" / "pages" / "settings"
 
-HEADING = "## The tool-round limit"
-KEY = "agents.max_tool_rounds"
+HEADING = "## When a turn stops"
+OLD_HEADING = "## The tool-round limit"
+OLD_KEY = "agents.max_tool_rounds"
 
-# The note a capped reply ends with, as the README quotes it: N where core
-# writes the limit, so the doc carries no number there that nothing pins.
-NOTE_HEAD, NOTE_TAIL = "[stopped after ", " tool rounds without finishing]"
-NOTE = f"{NOTE_HEAD}N{NOTE_TAIL}"
+# The owner's stop, as chat.py routes it: a path, not a number, so its digit is
+# not one the number pin judges.
+STOP_ROUTE = f"{chat.router.prefix}/turns/{{id}}/stop"
 
-# Each name the section gives, and the text that draws or stores it in the
-# app: a rename there turns this file red until the README follows.
-NAMES = (
-    ("Settings → Behaviour", SETTINGS_PAGES / "tabs.ts", "label: 'Behaviour'"),
-    ("Tool rounds", SETTINGS_PAGES / "ToolRoundsSection.tsx", 'title="Tool rounds"'),
-    ("Tool-round limit", SETTINGS_PAGES / "ToolRoundsSection.tsx", 'label="Tool-round limit"'),
-    (KEY, SETTINGS_PAGES / "ToolRoundsSection.tsx", f"TOOL_ROUNDS_KEY = '{KEY}'"),
-)
-
-# Every range and every default the section states, whatever their numbers,
-# each number taken whole: `between 1 and 500` is the pair (1, 500), never
-# `between 1 and 50` with a digit more. Case and line breaks do not matter
-# (the README is wrapped by hand); the numbers do.
-RANGES = re.compile(r"(?<!\w)between\s+(\d+)\s+and\s+(\d+)(?!\w)", re.IGNORECASE)
-DEFAULTS = re.compile(r"(?<!\w)default\s+is\s+(\d+)(?!\w)", re.IGNORECASE)
-
-# Arithmetic on the limit ("tools run from at most N-1 calls") moves with N by
-# construction and copies no number from the code: the one place a digit may
-# stand in the section outside the range and default phrases.
-ON_N = re.compile(r"(?<!\w)N\s*[-+]\s*\d+(?!\w)")
-
-# What reaching the limit does, in the words the section says it with: the
-# last allowed call's tools do not run, so tools run from at most N-1 calls,
-# and she then answers with no tools offered (the note that follows has its
-# own id). test_chat_tools.py pins the loop that makes both true.
-REACHING = ("N-1", "no tools")
+NOTE_HEAD = "[stopped after "
+# The capped note that no longer exists: neither core nor the README says it.
+OLD_NOTE_TAIL = " tool rounds without finishing]"
 
 
 def _section() -> str:
@@ -91,189 +69,134 @@ def _says(text: str, phrase: str) -> bool:
     return re.search(rf"(?<!\w){words}(?!\w)", text) is not None
 
 
-def _numbers_problem(section: str) -> str | None:
-    """What the section gets wrong about the limit's range or default, or None.
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
-    What it must say is built from the code NOW, on every call: the range from
-    agents.MIN_ROUNDS and agents.MAX_ROUNDS, the default from the
-    `agents.max_tool_rounds` def. It must say each, and no other: a second,
-    stale number beside the right one is a number nothing pins."""
-    low, high = agents.MIN_ROUNDS, agents.MAX_ROUNDS
-    default = settings_store.DEFS_BY_KEY[KEY].default
-    for wanted, said in (
-        (f"between {low} and {high}", [f"between {a} and {b}" for a, b in RANGES.findall(section)]),
-        (f"default is {default}", [f"default is {d}" for d in DEFAULTS.findall(section)]),
-    ):
-        if not said or any(phrase != wanted for phrase in said):
-            found = ", ".join(f"`{phrase}`" for phrase in said) or "none"
-            return f"the section must say `{wanted}` and no other; it says {found}"
+
+def _pinned_numbers() -> tuple[str, ...]:
+    """Every phrase with a number the section may state, each built from the
+    code NOW: the circling stop's two limits and the gateway read timeout."""
+    return (
+        f"for the {_ordinal(chat.SAME_CALL_LIMIT)} time",
+        f"{chat.STALE_ROUNDS_LIMIT} rounds in a row",
+        f"{int(chat.GATEWAY_TIMEOUT.read)} seconds",
+    )
+
+
+def _numbers_problem(section: str) -> str | None:
+    """What the section gets wrong about a number, or None: each pinned phrase
+    must be said, and no digit may stand anywhere else (a number nothing pins
+    stays put the day the code moves it)."""
+    rest = section.replace(STOP_ROUTE, " ")
+    for phrase in _pinned_numbers():
+        if not _says(section, phrase):
+            return f"the section must say `{phrase}`"
+        rest = re.sub(r"\s+".join(re.escape(w) for w in phrase.split()), " ", rest)
+    unpinned = re.findall(r"\d+", rest)
+    if unpinned:
+        return f"the section states numbers nothing pins: {unpinned}"
     return None
 
 
-def _unpinned_numbers(section: str) -> list[str]:
-    """Each number the section states outside its range and default phrases
-    (which _numbers_problem holds to the code) and outside arithmetic on N:
-    a number nothing pins, so it would stay put the day the code moved."""
-    rest = ON_N.sub(" ", DEFAULTS.sub(" ", RANGES.sub(" ", section)))
-    return re.findall(r"\d+", rest)
-
-
-# The app-side and chat.py checks below hold without the README section, so
-# each shares its id with an assert on the section rather than standing alone.
-
-
-def test_the_section_says_where_the_limit_is_set_in_the_names_the_app_draws():
-    for _name, source, drawn in NAMES:
-        assert drawn in source.read_text(encoding="utf-8"), f"{source.name} has no {drawn}"
-    assert KEY in settings_store.DEFS_BY_KEY
+def test_no_count_of_rounds_is_described_or_written():
+    """Replaces the old limit pins (where it is set, its range, its default,
+    the backstop, what reaching it does, the capped note): the limit is gone,
+    so the section names none of it and chat.py writes no capped note."""
+    readme = README.read_text(encoding="utf-8")
+    assert OLD_HEADING not in readme, f"deploy/README.md still has `{OLD_HEADING}`"
+    assert OLD_KEY not in settings_store.DEFS_BY_KEY
+    assert not (SETTINGS_PAGES / "ToolRoundsSection.tsx").exists()
+    assert OLD_NOTE_TAIL.strip(" ]") not in Path(chat.__file__).read_text(encoding="utf-8")
 
     section = _section()
-    for name, _source, _drawn in NAMES:
-        assert _says(section, name), f"the section does not say `{name}`"
+    assert _says(section, "No count of tool rounds stops a turn.")
+    for gone in (OLD_KEY, "Tool-round limit", "Tool rounds", "without finishing", "backstop"):
+        assert gone not in section, f"the section still says `{gone}`"
 
 
-def test_the_section_quotes_the_note_core_ends_a_capped_reply_with():
-    """The note in the owner's request, so a reader who sees it is led here.
-    chat.py must still write it, with the limit in an f-string field, or the
-    README would quote a note core no longer writes."""
-    field = r"\{[^{}]+\}"
-    written = re.compile('f"' + re.escape(NOTE_HEAD) + field + re.escape(NOTE_TAIL) + '"')
+def test_the_section_says_how_a_circling_turn_is_stopped_and_quotes_its_notes():
     source = Path(chat.__file__).read_text(encoding="utf-8")
-    assert written.search(source), f"chat.py writes no f-string `{NOTE}` with N a field"
-
+    assert (
+        'f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"' in source
+    ), "chat.py no longer writes the circling note this section quotes"
     section = _section()
-    assert _says(section, NOTE), f"the section does not quote `{NOTE}`"
-    numbered = r"\s+".join(re.escape(word) for word in NOTE_HEAD.split()) + r"\s+\d"
-    assert re.search(numbered, section) is None, "the section quotes the note with a number, not N"
-
-
-def test_the_section_says_what_reaching_the_limit_does():
-    """Not only the note's words: what happened before it landed. A section
-    cut down to where the limit is set and its numbers passes every other id
-    here, and leaves a reader who sees the note no wiser about what it cost."""
-    section = _section()
-    for fact in REACHING:
+    for why in chat.CIRCLING_NOTE_WORDS.values():
+        note = f"{NOTE_HEAD}N tool rounds: {why}]"
+        assert _says(section, note), f"the section does not quote `{note}`"
+    for fact in ("the same call", "nothing new", "no tools offered", "round_stop"):
         assert _says(section, fact), f"the section does not say `{fact}`"
 
 
+def test_the_section_states_the_circling_numbers_the_code_has():
+    problem = _numbers_problem(_section())
+    assert problem is None, problem
+
+
+def test_the_numbers_it_must_state_move_with_the_code(monkeypatch):
+    """Move a limit and the same check, on the README as it stands, fails
+    naming the phrase it now looks for. A number typed here would keep
+    passing the README's old one."""
+    section = _section()
+    assert _numbers_problem(section) is None
+
+    monkeypatch.setattr(chat, "SAME_CALL_LIMIT", 4)
+    problem = _numbers_problem(section)
+    assert problem is not None and "`for the 4th time`" in problem, problem
+    monkeypatch.undo()
+
+    monkeypatch.setattr(chat, "STALE_ROUNDS_LIMIT", 5)
+    problem = _numbers_problem(section)
+    assert problem is not None and "`5 rounds in a row`" in problem, problem
+
+
+def test_the_section_states_no_number_the_code_does_not_pin():
+    section = _section()
+    assert _numbers_problem(section) is None
+    problem = _numbers_problem(f"{section}\nup to 50 rounds")
+    assert problem is not None and "['50']" in problem, problem
+
+
 # What a stopped reply shows when her last answer is no answer (turn-cap T2):
-# that answer has no words of its own or asks for a tool, so the reply lists
-# what the tools returned (chat.tool_results_statement, read off the turn's
-# tool spans), then the note. test_capped_turn_answers.py pins the loop.
+# chat.tool_results_statement, read off the turn's tool spans, under its header.
 STOPPED_REPLY = ("no words of its own", "asks for a tool", "what the tools returned")
 
 
 def test_the_section_says_what_a_stopped_reply_shows_when_she_does_not_answer():
     assert callable(chat.tool_results_statement)
     section = _section()
-    for fact in STOPPED_REPLY:
+    for fact in (*STOPPED_REPLY, chat.TOOL_RESULTS_HEADER):
         assert _says(section, fact), f"the section does not say `{fact}`"
 
 
-def test_the_section_states_the_range_and_the_default_the_code_has():
-    problem = _numbers_problem(_section())
-    assert problem is None, problem
-
-
-def test_a_section_saying_another_number_instead_fails_the_pin():
-    """The criterion's three, built from the code's numbers: with the code at
-    1..50 and 50 they are `between 1 and 500`, `between 0 and 50` and
-    `default is 500`, each written where the section says the right one."""
-    section = _section()
-    problem = _numbers_problem(section)
-    assert problem is None, problem
-
-    low, high = agents.MIN_ROUNDS, agents.MAX_ROUNDS
-    default = settings_store.DEFS_BY_KEY[KEY].default
-    for said, right, wrong in (
-        (RANGES, f"between {low} and {high}", f"between {low} and {high}0"),
-        (RANGES, f"between {low} and {high}", f"between {low - 1} and {high}"),
-        (DEFAULTS, f"default is {default}", f"default is {default}0"),
-    ):
-        problem = _numbers_problem(said.sub(lambda _match: wrong, section))
-        assert problem is not None, f"a section saying `{wrong}` instead passed the pin"
-        assert f"`{right}`" in problem and f"`{wrong}`" in problem, problem
-
-
-def test_the_section_states_no_number_the_code_does_not_pin():
-    """The pin holds every number the section states, not only the phrases it
-    looks for. Said again in other words beside them (`up to 50`, `6 by
-    default`), a number stays put the day the code moves it, and the README
-    then says both. Arithmetic on N ("N-1") is the one digit allowed."""
-    section = _section()
-    problem = _numbers_problem(section)
-    assert problem is None, problem
-    unpinned = _unpinned_numbers(section)
-    assert unpinned == [], f"the section states numbers nothing pins: {unpinned}"
-
-    high = agents.MAX_ROUNDS
-    default = settings_store.DEFS_BY_KEY[KEY].default
-    for stale, number in ((f"up to {high}", high), (f"{default} by default", default)):
-        found = _unpinned_numbers(f"{section}\n{stale}")
-        assert found == [str(number)], f"a section also saying `{stale}` gave {found}"
-
-
-def test_the_range_it_must_state_moves_with_agents_bounds(monkeypatch):
-    """Move agents' pair and the same check, on the README as it stands, fails
-    naming the pair it now looks for. A range typed here, or copied once, would
-    keep passing the README's old numbers."""
-    section = _section()
-    problem = _numbers_problem(section)
-    assert problem is None, problem
-
-    monkeypatch.setattr(agents, "MIN_ROUNDS", 3)
-    monkeypatch.setattr(agents, "MAX_ROUNDS", 60)
-
-    problem = _numbers_problem(section)
-    assert problem is not None, "the README's range still passed with agents' bounds at 3..60"
-    assert "`between 3 and 60`" in problem, problem
-
-
-def test_the_default_it_must_state_moves_with_the_defs_default(monkeypatch):
-    """Move the def's default and the same check, on the README as it stands,
-    fails naming the default it now looks for."""
-    section = _section()
-    problem = _numbers_problem(section)
-    assert problem is None, problem
-
-    moved = dataclasses.replace(settings_store.DEFS_BY_KEY[KEY], default=7)
-    monkeypatch.setitem(settings_store.DEFS_BY_KEY, KEY, moved)
-
-    problem = _numbers_problem(section)
-    assert problem is not None, "the README's default still passed with the def's default at 7"
-    assert "`default is 7`" in problem, problem
-
-
-# The circling stop (turn-cap T4): a turn that repeats the same call or gets
-# nothing new for several rounds is stopped before the limit, with a note that
-# names why. The README quotes each note with N where core writes the rounds
-# used; chat.py must still write each reason's words. test_turn_progress.py
-# pins the loop and the exact notes (its T4 section).
-CIRCLING_REASONS = ("the same call was repeated", "the last rounds brought nothing new")
-CIRCLING = ("the same call", "nothing new", "before the limit")
-
-
-def test_the_section_says_how_a_circling_turn_is_stopped_and_quotes_its_notes():
+def test_the_section_says_a_thinking_only_round_is_reasked_then_passed_over():
     source = Path(chat.__file__).read_text(encoding="utf-8")
+    for filed in ('turn.span("round_retry")', '"reask"', '"pass_over"'):
+        assert filed in source, f"chat.py files no `{filed}`"
     section = _section()
-    for why in CIRCLING_REASONS:
-        assert why in source, f"chat.py writes no note saying `{why}`"
-        note = f"{NOTE_HEAD}N tool rounds: {why}]"
-        assert _says(section, note), f"the section does not quote `{note}`"
-    for fact in CIRCLING:
+    for fact in (
+        "re-asked once",
+        "next link",
+        "round_retry",
+        "reask",
+        "pass_over",
+        f"Stopped: {chat.THINKING_ONLY_REASON}:",
+    ):
         assert _says(section, fact), f"the section does not say `{fact}`"
 
 
-# turn-cap T5: the limit is the runaway/cost backstop, its default the top of
-# the range (agents.MAX_ROUNDS, read here), and the circling stop is the normal
-# one. The circling bullet itself is pinned above.
-BACKSTOP = ("backstop", "runaway")
-
-
-def test_the_section_says_the_default_is_the_top_of_the_range_and_a_backstop():
+def test_the_section_says_what_bounds_a_runaway_and_that_firings_are_uncut():
+    assert any(
+        getattr(r, "path", None) == f"{chat.router.prefix}/turns/{{turn_id}}/stop"
+        for r in chat.router.routes
+    )
+    assert scheduler.firing_timeout_s("scheduled") is None
     section = _section()
-    said = DEFAULTS.findall(section)
-    assert said == [str(agents.MAX_ROUNDS)], f"the section says the default is {said}"
-    assert settings_store.DEFS_BY_KEY[KEY].default == agents.MAX_ROUNDS
-    for fact in BACKSTOP:
-        assert _says(section.lower(), fact), f"the section does not say `{fact}`"
+    for fact in (
+        "What bounds a runaway",
+        STOP_ROUTE,
+        "monthly spending caps on cloud providers",
+        "A local model costs nothing",
+        "no wall-clock cut",
+    ):
+        assert _says(section, fact), f"the section does not say `{fact}`"

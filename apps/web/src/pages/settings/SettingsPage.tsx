@@ -19,7 +19,6 @@ import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection, decisionSwitchDefs } from './RoutingSection'
 import { ProactiveSection } from './ProactiveSection'
-import { TOOL_ROUNDS_KEY, ToolRoundsSection } from './ToolRoundsSection'
 import { SETTINGS_TABS, resolveTab } from './tabs'
 
 /**
@@ -114,12 +113,6 @@ export function SettingsPage() {
   // The decision role's two switches (decision-role spec §6), off the same
   // one settings fetch: drawn only when core lists both keys.
   const decisionSwitches = settings ? decisionSwitchDefs(settings) : null
-  // The tool-round limit, off the same one settings fetch: drawn only when
-  // core lists the key. A def made here when it is missing would be a second
-  // copy of core's default, so a core without the key (or a failed read)
-  // draws no limit at all. The listed def goes to the section as is: core is
-  // the only validator, so no bounds are kept on this page either.
-  const toolRoundsDef = defOf(TOOL_ROUNDS_KEY)
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -237,17 +230,6 @@ export function SettingsPage() {
                   checked={responsivenessCheck}
                   onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
                 />
-                {/* Last, so the sections above keep their places. */}
-                {toolRoundsDef && (
-                  <ToolRoundsSection
-                    def={toolRoundsDef}
-                    // The value CORE stored, handed straight back into the
-                    // one settings state this page renders from: the section
-                    // then has nothing pending, and coming back to this tab
-                    // seeds it with core's number, with no second read.
-                    onChanged={value => updateSettingValue(TOOL_ROUNDS_KEY, value)}
-                  />
-                )}
               </>
             )}
             {tab === 'devices' && (

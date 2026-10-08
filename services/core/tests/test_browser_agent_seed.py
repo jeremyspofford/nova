@@ -3,6 +3,7 @@ owner exists (S38) — and a deleted one stays deleted."""
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -57,11 +58,19 @@ async def test_with_an_owner_it_is_made_with_its_tools_and_recorded(pool, mount_
     made = await agents.by_name(pool, "browser")
     assert made is not None
     assert made.tools == browser_agent.SPEC.tools
-    assert made.max_tool_rounds == 30
+    # PIN MOVED (no-ceiling T6): was max_tool_rounds == 30; an agent has no rounds.
+    assert not hasattr(made, "max_tool_rounds")
     assert made.role == "agent_browser"
     assert (root / "agents" / "browser").is_dir()
     events = await _seeded_events(pool)
     assert len(events) == 1 and events[0]["actor"] == "seed (S38)"
+
+
+def test_the_seed_spec_names_no_rounds():
+    """no-ceiling T6: the browser agent's seed carries no round count — no
+    count of tool rounds stops any turn, the browsing agent's included."""
+    assert not hasattr(browser_agent.SPEC, "max_tool_rounds")
+    assert "max_tool_rounds" not in inspect.getsource(browser_agent)
 
 
 async def test_asking_again_makes_nothing_new(pool, mount_peers, root):

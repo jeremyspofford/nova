@@ -34,9 +34,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from urllib.parse import unquote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -56,6 +58,12 @@ ROUTE_HEADER = "X-Nova-Route"
 # The decision-model kinds a decision call allows, comma-separated
 # (routing.allowed_kinds): core states the owner's two switches on every call.
 KINDS_HEADER = "X-Nova-Decision-Kinds"
+# The links core passes over for ONE role-walked chat completion — a round
+# that answered with thinking only — as comma-separated
+# `quote(link)=quote(words)` pairs keyed by served id (routing.resolve's
+# `passed_over`). Never a wall; meaningless without a role's chain.
+PASS_OVER_HEADER = "X-Nova-Pass-Over"
+_BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 # ollama's /api/ps is local and answers in milliseconds; bounded so a wedged
 # engine costs the stamp (omitted), never the reply (S40 ruling C2: 2 s).
 STAMP_TIMEOUT = httpx.Timeout(2.0)
@@ -84,6 +92,42 @@ def _served_by(row: dict, model: str) -> str:
     return providers.served_by(row, model)
 
 
+def _decode(part: str) -> str:
+    """One percent-encoded part, strictly: a stray `%` or bytes that are not
+    UTF-8 raise ValueError rather than pass through as something else."""
+    if _BAD_ESCAPE.search(part):
+        raise ValueError("a '%' not followed by two hex digits")
+    return unquote(part, errors="strict")
+
+
+def parse_pass_over(value: str | None) -> dict[str, str]:
+    """X-Nova-Pass-Over's pairs as {served id: words}. An absent or blank
+    header is no pass-over. A malformed pair is a 400 naming it — never
+    dropped, since a dropped pair would silently serve the link core asked
+    to pass over."""
+    passed: dict[str, str] = {}
+    if not value or not value.strip():
+        return passed
+    for pair in value.split(","):
+        pair = pair.strip()
+        link, eq, words = pair.partition("=")
+        try:
+            if not eq:
+                raise ValueError("it has no '=' between the link and the words")
+            link = _decode(link).strip()
+            if not link:
+                raise ValueError("its link is empty")
+            words = _decode(words).strip()
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{PASS_OVER_HEADER} pair {pair!r} is malformed: {exc} "
+                "(expected comma-separated quote(link)=quote(words) pairs)",
+            ) from exc
+        passed[link] = words or "the caller passed it over"
+    return passed
+
+
 def _nothing_runnable(exc: routing.NothingRunnable) -> str:
     """The 503's words: the walk's own sentence, then every link's verdict. A
     chain with no links (the empty decisions chain) is the sentence alone —
@@ -107,6 +151,15 @@ async def chat_completions(request: Request) -> Response:
     pool = await db.get_pool()
     requested = body.get("model") if isinstance(body.get("model"), str) else None
     attribution = usage.Attribution.from_headers(request.headers)
+    passed_over = parse_pass_over(request.headers.get(PASS_OVER_HEADER))
+    if passed_over and not attribution.role:
+        # A call with no role names its model and walks no chain: there is no
+        # next link to pass over to (eval, rail 17).
+        raise HTTPException(
+            status_code=400,
+            detail=f"{PASS_OVER_HEADER} was sent on a call with no X-Nova-Role — "
+            "pass-over needs a role's chain to walk on to the next link",
+        )
     if attribution.role:
         if routing.protocol_of(attribution.role) != routing.CHAT:
             # The endpoint decides the protocol (decision-role spec §1): the
@@ -116,7 +169,9 @@ async def chat_completions(request: Request) -> Response:
                 detail=f"the {attribution.role} role answers typed questions at POST "
                 "/v1/systemone — a chat completion cannot be served from its chain",
             )
-        return await serve_by_role(request, pool, attribution.role, requested, body, attribution)
+        return await serve_by_role(
+            request, pool, attribution.role, requested, body, attribution, passed_over
+        )
     row, model = await providers.resolve(pool, requested)
     # No role: the explicit model, as before — but a capped provider is
     # refused BEFORE the call (rail 9), a 402 in words, never a substitute.
@@ -146,6 +201,7 @@ async def walk_role(
     attribution,
     serve: Callable[[routing.Decision], Awaitable[Response]],
     kinds: frozenset[str] | None = None,
+    passed_over: dict[str, str] | None = None,
 ) -> Response:
     """Walk the role's chain (app/routing.py) and serve from the first link
     that can — the ONE loop both data-plane routes use, so walls and fallback
@@ -157,7 +213,10 @@ async def walk_role(
     D21, or a link that serves no typed questions) is recorded and the next
     link tried the same way, but it is never walled. A link whose kind is not
     among `kinds` is never chosen at all (routing.resolve judges it
-    `kind_off`), so it is neither dialled nor walled."""
+    `kind_off`), so it is neither dialled nor walled. `passed_over` is the
+    caller's own pass-over for this request (X-Nova-Pass-Over): those links
+    are judged `passed_over` in the caller's words, never dialled, never
+    walled."""
     from app import admin  # the fit context and probe query /admin/suggest uses
 
     skip: set[str] = set()
@@ -183,6 +242,7 @@ async def walk_role(
                 skip=skip,
                 unreachable=passed,
                 kinds=kinds,
+                passed_over=passed_over,
             )
         except routing.NothingRunnable as exc:
             raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
@@ -228,7 +288,13 @@ async def walk_role(
 
 
 async def serve_by_role(
-    request: Request, pool, role: str, requested, body, attribution
+    request: Request,
+    pool,
+    role: str,
+    requested,
+    body,
+    attribution,
+    passed_over: dict[str, str] | None = None,
 ) -> Response:
     """A chat completion, walked through the role's chain (walk_role)."""
 
@@ -243,7 +309,9 @@ async def serve_by_role(
             route=decision.as_route(),
         )
 
-    return await walk_role(request, pool, role, requested, attribution, serve)
+    return await walk_role(
+        request, pool, role, requested, attribution, serve, passed_over=passed_over
+    )
 
 
 async def serve_completion(

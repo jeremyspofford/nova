@@ -429,3 +429,145 @@ async def test_a_derived_agent_role_is_served_from_its_own_chain_and_metered_und
         "coder_cloud:big-model",
         1,
     )
+
+
+# ── no-ceiling T1: X-Nova-Pass-Over on a role-walked chat completion ───────
+# `quote(link)=quote(words)[,...]`: the links core passes over for this one
+# request (a round that answered with thinking only). Read only when the call
+# walks a role's chain; a malformed pair or a call with no role is a 400 in
+# words, and nothing reaches a provider.
+
+from urllib.parse import quote  # noqa: E402
+
+import pytest  # noqa: E402
+
+WORDS = "thinking only, twice = no answer"  # a comma and an '=' survive encoding
+
+
+async def _three_local(client, pool, monkeypatch, mount_backend) -> FakeOllama:
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(deltas=("Hel", "lo"), tags=("qwen3:8b", "qwen3:4b", "qwen3:1.7b"))
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama", "model": "qwen3:8b"})
+    put = await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b", "hub:qwen3:1.7b"]})
+    assert put.status_code == 200, put.text
+    return fake
+
+
+def _dialled(fake: FakeOllama) -> list[str]:
+    return [b["model"] for p, b in fake.seen if p == "/v1/chat/completions"]
+
+
+async def _completion(client, headers: dict[str, str]):
+    return await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "hub:qwen3:8b",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+        headers=headers,
+    )
+
+
+async def test_the_pass_over_header_is_percent_decoded_and_every_pair_is_passed_over(
+    client, pool, monkeypatch, mount_backend
+):
+    fake = await _three_local(client, pool, monkeypatch, mount_backend)
+    header = ",".join(
+        f"{quote(link, safe='')}={quote(WORDS, safe='')}"
+        for link in ("hub:qwen3:8b", "hub:qwen3:4b")
+    )
+
+    resp = await _completion(
+        client, {"X-Nova-Role": "chat", "X-Nova-Purpose": "chat", "X-Nova-Pass-Over": header}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:1.7b"
+    from urllib.parse import unquote
+
+    route = resp.headers["x-nova-route"]
+    assert route.startswith("role=chat;link=3;")
+    reason = unquote(route.split("reason=", 1)[1].split(";", 1)[0])
+    assert "passed over" in reason and WORDS in reason
+    assert "hub:qwen3:8b" in reason and "hub:qwen3:4b" in reason
+    assert _dialled(fake) == ["qwen3:1.7b"]
+    (row,) = await pool.fetch(
+        "SELECT route_link, route_reason FROM usage_events WHERE kind = 'completion'"
+    )
+    assert row["route_link"] == 3 and WORDS in row["route_reason"]
+    assert "passed over" in row["route_reason"]
+
+
+async def test_every_link_passed_over_is_a_503_that_lists_them(
+    client, pool, monkeypatch, mount_backend
+):
+    fake = await _three_local(client, pool, monkeypatch, mount_backend)
+    header = ",".join(
+        f"{quote(link, safe='')}={quote(WORDS, safe='')}"
+        for link in ("hub:qwen3:8b", "hub:qwen3:4b", "hub:qwen3:1.7b")
+    )
+
+    resp = await _completion(client, {"X-Nova-Role": "chat", "X-Nova-Pass-Over": header})
+
+    assert resp.status_code == 503
+    error = resp.json()["error"]
+    for link in ("hub:qwen3:8b", "hub:qwen3:4b", "hub:qwen3:1.7b"):
+        assert f"{link}: " in error and WORDS in error
+    assert "unreachable" not in error and "refused" not in error and "walled" not in error
+    assert _dialled(fake) == []
+
+
+@pytest.mark.parametrize(
+    "bad_pair",
+    [
+        "hub%3Aqwen3%3A8b",  # no '='
+        "=thinking%20only",  # empty link
+        "hub%3Aqwen3%3A8b=%ZZ",  # bad percent-encoding
+        "hub%3Aqwen3%3A8b=%FF%FE",  # decodes to bytes that are not UTF-8
+    ],
+)
+async def test_a_malformed_pass_over_pair_is_a_400_naming_it(
+    client, pool, monkeypatch, mount_backend, bad_pair
+):
+    fake = await _three_local(client, pool, monkeypatch, mount_backend)
+
+    resp = await _completion(
+        client,
+        {"X-Nova-Role": "chat", "X-Nova-Pass-Over": f"hub%3Aqwen3%3A4b=fine,{bad_pair}"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert "X-Nova-Pass-Over" in error and bad_pair in error
+    assert _dialled(fake) == []
+
+
+async def test_pass_over_on_a_call_with_no_role_is_a_400_in_words(
+    client, pool, monkeypatch, mount_backend
+):
+    fake = await _three_local(client, pool, monkeypatch, mount_backend)
+
+    resp = await _completion(
+        client,
+        {
+            "X-Nova-Purpose": "eval",
+            "X-Nova-Pass-Over": f"{quote('hub:qwen3:8b', safe='')}={quote(WORDS, safe='')}",
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "pass-over needs a role's chain" in resp.json()["error"]
+    assert _dialled(fake) == []
+
+
+async def test_an_empty_pass_over_header_changes_nothing(client, pool, monkeypatch, mount_backend):
+    fake = await _three_local(client, pool, monkeypatch, mount_backend)
+
+    resp = await _completion(client, {"X-Nova-Role": "chat", "X-Nova-Pass-Over": ""})
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert resp.headers["x-nova-route"] == "role=chat;link=1"
+    assert _dialled(fake) == ["qwen3:8b"]

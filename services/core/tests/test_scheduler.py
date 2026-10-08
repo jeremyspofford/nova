@@ -1,12 +1,13 @@
 """The tick: a due row is claimed exactly once, every firing is a traced turn,
 delivery is a fact from the device's own frame, and the process's death is
 visible on the row it left running. S12: a scheduled row bound to an agent
-runs the agent's own funnel — its persona, its rounds, its role on the turn —
+runs the agent's own funnel — its persona and its role on the turn —
 and lands in the owner's conversation; a plain row's call is unchanged."""
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import subprocess
@@ -16,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncpg
+import httpx
 import pytest
 
 from app import (
@@ -26,7 +28,6 @@ from app import (
     devices,
     devices_ws,
     scheduler,
-    settings_store,
     timers,
     tools,
     traces,
@@ -124,8 +125,9 @@ async def _firings(pool, timer_id):
     )
 
 
-async def _rounds_ceiling(pool, rounds: int) -> None:
-    """The live round ceiling, written the way the settings route writes it."""
+async def _stale_rounds_row(pool, rounds: int) -> None:
+    """A leftover agents.max_tool_rounds row, as a pre-044 database holds it:
+    no-ceiling T4 pins that nothing reads it."""
     await pool.execute(
         "INSERT INTO settings (key, value) VALUES ('agents.max_tool_rounds', $1::jsonb) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -378,7 +380,9 @@ async def test_the_scheduled_turn_is_run_turn_called_with_ingest_false(
     # The plain pin (S12 kept it): no persona kwarg at all for a row nobody
     # bound — a plain firing's call is byte-for-byte what it was.
     assert call["kwargs"] == {"ingest": False}
-    _app, _pool, turn, who, conv, _message, history, model, _rounds, _emit = call["args"]
+    # no-ceiling T4: no round count rides the call — nine positionals, no rounds.
+    assert len(call["args"]) == 9, call["args"]
+    _app, _pool, turn, who, conv, _message, history, model, _emit = call["args"]
     assert who == person  # the timer's person, which for his timers is the owner
     assert conv == conversation and history == [] and model == MODEL
     assert turn.conversation_id == conversation
@@ -476,16 +480,17 @@ async def test_an_agent_bound_firing_runs_as_the_agent_and_lands_in_the_owners_c
     assert after["consecutive_failures"] == 0 and after["agent_id"] == agent.id
 
 
-async def test_a_bound_firings_run_turn_call_carries_the_persona_and_the_rows_rounds(
+async def test_a_bound_firings_run_turn_call_carries_the_persona_and_no_round_count(
     pool, mount_peers, monkeypatch, root
 ):
     """The agent case beside the plain pin below: the call differs in exactly
-    the persona kwarg, the agent's Person value, the row's round budget and
-    the empty model — the conversation, the empty history and ingest=False
-    are the same. The shared scope is derived from the row and the OWNER's id
-    (the timer's person), never handed in."""
+    the persona kwarg, the agent's Person value and the empty model — the
+    conversation, the empty history and ingest=False are the same. PIN MOVED
+    (no-ceiling T4, 2026-10-08): it also carried the row's round budget; no
+    round count rides any call now. The shared scope is derived from the row
+    and the OWNER's id (the timer's person), never handed in."""
     person, conversation = await _owner(pool)
-    agent = await _create_agent(pool, mount_peers, max_tool_rounds=3, read_shared_memory=True)
+    agent = await _create_agent(pool, mount_peers, read_shared_memory=True)
     mount_peers(gateway=FakeGateway(deltas=("ok",)), memory=FakeMemory())
     await _set_model(pool)  # set, and still not named for the agent's turn
     row = await _bound(pool, person, conversation, agent)
@@ -508,10 +513,10 @@ async def test_a_bound_firings_run_turn_call_carries_the_persona_and_the_rows_ro
     assert persona.tool_names == SUBSET
     assert persona.shared_person_id == person.id  # the timer's owner, from the row
     assert persona.workspace_root == agents.folder_for(agent)
-    _app, _pool, turn, who, conv, _message, history, model, rounds, _emit = call["args"]
+    assert len(call["args"]) == 9, call["args"]
+    _app, _pool, turn, who, conv, _message, history, model, _emit = call["args"]
     assert who == agent.person() and who.role == agents.AGENT_PERSON_ROLE
     assert conv == conversation and history == [] and model == ""
-    assert rounds == 3 == agent.max_tool_rounds
     assert turn.agent_id == agent.id and turn.role == agent.role
     assert turn.person_id == person.id and turn.conversation_id == conversation
     (firing,) = await _firings(pool, row["id"])
@@ -603,9 +608,7 @@ async def test_run_turn_ingests_by_default(pool, mount_peers, monkeypatch):
     memory = FakeMemory()
     mount_peers(gateway=ScriptedGateway(rounds=((text("hi"),),)), memory=memory)
     turn = await traces.open_turn(pool, conversation_id=conversation, model=MODEL)
-    await chat._run_turn(
-        app, pool, turn, person, conversation, "hello", [], MODEL, 3, lambda f: None
-    )
+    await chat._run_turn(app, pool, turn, person, conversation, "hello", [], MODEL, lambda f: None)
     await chat.drain_background()
     assert [i["exchange"] for i in memory.ingests] == [{"user": "hello", "assistant": "hi"}]
 
@@ -1311,46 +1314,75 @@ def test_the_bound_is_stated_in_words_from_the_bound_that_was_applied():
     assert "the turn's spans say which" in said
 
 
-async def test_the_bound_is_derived_from_the_live_ceiling_not_the_default(pool):
-    """The defect this closes: one constant computed from the DEFAULT round
-    ceiling bounded EVERY firing kind, so raising agents.max_tool_rounds — a
-    deliberate act — left a legitimate long turn to be cut, recorded an error
-    and charged one of the five failures that pause the row. Pinned against the
-    live setting, never a literal."""
-    await _rounds_ceiling(pool, 40)
-    rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
-    assert await scheduler.firing_timeout_s(pool, "scheduled") == rounds * chat.GATEWAY_TIMEOUT.read
-    # And it moves with the setting rather than with an edit here.
-    await _rounds_ceiling(pool, 12)
-    assert await scheduler.firing_timeout_s(pool, "scheduled") == 12 * chat.GATEWAY_TIMEOUT.read
+@pytest.mark.parametrize("kind", ["scheduled", beats.BEAT_KIND])
+async def test_a_model_turn_firing_has_no_wall_clock_cut(pool, kind):
+    """PIN MOVED (no-ceiling T4, 2026-10-08): this was rounds x
+    GATEWAY_TIMEOUT.read, the round ceiling in seconds. The count is gone, so a
+    model-turn firing has no wall-clock cut (None), whatever a stale row says:
+    its own reads' timeouts, circling, the owner's stop, USD caps and a round
+    failure end it."""
+    await _stale_rounds_row(pool, 1)
+    assert scheduler.firing_timeout_s(kind) is None
 
 
-async def test_a_bound_agents_firing_is_bounded_by_that_agents_own_budget(pool, mount_peers, root):
-    """An agent-bound scheduled row runs the agent's rounds, so the bound is
-    the agent's — reading the setting instead would cut the very row whose
-    budget was widened on purpose."""
-    await _owner(pool)
-    await _rounds_ceiling(pool, 6)
-    agent = await _create_agent(pool, mount_peers, name="researcher", max_tool_rounds=30)
-    assert agent.max_tool_rounds == 30
-    assert await scheduler.firing_timeout_s(pool, "scheduled", agent) == (
-        30 * chat.GATEWAY_TIMEOUT.read
+@pytest.mark.parametrize("kind", ["reminder", "job"])
+async def test_a_firing_that_makes_no_model_call_keeps_the_floor(pool, kind):
+    """A reminder writes a chat row and a device frame; a job is database work.
+    Neither waits on a gateway round, so both keep the floor as their cut."""
+    await _stale_rounds_row(pool, 40)
+    assert scheduler.firing_timeout_s(kind) == scheduler.FIRING_TIMEOUT_FLOOR_S
+
+
+def test_the_cut_reads_no_setting_and_no_agent():
+    """C5: kind is the only input — nothing to read, so no pool and no agent."""
+    assert list(inspect.signature(scheduler.firing_timeout_s).parameters) == ["kind"]
+    assert not inspect.iscoroutinefunction(scheduler.firing_timeout_s)
+
+
+def test_the_cut_words_no_longer_cite_a_round_ceiling():
+    """C5: a cut only ever falls on a non-model firing now, so its sentence
+    cannot say the bound is derived from a round ceiling."""
+    said = scheduler.timeout_reason("job", scheduler.FIRING_TIMEOUT_FLOOR_S)
+    assert "round ceiling" not in said
+    assert "ceiling" not in scheduler.firing_timeout_s.__doc__
+
+
+async def test_a_long_scheduled_firing_is_not_cut(pool, mount_peers, monkeypatch):
+    """C5: a scheduled turn that runs past the floor (shrunk to 0.05 s here)
+    and past every per-round bound (GATEWAY_TIMEOUT.read shrunk to 1 ms, so
+    rounds x read is tiny) runs to its answer: no asyncio.wait_for around a
+    model-turn firing. A reminder under the same floor is still cut (the job
+    test above), so the bound is per kind, not removed."""
+    monkeypatch.setattr(scheduler, "FIRING_TIMEOUT_FLOOR_S", 0.05)
+    monkeypatch.setattr(
+        chat, "GATEWAY_TIMEOUT", httpx.Timeout(connect=5.0, read=0.001, write=10.0, pool=5.0)
+    )
+    person, conversation = await _owner(pool)
+    mount_peers(gateway=ScriptedGateway(rounds=((text("done late"),),)), memory=FakeMemory())
+    await _set_model(pool)
+    row = await _scheduled(pool, person, conversation)
+    original = chat._run_turn
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_run_turn", slow)
+    await asyncio.wait_for(
+        scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1)), 10
     )
 
-
-async def test_a_firing_that_makes_no_model_call_gets_the_floor(pool):
-    """A reminder writes a chat row and a device frame; a job is database work.
-    Neither waits on a gateway round, so neither is bounded by one."""
-    await _rounds_ceiling(pool, 40)
-    assert await scheduler.firing_timeout_s(pool, "reminder") == scheduler.FIRING_TIMEOUT_FLOOR_S
-    assert await scheduler.firing_timeout_s(pool, "job") == scheduler.FIRING_TIMEOUT_FLOOR_S
-    # And the floor really is a floor: a tiny live ceiling cannot shrink a
-    # firing's budget below what its own work needs.
-    await _rounds_ceiling(pool, 1)
-    assert await scheduler.firing_timeout_s(pool, "beat") == scheduler.FIRING_TIMEOUT_FLOOR_S
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "ok", firing["reason"]
+    assert await pool.fetchval(TURN_STATUS, firing["turn_id"]) == "ok"
+    rows = await pool.fetch(
+        "SELECT content FROM messages WHERE conversation_id = $1 AND role = 'assistant'",
+        conversation,
+    )
+    assert [r["content"] for r in rows] == ["done late"]
 
 
-def test_the_kinds_bounded_by_the_round_ceiling_are_the_ones_that_run_a_model_turn():
+def test_the_uncut_kinds_are_the_ones_that_run_a_model_turn():
     assert set(scheduler.MODEL_TURN_KINDS) == {"scheduled", beats.BEAT_KIND}
 
 

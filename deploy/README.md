@@ -160,39 +160,51 @@ name or URL. Each line carries the gateway's last verdict, read live from
   for 60 seconds, so a machine that is off does not hold every page that reads the list;
   the Models page's Refresh (`/admin/catalog?fresh=1`) dials every source again.
 
-## The tool-round limit
+## When a turn stops
 
-A reply that ends with `[stopped after N tool rounds without finishing]` ran out of tool
-rounds. N is the limit it ran under: the setting `agents.max_tool_rounds`, or an agent's
-own rounds when an agent answered (below). The limit is a safety ceiling, a backstop
-against a runaway turn and its cost, not the normal way a turn stops: a turn going in
-circles is stopped as soon as that shows (below), before the limit whenever the limit is
-more than a few rounds, so a productive investigation runs on.
+No count of tool rounds stops a turn. A round is one call to the model; while she asks
+for tools they run and she is asked again, in chat, scheduled tasks, beats, agents and
+the eval runner alike. A turn ends on her answer, a stated error, the owner's stop, or
+one of the stops below, and each one says why.
 
-- **Where it is set.** Settings → Behaviour → Tool rounds: put the new limit in
-  "Tool-round limit" and Save. It takes a whole number between 1 and 50; anything else
-  is refused with the reason, and the stored limit stands. The default is 50, the top of
-  that range; a limit you saved stays as you saved it.
-- **What reaching it does.** A round is one call to the model while she is still asking
-  for tools. If the last allowed call asks for more, those tools do not run, so tools run
-  from at most N-1 calls. She then answers once more, with no tools offered, from what
-  the results give her, and the note follows. When that last answer has no words of its
-  own, fails, or asks for a tool (which does not run), the reply lists what the tools
-  returned, one line per call that ran, read off the turn's trace, and then the note, so
-  what the turn found is never lost. Raising it lets a reply do more before it stops, and
-  each extra round is one more model call: time, and spend on a cloud model.
-- **A turn going in circles stops there, before the limit when the limit is higher.**
-  When a turn makes the same call (same tool, same arguments) a third time, or three
-  rounds in a row bring nothing new (every result is text the turn already got), it
-  stops after that round's tools ran,
-  answers the same way with no tools offered, and its note says why:
+- **A turn going in circles stops.** When a turn makes the same call (same tool, same
+  arguments) for the 3rd time, or 3 rounds in a row bring nothing new (every result is
+  text the turn already got), it stops after that round's tools ran. She then answers
+  once more, with no tools offered, from what the results give her; a tool she asks for
+  then does not run. Her reply ends with a note that says why:
   `[stopped after N tool rounds: the same call was repeated]` or
   `[stopped after N tool rounds: the last rounds brought nothing new]`, where N is the
-  rounds it used. Every stopped turn records why in its trace (a `round_stop` step).
-- **Which replies use it.** Her chat replies, scheduled tasks that no agent runs, and the
-  eval runner's turns read it as each one starts, so a saved limit applies from the next
-  one, with no restart. An agent made without rounds of its own copies this limit when it
-  is made, so a change here leaves existing agents alone.
+  rounds it used. The trace records why in a `round_stop` step.
+- **What a stopped reply shows when she does not answer.** When that last answer has no
+  words of its own, fails, or asks for a tool, the reply lists what the tools returned,
+  under "What this turn's tools returned, as far as its trace recorded each result:",
+  one line per call that ran, read off the turn's trace, and then the note, so what the
+  turn found is never lost.
+- **A round that only thinks is asked again, then passed to the next link.** A round
+  whose model reasoned and then closed its stream with no reply and no tool calls is
+  re-asked once on the same model with the same request. If that model answers with
+  thinking only again, the round goes to the gateway with that model named as passed
+  over, and the gateway serves it from the next link in the turn's chain. Each re-ask
+  and pass-over is a `round_retry` step in the trace (`reask` or `pass_over`, with the
+  link). The next round starts from the first link again. Only when no link is left
+  (every link in the chain answered that way), the gateway cannot pass the link over
+  (it did not say which link served, or served it again), or the round has no chain to
+  walk (an eval runner turn names its model), does the turn end: its reply lists what
+  the tools returned, when any ran, then
+  `Stopped: every link in the chain answered with thinking only: <links> — <why>.`
+  A round that comes back with nothing at all, not even reasoning, still ends the turn
+  with the stated failure.
+- **What bounds a runaway.** The circling stop; the owner's stop
+  (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
+  tool reports progress); the gateway's monthly spending caps on cloud providers; a
+  gateway read that stays silent for 300 seconds, and each tool's own budget; and any
+  round that fails.
+  A local model costs nothing, so no spending cap stops it: a local turn that keeps
+  making new, different calls with new results runs until it answers, circles, or the
+  owner stops it. That is the owner's choice, not an oversight.
+- **Scheduled tasks and beats have no wall-clock cut.** They end the way a chat turn
+  does. Timers fire one after another, so a long scheduled turn delays the timers
+  behind it for as long as it works.
 
 ## Decision models (Jev and Kev)
 

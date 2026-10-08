@@ -1,7 +1,7 @@
 {
   "id": "delegates-the-write-to-an-agent",
   "suite": "agent_quality",
-  "suite_version": 20,
+  "suite_version": 21,
   "agents": [
     {
       "name": "eval_writer",
@@ -11,8 +11,7 @@
         "workspace_write_file",
         "workspace_read_file",
         "workspace_list_files"
-      ],
-      "max_tool_rounds": 4
+      ]
     }
   ],
   "message": "have eval_writer write hello.md in its folder with a one-line greeting",

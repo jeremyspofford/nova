@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './SettingsPage'
 import { SettingsShell } from './SettingsShell'
@@ -7,7 +7,7 @@ import { SETTINGS_TABS, DEFAULT_TAB, resolveTab } from './tabs'
 import { ThemeProvider } from '../../stores/theme-store'
 import { AuthProvider } from '../../stores/auth-store'
 import { ChatProvider } from '../../stores/chat-store'
-import { ApiError, getSettings, putSetting, type SettingDef } from '../../lib/api'
+import { getSettings, putSetting, type SettingDef } from '../../lib/api'
 
 // Each section fetches its own data. This file is about ROUTING — which
 // section appears under which tab — so every read is stubbed to its empty
@@ -54,7 +54,7 @@ const SECTIONS_BY_TAB: Record<string, string[]> = {
   general: ['General', 'Account'],
   appearance: ['Appearance', 'Display diagnostics'],
   models: ['Models', 'Providers', 'Routing'],
-  behaviour: ['Response quality', 'Tool rounds'],
+  behaviour: ['Response quality'],
   devices: ['Add to Nova', 'Devices', 'Machines'],
   connections: ['Connections'],
 }
@@ -116,10 +116,10 @@ beforeEach(() => {
   )
   vi.mocked(getSettings).mockResolvedValue([
     { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
-    // The tool-round limit, unset (so its value is its default): Behaviour
-    // draws Tool rounds only when the read lists the key, so it is listed
-    // here for SECTIONS_BY_TAB to hold it like every other section.
-    { key: 'agents.max_tool_rounds', type: 'int', default: 6, description: '', value: 6 },
+    // The old tool-round limit, as a core from before 2026-10-08 still lists
+    // it: no tab draws anything for it, so SECTIONS_BY_TAB holds no section
+    // for it and every tab test below runs with it listed.
+    { key: STALE_KEY, type: 'int', default: 6, description: '', value: 6 },
   ])
 })
 afterEach(() => {
@@ -250,31 +250,20 @@ describe('the settings tabs', () => {
 })
 
 /**
- * Settings → Behaviour → Tool rounds: the tool-round limit
- * (`agents.max_tool_rounds`, whose default in core is 6). The page draws
- * ToolRoundsSection from its ONE settings read, on Behaviour only, and only
- * when that read lists the key; a save writes the value CORE stored back into
- * the page's settings state, so the limit a tab shows after a round trip is
- * core's, never what was typed and never what was there before.
+ * Settings → Behaviour has no tool-round field (2026-10-08, owner: "remove
+ * the whole tool call limit entirely"). Core no longer has the setting, so
+ * there is nothing for the page to show or save. A core from before that
+ * change can still list the old key in its one settings read; the page draws
+ * nothing for it — no section, no description, no number field — on
+ * Behaviour or on any other tab. A turn ends on its own or on the
+ * going-in-circles stop, never on a count the owner set here.
  *
- * Here rather than in SettingsPage.test.tsx because renderAt mounts no
- * ChatPage, whose model picker reads GET /api/v1/settings too: every
- * getSettings call counted here is the page's own. Leaving a tab unmounts its
- * sections while the page stays mounted, so coming back seeds the section
- * afresh from the page's settings state: the round trip is how that state is
- * read.
+ * The old key is spelled in pieces so the web source holds no literal of it
+ * (src/lib/noRoundCap.src.test.ts reads the whole tree for one).
  */
 
-const LIMIT_KEY = 'agents.max_tool_rounds'
-
-/** Core's description of the key (settings_store.py), as GET lists it. */
-const CORE_DESCRIPTION =
-  'How many times one chat turn may call the model while it is still asking for tools. ' +
-  'Reaching the limit ends the turn with a note saying so, never silently.'
-
-/** Core's refusal of 51 (T1's sentence), as lib/api's putSetting rejects with it. */
-const CORE_REFUSES_51 =
-  'setting agents.max_tool_rounds: the tool-round limit must be between 1 and 50, got 51'
+/** The key a core from before 2026-10-08 still listed. */
+const STALE_KEY = ['agents', ['max', 'tool', 'rounds'].join('_')].join('.')
 
 const CHAT_MODEL: SettingDef = {
   key: 'chat.model',
@@ -284,12 +273,12 @@ const CHAT_MODEL: SettingDef = {
   value: 'qwen3:8b',
 }
 
-/** The limit as GET /api/v1/settings lists it: an int whose default is 6, holding `value`. */
-const limitDef = (value: unknown, description = CORE_DESCRIPTION): SettingDef => ({
-  key: LIMIT_KEY,
+/** The old limit, as a stale core's GET /api/v1/settings would list it. */
+const staleDef = (value: unknown): SettingDef => ({
+  key: STALE_KEY,
   type: 'int',
   default: 6,
-  description,
+  description: 'How many times one chat turn may call the model while it is still asking for tools.',
   value,
 })
 
@@ -300,198 +289,83 @@ const PROACTIVE: SettingDef[] = [
   { key: 'proactive.max_notices_per_day', type: 'int', default: 20, description: '', value: 9 },
 ]
 
-const limitHeading = () => panel().queryByRole('heading', { level: 2, name: 'Tool rounds' })
-const limitField = () => panel().getByLabelText('Tool-round limit') as HTMLInputElement
+/** Words a tool-round field would carry, in any case and spacing. */
+const ROUND_WORDS = /tool[\s-]*rounds?/i
 
-/** Waits for the Tool rounds section in the panel, as an assertion, so a page
- *  that never draws it fails here and says which section it lacked. */
-async function limitDrawn() {
-  await waitFor(() => expect(limitHeading(), 'the Tool rounds section').not.toBeNull())
+/** The panel's level-2 headings, in order. */
+const headings = () =>
+  [...screen.getByTestId('settings-panel').querySelectorAll('h2')].map(h => h.textContent ?? '')
+
+/** Nothing in the panel that a tool-round field would draw. */
+function expectNoRoundField(where: string) {
+  const el = screen.getByTestId('settings-panel')
+  expect(
+    headings().filter(h => ROUND_WORDS.test(h)),
+    `${where}: a tool-round heading`,
+  ).toEqual([])
+  expect(el.querySelector('[data-testid="tool-rounds-description"]'), `${where}: its description`).toBeNull()
+  expect(el.querySelector('[data-testid="tool-rounds-error"]'), `${where}: its error`).toBeNull()
+  expect(panel().queryAllByLabelText(ROUND_WORDS), `${where}: a field labelled for it`).toEqual([])
+  expect(el.textContent ?? '', `${where}: its words`).not.toMatch(ROUND_WORDS)
 }
 
-/** No Tool rounds section and no limit field in the panel. */
-function expectNoLimit(where: string) {
-  expect(limitHeading(), `${where}: a Tool rounds section`).toBeNull()
-  expect(panel().queryByLabelText('Tool-round limit'), `${where}: a limit field`).toBeNull()
-}
-
-/** Reads of GET /api/v1/settings that went around the mocked getSettings. */
-const settingsFetches = () =>
-  vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/settings'))
-
-/** Core's answer to PUT /api/v1/settings, for this test only: clearAllMocks
- *  keeps implementations, so the file's own empty answer is put back after. */
-function coreAnswers(answer: (key: string, value: boolean | string | number) => Promise<unknown>) {
-  const before = vi.mocked(putSetting).getMockImplementation()
-  onTestFinished(() => {
-    if (before) vi.mocked(putSetting).mockImplementation(before)
+/** Lets the page's one settings read land and React draw from it. */
+async function readLanded() {
+  await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(1))
+  await act(async () => {
+    await vi.mocked(getSettings).mock.results[0].value
+    await new Promise(r => setTimeout(r, 0))
   })
-  vi.mocked(putSetting).mockImplementation(answer as typeof putSetting)
 }
 
-/** Leaves Behaviour by the General tab link, then comes back by Behaviour's. */
-async function leaveAndComeBack() {
-  fireEvent.click(screen.getByTestId('settings-tab-general'))
-  await panel().findByRole('heading', { level: 2, name: 'General' })
-  expectNoLimit('general')
-  fireEvent.click(screen.getByTestId('settings-tab-behaviour'))
-  await limitDrawn()
-}
-
-describe('Settings → Behaviour: the tool-round limit', () => {
-  it('shows the limit as listed, 12 not the default and 99 not clamped, with the listed description, from the one settings read', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(12)])
-    const first = renderAt('/settings/behaviour')
-
-    await limitDrawn()
-    // 12 is stored; the def's default is 6.
-    expect(limitField().value).toBe('12')
-    expect(panel().getByTestId('tool-rounds-description').textContent).toBe(CORE_DESCRIPTION)
-    // From the page's one read: no second read, by getSettings or around it.
-    expect(getSettings).toHaveBeenCalledTimes(1)
-    expect(settingsFetches()).toEqual([])
-    expect(putSetting).not.toHaveBeenCalled()
-    first.unmount()
-
-    // A value stored before core bounded the key is shown as stored: 99, not
-    // clamped to 50. The words are whatever the listing carries.
-    const elsewhere = 'Words only this test wrote, so only the listing can have brought them.'
-    vi.mocked(getSettings).mockClear()
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(99, elsewhere)])
+describe('Settings → Behaviour: no tool-round field', () => {
+  it('draws no tool-round section, description, error or number field even when the read still lists the old key', async () => {
+    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, staleDef(12)])
     renderAt('/settings/behaviour')
 
-    await limitDrawn()
-    expect(limitField().value).toBe('99')
-    expect(panel().getByTestId('tool-rounds-description').textContent).toBe(elsewhere)
-    expect(getSettings).toHaveBeenCalledTimes(1)
-    expect(settingsFetches()).toEqual([])
+    await panel().findByRole('heading', { level: 2, name: 'Response quality' })
+    await readLanded()
+    expectNoRoundField('behaviour, the old key listed')
+    // No number field at all: Response quality is a switch, and nothing else
+    // on Behaviour takes a number unless the proactive keys are listed.
+    expect(panel().queryAllByRole('spinbutton')).toEqual([])
+    // Drawing nothing is not saving anything.
     expect(putSetting).not.toHaveBeenCalled()
   })
 
-  it('lives on Behaviour, reached from General by its tab link, and on no other tab', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(12)])
-    renderAt('/settings/general')
-    await panel().findByRole('heading', { level: 2, name: 'General' })
-
-    // Reached by navigating: the tab strip's Behaviour link, not an address.
-    fireEvent.click(screen.getByTestId('settings-tab-behaviour'))
-    await limitDrawn()
-    expect(screen.getByTestId('settings-tab-behaviour').getAttribute('aria-current')).toBe('page')
-    expect(limitField().value).toBe('12')
-
-    // The same listing on every other tab: no Tool rounds there. Each tab is
-    // waited on until its first section draws, so a panel still loading
-    // cannot pass for one without the section.
-    for (const t of SETTINGS_TABS.filter(tab => tab.slug !== 'behaviour')) {
-      fireEvent.click(screen.getByTestId(`settings-tab-${t.slug}`))
-      await panel().findByRole('heading', { level: 2, name: SECTIONS_BY_TAB[t.slug][0] })
-      expectNoLimit(t.slug)
-    }
-  })
-
-  it('is drawn beside the proactive settings when both are listed, and not when only they are', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, ...PROACTIVE, limitDef(12)])
-    const both = renderAt('/settings/behaviour')
-
-    await limitDrawn()
-    expect(limitField().value).toBe('12')
-    expect(panel().getByRole('heading', { level: 2, name: 'Proactive' })).toBeTruthy()
-    expect(panel().getByRole('heading', { level: 2, name: 'Response quality' })).toBeTruthy()
-    both.unmount()
-
-    // The proactive keys without the limit: Proactive drawing proves the read
-    // landed, so the absence after it is the page's choice, not a slow load.
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, ...PROACTIVE])
-    renderAt('/settings/behaviour')
-    await panel().findByRole('heading', { level: 2, name: 'Proactive' })
-    expect(panel().getByRole('heading', { level: 2, name: 'Response quality' })).toBeTruthy()
-    expectNoLimit('the proactive keys listed, the limit not')
-  })
-
-  it('is drawn when listed without the proactive settings, and not when unlisted or when the read fails, which the page says', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(12)])
+  it("Behaviour's sections are Response quality alone, or Proactive and Response quality when those keys are listed", async () => {
+    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, staleDef(12)])
     const alone = renderAt('/settings/behaviour')
-
-    await limitDrawn()
-    expect(limitField().value).toBe('12')
-    expect(panel().queryByRole('heading', { level: 2, name: 'Proactive' })).toBeNull()
+    await panel().findByRole('heading', { level: 2, name: 'Response quality' })
+    await readLanded()
+    expect(headings()).toEqual(['Response quality'])
     alone.unmount()
 
-    // Unlisted: Behaviour still draws, with no limit and no number field of
-    // the browser's own (the default 6 or any other).
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL])
-    const unlisted = renderAt('/settings/behaviour')
-    await panel().findByRole('heading', { level: 2, name: 'Response quality' })
-    expectNoLimit('the limit unlisted')
-    expect(panel().queryAllByRole('spinbutton')).toEqual([])
-    unlisted.unmount()
-
-    // The read failed: the page says why, Behaviour still draws, and there is
-    // no def to draw the limit from.
-    const reason = 'could not reach Nova — connection refused'
-    vi.mocked(getSettings).mockRejectedValue(new Error(reason))
+    // Proactive drawing proves the read landed, so what follows it is the
+    // page's whole answer, not a slow load.
+    vi.mocked(getSettings).mockClear()
+    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, ...PROACTIVE, staleDef(12)])
     renderAt('/settings/behaviour')
-    await waitFor(() =>
-      expect(screen.getByRole('alert').textContent).toBe(`Could not read the settings: ${reason}`),
-    )
-    await panel().findByRole('heading', { level: 2, name: 'Response quality' })
-    expectNoLimit('the read failed')
-    expect(panel().queryAllByRole('spinbutton')).toEqual([])
+    await panel().findByRole('heading', { level: 2, name: 'Proactive' })
+    await readLanded()
+    expect(headings()).toEqual(['Proactive', 'Response quality'])
+    expectNoRoundField('behaviour, proactive and the old key listed')
   })
 
-  it('a save puts what core stored into the page, so nothing is pending and the limit reads 21 after leaving the tab and coming back, with no second read', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(12)])
-    // Core stores 21 for a typed 20: the page must keep core's number.
-    coreAnswers(async (key, value) => (key === LIMIT_KEY ? { key, value: 21 } : { key, value }))
-    renderAt('/settings/behaviour')
-
-    await limitDrawn()
-    expect(limitField().value).toBe('12')
-    fireEvent.change(limitField(), { target: { value: '20' } })
-    fireEvent.click(panel().getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => expect(panel().getByText(/^Saved\b/).textContent).toContain('stored as 21'))
-    // Through lib/api's putSetting, once, as the number typed.
-    expect(vi.mocked(putSetting).mock.calls).toEqual([[LIMIT_KEY, 20]])
-    expect(limitField().value).toBe('21')
-    // Nothing pending: the page holds 21 now, so there is no Save, and no
-    // Reset that would bring 12 back.
-    expect(panel().queryByRole('button', { name: 'Save' })).toBeNull()
-    expect(panel().queryByRole('button', { name: 'Reset' })).toBeNull()
-
-    await leaveAndComeBack()
-    expect(limitField().value).toBe('21')
-    expect(getSettings).toHaveBeenCalledTimes(1)
-    expect(settingsFetches()).toEqual([])
-    expect(vi.mocked(putSetting).mock.calls).toEqual([[LIMIT_KEY, 20]])
-  })
-
-  it('a refusal shows the sentence core refused with, saves nothing, and the limit reads 12 after leaving the tab and coming back', async () => {
-    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, limitDef(12)])
-    // Core refuses 51 the way lib/api's putSetting rejects on core's 400.
-    coreAnswers(async (key, value) => {
-      if (key === LIMIT_KEY && value === 51) throw new ApiError(400, CORE_REFUSES_51)
-      return { key, value }
-    })
-    renderAt('/settings/behaviour')
-
-    await limitDrawn()
-    fireEvent.change(limitField(), { target: { value: '51' } })
-    fireEvent.click(panel().getByRole('button', { name: 'Save' }))
-
-    // Core's sentence, verbatim, after the section's lead.
-    await waitFor(() =>
-      expect(panel().getByRole('alert').textContent).toBe(`Could not save the limit: ${CORE_REFUSES_51}`),
-    )
-    // Through lib/api's putSetting, once, as the number 51.
-    expect(vi.mocked(putSetting).mock.calls).toEqual([[LIMIT_KEY, 51]])
-    // Nothing says saved.
-    expect(panel().queryByText(/^Saved\b/)).toBeNull()
-    expect(screen.getByTestId('settings-panel').textContent).not.toContain('stored as')
-
-    await leaveAndComeBack()
-    expect(limitField().value).toBe('12')
-    expect(getSettings).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(putSetting).mock.calls).toEqual([[LIMIT_KEY, 51]])
+  it('no other tab draws it either, reached by the tab links with the old key listed', async () => {
+    vi.mocked(getSettings).mockResolvedValue([CHAT_MODEL, staleDef(12)])
+    renderAt('/settings/general')
+    await panel().findByRole('heading', { level: 2, name: 'General' })
+    await readLanded()
+    for (const t of SETTINGS_TABS) {
+      fireEvent.click(screen.getByTestId(`settings-tab-${t.slug}`))
+      // Waited on until the tab's first section draws, so a panel still
+      // loading cannot pass for one without the field.
+      await panel().findByRole('heading', { level: 2, name: SECTIONS_BY_TAB[t.slug][0] })
+      await act(async () => {
+        await new Promise(r => setTimeout(r, 0))
+      })
+      expectNoRoundField(t.slug)
+    }
   })
 })

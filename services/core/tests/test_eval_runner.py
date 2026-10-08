@@ -114,35 +114,30 @@ def _case(
     )
 
 
-# -- the round ceiling when the setting cannot be read (turn-cap T5) --------
+# -- no round count in an eval turn (no-ceiling T4) -------------------------
 
 
-async def test_an_unreadable_limit_runs_the_turn_under_the_defs_own_default(
-    pool, mount_peers, monkeypatch
-):
-    """evals/runner.py once carried its own literal 6 beside the SettingDef's:
-    two numbers that agreed only until one moved. When the setting read fails
-    the turn runs under DEFS_BY_KEY's default, moved here to 7 so a literal
-    that happens to match the real default cannot pass."""
+async def test_an_eval_turn_reads_no_round_count_and_passes_none(pool, mount_peers, monkeypatch):
+    """PIN MOVED (no-ceiling T4, 2026-10-08): this pinned the runner falling
+    back to the SettingDef's default when agents.max_tool_rounds could not be
+    read. The count is gone: the runner never reads that key, and its
+    _run_turn call binds no max_tool_rounds."""
     key = "agents.max_tool_rounds"
-    moved = dataclasses.replace(settings_store.DEFS_BY_KEY[key], default=7)
-    monkeypatch.setitem(settings_store.DEFS_BY_KEY, key, moved)
-
+    asked: list[str] = []
     real_read = settings_store.read_value
 
-    async def unreadable(pool_or_conn, wanted):
-        if wanted == key:
-            raise RuntimeError("the settings table is unreachable")
+    async def recording(pool_or_conn, wanted):
+        asked.append(wanted)
         return await real_read(pool_or_conn, wanted)
 
-    monkeypatch.setattr(settings_store, "read_value", unreadable)
+    monkeypatch.setattr(settings_store, "read_value", recording)
 
-    ran_with: list[int] = []
+    bound_args: list[dict] = []
     real_turn = chat._run_turn
     bound = inspect.signature(real_turn)
 
     async def spy(*args, **kwargs):
-        ran_with.append(bound.bind(*args, **kwargs).arguments["max_tool_rounds"])
+        bound_args.append(dict(bound.bind(*args, **kwargs).arguments))
         return await real_turn(*args, **kwargs)
 
     monkeypatch.setattr(chat, "_run_turn", spy)
@@ -150,7 +145,9 @@ async def test_an_unreadable_limit_runs_the_turn_under_the_defs_own_default(
 
     run = await runner.run_case(app, pool, _case([PredicateSpec("reply_matches", "Here")]), MODEL)
 
-    assert ran_with == [7], ran_with
+    assert key not in asked, asked
+    assert len(bound_args) == 1
+    assert "max_tool_rounds" not in bound_args[0]
     assert run.ungradeable is False, run.detail
 
 
@@ -934,7 +931,6 @@ def _fixture_agent(name="eval_probe", **over) -> FixtureAgent:
         purpose=over.pop("purpose", "answers eval probes"),
         instructions=over.pop("instructions", "Do the small thing you are asked for."),
         tools=over.pop("tools", ("workspace_read_file",)),
-        max_tool_rounds=over.pop("max_tool_rounds", 2),
     )
 
 
@@ -1073,7 +1069,6 @@ async def test_an_orphan_from_a_killed_run_is_replaced_not_reused(pool, world, m
             purpose="left behind by a killed run",
             instructions="stale",
             tools=("workspace_read_file",),
-            max_tool_rounds=2,
         ),
         created_via="page",
         created_turn_id=None,
@@ -1198,7 +1193,6 @@ async def _make_fixture_agent(pool, name="eval_probe"):
             purpose="p",
             instructions="i",
             tools=("workspace_read_file",),
-            max_tool_rounds=2,
         ),
         created_via="page",
         created_turn_id=None,
@@ -1331,7 +1325,35 @@ def test_a_declared_agent_name_must_carry_the_reserved_prefix():
     assert parsed == FixtureAgent(
         name="eval_coder", purpose="p", instructions="i", tools=("get_time",)
     )
-    assert parsed.max_tool_rounds is None
+    # PIN MOVED (no-ceiling T6): was `parsed.max_tool_rounds is None` (the optional
+    # field absent); a case agent has no rounds field at all now.
+    assert not hasattr(parsed, "max_tool_rounds")
+
+
+def test_a_case_agent_still_naming_rounds_loads_without_them():
+    """no-ceiling T6, ORCHESTRATOR ruling: no new load-time strictness. A case
+    agent declared with a stale max_tool_rounds still loads as it did (the
+    loader reads only the keys it knows), and the parsed agent carries no
+    rounds — neither as a field nor in its JSON."""
+    parsed = cases_mod.agent_from_dict(
+        {
+            "name": "eval_coder",
+            "purpose": "p",
+            "instructions": "i",
+            "tools": ["get_time"],
+            "max_tool_rounds": 4,
+        }
+    )
+    assert parsed == FixtureAgent(
+        name="eval_coder", purpose="p", instructions="i", tools=("get_time",)
+    )
+    assert "max_tool_rounds" not in parsed.as_json()
+
+
+def test_the_runner_makes_a_fixture_agent_with_no_rounds():
+    """no-ceiling T6: the runner builds a case's agent through agents.create
+    and hands it no round count — there is none to hand."""
+    assert "max_tool_rounds" not in inspect.getsource(runner)
 
 
 # -- a run that cannot produce a measurement stops saying so (S22) ----------

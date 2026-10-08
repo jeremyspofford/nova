@@ -41,8 +41,6 @@ const DEFAULT_API: AgentFormApi = { listTools: apiListTools, listSkills: apiList
 /** The one tool never offered: delegation is Nova's, not an agent's. */
 export const HIDDEN_TOOLS: ReadonlySet<string> = new Set(['delegate_to_agent'])
 
-export const MAX_TOOL_ROUNDS = 50
-
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -58,14 +56,12 @@ interface Draft {
   skills: string[]
   /** As typed; '' = uncapped. Parsed only on submit. */
   cap: string
-  /** As typed; '' = the store's default. Parsed only on submit. */
-  rounds: string
   readShared: boolean
 }
 
 function draftFrom(initial: Agent | undefined): Draft {
   if (!initial) {
-    return { name: '', purpose: '', instructions: '', tools: [], skills: [], cap: '', rounds: '', readShared: false }
+    return { name: '', purpose: '', instructions: '', tools: [], skills: [], cap: '', readShared: false }
   }
   return {
     name: initial.name,
@@ -74,14 +70,12 @@ function draftFrom(initial: Agent | undefined): Draft {
     tools: [...initial.tools],
     skills: initial.skills.map(s => s.name),
     cap: initial.monthly_cap_usd === null ? '' : String(initial.monthly_cap_usd),
-    rounds: String(initial.max_tool_rounds),
     readShared: initial.read_shared_memory,
   }
 }
 
 /** What the draft sends. Numbers are parsed here and nowhere else; a blank
- * cap is null (uncapped) and a blank rounds field is OMITTED so the store
- * applies its own default rather than this client guessing one. */
+ * cap is null (uncapped). */
 export function bodyFrom(draft: Draft): AgentWrite {
   const body: AgentWrite = {
     name: draft.name.trim(),
@@ -92,7 +86,6 @@ export function bodyFrom(draft: Draft): AgentWrite {
     monthly_cap_usd: draft.cap.trim() === '' ? null : Number(draft.cap),
     read_shared_memory: draft.readShared,
   }
-  if (draft.rounds.trim() !== '') body.max_tool_rounds = Number(draft.rounds)
   return body
 }
 
@@ -180,13 +173,10 @@ function AgentFormBody({
     return draft.skills.filter(n => !offeredSkillNames.has(n))
   }, [skills, initial, draft.skills, offeredSkillNames])
 
-  const roundsNumber = draft.rounds.trim() === '' ? null : Number(draft.rounds)
-  const roundsBad =
-    roundsNumber !== null && (!Number.isInteger(roundsNumber) || roundsNumber < 1 || roundsNumber > MAX_TOOL_ROUNDS)
   const capNumber = draft.cap.trim() === '' ? null : Number(draft.cap)
   const capBad = capNumber !== null && (!Number.isFinite(capNumber) || capNumber < 0)
   const canSubmit =
-    !saving && !roundsBad && !capBad && draft.name.trim() !== '' && draft.purpose.trim() !== '' && draft.instructions.trim() !== ''
+    !saving && !capBad && draft.name.trim() !== '' && draft.purpose.trim() !== '' && draft.instructions.trim() !== ''
 
   const save = async () => {
     setSaving(true)
@@ -334,18 +324,6 @@ function AgentFormBody({
           onChange={e => setDraft(d => ({ ...d, cap: e.target.value }))}
           error={capBad ? 'a cap is a non-negative amount' : undefined}
           placeholder="uncapped"
-        />
-        <Input
-          label="Max tool rounds"
-          description={`1–${MAX_TOOL_ROUNDS}. Blank = the default.`}
-          type="number"
-          min={1}
-          max={MAX_TOOL_ROUNDS}
-          step={1}
-          inputMode="numeric"
-          value={draft.rounds}
-          onChange={e => setDraft(d => ({ ...d, rounds: e.target.value }))}
-          error={roundsBad ? `rounds must be a whole number from 1 to ${MAX_TOOL_ROUNDS}` : undefined}
         />
       </div>
 

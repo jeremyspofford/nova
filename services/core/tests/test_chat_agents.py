@@ -130,16 +130,14 @@ async def _agent_turn(
     *,
     ingest: bool = False,
     turn: traces.Turn | None = None,
-    max_tool_rounds: int | None = None,
     persona: agents.Persona | None = None,
 ) -> tuple[traces.Turn, list]:
     """Run one agent turn through the funnel exactly as delegation / a mention
     will: the agent's Person VALUE, its log conversation, its persona (the
-    shared scope DERIVED from the row and the owner's id), its rounds; settle
-    the detached close before returning. `max_tool_rounds` is the ARGUMENT a
-    caller hands the funnel (default: the row's own); `persona` overrides
-    the one derived from `agent` — for the test that runs a turn as the
-    wrong identity."""
+    shared scope DERIVED from the row and the owner's id); settle the
+    detached close before returning. No round count rides (no-ceiling T4).
+    `persona` overrides the one derived from `agent` — for the test that runs
+    a turn as the wrong identity."""
     if turn is None:
         turn = await _open_agent_turn(pool, agent, owner)
     if persona is None:
@@ -155,7 +153,6 @@ async def _agent_turn(
         message,
         [],
         MODEL,
-        agent.max_tool_rounds if max_tool_rounds is None else max_tool_rounds,
         frames.append,
         ingest=ingest,
         persona=persona,
@@ -178,7 +175,7 @@ async def _nova_turn(
     frames: list = []
     before = set(chat._BACKGROUND)
     await chat._run_turn(
-        app, pool, turn, owner, conversation["id"], message, [], MODEL, 3, frames.append
+        app, pool, turn, owner, conversation["id"], message, [], MODEL, frames.append
     )
     await chat.settle_detached(before)
     return turn, frames
@@ -364,7 +361,9 @@ async def test_an_agent_turn_advertises_its_subset_and_carries_its_block(pool, m
     assert "You are coder, an agent working for the household" in system
     assert "Purpose: writes code" in system and "Write small, tested changes." in system
     assert "Your workspace folder is agents/coder/" in system
-    assert f"You have {agent.max_tool_rounds} tool rounds per task." in system
+    # PIN MOVED (no-ceiling T6): was "You have N tool rounds per task." — an agent
+    # has no rounds, so its block states none.
+    assert "tool rounds" not in system
     assert "delegate_to_agent" not in system and "Agents you can delegate to" not in system
     assert payload["messages"][-1] == {"role": "user", "content": "write hello.py"}
 
@@ -915,32 +914,30 @@ async def test_a_call_to_no_tool_is_answered_from_the_subset(pool, mount_peers, 
     )
 
 
-async def test_the_rows_round_budget_wins_over_the_argument(pool, mount_peers, root):
-    """Rounds are ONE fact — the agent's own row, the number its prompt
-    states. A caller handing the funnel a different number (the global
-    setting, say) does not get it: with max_tool_rounds=1 on the row and 5
-    as the argument, a gateway scripted for two tool rounds is stopped after
-    one, through the ordinary out-of-rounds path."""
+async def test_no_round_count_stops_an_agents_turn(pool, mount_peers, root):
+    """PIN MOVED (no-ceiling T4, 2026-10-08): this pinned the row's per-agent
+    round count (1) winning over the argument (5) and stopping the turn
+    after one round. No count stops a turn now (owner: "not have a limit at
+    all"): two distinct tool rounds both run, and the agent's own answer is
+    the reply, with no stop note. The 60-round case is in test_turn_progress."""
     owner = await _owner(pool)
-    agent = await _create(pool, mount_peers, max_tool_rounds=1)
+    agent = await _create(pool, mount_peers)
     gateway = ScriptedGateway(
         rounds=(
             (whole_call("c1", "get_time", {}),),
-            (whole_call("c2", "get_time", {}),),
-            (text("late"),),
+            (whole_call("c2", "workspace_read_file", {"path": "x.md"}),),
+            (text("it is late"),),
         )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
-    turn, _ = await _agent_turn(pool, agent, owner, "what time is it", max_tool_rounds=5)
+    turn, _ = await _agent_turn(pool, agent, owner, "what time is it")
 
-    assert "You have 1 tool rounds per task." in gateway.payloads[0]["messages"][0]["content"]
-    assert gateway.calls == 2  # the one tool round, then the closing narration round
+    assert gateway.calls == 3
     spans = [s for s in await _spans(pool, turn.id) if s["kind"] == "tool"]
-    assert [
-        (s["name"], s["meta"]["ok"], s["meta"].get("refused_out_of_rounds")) for s in spans
-    ] == [("get_time", False, True)]
-    assert await _reply(pool, turn.id) == "[stopped after 1 tool rounds without finishing]"
+    assert [s["name"] for s in spans] == ["get_time", "workspace_read_file"]
+    assert not [s for s in spans if s["meta"].get("refused_out_of_rounds")]
+    assert await _reply(pool, turn.id) == "it is late"
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
 
 

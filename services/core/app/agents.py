@@ -47,7 +47,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import governance, identity, peers, settings_store, spend_api, tools, traces
+from app import governance, identity, peers, spend_api, tools, traces
 from app import skills as skills_store
 from app.identity import Person
 from app.tools.base import ToolFailure
@@ -91,9 +91,6 @@ EVAL_FIXTURE_PREFIX = "eval_"
 RESERVED_PREFIXES = frozenset({EVAL_FIXTURE_PREFIX})
 MENTION_RE = re.compile(r"^@([a-z][a-z_]{0,25})\b")
 CREATED_VIA = ("chat", "page")
-# The range is settings_store's (the agents.max_tool_rounds default is its
-# top, and that module cannot import this one at load): one place for 50.
-MIN_ROUNDS, MAX_ROUNDS = settings_store.TOOL_ROUNDS_RANGE
 
 # What a skill file IS — the name rule, the character budget, the directory
 # and the read — lives in app/skills.py (S17), because the skills table and
@@ -106,7 +103,7 @@ ROUTE_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 # Every read and every RETURNING names the same columns, so a row is the
 # same shape wherever it was fetched.
 _COLUMNS = (
-    "id, name, purpose, instructions, tools, skills, monthly_cap_usd, max_tool_rounds, "
+    "id, name, purpose, instructions, tools, skills, monthly_cap_usd, "
     "read_shared_memory, log_conversation_id, created_via, created_turn_id, "
     "created_at, updated_at"
 )
@@ -130,7 +127,6 @@ class Agent:
     tools: tuple[str, ...]
     skills: tuple[str, ...]
     monthly_cap_usd: Decimal | None
-    max_tool_rounds: int
     read_shared_memory: bool
     log_conversation_id: uuid.UUID | None
     created_via: str
@@ -160,7 +156,6 @@ class Agent:
             tools=tuple(record["tools"] or ()),
             skills=tuple(record["skills"] or ()),
             monthly_cap_usd=record["monthly_cap_usd"],
-            max_tool_rounds=record["max_tool_rounds"],
             read_shared_memory=record["read_shared_memory"],
             log_conversation_id=record["log_conversation_id"],
             created_via=record["created_via"],
@@ -295,7 +290,6 @@ def instructions_block(
     tail = [
         f"Your workspace folder is agents/{agent.name}/ — every path you read or write is "
         "inside it.",
-        f"You have {agent.max_tool_rounds} tool rounds per task.",
         memory,
         f"The owner may address you directly as @{agent.name} at the start of a message.",
         "To remove an agent, ask the owner or Nova.",
@@ -433,9 +427,6 @@ class AgentSpec:
     tools: tuple[str, ...]
     skills: tuple[str, ...] = ()
     monthly_cap_usd: Decimal | None = None
-    # None: the 'agents.max_tool_rounds' setting at create time, COPIED into
-    # the row — an agent's budget is its own fact, not a live setting read.
-    max_tool_rounds: int | None = None
     read_shared_memory: bool = False
     model_chain: tuple[str, ...] = ()
 
@@ -529,21 +520,10 @@ def validate_spec(
                 f"no skill named {name!r} — files under skills/: {', '.join(existing) or 'none'}"
             )
     _cap_decimal(spec.monthly_cap_usd)
-    rounds = spec.max_tool_rounds
-    if rounds is not None and (
-        isinstance(rounds, bool)
-        or not isinstance(rounds, int)
-        or not MIN_ROUNDS <= rounds <= MAX_ROUNDS
-    ):
-        raise AgentError(
-            f"max_tool_rounds must be between {MIN_ROUNDS} and {MAX_ROUNDS}, got {rounds!r}"
-        )
     _names_tuple(spec.model_chain, "model_chain")
 
 
-def _spec_meta(
-    spec: AgentSpec, rounds: int, created_via: str | None = None, *, with_chain: bool = True
-) -> dict:
+def _spec_meta(spec: AgentSpec, created_via: str | None = None, *, with_chain: bool = True) -> dict:
     """The spec as the ledger stores it — JSON-able, Decimal made a float.
     `with_chain=False` leaves model_chain out: the chain is not a column, so
     a write that did not carry one has nothing true to record about it."""
@@ -555,7 +535,6 @@ def _spec_meta(
         "tools": list(spec.tools),
         "skills": list(spec.skills),
         "monthly_cap_usd": None if cap is None else float(cap),
-        "max_tool_rounds": rounds,
         "read_shared_memory": bool(spec.read_shared_memory),
     }
     if with_chain:
@@ -563,18 +542,6 @@ def _spec_meta(
     if created_via is not None:
         meta["created_via"] = created_via
     return meta
-
-
-async def _rounds_for(pool: asyncpg.Pool, spec: AgentSpec) -> int:
-    if spec.max_tool_rounds is not None:
-        return int(spec.max_tool_rounds)
-    rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
-    if not MIN_ROUNDS <= rounds <= MAX_ROUNDS:
-        raise AgentError(
-            f"the agents.max_tool_rounds setting is {rounds}, outside {MIN_ROUNDS}..{MAX_ROUNDS} — "
-            "pass max_tool_rounds explicitly or fix the setting"
-        )
-    return rounds
 
 
 async def _owner_or_refuse(pool: asyncpg.Pool) -> Person:
@@ -848,7 +815,7 @@ def _describe(verb: str, agent: Agent, *, folder: Path, route: RouteOutcome) -> 
     return (
         f"{verb} agent {agent.name} — purpose: {_one_line(agent.purpose)}; "
         f"tools: {len(agent.tools)} of {registry_size} ({', '.join(agent.tools) or 'none'}); "
-        f"{folder_words}; rounds {agent.max_tool_rounds}; cap {cap}; memory: {memory}{skills}; "
+        f"{folder_words}; cap {cap}; memory: {memory}{skills}; "
         f"{route.detail}; log conversation {agent.log_conversation_id}"
     )
 
@@ -890,7 +857,6 @@ async def create(
         raise AgentError(
             f"created_via must be one of {', '.join(CREATED_VIA)}, got {created_via!r}"
         )
-    rounds = await _rounds_for(pool, spec)
     cap = _cap_decimal(spec.monthly_cap_usd)
     owner = await _owner_or_refuse(pool)
     folder = _folder(spec.name, None)
@@ -901,8 +867,8 @@ async def create(
         try:
             row = await conn.fetchrow(
                 "INSERT INTO agents (name, purpose, instructions, tools, skills, monthly_cap_usd, "
-                "max_tool_rounds, read_shared_memory, log_conversation_id, created_via, "
-                "created_turn_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) "
+                "read_shared_memory, log_conversation_id, created_via, created_turn_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
                 f"RETURNING {_COLUMNS}",
                 spec.name,
                 spec.purpose,
@@ -910,7 +876,6 @@ async def create(
                 list(spec.tools),
                 list(spec.skills),
                 cap,
-                rounds,
                 bool(spec.read_shared_memory),
                 log_id,
                 created_via,
@@ -924,7 +889,7 @@ async def create(
             kind=governance.AGENT_CREATED,
             actor=actor,
             subject_ref=agent.id,
-            meta=_spec_meta(spec, rounds, created_via),
+            meta=_spec_meta(spec, created_via),
         )
         _make_folder(folder, spec.name)
     route = await register_route(app, agent, spec.model_chain)
@@ -946,7 +911,6 @@ UPDATABLE = frozenset(
         "tools",
         "skills",
         "monthly_cap_usd",
-        "max_tool_rounds",
         "read_shared_memory",
         "model_chain",
     }
@@ -985,7 +949,6 @@ async def update(pool: asyncpg.Pool, app, name: str, changes: dict, *, actor: st
         tools=pick("tools", current.tools),
         skills=pick("skills", current.skills),
         monthly_cap_usd=pick("monthly_cap_usd", current.monthly_cap_usd),
-        max_tool_rounds=pick("max_tool_rounds", current.max_tool_rounds),
         read_shared_memory=bool(pick("read_shared_memory", current.read_shared_memory)),
         model_chain=changes.get("model_chain", ()),
     )
@@ -995,13 +958,12 @@ async def update(pool: asyncpg.Pool, app, name: str, changes: dict, *, actor: st
     # agent made before the rule (or by the harness) editable by nobody. The
     # refusal belongs on create, where the name is chosen.
     validate_spec(merged, allow_reserved_prefix=True)
-    rounds = await _rounds_for(pool, merged)
     cap = _cap_decimal(merged.monthly_cap_usd)
     changed = sorted(key for key in changes if key != "name")
     async with pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
             "UPDATE agents SET purpose = $2, instructions = $3, tools = $4, skills = $5, "
-            "monthly_cap_usd = $6, max_tool_rounds = $7, read_shared_memory = $8, "
+            "monthly_cap_usd = $6, read_shared_memory = $7, "
             f"updated_at = now() WHERE id = $1 RETURNING {_COLUMNS}",
             current.id,
             merged.purpose,
@@ -1009,7 +971,6 @@ async def update(pool: asyncpg.Pool, app, name: str, changes: dict, *, actor: st
             list(merged.tools),
             list(merged.skills),
             cap,
-            rounds,
             merged.read_shared_memory,
         )
         if row is None:
@@ -1025,7 +986,7 @@ async def update(pool: asyncpg.Pool, app, name: str, changes: dict, *, actor: st
                 "changed": changed,
                 # The chain is not a column: an update that did not carry one
                 # wrote nothing about it, so the ledger says nothing about it.
-                "after": _spec_meta(merged, rounds, with_chain="model_chain" in changes),
+                "after": _spec_meta(merged, with_chain="model_chain" in changes),
             },
         )
     if "model_chain" in changes:
@@ -1282,7 +1243,6 @@ def agent_json(
         "skills": skills_status(agent),
         "unknown_tools": unknown_tools(agent),
         "monthly_cap_usd": None if agent.monthly_cap_usd is None else float(agent.monthly_cap_usd),
-        "max_tool_rounds": agent.max_tool_rounds,
         "read_shared_memory": agent.read_shared_memory,
         "role": agent.role,
         "folder": f"agents/{agent.name}/",
@@ -1343,16 +1303,15 @@ def compose_brief(
     owner_name: str,
 ) -> str:
     """The message the agent's turn starts from — code-composed, never Nova's
-    prose, so the agent always knows who it works for, where its folder is,
-    how many rounds it has and what its report must contain. `context` and
+    prose, so the agent always knows who it works for, where its folder is
+    and what its report must contain. `context` and
     `deliverable` are appended only when given."""
     brief = (
         f"[Task from Nova for agent {agent.name}. You work for {owner_name}; they are not in "
         "this thread and will read Nova's relay of your report. Your workspace folder is "
-        f"agents/{agent.name}/ — every path you read or write is inside it. You have "
-        f"{agent.max_tool_rounds} tool rounds. When you finish, reply with a report: what you "
-        "did, what you found, every file you wrote (paths), and anything you could not do and "
-        f"why.]\n\nTask: {task.strip()}"
+        f"agents/{agent.name}/ — every path you read or write is inside it. When you finish, "
+        "reply with a report: what you did, what you found, every file you wrote (paths), "
+        f"and anything you could not do and why.]\n\nTask: {task.strip()}"
     )
     if context and context.strip():
         brief += f"\n\nContext from Nova: {context.strip()}"
@@ -1754,7 +1713,6 @@ async def delegate(ctx, args: dict) -> str:
         brief,
         [],
         "",
-        agent.max_tool_rounds,
         translator,
         ingest=False,
         persona=persona_for(

@@ -188,7 +188,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agent_dist, agents, chat, devices, machines, peers, settings_store, skills, traces
+from app import agent_dist, agents, chat, devices, machines, peers, skills, traces
 from app.browser import engine as browser_engine
 from app.evals import cases as cases_mod
 from app.evals import predicates, scratch
@@ -602,7 +602,6 @@ async def _create_fixture_agents(
                 purpose=spec.purpose,
                 instructions=spec.instructions,
                 tools=tuple(spec.tools),
-                max_tool_rounds=spec.max_tool_rounds,
             ),
             created_via=FIXTURE_CREATED_VIA,
             created_turn_id=None,
@@ -1212,13 +1211,6 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             case.message,
         )
 
-        try:
-            max_tool_rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
-        except Exception:
-            # The setting's own default, read here, so an eval turn runs
-            # under the same ceiling a real one would.
-            max_tool_rounds = settings_store.DEFS_BY_KEY["agents.max_tool_rounds"].default
-
         turn = await traces.open_turn(
             pool,
             kind=EVAL_TURN_KIND,
@@ -1261,7 +1253,6 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 case.message,
                 history,
                 model,
-                max_tool_rounds,
                 emit,
                 card=chat._card_channel(emit),
                 decide=True,

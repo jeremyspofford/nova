@@ -108,7 +108,6 @@ def _agent_value(**over) -> Agent:
         tools=("workspace_write_file",),
         skills=(),
         monthly_cap_usd=None,
-        max_tool_rounds=8,
         read_shared_memory=False,
         log_conversation_id=None,
         created_via="chat",
@@ -164,17 +163,54 @@ def test_the_five_tools_are_registered_and_shaped_like_the_api():
     assert set(FIVE) <= set(agents.nova_persona().tool_names)
 
 
-def test_the_round_budget_in_the_schema_is_the_stores_own_range():
-    """tools/agents.py cannot import app.agents at module level (the cycle
-    above), so the round bounds in its schema are literals — and literals
-    that drift from agents.MIN_ROUNDS/MAX_ROUNDS advertise a range the one
-    validator then refuses in words, or hide one it would accept. There is
-    no import that can derive them here, so this pin IS the mechanism that
-    keeps the two equal. (2026-09-08)"""
-    rounds = agent_tools._FIELDS["max_tool_rounds"]
-    assert (rounds["minimum"], rounds["maximum"]) == (agents.MIN_ROUNDS, agents.MAX_ROUNDS)
-    # The sentence the model reads says the same range as the schema.
-    assert f"{agents.MIN_ROUNDS}..{agents.MAX_ROUNDS}" in rounds["description"]
+# PIN RETIRED (no-ceiling T6): test_the_round_budget_in_the_schema_is_the_stores_own_range
+# pinned the schema's max_tool_rounds bounds to agents.MIN_ROUNDS/MAX_ROUNDS. Per-agent
+# rounds are gone (owner 2026-10-08: no count of tool rounds stops a turn), so there is
+# no range to keep in step; the tests below pin that the field is gone instead.
+
+
+def test_neither_agent_tool_schema_offers_rounds():
+    assert "max_tool_rounds" not in agent_tools._FIELDS
+    for name in ("create_agent", "update_agent"):
+        assert "max_tool_rounds" not in tools.REGISTRY[name].parameters["properties"], name
+    assert "max_tool_rounds" not in agent_tools._COLUMN_FIELDS
+
+
+async def test_a_create_agent_call_naming_rounds_is_refused_by_the_schema_check(
+    pool, mount_peers, root
+):
+    owner = await _owner(pool)
+    mount_peers(gateway=FakeGateway(admin_body={"role": "agent_coder", "chain": []}))
+    result, ok = await tools.dispatch(
+        "create_agent",
+        {
+            "name": "coder",
+            "purpose": "writes code",
+            "instructions": "Write small, tested changes.",
+            "tools": ["workspace_write_file"],
+            "max_tool_rounds": 8,
+        },
+        _ctx(owner),
+    )
+    assert not ok
+    assert result.startswith("Error: ")
+    assert "unknown argument 'max_tool_rounds' — this tool takes: " in result
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+
+
+async def test_an_update_agent_call_naming_rounds_is_refused_by_the_schema_check(
+    pool, mount_peers, root
+):
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+    before = await agents.by_name(pool, "coder")
+    result, ok = await tools.dispatch(
+        "update_agent", {"name": "coder", "max_tool_rounds": 3}, _ctx(owner)
+    )
+    assert not ok
+    assert result.startswith("Error: ")
+    assert "unknown argument 'max_tool_rounds' — this tool takes: " in result
+    assert await agents.by_name(pool, "coder") == before
 
 
 def test_importing_the_tools_package_cold_loads_neither_chat_nor_agents():
@@ -215,11 +251,12 @@ def test_importing_the_tools_package_cold_loads_neither_chat_nor_agents():
 
 
 def test_the_brief_is_code_composed_word_for_word():
-    agent = _agent_value(max_tool_rounds=8)
+    agent = _agent_value()
+    # PIN MOVED (no-ceiling T6): the brief no longer says "You have 8 tool rounds."
     head = (
         "[Task from Nova for agent coder. You work for Jeremy; they are not in this thread and "
         "will read Nova's relay of your report. Your workspace folder is agents/coder/ — every "
-        "path you read or write is inside it. You have 8 tool rounds. When you finish, reply "
+        "path you read or write is inside it. When you finish, reply "
         "with a report: what you did, what you found, every file you wrote (paths), and "
         "anything you could not do and why.]\n\nTask: write a haiku"
     )
@@ -459,7 +496,6 @@ async def test_create_agent_makes_the_row_and_the_folder_and_states_the_route(
             "instructions": "Write small, tested changes.",
             "tools": ["workspace_write_file", "workspace_read_file"],
             "model_chain": ["ollama:qwen3:8b"],
-            "max_tool_rounds": 8,
         },
         _ctx(owner),
     )
@@ -468,14 +504,14 @@ async def test_create_agent_makes_the_row_and_the_folder_and_states_the_route(
     row = await agents.by_name(pool, "coder")
     assert row is not None and row.created_via == "chat" and row.created_turn_id is None
     assert row.tools == ("workspace_write_file", "workspace_read_file")
-    assert row.max_tool_rounds == 8 and row.monthly_cap_usd is None
+    assert not hasattr(row, "max_tool_rounds") and row.monthly_cap_usd is None
     assert (root / "agents" / "coder").is_dir()
     assert ("/admin/routes/agent_coder", {"chain": ["ollama:qwen3:8b"]}) in gateway.seen
     # The sentence is composed from what was READ BACK: the row, the folder,
     # the registry size now, the gateway's echo and its explain walk.
     assert result.startswith(
         f"created agent coder — purpose: writes code; tools: 2 of {len(tools.REGISTRY)} "
-        "(workspace_write_file, workspace_read_file); folder agents/coder/ exists; rounds 8; "
+        "(workspace_write_file, workspace_read_file); folder agents/coder/ exists; "
         "cap none; memory: own notes only; "
         'route agent_coder registered, chain ["ollama:qwen3:8b"] — would be served by '
         f"ollama:qwen3:8b; log conversation {row.log_conversation_id}"
@@ -596,7 +632,7 @@ async def test_list_agents_is_the_pages_derivation(pool, mount_peers, root, monk
     assert await tools.dispatch("list_agents", {}, ctx) == ("no agents yet", True)
 
     coder = await _create(pool, mount_peers, monthly_cap_usd=5, tools=("get_time", "web_search"))
-    writer = await _create(pool, mount_peers, name="writer", purpose="drafts   prose\nfor the blog")
+    await _create(pool, mount_peers, name="writer", purpose="drafts   prose\nfor the blog")
     gateway = FakeGateway(
         spend_body=_spend({"key": "agent_coder", "local": False, "usd": 3.5, "calls": 3})
     )
@@ -615,10 +651,11 @@ async def test_list_agents_is_the_pages_derivation(pool, mount_peers, root, monk
     result, ok = await tools.dispatch("list_agents", {}, ctx)
     assert ok, result
     assert result.splitlines() == [
-        f"coder — writes code · tools: get_time, web_search · rounds {coder.max_tool_rounds} · "
+        # PIN MOVED (no-ceiling T6): the roster line no longer says "rounds N".
+        "coder — writes code · tools: get_time, web_search · "
         f"cap $5.00 (spent $3.50 this month) · working: web_search since {since}",
-        "writer — drafts prose for the blog · tools: get_time, workspace_read_file · rounds "
-        f"{writer.max_tool_rounds} · cap none (spent $0.00 this month) · idle",
+        "writer — drafts prose for the blog · tools: get_time, workspace_read_file · "
+        "cap none (spent $0.00 this month) · idle",
     ]
     assert len([p for p, _ in gateway.seen if p == "/admin/spend"]) == 1  # ONE report for all
     traces.clear_doing(live.id)

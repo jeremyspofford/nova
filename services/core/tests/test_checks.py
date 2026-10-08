@@ -144,8 +144,8 @@ async def _timer(pool, person_id, **over) -> uuid.UUID:
 
 async def _agent(pool, *, name: str = "coder", cap=None) -> uuid.UUID:
     return await pool.fetchval(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, "
-        "monthly_cap_usd, created_via) VALUES ($1, 'writes code', 'be brief', $2, 8, $3, 'page') "
+        "INSERT INTO agents (name, purpose, instructions, tools, "
+        "monthly_cap_usd, created_via) VALUES ($1, 'writes code', 'be brief', $2, $3, 'page') "
         "RETURNING id",
         name,
         ["get_time"],

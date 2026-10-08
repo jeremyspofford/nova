@@ -59,8 +59,9 @@ Frame contract (each line is `data: <json>`):
 A turn is a loop, not a single call: the model is offered the tool
 registry, and whenever it answers with tool calls they are executed in the
 order it asked for, appended to the transcript, and the model is asked
-again. The loop is bounded by agents.max_tool_rounds and every exit is
-said out loud — a stated error, or a note that the rounds ran out.
+again. No count of rounds bounds the loop: it ends on the model's answer, a
+stated error, the owner's stop, or the circling stop (RoundProgress), and
+every exit is said out loud.
 
 Nothing in the loop waits on anyone: a tool call runs the moment the model
 makes it (v4 makes no authorization decisions — owner ruling 2026-09-03), so
@@ -81,6 +82,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import itertools
 import json
 import logging
 import math
@@ -89,7 +91,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -486,20 +488,24 @@ def _said_not_done_meta(name: str, claim: object) -> dict:
 # say how much they left out.
 SPAN_RESULT_HEAD_CHARS = 500
 
-# The round cap must not SWALLOW an answer. The owner's walk, 2026-09-02 23:52:
-# the model ran device_run tree (honest "executable not found"), adapted to
+# A stop must not SWALLOW an answer. The owner's walk, 2026-09-02 23:52: the
+# model ran device_run tree (honest "executable not found"), adapted to
 # device_run find (exit 0 — the listing he asked for came back), then which
-# tree, and hit max_tool_rounds=6. The persisted reply was ONLY
-# "[stopped after 6 tool rounds without finishing]": a successful result existed
-# and the user never saw it.
+# tree, and the turn was cut by the round count it then had. The persisted
+# reply was ONLY the stop note: a successful result existed and the user never
+# saw it. (No count of rounds exists now — no-ceiling T4; the circling stop is
+# the only round-based stop.)
 #
-# So a capped turn gets ONE final NARRATION round — no tools advertised — with
-# every accumulated tool result still in context, so the model answers with what it has. It is
-# exactly one extra GATEWAY call and dispatches nothing, so the operator's cap
-# on TOOL rounds is honored to the letter; a call the model emits anyway is
-# refused with a stated result, never run. The note still lands after whatever
-# it says: the operator must still know the turn stopped early.
-OUT_OF_ROUNDS_REFUSAL = f"{tools.ERROR_PREFIX}out of tool rounds — answer with what you have"
+# So a circling-stopped turn gets ONE final NARRATION round — no tools
+# advertised — with every accumulated tool result still in context, so the
+# model answers with what it has. It is exactly one extra GATEWAY call and
+# dispatches nothing, so the stop holds to the letter; a call the model emits
+# anyway is refused with a stated result, never run. The note still lands after
+# whatever it says: the operator must still know the turn stopped early.
+OUT_OF_ROUNDS_REFUSAL = (
+    f"{tools.ERROR_PREFIX}this turn was stopped for going in circles and no further tool "
+    "will run — answer with what you have"
+)
 # A tool call emitted in a redirect round that advertised NO tools. Like the two
 # above it is REFUSED, never dispatched: a redirect gets one attempt at the
 # action and then must speak, and a closing round that quietly ran a tool would
@@ -507,15 +513,10 @@ OUT_OF_ROUNDS_REFUSAL = f"{tools.ERROR_PREFIX}out of tool rounds — answer with
 REDIRECT_CLOSED_REFUSAL = (
     f"{tools.ERROR_PREFIX}the redirect's tool round is over — answer with what you have"
 )
-OUT_OF_ROUNDS_NUDGE = (
-    "You have used every tool round for this turn and no further tool will run. "
-    "Answer now with what the tool results above already give you, and say "
-    "plainly what is still unknown."
-)
-# The circling stop's nudge (turn-cap T4). OUT_OF_ROUNDS_NUDGE would be false
-# here: a turn stopped for going in circles has rounds left, it is stopped
-# because the last ones got nowhere. Still only a request: the statement of what
-# the tools returned (T2) is what holds when the model ignores it.
+# The circling stop's nudge (turn-cap T4): the turn is stopped because the last
+# rounds got nowhere, never because a count ran out (no count exists). Still
+# only a request: the statement of what the tools returned (T2) is what holds
+# when the model ignores it.
 CIRCLING_NUDGE = (
     "No further tool will run this turn: the last tool rounds repeated a call or "
     "brought nothing new. Answer now with what the tool results above already give "
@@ -2492,8 +2493,8 @@ def tool_results_statement(spans: Sequence[traces.Span]) -> str | None:
     return "\n".join([TOOL_RESULTS_HEADER, *lines])
 
 
-# The circling stop (turn-cap T3): the normal end of a turn that is getting
-# nowhere, so the round ceiling is only a runaway backstop.
+# The circling stop (turn-cap T3): the end of a turn that is getting nowhere,
+# and the only round-based stop there is (no-ceiling T4: no count of rounds).
 #
 # SAME_CALL_LIMIT: one repeat of a call is a legitimate re-check after a change
 # (ps before and after a start); the third identical ask is a loop even when its
@@ -2505,11 +2506,9 @@ SAME_CALL_LIMIT = 3
 STALE_ROUNDS_LIMIT = 3
 STOP_REPEATED_CALL = "repeated_call"
 STOP_NO_NEW_RESULTS = "no_new_results"
-# The round ceiling's reason, as the `round_stop` span files it (turn-cap T4):
-# every stopped turn states why in its trace, the backstop included.
-STOP_CEILING = "ceiling"
 # What a circling stop's note says, after "[stopped after N tool rounds: ".
-# The ceiling keeps its own words ("without finishing"), unchanged.
+# These are the only reasons a `round_stop` span ever files: no count of
+# rounds stops a turn (no-ceiling T4).
 CIRCLING_NOTE_WORDS = {
     STOP_REPEATED_CALL: "the same call was repeated",
     STOP_NO_NEW_RESULTS: "the last rounds brought nothing new",
@@ -3502,7 +3501,7 @@ def markup_as_text_refusal(name: str) -> str:
 def markup_refusal_fact(name: str) -> str:
     """The markup fact APPENDED to a CLOSED round's own refusal.
 
-    The round's own reason (the rounds ran out, the redirect's tool round is
+    The round's own reason (the circling stop, the redirect's tool round is
     over) is the one the model most needs, and overwriting it — as the first cut
     of this did — cost a closed round its own reason. So both are said."""
     return (
@@ -3516,7 +3515,7 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     shows the call the model made and why it did not run, rather than a silent
     drop (a reply is a claim, the span is the fact). Returns the stated result
     the call is answered with. ONE implementation for every closed round (the
-    tool rounds ran out, or a redirect's closing round), so none can quietly
+    circling stop's narration round, or a redirect's closing round), so none can quietly
     become a dispatch.
 
     It is ALSO the only thing that ever happens to a tool call the model wrote as
@@ -3549,7 +3548,7 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
 
 
 def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
-    """The out-of-rounds narration round's refusal."""
+    """The circling stop's narration round's refusal."""
     return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
 
 
@@ -3658,6 +3657,7 @@ async def _gateway_round(
     on_reasoning: Callable[[str], None] | None = None,
     purpose: str | None = None,
     role: str | None = None,
+    pass_over: Mapping[str, str] | None = None,
 ) -> tuple[str, list[ToolCall], str | None]:
     """ONE gateway round: its text, the tool calls it asked for, a failure or None.
 
@@ -3718,6 +3718,17 @@ async def _gateway_round(
     reasoning_chars = 0
     purpose = purpose or traces.purpose_of(turn)
     role = role if role is not None else _role_of(turn)
+    headers = peers.attribution_headers(turn, purpose, role)
+    if pass_over:
+        # A pass-over names links of a ROLE's chain; a call with no role walks
+        # no chain (an eval names its model, rail 17) and the gateway refuses
+        # the header there. Refused here, before any request, so a caller can
+        # never believe a link was passed over when the header was dropped.
+        if not role:
+            raise ValueError(
+                f"pass_over needs a role's chain, and this {turn.kind} round has no role"
+            )
+        headers[peers.HEADER_PASS_OVER] = peers.pass_over_header(pass_over)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
@@ -3729,7 +3740,7 @@ async def _gateway_round(
                     "POST",
                     "/v1/chat/completions",
                     json=completion_payload(model, messages, advertised),
-                    headers=peers.attribution_headers(turn, purpose, role),
+                    headers=headers,
                 ) as response:
                     _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
@@ -3872,6 +3883,14 @@ async def _gateway_round(
             )
             span.meta["error"] = failure
             span.meta["error_class"] = EMPTY_ROUND
+            if reasoning_chars > 0 and saw_done and not stray_lines:
+                # The model chose to only think: it reasoned, the stream
+                # closed cleanly with [DONE], and nothing else came. Derived
+                # from the counted stream facts, never the error text — a
+                # stream cut short (no [DONE]) or carrying stray lines is a
+                # transport fault, not this. The turn loop reads the flag to
+                # re-ask the round, then pass the link over.
+                span.meta["thinking_only"] = True
         if not saw_done or stray_lines:
             # Only the unusual shapes are recorded — a clean stream is the
             # norm and needs no row of counters saying so.
@@ -3881,6 +3900,124 @@ async def _gateway_round(
                 stream["stray_head"] = stray_head
             span.meta["stream"] = stream
     return text, calls, failure
+
+
+# A thinking-only round (no-ceiling T3): the words a passed-over link is named
+# with in X-Nova-Pass-Over — a measured fact about what came back, never
+# "unreachable" or "refused", which would state a cause nobody checked.
+PASS_OVER_WORDS = "answered with thinking only"
+# The start of the reason a turn ends with when no link is left to try.
+THINKING_ONLY_REASON = "every link in the chain answered with thinking only"
+
+
+def _file_round_retry(turn: traces.Turn, action: str, link: str | None, round_number: int) -> None:
+    """File why a round is being run again, BEFORE the re-run's request, so
+    the trace reads in the order things happened."""
+    with turn.span("round_retry") as span:
+        span.meta.update(
+            {"why": "thinking_only", "action": action, "link": link, "round": round_number}
+        )
+
+
+def _thinking_only_end(links: Sequence[str], cause: str) -> str:
+    """The stated reason a round that only ever came back thinking ends the
+    turn: which links were tried, then what stopped the walk."""
+    named = f"{THINKING_ONLY_REASON}: {', '.join(links)}" if links else THINKING_ONLY_REASON
+    return f"Stopped: {named} — {cause.rstrip('.')}."
+
+
+async def _round_past_thinking_only(
+    app,
+    turn: traces.Turn,
+    model: str,
+    messages: Sequence[dict],
+    advertised: Sequence[dict],
+    *,
+    round_number: int,
+    on_delta: Callable[[str], None] | None,
+    on_reasoning: Callable[[str], None] | None = None,
+) -> tuple[str, list[ToolCall], str | None, str | None]:
+    """The turn loop's round, run again while it comes back thinking-only.
+
+    Returns _gateway_round's three values plus `ended`: None, or the stated
+    reason the round ran out of links (the turn ends on it).
+
+    A thinking-only round (its llm_call span says so, from the counted stream
+    facts) is re-asked once per served link with the same request; the same
+    link thinking-only again is passed over — named in X-Nova-Pass-Over, and
+    the gateway's own chain walk picks what serves next, so the next link is
+    never chosen here. Any other failure is returned as it is, exactly as
+    today, EXCEPT a 503 on an attempt that sent a pass-over: that is the
+    gateway saying nothing in the chain is left.
+
+    Termination is mechanical, not a count: each link gets one re-ask, each
+    pass-over adds a new served id, and a link served again after it was
+    passed over ends the round. The pass-over is this round's only — the
+    next round starts from link 1 again.
+    """
+    role = _role_of(turn)
+    pass_over: dict[str, str] = {}
+    reasked: set[str] = set()
+    while True:
+        text, calls, failure = await _gateway_round(
+            app,
+            turn,
+            model,
+            messages,
+            advertised,
+            round_number=round_number,
+            on_delta=on_delta,
+            on_reasoning=on_reasoning,
+            pass_over=pass_over or None,
+        )
+        if failure is None:
+            return text, calls, None, None
+        llm = _last_llm_span(turn.spans)
+        meta = llm.meta if llm is not None else {}
+        tried = list(pass_over)
+        if not meta.get("thinking_only"):
+            if pass_over and meta.get("gateway_status") == 503:
+                return text, calls, failure, _thinking_only_end(tried, failure)
+            return text, calls, failure, None
+        served_by = meta.get("served_by")
+        link = served_by if isinstance(served_by, str) else ""
+        if link and link not in tried:
+            tried.append(link)
+        if link and link in pass_over:
+            return (
+                text,
+                calls,
+                failure,
+                _thinking_only_end(tried, "the gateway served it again after it was passed over"),
+            )
+        if link not in reasked:
+            reasked.add(link)
+            _file_round_retry(turn, "reask", link or None, round_number)
+            _stop_if_asked(turn, "between steps")
+            continue
+        if not link:
+            return (
+                text,
+                calls,
+                failure,
+                _thinking_only_end(
+                    tried,
+                    "the gateway did not say which link served the round, "
+                    "so there is no link to pass over",
+                ),
+            )
+        if not role:
+            return (
+                text,
+                calls,
+                failure,
+                _thinking_only_end(
+                    tried, f"this {turn.kind} round has no role, so there is no chain to walk"
+                ),
+            )
+        pass_over[link] = PASS_OVER_WORDS
+        _file_round_retry(turn, "pass_over", link, round_number)
+        _stop_if_asked(turn, "between steps")
 
 
 # The usage fields the gateway's synthetic chunk states (S10) — copied onto
@@ -4834,7 +4971,7 @@ async def _claim_redirect(
         really executed the tool and round 2 merely narrated about it,
         redirecting would run it a SECOND time — a duplicated side effect, which
         is worse than the lie it was correcting.
-      * THE TURN IS NOT OUT OF ROUNDS. A turn that hit its round cap must not
+      * THE TURN IS NOT OUT OF ROUNDS. A turn the circling stop ended must not
         get one more dispatch through a side door.
 
     And inside the redirect the same rule holds mechanically rather than by
@@ -5060,7 +5197,6 @@ async def _run_turn(
     message: str,
     history: Sequence[dict],
     model: str,
-    max_tool_rounds: int,
     emit: Callable[[str | None], None],
     *,
     ingest: bool = True,
@@ -5212,14 +5348,6 @@ async def _run_turn(
                 f"turn {turn.id} was opened as {turn.role or 'nova'} but is being run as "
                 f"{persona.agent.role}"
             )
-        if persona.agent is not None:
-            # The round budget is ONE fact, the agent's own row (copied there
-            # at create time; agents._rounds_for): the argument is what the
-            # caller happened to read, and a caller that read the global
-            # setting instead of the row would run an agent past the budget
-            # its prompt states ("You have N tool rounds per task"). So the
-            # row wins, always.
-            max_tool_rounds = persona.agent.max_tool_rounds
         emit(
             _frame(
                 {
@@ -5484,15 +5612,17 @@ async def _run_turn(
         # exists to kill comes back laundered through her own words.
         read_ephemeral = live_facts.ephemeral(checked_live) or capability_note
 
-        # A round is one gateway call plus the tool calls it asks for. The
-        # cap counts gateway calls: reaching it with tools still pending
-        # ends the turn with the note below rather than executing work
-        # whose result nothing would ever read.
-        rounds_allowed = max(1, max_tool_rounds)
+        # A round is one gateway call plus the tool calls it asks for. No count
+        # of rounds ever stops a turn (owner, 2026-10-08: "not have a limit at
+        # all"): the loop runs until the model answers, a round fails, the
+        # owner stops it, or the circling stop (RoundProgress) ends it.
         failure: str | None = None
+        # The stated reason a thinking-only round ran out of links (no-ceiling
+        # T3); None while every round found a link that answered.
+        thinking_only_end: str | None = None
         out_of_rounds = False
-        # Why the round loop stopped the turn (STOP_CEILING or a RoundProgress
-        # reason) and the round it stopped at; None while nothing stopped it.
+        # Why the round loop stopped the turn (a RoundProgress reason) and the
+        # round it stopped at; None while nothing stopped it.
         # One detector per turn, so no other turn's calls count here.
         progress = RoundProgress()
         stop_reason: str | None = None
@@ -5584,14 +5714,15 @@ async def _run_turn(
                 served_by_sent = True
                 emit(_frame({"served_by": served_by}))
 
-        for round_number in range(1, rounds_allowed + 1):
+        # round_number is span metadata and RoundProgress input, never a limit.
+        for round_number in itertools.count(1):
             # A stop asked while the last round's tools ran ends the turn here
             # rather than buying another round of the direction he stopped.
             # "between steps", not the name in DOING: that name belongs to a call
             # that has already returned, and claiming its outcome is unknown
             # would be a false uncertainty about a call that finished.
             _stop_if_asked(turn, "between steps")
-            round_text, calls, failure = await _gateway_round(
+            round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
                 app,
                 turn,
                 model,
@@ -5610,11 +5741,6 @@ async def _run_turn(
             _emit_route()
             if not calls:
                 _emit_usage()
-                break
-            if round_number == rounds_allowed:
-                out_of_rounds = True
-                stop_reason = STOP_CEILING
-                stop_rounds = round_number
                 break
 
             messages.append(
@@ -5645,6 +5771,16 @@ async def _run_turn(
                 stop_rounds = round_number
                 break
 
+        if thinking_only_end is not None:
+            # No link was left to answer this round (no-ceiling T3): what the
+            # tools found, then why it stopped — the whole statement, so it is
+            # persisted as-is rather than composed as a generic no-response.
+            found = tool_results_statement(turn.spans)
+            await _end_without_a_reply(
+                f"{found}\n\n{thinking_only_end}" if found else thinking_only_end,
+                verbatim=True,
+            )
+            return
         if failure is not None:
             stated = failure
             failed_round = _last_llm_span(turn.spans)
@@ -5663,7 +5799,7 @@ async def _run_turn(
             await _end_without_a_reply(stated)
             return
 
-        # A note the BACKEND wrote about how the turn ended — the round cap, or a
+        # A note the BACKEND wrote about how the turn ended — the circling stop, or a
         # refused markup call. It is not the model's prose and it is not a claim:
         # it is the only record the operator has that the turn stopped early, so
         # it must survive every REPLACE-class composition below (found in review:
@@ -5722,11 +5858,10 @@ async def _run_turn(
             # one span per stopped turn, filed before the narration round.
             with turn.span("round_stop", stop_reason) as stop_span:
                 stop_span.meta.update({"reason": stop_reason, "rounds": stop_rounds})
-            circling = stop_reason != STOP_CEILING
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
-            # already earned must not be swallowed by the cap (see
-            # OUT_OF_ROUNDS_NUDGE). Its deltas stream and accumulate exactly like
+            # already earned must not be swallowed by the circling stop (see
+            # CIRCLING_NUDGE). Its deltas stream and accumulate exactly like
             # any other round's, so the operator watches it arrive.
             final_text, final_calls, final_failure = await _gateway_round(
                 app,
@@ -5736,7 +5871,7 @@ async def _run_turn(
                     *messages,
                     {
                         "role": "system",
-                        "content": CIRCLING_NUDGE if circling else OUT_OF_ROUNDS_NUDGE,
+                        "content": CIRCLING_NUDGE,
                     },
                 ],
                 (),
@@ -5748,11 +5883,11 @@ async def _run_turn(
                 # FAIL-OPEN: a dead narration round costs the answer, never the
                 # turn. Whatever streamed before it died stays (it was watched
                 # live) and the note below still lands.
-                logger.warning("the out-of-rounds narration round failed: %s", final_failure)
+                logger.warning("the circling stop's narration round failed: %s", final_failure)
             elif final_calls:
                 # It asked for tools anyway. NOTHING is dispatched: each call is
                 # answered with the stated result and recorded as a refused span,
-                # so the cap on TOOL rounds holds mechanically rather than by the
+                # so the circling stop holds mechanically rather than by the
                 # nudge asking nicely. The refusals join `messages` so the
                 # transcript any later redirect reads stays well-formed.
                 messages.append(
@@ -5767,12 +5902,9 @@ async def _run_turn(
                     result = _refuse_out_of_rounds(turn, call)
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            if circling:
-                backend_note = (
-                    f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
-                )
-            else:
-                backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
+            backend_note = (
+                f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
+            )
             note = f"\n\n{backend_note}" if parts else backend_note
             # Did the narration round ANSWER? Read off its own outcome, never
             # off `parts` (earlier rounds' text and its raw markup) and never
@@ -6020,7 +6152,7 @@ async def _run_turn(
                 nudge_for=lambda ran: consent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=CONSENT_REDIRECT_NOTE,
                 redirect_note_no_call=CONSENT_REDIRECT_NOTE_NO_CALL,
-                # A turn already at its round cap gets no extra dispatch
+                # A turn the circling stop ended gets no extra dispatch
                 # through the redirect's side door.
                 out_of_rounds=out_of_rounds,
                 messages=messages,
@@ -6579,7 +6711,7 @@ async def _run_turn(
             and not mechanical_guard_fired
             and not append_only_guard_fired
             and not redirect_spent
-            # Same rule as _claim_redirect: a turn at its round cap gets no
+            # Same rule as _claim_redirect: a turn the circling stop ended gets no
             # extra gateway round with a "do it now" nudge. Found in review —
             # the nudge would tell the model to call a tool the capped
             # narration round was not even offered, and the redirect's success
@@ -7171,7 +7303,6 @@ class _Started:
     message: str
     history: Sequence[dict]
     model: str
-    max_tool_rounds: int
     persona: agents.Persona | None
     # S28: the files this message carried, already bound to it. Loaded here,
     # under the same lock that wrote the message, so the turn cannot start
@@ -7301,12 +7432,10 @@ async def _open_turn(
 
     if agent is None:
         model = await settings_store.read_value(conn, "chat.model")
-        max_tool_rounds = await settings_store.read_value(conn, "agents.max_tool_rounds")
         runs_as = person
         persona = None
     else:
         model = ""
-        max_tool_rounds = agent.max_tool_rounds
         runs_as = agent.person()
         persona = agents.persona_for(
             agent,
@@ -7337,7 +7466,6 @@ async def _open_turn(
         message=message,
         history=history,
         model=model,
-        max_tool_rounds=max_tool_rounds,
         persona=persona,
         attached=attached,
     )
@@ -7375,7 +7503,6 @@ def _spawn_turn(
             started.message,
             started.history,
             started.model,
-            started.max_tool_rounds,
             emit,
             persona=started.persona,
             attached=started.attached,

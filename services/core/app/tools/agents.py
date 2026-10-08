@@ -129,17 +129,6 @@ _FIELDS: dict[str, dict] = {
             "when the ledger shows it reached."
         ),
     },
-    # The bounds are literals because this module cannot import app.agents at
-    # module level (the cycle, see the docstring), and a schema that advertises
-    # a range the one validator then refuses is a hand she is shown and cannot
-    # play. test_tools_agents pins them equal to agents.MIN_ROUNDS/MAX_ROUNDS —
-    # that pin is the mechanism keeping the two in step. (2026-09-08)
-    "max_tool_rounds": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-        "description": "Tool rounds per task, 1..50 (default: the agents.max_tool_rounds setting).",
-    },
     "read_shared_memory": {
         "type": "boolean",
         "description": (
@@ -178,7 +167,6 @@ async def create_agent(args: dict, ctx: ToolContext) -> str:
         tools=given["tools"],
         skills=given.get("skills") or (),
         monthly_cap_usd=given.get("monthly_cap_usd"),
-        max_tool_rounds=given.get("max_tool_rounds"),
         read_shared_memory=bool(given.get("read_shared_memory", False)),
         model_chain=given.get("model_chain") or (),
     )
@@ -207,7 +195,6 @@ _COLUMN_FIELDS = (
     "tools",
     "skills",
     "monthly_cap_usd",
-    "max_tool_rounds",
     "read_shared_memory",
 )
 
@@ -391,7 +378,6 @@ def roster_row(agents, row: dict) -> str:
         parts.append(f"skills: {', '.join(skills)}")
     parts.extend(
         [
-            f"rounds {row['max_tool_rounds']}",
             _cap_words(agents, row),
             _state_words(row.get("state") or {}),
         ]

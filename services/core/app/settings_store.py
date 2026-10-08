@@ -78,34 +78,6 @@ def _max_notices_problem(value: Any) -> str | None:
     return None
 
 
-# The tool-round range: an agent row's own rounds and the
-# agents.max_tool_rounds setting both take it. Written once, here, because
-# app.agents imports this module at its top (agents re-exports it as
-# MIN_ROUNDS, MAX_ROUNDS) and the setting's default below is its top.
-TOOL_ROUNDS_RANGE = (1, 50)
-
-
-def _tool_rounds_problem(value: Any) -> str | None:
-    """The tool-round limit takes the bounds an agent row's own rounds take:
-    TOOL_ROUNDS_RANGE above, read through agents.MIN_ROUNDS..agents.MAX_ROUNDS
-    (agents re-exports the pair) on every write.
-
-    There is no second pair. The range is written once, in TOOL_ROUNDS_RANGE;
-    a pair typed again would keep refusing and storing by the old numbers the
-    day that range moved — and a new agent made without its own rounds takes
-    this setting, which agents._rounds_for refuses outside that range.
-    """
-    # Function-local: app.agents imports THIS module at its top (it reads this
-    # limit as a new agent's rounds), so naming it up there would close the
-    # cycle — the same one-way idiom write_setting uses for app.beats.
-    from app import agents
-
-    low, high = agents.MIN_ROUNDS, agents.MAX_ROUNDS
-    if not low <= value <= high:
-        return f"the tool-round limit must be between {low} and {high}, got {value}"
-    return None
-
-
 # The decision step's budget as its notice says it — read off the step's own
 # constant, so the words cannot say one budget while the step runs another.
 _DECISION_BUDGET = f"{decisions.TURN_BUDGET_S:g} s"
@@ -175,24 +147,6 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "history on this machine, so a model that has always been slow here is "
             "never reported as degraded."
         ),
-    ),
-    SettingDef(
-        key="agents.max_tool_rounds",
-        type="int",
-        # The top of the range: the limit is the runaway/cost backstop, not
-        # the normal stop. A turn going in circles is stopped by
-        # chat.RoundProgress (after 3 repeats or 3 stale rounds), before the
-        # limit whenever the limit is higher than that (turn-cap T5).
-        default=TOOL_ROUNDS_RANGE[1],
-        description=(
-            "The safety ceiling on tool rounds in one chat turn, a backstop "
-            "against a runaway turn. A turn going in circles (the same call "
-            "made a third time, or three rounds in a row with nothing new) is "
-            "stopped there, before the limit whenever the limit is higher. "
-            "Reaching the limit ends the turn with a note saying so, "
-            "never silently."
-        ),
-        validate=_tool_rounds_problem,
     ),
     SettingDef(
         key="agents.responsiveness_check",

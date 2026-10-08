@@ -425,17 +425,19 @@ async def test_update_agent_appends_the_changed_fields_before_and_after(pool, mo
     sink: list = []
     result, ok = await tools.dispatch(
         "update_agent",
-        {"name": "coder", "purpose": "reviews code", "max_tool_rounds": 4},
+        {"name": "coder", "purpose": "reviews code", "instructions": "Review carefully."},
         _actx(owner, sink),
     )
     assert ok, result
     payload = _one(sink)
     assert payload["name"] == "coder"
-    assert set(payload["prior"]) == {"purpose", "max_tool_rounds"}
-    assert set(payload["landed"]) == {"purpose", "max_tool_rounds"}
+    # PIN MOVED (no-ceiling T6): the second field was max_tool_rounds (4); an agent
+    # has no rounds, so the pin uses another column field.
+    assert set(payload["prior"]) == {"purpose", "instructions"}
+    assert set(payload["landed"]) == {"purpose", "instructions"}
     assert payload["prior"]["purpose"] == "writes code"
     assert payload["landed"]["purpose"] == "reviews code"
-    assert payload["landed"]["max_tool_rounds"] == 4
+    assert payload["landed"]["instructions"] == "Review carefully."
 
 
 @requires_db
@@ -514,6 +516,31 @@ async def test_reverting_an_update_agent_changed_since_is_refused(pool, mount_pe
     with pytest.raises(ToolFailure, match="changed"):
         await _revert("update_agent")(payload, ctx)
     assert (await agents.by_name(pool, "coder")).purpose == "plans work"
+
+
+@requires_db
+async def test_reverting_a_recorded_update_naming_rounds_is_refused_in_words(pool, mount_peers, ws):
+    """no-ceiling T6: an undo payload recorded before per-agent rounds went
+    names max_tool_rounds. It cannot be put back (the field is gone), so the
+    revert refuses in words and writes nothing — never a silent partial."""
+    owner = await _person(pool)
+    await _created(pool, mount_peers, owner)
+    sink: list = []
+    ctx = _actx(owner, sink)
+    await tools.dispatch("update_agent", {"name": "coder", "purpose": "reviews code"}, ctx)
+    before = await agents.by_name(pool, "coder")
+    stale = {
+        "name": "coder",
+        "prior": {"purpose": "writes code", "max_tool_rounds": 8},
+        "landed": {"purpose": "reviews code", "max_tool_rounds": 4},
+    }
+
+    with pytest.raises(
+        ToolFailure,
+        match=r"the recorded agent update names fields it cannot put back: \['max_tool_rounds'\]",
+    ):
+        await _revert("update_agent")(stale, ctx)
+    assert await agents.by_name(pool, "coder") == before
 
 
 @requires_db
