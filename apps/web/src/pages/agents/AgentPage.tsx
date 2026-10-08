@@ -362,10 +362,6 @@ export function AgentPage({
               <SpendCell agent={agent} />
               <span className="text-content-tertiary"> of {capWords(agent.monthly_cap_usd)}</span>
             </dd>
-            <dt className="text-content-tertiary">Rounds</dt>
-            <dd className="text-content-secondary" data-testid="agent-rounds">
-              up to {agent.max_tool_rounds} tool round{agent.max_tool_rounds === 1 ? '' : 's'} a turn
-            </dd>
             <dt className="text-content-tertiary">Shared memory</dt>
             <dd className="text-content-secondary" data-testid="agent-read-shared">
               {agent.read_shared_memory ? 'reads the household\'s shared notes; writes only its own' : 'its own notes only'}

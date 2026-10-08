@@ -18,7 +18,6 @@ export function agentFixture(overrides: Partial<Agent> = {}): Agent {
     skills: [],
     unknown_tools: [],
     monthly_cap_usd: null,
-    max_tool_rounds: 8,
     read_shared_memory: false,
     role: `agent_${name}`,
     folder: `agents/${name}/`,

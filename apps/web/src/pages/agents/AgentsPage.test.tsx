@@ -236,7 +236,6 @@ describe('AgentsPage — New agent', () => {
     fillForm(form)
     fireEvent.click(within(form).getByLabelText(/review/))
     fireEvent.change(within(form).getByLabelText('Monthly cap (USD)'), { target: { value: '5' } })
-    fireEvent.change(within(form).getByLabelText('Max tool rounds'), { target: { value: '7' } })
     fireEvent.click(within(form).getByLabelText('Read shared memory'))
     fireEvent.submit(form)
 
@@ -248,7 +247,6 @@ describe('AgentsPage — New agent', () => {
       tools: ['workspace_write_file'],
       skills: ['review'],
       monthly_cap_usd: 5,
-      max_tool_rounds: 7,
       read_shared_memory: true,
     })
     await waitFor(() => expect(screen.queryByTestId('agent-form')).toBeNull())
@@ -258,7 +256,7 @@ describe('AgentsPage — New agent', () => {
     expect(screen.getByTestId('agent-created').textContent).toContain('created agent coder')
   })
 
-  it('a blank cap is uncapped (null) and a blank rounds field is left to the store\'s default', async () => {
+  it('a blank cap is uncapped (null), and the body names no rounds', async () => {
     const api = fakeApi()
     renderPage(api)
     await screen.findByText(/no agents yet/i)
@@ -270,24 +268,31 @@ describe('AgentsPage — New agent', () => {
     await waitFor(() => expect(api.createAgent).toHaveBeenCalledTimes(1))
     const body = api.createAgent.mock.calls[0][0]
     expect(body.monthly_cap_usd).toBeNull()
-    expect('max_tool_rounds' in body).toBe(false)
+    expect(Object.keys(body).filter(k => /round/i.test(k))).toEqual([])
     expect(body.read_shared_memory).toBe(false)
   })
 
-  it('rounds outside 1–50 cannot be submitted', async () => {
+  it('the create form has no tool-round field, and submit waits only on name, purpose and instructions (2026-10-08: no round ceiling)', async () => {
     const api = fakeApi()
     renderPage(api)
     await screen.findByText(/no agents yet/i)
     fireEvent.click(screen.getAllByRole('button', { name: /new agent/i })[0])
     const form = await screen.findByTestId('agent-form')
     await within(form).findByLabelText(/workspace_write_file/)
-    fillForm(form)
-    fireEvent.change(within(form).getByLabelText('Max tool rounds'), { target: { value: '51' } })
+    // No field, label, bound or hint about rounds anywhere in the sheet.
+    expect(within(form).queryAllByLabelText(/round/i)).toEqual([])
+    expect(form.textContent ?? '').not.toMatch(/tool[\s-]*rounds?|1 to 50|1–50/i)
+    // The only number fields left are not about rounds.
+    for (const box of within(form).queryAllByRole('spinbutton')) {
+      expect(box.getAttribute('name') ?? '', 'a number field named for rounds').not.toMatch(/round/i)
+      expect(box.getAttribute('max'), 'a number field bounded at 50').not.toBe('50')
+    }
     const submit = within(form).getByRole('button', { name: /create agent/i }) as HTMLButtonElement
-    expect(submit.disabled).toBe(true)
-    expect(within(form).getByText(/1 to 50/)).toBeDefined()
+    fillForm(form)
+    expect(submit.disabled).toBe(false)
     fireEvent.submit(form)
-    expect(api.createAgent).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalledTimes(1))
+    expect(Object.keys(api.createAgent.mock.calls[0][0]).filter(k => /round/i.test(k))).toEqual([])
   })
 
   it('a refused create shows the store\'s words inline and keeps the sheet open with the draft', async () => {

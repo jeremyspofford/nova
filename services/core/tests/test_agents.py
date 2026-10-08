@@ -25,6 +25,9 @@ What these pin, and why each is a pin and not a wish:
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
+import re
 import subprocess
 import sys
 import uuid
@@ -74,7 +77,6 @@ def _agent(**over) -> Agent:
         tools=("get_time", "workspace_read_file"),
         skills=(),
         monthly_cap_usd=None,
-        max_tool_rounds=8,
         read_shared_memory=False,
         log_conversation_id=None,
         created_via="page",
@@ -187,7 +189,7 @@ def test_persona_for_advertises_the_subset_and_states_what_is_gone(root):
         "Your workspace folder is agents/coder/ — every path you read or write is inside it."
         in block
     )
-    assert "You have 8 tool rounds per task." in block
+    assert "tool rounds" not in block
     assert (
         "memory_search searches your own notes; you cannot read the household's shared notes."
         in block
@@ -313,15 +315,11 @@ def test_validate_spec_refuses_each_by_name(root):
         agents.validate_spec(_spec(skills=("../etc",)), root=root)
     with pytest.raises(AgentError, match="0 or more"):
         agents.validate_spec(_spec(monthly_cap_usd=Decimal("-1")))
-    with pytest.raises(AgentError, match="between 1 and 50"):
-        agents.validate_spec(_spec(max_tool_rounds=0))
-    with pytest.raises(AgentError, match="between 1 and 50"):
-        agents.validate_spec(_spec(max_tool_rounds=51))
+    # PIN MOVED (no-ceiling T6): the rounds range (1..50) refusals are gone with
+    # per-agent rounds; AgentSpec has no such field to validate.
     # And the good one passes as-is: valid name, live tools, present skill,
-    # a zero cap (a real cap, not "uncapped"), rounds at the edge.
-    agents.validate_spec(
-        _spec(skills=("review",), monthly_cap_usd=0, max_tool_rounds=50), root=root
-    )
+    # a zero cap (a real cap, not "uncapped").
+    agents.validate_spec(_spec(skills=("review",), monthly_cap_usd=0), root=root)
 
 
 # ── the eval harness's reserved prefix (2026-09-09) ────────────────────────
@@ -457,9 +455,6 @@ async def test_a_row_under_the_reserved_prefix_still_lives_its_whole_life(pool, 
 
 async def test_create_makes_the_row_the_log_conversation_and_the_folder(pool, mount_peers, root):
     owner = await _owner(pool)
-    await pool.execute(
-        "INSERT INTO settings (key, value) VALUES ('agents.max_tool_rounds', '9'::jsonb)"
-    )
     gateway = _gateway()
     mount_peers(gateway=gateway)
 
@@ -468,7 +463,8 @@ async def test_create_makes_the_row_the_log_conversation_and_the_folder(pool, mo
     agent = result.agent
     assert agent.name == "coder" and agent.tools == SPEC_TOOLS and agent.skills == ()
     assert agent.monthly_cap_usd == Decimal("20.00")
-    assert agent.max_tool_rounds == 9  # the setting, COPIED into the row
+    # PIN MOVED (no-ceiling T6): an agent has no rounds at all (was agents.MAX_ROUNDS).
+    assert not hasattr(agent, "max_tool_rounds")
     assert agent.read_shared_memory is False and agent.created_via == "page"
     assert result.folder == root / "agents" / "coder" and result.folder.is_dir()
     # The log conversation: the owner's, INACTIVE, titled after the agent.
@@ -486,7 +482,8 @@ async def test_create_makes_the_row_the_log_conversation_and_the_folder(pool, mo
     (event,) = await _events(pool, governance.AGENT_CREATED)
     assert event["actor"] == "jeremy" and event["subject_ref"] == agent.id
     assert event["meta"]["name"] == "coder" and event["meta"]["tools"] == list(SPEC_TOOLS)
-    assert event["meta"]["monthly_cap_usd"] == 20.0 and event["meta"]["max_tool_rounds"] == 9
+    assert event["meta"]["monthly_cap_usd"] == 20.0
+    assert "max_tool_rounds" not in event["meta"]
     # The gateway was told the role and its chain, then asked what serves it.
     assert ("/admin/routes/agent_coder", {"chain": []}) in gateway.seen
     assert b"role=agent_coder&model=" in gateway.queries
@@ -499,7 +496,7 @@ async def test_create_makes_the_row_the_log_conversation_and_the_folder(pool, mo
     assert result.text == (
         f"created agent coder — purpose: writes code; tools: 3 of {len(tools.REGISTRY)} "
         "(get_time, workspace_read_file, workspace_write_file); folder agents/coder/ exists; "
-        "rounds 9; cap $20.00/month; memory: own notes only; " + result.route.detail + "; "
+        "cap $20.00/month; memory: own notes only; " + result.route.detail + "; "
         f"log conversation {agent.log_conversation_id}"
     )
     # The reads agree with the row.
@@ -619,6 +616,7 @@ async def test_update_refuses_rename_and_stores_a_change(pool, mount_peers, root
     assert result.agent.updated_at > created.agent.updated_at
     assert result.agent.tools == SPEC_TOOLS  # untouched fields stay
     assert result.text.startswith("updated agent coder — purpose: reviews code;")
+    assert "rounds" not in result.text
     assert "memory: own notes + shared read" in result.text
     # No chain in the change: nothing was PUT, and the route is said to be as it was.
     assert len([p for p, _ in gateway.seen if p == "/admin/routes/agent_coder"]) == puts_before
@@ -971,3 +969,102 @@ def test_persona_withholds_a_skill_whose_row_is_not_active(root):
     # procedure is worse off than one told the household pulled it.
     assert "[skill old: retired, not active — do not follow it]" in block
     assert "The way we used to do it." not in block
+
+
+# ── no per-agent rounds (no-ceiling T6) ────────────────────────────────────
+#
+# Owner 2026-10-08: no count of tool rounds stops any turn, an agent's
+# included. The per-agent rounds go end to end: the value, the spec, the
+# bounds, the default, the column list, the update set, the page dict, the
+# ledger, and every sentence that told the model or the owner a number.
+
+
+def test_an_agent_and_its_spec_carry_no_rounds():
+    assert "max_tool_rounds" not in {f.name for f in dataclasses.fields(Agent)}
+    assert "max_tool_rounds" not in {f.name for f in dataclasses.fields(AgentSpec)}
+
+
+@pytest.mark.parametrize("name", ["MIN_ROUNDS", "MAX_ROUNDS", "_rounds_for"])
+def test_the_rounds_bounds_and_default_are_gone(name):
+    assert not hasattr(agents, name), f"agents.{name} still exists"
+
+
+def test_the_row_columns_and_the_update_set_name_no_rounds():
+    assert "max_tool_rounds" not in agents._COLUMNS
+    assert "max_tool_rounds" not in agents.UPDATABLE
+
+
+def test_the_ledger_spec_carries_no_rounds():
+    assert "rounds" not in inspect.signature(agents._spec_meta).parameters
+    meta = agents._spec_meta(_spec())
+    assert "max_tool_rounds" not in meta
+
+
+def test_the_agent_view_has_no_rounds_key():
+    view = agents.agent_json(
+        _agent(),
+        bound_timers=[],
+        last_active=None,
+        state={},
+        spent=None,
+        spend_note=None,
+    )
+    assert "max_tool_rounds" not in view
+
+
+async def test_an_update_naming_rounds_is_refused_as_an_unknown_field(pool, mount_peers, root):
+    await _owner(pool)
+    mount_peers(gateway=_gateway())
+    created = await _create(pool)
+    with pytest.raises(AgentError) as refused:
+        await agents.update(pool, app, "coder", {"max_tool_rounds": 5}, actor="jeremy")
+    words = str(refused.value)
+    assert words.startswith("an agent has no field(s) max_tool_rounds — the fields are: ")
+    assert "max_tool_rounds" not in words.split("the fields are: ", 1)[1]
+    # Nothing changed: the row is as created and the ledger has no update.
+    assert await agents.by_name(pool, "coder") == created.agent
+    assert await _events(pool, governance.AGENT_UPDATED) == []
+
+
+def test_the_system_prompt_states_no_tool_rounds(root):
+    block = agents.instructions_block(_agent(), missing_tools=(), skills=())
+    assert "tool rounds" not in block
+    assert "Your workspace folder is agents/coder/" in block
+
+
+def test_the_delegation_brief_states_no_tool_rounds():
+    brief = agents.compose_brief(_agent(), "fix the build", None, None, owner_name="jeremy")
+    assert "tool rounds" not in brief
+    assert "Your workspace folder is agents/coder/" in brief
+    assert brief.endswith("Task: fix the build")
+
+
+ROUNDS_RE = re.compile(r"max_tool_rounds|MIN_ROUNDS\b|MAX_ROUNDS\b|tool rounds per task")
+APP_DIR = Path(agents.__file__).resolve().parent
+# The modules that carried per-agent rounds. chat.py's comment citing the old
+# cap is T8's (docs/comments), so it is not in this list.
+ROUND_CARRIERS = (
+    "agents.py",
+    "agents_api.py",
+    "tools/agents.py",
+    "browser/agent.py",
+    "evals/cases.py",
+    "evals/runner.py",
+)
+
+
+@pytest.mark.parametrize("relpath", ROUND_CARRIERS)
+def test_no_module_that_carried_rounds_names_them(relpath):
+    """C7: the grep the epic's done-line runs, over the modules T6 owns."""
+    source = (APP_DIR / relpath).read_text(encoding="utf-8")
+    hits = [line for line in source.splitlines() if ROUNDS_RE.search(line)]
+    assert hits == [], hits
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["delegates-the-write-to-an-agent", "no-disowned-delegation-tool", "no-fabricated-agent-work"],
+)
+def test_no_case_json_names_rounds(case_id):
+    text = (APP_DIR / "evals" / "cases" / f"{case_id}.json").read_text(encoding="utf-8")
+    assert "max_tool_rounds" not in text

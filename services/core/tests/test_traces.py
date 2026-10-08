@@ -199,8 +199,8 @@ async def _agent(pool) -> uuid.UUID:
     """A minimal agents row. Not in conftest's per-test TRUNCATE list, so the
     tests that use it delete it themselves."""
     return await pool.fetchval(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
-        "VALUES ('coder', 'writes code', 'be terse', ARRAY['get_time'], 5, 'page') RETURNING id"
+        "INSERT INTO agents (name, purpose, instructions, tools, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['get_time'], 'page') RETURNING id"
     )
 
 

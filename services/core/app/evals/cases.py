@@ -183,7 +183,6 @@ class FixtureAgent:
     purpose: str
     instructions: str
     tools: tuple[str, ...]
-    max_tool_rounds: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.startswith(FIXTURE_AGENT_PREFIX):
@@ -195,15 +194,12 @@ class FixtureAgent:
             )
 
     def as_json(self) -> dict:
-        out: dict = {
+        return {
             "name": self.name,
             "purpose": self.purpose,
             "instructions": self.instructions,
             "tools": list(self.tools),
         }
-        if self.max_tool_rounds is not None:
-            out["max_tool_rounds"] = self.max_tool_rounds
-        return out
 
 
 @dataclass(frozen=True)
@@ -734,15 +730,11 @@ def agent_from_dict(raw: dict) -> FixtureAgent:
     for name in tools_raw:
         if not isinstance(name, str) or not name.strip():
             raise CaseError(f"a case agent's tools must be tool names, got {name!r}")
-    rounds = raw.get("max_tool_rounds")
-    if rounds is not None and (isinstance(rounds, bool) or not isinstance(rounds, int)):
-        raise CaseError(f"a case agent's max_tool_rounds must be a whole number, got {rounds!r}")
     return FixtureAgent(
         name=_require(raw, "name", str),
         purpose=_require(raw, "purpose", str),
         instructions=_require(raw, "instructions", str),
         tools=tuple(name.strip() for name in tools_raw),
-        max_tool_rounds=rounds,
     )
 
 

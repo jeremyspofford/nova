@@ -1166,6 +1166,7 @@ async def resolve(
     skip: set[str] | None = None,
     unreachable: dict[str, str] | None = None,
     kinds: frozenset[str] | None = None,
+    passed_over: dict[str, str] | None = None,
 ) -> Decision:
     """The link that serves this call, decided BEFORE any provider is
     called. `skip` names links already refused in this request (the
@@ -1174,7 +1175,14 @@ async def resolve(
     served id (`provider:model`), so a bare link in the chain matches too,
     and neither is asked again in the same request. `kinds` is the decision-
     model kinds the caller allows (allowed_kinds; None allows every kind): a
-    link of another kind is passed over, `kind_off`, for this call only."""
+    link of another kind is passed over, `kind_off`, for this call only.
+    `passed_over` maps links the CALLER asks to pass over for this request
+    (X-Nova-Pass-Over: a round that answered with thinking only) to its
+    words, keyed by served id like the others: such a link that would
+    otherwise be runnable is judged `passed_over` in those words and the
+    walk goes on. It overrides only `runnable` — a link not runnable for its
+    own reason keeps that verdict, and `unreachable`/`skip` (live facts of
+    this request) outrank it. It is never a wall."""
     validate_role(role)
     protocol = protocol_of(role)
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
@@ -1267,6 +1275,9 @@ async def resolve(
         elif skip and served_as in skip:
             verdict["verdict"] = "refused"
             verdict["reason"] = f"{link} refused this request"
+        elif passed_over and served_as in passed_over and verdict["verdict"] == "runnable":
+            verdict["verdict"] = "passed_over"
+            verdict["reason"] = f"passed over: {passed_over[served_as]}"
         verdicts.append(verdict)
         # A wrong_protocol link never served anything and never will on this
         # role — its `local` says only where the PROVIDER sits, so counting it
@@ -1308,6 +1319,9 @@ async def resolve(
             elif skip and standby_id in skip:
                 reason = f"standby: {standby_id} refused this request"
                 verdicts.append({**entry, "verdict": "refused", "reason": reason})
+            elif passed_over and standby_id in passed_over:
+                reason = f"standby: passed over: {passed_over[standby_id]}"
+                verdicts.append({**entry, "verdict": "passed_over", "reason": reason})
             else:
                 skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)
                 verdicts.append({**entry, "verdict": "runnable", "reason": f"standby: {why}"})

@@ -26,10 +26,13 @@ beat (S11) runs app/beats.py under a `beat` span — its turn is opened here lik
 every other, but into the beats' OWN inactive conversation, so a beat that
 finds nothing says nothing where he would see it.
 
-Every per-kind run is bounded, and the bound is DERIVED per firing from the
-ceiling that firing actually runs under (firing_timeout_s). Firings run one
-after another, so one hung run would otherwise delay every timer behind it for
-as long as it hung (the S9 carry, taken now that a recurring beat exists).
+A firing that makes no model turn (reminder, job) is bounded by the floor
+(firing_timeout_s): firings run one after another, so one hung run would
+otherwise delay every timer behind it for as long as it hung. A model-turn
+firing (instruction, beat) has no wall-clock cut — no count of tool rounds
+bounds a turn — and ends by its rounds' own timeouts, the circling stop, the
+owner's stop, USD caps or a round failure; a long one delays later timers for
+as long as it works.
 
 Nothing here asks anyone for anything (owner ruling 2026-09-03): the path from
 claim to run awaits only the work.
@@ -82,10 +85,11 @@ AGENT_GONE_REASON = "the agent this timer was bound to no longer exists"
 # and run concurrently. Ten minutes is far past all of them, and past it a
 # firing is not slow, it is stuck.
 FIRING_TIMEOUT_FLOOR_S = 600.0
-# The kinds that run a model turn, and so are bounded by the LIVE round ceiling
-# rather than the floor. A beat is here because the digest composes its message
-# with a model turn (S11-3) and the watch beat may act in one — a bound that
-# only fits today's check-reading beat would cut that the day it lands.
+# The kinds that run a model turn, and so get no wall-clock cut at all (no count
+# of tool rounds bounds a turn; firing_timeout_s). A beat is here because the
+# digest composes its message with a model turn (S11-3) and the watch beat may
+# act in one — a floor that only fits today's check-reading beat would cut that
+# the day it lands.
 MODEL_TURN_KINDS = ("scheduled", beats.BEAT_KIND)
 FIRING_OK, FIRING_ERROR, FIRING_REFUSED, FIRING_INTERRUPTED = (
     "ok",
@@ -194,39 +198,25 @@ def _next_fire(row: asyncpg.Record, now: datetime) -> datetime | None:
 # -- one firing ----------------------------------------------------------------
 
 
-async def firing_timeout_s(
-    pool: asyncpg.Pool, kind: str, agent: agents.Agent | None = None
-) -> float:
-    """How long THIS firing may run before it is cut, derived from the ceiling
-    it actually runs under.
+def firing_timeout_s(kind: str) -> float | None:
+    """How long THIS firing may run before it is cut, by kind alone.
 
-    Two live numbers, never a literal: the gateway's own per-read silence
-    budget (chat.GATEWAY_TIMEOUT.read) and the round ceiling this firing runs
-    with — the agent's own row when one is bound, else the live
-    `agents.max_tool_rounds` setting. Their product is the longest a real turn
-    can take before its own timeouts end it.
-
-    This used to be one constant computed from the DEFAULT round ceiling, and
-    that was a bug with the owner's name on it: raising max_tool_rounds, or
-    binding a timer to an agent with a wider budget, is a deliberate act, and
-    the firing cut such a run off, recorded an error and spent one of the five
-    consecutive failures that pause the row. A ceiling he widened on purpose
-    now widens this with it.
+    A kind that runs a model turn (MODEL_TURN_KINDS: an instruction, with or
+    without an agent, and a beat) gets None — no wall-clock cut. No count of
+    tool rounds bounds a turn any more (owner, 2026-10-08: "not have a limit
+    at all"), and the old cut was exactly that count in seconds. Such a firing
+    ends by its own rounds' timeouts (chat.GATEWAY_TIMEOUT.read per read, each
+    tool's own budget), the circling stop, the owner's stop, USD caps, or a
+    round failure. Firings run one after another, so a long productive
+    scheduled turn delays the timers behind it for as long as it works.
 
     A kind that makes no gateway rounds (reminder, job) gets the floor — its
-    work has budgets of its own and no round to wait on. A settings read that
-    fails is NOT swallowed into a default here: the exception travels, the
-    firing is recorded an error with the reason, and nobody is told a bound was
-    applied that was not.
+    work has budgets of its own, and the floor keeps one hung run from holding
+    every timer behind it. Nothing is read: kind is the only input.
     """
-    rounds = 0
     if kind in MODEL_TURN_KINDS:
-        rounds = (
-            agent.max_tool_rounds
-            if agent is not None
-            else int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
-        )
-    return max(FIRING_TIMEOUT_FLOOR_S, rounds * chat.GATEWAY_TIMEOUT.read)
+        return None
+    return FIRING_TIMEOUT_FLOOR_S
 
 
 def timeout_reason(kind: str, bound_s: float) -> str:
@@ -234,14 +224,14 @@ def timeout_reason(kind: str, bound_s: float) -> str:
     actually applied to THAT firing, passed in rather than read from a
     constant, so the sentence cannot describe a bound nobody used.
 
-    It says out loud that a cut is not proof of a hang: the bound is derived
-    from the live ceiling, so a run that reached it was either stuck or a long
-    legitimate turn — the spans of the turn it names are what settle which."""
+    It says out loud that a cut is not proof of a hang: a run that reached the
+    bound was either stuck or a long legitimate one — the spans of the turn it
+    names are what settle which. Only a firing that makes no model turn is
+    ever cut (firing_timeout_s)."""
     return (
         f"this {kind} firing was stopped after {bound_s:g} seconds — the bound on one "
-        "firing, so a run that hangs cannot delay every timer behind it. It is derived from "
-        "the live round ceiling, so a run this long was either stuck or a legitimately long "
-        "one that was cut: the turn's spans say which"
+        "firing, so a run that hangs cannot delay every timer behind it. A run this long "
+        "was either stuck or a legitimately long one that was cut: the turn's spans say which"
     )
 
 
@@ -257,11 +247,11 @@ async def _run_firing(
     # _watch calls _run_turn (S11-2), this line moves with it.
     scheduler_closes_turn = kind != "scheduled"
     outcome = Outcome(FIRING_ERROR, "the firing did not reach an outcome")
-    # The floor until the row's own ceiling is known (it is derived below, once
-    # any bound agent is loaded). Only the bound that was actually applied ever
+    # The floor until the kind's bound is applied below (None: a model-turn
+    # firing, never cut). Only the bound that was actually applied ever
     # reaches timeout_reason, so this value can never appear in a sentence
     # describing a cut that used a different one.
-    bound_s = FIRING_TIMEOUT_FLOOR_S
+    bound_s: float | None = FIRING_TIMEOUT_FLOOR_S
     try:
         model = None
         agent: agents.Agent | None = None
@@ -334,15 +324,17 @@ async def _run_firing(
                 # its words for somebody else's timeout.
                 raise RuntimeError(f"a timeout inside the firing: {peers.reason(exc)}") from exc
 
-        # DERIVED from what this firing runs under — the bound agent's round
-        # budget, else the live setting — never from the default (see
-        # firing_timeout_s). Computed after the agent is loaded and before the
-        # run, so the number the cut states is the number that was applied.
-        bound_s = await firing_timeout_s(pool, kind, agent)
+        # By kind (firing_timeout_s): a model-turn firing is never cut (None),
+        # a firing that makes no model call keeps the floor. Computed before
+        # the run, so the number the cut states is the number that was applied.
+        bound_s = firing_timeout_s(kind)
         # The bound is around the RUN, not around the claim or the turn: a
         # firing that is cut off still has its turn, its trace and its row to
         # be closed by the finally below.
-        outcome = await asyncio.wait_for(run(), bound_s)
+        if bound_s is None:
+            outcome = await run()
+        else:
+            outcome = await asyncio.wait_for(run(), bound_s)
     except asyncio.CancelledError:
         # A graceful shutdown (lifespan cancels the ticker mid-firing) is not a
         # failure of the timer: the firing is closed `interrupted` with the
@@ -356,11 +348,17 @@ async def _run_firing(
         # passed its derived bound and was cancelled so the timers behind it
         # could go. Caught BEFORE Exception (TimeoutError is one) so the firing
         # states the bound in words instead of an opaque class name, and it is
-        # an ERROR — five of these pause the row, which is right: a beat that
+        # an ERROR — five of these pause the row, which is right: a job that
         # hangs every hour is broken, not merely slow. The sentence says a cut
-        # may also be a legitimately long run, because this bound is derived
-        # from the live ceiling and only the spans can settle which it was.
-        outcome = Outcome(FIRING_ERROR, timeout_reason(kind, bound_s))
+        # may also be a legitimately long run, because only the spans can
+        # settle which it was. Only a bounded (non-model) kind reaches here;
+        # an unbounded one that somehow did says so rather than naming a bound.
+        outcome = Outcome(
+            FIRING_ERROR,
+            timeout_reason(kind, bound_s)
+            if bound_s is not None
+            else f"the {kind} firing timed out with no bound applied",
+        )
         logger.error("timer %s firing %s: %s", row["id"], firing_id, outcome.reason)
     except Exception as exc:
         logger.exception("timer %s firing %s failed unexpectedly", row["id"], firing_id)
@@ -571,10 +569,10 @@ async def _fire_scheduled(
     and lands in their conversation, never the owner's.
 
     With `agent` (the row's agent_id, loaded by _run_firing) the turn runs AS
-    the agent and differs in exactly four places: the "no chat model" refusal
+    the agent and differs in exactly three places: the "no chat model" refusal
     does not apply (the turn names no model and the gateway walks the agent's
     own chain), the person is the agent's value (its memory partition, its
-    workspace principal), the round budget is the agent's row, and _run_turn
+    workspace principal), and _run_turn
     gets its persona (subset, block, folder, cap). Everything else — the
     framed message, the owner's conversation, ingest=False, the read-back —
     is the same line of code. A capped agent ends the turn through
@@ -602,13 +600,11 @@ async def _fire_scheduled(
         now_words=schedule.local_words(now, row["timezone"]),
     )
     if agent is None:
-        max_tool_rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
         # A plain row's call is EXACTLY what it was before agents existed
         # (pinned: kwargs == {"ingest": False}); persona rides only with one.
         persona_kwargs: dict = {}
     else:
         person = agent.person()
-        max_tool_rounds = agent.max_tool_rounds
         # The shared-memory scope is derived from the row inside persona_for
         # from the OWNER's id — the timer's person, whose notes they are.
         persona_kwargs = {
@@ -629,7 +625,6 @@ async def _fire_scheduled(
         message,
         [],
         model,
-        max_tool_rounds,
         frames.append,
         ingest=False,
         **persona_kwargs,

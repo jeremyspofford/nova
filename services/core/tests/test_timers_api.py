@@ -611,8 +611,8 @@ async def _agent_row(pool, name: str = "coder") -> uuid.UUID:
     """A minimal agents row (migration 021) — the binding target. Nothing
     here needs the gateway route or the folder, so no agents.create."""
     return await pool.fetchval(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
-        "VALUES ($1, 'writes code', 'be terse', ARRAY['get_time'], 5, 'page') RETURNING id",
+        "INSERT INTO agents (name, purpose, instructions, tools, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['get_time'], 'page') RETURNING id",
         name,
     )
 

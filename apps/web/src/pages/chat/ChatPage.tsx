@@ -40,8 +40,8 @@ function asQueued(conversation: Conversation): QueuedMessage[] {
  *
  * The poll runs for exactly as long as core says the turn is in flight. It
  * used to give up after 300 s — "the gateway's read budget", the reasoning
- * went — but a turn is not one gateway call: it is up to max_tool_rounds of
- * them plus redirects, each with its own 300 s of allowed silence, and the
+ * went — but a turn is not one gateway call: it is any number of them
+ * plus redirects, each with its own 300 s of allowed silence, and the
  * poll's clock starts at the RELOAD, not at the send. A refresh a second
  * after sending, followed by a 300 s timeout, had the poll giving up ~1 s
  * before the turn closed, and the page went quiet with the turn's stated

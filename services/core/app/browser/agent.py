@@ -51,7 +51,6 @@ SPEC = agents.AgentSpec(
         "workspace_write_file",
         "workspace_list_files",
     ),
-    max_tool_rounds=30,
 )
 
 

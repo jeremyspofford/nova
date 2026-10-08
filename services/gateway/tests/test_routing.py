@@ -858,3 +858,186 @@ async def test_a_402_wall_keeps_the_providers_sentence_not_a_head_of_its_json(
     assert "refused (402)" in walls[0]["reason"]
     assert "can only afford 0" in walls[0]["reason"]
     assert '{"error"' not in walls[0]["reason"]
+
+
+# ── no-ceiling T1: X-Nova-Pass-Over ─────────────────────────────────────────
+# Core passes over a link that answered a round with thinking only (reasoning,
+# no content, no tool calls): resolve judges it "passed_over" in the caller's
+# words and walks on. It is a per-request fact, never a wall.
+
+THINKING = "answered with thinking only, twice"
+
+
+async def _resolve(pool, role, requested, **kw):
+    from app import admin
+    from app.main import app
+
+    return await routing.resolve(
+        app,
+        pool,
+        role=role,
+        requested=requested,
+        timezone="UTC",
+        fit_context=admin._fit_context,
+        latest_probes=admin._latest_probes,
+        **kw,
+    )
+
+
+def _pass_over_header(pairs: dict[str, str]) -> str:
+    from urllib.parse import quote
+
+    return ",".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in pairs.items())
+
+
+async def test_a_passed_over_link_is_judged_passed_over_in_the_callers_words_and_the_walk_goes_on(
+    client, pool, local
+):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    decision = await _resolve(pool, "chat", "hub:qwen3:8b", passed_over={"hub:qwen3:8b": THINKING})
+
+    assert decision.link == 2 and decision.model == "qwen3:4b"
+    first = decision.verdicts[0]
+    assert first["id"] == "hub:qwen3:8b"
+    assert first["verdict"] == "passed_over"
+    assert THINKING in first["reason"]
+    assert "hub:qwen3:8b" in decision.reason and "passed over" in decision.reason
+    assert THINKING in decision.reason
+
+
+async def test_a_bare_link_is_passed_over_by_its_served_id(client, pool, local):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    decision = await _resolve(pool, "chat", "qwen3:8b", passed_over={"hub:qwen3:8b": THINKING})
+
+    assert decision.model == "qwen3:4b"
+    assert decision.verdicts[0]["verdict"] == "passed_over"
+
+
+async def test_a_link_not_runnable_for_its_own_reason_keeps_that_verdict(client, pool, local):
+    """Pass-over only overrides `runnable`: a walled link stays walled, and a
+    live refusal in the same request outranks the caller's pass-over."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    await routing.record_refusal(pool, {"name": "hub"}, 503, "loading", model="qwen3:8b")
+
+    with pytest.raises(routing.NothingRunnable) as caught:
+        await _resolve(
+            pool,
+            "chat",
+            "hub:qwen3:8b",
+            passed_over={"hub:qwen3:8b": THINKING, "hub:qwen3:4b": THINKING},
+        )
+    assert [(v["id"], v["verdict"]) for v in caught.value.verdicts] == [
+        ("hub:qwen3:8b", "walled"),
+        ("hub:qwen3:4b", "passed_over"),
+    ]
+
+    with pytest.raises(routing.NothingRunnable) as caught:
+        await _resolve(
+            pool,
+            "chat",
+            "hub:qwen3:4b",
+            skip={"hub:qwen3:4b"},
+            passed_over={"hub:qwen3:4b": THINKING},
+        )
+    assert [(v["id"], v["verdict"]) for v in caught.value.verdicts] == [("hub:qwen3:4b", "refused")]
+
+
+async def test_every_link_passed_over_is_nothing_runnable_listing_each_as_passed_over(
+    client, pool, local
+):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    with pytest.raises(routing.NothingRunnable) as caught:
+        await _resolve(
+            pool,
+            "chat",
+            "hub:qwen3:8b",
+            passed_over={"hub:qwen3:8b": THINKING, "hub:qwen3:4b": "thinking only again"},
+        )
+
+    verdicts = caught.value.verdicts
+    assert [(v["id"], v["verdict"]) for v in verdicts] == [
+        ("hub:qwen3:8b", "passed_over"),
+        ("hub:qwen3:4b", "passed_over"),
+    ]
+    assert THINKING in verdicts[0]["reason"]
+    assert "thinking only again" in verdicts[1]["reason"]
+    for v in verdicts:
+        for label in ("unreachable", "refused", "walled"):
+            assert label not in v["reason"]
+
+
+async def test_the_standby_can_be_passed_over_too(client, pool, local, mount_backend):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+
+    with pytest.raises(routing.NothingRunnable) as caught:
+        await _resolve(pool, "judge", None, passed_over={"hub:qwen3:8b": THINKING})
+
+    standby = caught.value.verdicts[-1]
+    assert standby["id"] == "hub:qwen3:8b"
+    assert standby["verdict"] == "passed_over"
+    assert THINKING in standby["reason"]
+
+
+async def test_the_pass_over_header_serves_the_next_link_and_the_route_says_why(
+    client, pool, local
+):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "hub:qwen3:8b",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+        headers={
+            "X-Nova-Role": "chat",
+            "X-Nova-Purpose": "chat",
+            "X-Nova-Pass-Over": _pass_over_header({"hub:qwen3:8b": THINKING}),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    route = _route_chunk(resp.content)
+    assert route["link"] == 2
+    assert "hub:qwen3:8b" in route["reason"] and "passed over" in route["reason"]
+    assert THINKING in route["reason"]
+    sent = [b["model"] for p, b in local.seen if p == "/v1/chat/completions"]
+    assert sent == ["qwen3:4b"], "the passed-over link was never dialled"
+
+
+async def test_a_passed_over_link_is_never_walled_and_serves_the_next_request(
+    client, pool, local, monkeypatch
+):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    walled: list = []
+    real = routing.record_refusal
+
+    async def spy(*args, **kwargs):
+        walled.append((args, kwargs))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(routing, "record_refusal", spy)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "hub:qwen3:8b", "messages": [], "stream": True},
+        headers={
+            "X-Nova-Role": "chat",
+            "X-Nova-Pass-Over": _pass_over_header({"hub:qwen3:8b": THINKING}),
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    assert walled == []
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+    again = await _chat(client, "chat", model="hub:qwen3:8b")
+    assert again.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert again.headers["x-nova-route"] == "role=chat;link=1"

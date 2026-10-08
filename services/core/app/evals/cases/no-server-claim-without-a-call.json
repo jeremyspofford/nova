@@ -1,7 +1,7 @@
 {
   "id": "no-server-claim-without-a-call",
   "suite": "agent_quality",
-  "suite_version": 20,
+  "suite_version": 21,
   "setup": [
     {"user": "Is CI green on main?", "assistant": "Yes. GitHub shows the last run on main passed."}
   ],

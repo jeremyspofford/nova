@@ -559,7 +559,13 @@ def test_the_backends_own_words_do_not_change_with_the_calls():
 # executor. These run the real funnel (`/api/v1/chat/stream`) against a
 # scripted gateway, so they need the database.
 
-NOTE_2 = "[stopped after 2 tool rounds without finishing]"
+# PINS MOVED (no-ceiling T4, 2026-10-08): this section stopped its turns with
+# the round CAP (a limit of 2, round 2's call never ran, note "[stopped after
+# 2 tool rounds without finishing]"). The count is gone by owner ruling; the
+# circling stop is the only round stop and reaches the same narration path.
+# Each pin keeps its subject on a circling stop instead: the same get_time
+# call a third time (all three run), then the narration round.
+NOTE_2 = "[stopped after 3 tool rounds: the same call was repeated]"
 CLOCK = "2026-10-07 16:44 UTC"
 
 
@@ -621,12 +627,12 @@ def _corrections(sent: list) -> list[str]:
 
 
 async def _cap_held(pool, gateway, spy, *, narration_calls: int) -> None:
-    """C4: the cap is unchanged. Two tool rounds and one narration round; only
-    round 1's call reached its executor; the narration round advertised no
+    """C4: the stop is unchanged. Three tool rounds and one narration round;
+    each round's call reached its executor; the narration round advertised no
     tools and each call it asked for was refused, none dispatched."""
-    assert gateway.calls == 3
-    assert gateway.payloads[2].get("tools") in (None, [])
-    assert len(spy.calls) == 1
+    assert gateway.calls == 4
+    assert gateway.payloads[3].get("tools") in (None, [])
+    assert len(spy.calls) == 3
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
     spans = await _turn_spans(pool)
     narration = [s for s in spans if s.kind == "llm_call" and s.meta.get("round") == 0]
@@ -635,19 +641,18 @@ async def _cap_held(pool, gateway, spy, *, narration_calls: int) -> None:
     refused = [s for s in spans if s.kind == "tool" and s.meta.get("refused_out_of_rounds")]
     assert len(refused) == narration_calls
     reached = [s for s in spans if s.kind == "tool" and s.meta.get("reached_executor") is True]
-    assert [s.name for s in reached] == ["get_time"]
+    assert [s.name for s in reached] == ["get_time"] * 3
 
 
 async def _run(owner_client, mount_peers, narration: tuple | None, *, first: tuple = ()):
-    """Round 1 asks for the clock (it runs), round 2 asks again (the cap: it
-    does not run), then the narration round plays `narration` (None: the
-    script ends, so the narration call fails at the gateway)."""
-    rounds = ((*first, _clock_call("c1")), (_clock_call("c2"),))
+    """Rounds 1-3 ask for the clock (all run; the third is the circling
+    stop), then the narration round plays `narration` (None: the script
+    ends, so the narration call fails at the gateway)."""
+    rounds = ((*first, _clock_call("c1")), (_clock_call("c2"),), (_clock_call("c3"),))
     if narration is not None:
         rounds = (*rounds, narration)
     gateway = ScriptedGateway(rounds=rounds)
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
     sent = await _say(owner_client, "what time is it?")
     return gateway, sent
 
@@ -741,15 +746,15 @@ async def test_a_narration_round_of_only_markup_gets_the_statement_then_the_note
     assert block in stored
     assert stored.count(statement) == 1
     assert block in "".join(_texts(sent))
-    assert gateway.calls == 3
-    assert len(spy.calls) == 1
+    assert gateway.calls == 4
+    assert len(spy.calls) == 3
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
     reached = [
         s.name
         for s in await _turn_spans(pool)
         if s.kind == "tool" and s.meta.get("reached_executor") is True
     ]
-    assert reached == ["get_time"]
+    assert reached == ["get_time"] * 3
 
 
 @requires_db
@@ -758,28 +763,29 @@ async def test_every_distinct_call_that_ran_is_in_the_statement(
 ):
     """C1, c042afa1's shape: several distinct calls ran, each found something,
     and the narration round asked for one more on the wire. Every result is
-    in the stored reply, above the note."""
+    in the stored reply, above the note. (Stopped by d.md's missing-file read
+    a third time, no longer by a cap of 4.)"""
     workspace.mkdir(parents=True, exist_ok=True)
     found = {name: f"finding number {i} lives in {name}" for i, name in enumerate("abc", 1)}
     for name, body in found.items():
         (workspace / f"{name}.md").write_text(body)
     reads = tuple(
-        (whole_call(f"r{name}", "workspace_read_file", {"path": f"{name}.md"}),) for name in "abcd"
+        (whole_call(f"r{i}", "workspace_read_file", {"path": f"{name}.md"}),)
+        for i, name in enumerate("abcddd")
     )
     narration = (whole_call("n1", "workspace_read_file", {"path": "e.md"}),)
     gateway = ScriptedGateway(rounds=(*reads, narration))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 4)
 
     sent = await _say(owner_client, "find it")
 
     statement = await _turn_statement(pool)
     stored = await _stored(pool)
-    assert stored == f"{statement}\n\n[stopped after 4 tool rounds without finishing]"
+    assert stored == f"{statement}\n\n[stopped after 6 tool rounds: the same call was repeated]"
     for body in found.values():
         assert len(_lines_holding(stored, body)) == 1
     assert "".join(_texts(sent)) == stored
-    assert gateway.calls == 5
+    assert gateway.calls == 7
 
 
 @requires_db
@@ -885,23 +891,24 @@ async def test_a_narration_round_that_answers_in_prose_stores_exactly_todays_rep
 async def test_a_stopped_turn_where_no_call_ran_stores_exactly_todays_reply(
     case, owner_client, pool, mount_peers, workspace, monkeypatch
 ):
-    """C3: at a limit of 1, round 1's call is the capped one and never runs,
-    so nothing reached an executor: the narration round that does not answer
-    leaves exactly today's reply, the note alone."""
+    """C3: the same unreadable call three times (arguments get_time refuses
+    before its executor) is a circling stop where nothing reached an executor:
+    the narration round that does not answer leaves the note alone. PIN MOVED
+    (no-ceiling T4): this was a cap of 1 refusing round 1's call."""
     narration, narration_calls = _narrations()[case]
     spy = _arm_clock(monkeypatch)
-    rounds = ((_clock_call("c1"),),) + ((narration,) if narration is not None else ())
+    bad = lambda i: (whole_call(f"c{i}", "get_time", {"bogus": 1}),)  # noqa: E731
+    rounds = (bad(1), bad(2), bad(3)) + ((narration,) if narration is not None else ())
     gateway = ScriptedGateway(rounds=rounds)
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 1)
 
     sent = await _say(owner_client, "what time is it?")
 
-    note = "[stopped after 1 tool rounds without finishing]"
+    note = NOTE_2
     assert await _stored(pool) == note
     assert "".join(_texts(sent)) == note
     assert spy.calls == []
-    assert gateway.calls == 2
+    assert gateway.calls == 4
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
     refused = [
         s
@@ -923,10 +930,15 @@ async def test_an_on_topic_judge_keeps_the_statement_and_the_note(
     on_topic verdict leaves the reply as it streamed: statement, then note."""
     spy = _arm_clock(monkeypatch)
     gateway = ScriptedGateway(
-        rounds=((_clock_call("c1"),), (_clock_call("c2"),), (), (text("on_topic"),))
+        rounds=(
+            (_clock_call("c1"),),
+            (_clock_call("c2"),),
+            (_clock_call("c3"),),
+            (),
+            (text("on_topic"),),
+        )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
     await _set_judge(owner_client)
 
     sent = await _say(owner_client, "what time is it?")
@@ -935,8 +947,8 @@ async def test_an_on_topic_judge_keeps_the_statement_and_the_note(
     stored = await _stored(pool)
     assert stored == f"{statement}\n\n{NOTE_2}"
     assert "".join(_texts(sent)) == stored
-    assert gateway.calls == 4
-    assert len(spy.calls) == 1
+    assert gateway.calls == 5
+    assert len(spy.calls) == 3
 
 
 @requires_db
@@ -952,20 +964,20 @@ async def test_a_refocused_reply_is_not_cut_open_by_the_statement(
         rounds=(
             (_clock_call("c1"),),
             (_clock_call("c2"),),
+            (_clock_call("c3"),),
             (),
             (text("off_topic"),),
             (text(corrected),),
         )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
     await _set_judge(owner_client)
 
     await _say(owner_client, "what time is it?")
 
     assert await _stored(pool) == corrected
-    assert gateway.calls == 5
-    assert len(spy.calls) == 1
+    assert gateway.calls == 6
+    assert len(spy.calls) == 3
 
 
 @requires_db

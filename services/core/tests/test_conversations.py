@@ -347,8 +347,8 @@ MESSAGE_KEYS = {
 
 async def _agent(pool, name: str = "coder") -> uuid.UUID:
     return await pool.fetchval(
-        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
-        "VALUES ($1, 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page') "
+        "INSERT INTO agents (name, purpose, instructions, tools, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['workspace_write_file'], 'page') "
         "RETURNING id",
         name,
     )

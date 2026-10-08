@@ -68,7 +68,6 @@ async def _nova(pool, owner, message: str, *, decide: bool) -> traces.Turn:
         message,
         [],
         MODEL,
-        3,
         frames.append,
         decide=decide,
     )
@@ -318,7 +317,6 @@ async def test_an_agents_turn_asks_no_decision_model_even_when_told_to(pool, mou
         PHONE,
         [],
         MODEL,
-        3,
         [].append,
         persona=agents.persona_for(agent, owner_id=owner.id),
         decide=True,
@@ -373,7 +371,6 @@ async def test_a_turn_cancelled_during_the_step_ends_cancelled_and_closed(pool, 
             PHONE,
             [],
             MODEL,
-            3,
             [].append,
             decide=True,
         )

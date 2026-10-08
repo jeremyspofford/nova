@@ -8,14 +8,11 @@ new hour would otherwise sit in the table doing nothing.
 
 from __future__ import annotations
 
-import ast
 import importlib
-import re
-from pathlib import Path
 
 import pytest
 
-from app import agents, beats, chat, decisions, schedule, scheduler, settings_store
+from app import beats, decisions, schedule, settings_store
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -46,7 +43,10 @@ KNOWN_KEYS = {
     "chat.model",
     "chat.vision_model",
     "appearance.default_preset",
-    "agents.max_tool_rounds",
+    # agents.max_tool_rounds LEFT (no-ceiling T5, owner 2026-10-08: "I'd prefer
+    # to not have a limit at all"): no count of tool rounds stops a turn, so the
+    # def is deleted and migration 044 deletes its stored row. Deliberate
+    # tripwire update — the set moved by one because one def went.
     "agents.responsiveness_check",
     "nova.timezone",
     "proactive.enabled",
@@ -144,32 +144,31 @@ async def test_a_string_setting_refuses_null(owner_client):
     assert resp.status_code == 400
 
 
+INT_KEY = "skills.flag_after_rough_uses"
+# PIN MOVED (no-ceiling T5): the int-type pins below used agents.max_tool_rounds,
+# the registry's first int setting. That setting is gone (owner 2026-10-08: no
+# count of tool rounds stops a turn), so the same type checks now run on another
+# int def with no validate hook of its own, skills.flag_after_rough_uses.
+
+
 async def test_an_int_setting_round_trips_as_a_number(owner_client, pool):
-    resp = await owner_client.put(
-        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": 3}
-    )
+    resp = await owner_client.put("/api/v1/settings", json={"key": INT_KEY, "value": 3})
     assert resp.status_code == 200
-    assert (await _by_key(owner_client))["agents.max_tool_rounds"]["value"] == 3
-    assert (
-        await pool.fetchval("SELECT value FROM settings WHERE key = 'agents.max_tool_rounds'") == 3
-    )
+    assert (await _by_key(owner_client))[INT_KEY]["value"] == 3
+    assert await pool.fetchval("SELECT value FROM settings WHERE key = $1", INT_KEY) == 3
 
 
 async def test_an_int_setting_refuses_a_bool(owner_client):
     # python says True == 1; the type check here does not, so a checkbox
-    # wired to the wrong key cannot silently become "1 round".
-    resp = await owner_client.put(
-        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": True}
-    )
+    # wired to the wrong key cannot silently become 1.
+    resp = await owner_client.put("/api/v1/settings", json={"key": INT_KEY, "value": True})
     assert resp.status_code == 400
     assert "int" in resp.json()["error"]
 
 
 async def test_an_int_setting_refuses_a_string_and_a_float(owner_client):
     for value in ("6", 6.5):
-        resp = await owner_client.put(
-            "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": value}
-        )
+        resp = await owner_client.put("/api/v1/settings", json={"key": INT_KEY, "value": value})
         assert resp.status_code == 400, value
 
 
@@ -219,215 +218,54 @@ async def test_the_listing_carries_no_validate_callable(owner_client):
         assert set(item) == {"key", "type", "default", "description", "value"}
 
 
-# -- the tool-round limit's bounds (agents.max_tool_rounds) --------------------
+# -- the tool-round limit is gone (no-ceiling T5, owner 2026-10-08) ------------
 #
-# The limit takes the same bounds as an agent row's own rounds:
-# agents.MIN_ROUNDS..agents.MAX_ROUNDS, read from agents.py when the value is
-# written, never a second pair. Every expected word below is built from those
-# constants, so these tests follow the bounds wherever agents.py moves them.
+# PIN MOVED: this block pinned agents.max_tool_rounds — its bounds (agents'
+# MIN_ROUNDS..MAX_ROUNDS read at write time), its derived default of 50, its
+# help text ("backstop") and the scheduler's firing bound of rounds x read.
+# The owner removed the count entirely: the circling stop (chat.RoundProgress)
+# is the only round-based stop, and test_turn_progress / test_scheduler pin
+# that (a model-turn firing is uncut). What is pinned here now is the removal:
+# no def, no range, no validator, the stored row ignored, and a write refused
+# by the registry's ordinary unknown-key path (no special retired-key message).
 
 ROUNDS_KEY = "agents.max_tool_rounds"
 
 
-def _rounds_refusal_says(error: str, value: int, low: int, high: int) -> None:
-    """The refusal names the key, the range and the value it refused. `got
-    {value}` is matched up to its last digit: a bare `str(value) in error` is
-    true for 0 and 5, both of which are inside "50"."""
-    assert ROUNDS_KEY in error, error
-    assert f"between {low} and {high}" in error, error
-    assert re.search(rf"\bgot {re.escape(str(value))}(?!\d)", error), error
+def test_the_registry_has_no_tool_round_setting():
+    assert ROUNDS_KEY not in settings_store.DEFS_BY_KEY
+    assert all(d.key != ROUNDS_KEY for d in settings_store.SETTING_DEFS)
 
 
-async def _stored_rounds(pool):
-    return await pool.fetchval("SELECT value FROM settings WHERE key = $1", ROUNDS_KEY)
+@pytest.mark.parametrize("name", ["TOOL_ROUNDS_RANGE", "_tool_rounds_problem"])
+def test_the_rounds_range_and_its_validator_are_gone(name):
+    assert not hasattr(settings_store, name), f"settings_store.{name} still exists"
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        pytest.param(agents.MAX_ROUNDS + 1, id="one_above_max"),
-        pytest.param(agents.MIN_ROUNDS - 1, id="one_below_min"),
-        pytest.param(-1, id="negative"),
-    ],
-)
-async def test_a_limit_outside_the_agent_bounds_is_refused_in_words(owner_client, pool, value):
-    resp = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": value})
+async def test_the_listing_omits_the_key_even_with_a_stale_row(owner_client, pool):
+    """A row left behind by an install that had set the limit is never listed:
+    the listing reads defs, not rows."""
+    await pool.execute("INSERT INTO settings (key, value) VALUES ($1, '50'::jsonb)", ROUNDS_KEY)
+    items = await _by_key(owner_client)
+    assert ROUNDS_KEY not in items
+    assert ROUNDS_KEY not in await settings_store.read_values(pool)
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["no_row", "stale_row"])
+async def test_writing_the_limit_is_refused_as_an_unknown_key(owner_client, pool, stale):
+    if stale:
+        await pool.execute("INSERT INTO settings (key, value) VALUES ($1, '50'::jsonb)", ROUNDS_KEY)
+    count = "SELECT count(*) FROM settings WHERE key = $1"
+    before = await pool.fetchval(count, ROUNDS_KEY)
+
+    resp = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 20})
 
     assert resp.status_code == 400, resp.text
-    _rounds_refusal_says(resp.json()["error"], value, agents.MIN_ROUNDS, agents.MAX_ROUNDS)
-    assert await pool.fetchval("SELECT count(*) FROM settings") == 0
-
-
-async def test_the_bounds_are_inclusive_and_one_past_either_is_refused(owner_client, pool):
-    """Exactly at a bound is a limit; one past it is not. The accepted edges
-    share this test with the refusals on purpose: an edge checked alone passes
-    with no bound at all."""
-    for edge in (agents.MIN_ROUNDS, agents.MAX_ROUNDS):
-        resp = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": edge})
-        assert resp.status_code == 200, (edge, resp.text)
-        assert resp.json() == {"key": ROUNDS_KEY, "value": edge}
-        assert await _stored_rounds(pool) == edge
-        assert (await _by_key(owner_client))[ROUNDS_KEY]["value"] == edge
-
-    for past in (agents.MIN_ROUNDS - 1, agents.MAX_ROUNDS + 1):
-        resp = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": past})
-        assert resp.status_code == 400, (past, resp.text)
-    assert await _stored_rounds(pool) == agents.MAX_ROUNDS
-
-
-async def test_a_refused_limit_stores_nothing_and_the_stored_one_stands(owner_client, pool):
-    too_many = {"key": ROUNDS_KEY, "value": agents.MAX_ROUNDS + 1}
-
-    refused = await owner_client.put("/api/v1/settings", json=too_many)
-    assert refused.status_code == 400, refused.text
-    assert await pool.fetchval("SELECT count(*) FROM settings WHERE key = $1", ROUNDS_KEY) == 0
-
-    stored = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 12})
-    assert stored.status_code == 200, stored.text
-    refused = await owner_client.put("/api/v1/settings", json=too_many)
-    assert refused.status_code == 400, refused.text
-    assert await _stored_rounds(pool) == 12
-    assert (await _by_key(owner_client))[ROUNDS_KEY]["value"] == 12
-
-
-async def test_the_bounds_are_agents_own_read_at_write_time(owner_client, pool, monkeypatch):
-    """Move agents' pair and the limit moves with it, with settings_store NOT
-    reloaded. A pair copied when settings_store loaded, or typed a second time,
-    would refuse 55 and store 2."""
-    monkeypatch.setattr(agents, "MIN_ROUNDS", 3)
-    monkeypatch.setattr(agents, "MAX_ROUNDS", 60)
-
-    inside = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 55})
-    assert inside.status_code == 200, inside.text
-    assert await _stored_rounds(pool) == 55
-
-    below = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 2})
-    assert below.status_code == 400, below.text
-    _rounds_refusal_says(below.json()["error"], 2, 3, 60)
-    assert await _stored_rounds(pool) == 55
-
-
-async def test_the_bounds_are_read_on_every_write_not_copied_at_the_first(
-    owner_client, pool, monkeypatch
-):
-    """The first write is made HERE, under agents' own pair, and only then does
-    the pair move: the next write must follow it. A pair copied at the first
-    write (a cache filled on the first call) passes the test above whenever
-    that test makes the process's first write, run alone or run first."""
-    past = agents.MAX_ROUNDS + 1
-
-    before = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": past})
-    assert before.status_code == 400, before.text
-    _rounds_refusal_says(before.json()["error"], past, agents.MIN_ROUNDS, agents.MAX_ROUNDS)
-    assert await _stored_rounds(pool) is None
-
-    monkeypatch.setattr(agents, "MAX_ROUNDS", agents.MAX_ROUNDS + 10)
-
-    after = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": past})
-    assert after.status_code == 200, after.text
-    assert await _stored_rounds(pool) == past
-
-
-async def test_the_limit_defaults_to_the_top_of_the_agent_range_and_passes_its_own_hook(
-    owner_client,
-):
-    """PIN MOVED (turn-cap T5): this pinned the default at 6 while the count was
-    the normal way a turn stopped. A turn going in circles is now stopped by
-    chat.RoundProgress, so the limit is the runaway/cost backstop and its default
-    is the top of the range the field and agent rows already accept,
-    agents.MAX_ROUNDS (50), read here, never typed."""
-    item = (await _by_key(owner_client))[ROUNDS_KEY]
-    top = agents.MAX_ROUNDS
-    assert (item["type"], item["default"], item["value"]) == ("int", top, top)
-
-    definition = settings_store.DEFS_BY_KEY[ROUNDS_KEY]
-    assert definition.default == agents.MAX_ROUNDS == 50
-    assert definition.validate is not None, "the tool-round limit has no bounds hook"
-    assert definition.validate(definition.default) is None
-
-
-async def test_an_unset_limit_reads_the_top_of_the_range_through_every_reader(pool):
-    assert await _stored_rounds(pool) is None
-    assert await settings_store.read_value(pool, ROUNDS_KEY) == agents.MAX_ROUNDS
-    assert (await settings_store.read_values(pool))[ROUNDS_KEY] == agents.MAX_ROUNDS
-
-
-async def test_a_stored_limit_still_wins_over_the_new_default(owner_client, pool):
-    """The owner's live stored 20 must keep running under 20: the new default
-    only reaches an install that never set the limit."""
-    stored = await owner_client.put("/api/v1/settings", json={"key": ROUNDS_KEY, "value": 20})
-    assert stored.status_code == 200, stored.text
-
-    item = (await _by_key(owner_client))[ROUNDS_KEY]
-    assert (item["default"], item["value"]) == (agents.MAX_ROUNDS, 20)
-    assert await settings_store.read_value(pool, ROUNDS_KEY) == 20
-
-
-def _int_literals(path: Path, number: int) -> list[int]:
-    """The line of every int literal equal to `number` in the file."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and type(node.value) is int and node.value == number
-    ]
-
-
-def test_the_default_is_derived_not_a_second_literal():
-    """The number 50 is written once (the rounds range), and the def's default
-    is an expression naming it, never an int typed into the def: the day the
-    range moves, the default moves with it."""
-    app_dir = Path(settings_store.__file__).resolve().parent
-    tree = ast.parse((app_dir / "settings_store.py").read_text(encoding="utf-8"))
-    defaults = [
-        keyword.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", None) == "SettingDef"
-        and any(
-            kw.arg == "key" and isinstance(kw.value, ast.Constant) and kw.value.value == ROUNDS_KEY
-            for kw in node.keywords
-        )
-        for keyword in node.keywords
-        if keyword.arg == "default"
-    ]
-    assert len(defaults) == 1, f"{len(defaults)} defaults for {ROUNDS_KEY}"
-    assert not isinstance(defaults[0], ast.Constant), (
-        f"the {ROUNDS_KEY} default is the literal {ast.unparse(defaults[0])}, not derived"
-    )
-
-    files = ("agents.py", "settings_store.py", "scheduler.py", "evals/runner.py")
-    found = {name: _int_literals(app_dir / name, agents.MAX_ROUNDS) for name in files}
-    assert sum(len(lines) for lines in found.values()) == 1, found
-
-
-# The words under the Settings -> Behaviour field (turn-cap T5): the limit is
-# the backstop, a turn going in circles is stopped before it, and reaching it
-# still ends the turn with a note, never silently.
-BACKSTOP_WORDS = ("backstop", "safety ceiling")
-CIRCLING_WORDS = ("in circles", "the same call", "nothing new", "before")
-
-
-def test_the_help_text_says_the_limit_is_a_backstop_and_circling_stops_a_turn_first():
-    said = settings_store.DEFS_BY_KEY[ROUNDS_KEY].description
-    lowered = said.lower()
-    assert any(word in lowered for word in BACKSTOP_WORDS), said
-    for words in CIRCLING_WORDS:
-        assert words in lowered, f"the help text does not say `{words}`: {said}"
-    assert "note" in lowered and "never silently" in lowered, said
-
-
-def test_the_help_text_no_longer_reads_as_the_normal_stop():
-    said = settings_store.DEFS_BY_KEY[ROUNDS_KEY].description
-    assert not said.startswith("How many times one chat turn may call the model"), said
-
-
-async def test_an_unset_limit_bounds_a_firing_by_the_top_of_the_range(pool):
-    """scheduler.firing_timeout_s follows the default by derivation: an unset
-    limit is agents.MAX_ROUNDS rounds of the gateway's read budget."""
-    assert await _stored_rounds(pool) is None
-    bound = await scheduler.firing_timeout_s(pool, "scheduled")
-    assert bound == agents.MAX_ROUNDS * chat.GATEWAY_TIMEOUT.read
+    error = resp.json()["error"]
+    assert error.startswith(f"unknown setting key: {ROUNDS_KEY} — known keys: "), error
+    assert await pool.fetchval(count, ROUNDS_KEY) == before
+    if stale:
+        assert await pool.fetchval("SELECT value FROM settings WHERE key = $1", ROUNDS_KEY) == 50
 
 
 # -- the decision role's two switches (decision-role spec §6) -----------------

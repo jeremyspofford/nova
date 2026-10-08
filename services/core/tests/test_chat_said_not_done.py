@@ -816,23 +816,24 @@ async def test_prose_a_replace_class_correction_dropped_is_not_read(
 async def test_the_round_cap_note_is_never_read_as_the_sentence_after_her_fence(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """(T5) A capped turn: her last words write device_info as a fence, and the
-    backend adds "[stopped after 2 tool rounds without finishing]". Read as
-    hers, that note's "after" took the fence back and the guard went silent
-    (rr3 probe_note). She is read without it: the sentence is appended after
-    the note, and the note is intact."""
+    """(T5) A stopped turn: her last words write device_info as a fence, and the
+    backend adds its stop note. Read as hers, that note's "after" took the
+    fence back and the guard went silent (rr3 probe_note). She is read without
+    it: the sentence is appended after the note, and the note is intact.
+    PIN MOVED (no-ceiling T4, 2026-10-08): the stop was a cap of 2 with the
+    note "[stopped after 2 tool rounds without finishing]"; the count is gone,
+    so the stop is the circling one (get_time a third time)."""
     await _pair(pool)
     info = _arm(monkeypatch, "device_info", f"{DEVICE} system info:\nWindows 11")
     forever = (call("get_time", {}, "c"),)
     fenced = f'Let me check the OS next:\n{F}\ndevice_info "DELL-XPS-8950"\n{F}'
-    gateway = ScriptedGateway(rounds=(forever, forever, (text(fenced),)))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, (text(fenced),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client, "what time is it, and what OS is my dell on?")
 
-    cap = "[stopped after 2 tool rounds without finishing]"
-    assert gateway.calls == 3
+    cap = "[stopped after 3 tool rounds: the same call was repeated]"
+    assert gateway.calls == 4
     assert info.calls == []
     assert await _stored(pool) == f"{fenced}\n\n{cap}\n\n{WROTE_INFO}"
     assert _corrections(sent) == [WROTE_INFO]

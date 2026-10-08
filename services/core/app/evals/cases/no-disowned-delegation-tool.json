@@ -1,7 +1,7 @@
 {
   "id": "no-disowned-delegation-tool",
   "suite": "agent_quality",
-  "suite_version": 20,
+  "suite_version": 21,
   "agents": [
     {
       "name": "eval_helper",
@@ -11,8 +11,7 @@
         "workspace_write_file",
         "workspace_read_file",
         "workspace_list_files"
-      ],
-      "max_tool_rounds": 4
+      ]
     }
   ],
   "setup": [

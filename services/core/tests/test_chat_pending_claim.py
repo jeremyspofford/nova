@@ -825,35 +825,35 @@ async def test_no_redirect_when_the_turn_already_ran_the_tool(
 async def test_no_redirect_dispatch_when_the_turn_ran_out_of_rounds(
     owner_client, pool, mount_peers, monkeypatch
 ):
-    """I2's other half: a turn that hit its round cap must not get one more tool
-    dispatch through the redirect's side door. The cap round narrates the
-    fabrication and asks for a tool; nothing is dispatched, and the redirect
-    refuses to start.
+    """I2's other half: a stopped turn must not get one more tool dispatch
+    through the redirect's side door. The narration round claims the action
+    awaits approval and asks for the tool; nothing is dispatched, and the
+    redirect refuses to start.
 
-    A capped turn gets ONE tool-less narration round so the cap cannot swallow
-    an answer, so the gateway is called twice. What this test is about is
-    asserted hard: the spy proves NOTHING was dispatched — not in the capped
-    round, not in the narration round, not in a redirect that never started."""
+    PIN MOVED (no-ceiling T4, 2026-10-08): the stop was a cap of 1 (the
+    capped round's call not run). The count is gone; the stop is now the
+    circling one — a call to a tool that does not exist, three times (refused,
+    so nothing ran) — and what this is about is asserted hard: the spy proves
+    NOTHING was dispatched, not in the narration round, not in a redirect."""
     spy = await _arm_auto_tool(pool, monkeypatch)
-    resp = await owner_client.put(
-        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": 1}
-    )
-    assert resp.status_code == 200, resp.text
+    missing = (call_delta(0, call_id="m", name="no_such_tool", arguments="{}"),)
     gateway = ScriptedGateway(
         rounds=(
+            missing,
+            missing,
+            missing,
+            # The narration round: no tools advertised; it claims approval and
+            # asks for the tool anyway — refused, never dispatched.
             (text("That's awaiting your approval."), auto_call("r1", URL)),
-            # The out-of-rounds narration round: no tools advertised, and it
-            # says nothing new here — the fabrication is what the guard judges.
-            (text(""),),
         )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client, "turn on the desk light")
 
-    assert spy.calls == []  # nothing dispatched, in the round OR the redirect
-    assert gateway.calls == 2  # the capped round + the one narration round
-    assert gateway.payloads[1].get("tools") in (None, [])
+    assert spy.calls == []  # nothing dispatched, in the narration OR the redirect
+    assert gateway.calls == 4  # three refused rounds + the one narration round
+    assert gateway.payloads[3].get("tools") in (None, [])
     assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
     spans = await _guard_spans(pool)
     assert spans[0]["meta"]["redirected"] is False

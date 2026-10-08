@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app import agents, chat, tools, traces
+from app import chat, tools, traces
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, Refusal, ScriptedGateway
 
@@ -447,165 +447,146 @@ async def test_a_tool_that_does_not_exist_is_refused_by_name(
     assert "no tool named 'run_shell_command'" in result
 
 
-# -- the round cap ---------------------------------------------------------
+# -- no round count (no-ceiling T4) ----------------------------------------
+#
+# PINS MOVED (no-ceiling T4, 2026-10-08): this section pinned the round CAP —
+# agents.max_tool_rounds = 2, the capped round's call never run, the note
+# "[stopped after 2 tool rounds without finishing]". The owner removed the
+# count ("not have a limit at all"); the circling stop (chat.RoundProgress) is
+# the only round-based stop, and it reaches the same narration path. Each pin
+# below keeps what it was about (one toolless narration round, fail-open, a
+# refused narration call, a kept note, a gated redirect) on a circling stop:
+# the same get_time call a third time.
+
+STOP_NOTE = "[stopped after 3 tool rounds: the same call was repeated]"
 
 
-async def test_the_round_cap_stops_and_says_so(owner_client, pool, mount_peers, workspace):
-    """PIN MOVED (out-of-rounds narration, 2026-09-03): the cap now spends ONE
-    extra GATEWAY call on a tool-less narration round, so a turn whose work
-    already succeeded still reports it instead of persisting only the note.
-    Hence 3 gateway calls, not 2 — and the narration round here asks for a tool
-    anyway, which is REFUSED rather than dispatched, so the second (start,
-    error) pair joins the activity list while the cap on TOOL rounds holds."""
-    forever = (whole_call("c", "get_time", {}),)
-    gateway = ScriptedGateway(rounds=(forever, forever, forever, forever))
+async def test_no_round_count_stops_a_productive_turn(owner_client, pool, mount_peers, workspace):
+    """A stale agents.max_tool_rounds row of 2 (as a pre-044 database holds
+    it) is never read: four distinct productive rounds all run and the model's
+    own answer is the reply, with no note."""
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('agents.max_tool_rounds', '2'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+    for name in "abcd":
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / f"{name}.md").write_text(f"body of {name}")
+    reads = tuple(
+        (whole_call(f"r{name}", "workspace_read_file", {"path": f"{name}.md"}),) for name in "abcd"
+    )
+    gateway = ScriptedGateway(rounds=(*reads, (text("Read all four."),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client)
 
-    assert gateway.calls == 3  # 2 tool rounds + the one narration round
-    assert gateway.payloads[2].get("tools") in (None, [])
-    note = texts(sent)[-1]
-    assert "stopped after 2 tool rounds without finishing" in note
-    # Only the FIRST round's call ran. The capped round's calls are not
-    # executed, and the narration round's call is refused, never dispatched.
+    assert gateway.calls == 5
+    assert activities(sent) == [("workspace_read_file", s) for _ in "abcd" for s in ("start", "ok")]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == "Read all four."
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_a_circling_stop_says_so(owner_client, pool, mount_peers, workspace):
+    """The circling stop spends ONE extra gateway call on a tool-less narration
+    round; the narration round here asks for a tool anyway, which is REFUSED
+    rather than dispatched, so its (start, error) pair joins the activity list."""
+    forever = (whole_call("c", "get_time", {}),)
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, forever))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert gateway.calls == 4  # 3 tool rounds + the one narration round
+    assert gateway.payloads[3].get("tools") in (None, [])
+    assert texts(sent)[-1].endswith(STOP_NOTE)
+    # All three rounds' calls ran; the narration round's call is refused.
     assert activities(sent) == [
-        ("get_time", "start"),
-        ("get_time", "ok"),
+        *[("get_time", s) for _ in range(3) for s in ("start", "ok")],
         ("get_time", "start"),
         ("get_time", "error"),
     ]
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert "stopped after 2 tool rounds without finishing" in stored
+    assert stored.endswith(STOP_NOTE)
 
 
-# -- the cap must not SWALLOW an answer ------------------------------------
-#
-# The owner's walk, 2026-09-02 23:52: the model ran device_run tree (honest
-# "executable not found"), adapted to device_run find (exit 0 — the listing he
-# asked for came back), then which tree, and hit max_tool_rounds=6. The persisted
-# reply was ONLY "[stopped after 6 tool rounds without finishing]": a successful
-# result existed and the user never saw it. A capped turn now gets ONE final
-# tool-less narration round with every accumulated tool result in context, so the
-# model answers with what it has — and the note still lands after it.
-
-
-async def test_the_cap_gets_one_toolless_narration_round_that_answers(
+async def test_a_stop_gets_one_toolless_narration_round_that_answers(
     owner_client, pool, mount_peers, workspace
 ):
-    """The headline fix. Round 1 runs a tool successfully, round 2 hits the cap
-    with another call. The turn then makes EXACTLY one more gateway call, with
-    NO tools advertised, whose answer persists — followed by the note, which
-    stays because the operator must still know the turn stopped early."""
+    """A stopped turn makes EXACTLY one more gateway call, with NO tools
+    advertised and every tool result in context, whose answer persists —
+    followed by the note."""
     forever = (whole_call("c", "get_time", {}),)
     answer = "It's just past midnight — that's what the clock call came back with."
-    gateway = ScriptedGateway(rounds=(forever, forever, (text(answer),)))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, (text(answer),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client)
 
-    # Exactly one extra GATEWAY call, and it advertised no tools.
-    assert gateway.calls == 3
-    assert gateway.payloads[2].get("tools") in (None, [])
-    # It saw the accumulated tool results — that is the whole point.
-    roles = [m["role"] for m in gateway.payloads[2]["messages"]]
+    assert gateway.calls == 4
+    assert gateway.payloads[3].get("tools") in (None, [])
+    roles = [m["role"] for m in gateway.payloads[3]["messages"]]
     assert "tool" in roles
-
-    # Only round 1's call ever ran: the narration round dispatched nothing.
-    assert activities(sent) == [("get_time", "start"), ("get_time", "ok")]
+    # The narration round dispatched nothing.
+    assert activities(sent) == [("get_time", s) for _ in range(3) for s in ("start", "ok")]
 
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert answer in stored
-    assert stored.endswith("[stopped after 2 tool rounds without finishing]")
-    assert texts(sent)[-2:] == [
-        answer,
-        "\n\n[stopped after 2 tool rounds without finishing]",
-    ]
+    assert stored == f"{answer}\n\n{STOP_NOTE}"
+    assert texts(sent)[-2:] == [answer, f"\n\n{STOP_NOTE}"]
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
-async def test_a_silent_narration_round_leaves_the_note_alone(
-    owner_client, pool, mount_peers, workspace
-):
+async def test_a_silent_narration_round_leaves_the_note(owner_client, pool, mount_peers, workspace):
     """FAIL-OPEN: the narration round says nothing — never an error, never an
-    empty turn, and the note still ends the reply.
-
-    PIN MOVED (turn-cap T2, 2026-10-07): this pinned the stored reply as the
-    note ALONE while round 1's get_time had run, which is the behaviour that
-    epic removes (the reply now states what the tools returned, then the
-    note). Relaxed to the note ending a reply that is not the note alone;
-    the exact text is pinned in test_capped_turn_answers.py."""
+    empty turn; the tools' statement then the note end the reply."""
     forever = (whole_call("c", "get_time", {}),)
-    gateway = ScriptedGateway(rounds=(forever, forever, ()))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, ()))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     await _say(owner_client)
 
-    assert gateway.calls == 3
+    assert gateway.calls == 4
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored.endswith("[stopped after 2 tool rounds without finishing]")
-    assert stored != "[stopped after 2 tool rounds without finishing]"  # never the note alone
+    assert stored.endswith(STOP_NOTE)
+    assert stored != STOP_NOTE  # never the note alone
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
-async def test_a_failed_narration_round_leaves_the_note_alone(
-    owner_client, pool, mount_peers, workspace
-):
+async def test_a_failed_narration_round_leaves_the_note(owner_client, pool, mount_peers, workspace):
     """FAIL-OPEN, the other way: the narration round's gateway call dies (the
-    script has no round 3, so it answers 500). The turn still ENDS ok with the
-    note — a dead extra round costs the answer, never the turn.
-
-    PIN MOVED (turn-cap T2, 2026-10-07): the stored reply is no longer the
-    note ALONE (round 1's call ran, so its result is stated before the note);
-    relaxed to the note ending a reply that is not the note alone; exact
-    text pinned in test_capped_turn_answers.py."""
+    script has no round 4, so it answers 500). The turn still ENDS ok."""
     forever = (whole_call("c", "get_time", {}),)
-    gateway = ScriptedGateway(rounds=(forever, forever))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client)
 
-    assert gateway.calls == 3
+    assert gateway.calls == 4
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored.endswith("[stopped after 2 tool rounds without finishing]")
-    assert stored != "[stopped after 2 tool rounds without finishing]"  # never the note alone
+    assert stored.endswith(STOP_NOTE)
+    assert stored != STOP_NOTE  # never the note alone
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
 async def test_a_tool_call_in_the_narration_round_is_refused_not_dispatched(
     owner_client, pool, mount_peers, workspace
 ):
-    """The cap on TOOL rounds is held MECHANICALLY, not by the nudge asking
-    nicely: a call the narration round emits anyway is answered with a stated
-    result and recorded as a refused span. The tool never runs, and the note
-    still persists.
-
-    PIN MOVED (turn-cap T2, 2026-10-07): the stored reply is no longer the
-    note ALONE (a.md's write ran, so its result is stated before the note);
-    relaxed to the note ending a reply that is not the note alone; exact
-    text pinned in test_capped_turn_answers.py."""
+    """The stop is held MECHANICALLY: a call the narration round emits anyway
+    is answered with a stated result and recorded as a refused span. The tool
+    never runs. The refusal says the turn stopped for circling — never "out of
+    tool rounds", which no longer exists (no-ceiling T4)."""
     write = (whole_call("w1", "workspace_write_file", {"path": "a.md", "content": "one"}),)
-    second = (whole_call("w2", "workspace_write_file", {"path": "b.md", "content": "two"}),)
-    third = (whole_call("w3", "workspace_write_file", {"path": "c.md", "content": "three"}),)
-    gateway = ScriptedGateway(rounds=(write, second, third))
+    narration = (whole_call("w3", "workspace_write_file", {"path": "c.md", "content": "three"}),)
+    gateway = ScriptedGateway(rounds=(write, write, write, narration))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client)
 
-    assert gateway.calls == 3
-    # a.md was written in round 1; b.md's call was capped; c.md's was REFUSED.
+    assert gateway.calls == 4
     assert (workspace / "a.md").exists()
-    assert not (workspace / "b.md").exists()
     assert not (workspace / "c.md").exists()
-    assert activities(sent) == [
-        ("workspace_write_file", "start"),
-        ("workspace_write_file", "ok"),
+    assert activities(sent)[-2:] == [
         ("workspace_write_file", "start"),
         ("workspace_write_file", "error"),
     ]
@@ -617,41 +598,37 @@ async def test_a_tool_call_in_the_narration_round_is_refused_not_dispatched(
     ]
     assert len(refused) == 1
     assert refused[0]["meta"]["ok"] is False
-    assert refused[0]["meta"]["error"] == chat.OUT_OF_ROUNDS_REFUSAL
+    error = refused[0]["meta"]["error"]
+    assert error.startswith(tools.ERROR_PREFIX)
+    assert "out of tool rounds" not in error
 
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored.endswith("[stopped after 2 tool rounds without finishing]")
-    assert stored != "[stopped after 2 tool rounds without finishing]"  # never the note alone
+    assert stored.endswith(STOP_NOTE)
+    assert stored != STOP_NOTE  # never the note alone
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
-async def test_a_replace_class_correction_cannot_swallow_the_cap_note(
+async def test_a_replace_class_correction_cannot_swallow_the_stop_note(
     owner_client, pool, mount_peers, workspace
 ):
-    """Review I1: FIX A must not undo FIX B. The narration round answers with an
-    unchecked device-state claim, so the state guard fires and its correction
-    REPLACES the model's prose — which is right, but the cap note is the
-    BACKEND's record that the turn stopped early, not the model's prose, and it
-    must survive. Without this the operator cannot tell a capped turn from an
-    ordinary one."""
+    """Review I1: the narration round answers with an unchecked device-state
+    claim, so the state guard's correction REPLACES the model's prose — but the
+    stop note is the BACKEND's record that the turn stopped, and it survives."""
     await pool.execute(
         "INSERT INTO devices (name, platform, hostname, pubkey) "
         "VALUES ('DELL-XPS-8950', 'linux', 'dell', $1)",
         "a" * 64,
     )
-    # A tool that does not exist: refused, so NOTHING ran successfully — the
-    # redirect is then blocked by the round cap itself, which is the precondition
-    # under test (a successful call would block it earlier, for another reason).
+    # A tool that does not exist: refused, so NOTHING ran — the redirect is
+    # then blocked by the stop itself, the precondition under test.
     forever = (whole_call("c", "no_such_tool", {}),)
     claim = "The device is still offline."
-    gateway = ScriptedGateway(rounds=(forever, forever, (text(claim),)))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, (text(claim),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     sent = await _say(owner_client)
 
-    # No redirect: an out-of-rounds turn gets no extra dispatch.
-    assert gateway.calls == 3
+    assert gateway.calls == 4  # no redirect
     guard_spans = [row for row in await _spans(pool, "guard")]
     assert [row["name"] for row in guard_spans] == ["state_claim"]
     assert guard_spans[0]["meta"]["not_redirected_because"] == "out_of_rounds"
@@ -659,43 +636,33 @@ async def test_a_replace_class_correction_cannot_swallow_the_cap_note(
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
     assert stored == (
         "Correction: I did not actually check the device this turn — I have no "
-        "record of doing so.\n\n[stopped after 2 tool rounds without finishing]"
+        f"record of doing so.\n\n{STOP_NOTE}"
     )
     assert claim not in stored
-    assert texts(sent)[-1].endswith("[stopped after 2 tool rounds without finishing]")
+    assert texts(sent)[-1].endswith(STOP_NOTE)
 
 
-async def test_the_deferral_redirect_is_gated_on_the_round_cap(
+async def test_the_deferral_redirect_is_gated_on_the_stop(
     owner_client, pool, mount_peers, workspace
 ):
-    """Review M2: the deferral redirect was not gated on out_of_rounds, so a
-    capped narration that says "let me search" earned a fourth gateway call
-    whose nudge told the model to call a tool the capped round was not even
-    offered — and whose success path replaced (and so discarded) the cap note.
-    It is gated now: three gateway calls, no deferral span, note intact."""
+    """Review M2: a stopped narration that says "let me search" earns no
+    redirect round. Four gateway calls, no deferral span, note intact."""
     forever = (whole_call("c", "get_time", {}),)
     defer = "Let me search the web for the rest of that."
-    gateway = ScriptedGateway(rounds=(forever, forever, (text(defer),)))
+    gateway = ScriptedGateway(rounds=(forever, forever, forever, (text(defer),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 2)
 
     await _say(owner_client)
 
-    assert gateway.calls == 3  # a fourth would be the deferral redirect
+    assert gateway.calls == 4  # a fifth would be the deferral redirect
     assert [row["name"] for row in await _spans(pool, "guard")] == []
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
-    assert stored == f"{defer}\n\n[stopped after 2 tool rounds without finishing]"
+    assert stored == f"{defer}\n\n{STOP_NOTE}"
 
 
-async def test_the_default_round_cap_is_the_top_of_the_agent_range(owner_client):
-    """PIN MOVED (turn-cap T5): was 6. The count is no longer the normal stop
-    (a circling turn is stopped by chat.RoundProgress), so the cap is the
-    runaway backstop at agents.MAX_ROUNDS, read here, never typed."""
-    resp = await owner_client.get("/api/v1/settings")
-    defs = {item["key"]: item for item in resp.json()["settings"]}
-    assert defs["agents.max_tool_rounds"]["type"] == "int"
-    assert defs["agents.max_tool_rounds"]["default"] == agents.MAX_ROUNDS
-    assert defs["agents.max_tool_rounds"]["value"] == agents.MAX_ROUNDS
+# PIN RETIRED (no-ceiling T5): test_the_default_round_cap_is_the_top_of_the_agent_range
+# read agents.max_tool_rounds from GET /api/v1/settings; the setting is gone (no
+# round count stops a turn), and test_settings pins that the listing omits it.
 
 
 # -- the empty-reply floor -------------------------------------------------

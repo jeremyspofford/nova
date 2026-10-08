@@ -18,6 +18,7 @@ from __future__ import annotations
 import builtins
 import copy
 import dataclasses
+import inspect
 import json
 import socket
 
@@ -27,8 +28,8 @@ from app import agents, chat, tools, traces
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
-from tests.test_chat_agents import _agent_turn, _create, _owner, _reply
-from tests.test_chat_tools import _say, _set, whole_call
+from tests.test_chat_agents import SUBSET, _agent_turn, _create, _owner, _reply
+from tests.test_chat_tools import _say, whole_call
 from tests.test_chat_tools import text as text_delta
 
 # c042afa1-b3b3-4d45-95f4-4de0ad1b9c39, read read-only from the live nova_core
@@ -941,7 +942,6 @@ PROBE_SCHEMA = {
 PROSE = "Here is what I found."
 NOTE_REPEATED = "[stopped after {n} tool rounds: the same call was repeated]"
 NOTE_NO_NEW = "[stopped after {n} tool rounds: the last rounds brought nothing new]"
-NOTE_CEILING = "[stopped after {n} tool rounds without finishing]"
 
 
 @pytest.fixture
@@ -1040,10 +1040,9 @@ async def _narration_held(pool, gateway, *, tool_rounds: int, refused: int = 0) 
     )
 
 
-async def _run_probes(owner_client, mount_peers, rounds: tuple, *, limit: int):
+async def _run_probes(owner_client, mount_peers, rounds: tuple):
     gateway = ScriptedGateway(rounds=rounds)
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", limit)
     sent = await _say(owner_client, "find it")
     return gateway, sent
 
@@ -1061,7 +1060,9 @@ async def test_the_same_call_a_third_time_ends_the_turn_after_its_tools_ran(
     ran = _arm_probe(monkeypatch, lambda q, n: f"{q} result #{n}")
 
     gateway, sent = await _run_probes(
-        owner_client, mount_peers, (*_probe_rounds("a", "a", "a"), (text_delta(PROSE),)), limit=10
+        owner_client,
+        mount_peers,
+        (*_probe_rounds("a", "a", "a"), (text_delta(PROSE),)),
     )
 
     assert ran == ["a", "a", "a"]
@@ -1085,7 +1086,6 @@ async def test_three_rounds_that_bring_nothing_new_end_the_turn(
         owner_client,
         mount_peers,
         (*_probe_rounds("a", "b", "c", "d"), (text_delta(PROSE),)),
-        limit=10,
     )
 
     assert ran == ["a", "b", "c", "d"]
@@ -1119,7 +1119,7 @@ async def test_a_circling_stop_whose_narration_does_not_answer_gets_the_statemen
     if narration is not None:
         rounds = (*rounds, narration)
 
-    gateway, sent = await _run_probes(owner_client, mount_peers, rounds, limit=10)
+    gateway, sent = await _run_probes(owner_client, mount_peers, rounds)
 
     assert ran == ["a", "a", "a"]
     spans = await _spans_of(pool)
@@ -1143,25 +1143,28 @@ async def test_a_circling_stops_nudge_does_not_say_every_round_was_used(
     _arm_probe(monkeypatch, lambda q, n: f"{q} result #{n}")
 
     gateway, _sent = await _run_probes(
-        owner_client, mount_peers, (*_probe_rounds("a", "a", "a"), (text_delta(PROSE),)), limit=10
+        owner_client,
+        mount_peers,
+        (*_probe_rounds("a", "a", "a"), (text_delta(PROSE),)),
     )
 
     assert gateway.calls == 4
     nudge = _last_system(gateway.payloads[3])
     assert isinstance(nudge, str), "the narration round carried no closing nudge"
-    assert nudge != chat.OUT_OF_ROUNDS_NUDGE
+    assert nudge == chat.CIRCLING_NUDGE
     assert "every tool round" not in nudge
     assert "no further tool" in nudge.lower()
 
 
 @requires_db
-async def test_c042afa1_runs_to_the_ceiling_and_the_ceiling_stop_is_unchanged(
+async def test_c042afa1_is_never_stopped_and_runs_to_its_own_answer(
     owner_client, pool, mount_peers, workspace, monkeypatch
 ):
-    """C1 c042afa1's shape (20 distinct calls, the live heads as results) is
-    never stopped as circling; C2 the ceiling's nudge and note are byte-for-byte
-    today's; C3 it files one round_stop, reason ceiling, rounds = the limit.
-    Round 20's call is the ceiling's and does not run (C4)."""
+    """PIN MOVED (no-ceiling T4, 2026-10-08): this pinned the ceiling's stop at
+    a limit of 20 (nudge, note, round_stop reason ceiling). The ceiling is gone
+    by owner ruling ("not have a limit at all"). c042afa1's shape (20 distinct
+    calls, the live heads as results) is still never stopped as circling: every
+    call runs, the model's own answer is the reply, no note, no round_stop."""
     heads = [head for _name, _args, head in C042AFA1_ROUNDS]
     assert len(heads) == 20
     ran = _arm_probe(monkeypatch, lambda q, n: heads[int(q)])
@@ -1170,37 +1173,134 @@ async def test_c042afa1_runs_to_the_ceiling_and_the_ceiling_stop_is_unchanged(
         owner_client,
         mount_peers,
         (*_probe_rounds(*(str(i) for i in range(20))), (text_delta(PROSE),)),
-        limit=20,
     )
 
-    assert ran == [str(i) for i in range(19)]
-    await _narration_held(pool, gateway, tool_rounds=20)
-    assert _last_system(gateway.payloads[20]) == chat.OUT_OF_ROUNDS_NUDGE
+    assert ran == [str(i) for i in range(20)]
+    assert gateway.calls == 21
     stored = await _stored(pool)
-    assert stored == f"{PROSE}\n\n{NOTE_CEILING.format(n=20)}"
+    assert stored == PROSE
     assert "".join(_texts(sent)) == stored
-    _stop_held(_stops(await _spans_of(pool)), "ceiling", 20)
+    assert _stops(await _spans_of(pool)) == []
 
 
-# -- T4 C4: circling and the ceiling do not fight --------------------------------
+# -- no-ceiling T4: no count of rounds ever stops a turn --------------------------
+
+SIXTY = 60
+
+
+def test_run_turn_takes_no_round_count():
+    """C1: the funnel has no round-count parameter for any caller to pass."""
+    assert "max_tool_rounds" not in inspect.signature(chat._run_turn).parameters
+
+
+@pytest.mark.parametrize("gone", ["STOP_CEILING", "OUT_OF_ROUNDS_NUDGE"])
+def test_the_ceilings_names_are_gone(gone):
+    """C1/C2: no ceiling reason to file and no ceiling nudge to send."""
+    assert not hasattr(chat, gone), gone
+
+
+@pytest.mark.parametrize("gone", ["STOP_CEILING", "OUT_OF_ROUNDS_NUDGE", "rounds_allowed"])
+def test_no_ceiling_name_is_left_anywhere_in_the_app(gone):
+    """C1 (the grep): not in chat alone — no module under app/ names the
+    ceiling's reason, its nudge or the loop's allowance, so nothing can
+    reintroduce a count by importing one of them."""
+    from pathlib import Path
+
+    root = Path(chat.__file__).resolve().parent
+    hits = [
+        str(path.relative_to(root))
+        for path in sorted(root.rglob("*.py"))
+        if gone in path.read_text(encoding="utf-8")
+    ]
+    assert hits == [], f"{gone} still named in {hits}"
+
+
+def test_the_loop_counts_no_allowance():
+    """C1: the loop is unbounded; round_number is metadata, never a limit."""
+    source = inspect.getsource(chat._run_turn)
+    assert "rounds_allowed" not in source
+    assert "without finishing" not in source
+    assert "max_tool_rounds" not in source
+
+
+def test_the_only_round_stop_reasons_are_the_circling_ones():
+    """C2: the circling note words name every reason a round_stop can carry."""
+    assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
 
 
 @requires_db
-async def test_the_ceiling_still_stops_before_dispatch_when_a_repeat_reaches_it(
+async def test_sixty_productive_rounds_run_to_the_models_answer(
     owner_client, pool, mount_peers, workspace, monkeypatch
 ):
-    """C4: at a limit of 3 the third identical call is the ceiling's round, so
-    it never runs and never counts as a repeat: the stop is the ceiling's, and
-    only the ceiling's."""
-    ran = _arm_probe(monkeypatch, lambda q, n: f"{q} result #{n}")
+    """C1: 60 rounds of distinct calls, each bringing a new result, all run;
+    the turn ends on the model's own answer, status ok, stored and streamed
+    alike, with no round_stop, no "[stopped after" note, no narration round."""
+    ran = _arm_probe(monkeypatch, lambda q, n: f"{q} found thing #{n}")
+    qs = [f"q{i}" for i in range(SIXTY)]
 
-    _gateway, _sent = await _run_probes(
-        owner_client, mount_peers, (*_probe_rounds("a", "a", "a"), (text_delta(PROSE),)), limit=3
+    gateway, sent = await _run_probes(
+        owner_client, mount_peers, (*_probe_rounds(*qs), (text_delta(PROSE),))
     )
 
-    assert ran == ["a", "a"]
-    assert await _stored(pool) == f"{PROSE}\n\n{NOTE_CEILING.format(n=3)}"
-    _stop_held(_stops(await _spans_of(pool)), "ceiling", 3)
+    assert ran == qs
+    assert gateway.calls == SIXTY + 1
+    assert all(payload.get("tools") for payload in gateway.payloads)
+    stored = await _stored(pool)
+    assert stored == PROSE
+    assert "[stopped after" not in stored
+    assert "".join(_texts(sent)) == stored
+    assert await pool.fetchval("SELECT status FROM turns ORDER BY started_at DESC LIMIT 1") == "ok"
+    spans = await _spans_of(pool)
+    assert _stops(spans) == []
+    assert [s for s in spans if s.kind == "llm_call" and s.meta.get("round") == 0] == []
+
+
+@requires_db
+async def test_a_stale_stored_round_limit_is_never_read(
+    owner_client, pool, mount_peers, workspace, monkeypatch
+):
+    """C4: the chat endpoint reads no round count. A leftover settings row of 2
+    (written straight to the table, as a pre-044 database holds it) does not
+    stop a four-round productive turn."""
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('agents.max_tool_rounds', '2'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+    ran = _arm_probe(monkeypatch, lambda q, n: f"{q} result #{n}")
+
+    gateway, _sent = await _run_probes(
+        owner_client, mount_peers, (*_probe_rounds("a", "b", "c", "d"), (text_delta(PROSE),))
+    )
+
+    assert ran == ["a", "b", "c", "d"]
+    assert gateway.calls == 5
+    assert await _stored(pool) == PROSE
+    assert _stops(await _spans_of(pool)) == []
+
+
+def _callers():
+    from app import scheduler
+    from app.evals import runner
+
+    return {
+        "chat._open_turn": chat._open_turn,
+        "chat._spawn_turn": chat._spawn_turn,
+        "scheduler._fire_scheduled": scheduler._fire_scheduled,
+        "agents.delegate": agents.delegate,
+        "evals.runner.run_case": runner.run_case,
+    }
+
+
+@pytest.mark.parametrize("name", list(_callers()))
+def test_no_caller_reads_or_passes_a_round_count(name):
+    """C4: every caller of _run_turn drops the argument and reads no
+    agents.max_tool_rounds setting or agent column."""
+    assert "max_tool_rounds" not in inspect.getsource(_callers()[name]), name
+
+
+def test_the_started_turn_carries_no_round_count():
+    """C4: the chat endpoint hands the spawned turn no round count."""
+    assert "max_tool_rounds" not in {f.name for f in dataclasses.fields(chat._Started)}
 
 
 @requires_db
@@ -1220,7 +1320,6 @@ async def test_only_a_stopped_turn_files_a_round_stop_and_turns_share_no_progres
         )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 10)
 
     await _say(owner_client, "find it")
     first = await pool.fetchval("SELECT id FROM turns ORDER BY started_at DESC LIMIT 1")
@@ -1244,7 +1343,9 @@ async def test_a_circling_stop_gates_the_deferral_redirect(
     defer = "Let me search the web for the rest of that."
 
     gateway, _sent = await _run_probes(
-        owner_client, mount_peers, (*_probe_rounds("a", "a", "a"), (text_delta(defer),)), limit=10
+        owner_client,
+        mount_peers,
+        (*_probe_rounds("a", "a", "a"), (text_delta(defer),)),
     )
 
     assert gateway.calls == 4  # a fifth would be the deferral redirect
@@ -1265,7 +1366,7 @@ async def test_an_agent_turn_that_circles_gets_the_statement_its_note_and_the_sp
     narration is silent, so its reply is the statement then the circling note.
     The new span kind changes nothing run_facts or turn_usage read."""
     owner = await _owner(pool)
-    agent = await _create(pool, mount_peers, max_tool_rounds=10)
+    agent = await _create(pool, mount_peers)
     gateway = ScriptedGateway(
         rounds=(
             (whole_call("c1", "get_time", {}),),
@@ -1299,26 +1400,27 @@ async def test_an_agent_turn_that_circles_gets_the_statement_its_note_and_the_sp
 
 
 @requires_db
-async def test_a_row_capped_agent_turn_files_a_ceiling_stop_with_the_rows_rounds(
-    pool, mount_peers, workspace
+async def test_an_agent_turn_of_sixty_productive_rounds_runs_to_its_answer(
+    pool, mount_peers, workspace, monkeypatch
 ):
-    """C5: the row's rounds stay its ceiling (1, against an argument of 5), and
-    that stop files reason ceiling with rounds = the row's value."""
+    """PIN MOVED (no-ceiling T4, 2026-10-08): this pinned the row's rounds as
+    the agent's ceiling (reason ceiling, rounds 1). No count stops an agent's
+    turn either: 60 distinct productive rounds run, its own answer is the
+    reply, status ok, no round_stop."""
     owner = await _owner(pool)
-    agent = await _create(pool, mount_peers, max_tool_rounds=1)
-    gateway = ScriptedGateway(
-        rounds=(
-            (whole_call("c1", "get_time", {}),),
-            (text_delta("late"),),
-        )
-    )
+    ran = _arm_probe(monkeypatch, lambda q, n: f"{q} found thing #{n}")
+    agent = await _create(pool, mount_peers, tools=(*SUBSET, PROBE))
+    qs = [f"q{i}" for i in range(SIXTY)]
+    gateway = ScriptedGateway(rounds=(*_probe_rounds(*qs), (text_delta("all done"),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
-    turn, _frames = await _agent_turn(pool, agent, owner, "what time is it", max_tool_rounds=5)
+    turn, _frames = await _agent_turn(pool, agent, owner, "find them all")
 
-    assert gateway.calls == 2
-    _stop_held(_stops(turn.spans), "ceiling", 1)
-    assert await _reply(pool, turn.id) == f"late\n\n{NOTE_CEILING.format(n=1)}"
+    assert ran == qs
+    assert gateway.calls == SIXTY + 1
+    assert _stops(turn.spans) == []
+    assert await _reply(pool, turn.id) == "all done"
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
 
 
 # -- T4 COVERAGE: what the loop feeds the detector, and who files no span ---------
@@ -1337,7 +1439,6 @@ async def test_results_that_differ_only_past_a_span_head_are_news(
         owner_client,
         mount_peers,
         (*_probe_rounds("a", "b", "c", "d"), (text_delta(PROSE),)),
-        limit=10,
     )
 
     assert ran == ["a", "b", "c", "d"]
@@ -1357,7 +1458,9 @@ async def test_a_round_of_two_calls_feeds_both_results_in_call_order(
     pair = lambda r: (_probe(f"a{r}", "a"), _probe(f"b{r}", "b"))  # noqa: E731
 
     gateway, _sent = await _run_probes(
-        owner_client, mount_peers, (pair(1), pair(2), pair(3), (text_delta(PROSE),)), limit=10
+        owner_client,
+        mount_peers,
+        (pair(1), pair(2), pair(3), (text_delta(PROSE),)),
     )
 
     assert ran == ["a", "b"] * 3
@@ -1385,7 +1488,9 @@ async def test_a_tool_message_missing_from_a_round_fails_the_turn_never_skipped(
     monkeypatch.setattr(chat, "_dispatch_calls", drops_a_result)
 
     gateway, _sent = await _run_probes(
-        owner_client, mount_peers, (*_probe_rounds("a", "b"), (text_delta(PROSE),)), limit=10
+        owner_client,
+        mount_peers,
+        (*_probe_rounds("a", "b"), (text_delta(PROSE),)),
     )
 
     assert ran == ["a"]
@@ -1404,7 +1509,7 @@ async def test_a_turn_that_fails_after_tool_rounds_files_no_round_stop(
     round fails at the gateway: the turn failed, it was not stopped."""
     ran = _arm_probe(monkeypatch, lambda q, n: f"{q} result #{n}")
 
-    gateway, _sent = await _run_probes(owner_client, mount_peers, _probe_rounds("a", "b"), limit=10)
+    gateway, _sent = await _run_probes(owner_client, mount_peers, _probe_rounds("a", "b"))
 
     assert ran == ["a", "b"]
     assert gateway.calls == 3
@@ -1438,7 +1543,6 @@ async def test_a_turn_he_stops_after_tool_rounds_files_no_round_stop(
     )
     gateway = ScriptedGateway(rounds=(*_probe_rounds("a", "slow"), (text_delta(PROSE),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
-    await _set(owner_client, "agents.max_tool_rounds", 10)
 
     turn = asyncio.create_task(
         owner_client.post("/api/v1/chat/stream", json={"message": "find it"})

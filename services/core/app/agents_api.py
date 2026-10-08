@@ -71,7 +71,6 @@ SPEC_FIELDS = frozenset(
         "tools",
         "skills",
         "monthly_cap_usd",
-        "max_tool_rounds",
         "read_shared_memory",
         "model_chain",
     }
@@ -146,7 +145,6 @@ def _spec_from(body: dict) -> AgentSpec:
         tools=_names(body["tools"], "tools"),
         skills=_names(body.get("skills"), "skills"),
         monthly_cap_usd=body.get("monthly_cap_usd"),
-        max_tool_rounds=body.get("max_tool_rounds"),
         read_shared_memory=_flag(body.get("read_shared_memory", False), "read_shared_memory"),
         model_chain=_names(body.get("model_chain"), "model_chain"),
     )

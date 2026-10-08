@@ -385,6 +385,15 @@ v20 (S38, 2026-10-05; renumbered on top of S42b's v19 when main came into
   with the rest; no v19 row is comparable with a v20 one.
   suite_version 19 -> 20 for all THIRTY-NINE cases; count pin 36 -> 39.
 
+v20 -> v21 (2026-10-08, no-ceiling T6): no count of tool rounds stops any
+turn (owner: "not have a limit at all"), so per-agent rounds are gone end to
+end. Three cases declared an agent with max_tool_rounds 4
+(delegates-the-write-to-an-agent, no-disowned-delegation-tool,
+no-fabricated-agent-work): their case agents no longer run under 4 rounds,
+which changes what those replays measure. Case content changed, so no v20
+row is comparable with a v21 one. suite_version 20 -> 21 for all THIRTY-NINE
+cases; the count pin stays 39 (no case added or removed).
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -527,6 +536,32 @@ def _case(case_id: str) -> cases_mod.Case:
     raise AssertionError(f"case {case_id!r} not found in suite {SUITE!r}")
 
 
+# -- no-ceiling T6: case agents carry no rounds ------------------------------
+
+ROUNDS_CASES = (
+    "delegates-the-write-to-an-agent",
+    "no-disowned-delegation-tool",
+    "no-fabricated-agent-work",
+)
+
+
+def test_a_case_agent_has_no_rounds_field():
+    assert "max_tool_rounds" not in {f.name for f in dataclasses.fields(cases_mod.FixtureAgent)}
+
+
+@pytest.mark.parametrize("case_id", ROUNDS_CASES)
+def test_the_case_json_declares_its_agent_without_rounds(case_id):
+    """The git-versioned file itself, read raw: a stale key would load
+    (agent_from_dict keeps its key handling) and mean nothing, so the
+    file must not carry it."""
+    raw = json.loads((cases_mod.CASES_DIR / f"{case_id}.json").read_text(encoding="utf-8"))
+    assert raw["agents"], case_id
+    for agent in raw["agents"]:
+        assert "max_tool_rounds" not in agent, (case_id, agent["name"])
+    assert raw["suite_version"] == 21
+    assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
+
+
 # -- the suite loads via T1's loader, one suite at one version --------------
 
 
@@ -568,7 +603,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {20}
+    assert {c.suite_version for c in cases} == {21}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -587,8 +622,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
 #    case; v18: the S37a MCP cases; v19: the two S42b cases; v20: the S38
-#    browser cases -- see the module docstring); the version assertion
-#    inside this test tracks the live value, 20, not "2".
+#    browser cases; v21: case agents lose their rounds -- see the module
+#    docstring); the version assertion inside this test tracks the live
+#    value, 21, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -611,7 +647,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 20
+        assert case.suite_version == 21
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -1250,8 +1286,9 @@ async def test_no_fabricated_agent_work_good_and_bad(pool, world, mount_peers, m
         monkeypatch,
         "list_agents",
         LIST_AGENTS_SCHEMA,
+        # FIXTURE MOVED (no-ceiling T6): the roster line no longer says "rounds 4".
         "eval_idle — summarizes documents on request · tools: workspace_read_file, "
-        "workspace_list_files · rounds 4 · cap none (spent $0.00 this month) · idle",
+        "workspace_list_files · cap none (spent $0.00 this month) · idle",
     )
 
     good_gateway = ScriptedGateway(

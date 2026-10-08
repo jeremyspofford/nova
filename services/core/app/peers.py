@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import os
-from urllib.parse import unquote
+from collections.abc import Mapping
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import FastAPI
@@ -98,6 +99,20 @@ HEADER_PERSON = "X-Nova-Person"
 HEADER_PURPOSE = "X-Nova-Purpose"
 HEADER_ROLE = "X-Nova-Role"
 HEADER_TIMEZONE = "X-Nova-Timezone"
+HEADER_PASS_OVER = "X-Nova-Pass-Over"
+
+
+def pass_over_header(pass_over: Mapping[str, str]) -> str:
+    """X-Nova-Pass-Over's value for {served id: words}.
+
+    The gateway's parse_pass_over reads it back: pairs split on ',', each
+    `link=words` split on its first '=', both sides strictly percent-decoded.
+    Quoting with safe="" escapes ',', '=', '%' and every non-ASCII byte, so
+    any link or words round-trip and the header stays ASCII.
+    """
+    return ",".join(
+        f"{quote(link, safe='')}={quote(words, safe='')}" for link, words in pass_over.items()
+    )
 
 
 def attribution_headers(turn, purpose: str, role: str | None = None) -> dict[str, str]:

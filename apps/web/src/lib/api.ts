@@ -895,7 +895,6 @@ export interface Agent extends AgentSummary {
   skills: AgentSkill[]
   unknown_tools: string[]
   monthly_cap_usd: number | null
-  max_tool_rounds: number
   read_shared_memory: boolean
   /** `agents/<name>/` — the workspace folder its files live under. */
   folder: string
@@ -920,7 +919,6 @@ export interface AgentWrite {
   tools: string[]
   skills?: string[]
   monthly_cap_usd?: number | null
-  max_tool_rounds?: number
   read_shared_memory?: boolean
   model_chain?: string[]
 }

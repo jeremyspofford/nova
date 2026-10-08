@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app import agents, settings_store, timers, tools, traces
+from app import agents, timers, tools, traces
 from app.agents_api import IDLE
 from app.identity import Person
 from app.tools.base import RESULT_KIND_LISTING
@@ -43,7 +43,6 @@ AGENT_KEYS = {
     "skills",
     "unknown_tools",
     "monthly_cap_usd",
-    "max_tool_rounds",
     "read_shared_memory",
     "role",
     "folder",
@@ -182,10 +181,9 @@ async def test_create_read_update_delete_round_trip(owner_client, pool, mount_pe
     assert created["tools"] == SPEC_TOOLS and created["unknown_tools"] == []
     assert created["skills"] == []
     assert created["monthly_cap_usd"] == 20.0
-    # PIN MOVED (turn-cap T6): read the setting's default where the code reads it
-    # (settings_store), not a literal; T5 moved it 6 -> 50 on purpose.
-    default_rounds = settings_store.DEFS_BY_KEY["agents.max_tool_rounds"].default
-    assert created["max_tool_rounds"] == default_rounds  # COPIED at create
+    # PIN MOVED (no-ceiling T6): an agent has no rounds (AGENT_KEYS no longer names
+    # max_tool_rounds), so the created row carries no such key.
+    assert "max_tool_rounds" not in created
     assert created["read_shared_memory"] is False
     assert created["created_via"] == "page"
     assert created["log_conversation_id"] is not None
@@ -219,13 +217,11 @@ async def test_create_read_update_delete_round_trip(owner_client, pool, mount_pe
     one = await owner_client.get("/api/v1/agents/coder")
     assert one.status_code == 200 and one.json() == row
 
-    updated = await owner_client.put(
-        "/api/v1/agents/coder", json={"purpose": "reviews code", "max_tool_rounds": 3}
-    )
+    updated = await owner_client.put("/api/v1/agents/coder", json={"purpose": "reviews code"})
     assert updated.status_code == 200, updated.text
     body = updated.json()
     assert set(body) == AGENT_KEYS | {"text", "route"}
-    assert body["purpose"] == "reviews code" and body["max_tool_rounds"] == 3
+    assert body["purpose"] == "reviews code" and "max_tool_rounds" not in body
     assert body["updated_at"] >= body["created_at"]
     assert body["text"].startswith("updated agent coder — purpose: reviews code; ")
     # No chain in the change: the route is left alone and said to be.
@@ -300,7 +296,6 @@ async def test_a_bad_spec_is_a_400_quoting_the_reason(owner_client, mount_peers,
         "delegate_to_agent cannot be in an agent's tools"
     )
     assert "no skill named 'missing'" in await refused(_body(skills=["missing"]))
-    assert "max_tool_rounds must be between 1 and 50" in await refused(_body(max_tool_rounds=99))
     assert "monthly_cap_usd must be 0 or more" in await refused(_body(monthly_cap_usd=-1))
     # The shapes the router itself refuses, each naming what was wrong.
     assert await refused({"name": "coder", "tools": SPEC_TOOLS}) == (
@@ -573,3 +568,44 @@ async def test_spend_is_the_ledgers_by_role_read_once_and_unreadable_is_said(
     one = (await owner_client.get("/api/v1/agents/coder")).json()
     assert one["spent_month_usd"] is None
     assert one["spend_note"].startswith("ledger unreadable — could not reach the gateway")
+
+
+# ── no per-agent rounds (no-ceiling T6) ────────────────────────────────────
+
+
+async def test_a_create_naming_rounds_is_refused_as_an_unknown_field(
+    owner_client, pool, mount_peers, root
+):
+    mount_peers(gateway=_gateway())
+    resp = await owner_client.post("/api/v1/agents", json=_body(max_tool_rounds=8))
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error.startswith("an agent has no field(s) max_tool_rounds — the fields are: ")
+    assert "max_tool_rounds" not in error.split("the fields are: ", 1)[1]
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+
+
+async def test_an_update_naming_rounds_is_refused_and_changes_nothing(
+    owner_client, mount_peers, root
+):
+    mount_peers(gateway=_gateway())
+    created = await _create(owner_client)
+    before = (await owner_client.get("/api/v1/agents/coder")).json()
+    resp = await owner_client.put(
+        "/api/v1/agents/coder", json={"purpose": "reviews code", "max_tool_rounds": 3}
+    )
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error.startswith("an agent has no field(s) max_tool_rounds — the fields are: ")
+    assert "max_tool_rounds" not in error.split("the fields are: ", 1)[1]
+    after = (await owner_client.get("/api/v1/agents/coder")).json()
+    assert after == before and after["purpose"] == created["purpose"]
+
+
+async def test_reading_an_agent_shows_no_rounds(owner_client, mount_peers, root):
+    mount_peers(gateway=_gateway())
+    await _create(owner_client)
+    one = (await owner_client.get("/api/v1/agents/coder")).json()
+    assert "max_tool_rounds" not in one
+    (listed,) = (await owner_client.get("/api/v1/agents")).json()
+    assert "max_tool_rounds" not in listed

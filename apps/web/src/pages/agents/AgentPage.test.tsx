@@ -124,7 +124,6 @@ describe('AgentPage — the header', () => {
         purpose: 'writes code',
         monthly_cap_usd: 5,
         spent_month_usd: 1.5,
-        max_tool_rounds: 8,
         read_shared_memory: true,
         tools: ['workspace_read_file', 'gone_tool'],
         unknown_tools: ['gone_tool'],
@@ -146,7 +145,8 @@ describe('AgentPage — the header', () => {
     expect(within(facts).getByRole('link', { name: /settings → routing/i }).getAttribute('href')).toBe('/settings/models')
     expect(within(facts).getByTestId('spend').textContent).toBe('$1.50')
     expect(within(facts).getByText(/of \$5\.00 \/ month/)).toBeDefined()
-    expect(within(facts).getByTestId('agent-rounds').textContent).toBe('up to 8 tool rounds a turn')
+    // No rounds fact: a turn has no round ceiling (2026-10-08).
+    expect(within(facts).queryByTestId('agent-rounds')).toBeNull()
     expect(within(facts).getByTestId('agent-read-shared').textContent).toContain('reads the household')
     const tools = within(facts).getByTestId('agent-tools')
     expect(tools.textContent).toContain('workspace_read_file')
@@ -156,6 +156,19 @@ describe('AgentPage — the header', () => {
     expect(skills.textContent).toContain('lost — missing')
     expect(within(facts).getByTestId('agent-folder').textContent).toBe('agents/coder/')
     expect(within(facts).getByTestId('agent-timers').textContent).toContain('nightly review')
+  })
+
+  it('shows no rounds fact, even when the fetched agent still names the old per-agent rounds (2026-10-08: no round ceiling)', async () => {
+    // A core from before the change still answers the old key; the old key is
+    // spelled in pieces so the web source holds no literal of it.
+    const stale = ['max', 'tool', 'rounds'].join('_')
+    const api = fakeApi(() => ({ ...agentFixture(), [stale]: 8 }) as Agent)
+    renderPage(api)
+    const facts = await screen.findByTestId('agent-facts')
+    expect(within(facts).queryByTestId('agent-rounds')).toBeNull()
+    const terms = [...facts.querySelectorAll('dt')].map(dt => dt.textContent ?? '')
+    expect(terms.filter(t => /round/i.test(t))).toEqual([])
+    expect(facts.textContent ?? '').not.toMatch(/tool[\s-]*rounds?\s+a\s+turn|\bup to \d+ tool/i)
   })
 
   it('an unreadable ledger reads "spend unreadable" with the note, never 0', async () => {
@@ -352,7 +365,7 @@ describe('AgentPage — Edit', () => {
     expect((within(form).getByLabelText(/workspace_read_file/) as HTMLInputElement).checked).toBe(true)
     expect((within(form).getByLabelText(/workspace_write_file/) as HTMLInputElement).checked).toBe(false)
     expect((await within(form).findByLabelText(/review/) as HTMLInputElement).checked).toBe(true)
-    expect((within(form).getByLabelText('Max tool rounds') as HTMLInputElement).value).toBe('8')
+    expect(within(form).queryAllByLabelText(/round/i)).toEqual([])
 
     fireEvent.change(within(form).getByLabelText('Purpose'), { target: { value: 'writes and reviews code' } })
     fireEvent.click(within(form).getByLabelText(/workspace_write_file/))
@@ -367,13 +380,33 @@ describe('AgentPage — Edit', () => {
       tools: ['workspace_read_file', 'workspace_write_file'],
       skills: ['review'],
       monthly_cap_usd: null,
-      max_tool_rounds: 8,
       read_shared_memory: false,
     })
     await waitFor(() => expect(screen.queryByTestId('agent-form')).toBeNull())
     // The header now shows the row the server read back, and its sentence.
     expect(screen.getByText('writes and reviews code')).toBeDefined()
     expect(screen.getByTestId('agent-saved').textContent).toContain('updated agent coder')
+  })
+
+  it('editing an agent fetched with the old per-agent rounds draws no rounds field and PUTs no rounds (2026-10-08: no round ceiling)', async () => {
+    // Spelled in pieces so the web source holds no literal of the old key.
+    const stale = ['max', 'tool', 'rounds'].join('_')
+    const api = fakeApi(() => ({ ...agentFixture(), [stale]: 8 }) as Agent)
+    renderPage(api)
+    await screen.findByTestId('agent-facts')
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }))
+    const form = await screen.findByTestId('agent-form')
+    await within(form).findByLabelText(/workspace_write_file/)
+    expect(within(form).queryAllByLabelText(/round/i)).toEqual([])
+    expect(form.textContent ?? '').not.toMatch(/tool[\s-]*rounds?|1 to 50|1–50/i)
+    fireEvent.change(within(form).getByLabelText('Purpose'), { target: { value: 'edited' } })
+    const submit = within(form).getByRole('button', { name: /save changes/i }) as HTMLButtonElement
+    expect(submit.disabled).toBe(false)
+    fireEvent.submit(form)
+    await waitFor(() => expect(api.updateAgent).toHaveBeenCalledTimes(1))
+    const [, changes] = api.updateAgent.mock.calls[0]
+    expect(Object.keys(changes).filter(k => /round/i.test(k))).toEqual([])
+    expect(changes.purpose).toBe('edited')
   })
 
   it('a tool the registry no longer lists is shown flagged and ticked, so it can be unticked', async () => {
