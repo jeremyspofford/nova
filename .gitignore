@@ -68,6 +68,7 @@ deploy/.backup-passphrase.lock/
 deploy/backups/
 
 # S41 move markers: local state of THIS machine, never committed.
+deploy/.restored
 deploy/.moved
 deploy/tailscale/MOVED_TO
 
