@@ -94,6 +94,9 @@ export interface SessionsStore {
   focus: (paneId: string) => void
   /** Open in the focused pane, or focus the pane already showing it. */
   openSession: (sessionId: string) => void
+  /** Open the session `step` places down the sidebar list from the focused
+   *  pane's (wrapping) — Ctrl+Tab is +1, Ctrl+Shift+Tab is -1. */
+  cycleSession: (step: number) => void
   /** Open in a new pane beside the focused one. False at the cap. */
   openInSplit: (sessionId: string) => boolean
   dropSession: (sessionId: string, paneId: string, zone: DropZone) => void
@@ -258,6 +261,42 @@ export function SessionsProvider({
     },
     [paneShowing, focus, onChat, navigate, focused, layout.extra, goMain, navigatePane],
   )
+
+  const cycleSession = useCallback(
+    (step: number) => {
+      if (sessions.length === 0) return
+      const current = panes.find(p => p.id === focused)?.effectiveSessionId
+      const at = sessions.findIndex(s => s.id === current)
+      // From a session not in the list (archived, or not loaded yet) the
+      // first step lands on the first or last row rather than skipping one.
+      const from = at === -1 ? (step > 0 ? -1 : 0) : at
+      const n = sessions.length
+      openSession(sessions[(((from + step) % n) + n) % n].id)
+    },
+    [sessions, panes, focused, openSession],
+  )
+
+  // Ctrl+Tab / Ctrl+Shift+Tab, the browser-tab gesture, plus Alt+Down /
+  // Alt+Up (Slack's) because an ordinary browser tab never sees Ctrl+Tab —
+  // the browser keeps it for its own tabs. The installed app's window gets
+  // it. Listening here, not in the sidebar, so it works with the sidebar
+  // closed and on every page.
+  const cycleRef = useRef(cycleSession)
+  cycleRef.current = cycleSession
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey) return
+      let step = 0
+      if (e.key === 'Tab' && e.ctrlKey && !e.altKey) step = e.shiftKey ? -1 : 1
+      else if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowDown') step = 1
+      else if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowUp') step = -1
+      if (step === 0) return
+      e.preventDefault()
+      cycleRef.current(step)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const canSplit = !isMobile && layout.order.length < MAX_PANES
 
@@ -445,6 +484,7 @@ export function SessionsProvider({
     focused,
     focus,
     openSession,
+    cycleSession,
     openInSplit,
     dropSession,
     navigatePane,
