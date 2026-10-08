@@ -258,4 +258,37 @@ describe('SessionsProvider and the sidebar list', () => {
     fireEvent.click(screen.getByTestId('new-session'))
     await waitFor(() => expect(out.path).toBe('/chat?session=new-1'))
   })
+
+  it('Ctrl+Tab steps down the list and wraps; Ctrl+Shift+Tab steps back', async () => {
+    const out = mount(fakeApi([session('a', { main: true }), session('b'), session('c')]))
+    await screen.findByText('label c')
+    const key = (init: KeyboardEventInit) => fireEvent.keyDown(window, init)
+    key({ key: 'Tab', ctrlKey: true })
+    expect(out.path).toBe('/chat?session=b')
+    key({ key: 'Tab', ctrlKey: true })
+    expect(out.path).toBe('/chat?session=c')
+    key({ key: 'Tab', ctrlKey: true })
+    expect(out.path).toBe('/chat')
+    key({ key: 'Tab', ctrlKey: true, shiftKey: true })
+    expect(out.path).toBe('/chat?session=c')
+    // Alt+Up / Alt+Down do the same where the browser keeps Ctrl+Tab.
+    key({ key: 'ArrowUp', altKey: true })
+    expect(out.path).toBe('/chat?session=b')
+    key({ key: 'ArrowDown', altKey: true })
+    expect(out.path).toBe('/chat?session=c')
+    // A bare Tab is focus movement, never a session switch.
+    key({ key: 'Tab' })
+    expect(out.path).toBe('/chat?session=c')
+  })
+
+  it('Ctrl+Tab with a split moves focus to the pane already showing the next one', async () => {
+    const out = mount(fakeApi([session('a', { main: true }), session('b')]))
+    await screen.findByText('label b')
+    act(() => {
+      out.store!.openInSplit('b')
+    })
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true })
+    expect(out.store!.focused).toBe('main')
+    expect(out.store!.panes).toHaveLength(2)
+  })
 })
