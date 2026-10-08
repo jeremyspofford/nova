@@ -30,9 +30,12 @@ import { findUndefinedColorTokens } from '../../lib/colorTokens'
 
 const MD = '(min-width: 768px)'
 
-/** Drive `useIsMobile`, which reads matchMedia('(min-width: 768px)'). */
+/** Drive `useIsMobile`, which reads matchMedia('(min-width: 768px)'), and
+ *  size the window to match — the phone menu is the full screen wide, so
+ *  its drag maths reads `innerWidth`, and jsdom's default is a 1024px desktop. */
 function setViewport(width: 'mobile' | 'desktop') {
   const isDesktop = width === 'desktop'
+  vi.stubGlobal('innerWidth', isDesktop ? 1280 : 393)
   vi.stubGlobal(
     'matchMedia',
     (query: string) =>
@@ -223,6 +226,8 @@ describe('AppLayout — which nav renders', () => {
     await screen.findByText('page')
     fireEvent.click(menuButton()!)
     const panel = await screen.findByTestId('mobile-drawer-panel')
+    // The menu fills the screen rather than coming most of the way out.
+    expect(panel.style.width).toBe('393px')
 
     fireEvent.touchStart(panel, { touches: [{ clientX: 280, clientY: 400 }] })
     fireEvent.touchMove(panel, { touches: [{ clientX: 40, clientY: 404 }] })
