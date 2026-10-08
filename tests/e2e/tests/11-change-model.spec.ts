@@ -48,7 +48,8 @@ test('change model: a pick on Models reaches the next turn without a restart', a
   const library = `library:${target}`
 
   await page.goto('/models')
-  await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible()
+  // Titled "Model catalog" since the page moved into Settings (2026-10-08).
+  await expect(page.getByRole('heading', { name: 'Model catalog' })).toBeVisible()
 
   // ── get the target model installed, however it currently stands ─────────
   await page.getByRole('button', { name: /^All/ }).click()

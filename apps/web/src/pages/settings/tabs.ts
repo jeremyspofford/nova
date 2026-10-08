@@ -9,6 +9,11 @@
  *
  * The slug is a URL segment (`/settings/models`), so these names are part of
  * the product's surface — renaming one breaks a link somebody saved.
+ *
+ * These are the tabs SettingsPage draws itself. Settings' nav also lists
+ * pages that live at their own addresses (Agents, Skills, the model catalog,
+ * AI Quality, Governance); that list, and the order everything comes in, is
+ * settingsNav.ts.
  */
 export type SettingsTab = {
   slug: string
@@ -29,8 +34,13 @@ export const SETTINGS_TABS: SettingsTab[] = [
     blurb: 'Theme, typeface, and what this device reports about its own screen.',
   },
   {
+    // Labelled Routing since 2026-10-08, when the model catalog moved into
+    // Settings beside it: two entries called "Models" in one nav would be a
+    // coin toss. The slug stays — /settings/models is linked from chat's
+    // model switcher and from saved bookmarks — and core's own messages
+    // already send people to "Settings → Routing".
     slug: 'models',
-    label: 'Models',
+    label: 'Routing',
     blurb: 'Which model answers, and who provides it.',
   },
   {

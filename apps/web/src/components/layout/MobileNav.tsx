@@ -9,20 +9,15 @@ import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { AccountMenu } from './AccountMenu'
 import { SessionsList } from './SessionsList'
-import { NavCountBadge, navBadgeState, navSections, type NavItem, type NavSection } from './Sidebar'
+import { NavCountBadge, navBadgeState, navSections } from './Sidebar'
 
-// The nav config is Sidebar's, DERIVED rather than copied: the unlabelled
-// (Core) sections are the primary tabs, every labelled section is tucked
-// into "More" — the same entries in the same order by construction. The two
-// lists used to be hand-mirrored and had drifted once (Governance was
-// missing here until S9). SURFACE_PRESET is hardcoded to 'advanced' until a
-// real feature-flag source lands — see brief adaptation notes.
-export const primaryTabs: NavItem[] = navSections
-  .filter(section => section.label === undefined)
-  .flatMap(section => section.items)
-
-export const moreItems: NavSection[] = navSections.filter(section => section.label !== undefined)
-
+// The nav config is Sidebar's, rendered whole: the drawer is the phone's only
+// navigation, so every section and every entry is in it, in the same order.
+// (It once derived "primary tabs" and a "More" list from it for a bottom tab
+// bar; the bar went on 2026-09-15 and the split with it on 2026-10-08, when
+// the sidebar came down to one group.) SURFACE_PRESET is hardcoded to
+// 'advanced' until a real feature-flag source lands — see brief adaptation
+// notes.
 const SURFACE_PRESET: SurfacePreset = 'advanced'
 
 /** The panel's width. A fixed number rather than a percentage because the
@@ -60,7 +55,6 @@ export function MobileNav() {
   const unseen = useUnseenNotices()
 
   const isActive = (to: string) => location.pathname === to
-  const moreActive = moreItems.some(section => section.items.some(item => isActive(item.to)))
 
   // Where the panel sits right now. During a drag it follows the finger;
   // otherwise CSS moves it and the transition below animates the change.

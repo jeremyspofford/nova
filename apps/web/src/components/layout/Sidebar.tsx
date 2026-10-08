@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { BookOpen, Bot, Boxes, CalendarClock, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, PanelLeft, ScrollText } from 'lucide-react'
+import { CalendarClock, FolderOpen, Inbox, MessageSquare, PanelLeft } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -74,46 +74,36 @@ function readWidth(): number {
   }
 }
 
-// S1 nav config: Chat (Core) + the household's subjects (System). What
-// belongs to HIM rather than to the household — settings, usage, the record
-// of what she has done — is under his name instead (AccountMenu).
-// Everything else waits on
-// the pages that back it. `SURFACE_PRESET` is hardcoded to 'advanced' until
-// a real feature-flag source lands — see brief adaptation notes.
+// The sidebar is for the WORK (2026-10-08, owner's call): the conversation,
+// what is due, what she noticed, and the files — the way Claude Code's keeps
+// its sessions and Routines, with everything you configure under Settings.
+//
+// Governance, AI Quality, Agents, Skills and Models sat here until then, in a
+// "System" group of eight under Chat. They live in Settings now, in its own
+// nav beside the tabs it already had (pages/settings/settingsNav.ts), and keep
+// their addresses. Schedules stays: what fires and when is something he
+// checks, not something he sets up once — the owner named it as the
+// Routines of this app.
+//
+// Activity, Spend and Settings are NOT here either (2026-09-16, owner's
+// call): they live under his name in the AccountMenu, the place a person
+// looks for their own account, their usage and what the assistant has been
+// doing. One home each — navSections.test.ts pins every one of these as an
+// ABSENCE, because putting one back here would quietly give it two.
+//
+// One unlabelled group: four entries need no heading, and "System" no longer
+// describes them. `SURFACE_PRESET` is hardcoded to 'advanced' until a real
+// feature-flag source lands — see brief adaptation notes.
 export const navSections: NavSection[] = [
   {
-    // Core — no label, always visible
     items: [
       { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
-    ],
-  },
-  {
-    label: 'System',
-    items: [
-      { to: '/governance', label: 'Governance', icon: ScrollText, minRole: 'admin' },
-      { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
       { to: '/schedules', label: 'Schedules', icon: CalendarClock, minRole: 'admin' },
-      // S12: the agents the household runs — between what fires and what
-      // was written, since an agent is what the one does and what the other
-      // shows.
-      { to: '/agents', label: 'Agents', icon: Bot, minRole: 'admin' },
-      // S17: the procedures written down from what worked before. Beside
-      // Agents, because both answer "what does this household know how to
-      // do" — one as a who, the other as a how.
-      { to: '/skills', label: 'Skills', icon: BookOpen, minRole: 'admin' },
       // S11: what she noticed without being asked, and what she did about
-      // it. Straight after Agents — the beats are the last thing that acts on
-      // its own, and this is the record of those actions.
+      // it. After Schedules — the beats are the last thing that acts on its
+      // own, and this is the record of those actions.
       { to: '/inbox', label: 'Inbox', icon: Inbox, minRole: 'admin', badge: 'unseen_notices' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
-      { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
-      // Activity, Spend and Settings are NOT here (2026-09-16, owner's
-      // call). All three live under his name in the AccountMenu — the
-      // place a person looks for their own account, their usage and what
-      // the assistant has been doing. Listing them twice made the nav a
-      // wall of fifteen rows in which the household's actual subjects
-      // (agents, skills, schedules) were no easier to find than the
-      // settings page. One home each.
     ],
   },
 ]

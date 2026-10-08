@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import * as ui from './components/ui'
 import { neutralPalettes } from './lib/color-palettes'
+import { SETTINGS_NAV } from './pages/settings/settingsNav'
 
 type Route = { status?: number; body?: unknown; hold?: Promise<void> }
 
@@ -330,6 +331,59 @@ describe('App gate', () => {
     render(<App />)
     await waitFor(() => expect(screen.getByText('Nova is not answering')).toBeDefined())
   })
+})
+
+describe('Settings holds what left the sidebar (2026-10-08)', () => {
+  /** A signed-in owner past setup, on a desktop wide enough for the
+   *  Settings nav column. Every page's own reads answer 404: this is about
+   *  WHERE each page renders, and a page that says it could not load is
+   *  still in its place. */
+  function signedInWide() {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: query.startsWith('(min-width'),
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }) as unknown as MediaQueryList,
+    )
+    mockApi({
+      '/api/v1/auth/state': { body: { has_users: true } },
+      '/api/v1/auth/me': { body: { person: { id: 'p1', name: 'Ada', role: 'owner' } } },
+      '/api/v1/settings': {
+        body: {
+          settings: [{ key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true }],
+        },
+      },
+    })
+  }
+
+  // Derived from the nav, not a list kept here: an entry added to
+  // settingsNav.ts whose route App.tsx forgot — or put outside the shell —
+  // fails by name. The catch-all would otherwise send it to /chat, which
+  // looks like a link that does nothing.
+  it.each(SETTINGS_NAV.flatMap(g => g.items.map(i => [i.to, i.label] as const)))(
+    '%s opens inside Settings, with %s marked',
+    async to => {
+      signedInWide()
+      window.history.pushState({}, '', to)
+      const { unmount } = render(<App />)
+      const nav = await screen.findByTestId('settings-nav')
+      expect(window.location.pathname).toBe(to)
+      await waitFor(() => {
+        const current = nav.querySelector('[aria-current="page"]')
+        expect(current?.getAttribute('href')).toBe(to)
+      })
+      expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeDefined()
+      unmount()
+    },
+  )
 })
 
 describe('the setup pages (S47)', () => {

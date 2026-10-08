@@ -362,7 +362,7 @@ function AgentFormBody({
 
       <p className="text-caption text-content-tertiary">
         Which model answers it is a routing chain:{' '}
-        <Link to="/settings" className="inline-flex items-center gap-1 text-accent hover:underline">
+        <Link to="/settings/models" className="inline-flex items-center gap-1 text-accent hover:underline">
           set its model chain on Settings → Routing <ExternalLink size={11} />
         </Link>
       </p>

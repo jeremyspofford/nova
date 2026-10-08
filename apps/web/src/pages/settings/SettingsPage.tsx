@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import clsx from 'clsx'
+import { useParams } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Skeleton } from '../../components/ui'
 import { useAuth } from '../../stores/auth-store'
@@ -152,12 +151,15 @@ export function SettingsPage() {
     await refresh()
   }
 
+  const current = SETTINGS_TABS.find(t => t.slug === tab)!
+
   return (
     <div>
-      <PageHeader
-        title="Settings"
-        description="How this instance looks and who is signed in."
-      />
+      {/* The tab's own name and what it is for. The strip of tab links that
+          sat here is the Settings shell's nav now (SettingsShell.tsx,
+          2026-10-08), which lists these tabs beside the pages that moved out
+          of the sidebar; inside it this header is an h2 under "Settings". */}
+      <PageHeader title={current.label} description={current.blurb} />
 
       {error && (
         <div
@@ -167,43 +169,6 @@ export function SettingsPage() {
           Could not read the settings: {error}
         </div>
       )}
-
-      {/* LINKS, not buttons with state. Each tab is a real address, so it
-          can be bookmarked, sent to someone, and survive a refresh — and the
-          browser's back button steps between tabs the way it does everywhere
-          else. `aria-current` is the honest markup for that; the ARIA tab
-          pattern describes in-page panels, which these are not. */}
-      <nav aria-label="Settings sections" className="mb-4 border-b border-border-subtle">
-        <div className="flex gap-1 overflow-x-auto custom-scrollbar -mb-px">
-          {SETTINGS_TABS.map(t => {
-            const current = t.slug === tab
-            return (
-              // A plain Link, NOT NavLink: NavLink decides `aria-current`
-              // from its OWN path match and overrides the prop, so at bare
-              // `/settings` — which resolves to this first tab — it marked
-              // nothing current. `current` here comes from the resolved tab,
-              // which knows about that fallback and about bad slugs.
-              <Link
-                key={t.slug}
-                to={`/settings/${t.slug}`}
-                aria-current={current ? 'page' : undefined}
-                data-testid={`settings-tab-${t.slug}`}
-                className={clsx(
-                  'shrink-0 whitespace-nowrap px-3 py-2 text-compact font-medium border-b-2 transition-colors duration-fast',
-                  current
-                    ? 'border-accent text-accent'
-                    : 'border-transparent text-content-secondary hover:text-content-primary hover:border-border',
-                )}
-              >
-                {t.label}
-              </Link>
-            )
-          })}
-        </div>
-      </nav>
-      <p className="mb-6 text-caption text-content-tertiary" data-testid="settings-tab-blurb">
-        {SETTINGS_TABS.find(t => t.slug === tab)?.blurb}
-      </p>
 
       <div className="space-y-6" data-testid="settings-panel">
         {settings === null && !error ? (

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './SettingsPage'
+import { SettingsShell } from './SettingsShell'
 import { SETTINGS_TABS, DEFAULT_TAB, resolveTab } from './tabs'
 import { ThemeProvider } from '../../stores/theme-store'
 import { AuthProvider } from '../../stores/auth-store'
@@ -58,15 +59,36 @@ const SECTIONS_BY_TAB: Record<string, string[]> = {
   connections: ['Connections'],
 }
 
+/** Inside the Settings shell, as App.tsx mounts it, on a screen wide enough
+ *  for its nav column (2026-10-08): the tab links these tests click are the
+ *  shell's nav now, not a strip on the page. Below 1280px the shell drills
+ *  down instead and draws no nav beside the page — SettingsShell.test.tsx
+ *  covers that half. */
 function renderAt(path: string) {
+  vi.stubGlobal(
+    'matchMedia',
+    (query: string) =>
+      ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  )
   return render(
     <MemoryRouter initialEntries={[path]}>
       <ThemeProvider>
         <AuthProvider>
           <ChatProvider fetchImpl={vi.fn(async () => new Response('{}'))}>
             <Routes>
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/settings/:tab" element={<SettingsPage />} />
+              <Route element={<SettingsShell />}>
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/:tab" element={<SettingsPage />} />
+              </Route>
             </Routes>
           </ChatProvider>
         </AuthProvider>
@@ -213,9 +235,15 @@ describe('the settings tabs', () => {
   })
 
   it('every tab says what it is for, not just its name', async () => {
+    // Under its own name, as the page's title: the strip and the blurb line
+    // under it became the shell's nav and this header on 2026-10-08.
     for (const t of SETTINGS_TABS) {
       const { unmount } = renderAt(`/settings/${t.slug}`)
-      expect(screen.getByTestId('settings-tab-blurb').textContent, t.slug).toBe(t.blurb)
+      // From the blurb, not the name: several tabs carry a section of their
+      // own name once the read lands ("General", "Devices").
+      const title = screen.getByText(t.blurb).previousElementSibling
+      expect(title?.tagName, t.slug).toBe('H2')
+      expect(title?.textContent, t.slug).toBe(t.label)
       unmount()
     }
   })

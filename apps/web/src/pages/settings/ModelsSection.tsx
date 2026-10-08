@@ -194,11 +194,11 @@ export function ModelsSection({
 
   const modelsLink = inRouter ? (
     <Link to="/models" className="text-accent hover:underline">
-      Models
+      the Catalog
     </Link>
   ) : (
     <a href="/models" className="text-accent hover:underline">
-      Models
+      the Catalog
     </a>
   )
 
@@ -225,7 +225,7 @@ export function ModelsSection({
                 {seersReason
                   ? `Could not tell which models can see images — ${seersReason}`
                   : 'No installed model can see images. Nova will say so rather than describing ' +
-                    'one; pull a vision model in Models to change that.'}
+                    'one; pull a vision model from the Catalog to change that.'}
               </p>
             ) : (
               <>
@@ -268,7 +268,7 @@ export function ModelsSection({
           </div>
 
           <p className="text-caption text-content-tertiary" data-testid="models-catalog-link">
-            Which model chat answers with, and what it falls back to, is set under Routing below. Browse
+            Which model chat answers with, and what it falls back to, is set under Routing above. Browse
             every model Nova can run or reach, pull one, or compare them in {modelsLink}.
           </p>
           {/* Honest, qualitative accuracy disclaimer (S3 walk-fix round 12) —
