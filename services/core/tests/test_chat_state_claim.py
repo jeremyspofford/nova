@@ -428,7 +428,11 @@ async def test_a_refused_not_connected_call_backs_an_offline_report(
     )
     assert span["name"] == "device_run"
     assert span["meta"]["ok"] is False
-    assert span["meta"]["facts"] == [{"device": DEVICE, "connected": False}]
+    # A chat turn arms stack_claim, so the fact carries known_as (stack-claim T3):
+    # paired name + the row's hostname "dell"; this fixture's providers read fails.
+    assert span["meta"]["facts"] == [
+        {"device": DEVICE, "connected": False, "known_as": [DEVICE, "dell"]}
+    ]
 
     assert [s["name"] for s in await _guard_spans(pool)] == []
     assert _corrections(sent) == []

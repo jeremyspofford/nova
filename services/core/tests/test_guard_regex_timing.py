@@ -232,6 +232,12 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     # one-word and a two-word server, as chat._mcp_server_refs derives them.
     for i, pattern in enumerate(guards._server_patterns(("github", "home assistant"))):
         found[f"_server_patterns[{i}]"] = pattern
+    # The stack-claim pair (2026-10-07): the whole-word name alternation and
+    # the (before, after) subject-qualifier patterns, over a one-word machine
+    # and a hyphenated device, as other_machine_names derives them.
+    found["_machine_name_pattern"] = guards._machine_name_pattern(("dell", "DELL-XPS-8950"))
+    for i, pattern in enumerate(guards._qualifier_patterns(("dell", "DELL-XPS-8950"))):
+        found[f"_qualifier_patterns[{i}]"] = pattern
     return found
 
 
@@ -426,12 +432,38 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     209 -> 211, 277 -> 281, 68 -> 70 (measured). The two rows sit after S42b's update row, at
     `_CAPABILITY_TOOLS[22][0]` and `[23][0]`, so the device_run row is [24]
     and the mcp_connect and mcp_call rows are [25] and [26]; no id the fossil
-    holds moved."""
+    holds moved.
+
+    The stack-claim fix (2026-10-07, stack_claim never replaces a true
+    statement about ANOTHER machine's model server) moved all three,
+    deliberately: 211 -> 212, 281 -> 285, 70 -> 73.
+       1  new BARE module Pattern, reached by both walks: `_OWN_STACK_MARKER`
+          (my/our/Nova's/hub/gateway — a clause naming her own stack is never
+          excused).
+       3  per-name builders in the live walk only (the fossil is not
+          evolved): `_machine_name_pattern` and `_qualifier_patterns[0..1]`
+          (the possessive/adjacent name before the subject, the "on/at/in
+          <name>" after the claim)."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 211, len(old)
-    assert len(new) == 281, len(new)
-    assert len(new) - len(old) == 70
+    assert len(old) == 212, len(old)
+    assert len(new) == 285, len(new)
+    assert len(new) - len(old) == 73
+
+
+def test_the_sweep_reaches_the_stack_claim_patterns():
+    """The stack-claim fix's patterns are timed by both padding sweeps: the
+    bare marker by its module name, the builders by what they compile for a
+    machine and a device — selected by object, so a rename cannot hide one."""
+    new = _every_pattern()
+    names = ("dell", "DELL-XPS-8950")
+    expected = [
+        guards._OWN_STACK_MARKER,
+        guards._machine_name_pattern(names),
+        *guards._qualifier_patterns(names),
+    ]
+    for pattern in expected:
+        assert any(p is pattern for p in new.values()), pattern.pattern
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -519,6 +551,14 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "there_is_then_spaces": "there is" + pad + "no",
         "in_my_then_spaces": "in my" + pad + "toolbox",
         "any_then_spaces": "any" + pad + "place",
+        # The stack-claim pair (2026-10-07): a machine name walking to its
+        # possessive and subject, "on/at/in [the]" walking to a name, a
+        # hyphenated device name cut by padding, and an own-stack word.
+        "possessive_machine_then_spaces": "the Dell's" + pad + "Ollama",
+        "qualifier_on_then_spaces": " on" + pad + "the" + pad + "Dell",
+        "qualifier_the_then_spaces": " at the" + pad + "x",
+        "device_name_then_spaces": "DELL-XPS" + pad + "-8950",
+        "own_marker_then_spaces": "nova" + pad + "'s",
     }
 
 
@@ -1835,3 +1875,129 @@ def test_the_capability_guard_reads_50_kb_in_linear_time(label, build):
         build,
         cap_s=CAPABILITY_CAP_S,
     )
+
+
+# ── stack_claim over many machines (stack-claim epic T6, 2026-10-07) ──
+#
+# stack_claim_check now reads the turn's machines and devices out of its spans
+# (other_machine_names) and asks, per serving claim, whether one of them
+# qualifies the claim's subject — a name alternation built once per names
+# tuple, a bounded tail before the subject, an anchored match after the claim,
+# and (rule b) a search for the hub's own device in the clause. Every clause
+# below is EXCUSED, so the guard walks the whole reply; one cycle names every
+# machine and device of the turn.
+_STACK_CLOUD_ROUND = _span(
+    "llm_call",
+    "openrouter:anthropic/claude-haiku-5.5",
+    purpose="chat",
+    local=False,
+    served_by="openrouter:anthropic/claude-haiku-5.5",
+)
+# Her own computer, marked as the live device_list marks it: rule (b) then
+# searches each clause for its name.
+_STACK_HUB_DEVICE = _span(
+    "tool",
+    "device_list",
+    ok=True,
+    reached_executor=True,
+    args_redacted={},
+    facts=[{"device": "Beelink Mini S", "connected": True}],
+    result_head=(
+        "Paired devices:\n- Beelink Mini S (Pop!_OS 24.04 LTS) — connected; its agent "
+        "came in through the hub machine's own door"
+    ),
+)
+
+
+def _stack_spans(names: int) -> list:
+    """A cloud-served turn whose machine_status recorded `names` distinct
+    machines and devices (half each: box<i> on BOX-<i>-PC), none answering."""
+    machines = [
+        {"machine": f"box{i}", "device": f"BOX-{i}-PC", "state": "walled", "answering": False}
+        for i in range(names // 2)
+    ]
+    status = _span(
+        "tool",
+        "machine_status",
+        ok=True,
+        reached_executor=True,
+        args_redacted={},
+        facts=machines,
+    )
+    return [_STACK_CLOUD_ROUND, status, _STACK_HUB_DEVICE]
+
+
+STACK_NAMES = 200
+_STACK_SPANS = _stack_spans(STACK_NAMES)
+
+
+def _cycle(unit: str, count: int = STACK_NAMES // 2):
+    """`unit` with {i} cycling over the turn's `count` machines, to n chars."""
+
+    def build(n: int) -> str:
+        out: list[str] = []
+        size = index = 0
+        while size < n:
+            piece = unit.format(i=index % count)
+            out.append(piece)
+            size += len(piece)
+            index += 1
+        return "".join(out)[:n]
+
+    return build
+
+
+STACK_FIFTY_KB = [
+    ("after_qualifier_machines", _cycle("Ollama is down on box{i}; ")),
+    ("after_qualifier_devices", _cycle("I can't reach Ollama on the BOX-{i}-PC; ")),
+    ("before_possessive_devices", _cycle("The BOX-{i}-PC's Ollama is unreachable; ")),
+    ("before_adjacent_machines", _cycle("the box{i} model is offline; ")),
+    ("bare_claims_rule_b", _repeat("I can't reach Ollama; ")),
+    ("padded_bare_claim", lambda n: "I can't reach Ollama" + " " * n + "today"),
+    ("padded_qualifier", lambda n: "Ollama is down" + " " * n + "on box7"),
+    ("one_clause_of_names", lambda n: "I can't reach Ollama, " + _cycle("box{i}, ")(n)),
+    ("names_then_spaces", _cycle("box{i}" + " " * 40 + "'s Ollama is down; ")),
+]
+
+
+@pytest.mark.parametrize("label,build", STACK_FIFTY_KB, ids=[c[0] for c in STACK_FIFTY_KB])
+def test_stack_claim_reads_50_kb_against_two_hundred_machines_in_linear_time(label, build):
+    """Every shape is a true statement about other machines (excused, None),
+    so the guard reads all of it — asserted first, or the timing is of an
+    early return."""
+    assert len(guards.other_machine_names(_STACK_SPANS, "chat")) == STACK_NAMES
+    assert guards.stack_claim_check(build(50_000), _STACK_SPANS, purpose="chat") is None
+    _assert_linear(
+        f"stack_claim {label}",
+        lambda r: guards.stack_claim_check(r, _STACK_SPANS, purpose="chat"),
+        build,
+    )
+
+
+# One cycle over 25 machines both sizes hold: short, so the spans' read is
+# what the 4x step measures — a 5 KB reply's clauses hid a quadratic per-name
+# rescan of the facts (measured: passed at 200).
+_STACK_REPLY = _cycle("Ollama is down on box{i}; ", count=25)(650)
+
+
+def test_stack_claim_reads_two_hundred_machines_in_linear_time():
+    """50 -> 200 machines and devices against a fixed short reply (naming
+    machines both sizes hold) is linear, and 200 read it under the cap."""
+    assert guards.stack_claim_check(_STACK_REPLY, _stack_spans(50), purpose="chat") is None
+    _assert_linear(
+        "stack_claim machines",
+        lambda spans: guards.stack_claim_check(_STACK_REPLY, spans, purpose="chat"),
+        _stack_spans,
+        small=50,
+        large=200,
+        cap_s=BIG_INPUT_CAP_S,
+    )
+
+
+def test_the_stack_claim_timing_record_still_fires_on_her_own_stack():
+    """The pins above time a read that ends in None only because each clause
+    names another machine: over the same spans a false claim about her own
+    stack still fires, at the end of 50 KB."""
+    reply = _cycle("Ollama is down on box{i}; ")(50_000) + "; The backend is down."
+    claim = guards.stack_claim_check(reply, _STACK_SPANS, purpose="chat")
+    assert claim is not None and claim.subject == "The backend"

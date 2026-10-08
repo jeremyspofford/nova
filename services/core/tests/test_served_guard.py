@@ -26,6 +26,7 @@ import pytest
 
 from app import agents, chat, guards
 from tests.s40_walk import B02A5694, B851AA91, T60834CCF
+from tests.test_guards import LIVE_DELL_REPLY, live_dell_spans
 
 HUB_8B = "hub:qwen3:8b"
 HUB_27B = "hub:qwen3.8:27b"
@@ -797,6 +798,19 @@ def test_a_regeneration_that_repeats_a_serving_state_lie_is_refused():
     REPLACE-class claim in it is refused by name, armed by the turn's own kind
     exactly as over the reply."""
     assert _vet("The model is unreachable right now.", [_llm(), RECALLED]) == "stack_claim"
+
+
+@pytest.mark.parametrize("kind", ["chat", "eval"])
+def test_a_regeneration_of_the_live_dell_reply_is_not_refused_as_a_stack_claim(kind):
+    """Stack-claim epic T4: the live turn's reconstructed reply (turn 07076682,
+    a true report about the Dell's Ollama) over its own spans is not refused
+    by stack_claim on regeneration. _vet returns the FIRST guard that fires,
+    so the direct check pins that an earlier guard cannot mask a stack_claim
+    fire."""
+    spans = live_dell_spans(kind)
+    assert guards.served_this_turn(spans, kind)
+    assert guards.stack_claim_check(LIVE_DELL_REPLY, spans, purpose=kind) is None
+    assert _vet(LIVE_DELL_REPLY, spans, kind) != "stack_claim"
 
 
 @pytest.mark.parametrize(

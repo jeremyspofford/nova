@@ -3732,6 +3732,767 @@ def test_the_claim_names_what_it_matched_for_the_span():
     assert "down" in claim.phrase
 
 
+# -- stack-claim epic T1: the OTHER machines a turn's spans name --------------
+#
+# Live turn 07076682 (2026-10-07, "start the dell's ollama", cloud-served on
+# openrouter): she read the Dell and said she "can't reach Ollama" — true of
+# the Dell — and stack_claim replaced her whole reply. The machines and
+# devices a claim can be ABOUT come from the turn's own spans, never a list.
+
+
+def _tool_span(name, *, ok=True, reached=True, args=None, facts=None):
+    meta = {"ok": ok, "reached_executor": reached, "args_redacted": args or {}}
+    if facts is not None:
+        meta["facts"] = facts
+    return SimpleNamespace(kind="tool", name=name, meta=meta)
+
+
+def _cloud_round(n):
+    return _llm_span(
+        round=n,
+        completion_chars=200,
+        local=False,
+        served_by="openrouter:anthropic/claude-haiku-5.5",
+    )
+
+
+# The live turn's device_list span as recorded (facts + result_head): every
+# paired device, the hub's own computer included — its line says its agent
+# came in through the hub machine's own door.
+LIVE_DEVICE_LIST = SimpleNamespace(
+    kind="tool",
+    name="device_list",
+    meta={
+        "ok": True,
+        "reached_executor": True,
+        "args_redacted": {},
+        "facts": [
+            {"device": "Beelink Mini S", "connected": True},
+            {"device": "DELL-XPS-8950", "connected": True},
+        ],
+        "result_head": (
+            "Paired devices:\n"
+            "- Beelink Mini S (Pop!_OS 24.04 LTS) — connected, last seen "
+            "2026-10-07T19:57:51.098892+00:00; its agent came in through the hub machine's "
+            "own door; agent 0b5f4341b84c (the hub's build); folders: @home, @desktop, "
+            "@documents, @downloads\n"
+            "- DELL-XPS-8950 (Windows 11) — connected, last seen "
+            "2026-10-07T19:57:40.000000+00:00; agent 0b5f4341b84c (the hub's build)"
+        ),
+    },
+)
+
+
+def _dell_status(*, answering):
+    return _tool_span(
+        "machine_status",
+        args={"machine": "dell"},
+        facts=[
+            {
+                "machine": "dell",
+                "device": "DELL-XPS-8950",
+                "state": "walled" if not answering else "ok",
+                "answering": answering,
+            }
+        ],
+    )
+
+
+LIVE_DELL_SPANS = [
+    _cloud_round(1),
+    LIVE_DEVICE_LIST,
+    _cloud_round(2),
+    _dell_status(answering=False),
+    _cloud_round(3),
+    _tool_span("device_launch_app", ok=False, args={"device": "DELL-XPS-8950", "app": "ollama"}),
+    _cloud_round(4),
+    _tool_span("device_list_apps", args={"device": "DELL-XPS-8950"}),
+    _tool_span("device_run", args={"device": "DELL-XPS-8950", "command": "where ollama"}),
+    _tool_span("device_run", args={"device": "DELL-XPS-8950", "command": "netstat -ano"}),
+    _tool_span("device_run", args={"device": "DELL-XPS-8950", "command": "tasklist"}),
+    _cloud_round(5),
+    _cloud_round(6),
+]
+
+
+def test_other_machine_names_from_the_live_dell_turn():
+    names = guards.other_machine_names(LIVE_DELL_SPANS, "chat")
+    assert "dell" in names
+    assert "DELL-XPS-8950" in names
+
+
+def test_other_machine_names_is_empty_for_a_served_turn_alone():
+    assert guards.other_machine_names(SERVED, "chat") == ()
+
+
+def _engine_round(head, n=1):
+    return _llm_span(round=n, completion_chars=80, local=True, served_by=f"{head}:qwen3:8b")
+
+
+def test_other_machine_names_drops_the_machine_that_wrote_the_reply():
+    spans = [
+        _engine_round("hub"),
+        _tool_span(
+            "machine_status",
+            args={"machine": ""},
+            facts=[{"machine": "hub"}, {"machine": "dell"}],
+        ),
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "dell" in names
+    assert "hub" not in names
+
+
+def test_other_machine_names_reads_device_args_only_when_the_executor_ran():
+    refused = [
+        SERVED[0],
+        _tool_span("device_run", ok=False, reached=False, args={"device": "ghost-pc"}),
+    ]
+    assert "ghost-pc" not in guards.other_machine_names(refused, "chat")
+    launched = [
+        SERVED[0],
+        _tool_span("device_launch_app", ok=False, reached=True, args={"device": "DELL-XPS-8950"}),
+    ]
+    assert "DELL-XPS-8950" in guards.other_machine_names(launched, "chat")
+
+
+def test_other_machine_names_reads_any_tool_facts_device_sorted_and_unique():
+    spans = [
+        SERVED[0],
+        _tool_span(
+            "device_list",
+            facts=[{"device": "Beelink Mini S"}, {"device": "DELL-XPS-8950"}, {"device": "x"}],
+        ),
+        _tool_span("device_run", args={"device": "DELL-XPS-8950"}),
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "Beelink Mini S" in names
+    assert "DELL-XPS-8950" in names
+    assert "x" not in names
+    assert isinstance(names, tuple)
+    assert list(names) == sorted(set(names))
+
+
+def test_other_machine_names_subtracts_only_the_reply_rounds_engine():
+    spans = [
+        _engine_round("dell", n=1),
+        _engine_round("hub", n=2),
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "dell" in names
+    assert "hub" not in names
+
+
+def test_other_machine_names_the_reply_round_is_own_purpose_only():
+    # A later round of another purpose did not write the reply: the chat
+    # round's engine is the one subtracted, the other round's is not.
+    other = SimpleNamespace(
+        kind="llm_call",
+        name="qwen3:8b",
+        meta={"purpose": "memory", "round": 2, "local": True, "served_by": "hub:qwen3:8b"},
+    )
+    names = guards.other_machine_names([_engine_round("dell"), other], "chat")
+    assert "dell" not in names
+    assert "hub" in names
+
+
+def test_other_machine_names_the_reply_round_is_error_free_only():
+    # A failed last round wrote nothing: the reply came from the hub round.
+    failed = _llm_span(round=2, error="boom", local=True, served_by="dell:qwen3:8b")
+    spans = [
+        _engine_round("hub"),
+        failed,
+        _tool_span("machine_status", facts=[{"machine": "hub"}, {"machine": "dell"}]),
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "dell" in names
+    assert "hub" not in names
+
+
+def test_other_machine_names_reads_the_device_arg_of_device_tools_only():
+    spans = [
+        SERVED[0],
+        _tool_span("web_fetch", args={"device": "ghost-pc"}),
+        _tool_span("device_run", args={"device": "  DELL-XPS-8950  "}),
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "ghost-pc" not in names
+    assert "DELL-XPS-8950" in names
+
+
+# -- stack-claim epic T2: a claim about ANOTHER machine's model server -------
+#
+# Orchestrator decision after T2 VERIFY FAIL: a remote machine excuses a stack
+# claim only when (a) it QUALIFIES the claim's subject ("the Dell's Ollama",
+# "Ollama on the Dell", "the Dell Ollama", or the machine IS the subject), or
+# (b) the subject is bare and this turn's machine_status recorded a remote
+# model machine NOT answering, with no own-stack marker. A name elsewhere in
+# the clause excuses nothing; the hub's own computer is never another machine;
+# a gateway claim is never excused.
+
+# The live turn, but the Dell answering: no not-answering fact, so rule (b)
+# cannot apply and only a qualifier excuses.
+DELL_ANSWERING_SPANS = [
+    _dell_status(answering=True) if span.name == "machine_status" else span
+    for span in LIVE_DELL_SPANS
+]
+# The live turn without its machine_status read: devices named, no fact.
+DELL_DEVICES_ONLY_SPANS = [span for span in LIVE_DELL_SPANS if span.name != "machine_status"]
+
+QUALIFIED_BY_THE_DELL = [
+    "I can't reach Ollama on the Dell.",
+    "The Dell's Ollama is down.",
+    "The Dell's Ollama is not responding.",
+    "The Dell's Ollama isn't running.",
+    "Ollama on DELL-XPS-8950 is not responding.",
+    "Ollama on DELL-XPS-8950 is unreachable.",
+    "The model on the dell is unreachable.",
+    "Ollama is unreachable on DELL-XPS-8950.",
+    "The model is unreachable on the Dell.",
+    "I can't reach Ollama on DELL-XPS-8950.",
+    "Ollama is down at the Dell.",
+    "The Dell Ollama is not responding.",
+    "The Dell is unreachable.",
+]
+
+
+@pytest.mark.parametrize("reply", QUALIFIED_BY_THE_DELL)
+@pytest.mark.parametrize(
+    "spans",
+    [LIVE_DELL_SPANS, DELL_ANSWERING_SPANS],
+    ids=["live", "dell-answering"],
+)
+def test_stack_claim_excuses_a_subject_qualified_by_another_machine(reply, spans):
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't reach Ollama on DELL-XPS-8950.",
+        "Ollama is unreachable on DELL-XPS-8950.",
+        "The DELL-XPS-8950's Ollama is down.",
+    ],
+)
+def test_stack_claim_excuses_a_subject_qualified_by_a_device_the_turn_used(reply):
+    # No machine_status read: the device the turn's device_* calls named is
+    # another machine all the same ("dell" alone is not a name here).
+    assert guards.stack_claim_check(reply, DELL_DEVICES_ONLY_SPANS, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't reach Ollama on the Dell.",
+        "The Dell's Ollama is down.",
+        "The Dell's Ollama is not responding.",
+        "Ollama is unreachable on DELL-XPS-8950.",
+        "The model is unreachable on the Dell.",
+        "I can't reach Ollama on DELL-XPS-8950.",
+        "Ollama is down at the Dell.",
+        "The Dell Ollama is not responding.",
+    ],
+)
+def test_stack_claim_naming_a_machine_no_span_names_still_fires(reply):
+    # The excuse is derived from the spans, never from the words themselves.
+    assert guards.stack_claim_check(reply, SERVED, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Ollama on DELL-XPS-8950 is not responding.",
+        "The model on the dell is unreachable.",
+        "The Dell's Ollama isn't running.",
+        "The Dell is unreachable.",
+    ],
+)
+def test_stack_claim_non_matching_named_forms_stay_silent_with_served(reply):
+    # Guard pin: these never matched the serving patterns; still None.
+    assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't reach Ollama, so I checked DELL-XPS-8950.",
+        "The model is unreachable, so I checked the Dell.",
+        "I can't reach the model, unlike the Dell.",
+        "The gateway is down and the Dell is fine.",
+    ],
+)
+@pytest.mark.parametrize(
+    "spans",
+    [DELL_ANSWERING_SPANS, DELL_DEVICES_ONLY_SPANS],
+    ids=["dell-answering", "devices-only"],
+)
+def test_stack_claim_a_name_elsewhere_in_the_clause_excuses_nothing(reply, spans):
+    # VERIFY's escapes: the name does not qualify the subject, so the claim is
+    # about her own stack and still fires.
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The gateway is down and the Dell is fine.",
+        "The gateway is down on the Dell.",
+        "I can't reach the gateway on DELL-XPS-8950.",
+        "The Dell's gateway is unreachable.",
+    ],
+)
+def test_stack_claim_a_gateway_claim_is_never_excused(reply):
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is not None
+
+
+def test_stack_claim_own_stack_claim_beside_another_machine_clause_still_fires():
+    reply = "The model is unreachable; the Dell is fine."
+    assert guards.stack_claim_check(reply, DELL_ANSWERING_SPANS, purpose="chat") is not None
+
+
+def test_other_machine_names_excludes_the_hubs_own_device():
+    # device_list names every paired device; the one whose agent came in
+    # through the hub machine's own door is her own computer, not another.
+    names = guards.other_machine_names(LIVE_DELL_SPANS, "chat")
+    assert "Beelink Mini S" not in names
+    assert "DELL-XPS-8950" in names
+    assert "dell" in names
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Ollama is unreachable on Beelink Mini S.",
+        "I can't reach Ollama on the Beelink Mini S.",
+        "I can't reach Ollama, so I checked Beelink Mini S.",
+    ],
+)
+@pytest.mark.parametrize(
+    "spans",
+    [LIVE_DELL_SPANS, DELL_ANSWERING_SPANS],
+    ids=["live", "dell-answering"],
+)
+def test_stack_claim_naming_the_hubs_own_device_still_fires(reply, spans):
+    # Qualified by her own computer, the subject is neither another machine's
+    # nor bare: no excuse applies even while the Dell is not answering.
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't reach Ollama.",
+        "Ollama is not responding right now.",
+        "The model is unreachable.",
+        "I can't reach the model.",
+    ],
+)
+def test_stack_claim_excuses_a_bare_subject_while_a_remote_machine_is_not_answering(reply):
+    # Rule (b), the live shape: cloud-served, machine_status recorded the Dell
+    # not answering, and she said "I can't reach Ollama" with no qualifier.
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't reach Ollama.",
+        "Ollama is not responding right now.",
+        "The model is unreachable.",
+    ],
+)
+@pytest.mark.parametrize(
+    "spans",
+    [DELL_ANSWERING_SPANS, DELL_DEVICES_ONLY_SPANS, SERVED],
+    ids=["dell-answering", "devices-only", "served"],
+)
+def test_stack_claim_a_bare_subject_fires_without_a_not_answering_remote_fact(reply, spans):
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "My Ollama is down.",
+        "My model is down.",
+        "Our model is unreachable.",
+        "The hub's Ollama is down.",
+        "The gateway is down.",
+        "I can't reach the gateway.",
+    ],
+)
+def test_stack_claim_an_own_stack_marker_fires_while_a_remote_machine_is_not_answering(reply):
+    # Rule (b) never covers her own stack: 'my', 'our', 'the hub', the gateway.
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is not None
+
+
+def test_stack_claim_bare_subject_excuse_needs_a_remote_machines_fact_not_the_hubs():
+    # A not-answering fact about the machine that wrote the reply is not a
+    # remote machine's: the hub-served round subtracts it.
+    spans = [
+        _engine_round("hub"),
+        _tool_span(
+            "machine_status",
+            facts=[{"machine": "hub", "answering": False}, {"machine": "dell", "answering": True}],
+        ),
+    ]
+    assert guards.stack_claim_check("I can't reach Ollama.", spans, purpose="chat") is not None
+
+
+# T2 COVERAGE (2026-10-07): the own-stack edges the pins above leave open —
+# each proved by breaking guards.py and watching only it fail.
+
+# A cloud-served turn whose machine_status names the hub itself: "hub" IS a
+# name in the spans, so only the own-marker checks keep it from excusing.
+HUB_AND_DELL_CLOUD_SPANS = [
+    _cloud_round(1),
+    _tool_span(
+        "machine_status",
+        facts=[{"machine": "hub", "answering": False}, {"machine": "dell", "answering": True}],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["The hub's Ollama is down.", "Ollama is unreachable on the hub."],
+)
+def test_stack_claim_a_qualifier_naming_the_hub_excuses_nothing(reply):
+    # (a): a qualifier that is her own hub is not another machine's.
+    assert "hub" in guards.other_machine_names(HUB_AND_DELL_CLOUD_SPANS, "chat")
+    assert guards.stack_claim_check(reply, HUB_AND_DELL_CLOUD_SPANS, purpose="chat") is not None
+
+
+def test_stack_claim_a_not_answering_hub_never_excuses_a_bare_subject():
+    # (b): the hub not answering is her own stack, even on a cloud turn
+    # where nothing subtracts it from the names.
+    reply = "I can't reach Ollama."
+    assert guards.stack_claim_check(reply, HUB_AND_DELL_CLOUD_SPANS, purpose="chat") is not None
+
+
+def test_stack_claim_a_qualifier_after_the_claim_must_touch_it():
+    # (a): "on the Dell" excuses only right after the claim, never later in
+    # the clause.
+    reply = "The model is unreachable, so I checked the logs on the Dell."
+    assert guards.stack_claim_check(reply, DELL_ANSWERING_SPANS, purpose="chat") is not None
+
+
+# T2 COVERAGE (after GREEN3): the after-qualifier's leading gap is capped at
+# \s{1,16} for linear time. Ordinary spacing up to the cap still excuses; a
+# gap past it is not a qualifier, so only rule (b) can excuse.
+@pytest.mark.parametrize("gap", [1, 2, 16], ids=["one-space", "two-spaces", "at-cap"])
+@pytest.mark.parametrize(
+    "claim", ["Ollama is down", "I can't reach Ollama"], ids=["assertion", "unreached"]
+)
+def test_stack_claim_after_qualifier_excuses_within_the_gap_cap(claim, gap):
+    reply = f"{claim}{' ' * gap}on the Dell."
+    assert guards.stack_claim_check(reply, DELL_ANSWERING_SPANS, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "claim", ["Ollama is down", "I can't reach Ollama"], ids=["assertion", "unreached"]
+)
+def test_stack_claim_after_qualifier_past_the_gap_cap_is_not_a_qualifier(claim):
+    reply = f"{claim}{' ' * 17}on the Dell."
+    # Dell answering: no rule (b), so the uncapped "on the Dell" excuses nothing.
+    assert guards.stack_claim_check(reply, DELL_ANSWERING_SPANS, purpose="chat") is not None
+    # Dell not answering: the bare subject is excused by rule (b) instead.
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        _tool_span("machine_status", ok=False, facts=[{"machine": "dell", "answering": False}]),
+        _tool_span("device_run", facts=[{"machine": "dell", "answering": False}]),
+    ],
+    ids=["failed-machine-status", "not-a-machine-read"],
+)
+def test_stack_claim_bare_subject_excuse_reads_only_an_ok_machine_read(extra):
+    # (b): the not-answering fact counts only from an ok machine read.
+    spans = [*DELL_ANSWERING_SPANS, extra]
+    assert guards.stack_claim_check("I can't reach Ollama.", spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize("reply", ["Nova's model is down.", "Nova’s Ollama is unreachable."])
+def test_stack_claim_her_own_name_fires_while_a_remote_machine_is_not_answering(reply):
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is not None
+
+
+def _machine_spans(*machines):
+    return [
+        SERVED[0],
+        _tool_span("machine_status", facts=[{"machine": m} for m in machines]),
+    ]
+
+
+def test_stack_claim_machine_name_inside_another_word_does_not_skip():
+    spans = _machine_spans("hub")
+    assert "hub" in guards.other_machine_names(spans, "chat")
+    reply = "The model is unreachable on GitHub."
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+def test_stack_claim_machine_name_with_metacharacters_matches_literally():
+    spans = _machine_spans("pc.1")
+    assert (
+        guards.stack_claim_check("The model is unreachable on pcx1.", spans, purpose="chat")
+        is not None
+    )
+    assert (
+        guards.stack_claim_check("The model is unreachable on pc.1.", spans, purpose="chat") is None
+    )
+
+
+def test_machine_name_pattern_is_cached_escaped_whole_word_case_insensitive():
+    names = ("DELL-XPS-8950", "dell", "pc.1")
+    pattern = guards._machine_name_pattern(names)
+    assert guards._machine_name_pattern(names) is pattern
+    assert pattern.search("Ollama on dell-xps-8950 is down").group(0).lower() == "dell-xps-8950"
+    assert pattern.search("the Dell's Ollama") is not None
+    assert pattern.search("on pcx1") is None
+    assert pattern.search("on pc.1 now") is not None
+    assert pattern.search("on GitHub") is None
+    assert pattern.search("on dellish") is None
+
+
+def test_machine_name_pattern_prefers_the_longest_name_and_treats_hyphen_as_word():
+    # Longest-first: "pc 1" wins over its prefix "pc" at the same position.
+    assert guards._machine_name_pattern(("pc", "pc 1")).search("on pc 1 now").group(0) == "pc 1"
+    # A hyphen joins words: "xps" inside "DELL-XPS-8950" is not a whole name.
+    assert guards._machine_name_pattern(("xps",)).search("on DELL-XPS-8950") is None
+    assert guards._machine_name_pattern(("xps",)).search("on the XPS now") is not None
+
+
+# -- stack-claim epic T3: her own engine served, and a device's other names ---
+#
+# T2 VERIFY2 found two gaps. ESCAPE: rule (b) excused a bare "I can't reach
+# Ollama" even when her OWN engine answered a round of this turn, and excused
+# own-stack nouns (backend, stack) that are never a remote machine's model
+# server. FALSE POSITIVE: a turn that drove the Dell by device tools alone
+# named only "DELL-XPS-8950", so "the Dell's Ollama" was still replaced. A
+# device call now records the names its device is known by (`known_as`).
+
+# An error-free round of her own purpose served by her own engine (the
+# gateway's local stamp) — the reply's round when appended last.
+ENGINE_ROUND = _llm_span(round=7, completion_chars=80, local=True, served_by="hub:qwen3:8b")
+
+ESCAPE_SENTENCES = [
+    "I can't reach Ollama.",
+    "The backend is down.",
+    "The stack is down right now.",
+    "I can't reach the LLM.",
+]
+
+
+@pytest.mark.parametrize("reply", ESCAPE_SENTENCES)
+def test_stack_claim_bare_claim_fires_when_her_own_engine_served(reply):
+    spans = [*LIVE_DELL_SPANS, ENGINE_ROUND]
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+def test_stack_claim_cloud_served_bare_ollama_stays_excused():
+    assert (
+        guards.stack_claim_check("I can't reach Ollama.", LIVE_DELL_SPANS, purpose="chat") is None
+    )
+
+
+@pytest.mark.parametrize("reply", ["The backend is down.", "The stack is down right now."])
+def test_stack_claim_own_stack_nouns_are_never_excused_by_rule_b(reply):
+    # backend / stack are her own stack's words, never a remote model server's.
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is not None
+
+
+def test_stack_claim_her_engine_is_derived_from_the_round_not_a_name():
+    round_ = _llm_span(round=7, completion_chars=80, local=True, served_by="zz-box:qwen3:8b")
+    spans = [*LIVE_DELL_SPANS, round_]
+    assert guards.stack_claim_check("I can't reach Ollama.", spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"error": "the gateway timed out"},
+        {"purpose": "summary"},
+    ],
+    ids=["errored", "other-purpose"],
+)
+def test_stack_claim_an_engine_round_that_is_not_her_own_answer_does_not_count(extra):
+    round_ = _llm_span(round=7, completion_chars=80, local=True, served_by="zz-box:qwen3:8b")
+    round_.meta.update(extra)
+    spans = [*LIVE_DELL_SPANS, round_]
+    assert guards.stack_claim_check("I can't reach Ollama.", spans, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["I can't reach Ollama on the Dell right now.", "The Dell's Ollama is down."],
+)
+def test_stack_claim_qualified_claims_stay_excused_when_her_engine_served(reply):
+    spans = [*LIVE_DELL_SPANS, ENGINE_ROUND]
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is None
+
+
+def _device_only_spans(known_as):
+    """device_list + device_run on the Dell, no machine_status, cloud rounds —
+    the device_run's fact carrying `known_as` as _require_connected records it."""
+    fact = {"device": "DELL-XPS-8950", "connected": True}
+    if known_as is not None:
+        fact["known_as"] = list(known_as)
+    return [
+        _cloud_round(1),
+        LIVE_DEVICE_LIST,
+        _cloud_round(2),
+        _tool_span(
+            "device_run",
+            args={"device": "DELL-XPS-8950", "command": "where ollama"},
+            facts=[fact],
+        ),
+        _cloud_round(3),
+    ]
+
+
+DEVICE_ONLY_SPANS = _device_only_spans(["DELL-XPS-8950", "DELL-XPS-8950", "dell"])
+
+
+def test_other_machine_names_reads_a_device_facts_known_as():
+    assert "dell" in guards.other_machine_names(DEVICE_ONLY_SPANS, "chat")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["I can't reach Ollama on the Dell right now.", "The Dell's Ollama is down."],
+)
+def test_stack_claim_a_device_known_as_name_qualifies_the_subject(reply):
+    assert guards.stack_claim_check(reply, DEVICE_ONLY_SPANS, purpose="chat") is None
+
+
+def test_stack_claim_a_nickname_must_come_from_the_spans():
+    spans = _device_only_spans(["DELL-XPS-8950"])
+    assert "dell" not in guards.other_machine_names(spans, "chat")
+    reply = "I can't reach Ollama on the Dell right now."
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+def test_other_machine_names_a_device_list_fact_without_known_as_adds_nothing_new():
+    spans = [_cloud_round(1), LIVE_DEVICE_LIST, _cloud_round(2)]
+    assert guards.other_machine_names(spans, "chat") == ("DELL-XPS-8950",)
+
+
+def test_other_machine_names_never_takes_the_hubs_own_device_aliases():
+    spans = [
+        _cloud_round(1),
+        LIVE_DEVICE_LIST,
+        _tool_span(
+            "device_run",
+            args={"device": "Beelink Mini S", "command": "uptime"},
+            facts=[
+                {
+                    "device": "Beelink Mini S",
+                    "connected": True,
+                    "known_as": ["Beelink Mini S", "pop-os"],
+                }
+            ],
+        ),
+        *DEVICE_ONLY_SPANS[2:],
+    ]
+    names = guards.other_machine_names(spans, "chat")
+    assert "dell" in names
+    assert "pop-os" not in names
+    assert "Beelink Mini S" not in names
+    reply = "Ollama is unreachable on pop-os."
+    assert guards.stack_claim_check(reply, spans, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "reply", ["I can't reach the LLM.", "The inference service is unavailable."]
+)
+def test_stack_claim_cloud_served_bare_remote_server_nouns_stay_excused(reply):
+    # T3 COVERAGE: llm and inference are a remote model server's words too, so
+    # rule (b) still excuses them on a cloud-served turn (Assumptions).
+    assert guards.stack_claim_check(reply, LIVE_DELL_SPANS, purpose="chat") is None
+
+
+def test_other_machine_names_known_as_keeps_stripped_strings_only():
+    # T3 COVERAGE: aliases are strings, stripped — a padded name is the name,
+    # and a non-string entry is skipped, never read.
+    spans = _device_only_spans(["DELL-XPS-8950", "  dell  ", 7, None])
+    names = guards.other_machine_names(spans, "chat")
+    assert "dell" in names
+    assert "  dell  " not in names
+
+
+# -- stack-claim epic T4: the live turn's whole reply, not one sentence -------
+#
+# Turn 07076682 (2026-10-07): her 1019-char reply about the Dell's Ollama was
+# REPLACED by the stack_claim correction. Her text is not stored, so this is a
+# reconstruction from the live tool results — every sentence true of
+# LIVE_DELL_SPANS, the live guard phrase "can't reach Ollama" left unqualified
+# as the span meta recorded it. The pin's value is the clause mix: a later rule
+# that fires on any of its other clauses is caught here.
+LIVE_DELL_REPLY = (
+    "I couldn't start the Dell's Ollama. Here is what I found. I can't reach Ollama: "
+    "machine_status says the dell (100.122.40.93) is walled for another 13 minutes after "
+    "dell:qwen3:8b refused with a 502. I tried to launch the Ollama app on DELL-XPS-8950, "
+    "and device_launch_app found no Ollama app installed there, so there was nothing to "
+    "launch. The Dell's app list does not include Ollama either. Running `where ollama` "
+    "on the Dell exited 1, which means the ollama binary is not on its PATH. netstat on "
+    "the Dell does show a process listening on port 11435, so something already holds "
+    "that port, and tasklist showed no ollama.exe running.\n\n"
+    "Next steps:\n"
+    "1. Wait out the 13-minute wall and I will check the Dell again.\n"
+    "2. If Ollama was installed under a different user or folder, tell me the path and I "
+    "will start it from there.\n"
+    "3. I can look up which process owns port 11435 on the Dell and stop it if it is stale."
+)
+
+
+def test_live_dell_reply_is_the_live_turns_shape():
+    # T4 criterion 1: the reconstruction carries the live phrase, unqualified,
+    # at the live reply's size, and no correction text of its own.
+    assert 900 <= len(LIVE_DELL_REPLY) <= 1100
+    assert "I can't reach Ollama:" in LIVE_DELL_REPLY
+    assert "Correction:" not in LIVE_DELL_REPLY
+    for fact in ("walled", "13 minutes", "no Ollama app", "`where ollama`", "exited 1", "11435"):
+        assert fact in LIVE_DELL_REPLY
+
+
+def live_dell_spans(purpose):
+    """LIVE_DELL_SPANS as a turn of `purpose`: its rounds carry that purpose,
+    so the guard is armed (an eval reading chat rounds would be vacuous)."""
+    return [
+        SimpleNamespace(kind=s.kind, name=s.name, meta={**s.meta, "purpose": purpose})
+        if s.kind == "llm_call"
+        else s
+        for s in LIVE_DELL_SPANS
+    ]
+
+
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_stack_claim_live_dell_reply_is_not_replaced(purpose):
+    # T4 criterion 2: the live turn's whole reply over the live turn's spans.
+    spans = live_dell_spans(purpose)
+    assert guards.served_this_turn(spans, purpose)
+    assert guards.stack_claim_check(LIVE_DELL_REPLY, spans, purpose=purpose) is None
+
+
+def test_stack_claim_live_dell_reply_fires_when_her_own_engine_served():
+    # T4 criterion 4 (non-vacuous): the same reply, her own engine answering,
+    # is a false claim about her side — the excuse above is the remote context.
+    spans = [*LIVE_DELL_SPANS, ENGINE_ROUND]
+    claim = guards.stack_claim_check(LIVE_DELL_REPLY, spans, purpose="chat")
+    assert claim is not None
+    assert claim.phrase == "can't reach Ollama"
+
+
+def test_stack_claim_live_dell_reply_fires_without_remote_context():
+    # T4 criterion 5 (non-vacuous): served, no remote machine in the spans —
+    # the reconstruction holds a real serving match.
+    claim = guards.stack_claim_check(LIVE_DELL_REPLY, SERVED, purpose="chat")
+    assert claim is not None
+    assert claim.subject == "Ollama"
+
+
 # -- S42b: an update is confirmed by the reconnect, never by the send --------
 #
 # machine_update records {"machine_update", "hub", "outcome", "version",

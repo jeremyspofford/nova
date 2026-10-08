@@ -726,6 +726,7 @@ async def test_an_offline_device_records_connected_false_before_refusing(pool):
 
     assert ok is False
     assert "not connected" in result
+    # Outside a turn (devices.TURN_PURPOSE unset): no known_as (stack-claim T3).
     assert facts == [{"device": "laptop", "connected": False}]
 
 
@@ -782,6 +783,7 @@ async def test_a_successful_call_records_the_fact_exactly_once(pool):
     result, ok = await asyncio.wait_for(task, 2)
 
     assert ok is True and "disk: 431 GiB free" in result
+    # Outside a turn (devices.TURN_PURPOSE unset): no known_as (stack-claim T3).
     assert facts == [{"device": "laptop", "connected": True}]  # exactly once
 
 
@@ -810,6 +812,7 @@ async def test_two_calls_in_one_turn_each_record_their_own_fact(pool):
         await asyncio.wait_for(ans, 2)
         assert ok is True
 
+    # Outside a turn (devices.TURN_PURPOSE unset): no known_as (stack-claim T3).
     assert facts == [
         {"device": "laptop", "connected": True},
         {"device": "laptop", "connected": True},
@@ -851,7 +854,7 @@ async def test_a_device_gone_by_send_time_ends_the_facts_on_connected_false(pool
 
     assert ok is False
     assert "not connected" in result and "tile is stale" in result
-    # `_admit`'s stale read, then the truth.
+    # `_admit`'s stale read, then the truth. Outside a turn: no known_as (T3).
     assert facts == [
         {"device": "laptop", "connected": True},
         {"device": "laptop", "connected": False},
@@ -2734,6 +2737,7 @@ async def test_an_unasked_device_info_refusal_keeps_dispatchs_error_shape(pool):
     )
     assert not checked.ok
     assert checked.problem.startswith("Error: device 'dell' is not connected — its tile is stale")
+    # Outside a turn (devices.TURN_PURPOSE unset): no known_as (stack-claim T3).
     assert ctx.facts_sink == [{"device": "dell", "connected": False}]
 
 
