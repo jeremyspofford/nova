@@ -1,3 +1,4 @@
 [tools]
+"aqua:anthropics/claude-code" = "latest"
 claude-code = "latest"
 go = "1.27.1"
