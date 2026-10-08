@@ -236,6 +236,14 @@ class GatewayPlant:
             raise UnknownMachine(_no_paired_device(name, live))
         return row
 
+    async def live_devices(self, app) -> list:
+        """Every LIVE (unrevoked) device row, with its hostname — what
+        code_repo.repo_machine matches NOVA_REPO_HOST against (the S32
+        worktree part, T2). Read through the plant so a replay answers
+        instead (FixturePlant: none)."""
+        pool = await db.get_pool()
+        return list(await devices.rows_with_last_update(pool, live_only=True))
+
     async def knocks(self, app) -> list[dict]:
         """Each revoked agent that knocked in the last day (P28), newest first
         — devices.revoked_knocks, read through the plant so device_list's
@@ -580,6 +588,12 @@ class FixturePlant(GatewayPlant):
             out["build"] = device_facts.build_state(out.get("agent_version"), hub_version)
             declared.append(out)
         return declared
+
+    async def live_devices(self, app) -> list:
+        """None (the replay-hermeticity ruling): a declared device has no row,
+        and a real row is never read — so no replay resolves her repository's
+        machine, and no git command reaches a real agent."""
+        return []
 
     async def knocks(self, app) -> list[dict]:
         """None (the replay-hermeticity ruling): a case declares no revoked

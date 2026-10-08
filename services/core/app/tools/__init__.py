@@ -39,6 +39,7 @@ from app.tools import (
     about,
     agents,
     browser,
+    changes,
     devices,
     inference,
     machines,
@@ -131,6 +132,10 @@ REGISTRY: dict[str, Tool] = {
         # whether there is anything newer to pull, and its live architecture,
         # the clients people use her from included (tools/about.py).
         *about.TOOLS,
+        # Worktrees epic T5 (2026-10-08): a change of hers starts in its own git
+        # worktree on the machine that holds her repository (tools/changes.py).
+        # She branched IN the owner's live checkout and ./install deployed her WIP.
+        *changes.TOOLS,
     )
 }
 

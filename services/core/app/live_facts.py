@@ -151,6 +151,9 @@ NOT_AUTO_RUN = {
     # by her asking, and the update check reaches GitHub — nothing calls out of
     # this network unasked.
     "nova_about": "its update check asks GitHub; nothing reaches outside unasked",
+    # 2026-10-08: her open changes are read by running git on the repo
+    # machine through its agent; that look belongs to her own call.
+    "list_changes": "it runs git on the repo machine through its agent; her call is when to look",
     "fetch_url": "the note would choose the address; nothing checks it against this system",
     "web_search": "the note would choose the query; a search reaches whoever answers it",
     "memory_search": "the note came out of memory, so checking it against memory proves nothing",

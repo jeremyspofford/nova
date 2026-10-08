@@ -106,6 +106,7 @@ from app import (
     addresses,
     agents,
     attachments,
+    code_repo,
     conversations,
     db,
     decisions,
@@ -1014,6 +1015,29 @@ def _repository_sentence() -> str:
     return f" {line}" if line else ""
 
 
+def _change_sentence(tool_names: Sequence[str]) -> str:
+    """Worktrees epic T7: code work on her own repository starts with
+    start_change. Stated only when that tool is in THIS turn's tools AND the
+    checkout and its machine are recorded by code_repo's own rules — the two
+    things start_change needs — read live each prompt. The names are the
+    changes module's constants, so a rename moves the sentence with it. A
+    fact, not the control: the control is the tool and the outside_worktree
+    flag on device_run / device_write_file."""
+    start = tools.changes.START_CHANGE
+    if start not in tool_names:
+        return ""
+    if code_repo.repo_dir() is None or code_repo.repo_host() is None:
+        return ""
+    resume = tools.changes.LIST_CHANGES
+    resume_clause = f"; {resume} finds the ones already open" if resume in tool_names else ""
+    return (
+        f" Changes to your own code start with {start}, which makes a git worktree of yours "
+        "on a new branch; then run every command with that worktree as device_run's cwd and "
+        "write files only under it — never in the main checkout, which is what ./install "
+        f"deploys{resume_clause}."
+    )
+
+
 def stable_system_prompt(
     model: str, tool_names: Sequence[str], *, agent_block: str | None = None
 ) -> str:
@@ -1046,7 +1070,7 @@ def stable_system_prompt(
         f"This turn asks the gateway for {model or 'its default model'}; its routing decides "
         "which model actually answers. Be direct and concrete, "
         "and say plainly when you do not know something."
-        f"{_repository_sentence()}\n\n"
+        f"{_repository_sentence()}{_change_sentence(tool_names)}\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
         "When the user asks for something a tool can do, call the tool in THIS "
@@ -3332,6 +3356,12 @@ async def _run_tool(
             # Exactly what THIS call settled — the sink is append-only for the
             # turn, so the slice beyond the mark is this call's own contribution.
             span.meta["facts"] = scrub.tree(list(facts[facts_before:]))
+            if any("outside_worktree" in fact for fact in facts[facts_before:]):
+                # Worktrees epic T4: THIS call touched the live checkout outside
+                # her worktrees (tools/devices.py states it on the result). A
+                # mark after the fact — the call already ran; nothing reads it
+                # to decide anything.
+                span.meta["outside_worktree"] = True
         if not ok:
             span.meta["error"] = head
     return result, ok

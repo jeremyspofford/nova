@@ -121,6 +121,31 @@ model is wrong. If the answer is "the prompt says not to", it is not done.
 - Memory files live in `./data/memory/` (gitignored) — human-readable, safe
   to edit by hand; the index rescans on startup and reindexes on write.
 
+## When you change code
+
+Written to the coder — Nova or anyone else changing this repository.
+
+- **Start a change first.** Nova: call `start_change` with a short title. It
+  makes a git worktree of yours at `<checkout>/.worktrees/nova-<id>` on a new
+  branch `nova/<id>-<slug>` off the default branch, and returns its path.
+  Resume an open one with `list_changes`.
+- **Work only in that worktree.** Pass its path as `cwd` to `device_run`, and
+  write files only under it. Never check out or switch branches, edit files,
+  or leave uncommitted work in the main checkout: it is what `./install`
+  deploys. A `device_run` or `device_write_file` that touches the checkout
+  outside `.worktrees/nova-*` still runs, but its result ends with a warning
+  naming `start_change` and its trace span carries `outside_worktree`.
+  Reading the checkout is fine.
+- **Run the repo's checks for what you touched before saying done:**
+  - core: `uv run pytest` from `services/core` (gateway and memory the same,
+    from their own directories); DB-backed tests skip without
+    `TEST_DATABASE_URL`, and a skipped test did not run.
+  - web: `npm test` and `npx tsc --noEmit` from `apps/web`.
+    Never `npx vitest run`: use `npm test`.
+  - `uv run ruff check` on the files you edited.
+  A check that could not run (a missing tool on the machine, a skip) is not
+  a pass — say which one and why.
+
 ## Definition of done
 
 Verify in the running app (real chat flow through :5173), not just tests or

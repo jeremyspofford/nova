@@ -39,6 +39,7 @@ import re
 from contextvars import ContextVar
 
 from app import (
+    code_repo,
     db,
     device_facts,
     devices,
@@ -305,6 +306,21 @@ def _check_fs_path(
     )
 
 
+async def admit_row(row, ctx: ToolContext | None = None):
+    """The connected check for a row already resolved (by _resolve, or by
+    code_repo.repo_machine for start_change): records the connectivity fact
+    and refuses when the socket is not live. Returns the pool to send with.
+    _admit runs it for every named-device tool, so the order still lives in
+    one place."""
+    pool = await db.get_pool()
+    # The names the device is known by ride its connectivity fact (stack-claim
+    # epic T3) — read only when there is a sink to record them on AND the
+    # turn's kind arms the guard that reads them (_names_armed).
+    known_as = await _known_as(row, ctx) if _names_armed(ctx) else None
+    _require_connected(row, ctx, known_as)
+    return pool
+
+
 async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = False):
     """The per-device layer, in order: paired (not revoked) -> connected ->
     (fs tools) absolute path on its OS. Returns (pool, row, normalized path or
@@ -319,12 +335,7 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
     # Resolved first, through the plant: a replay refuses here, before the
     # pool, the registry or the hub is touched.
     row = await _resolve(ctx.app if ctx is not None else None, args["device"])
-    pool = await db.get_pool()
-    # The names the device is known by ride its connectivity fact (stack-claim
-    # epic T3) — read only when there is a sink to record them on AND the
-    # turn's kind arms the guard that reads them (_names_armed).
-    known_as = await _known_as(row, ctx) if _names_armed(ctx) else None
-    _require_connected(row, ctx, known_as)
+    pool = await admit_row(row, ctx)
     path = (
         _check_fs_path(
             args["path"],
@@ -386,14 +397,77 @@ async def _command(
         raise ToolFailure(exc.reason) from exc
 
 
+_NO_REASON = "the device reported a failure with no reason"
+
+
 def _require_ok(result: dict, row) -> dict:
     """A device that reports ok=False did NOT do the thing — surface that as a
     failure rather than dressing an error as success. `ok` is the device's own
     judgment, carried in its result frame."""
     if not result.get("ok"):
-        error = result.get("error") or "the device reported a failure with no reason"
+        error = result.get("error") or _NO_REASON
         raise ToolFailure(f"{row['name']}: {error}")
     return result
+
+
+# -- the outside-worktree flag (worktrees epic T4) ---------------------------
+#
+# Owner ruling 2026-10-08 ("Worktree by default + flag"), under the 09-03
+# no-approvals ruling: a run or a write on the machine that holds her own
+# repository which touches the checkout OUTSIDE her .worktrees/nova-<id> STILL
+# RUNS — then its result ends with this stated warning and the turn's facts
+# carry {"outside_worktree": <repo>, "tool": <name>}, which chat._run_tool lifts
+# to span.meta["outside_worktree"]. Nothing here refuses or waits. The fact has
+# no "device" key: that key is read as a connectivity record (the state guard).
+#
+# Reads (device_read_file, device_list_files) never flag: they change nothing in
+# the checkout, and reading the live code is how she learns it. device_run
+# cannot tell a read from a write, so any reference to the checkout flags.
+#
+# Known gap: an @folder cwd or path (e.g. @home/workspace/nova) is resolved on
+# the machine, not here, so it is not classified and does not flag.
+
+
+def outside_worktree_warning(repo: str) -> str:
+    return (
+        f"Warning: this touched the live checkout {repo}, not a worktree of yours — start a "
+        "change with start_change and work inside its .worktrees/nova-<id>."
+    )
+
+
+def _outside_checkout(
+    row, *, cwd: str | None = None, argv: list | None = None, path: str | None = None
+) -> str | None:
+    """The checkout's path when this call, on THIS admitted row, touches it
+    outside her worktrees; None otherwise. Derived live from NOVA_REPO_HOST and
+    NOVA_CHECKOUT (app/code_repo.py) and the row's own hostname — never a
+    second device-table read. Linear in the argv: code_repo scans each element
+    with str.find and a one-character boundary check, no backtracking regex."""
+    host = code_repo.repo_host()
+    if host is None:
+        return None
+    hostname = row["hostname"] if "hostname" in row.keys() else None
+    if not isinstance(hostname, str) or hostname.strip().lower() != host.lower():
+        return None
+    repo = code_repo.repo_dir()
+    if repo is None:
+        return None
+    if cwd is not None and code_repo.checkout_scope(cwd, repo) == "outside":
+        return repo
+    if path is not None and code_repo.checkout_scope(path, repo) == "outside":
+        return repo
+    if argv is not None:
+        strings = [element for element in argv if isinstance(element, str)]
+        if code_repo.argv_scope(strings, repo) == "outside":
+            return repo
+    return None
+
+
+def _flag_outside(ctx: ToolContext | None, repo: str, tool: str) -> str:
+    """Record the fact for this call and return the warning line."""
+    if ctx is not None and ctx.facts_sink is not None:
+        ctx.facts_sink.append({"outside_worktree": repo, "tool": tool})
+    return outside_worktree_warning(repo)
 
 
 # -- the executors -----------------------------------------------------------
@@ -663,13 +737,48 @@ async def device_notify(args: dict, ctx: ToolContext) -> str:
 async def device_run(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, ctx=ctx)
     argv = args["argv"]
-    result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}, ctx=ctx), row)
+    exec_args: dict = {"argv": argv}
+    cwd = None
+    if "cwd" in args:
+        # Checked exactly like an fs path (worktrees epic T3): absolute on the
+        # device's OS, normalized, or a reported @folder passed on unresolved
+        # for the machine to resolve. The agent (apps/novad caps/shell.go)
+        # runs the program in it; without one it runs in the agent's home.
+        cwd = _check_fs_path(
+            args["cwd"],
+            row["platform"],
+            device_facts.folders_of(row["facts"]),
+            row["name"],
+            device_facts.folders_unread(row["facts"]),
+            device_facts.predates_folders(row["facts"]),
+        )
+        exec_args["cwd"] = cwd
+    outside = _outside_checkout(row, cwd=cwd, argv=argv)
+    result = await _command(pool, row, "shell.exec", exec_args, ctx=ctx)
+    # Past here the agent answered with a result frame: the command was sent
+    # and ran or failed on the machine, so a flagged call is flagged either
+    # way (a transport failure above sent nothing it could confirm, and says so).
+    warning = _flag_outside(ctx, outside, "device_run") if outside is not None else None
+    if not result.get("ok"):
+        if cwd is not None:
+            # The agent's own words for a missing directory name only the
+            # program ("could not run \"git\": fork/exec ...: no such file or
+            # directory"), which reads as the binary missing — so the cwd is
+            # named here too.
+            error = result.get("error") or "the device reported a failure with no reason"
+            failure = f"{row['name']}: could not run {argv} in {cwd}: {error}"
+        else:
+            failure = f"{row['name']}: {result.get('error') or _NO_REASON}"
+        raise ToolFailure(failure if warning is None else f"{failure}\n{warning}")
     exit_code = result.get("exit_code")
     output = result.get("output") or "(no output)"
     # The "<name> ran <argv> — exit <code>" preamble is READ by the presented-
     # listing guard (app/guards.py _RUN_PREAMBLE): under it, a run of bare names
     # in the output (a plain `ls`) counts as a listing. Pinned in its suite.
-    return f"{row['name']} ran {argv} — exit {exit_code}\n{output}"
+    # The cwd goes AFTER the code so the preamble still matches.
+    where = f" in {cwd}" if cwd is not None else ""
+    text = f"{row['name']} ran {argv} — exit {exit_code}{where}\n{output}"
+    return text if warning is None else f"{text}\n{warning}"
 
 
 async def device_write_file(args: dict, ctx: ToolContext) -> str:
@@ -686,10 +795,17 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
             f"content is {size} bytes, over the {WRITE_FILE_CAP_KIB} KiB write cap for a "
             "device — no v1 device capability moves more than that; write a smaller file"
         )
-    _require_ok(
-        await _command(pool, row, "fs.write", {"path": path, "content": content}, ctx=ctx), row
-    )
-    return f"Wrote {path} on {row['name']}."
+    outside = _outside_checkout(row, path=path)
+    result = await _command(pool, row, "fs.write", {"path": path, "content": content}, ctx=ctx)
+    warning = _flag_outside(ctx, outside, "device_write_file") if outside is not None else None
+    try:
+        _require_ok(result, row)
+    except ToolFailure as exc:
+        if warning is None:
+            raise
+        raise ToolFailure(f"{exc}\n{warning}") from exc
+    done = f"Wrote {path} on {row['name']}."
+    return done if warning is None else f"{done}\n{warning}"
 
 
 # What no agent's apps.launch result carries, on any OS: whether a window
@@ -869,7 +985,8 @@ TOOLS: tuple[Tool, ...] = (
             "measured yet). On Linux and macOS a command runs with no terminal and empty "
             "input: anything that asks for input (a sudo password, a yes/no question) gets no "
             "answer and fails at once with its own message. On Windows, whether a command "
-            "that asks for input fails at once has not been measured yet."
+            "that asks for input fails at once has not been measured yet. Give `cwd` to run "
+            "in a directory: relative paths and git then run from it."
         ),
         parameters=_obj(
             {
@@ -879,6 +996,16 @@ TOOLS: tuple[Tool, ...] = (
                     "items": {"type": "string"},
                     "minItems": 1,
                     "description": "The program and its arguments, as separate strings.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "The directory to run the command in, absolute in the device's own "
+                        "OS (or a known @folder). Relative paths in argv, and git, run from "
+                        "it — give the repository or worktree here instead of cd in a shell. "
+                        "Without it the command runs in the agent's home directory. A cwd that "
+                        "does not exist fails, naming it."
+                    ),
                 },
             },
             ["device", "argv"],

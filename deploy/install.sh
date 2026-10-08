@@ -2205,6 +2205,38 @@ record_repository() {
   fi
 }
 
+# ---- which machine holds her checkout (her code work) ----------------------
+#
+# Core already knows WHERE the checkout is (record_build's NOVA_CHECKOUT); it
+# did not know WHICH paired machine holds it, so no tool could put her code
+# work in a worktree of it. The installer runs ON that machine, so the answer
+# is this machine's `hostname` — the value novad reports as the device row's
+# hostname (os.Hostname), which core matches. The door a device came in
+# through is not identity. Any checkout counts, whatever its remote (or none).
+# Not a checkout, or a hostname that is not DNS-ish (letters, digits, dots,
+# hyphens): blanked with one line saying why — a stale value would name a
+# machine that does not hold her code.
+record_repo_host() {
+  local host="" why=""
+  if ! git -C "$REPO_ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
+    why="$REPO_ROOT is not a git checkout"
+  else
+    host="$(hostname 2>/dev/null)" || host=""
+    if ! printf '%s' "$host" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
+      || [ "$(printf '%s' "$host" | wc -l)" -ne 0 ]; then
+      why="this machine's hostname ('$host') is not a DNS-style name"
+      host=""
+    fi
+  fi
+  if [ -z "$host" ]; then
+    [ -z "$(get_env_value NOVA_REPO_HOST)" ] || set_env_value NOVA_REPO_HOST ""
+    log "repo host: $why — NOVA_REPO_HOST left blank; Nova is not told which machine holds her checkout"
+    return 0
+  fi
+  [ "$(get_env_value NOVA_REPO_HOST)" = "$host" ] || set_env_value NOVA_REPO_HOST "$host"
+  log "repo host: NOVA_REPO_HOST=$host (the machine holding $REPO_ROOT)"
+}
+
 # ---- the build this stack is brought up from (the About page) --------------
 #
 # Nothing said which commit a running hub was built from: the owner could not
@@ -2423,6 +2455,9 @@ cmd_install() {
   record_compose_profiles
   # Before compose_up, so the core container this run creates reads it.
   record_repository
+  # Before compose_up, for the same reason: core matches this against the
+  # paired devices' hostnames to find the machine that holds her checkout.
+  record_repo_host
   # Before compose_up, for the same reason: the core this run creates is the
   # one whose About page names this commit.
   record_build
