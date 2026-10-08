@@ -10,9 +10,10 @@ import {
   type About,
   type AboutAgent,
   type AboutClient,
+  type AboutRemoteModelMachine,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { agentState, attemptState, buildLabel, canStartUpdate, machineState, plural, serviceColor, updateHeadline } from './aboutFormat'
+import { agentState, attemptState, buildLabel, canStartUpdate, machineState, plural, remoteState, serviceColor, updateHeadline } from './aboutFormat'
 
 /**
  * What this instance of Nova is, read live from core (app/about.py): the
@@ -376,6 +377,28 @@ function AgentNode({ agent }: { agent: AboutAgent }) {
   )
 }
 
+/** A model server on another machine (a gateway provider, not one of the
+ *  hub's engines), told apart by the device it runs on. */
+function RemoteNode({ remote }: { remote: AboutRemoteModelMachine }) {
+  // An answering machine's reason is the gateway's "N models listed" note:
+  // the subtitle already carries the count, so it is not said twice.
+  const reason = remote.state === 'answering' && remote.models !== null ? null : remote.reason
+  return (
+    <Node
+      icon={<Server size={16} />}
+      title={remote.name}
+      subtitle={[
+        remote.device ? `on ${remote.device}` : remote.device_said,
+        remote.host,
+        remote.models !== null ? `${remote.models} ${plural(remote.models, 'model')}` : null,
+      ].filter(Boolean).join(' · ')}
+      badge={remoteState(remote)}
+    >
+      {reason && <div className="mt-1 text-caption text-content-tertiary">{reason}</div>}
+    </Node>
+  )
+}
+
 function ClientNode({ client }: { client: AboutClient }) {
   const Icon = client.kind === 'installed app' || client.device === 'iPhone' || client.device === 'Android'
     ? Smartphone
@@ -445,13 +468,17 @@ function Architecture({ about }: { about: About }) {
             )}
           </Tier>
           <Tier title="Machines running models" hint="the gateway’s last reading" testid="about-models">
-            {models.machines === null ? (
-              <p className="text-compact text-danger">Could not be read: {models.reason}</p>
-            ) : models.machines.length === 0 ? (
+            {/* The engines and the remote machines are two readings: each
+                says its own reason, and one unread never hides the other. */}
+            {models.machines === null && <p className="text-compact text-danger">Could not be read: {models.reason}</p>}
+            {models.remotes === null && (
+              <p className="text-compact text-danger">Remote model machines could not be read: {models.remotes_reason}</p>
+            )}
+            {models.machines?.length === 0 && models.remotes?.length === 0 ? (
               <p className="text-compact text-content-tertiary">None.</p>
             ) : (
               <div className="space-y-2">
-                {models.machines.map(m => (
+                {(models.machines ?? []).map(m => (
                   <Node
                     key={m.name}
                     icon={<Server size={16} />}
@@ -461,6 +488,9 @@ function Architecture({ about }: { about: About }) {
                   >
                     {m.reason && <div className="mt-1 text-caption text-content-tertiary">{m.reason}</div>}
                   </Node>
+                ))}
+                {(models.remotes ?? []).map(r => (
+                  <RemoteNode key={`remote:${r.name}`} remote={r} />
                 ))}
               </div>
             )}

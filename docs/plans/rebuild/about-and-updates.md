@@ -63,10 +63,43 @@ allows 60 requests an hour.
 
 `app/about.py` builds one dict: build, updates, hub (tailnet address, its own
 agent, the gateway and memory health), the other agents, the model machines
-(the gateway's reading, or the reason it could not be read), and clients.
+(the gateway's engines and the remote model machines, each with the reason
+it could not be read), and clients.
 `GET /api/v1/about` returns it to the page. `nova_about` renders the same dict
 as lines she can quote (`about.render`). The page and her words cannot
 disagree about what is running.
+
+### Machines running models
+
+The "Machines running models" tier (and `nova_about`'s `MODEL MACHINES`
+lines) holds two readings, each with its own reason when it cannot be read:
+
+- **The gateway's engines** (`model_machines.machines`): the hub's built-in
+  Ollama, with its state and how many models it holds.
+- **The remote model machines** (`model_machines.remotes`): every gateway
+  provider that is not `builtin` and whose URL is on a machine, not a cloud.
+  This is the same selection, through the same helper, that `machine_status`
+  uses for its "Remote model machines" (`model_machines.remotes_of`; see
+  `deploy/README.md`). The Dell's `dell` and `dell-kev` rows are listed here.
+  Each one shows:
+  - the gateway's last verdict, read from its providers and walls, never a
+    call made now: answering, failing with the gateway's reason, walled
+    (with the whole minutes left when the wall has an end), or unknown. It is never "answering" unless the gateway
+    said so.
+  - the paired device it runs on ("on DELL-XPS-8950"), matched by address
+    through `model_machines.place` against the agents' own addresses and the
+    tailnet peers, or the words saying why no device is named.
+  - its model count ("16 models"), only when the gateway's last listing
+    gave one (its "N models listed" note). Otherwise no count is shown,
+    never a guess.
+
+The two readings fail apart. A gateway whose providers cannot be read
+shows "Remote model machines could not be read: <reason>" while the engine
+rows still render, and the reverse. "None." appears only when both lists
+were read and both are empty. `nova_about` words each remote line through
+`model_machines.remote_words`, the same wording `machine_status` uses, and
+records the same per-machine fact (`model_machines.fact_of`) in the turn's
+trace.
 
 - Page: `/about`, linked from the account menu as "About Nova".
 - Tool: `nova_about` (`reads_only`, `ephemeral`). It is registered, so it is

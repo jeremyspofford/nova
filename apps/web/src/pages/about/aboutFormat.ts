@@ -1,5 +1,5 @@
 import type { SemanticColor } from '../../lib/design-tokens'
-import type { AboutAgent, AboutBuild, AboutModelMachine, AboutService, AboutUpdateAttempt, AboutUpdates } from '../../lib/api'
+import type { AboutAgent, AboutBuild, AboutModelMachine, AboutRemoteModelMachine, AboutService, AboutUpdateAttempt, AboutUpdates } from '../../lib/api'
 
 /** The update check's one-line verdict and its colour. "unknown" is never
  *  drawn as up to date: a check that could not run says why instead. */
@@ -49,6 +49,27 @@ export function machineState(m: AboutModelMachine): { text: string; color: Seman
       return { text: 'Not checked yet', color: 'neutral' }
     default:
       return { text: m.state ?? 'Unknown', color: 'neutral' }
+  }
+}
+
+/** A remote model machine's badge, from the gateway's verdict alone. */
+/** A remote model machine's badge. `state` is the one source: only
+ *  "answering" is ever drawn as Answering; anything core did not name
+ *  degrades to Unknown rather than being promoted to a badge. */
+export function remoteState(r: Pick<AboutRemoteModelMachine, 'state' | 'walled_for_s'>): { text: string; color: SemanticColor } {
+  switch (r.state) {
+    case 'answering':
+      return { text: 'Answering', color: 'success' }
+    case 'failing':
+      return { text: 'Failing', color: 'danger' }
+    case 'walled': {
+      const s = r.walled_for_s
+      if (s === null || s === undefined) return { text: 'Walled', color: 'warning' }
+      const min = Math.floor(s / 60)
+      return { text: min < 1 ? 'Walled for <1 min' : `Walled for ${min} min`, color: 'warning' }
+    }
+    default:
+      return { text: 'Unknown', color: 'neutral' }
   }
 }
 

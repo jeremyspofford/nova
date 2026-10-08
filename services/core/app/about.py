@@ -37,7 +37,16 @@ from typing import Any
 
 import httpx
 
-from app import agent_dist, db, device_facts, devices_ws, machines, network, peers
+from app import (
+    agent_dist,
+    db,
+    device_facts,
+    devices_ws,
+    machines,
+    model_machines,
+    network,
+    peers,
+)
 
 logger = logging.getLogger("core")
 
@@ -378,6 +387,45 @@ async def clients(pool) -> dict:
     }
 
 
+def _place_remotes(remotes: list[dict], rows, facts_sink: list[dict] | None) -> list[dict]:
+    """Each remote model machine as the page shows it, placed on the paired
+    device it runs on. The agents are identity only — built from the device
+    rows topology already read, never a connectivity read — and the tailnet
+    peers. A turn's facts_sink gets machine_status's own remote fact for each:
+    the gateway's last verdict, never "answering" unless state_of said so."""
+    agents = [
+        {
+            "name": row["name"],
+            "hostname": row["hostname"],
+            "platform": row["platform"],
+            "addresses": device_facts.addresses_of(row["facts"]),
+        }
+        for row in rows
+    ]
+    tailnet = network.tailnet_peers()
+    at = datetime.now(UTC).isoformat()
+    shown = []
+    for remote in remotes:
+        placed = model_machines.place(remote["base_url"], agents, None, tailnet)
+        state = remote["state"]
+        shown.append(
+            {
+                "name": remote["name"],
+                "host": remote["host"],
+                "state": state["state"],
+                "reason": state["reason"],
+                "walled_for_s": state["walled_for_s"],
+                "answering": state["answering"],
+                "models": remote["models"],
+                "device": placed["device"],
+                "device_said": placed["said"],
+            }
+        )
+        if facts_sink is not None:
+            facts_sink.append(model_machines.fact_of(remote, placed["device"], at))
+    return shown
+
+
 async def topology(app, facts_sink: list[dict] | None = None) -> dict:
     """The hub, the other agents, the model machines and the services."""
     pool = await db.get_pool()
@@ -388,7 +436,7 @@ async def topology(app, facts_sink: list[dict] | None = None) -> dict:
     )
     hub_version = await agent_dist.version()
 
-    async def model_machines() -> dict:
+    async def engine_machines() -> dict:
         try:
             views = await machines.plant().engines(app, live=False)
         except machines.PlantUnavailable as exc:
@@ -409,8 +457,18 @@ async def topology(app, facts_sink: list[dict] | None = None) -> dict:
             "reason": None,
         }
 
-    engines, gateway, memory = await asyncio.gather(
-        model_machines(),
+    async def remote_machines() -> tuple[list[dict] | None, str | None]:
+        # The same selection machine_status makes (tools/machines._remotes):
+        # the gateway's providers and live walls, through remotes_of.
+        try:
+            providers, walls = await machines.plant().model_providers(app)
+        except machines.PlantUnavailable as exc:
+            return None, str(exc)
+        return model_machines.remotes_of(providers, walls, datetime.now(UTC)), None
+
+    engines, (remotes, remotes_reason), gateway, memory = await asyncio.gather(
+        engine_machines(),
+        remote_machines(),
         _service(app, "gateway", peers.GATEWAY),
         _service(app, "memory", peers.MEMORY),
     )
@@ -423,6 +481,8 @@ async def topology(app, facts_sink: list[dict] | None = None) -> dict:
             "state"
         ]
         (hub_agents if row["last_transport"] == "host" else satellites).append(agent)
+    engines["remotes"] = None if remotes is None else _place_remotes(remotes, rows, facts_sink)
+    engines["remotes_reason"] = remotes_reason
     return {
         "hub": {
             "address": address.origin,
@@ -548,7 +608,7 @@ def render(data: dict, now: datetime | None = None) -> str:
     lines.append("MODEL MACHINES (the gateway's last reading)")
     if m["machines"] is None:
         lines.append(f"  could not be read: {m['reason']}")
-    elif not m["machines"]:
+    elif not m["machines"] and m["remotes"] == []:
         lines.append("  none")
     for e in m["machines"] or []:
         held = f", {e['models']} model(s)" if e["models"] is not None else ""
@@ -557,6 +617,12 @@ def render(data: dict, now: datetime | None = None) -> str:
             "" if e["serving"] is None else (", serving" if e["serving"] else ", switched off")
         )
         lines.append(f"  {e['name']}: {e['state'] or 'unknown'}{serving}{held}{why}")
+    if m["remotes"] is None:
+        lines.append(f"  remote model machines could not be read: {m['remotes_reason']}")
+    for r in m["remotes"] or []:
+        where = f"remote, {r['host']}" if r["host"] is not None else "remote"
+        words = model_machines.remote_words(r, r["device_said"])
+        lines.append(f"  {r['name']} ({where}): {words}")
 
     c = data["clients"]
     lines.append(f"CLIENTS (signed-in apps and browsers used in the last {c['window_days']} days)")
