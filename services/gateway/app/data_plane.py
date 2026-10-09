@@ -54,6 +54,10 @@ logger = logging.getLogger("gateway")
 SERVED_BY_HEADER = "X-Nova-Served-By"
 SERVED_ON_HEADER = "X-Nova-Served-On"
 SERVED_RUNTIME_HEADER = "X-Nova-Served-Runtime"
+# local-context T1: the window (tokens) the answering model is actually
+# served with — its ollama's /api/ps `context_length`, read after the answer.
+# Omitted when not readable, never guessed and never a table of sizes.
+CONTEXT_WINDOW_HEADER = "X-Nova-Context-Window"
 ROUTE_HEADER = "X-Nova-Route"
 # The decision-model kinds a decision call allows, comma-separated
 # (routing.allowed_kinds): core states the owner's two switches on every call.
@@ -363,9 +367,19 @@ async def serve_completion(
             )
         except TimeoutError:
             logger.info(
-                "served-on: omitted for %s — the stamp took longer than %g s",
+                "served-on and context window: omitted for %s — the stamp took longer than %g s",
                 served_by,
                 STAMP_BUDGET_S,
+            )
+        except Exception as exc:  # noqa: BLE001 — a fact read never costs the reply
+            # The stamp is facts read after the answer: any failure reading
+            # them is a stated absence (logged with its reason), never the
+            # reply's failure and never a fallback value.
+            logger.warning(
+                "served-on and context window: omitted for %s — the stamp failed: %s: %s",
+                served_by,
+                type(exc).__name__,
+                exc,
             )
     response = await usage.observe(
         pool,
@@ -523,6 +537,7 @@ class Served:
 
     on: str | None = None
     runtime: str | None = None
+    window: int | None = None
 
     def headers(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -530,6 +545,8 @@ class Served:
             out[SERVED_ON_HEADER] = self.on
         if self.runtime:
             out[SERVED_RUNTIME_HEADER] = self.runtime
+        if self.window:
+            out[CONTEXT_WINDOW_HEADER] = str(self.window)
         return out
 
 
@@ -544,23 +561,31 @@ async def served_stamp(app, pool, row: dict, model: str) -> Served:
     reader, 30 s of process memory, never an nvidia-smi per reply; ruling
     C1). Any other engine's devices are its own agent's to report (S44),
     never this host's guess. /api/ps is read through engines.resident, the
-    one /api/ps reader (ruling C2)."""
+    one /api/ps reader (ruling C2).
+
+    local-context T1: the same read states the window the model is served
+    with (`context_length`). Any engine states it — it is a fact of the
+    model, not of this host's hardware — and so does an openai-chat row
+    whose origin (base_url minus /v1, e.g. another machine's ollama /v1) answers
+    /api/ps: one read there, never the hub's. Not readable is omitted and
+    logged, never guessed."""
+    served_by = _served_by(row, model)
     if not engines.is_engine(row):
-        return Served()
+        return Served(window=await _origin_window(app, row, model, served_by))
     try:
         engine = await engines.get(pool, row["name"])
     except engines.UnknownEngine:
         return Served()
-    if not engine["builtin"]:
-        view = await engines.observe(app, pool, engine, live=False)
-        return Served(runtime=view.runtime)
     view, (resident, why) = await asyncio.gather(
         engines.observe(app, pool, engine, live=False),
         engines.resident(app, engine, timeout=STAMP_TIMEOUT),
     )
     if resident is None:
-        logger.info("served-on: omitted for %s — %s", _served_by(engine, model), why)
+        logger.info("served-on and context window: omitted for %s — %s", served_by, why)
         return Served(runtime=view.runtime)
+    window = _window_of(resident, model, served_by)
+    if not engine["builtin"]:
+        return Served(runtime=view.runtime, window=window)
     # An engine nobody observed (it wakes on LAN) states only what it last
     # stored, and a stored device list is never read as this host's: a
     # database restored elsewhere would carry a card this machine lacks.
@@ -569,7 +594,51 @@ async def served_stamp(app, pool, row: dict, model: str) -> Served:
     on = compute_id.served_on(
         size, size_vram, list(facts.get("accelerators") or []), facts.get("cpu")
     )
-    return Served(on=on, runtime=view.runtime)
+    return Served(on=on, runtime=view.runtime, window=window)
+
+
+async def _origin_window(app, row: dict, model: str, served_by: str) -> int | None:
+    """The window an openai-chat row's ORIGIN states for `model`: its
+    base_url minus a trailing /v1, asked /api/ps once through the one reader
+    (engines.resident). A cloud origin has no /api/ps — that is absent and
+    logged like any unreadable window, never guessed."""
+    if row.get("adapter") != "openai-chat":
+        logger.info(
+            "context window: omitted for %s — a %s row states none",
+            served_by,
+            row.get("adapter"),
+        )
+        return None
+    base = providers.base_url_of(row)
+    origin = base[: -len("/v1")] if base.endswith("/v1") else base
+    resident, why = await engines.resident(app, {**row, "base_url": origin}, timeout=STAMP_TIMEOUT)
+    if resident is None:
+        logger.info("context window: omitted for %s — %s", served_by, why)
+        return None
+    return _window_of(resident, model, served_by)
+
+
+def _window_of(resident: list[dict], model: str, served_by: str) -> int | None:
+    """The served `context_length` /api/ps states for `model` (a bare pull is
+    listed as `name:latest`), or None — logged with the reason."""
+    wanted = {model, f"{model}:latest"}
+    for entry in resident:
+        if entry.get("model") in wanted:
+            window = entry.get("context_length")
+            if window is None:
+                logger.info(
+                    "context window: omitted for %s — /api/ps states no usable "
+                    "context_length for %s",
+                    served_by,
+                    entry.get("model"),
+                )
+            return window
+    logger.info(
+        "context window: omitted for %s — /api/ps does not list %s as resident",
+        served_by,
+        model,
+    )
+    return None
 
 
 def _bytes(value: object) -> int | None:

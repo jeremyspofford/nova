@@ -459,12 +459,22 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     X") and `_RAN_COMMAND_MORE` (a backticked command chained onto it, "…and
     then `pytest`"): 215 -> 217, 288 -> 290. Its cut reuses
     `_TESTS_PASSED_CUT`; what backs it is read from run facts' words with
-    string methods, no regex."""
+    string methods, no regex.
+
+    T6 of the local-context epic (2026-10-09, turn d4f59914's "I don't have an
+    internal browser") moved all three, deliberately: 2 new BARE module
+    Patterns, reached by both walks — `_POSSESSION_LEAD` (the clause gate: a
+    first-person present "I don't/do not have" whose object is a/an/any + at
+    most two words + browser) and `_CAP_BROWSER_POSSESSION` (the row's
+    pattern): 217 -> 219, 290 -> 292; and `_CAPABILITY_TOOLS` grew a row, the
+    same `_CAP_BROWSER_POSSESSION` under a second id, reached by the live walk
+    only: 292 -> 293, the difference 73 -> 74. The row is appended LAST
+    (`_CAPABILITY_TOOLS[27][0]`), so no existing id moved."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 217, len(old)
-    assert len(new) == 290, len(new)
-    assert len(new) - len(old) == 73
+    assert len(old) == 219, len(old)
+    assert len(new) == 293, len(new)
+    assert len(new) - len(old) == 74
 
 
 def test_the_sweep_reaches_the_stack_claim_patterns():
@@ -575,6 +585,12 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "qualifier_the_then_spaces": " at the" + pad + "x",
         "device_name_then_spaces": "DELL-XPS" + pad + "-8950",
         "own_marker_then_spaces": "nova" + pad + "'s",
+        # T6 (local-context epic, 2026-10-09): a possession lead walking to its
+        # article, an article walking to the browser noun, and the browser noun
+        # walking to a present-state tail.
+        "possession_then_spaces": "I don't have" + pad + "a browser",
+        "article_then_spaces": "I don't have an" + pad + "browser",
+        "browser_then_spaces": "I don't have a browser" + pad + "right now",
     }
 
 
@@ -1880,6 +1896,14 @@ CAPABILITY_SHAPES = [
         "there is no, the toolset at its end",
         lambda n: _repeat("there is no x ")(n - 16) + " in my toolset.",
     ),
+    # T6 (local-context epic, 2026-10-09): turn d4f59914's possession denial,
+    # repeated as sentences and as one clause, and one lead before many nouns.
+    ("possession denials", _repeat("I don't have an internal browser or IDE. ")),
+    ("one clause of possession denials", _repeat("I don't have an internal browser and ")),
+    (
+        "one possession lead, browser nouns, a present-state tail at its end",
+        lambda n: "I don't have " + _repeat("a web browser or ")(n - 23) + " right now.",
+    ),
 ]
 
 
@@ -2122,3 +2146,20 @@ def test_narration_reads_edited_file_claims_in_50_kb_in_linear_time(label, build
         facts=[{"file": {"op": "write", "device": "mini-pc"}, "target": "/home/j/new.py"}],
     )
     _assert_linear(f"edited_file {label}", lambda r: guards.narration_check(r, [write]), build)
+
+
+# -- T6 (local-context epic, 2026-10-09): the browser possession row is swept --
+
+
+def test_the_sweep_reaches_the_browser_possession_row():
+    """RED until a capability row for browser_open exists (turn d4f59914's
+    "I don't have an internal browser"): every pattern bound to browser_open
+    in _CAPABILITY_TOOLS is timed by both padding sweeps — selected by its
+    tool's name, never by position (ruling F11). GREEN moves the sweep count
+    pins in test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns
+    by the new row (and any new bare module Pattern), deliberately."""
+    rows = [pattern for pattern, tool in guards._CAPABILITY_TOOLS if tool == "browser_open"]
+    assert rows, "no capability row maps a phrase to browser_open"
+    swept = _every_pattern().values()
+    for pattern in rows:
+        assert any(p is pattern for p in swept), pattern.pattern

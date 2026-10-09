@@ -786,3 +786,238 @@ def test_a_qualified_mcp_limit_is_honest(reply):
 def test_a_bare_mcp_denial_is_still_corrected(reply, tool):
     correction = guards.capability_claim_check(reply, ALL_TOOLS)
     assert correction is not None and tool in tgt(correction), reply
+
+
+# -- T6 (local-context epic, 2026-10-09): a POSSESSION denial of her browser --
+#
+# Turn d4f59914 (dell:qwen3:8b): "I don't have an internal browser or IDE (like
+# VS Code) embedded in my architecture" while browser_open was registered, and
+# nothing fired: _DENIAL_LEAD reads only "don't have the ability/access to", so
+# a first-person denial of HAVING a browser never reached a capability row.
+#
+# Criteria (RED 2026-10-09):
+#   C1 a first-person, present possession denial of a browser — "I don't have"
+#      / "I do not have" + a/an/any + at most two words + browser — draws a
+#      capability correction naming browser_open while browser_open is in the
+#      live tool list; the owner's exact d4f59914 sentence is one of them.
+#   C2 derived: the SAME sentences are silent when browser_open is not in the
+#      tool list (and with no tools at all).
+#   C3 precision: another subject, a past form, a hedge, a specific browser
+#      that is not hers ("your browser's", "the browser history"), a stated
+#      present state ("open right now") — each a minimal edit of a firing
+#      sentence — is silent. Pinned as PAIRS so each honest form is checked
+#      against a sentence that does fire.
+#   C4 the correction over itself is clean (self-reference).
+
+BROWSER_POSSESSION_DENIALS = [
+    (
+        "d4f59914_exact",
+        "I don't have an internal browser or IDE (like VS Code) embedded in my architecture.",
+    ),
+    ("dont_have_a_browser", "I don't have a browser."),
+    ("do_not_have_a_web_browser", "I do not have a web browser."),
+    ("dont_have_any_built_in_browser", "I don't have any built-in browser."),
+    ("curly_apostrophe", "I don’t have a browser I can use."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    BROWSER_POSSESSION_DENIALS,
+    ids=[c[0] for c in BROWSER_POSSESSION_DENIALS],
+)
+def test_t6_c1_a_possession_denial_of_her_browser_is_corrected(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"{label!r}: a false denial of browser_open went uncorrected"
+    assert "browser_open" in tgt(correction)
+    assert "browser_open" in correction.text
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    BROWSER_POSSESSION_DENIALS,
+    ids=[c[0] for c in BROWSER_POSSESSION_DENIALS],
+)
+def test_t6_c2_the_possession_denial_flips_on_the_live_tool_list(label, reply):
+    assert guards.capability_claim_check(reply, ["browser_open"]) is not None, label
+    without = [t for t in ALL_TOOLS if t != "browser_open"]
+    correction = guards.capability_claim_check(reply, without)
+    assert correction is None or "browser_open" not in tgt(correction), label
+    assert guards.capability_claim_check(reply, []) is None, label
+
+
+# (label, a sentence that fires, its minimal honest edit)
+BROWSER_POSSESSION_PAIRS = [
+    ("other_subject_you", "I don't have a browser.", "You don't have a browser."),
+    ("other_subject_it", "I don't have a web browser.", "It doesn't have a web browser."),
+    (
+        "other_subject_machine",
+        # T6 VERIFY 2 ruling: "installed" after "browser" is no longer on the
+        # allowlist (it admits a place: "installed on your Mac"), so the
+        # firing side is the bare head form.
+        "I don't have a browser.",
+        "The Dell doesn't have a browser installed.",
+    ),
+    ("past_didnt", "I don't have a browser.", "I didn't have a browser open earlier."),
+    ("past_did_not", "I do not have a browser.", "I did not have a browser before this update."),
+    ("hedge_might", "I don't have a browser.", "I might not have a browser available."),
+    (
+        "his_browser_not_hers",
+        "I don't have a browser.",
+        "I don't have your browser's saved passwords.",
+    ),
+    (
+        "the_browser_history",
+        "I don't have a browser.",
+        "I don't have the browser history you mean.",
+    ),
+    (
+        "present_state",
+        "I don't have a browser.",
+        "I don't have a browser page open right now.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,fires,honest", BROWSER_POSSESSION_PAIRS, ids=[c[0] for c in BROWSER_POSSESSION_PAIRS]
+)
+def test_t6_c3_an_honest_edit_of_a_possession_denial_is_left_alone(label, fires, honest):
+    correction = guards.capability_claim_check(fires, ALL_TOOLS)
+    assert correction is not None and "browser_open" in tgt(correction), (
+        f"{label!r}: the first-person form {fires!r} must fire for the pair to mean anything"
+    )
+    assert guards.capability_claim_check(honest, ALL_TOOLS) is None, (
+        f"{label!r}: {honest!r} was wrongly corrected — the guard would be the liar"
+    )
+
+
+def test_t6_c4_the_browser_correction_is_clean_over_itself():
+    correction = guards.capability_claim_check(BROWSER_POSSESSION_DENIALS[0][1], ALL_TOOLS)
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+def test_t6_c4_the_possession_row_fires_only_after_its_own_lead():
+    """The row carries its own "I don't/do not have" lead: "a browser" after a
+    DIFFERENT lead is not a possession denial, and stays silent."""
+    honest = "I can't open that page because I have a browser extension blocking it."
+    assert guards.capability_claim_check(honest, ALL_TOOLS) is None
+
+
+# T6 VERIFY gap (2026-10-09): "browser" as a MODIFIER of a following noun, a
+# compound ("browser-based"), a browser in a stated state or place ("open on
+# your Mac"), or after a preference adjective ("favorite browser") is not a
+# denial that she HAS a browser — each is an honest reply while browser_open is
+# registered. Orchestrator ruling: the row fires only when "browser" is the
+# HEAD of the noun phrase she says she lacks.
+BROWSER_MODIFIER_HONEST = [
+    ("tab_open_on_phone", "I don't have a browser tab open on your phone."),
+    ("extension_installed", "I don't have a browser extension installed for that."),
+    ("session_logged_in", "I don't have a browser session logged into your bank."),
+    ("any_cookies", "I don't have any browser cookies from your account."),
+    ("profile_with_login", "I don't have a browser profile with your login."),
+    ("hyphen_based_login", "I don't have a browser-based login for that site."),
+    ("preference", "I don't have a browser preference; any of them works for me."),
+    ("any_bookmarks", "I don't have any browser bookmarks of yours."),
+    (
+        "screenshot_yet",
+        "I don't have a browser screenshot of that page yet; let me take one.",
+    ),
+    ("history", "I don't have any browser history for that site."),
+    ("window", "I don't have a browser window for that."),
+    ("open_on_mac", "I don't have a browser open on your Mac."),
+    ("running", "I don't have a browser running on the Dell."),
+    ("favorite", "I don't have a favorite browser."),
+    ("preferred", "I don't have a preferred browser."),
+    ("default", "I do not have a default browser in mind."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BROWSER_MODIFIER_HONEST, ids=[c[0] for c in BROWSER_MODIFIER_HONEST]
+)
+def test_t6_c3_browser_as_a_modifier_or_a_state_is_left_alone(label, reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        f"{label!r}: {reply!r} was wrongly corrected — the guard would be the liar"
+    )
+
+
+# The head-noun shapes the ruling keeps firing: a coordinated "or" list, or
+# wording about the capability itself after "browser". VERIFY 2 ruling dropped
+# "a browser and terminal here" and "a browser (like Chrome) to use": "and
+# <noun>" and a bare parenthetical are off the allowlist (missed lies, logged
+# as Survivors, so "a browser and an editor open side by side" stays honest).
+BROWSER_HEAD_DENIALS = [
+    ("or_ide", "I don't have a browser or IDE."),
+    ("of_my_own", "I don't have a browser of my own."),
+    ("built_in", "I don't have a browser built in."),
+    ("embedded_in", "I don't have a browser embedded in my architecture."),
+    ("access", "I don't have any browser access."),
+    ("tool", "I don't have a browser tool."),
+    ("capability", "I do not have a browser capability."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BROWSER_HEAD_DENIALS, ids=[c[0] for c in BROWSER_HEAD_DENIALS]
+)
+def test_t6_c1_browser_as_the_head_noun_still_fires(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and "browser_open" in tgt(correction), label
+
+
+# T6 VERIFY 2 gap (2026-10-09): what may follow "browser" is an ALLOWLIST
+# (orchestrator ruling — precision first): end of clause, ", so/but …", a
+# coordinated "or <1-3 words>" (optionally a parenthetical) itself followed by
+# one of those, or capability wording ("of my own", "built in", "embedded",
+# "integrated", "access", "tool", "capability", "available to me", "I can
+# use"). A place, a state or a coordinated noun after it is an honest reply
+# about another machine or a scene, never her capability.
+BROWSER_PLACE_OR_LIST_HONEST = [
+    (
+        "installed_on_sandbox_image",
+        "I don't have a browser installed on the Dell's sandbox image,"
+        " so I'll install Firefox there.",
+    ),
+    (
+        "available_on_desktop_session",
+        "I don't have a browser available on the mini PC's desktop session,"
+        " so I'll use the headless one.",
+    ),
+    ("installed_on_your_mac", "I don't have a browser installed on your Mac."),
+    ("installed_on_the_dell_yet", "I don't have a browser installed on the Dell yet."),
+    ("available_on_that_machine", "I don't have a browser available on that machine."),
+    ("any_installed_in_container", "I don't have any browser installed in the sandbox container."),
+    ("available_offline", "I don't have a browser available offline."),
+    (
+        "and_editor_side_by_side",
+        "I don't have a browser and an editor open side by side like you do.",
+    ),
+    ("and_terminal_side_by_side", "I don't have a browser and a terminal side by side."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BROWSER_PLACE_OR_LIST_HONEST, ids=[c[0] for c in BROWSER_PLACE_OR_LIST_HONEST]
+)
+def test_t6_c3_browser_in_a_place_or_a_list_is_left_alone(label, reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        f"{label!r}: {reply!r} was wrongly corrected — the guard would be the liar"
+    )
+
+
+# ", so I can't …" after the denied browser is the denial's consequence, not a
+# qualifier: these are lies while browser_open is registered.
+BROWSER_SO_I_CANT_DENIALS = [
+    ("bare_so_i_cant", "I don't have a browser, so I can't look."),
+    ("built_in_so_i_cant", "I don't have a built-in browser, so I can't check the page."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BROWSER_SO_I_CANT_DENIALS, ids=[c[0] for c in BROWSER_SO_I_CANT_DENIALS]
+)
+def test_t6_c1_a_denial_followed_by_so_i_cant_still_fires(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and "browser_open" in tgt(correction), label

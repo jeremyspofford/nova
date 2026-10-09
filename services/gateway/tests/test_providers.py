@@ -1431,3 +1431,228 @@ def test_a_bare_models_row_states_nothing_about_chat():
     _, suitability = listing_capabilities(parameters_only)
     assert suitability["chat"]["value"] is True
     assert suitability["chat"]["note"] == "supported_parameters are stated (a chat model)"
+
+
+# ── T2 (local-context epic): `local` derived from the base_url host ──────
+
+_PRIVATE_URLS = (
+    "http://127.0.0.1:11434/v1",
+    "http://localhost:8000/v1",
+    "http://LOCALHOST:8000/v1",
+    "http://[::1]:11434/v1",
+    "http://10.0.0.5/v1",
+    "http://172.16.3.4:11434/v1",
+    "http://172.31.255.254/v1",
+    "http://192.168.1.20:11434/v1",
+    "http://100.122.40.93:11435/v1",  # the Dell, on the tailnet (100.64/10)
+    "http://100.64.0.1/v1",
+    "http://100.127.255.254/v1",
+    "http://box.tailba0abb.ts.net/v1",
+    "https://nova.tailba0abb.ts.net/v1",
+    "http://user:pw@10.0.0.5:8080/v1",  # userinfo is not the host
+)
+
+_PUBLIC_URLS = (
+    "https://openrouter.ai/api/v1",
+    "https://api.openai.com/v1",
+    "http://100.128.0.1/v1",  # just past 100.64/10
+    "http://100.63.255.255/v1",  # just before it
+    "http://172.32.0.1/v1",  # just past 172.16/12
+    "http://8.8.8.8/v1",
+    "http://ts.net.example.com/v1",  # ts.net as a label, not the suffix
+    "http://evilts.net/v1",
+    "http://localhost.example.com/v1",
+    "http://lanbox.test/v1",
+    "http://ollama:11434/v1",  # a single-label docker host: the owner says
+    "http://10.0.0.5@evil.example.com/v1",  # a private address as userinfo
+)
+
+
+@pytest.mark.parametrize("url", _PRIVATE_URLS)
+def test_local_by_host_reads_the_owners_own_network(url):
+    assert providers.local_by_host(url) is True
+
+
+@pytest.mark.parametrize("url", _PUBLIC_URLS)
+def test_local_by_host_leaves_a_public_host_false(url):
+    assert providers.local_by_host(url) is False
+
+
+@pytest.mark.parametrize("url", _PRIVATE_URLS)
+def test_a_create_that_omits_local_derives_it_from_a_private_host(url):
+    merged = providers.validate_shape(
+        {"adapter": "openai-chat", "base_url": url, "auth_shape": "none"}
+    )
+    assert merged["local"] is True
+
+
+@pytest.mark.parametrize("url", _PUBLIC_URLS)
+def test_a_create_that_omits_local_on_a_public_host_stays_false(url):
+    merged = providers.validate_shape(
+        {"adapter": "openai-chat", "base_url": url, "auth_shape": "none"}
+    )
+    assert merged["local"] is False
+
+
+def test_an_explicit_local_wins_over_the_host_both_ways():
+    private = providers.validate_shape(
+        {
+            "adapter": "openai-chat",
+            "base_url": "http://192.168.1.20:11434/v1",
+            "auth_shape": "none",
+            "local": False,
+        }
+    )
+    assert private["local"] is False, "the owner's false on a private host stands"
+    public = providers.validate_shape(
+        {
+            "adapter": "openai-chat",
+            "base_url": "https://openrouter.ai/api/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "k",
+            "local": True,
+        }
+    )
+    assert public["local"] is True, "the owner's true on a public host stands"
+    kept = providers.validate_shape(
+        {},
+        existing={
+            "adapter": "openai-chat",
+            "base_url": "http://192.168.1.20:11434/v1",
+            "auth_shape": "none",
+            "local": False,
+            "builtin": False,
+        },
+    )
+    assert kept["local"] is False, "an update that omits local keeps the stored value"
+
+
+async def test_a_private_host_provider_saved_without_local_is_local_on_the_wire(
+    client, pool, mount_backend
+):
+    """The observable end: core copies the usage chunk's `local` onto the
+    llm_call span (chat._USAGE_FIELDS) — a row created at the Dell's address
+    with no `local` in the payload states local:true there, carries no
+    dollars even when the provider reports a cost, and its ledger row says
+    local too."""
+    origin = "http://100.122.40.93:11435"
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "qwen3:8b"}]},
+        deltas=("hi",),
+        cost=0.5,
+    )
+    mount_backend(origin, fake.app)
+    created = await client.post(
+        "/admin/providers",
+        json={
+            "name": "dell",
+            "adapter": "openai-chat",
+            "base_url": f"{origin}/v1",
+            "auth_shape": "none",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["local"] is True
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "dell:qwen3:8b", "messages": [], "stream": True},
+        headers={"X-Nova-Purpose": "chat"},
+    )
+    assert resp.status_code == 200, resp.text
+    usage = [p["usage"] for p in _sse_payloads(resp.content) if p != "[DONE]" and p.get("usage")]
+    assert usage, "the stream carried no usage chunk"
+    assert usage[-1]["local"] is True
+    assert usage[-1]["cost_usd"] is None
+    (row,) = await pool.fetch(
+        "SELECT local, cost_usd FROM usage_events WHERE kind = 'completion' AND provider = 'dell'"
+    )
+    assert row["local"] is True and row["cost_usd"] is None
+
+
+async def test_a_public_host_provider_saved_without_local_stays_metered_in_dollars(
+    client, pool, mount_backend
+):
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "gpt-x"}]},
+        deltas=("hi",),
+        cost=0.5,
+        prefix="/api/v1",
+    )
+    mount_backend("https://openrouter.ai", fake.app)
+    created = await client.post(
+        "/admin/providers",
+        json={
+            "name": "openrouter",
+            "adapter": "openai-chat",
+            "base_url": "https://openrouter.ai/api/v1",
+            "auth_shape": "none",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["local"] is False
+
+
+# ── migration 012: existing rows backfilled by the same host rule ────────
+
+
+async def test_migration_012_backfills_local_by_host_and_never_unsets_it(tmp_path):
+    import asyncpg
+
+    import tests.conftest as conftest
+
+    await _migrate_to(tmp_path, 11)
+    rows = (
+        ("dell", "http://100.122.40.93:11435/v1", False),
+        ("lan", "http://192.168.1.20:11434/v1", False),
+        ("loop", "http://localhost:8000/v1", False),
+        ("tail", "https://box.tailba0abb.ts.net/v1", False),
+        ("cloud", "https://openrouter.ai/api/v1", False),
+        ("past-cgnat", "http://100.128.0.1/v1", False),
+        ("owner-true", "https://api.example.com/v1", True),
+        ("v6-loop", "http://[::1]:11434/v1", False),
+        ("userinfo", "http://u:p@172.16.3.4:8080/v1", False),
+        ("private-userinfo", "http://10.0.0.5@evil.example.com/v1", False),
+        ("past-rfc1918", "http://172.32.0.1/v1", False),
+        ("docker", "http://ollama:11434/v1", False),
+    )
+    conn = await asyncpg.connect(TEST_DSN)
+    try:
+        for name, url, local in rows:
+            await conn.execute(
+                "INSERT INTO providers (name, adapter, base_url, auth_shape, local) "
+                "VALUES ($1, 'openai-chat', $2, 'none', $3)",
+                name,
+                url,
+                local,
+            )
+    finally:
+        await conn.close()
+    await run_migrations(TEST_DSN, MIGRATIONS_DIR)
+    conn = await asyncpg.connect(TEST_DSN)
+    try:
+        got = {
+            r["name"]: r["local"]
+            for r in await conn.fetch("SELECT name, local FROM providers WHERE NOT builtin")
+        }
+        applied = await conn.fetchval(
+            "SELECT count(*) FROM schema_migrations WHERE filename = '012_local_by_host.sql'"
+        )
+    finally:
+        await conn.close()
+        conftest._schema_built = False
+    assert applied == 1
+    assert got == {
+        "dell": True,
+        "lan": True,
+        "loop": True,
+        "tail": True,
+        "cloud": False,
+        "past-cgnat": False,
+        "owner-true": True,
+        "v6-loop": True,
+        "userinfo": True,
+        "private-userinfo": False,
+        "past-rfc1918": False,
+        "docker": False,
+    }

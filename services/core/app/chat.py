@@ -107,6 +107,7 @@ from app import (
     agents,
     attachments,
     code_repo,
+    context_fit,
     conversations,
     db,
     decisions,
@@ -1010,10 +1011,29 @@ def repository_line(repo: str, branch: str) -> str | None:
     return f"{line} (default branch {branch})." if branch else f"{line}."
 
 
+# T6 (local-context epic, turn 6e5ff59e): asked to change the sidebar icon of
+# the Nova web app, she gave browser-settings advice — nothing told her the UI
+# she is talked to through is her own code. A repository-layout fact (relative
+# to the repository root), so a named constant; an absolute path is only ever
+# the recorded checkout's, read live from code_repo.
+WEB_UI_DIR = "apps/web"
+
+
+def _web_ui_sentence() -> str:
+    """Rides the repository line: names <checkout>/apps/web only when the
+    checkout and its machine are recorded by code_repo's own rules, read live."""
+    checkout, host = code_repo.repo_dir(), code_repo.repo_host()
+    where = f" ({checkout.rstrip('/')}/{WEB_UI_DIR} on {host})" if checkout and host else ""
+    return (
+        f" Your web UI, the app the owner talks to you through, is {WEB_UI_DIR} "
+        f"in that repository{where}."
+    )
+
+
 def _repository_sentence() -> str:
     """Read live from the environment each prompt — derived, never a constant."""
     line = repository_line(os.environ.get(REPO_ENV, ""), os.environ.get(REPO_BRANCH_ENV, ""))
-    return f" {line}" if line else ""
+    return f" {line}{_web_ui_sentence()}" if line else ""
 
 
 def _change_sentence(tool_names: Sequence[str]) -> str:
@@ -3810,15 +3830,17 @@ async def _gateway_round(
         span.meta["round"] = round_number
         span.meta["tools_advertised"] = bool(advertised)
         span.meta["purpose"] = purpose
+        requested = _requested_key(model, role)
+        sent = _fit_to_window(turn, span, messages, requested)
         try:
             async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
                 async with client.stream(
                     "POST",
                     "/v1/chat/completions",
-                    json=completion_payload(model, messages, advertised),
+                    json=completion_payload(model, sent, advertised),
                     headers=headers,
                 ) as response:
-                    _note_served(span, response.headers)
+                    _note_served(span, response.headers, requested)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
@@ -3905,6 +3927,7 @@ async def _gateway_round(
                 span.meta["timeout_s"] = getattr(GATEWAY_TIMEOUT, phase)
         elapsed_s = time.perf_counter() - t0
         _note_throughput(span, t0, t_first_any, t_first_delta, elapsed_s, reasoning_chars)
+        _learn_chars_per_token(span, sent)
         calls = buffer.finished()
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
@@ -3986,13 +4009,18 @@ PASS_OVER_WORDS = "answered with thinking only"
 THINKING_ONLY_REASON = "every link in the chain answered with thinking only"
 
 
-def _file_round_retry(turn: traces.Turn, action: str, link: str | None, round_number: int) -> None:
+def _file_round_retry(
+    turn: traces.Turn,
+    action: str,
+    link: str | None,
+    round_number: int,
+    *,
+    why: str = "thinking_only",
+) -> None:
     """File why a round is being run again, BEFORE the re-run's request, so
     the trace reads in the order things happened."""
     with turn.span("round_retry") as span:
-        span.meta.update(
-            {"why": "thinking_only", "action": action, "link": link, "round": round_number}
-        )
+        span.meta.update({"why": why, "action": action, "link": link, "round": round_number})
 
 
 def _thinking_only_end(links: Sequence[str], cause: str) -> str:
@@ -4000,6 +4028,67 @@ def _thinking_only_end(links: Sequence[str], cause: str) -> str:
     turn: which links were tried, then what stopped the walk."""
     named = f"{THINKING_ONLY_REASON}: {', '.join(links)}" if links else THINKING_ONLY_REASON
     return f"Stopped: {named} — {cause.rstrip('.')}."
+
+
+@dataclass(frozen=True)
+class WindowCut:
+    """A round the served window cut (T5): who served it, the window it was
+    served with, and the prompt_tokens the gateway counted for it."""
+
+    link: str
+    window: int
+    prompt_tokens: int
+
+
+def _cut_at_window(turn: traces.Turn) -> WindowCut | None:
+    """Was the turn's latest round cut by its served window? Marks its span.
+
+    Cut = the gateway's own prompt_tokens >= window - 1: ollama clamps the
+    count at window - 1 when it drops the FRONT of a request (turn 0f7af448:
+    32767 on a 32768 window), so that count is the fact that her instructions
+    and his ask were not in what the model read. The window is the one the
+    round's own answer stated, else the one its link stated last; neither ->
+    no check (unknown is stated as absent, never guessed). A round with no
+    stated prompt_tokens is never called cut."""
+    llm = _last_llm_span(turn.spans)
+    if llm is None:
+        return None
+    link = llm.meta.get("served_by")
+    prompt_tokens = llm.meta.get("prompt_tokens")
+    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool):
+        return None
+    window = llm.meta.get("context_window")
+    if not isinstance(window, int) and isinstance(link, str):
+        window = _SERVED_WINDOWS.get(link)
+    if not isinstance(window, int) or prompt_tokens < window - 1:
+        return None
+    llm.meta["context_truncated"] = True
+    return WindowCut(
+        link=link if isinstance(link, str) else "", window=window, prompt_tokens=prompt_tokens
+    )
+
+
+def _window_cut_end(cut: WindowCut) -> str:
+    """The stated reason a round cut twice ends the turn: the served model,
+    its window and the count that says the request did not fit."""
+    who = cut.link or "the serving model"
+    return (
+        f"Stopped: the request to {who} was cut at its {cut.window}-token context window "
+        f"again after it was fitted and re-sent (the gateway counted {cut.prompt_tokens} "
+        "prompt tokens), so the start of it — her instructions and your message — was "
+        "not what the model read, and its answer was not used."
+    )
+
+
+def _window_cut_note(cut: WindowCut) -> str:
+    """The live note a cut round's already-streamed text is followed by: what
+    was just shown is not the answer, and the round is being asked again."""
+    who = cut.link or "the serving model"
+    return (
+        f"(The text above was cut off: the request reached {who}'s {cut.window}-token "
+        "context window and lost its start, so it is not kept. Asking again with the "
+        "request fitted to that window.)"
+    )
 
 
 async def _round_past_thinking_only(
@@ -4185,7 +4274,7 @@ def _note_route(span, header: str | None) -> None:
         span.meta["route_reason"] = fields["reason"]
 
 
-def _note_served(span, headers) -> None:
+def _note_served(span, headers, requested: str | None = None) -> None:
     """WHO served this round, and WHERE (S40, D10), off the gateway's headers.
 
     X-Nova-Served-By is `provider:model`. X-Nova-Served-On is the compute id
@@ -4195,16 +4284,124 @@ def _note_served(span, headers) -> None:
     the gateway could not tell (more than one accelerator, a cloud model), and
     model_speed keys every rate by these — a guessed compute would file a round
     under a machine it never ran on.
+
+    `requested` (T4b) is what the round asked for (_requested_key): the link
+    that served it becomes the one that request's next round — this turn's
+    or a later turn's — is fitted to.
     """
     served_by = headers.get("x-nova-served-by")
     if served_by:
         span.meta["served_by"] = served_by
+        if requested:
+            _SERVED_LINK_BY_REQUEST[requested] = served_by
     served_on = headers.get("x-nova-served-on")
     if served_on:
         span.meta["served_on"] = served_on
     runtime = headers.get("x-nova-served-runtime")
     if runtime:
         span.meta["served_runtime"] = runtime
+    window = _stated_window(headers.get(CONTEXT_WINDOW_HEADER))
+    if window is not None:
+        span.meta["context_window"] = window
+        if served_by:
+            _SERVED_WINDOWS[served_by] = window
+
+
+# The window the gateway says the answering model is actually served with
+# (ollama's /api/ps context_length, read after the answer). Absent when the
+# gateway could not read it — and then nothing is fitted: unknown is stated
+# as absent, never guessed.
+CONTEXT_WINDOW_HEADER = "x-nova-context-window"
+
+# What each served link (X-Nova-Served-By) last stated about itself, in
+# process memory: its window, and the chars-per-token its own prompt_tokens
+# measured. A later round on that link is fitted with them. Keyed by the
+# link, so a window one link stated never fits another link's request.
+_SERVED_WINDOWS: dict[str, int] = {}
+_SERVED_CHARS_PER_TOKEN: dict[str, float] = {}
+# Which link last served each request (T4b), keyed by _requested_key: the
+# model a round asked for, or the role chain it walked when it named none.
+# Round 1 of a turn has no served round of its own yet; this is how it is
+# fitted to the window its model's link stated on an earlier turn. A
+# fallback that answers instead becomes the request's link — the next round
+# is fitted to the window of the link that actually answered.
+_SERVED_LINK_BY_REQUEST: dict[str, str] = {}
+
+
+def _requested_key(model: str, role: str | None) -> str | None:
+    """What a round asked the gateway for: its model when it names one, else
+    the role chain it walks (an agent turn sends model "" and the gateway
+    picks off its role's chain), else nothing — then only this turn's own
+    served rounds can say what it reaches."""
+    if model:
+        return model
+    if role:
+        return f"role:{role}"
+    return None
+
+
+def _stated_window(header: str | None) -> int | None:
+    if not header:
+        return None
+    try:
+        window = int(header.strip())
+    except ValueError:
+        logger.warning("ignored a context window the gateway stated as %r", header[:40])
+        return None
+    return window if window > 0 else None
+
+
+def _last_served_link(turn: traces.Turn) -> str | None:
+    """The link that served this turn's latest round — the link the next
+    round is presumed to reach (a route that moves is T5's truncation check)."""
+    for span in reversed(turn.spans):
+        if span.kind == "llm_call" and span.meta.get("served_by"):
+            return span.meta["served_by"]
+    return None
+
+
+def _fit_to_window(
+    turn: traces.Turn, span, messages: Sequence[dict], requested: str | None = None
+) -> Sequence[dict]:
+    """`messages` fitted (context_fit.fit) to the window of the link that last
+    served this request (`requested`, across turns — T4b), or, when the round
+    names no request, of the link that served this turn's last round; when
+    that link stated one. Else unchanged. The span's `context_fitted_to` says
+    which window the request was fitted to before it was sent (absent: none).
+
+    Fits what is SENT only: fit never mutates its input, so the conversation
+    the turn keeps — and the tool results it persists — stay whole. The span
+    says what was trimmed, and only when something was."""
+    link = _SERVED_LINK_BY_REQUEST.get(requested) if requested else None
+    if link is None:
+        link = _last_served_link(turn)
+    window = _SERVED_WINDOWS.get(link) if link else None
+    if window is None:
+        return messages
+    span.meta["context_fitted_to"] = window
+    ratio = _SERVED_CHARS_PER_TOKEN.get(link, context_fit.DEFAULT_CHARS_PER_TOKEN)
+    fitted, report = context_fit.fit(messages, window, ratio)
+    if report.tool_results_trimmed or report.rounds_dropped:
+        span.meta["context_trimmed"] = {
+            "tool_results": report.tool_results_trimmed,
+            "rounds_dropped": report.rounds_dropped,
+            "est_tokens": report.est_tokens,
+        }
+    return fitted
+
+
+def _learn_chars_per_token(span, sent: Sequence[dict]) -> None:
+    """Calibrate the served link's chars-per-token from this round's own
+    prompt_tokens over the chars it was sent (counted as context_fit counts).
+    Tool schemas and template tokens land in the count too, so the ratio
+    errs toward trimming more, never less."""
+    link = span.meta.get("served_by")
+    prompt_tokens = span.meta.get("prompt_tokens")
+    if not link or not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool):
+        return
+    ratio = context_fit.calibrated_chars_per_token(sent, prompt_tokens)
+    if ratio is not None:
+        _SERVED_CHARS_PER_TOKEN[link] = ratio
 
 
 def _note_upstream(span, chunk: dict) -> None:
@@ -4341,7 +4538,7 @@ async def _collect_completion(
     # turn is doing gets the same answer as for its own rounds (traces.DOING).
     traces.set_doing(turn.id, "thinking")
     model = await _round_model(turn, model, messages)
-    payload: dict = {"messages": list(messages), "stream": True}
+    payload: dict = {"stream": True}
     if model:
         # An empty chat.model means "the gateway default"; sending "" would ask
         # for a model literally named "".
@@ -4354,15 +4551,19 @@ async def _collect_completion(
         span.meta["purpose"] = purpose
         span.meta["tools_advertised"] = False
         span.meta["ok"] = False
+        role = turn.role or "judge"
+        requested = _requested_key(model, role)
+        sent = _fit_to_window(turn, span, messages, requested)
+        payload["messages"] = list(sent)
         try:
             async with peers.client(app, peers.GATEWAY, JUDGE_TIMEOUT) as client:
                 async with client.stream(
                     "POST",
                     "/v1/chat/completions",
                     json=payload,
-                    headers=peers.attribution_headers(turn, purpose, turn.role or "judge"),
+                    headers=peers.attribution_headers(turn, purpose, role),
                 ) as response:
-                    _note_served(span, response.headers)
+                    _note_served(span, response.headers, requested)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors="replace")
@@ -4396,6 +4597,7 @@ async def _collect_completion(
         except Exception as exc:
             span.meta["error"] = peers.reason(exc)[:400]
             raise
+        _learn_chars_per_token(span, sent)
         span.meta["ok"] = True
     return "".join(collected)
 
@@ -5696,6 +5898,9 @@ async def _run_turn(
         # The stated reason a thinking-only round ran out of links (no-ceiling
         # T3); None while every round found a link that answered.
         thinking_only_end: str | None = None
+        # The stated reason a round the served window cut twice ends the turn
+        # (T5); None while no re-sent round was cut again.
+        window_cut_end: str | None = None
         out_of_rounds = False
         # Why the round loop stopped the turn (a RoundProgress reason) and the
         # round it stopped at; None while nothing stopped it.
@@ -5798,6 +6003,7 @@ async def _run_turn(
             # that has already returned, and claiming its outcome is unknown
             # would be a false uncertainty about a call that finished.
             _stop_if_asked(turn, "between steps")
+            streamed_before = len(parts)
             round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
                 app,
                 turn,
@@ -5808,6 +6014,41 @@ async def _run_turn(
                 on_delta=_stream_delta,
                 on_reasoning=_stream_reasoning,
             )
+            cut = _cut_at_window(turn) if failure is None else None
+            if cut is not None:
+                # The served window cut this round (T5): the model never read
+                # the front of the request, so neither its text nor its calls
+                # are an answer. Its streamed text leaves the durable reply
+                # (it was shown live, so the watcher is told it is not kept),
+                # its calls are not dispatched, and the round is re-sent ONCE
+                # — fitted by _gateway_round to the window and the ratio this
+                # cut round's own prompt_tokens just taught (_note_served,
+                # _learn_chars_per_token).
+                if len(parts) > streamed_before:
+                    del parts[streamed_before:]
+                    emit(_frame({"correction": _window_cut_note(cut)}))
+                _file_round_retry(
+                    turn, "refit", cut.link or None, round_number, why="context_truncated"
+                )
+                _stop_if_asked(turn, "between steps")
+                streamed_before = len(parts)
+                round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
+                    app,
+                    turn,
+                    model,
+                    messages,
+                    advertised,
+                    round_number=round_number,
+                    on_delta=_stream_delta,
+                    on_reasoning=_stream_reasoning,
+                )
+                cut = _cut_at_window(turn) if failure is None else None
+                if cut is not None:
+                    # Cut again after fitting: no third request. Its text is
+                    # not kept either; the turn ends on the stated cut.
+                    del parts[streamed_before:]
+                    window_cut_end = _window_cut_end(cut)
+                    break
             if failure is not None:
                 break
             # A round that answered is badged with who answered it; a failed
@@ -5847,6 +6088,15 @@ async def _run_turn(
                 stop_rounds = round_number
                 break
 
+        if window_cut_end is not None:
+            # Same end shape as a thinking-only stop: what the tools found,
+            # then why it stopped, persisted as-is.
+            found = tool_results_statement(turn.spans)
+            await _end_without_a_reply(
+                f"{found}\n\n{window_cut_end}" if found else window_cut_end,
+                verbatim=True,
+            )
+            return
         if thinking_only_end is not None:
             # No link was left to answer this round (no-ceiling T3): what the
             # tools found, then why it stopped — the whole statement, so it is

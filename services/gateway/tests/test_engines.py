@@ -428,6 +428,8 @@ async def test_resident_is_the_engines_own_ps_in_ollamas_own_keys(pool, hub):
             "vram_mb": 5_000_000_000 / (1024 * 1024),
             "size": 6_000_000_000,
             "size_vram": 5_000_000_000,
+            # T1 (the served window): entries carry context_length; this fixture states none.
+            "context_length": None,
         }
     ]
 
@@ -448,8 +450,15 @@ async def test_a_resident_entry_whose_vram_is_not_a_byte_count_is_skipped_never_
     row = await engines.get(pool, "hub")
     resident, reason = await engines.resident(gateway_app, row)
     assert reason is None
+    # T1 (the served window): entries now carry context_length; None — this fixture states none.
     assert resident == [
-        {"model": "qwen3:8b", "vram_mb": 0.0, "size": 6_000_000_000, "size_vram": 0}
+        {
+            "model": "qwen3:8b",
+            "vram_mb": 0.0,
+            "size": 6_000_000_000,
+            "size_vram": 0,
+            "context_length": None,
+        }
     ]
 
 
@@ -551,6 +560,8 @@ async def test_one_engine_carries_its_card_in_admin_vrams_own_keys(client, hub, 
             "vram_mb": 5_000_000_000 / (1024 * 1024),
             "size": 6_000_000_000,
             "size_vram": 5_000_000_000,
+            # T1 (the served window): entries carry context_length; this fixture states none.
+            "context_length": None,
         }
     ]
     assert vram["free_after_switch_gb"] == round(
@@ -594,6 +605,8 @@ async def test_another_machines_card_is_never_read_from_the_hub(client, pool, hu
             "vram_mb": 17_000_000_000 / (1024 * 1024),
             "size": 17_000_000_000,
             "size_vram": 17_000_000_000,
+            # T1 (the served window): entries carry context_length; this fixture states none.
+            "context_length": None,
         }
     ]
     assert live["vram"]["free_after_switch_gb"] is None

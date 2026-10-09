@@ -236,3 +236,23 @@ async def test_a_stamp_that_stalls_costs_the_stamp_never_the_reply(client, pool,
 def test_the_stamps_whole_budget_is_two_seconds():
     """The ruling's number: never more than ~2 s before the first byte."""
     assert data_plane.STAMP_BUDGET_S == 2.0
+
+
+async def test_resident_keeps_the_served_context_length(client, pool, hub):
+    """local-context T1: the one /api/ps reader keeps each entry's
+    `context_length` — the window the model is actually served with — so
+    the stamp can state it; an entry that states none keeps None, never a
+    filled-in number."""
+    from app.main import app as gateway_app
+
+    hub.ps_models = [
+        {"name": "qwen3:8b", "size": 6_400_000_000, "size_vram": 6_400_000_000,
+         "context_length": 32768},
+        {"name": "gemma3:latest", "size": 3_000_000_000, "size_vram": 0},
+    ]
+    engine = await engines.get(pool, "hub")
+    resident, why = await engines.resident(gateway_app, engine)
+    assert why is None
+    by_name = {entry["model"]: entry for entry in resident}
+    assert by_name["qwen3:8b"]["context_length"] == 32768
+    assert by_name["gemma3:latest"]["context_length"] is None
