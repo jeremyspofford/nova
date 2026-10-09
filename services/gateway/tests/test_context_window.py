@@ -132,6 +132,27 @@ async def test_an_openai_chat_row_on_an_ollama_origin_states_its_window(
     assert not [p for p, _ in hub.seen if p == "/api/ps"], "never the hub's /api/ps"
 
 
+async def test_an_origin_listing_the_model_in_another_case_states_its_window(
+    client, pool, hub, mount_backend
+):
+    """Live 2026-10-09: the Dell's /api/ps lists `Qwen3:8b` while the route
+    names `qwen3:8b`. Ollama's names are case-insensitive, so this is the
+    same model and its window is stated."""
+    dell = FakeOllama(ps_models=_resident(model="Qwen3:8b", context_length=32768))
+    mount_backend("http://dell.test", dell.app)
+    await _dell_row(pool)
+
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "dell:qwen3:8b"})
+
+    assert resp.status_code == 200
+    assert resp.headers[WINDOW] == "32768"
+
+
+def test_another_model_in_any_case_is_not_this_one():
+    assert data_plane._resident_entry(_resident(model="Qwen3:4B"), "qwen3:8b") is None
+    assert data_plane._resident_entry(_resident(model="GEMMA3:LATEST"), "gemma3") is not None
+
+
 # ── C3: what is not readable is omitted, logged, and never costs the reply ─
 
 
