@@ -2942,6 +2942,62 @@ _CAP_BROWSER_SCREENSHOT = re.compile(
     r"(?:web\s*+pages?|websites?)\b" + _BROWSER_QUALIFIED_TAIL,
     re.I,
 )
+# T6 (local-context epic, 2026-10-09): a POSSESSION denial of her browser.
+# Turn d4f59914 (dell:qwen3:8b): "I don't have an internal browser or IDE ..."
+# while browser_open was registered — _DENIAL_LEAD reads "don't have" only as
+# "don't have the ability/access to", so denying she HAS a browser reached no
+# row. The object is narrow on purpose: a/an/any, at most two words, then
+# "browser" — never "your browser's …" or "the browser history" (his browser,
+# or one specific thing), and never a stated present state ("… open right
+# now"). The row carries its own lead as fixed-width lookbehinds, so it fires
+# ONLY right after a first-person present "I don't/do not have" — never after
+# another lead ("I can't open it because I have a browser extension …").
+# _POSSESSION_LEAD is the clause gate for it, and its lookahead admits a clause
+# only when this very object follows. Possessive runs, bounded repeats: linear.
+#
+# T6 VERIFY fix: "browser" must be the HEAD of what she says she lacks, and
+# what may FOLLOW it is an allowlist (VERIFY 2 + orchestrator ruling: precision
+# first — a missed lie is a Survivor, a corrected honest reply is a defect).
+# The denial stands only when "browser" is followed by:
+#   1. the end of the clause ([.!?;:] or end of text);
+#   2. ", so …" / ", but …" (or a bare "," where the clause split at "but");
+#   3. "or <1-3 words>" (a coordinated alternative: "or IDE"), optionally a
+#      bounded "( … )", then itself 1, 2 or 4;
+#   4. capability wording: "of my own", "built in"/"built-in", "embedded",
+#      "integrated", "access", "tool(s)", "capability", "available to me",
+#      "I can use".
+# Anything else is silent: a place or state ("installed on your Mac",
+# "available offline", "open on your Mac", "running on the Dell"), a modifier
+# use ("a browser tab/extension/session", "browser-based"), "and <noun>" ("a
+# browser and an editor open side by side"). A preference adjective before it
+# ("a favorite/preferred/default browser") is silent too. Possessive runs,
+# bounded repeats and a lazy {0,2} over possessive words: linear.
+_BROWSER_TAIL_END = r"\s*+(?:[.!?;:]|,\s*+(?:(?:so|but)\b|$)|$)"
+_BROWSER_TAIL_CAPABILITY = (
+    r"\s++(?:of\s++my\s++own|built[\s-]++in|embedded|integrated|access|tools?"
+    r"|capabilit(?:y|ies)|available\s++to\s++me|i\s++can\s++use)\b"
+)
+_BROWSER_TAIL_OK = "(?:" + _BROWSER_TAIL_END + "|" + _BROWSER_TAIL_CAPABILITY + ")"
+_BROWSER_HEAD_TAIL = (
+    "(?="
+    + _BROWSER_TAIL_OK
+    + r"|\s++or\s++(?:[\w-]++\s++){0,2}?[\w-]++(?:\s*+\([^()]{0,80}+\))?"
+    + _BROWSER_TAIL_OK
+    + ")"
+)
+_BROWSER_OBJECT = (
+    r"(?:an?|any)\s++(?:(?!(?:favou?rite|preferred|default)\b)[\w-]++\s++){0,2}?browser\b"
+    + _BROWSER_HEAD_TAIL
+)
+_POSSESSION_LEAD = re.compile(
+    r"\bi\s++(?:don['’]?t|do\s++not)\s++have\s++(?=" + _BROWSER_OBJECT + r")",
+    re.I,
+)
+_CAP_BROWSER_POSSESSION = re.compile(
+    r"(?:(?<=\bi don't have )|(?<=\bi don’t have )|(?<=\bi dont have )"
+    r"|(?<=\bi do not have ))" + _BROWSER_OBJECT + r"(?!" + _PRESENT_STATE_TAIL + r")",
+    re.I,
+)
 _CAP_ON_A_PHONE = re.compile(
     r"put(?:ting)?\s+(?:myself|me|nova)\s+on\s+"
     r"(?:a\s+|an\s+|your\s+|another\s+)?(?:phones?|tablets?|iphones?|ipads?|android\s+phones?)\b"
@@ -3261,6 +3317,7 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "mcp_call",
     ),
+    (_CAP_BROWSER_POSSESSION, "browser_open"),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -3470,7 +3527,11 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue  # a question/offer asserts no inability
-        lead = _DENIAL_LEAD.search(clause) or _ABSENT_FROM_TOOLSET.search(clause)
+        lead = (
+            _DENIAL_LEAD.search(clause)
+            or _ABSENT_FROM_TOOLSET.search(clause)
+            or _POSSESSION_LEAD.search(clause)
+        )
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
@@ -3485,6 +3546,12 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # phrase on the denial's own side keeps an unrelated capability
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
+                if pattern is _CAP_BROWSER_POSSESSION:
+                    # The row carries its own lead (fixed-width lookbehinds),
+                    # so it is after a lead by construction — even when an
+                    # earlier-found lead is a LATER "I can't" in the same
+                    # clause ("I don't have a browser, so I can't look.").
+                    after_lead = True
                 before_trailing = trailing is not None and m.end() <= trailing.start()
                 if not (after_lead or before_trailing):
                     continue

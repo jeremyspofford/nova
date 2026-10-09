@@ -274,8 +274,10 @@ async def resident(
     """(every model THIS engine's /api/ps reports resident, reason-if-not).
 
     The one /api/ps reader (ruling C2). Entries are `{model, vram_mb, size,
-    size_vram}` in ollama's own keys: vram_mb for fit's free-after-switch,
-    size/size_vram for the D10 stamp (compute_id.served_on), which decides
+    size_vram, context_length}` in ollama's own keys: context_length for the
+    served window (data_plane's X-Nova-Context-Window; None when unstated),
+    vram_mb for fit's free-after-switch, size/size_vram for the D10 stamp
+    (compute_id.served_on), which decides
     offload from exactly those two numbers. An entry /api/ps states no
     size_vram for — or states it as anything but a byte count — is skipped;
     nothing is filled in, and a garbled entry never costs the caller (the
@@ -292,7 +294,9 @@ async def resident(
         async with client(app, row, timeout) as c:
             resp = await c.get("/api/ps")
             resp.raise_for_status()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        # InvalidURL is not an httpx.HTTPError: a garbled address is a read
+        # that could not run, stated like any other.
         return None, f"could not reach {name}'s /api/ps — {adapters.reason(exc)}"
     try:
         body = resp.json()
@@ -313,13 +317,30 @@ async def resident(
         ):
             out.append(
                 {
-                    "model": entry.get("name") or entry.get("model"),
+                    # Only a name ollama stated as text; anything else
+                    # matches no model, never coerced.
+                    "model": _text(entry.get("name")) or _text(entry.get("model")),
                     "vram_mb": size_vram / (1024 * 1024),
                     "size": entry.get("size"),
                     "size_vram": size_vram,
+                    # The window the model is actually SERVED with (not
+                    # /api/show's model max); None when not stated as a
+                    # positive count — never filled in.
+                    "context_length": _count(entry.get("context_length")),
                 }
             )
     return out, None
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _count(value: object) -> int | None:
+    """A positive token count ollama stated, or None (a bool, a string, 0 are not)."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
 
 
 async def _builtin_facts() -> tuple[dict, str | None]:

@@ -208,6 +208,24 @@ one of the stops below, and each one says why.
   `Stopped: every link in the chain answered with thinking only: <links> — <why>.`
   A round that comes back with nothing at all, not even reasoning, still ends the turn
   with the stated failure.
+- **A local model's request is fitted to the window it is served with.** Ollama serves
+  a model with a context window it chose at load time and silently drops the
+  start of a request that is longer: her instructions and your message go first. So
+  the gateway reads the window the serving engine actually loaded the model with
+  (`/api/ps`, for the hub's engine and for any Ollama-compatible provider) and states
+  it on each answer, and core fits every later round to it before sending: the oldest
+  tool results are trimmed first, each to a note
+  `[trimmed N chars to fit a W-token context window]`, then the oldest whole tool
+  rounds are dropped. Her instructions and your latest message are never trimmed. Only
+  what is sent is fitted; the conversation and the trace keep every result whole. The
+  trace records `context_window` and, when it trimmed, `context_trimmed` on the round.
+  The window is remembered per serving link, so the first round of the next turn is
+  fitted too; a link whose window was never stated is sent as is.
+- **A round the window still cut is re-sent once.** When the gateway counts a prompt
+  that reached the window (`prompt_tokens` at the window minus one), the round is marked
+  `context_truncated`; its text is not kept and its tool calls do not run. It is
+  re-sent once, fitted. If that is cut too, the turn ends with
+  `Stopped: the request to <model> was cut at its W-token context window again …`.
 - **What bounds a runaway.** The circling stop; the owner's stop
   (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
   tool reports progress); the gateway's monthly spending caps on cloud providers; a

@@ -338,3 +338,86 @@ def test_c5_the_deploy_readme_notes_the_flag():
     assert "outside_worktree" in readme
     assert changes.START_CHANGE in readme
     assert "warning" in readme.lower()
+
+
+# --- T6 (local-context epic, 2026-10-09): her web UI is apps/web ------------
+#
+# Turn 6e5ff59e (dell:qwen3:8b): asked to change the sidebar icon of the Nova
+# web app, she answered with browser-settings advice — nothing told her the UI
+# she is talked to through is apps/web in her own repository.
+#
+# Criteria (RED 2026-10-09):
+#   C1 when the repository line is stated, the first paragraph also states her
+#      web UI is apps/web in that repository, after the repository line; the
+#      directory is real in this checkout (apps/web/package.json).
+#   C2 no repository line -> no web-UI sentence (even with the checkout
+#      recorded): the sentence rides the repository fact.
+#   C3 derived, never a hardcoded absolute path: with the checkout recorded
+#      (NOVA_CHECKOUT + NOVA_REPO_HOST, code_repo's rules) the sentence names
+#      <checkout>/apps/web, following whatever the checkout is; unrecorded, it
+#      names the relative apps/web alone and no absolute path.
+
+WEB_DIR = "apps/web"
+
+
+def _web_sentence(prompt: str) -> str | None:
+    """The first-paragraph sentence that names apps/web, or None."""
+    first = prompt.split("\n\n", 1)[0]
+    at = first.find(WEB_DIR)
+    if at < 0:
+        return None
+    start = max(first.rfind(". ", 0, at), first.rfind(".) ", 0, at))
+    end = first.find(". ", at)
+    return first[start + 1 : end if end >= 0 else len(first)].strip()
+
+
+def _repo(monkeypatch):
+    monkeypatch.setenv("NOVA_REPO", "jeremyspofford/nova")
+    monkeypatch.setenv("NOVA_REPO_BRANCH", "main")
+
+
+def test_t6_c1_the_prompt_names_apps_web_as_her_web_ui(monkeypatch):
+    assert (ROOT / WEB_DIR / "package.json").is_file()
+    _repo(monkeypatch)
+    prompt = chat.stable_system_prompt(MODEL, tools.tool_names())
+    sentence = _web_sentence(prompt)
+    assert sentence is not None, "her prompt does not say her web UI is apps/web"
+    assert "web UI" in sentence
+    repo_at = prompt.index("Your own source code is the GitHub repository")
+    assert repo_at < prompt.index(WEB_DIR) < prompt.index("\n\n")
+
+
+def test_t6_c2_the_web_ui_sentence_rides_the_repository_line(monkeypatch, _recorded):
+    _repo(monkeypatch)
+    assert _web_sentence(chat.stable_system_prompt(MODEL, tools.tool_names())) is not None
+    monkeypatch.delenv("NOVA_REPO")
+    prompt = chat.stable_system_prompt(MODEL, tools.tool_names())
+    assert WEB_DIR not in prompt
+
+
+def test_t6_c3_the_absolute_path_follows_the_recorded_checkout(monkeypatch, _recorded):
+    _repo(monkeypatch)
+    sentence = _web_sentence(chat.stable_system_prompt(MODEL, tools.tool_names()))
+    assert sentence is not None and f"{CHECKOUT}/{WEB_DIR}" in sentence
+    other = "/srv/elsewhere/nova"
+    monkeypatch.setenv("NOVA_CHECKOUT", other)
+    sentence = _web_sentence(chat.stable_system_prompt(MODEL, tools.tool_names()))
+    assert sentence is not None and f"{other}/{WEB_DIR}" in sentence
+    assert CHECKOUT not in sentence
+
+
+def test_t6_c3_unrecorded_checkout_names_the_relative_path_alone(monkeypatch):
+    _repo(monkeypatch)
+    sentence = _web_sentence(chat.stable_system_prompt(MODEL, tools.tool_names()))
+    assert sentence is not None
+    assert f"/{WEB_DIR}" not in sentence, sentence
+
+
+def test_t6_c3_a_checkout_without_its_machine_names_the_relative_path_alone(monkeypatch):
+    """Recorded means BOTH (code_repo's rules): the checkout without its
+    machine names no absolute path."""
+    _repo(monkeypatch)
+    monkeypatch.setenv("NOVA_CHECKOUT", CHECKOUT)
+    sentence = _web_sentence(chat.stable_system_prompt(MODEL, tools.tool_names()))
+    assert sentence is not None
+    assert f"/{WEB_DIR}" not in sentence, sentence

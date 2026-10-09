@@ -10,6 +10,7 @@ contain one — the CHECK on the table pins it), so an ollama tag like
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -122,6 +123,47 @@ def validate_name(name: object) -> str:
     return name
 
 
+#: The address ranges that are the owner's own network (T2 of the
+#: local-context epic): loopback, RFC1918 and the 100.64/10 range Tailscale
+#: hands out. Migration 012 states the same rule in SQL for existing rows.
+LOCAL_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+    )
+)
+#: A tailnet's MagicDNS names all end here.
+TAILNET_SUFFIX = ".ts.net"
+
+
+def local_by_host(base_url: str | None) -> bool:
+    """Whether a base URL's host is on the owner's own network: loopback,
+    RFC1918, the 100.64/10 tailnet range, a *.ts.net name or localhost.
+    Any other host — a public name, a single-label docker host, an
+    unparseable URL — is not derived local; the owner can still say so."""
+    if not isinstance(base_url, str):
+        return False
+    try:
+        host = urlsplit(base_url.strip()).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(TAILNET_SUFFIX):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in network for network in LOCAL_NETWORKS)
+
+
 def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
     """The row a create/update would write, or a 400 with the stated reason.
 
@@ -197,13 +239,16 @@ def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
     # `local` (decision-role spec §1): the provider runs on the owner's own
     # machine, so its calls are never priced and never capped (usage.over_cap,
     # usage.price_call). An engine always is; any other row is what the owner
-    # says — false until he says so, and kept when an update omits it.
+    # says. A create that does not say is read off the base_url host
+    # (local_by_host); an update that omits it keeps the stored value.
     if "local" in payload:
         if not isinstance(payload["local"], bool):
             raise HTTPException(status_code=400, detail="local must be true or false")
         merged["local"] = payload["local"]
+    elif existing is None:
+        merged["local"] = local_by_host(merged.get("base_url"))
     else:
-        merged["local"] = bool((existing or {}).get("local", False))
+        merged["local"] = bool(existing.get("local", False))
     if adapter == "ollama":
         merged["local"] = True
     for field in ("default_model", "model_note", "preset"):
