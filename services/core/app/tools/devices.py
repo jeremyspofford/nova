@@ -173,7 +173,10 @@ def _names_armed(ctx: ToolContext | None) -> bool:
 
 
 def _require_connected(
-    row, ctx: ToolContext | None = None, known_as: list[str] | None = None
+    row,
+    ctx: ToolContext | None = None,
+    known_as: list[str] | None = None,
+    replay: machines.ReplayAgent | None = None,
 ) -> None:
     """Refuse unless the device's socket is live in the hub right now. The same
     words hub.command uses for a socket that is gone by the time it sends, so
@@ -190,8 +193,12 @@ def _require_connected(
     Runs exactly once per call, so every call's span carries its own record —
     the chat loop slices the sink per call, and a record suppressed here would
     leave a later call on the same device looking unchecked.
+
+    In an eval replay a declared device's connectivity is its declaration's
+    (`replay`, machines.ReplayAgent — S29b T5), never the hub's: recorded and
+    refused here in the same words, so the replay reads as a real call does.
     """
-    connected = devices_ws.hub.is_connected(row["id"])
+    connected = replay.connected if replay is not None else devices_ws.hub.is_connected(row["id"])
     if ctx is not None and ctx.facts_sink is not None:
         fact = {"device": row["name"], "connected": connected}
         if known_as is not None:
@@ -311,13 +318,18 @@ async def admit_row(row, ctx: ToolContext | None = None):
     code_repo.repo_machine for start_change): records the connectivity fact
     and refuses when the socket is not live. Returns the pool to send with.
     _admit runs it for every named-device tool, so the order still lives in
-    one place."""
-    pool = await db.get_pool()
+    one place.
+
+    A replay's declared device (machines.ReplayAgent, S29b T5) has no pool to
+    send with: its command is answered by the plant (_command), so None is
+    returned and the pool is never opened."""
+    replay = machines.plant().replay_agent(row["name"])
+    pool = None if replay is not None else await db.get_pool()
     # The names the device is known by ride its connectivity fact (stack-claim
     # epic T3) — read only when there is a sink to record them on AND the
     # turn's kind arms the guard that reads them (_names_armed).
     known_as = await _known_as(row, ctx) if _names_armed(ctx) else None
-    _require_connected(row, ctx, known_as)
+    _require_connected(row, ctx, known_as, replay)
     return pool
 
 
@@ -377,13 +389,20 @@ async def _command(
     the same way `_require_connected`'s is.
 
     `timeout` None is COMMAND_TIMEOUT_SECONDS, read HERE, at call time — never
-    bound as the default at import, which a patched constant would not reach."""
+    bound as the default at import, which a patched constant would not reach.
+
+    In an eval replay a declared device that declares run answers is answered
+    by its machines.ReplayAgent (S29b T5) — the declared result frame, or a
+    stated cannot — and nothing is signed or sent: the hub is never reached."""
     if envelopes.contains_lone_surrogate(args):
         raise ToolFailure(
             "an argument contains an unpaired UTF-16 surrogate, which cannot be signed "
             "for the device — remove the malformed character and try again"
         )
     try:
+        replay = machines.plant().replay_agent(row["name"])
+        if replay is not None:
+            return replay.answer(capability, args)
         return await devices_ws.hub.command(
             pool,
             device_id=row["id"],
@@ -797,9 +816,9 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(failure if warning is None else f"{failure}\n{warning}")
     exit_code = result.get("exit_code")
     output = result.get("output") or "(no output)"
-    # The "<name> ran <argv> — exit <code>" preamble is READ by the presented-
-    # listing guard (app/guards.py _RUN_PREAMBLE): under it, a run of bare names
-    # in the output (a plain `ls`) counts as a listing. Pinned in its suite.
+    # The "<name> ran <argv> — exit <code>" preamble is for the model; the
+    # presented-listing guard no longer arms on it (S29b) — the run fact filed
+    # above arms a bare-name `ls`. Its format stays pinned (_RUN_PREAMBLE).
     # The cwd goes AFTER the code so the preamble still matches.
     where = f" in {cwd}" if cwd is not None else ""
     text = f"{row['name']} ran {argv} — exit {exit_code}{where}\n{output}"

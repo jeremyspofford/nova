@@ -446,12 +446,15 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     replay-hermeticity ruling): ALONE, never beside the real ones, and with
     no real knock; machine_update acts only on them, and answers each with
     the outcome its declaration names (cases.FixtureDevice.update — S42b
-    Task 24), sending nothing anywhere."""
+    Task 24), sending nothing anywhere. S29b T5: a declared device's run
+    answers (cases.FixtureDevice.run) are what device_run gets on it, from
+    the plant, never the hub."""
     return machines.PLANT.set(
         machines.FixturePlant(
             {m.name: m.as_row() for m in case.machines},
             devices={d.name: d.as_view() for d in case.devices},
             updates={d.name: d.update for d in case.devices if d.update},
+            runs={d.name: list(d.run) for d in case.devices if d.run},
         )
     )
 

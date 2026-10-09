@@ -83,6 +83,10 @@ KNOWN_PREDICATES = frozenset(
         # S40: tool_succeeded plus the ARGUMENTS it ran with, because an ok
         # span alone cannot say which way a switch was set.
         "tool_succeeded_with",
+        # S29b T6: a FACT a span carries (span.meta["facts"]) — what ran and
+        # how it ended, e.g. a device_run's exit code. Same '<tool> <json
+        # object>' arg as tool_succeeded_with.
+        "fact_matches",
     }
 )
 
@@ -109,8 +113,8 @@ class PredicateSpec:
             )
         if not self.arg:
             raise CaseError(f"predicate {self.predicate!r} requires a non-empty arg")
-        if self.predicate == "tool_succeeded_with":
-            parse_tool_with(self.arg)  # refused at LOAD, by name
+        if self.predicate in ("tool_succeeded_with", "fact_matches"):
+            parse_tool_with(self.arg, self.predicate)  # refused at LOAD, by name
 
     def as_json(self) -> dict:
         out: dict = {"predicate": self.predicate}
@@ -277,23 +281,24 @@ def skill_from_dict(raw: object) -> FixtureSkill:
     )
 
 
-def parse_tool_with(arg: str) -> tuple[str, dict]:
-    """`<tool> <json object>` — the one predicate argument with two parts.
+def parse_tool_with(arg: str, predicate: str = "tool_succeeded_with") -> tuple[str, dict]:
+    """`<tool> <json object>` — the predicate argument with two parts, shared
+    by tool_succeeded_with (the call's arguments) and fact_matches (a fact the
+    span carries). `predicate` only names who is refusing.
 
     tool_succeeded('machine_configure') is true whichever way she switched a
     machine: both are an ok span. A case about the DIRECTION of a write names
     the arguments too, and they are parsed here so a typo is a load error."""
     name, _, raw = arg.strip().partition(" ")
     if not name or not raw.strip():
-        raise CaseError(f"tool_succeeded_with takes '<tool> <json object>', got {arg!r}")
+        raise CaseError(f"{predicate} takes '<tool> <json object>', got {arg!r}")
     try:
         wanted = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise CaseError(f"tool_succeeded_with: {raw!r} is not JSON — {exc}") from exc
+        raise CaseError(f"{predicate}: {raw!r} is not JSON — {exc}") from exc
     if not isinstance(wanted, dict) or not wanted:
-        raise CaseError(
-            f"tool_succeeded_with: the arguments must be a non-empty JSON object, got {raw!r}"
-        )
+        what = "arguments" if predicate == "tool_succeeded_with" else "wanted fact"
+        raise CaseError(f"{predicate}: the {what} must be a non-empty JSON object, got {raw!r}")
     return name, wanted
 
 
@@ -433,7 +438,15 @@ class FixtureDevice:
     plant answers "sent" for a device that declares none. It is one of the
     plant's own outcomes (machines.FIXTURE_UPDATE_OUTCOMES), refused at LOAD
     otherwise — never device_facts.UPDATE_OUTCOMES, the agent's own report of
-    an update, which is another set under a similar name."""
+    an update, which is another set under a similar name.
+
+    `run` (S29b T5) is what device_run answers on this device in the replay:
+    {"argv": [...], "exit_code": int, "output": text} per declared argv, the
+    words of a real shell.exec result frame (machines.run_answers checks the
+    shape at LOAD). A device that declares any is the one a device tool may
+    act on in a replay — device_run alone, on exactly a declared argv, and
+    answered by the plant (machines.ReplayAgent) without reaching the hub;
+    every other argv, and every other acting tool, is a stated cannot."""
 
     name: str
     platform: str
@@ -441,6 +454,7 @@ class FixtureDevice:
     connected: bool = True
     facts: dict | None = None
     update: str | None = None
+    run: tuple[dict, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name.startswith(FIXTURE_AGENT_PREFIX):
@@ -491,6 +505,8 @@ class FixtureDevice:
             out["facts"] = copy.deepcopy(self.facts)
         if self.update is not None:
             out["update"] = self.update
+        if self.run:
+            out["run"] = [copy.deepcopy(answer) for answer in self.run]
         return out
 
 
@@ -516,6 +532,12 @@ def device_from_dict(raw: object) -> FixtureDevice:
     update = raw.get("update")
     if update is not None and not isinstance(update, str):
         raise CaseError(f"a case device's update must be text, got {update!r}")
+    run: tuple[dict, ...] = ()
+    if "run" in raw:
+        try:
+            run = machines.run_answers(raw["run"])
+        except ValueError as exc:
+            raise CaseError(str(exc)) from exc
     return FixtureDevice(
         name=_require(raw, "name", str),
         platform=_require(raw, "platform", str),
@@ -523,6 +545,7 @@ def device_from_dict(raw: object) -> FixtureDevice:
         connected=connected,
         facts=facts,
         update=update,
+        run=run,
     )
 
 

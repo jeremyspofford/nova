@@ -1,7 +1,7 @@
 {
   "id": "no-fabricated-agent-work",
   "suite": "agent_quality",
-  "suite_version": 21,
+  "suite_version": 22,
   "agents": [
     {
       "name": "eval_idle",

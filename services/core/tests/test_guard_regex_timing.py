@@ -469,12 +469,53 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     pattern): 217 -> 219, 290 -> 292; and `_CAPABILITY_TOOLS` grew a row, the
     same `_CAP_BROWSER_POSSESSION` under a second id, reached by the live walk
     only: 292 -> 293, the difference 73 -> 74. The row is appended LAST
-    (`_CAPABILITY_TOOLS[27][0]`), so no existing id moved."""
+    (`_CAPABILITY_TOOLS[27][0]`), so no existing id moved.
+
+    S29b T1 (2026-10-09, live "I can't search the web" / "I don't have web
+    search" with web_search registered) moved all three, deliberately: 2 new
+    BARE module Patterns, reached by both walks — `_CAP_WEB_SEARCH` (the lead
+    row) and `_CAP_WEB_SEARCH_POSSESSION` (the possession row; its object is a
+    string spliced into it and into `_POSSESSION_LEAD`, which changed shape,
+    not count): 219 -> 221, 293 -> 295; and `_CAPABILITY_TOOLS` grew two rows,
+    the same two objects under second ids, reached by the live walk only:
+    295 -> 297, the difference 74 -> 76. Both are appended LAST
+    (`_CAPABILITY_TOOLS[28][0]` and `[29][0]`), so no existing id moved.
+
+    S29b T2 (2026-10-09, live "No, I can't run commands on your laptop" with
+    device_run registered) moved the live total and the difference, not the
+    fossil: device_run's GENERAL noun joined the S42a row's own pattern (one
+    device_run row, so the reachability proof above still selects it by name;
+    still [24], no new id), and `_CAPABILITY_TOOLS` grew five rows —
+    device_read_file, device_list_files, device_write_file, device_launch_app,
+    device_notify — compiled inline by `_device_row` (no bare module Pattern),
+    reached by the live walk only: 297 -> 302, the difference 76 -> 81.
+    Appended LAST (`_CAPABILITY_TOOLS[30][0]`..`[34][0]`), so no id moved.
+
+    S29b T7 (2026-10-09, "39 tests passed and 1 failed." corrected over an
+    exit-1 run) moved the two totals, deliberately, and not the difference: 3
+    new BARE module Patterns, reached by both walks — `_TESTS_FAILED_STATED`
+    (a nonzero failure/error count in the sentence), `_TESTS_TALLY` (a
+    runner's tally) and `_TESTS_PASSED_COUNT` (a bare "<N> passed" beside a
+    tally): 221 -> 224, 302 -> 305.
+
+    T7 rework (2026-10-09, orchestrator ruling: the acknowledgement is read
+    over the whole reply) replaced `_TESTS_FAILED_STATED` with ONE bare module
+    Pattern, `_TESTS_FAILURE_ACK` (failure word / partial count / except
+    qualifier, one finditer), and widened `_TESTS_TALLY` in place: one out,
+    one in, so the totals stay 224 / 305 — unmoved, deliberately.
+
+    T7 narrowing (2026-10-09, orchestrator ruling after VERIFY 2: T7 may only
+    remove corrections main makes) deleted `_TESTS_TALLY` and
+    `_TESTS_PASSED_COUNT` — a bare "<N> passed" beside a tally was a claim
+    main never read, and it corrected honest no-run sentences ("12 passed the
+    audit, 0 failed it."). `_TESTS_FAILURE_ACK` was widened in place (the
+    "nothing [is] failed/broken" negation). Two bare Patterns out, reached by
+    both walks: 224 -> 222, 305 -> 303, the difference 81 unchanged."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 219, len(old)
-    assert len(new) == 293, len(new)
-    assert len(new) - len(old) == 74
+    assert len(old) == 222, len(old)
+    assert len(new) == 303, len(new)
+    assert len(new) - len(old) == 81
 
 
 def test_the_sweep_reaches_the_stack_claim_patterns():
@@ -1904,6 +1945,42 @@ CAPABILITY_SHAPES = [
         "one possession lead, browser nouns, a present-state tail at its end",
         lambda n: "I don't have " + _repeat("a web browser or ")(n - 23) + " right now.",
     ),
+    # S29b T1 (2026-10-09): the live web-search denials, as sentences, as one
+    # clause, and one lead before many search phrases with a tail at its end.
+    ("web search denials", _repeat("I can't search the web. ")),
+    ("web search possession denials", _repeat("I don't have web search. ")),
+    ("one clause of web search denials", _repeat("I can't search the web and ")),
+    (
+        "one lead, web search phrases, a present-state tail at its end",
+        lambda n: (
+            "I can't "
+            + _repeat("search the web or ")(n - 52)
+            + " right now because the search engine isn't answering."
+        ),
+    ),
+    (
+        "one possession lead, web search nouns, a modifier at its end",
+        lambda n: "I don't have " + _repeat("web search or ")(n - 21) + " results.",
+    ),
+    # S29b T2 (2026-10-09): the live device denial, as sentences, as one
+    # clause, one lead before many device phrases with a tail at its end, and
+    # many general nouns after one verb.
+    ("device denials", _repeat("No, I can't run commands on your laptop. ")),
+    ("one clause of device denials", _repeat("I can't run commands on your laptop and ")),
+    (
+        "one lead, device phrases, a present-state tail at its end",
+        lambda n: (
+            "I can't "
+            + _repeat("read files on your computer or ")(n - 40)
+            + " right now because it's asleep."
+        ),
+    ),
+    (
+        "one verb, device nouns, an object at its end",
+        lambda n: (
+            "I can't open apps on your " + _repeat("PC or ")(n - 50) + " that need admin rights."
+        ),
+    ),
 ]
 
 
@@ -2056,11 +2133,46 @@ def test_the_sweep_reaches_the_tests_passed_patterns():
     )
 
 
+def test_the_sweep_reaches_the_s29b_t7_tally_patterns():
+    swept = _every_pattern().values()
+    for pattern in (guards._TESTS_FAILURE_ACK,):
+        assert any(p is pattern for p in swept), pattern.pattern
+
+
+def _claimed(build):
+    """`build` behind an unbacked tests claim, to n characters: the claim
+    makes narration read the whole reply for an acknowledgement."""
+    head = "All 40 tests passed. "
+    return lambda n: (head + build(n))[:n]
+
+
 TESTS_PASSED_FIFTY_KB = [
     ("claims", _repeat("All 40 tests passed and ")),
     ("hedged claims", _repeat("the tests should probably pass ")),
     ("negated claims", _repeat("not all of the tests passed ")),
     ("test words, no verb", _repeat("tests suite tests 40 all ")),
+    # S29b T7: the tally and stated-failure reads, once per sentence, over
+    # one 50 KB sentence of clauses that each make a claim and over many.
+    ("mixed reports, one sentence", _repeat("39 tests passed; 1 failed, 2 skipped; ")),
+    ("mixed reports, many sentences", _repeat("39 passed, 1 failed. ")),
+    ("tally words, no count", _repeat("passed failed skipped errors one two ")),
+    # T7 rework: the reply-wide acknowledgement read, one finditer, after an
+    # unbacked claim at the front, over shapes that never acknowledge (so
+    # the pass reaches the end): negated failures, whole counts, qualifiers
+    # just beyond their 40-character window, digit runs, "only" with no
+    # "passed".
+    ("negated failures", _repeat("All 40 tests passed, none of the tests failed, no errors, ")),
+    ("whole counts", _repeat("40 of 40 tests passed, 40/40 passed, ")),
+    (
+        "qualifiers out of reach",
+        _claimed(_repeat("tests " + "x" * 44 + " except " + "y" * 44 + " ")),
+    ),
+    ("digit runs", _claimed(_repeat("1234567890" * 3 + " /x of "))),
+    ("only-N without passed", _claimed(_repeat("only 39 " + "z" * 44 + " "))),
+    # T7 narrowing: the "nothing [is] failed/broken" negation, and "nothing"
+    # with no failure word after it, each read to the end.
+    ("nothing negations", _claimed(_repeat("nothing is broken, nothing failed, "))),
+    ("nothing without a failure word", _claimed(_repeat("nothing is fine nothing was "))),
 ]
 
 
@@ -2162,4 +2274,57 @@ def test_the_sweep_reaches_the_browser_possession_row():
     assert rows, "no capability row maps a phrase to browser_open"
     swept = _every_pattern().values()
     for pattern in rows:
+        assert any(p is pattern for p in swept), pattern.pattern
+
+
+# -- S29b T1 (2026-10-09): the web_search capability row is swept --------------
+
+
+def test_the_sweep_reaches_the_web_search_row():
+    """RED until a capability row for web_search exists (live 10-09: "I can't
+    search the web" / "I don't have web search" went uncorrected): every
+    pattern bound to web_search in _CAPABILITY_TOOLS is timed by both padding
+    sweeps — selected by its tool's name, never by position (ruling F11).
+    GREEN moves the sweep count pins in
+    test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns by the
+    new row(s) (and any new bare module Pattern), deliberately."""
+    rows = [pattern for pattern, tool in guards._CAPABILITY_TOOLS if tool == "web_search"]
+    assert rows, "no capability row maps a phrase to web_search"
+    swept = _every_pattern().values()
+    for pattern in rows:
+        assert any(p is pattern for p in swept), pattern.pattern
+
+
+# -- S29b T2 (2026-10-09): the device capability rows are swept ---------------
+
+
+def test_the_sweep_reaches_the_device_rows():
+    """RED until a capability row exists for each acting device tool (live
+    10-09: "No, I can't run commands on your laptop" went uncorrected): every
+    pattern bound to device_read_file / device_list_files / device_write_file /
+    device_launch_app / device_notify is timed by both padding sweeps, and a
+    device_run row reading a GENERAL noun ("your laptop") is too — selected by
+    tool name and by what it matches, never by position (ruling F11). GREEN
+    moves the sweep count pins in
+    test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns by the
+    new row(s) (and any new bare module Pattern), deliberately."""
+    swept = _every_pattern().values()
+    for tool in (
+        "device_read_file",
+        "device_list_files",
+        "device_write_file",
+        "device_launch_app",
+        "device_notify",
+    ):
+        rows = [pattern for pattern, t in guards._CAPABILITY_TOOLS if t == tool]
+        assert rows, f"no capability row maps a phrase to {tool}"
+        for pattern in rows:
+            assert any(p is pattern for p in swept), pattern.pattern
+    general = [
+        pattern
+        for pattern, t in guards._CAPABILITY_TOOLS
+        if t == "device_run" and pattern.search("run commands on your laptop")
+    ]
+    assert general, "no device_run row reads a general noun ('your laptop')"
+    for pattern in general:
         assert any(p is pattern for p in swept), pattern.pattern

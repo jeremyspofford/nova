@@ -221,6 +221,12 @@ class GatewayPlant:
         pool = await db.get_pool()
         return await devices.live_machines(pool)
 
+    def replay_agent(self, name: str) -> ReplayAgent | None:
+        """None: a real device's agent is reached through the hub. An eval
+        replay's plant answers for a declared device that declares run
+        answers (FixturePlant.replay_agent, S29b T5)."""
+        return None
+
     async def paired_device(self, app, name: str):
         """The live device row a device tool acts on, by the name she gave
         (Task 22 fix round 1, 6) — read through the plant so that a replay
@@ -472,6 +478,94 @@ FIXTURE_UPDATE_OUTCOMES: tuple[str, ...] = (
     "not_confirmed",
     "refused",
 )
+# The one capability a declared device answers in a replay (S29b T5):
+# device_run's. Every other acting tool still gets the no-key cannot.
+FIXTURE_RUN_CAPABILITY = "shell.exec"
+_RUN_ANSWER_KEYS = frozenset({"argv", "exit_code", "output"})
+
+
+def run_answers(raw: object) -> tuple[dict, ...]:
+    """A declared device's `run` answers (S29b T5), checked and normalized:
+    a non-empty list of {"argv": [text, ...] (non-empty), "exit_code": int,
+    "output": text (default "")} — the words of a real shell.exec result
+    frame, never stdout/stderr. argv keys the answer, so one argv twice is
+    malformed. Raises ValueError naming "device's run"; cases.device_from_dict
+    restates it as a CaseError at LOAD, and FixturePlant refuses it at
+    construction."""
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"a case device's run must be a non-empty list of answers, got {raw!r}")
+    out: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError(f"a case device's run answer must be an object, got {entry!r}")
+        unknown = sorted(set(entry) - _RUN_ANSWER_KEYS)
+        if unknown:
+            raise ValueError(
+                f"a case device's run answer takes only {', '.join(sorted(_RUN_ANSWER_KEYS))}, "
+                f"got {', '.join(map(repr, unknown))}"
+            )
+        argv = entry.get("argv")
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or not all(isinstance(element, str) for element in argv)
+        ):
+            raise ValueError(
+                f"a case device's run argv must be a non-empty list of text, got {argv!r}"
+            )
+        code = entry.get("exit_code")
+        if isinstance(code, bool) or not isinstance(code, int):
+            raise ValueError(f"a case device's run exit_code must be an integer, got {code!r}")
+        output = entry.get("output", "")
+        if not isinstance(output, str):
+            raise ValueError(f"a case device's run output must be text, got {output!r}")
+        key = tuple(argv)
+        if key in seen:
+            raise ValueError(f"a case device's run answers {argv!r} twice")
+        seen.add(key)
+        out.append({"argv": list(argv), "exit_code": code, "output": output})
+    return tuple(out)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReplayAgent:
+    """A declared device's agent in a replay that declares run answers (S29b
+    T5): what tools/devices reads INSTEAD of the hub for this one device —
+    its connectivity is the declaration's `connected`, never a socket, and
+    a command is answered from the declaration, never sent. Nothing real is
+    touched.
+
+    Only device_run's capability is answered, and only an argv declared
+    exactly (a prefix or an extension is another command). Anything else is
+    a stated cannot — never a made-up success — in words that say nothing
+    about the replay: a scored turn must not be able to tell it is measured
+    (S40 fix wave B3)."""
+
+    name: str
+    connected: bool
+    answers: dict[tuple[str, ...], dict]
+
+    def answer(self, capability: str, args: dict) -> dict:
+        """The result frame a real agent would send for this command, or
+        devices.DeviceRefused (tools/devices._command restates it as the
+        ToolFailure the model reads)."""
+        if capability != FIXTURE_RUN_CAPABILITY:
+            raise devices.DeviceRefused(
+                f"cannot: no command can be sent to {self.name}'s agent — no pairing key of "
+                "its is on record"
+            )
+        argv = args.get("argv")
+        found = (
+            self.answers.get(tuple(argv))
+            if isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+            else None
+        )
+        if found is None:
+            raise devices.DeviceRefused(
+                f"cannot: {self.name}'s agent gave no answer for {argv!r} — the command was not run"
+            )
+        return {"ok": True, "exit_code": found["exit_code"], "output": found["output"]}
 
 
 class FixturePlant(GatewayPlant):
@@ -501,6 +595,7 @@ class FixturePlant(GatewayPlant):
         fixtures: dict[str, dict],
         devices: dict[str, dict] | None = None,
         updates: dict[str, str] | None = None,
+        runs: dict[str, list[dict]] | None = None,
     ) -> None:
         # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
         # here rather than retyped. Imported in the call: app.agents imports
@@ -534,6 +629,19 @@ class FixturePlant(GatewayPlant):
                 f"a declared update must be one of {', '.join(FIXTURE_UPDATE_OUTCOMES)}, got "
                 f"{', '.join(unsaid)}"
             )
+        # What device_run answers on each declared device (S29b T5), keyed
+        # by exact argv — refused at construction, like `updates`, for a
+        # device the case did not declare or an answer of the wrong shape.
+        runs = runs or {}
+        stray_runs = sorted(name for name in runs if name not in declared_devices)
+        if stray_runs:
+            raise ValueError(
+                f"run answers are declared for no declared device: {', '.join(stray_runs)}"
+            )
+        self._runs = {
+            name: {tuple(a["argv"]): a for a in run_answers(list(answers))}
+            for name, answers in runs.items()
+        }
         self._specs = {name: copy.deepcopy(spec) for name, spec in fixtures.items()}
         self._views: dict[str, dict] = {}
         for name, spec in self._specs.items():
@@ -620,13 +728,42 @@ class FixturePlant(GatewayPlant):
         guard's verdict in a replay would hang on the owner's registry."""
         return {name: device_facts.view_machine(view) for name, view in self._devices.items()}
 
+    def replay_agent(self, name: str) -> ReplayAgent | None:
+        """The declared device's ReplayAgent when the case declared run
+        answers for it (S29b T5); None for any other name."""
+        if name not in self._runs:
+            return None
+        return ReplayAgent(
+            name=name,
+            connected=bool(self._devices[name].get("connected")),
+            answers=copy.deepcopy(self._runs[name]),
+        )
+
     async def paired_device(self, app, name: str):
-        """Never a row (Task 22 fix round 1, 6): a replay acts on no machine.
-        A declared device has no agent a command could reach — it was never
-        paired, so no key of its is on record — and any other name is not a
-        paired device in the replay's world, said with the declared listing.
-        Neither the real registry nor the hub is touched; why a real name was
-        refused goes to the log, never to the tool."""
+        """Never a real row (Task 22 fix round 1, 6): a replay acts on no real
+        machine. A declared device has no agent a command could reach — it
+        was never paired, so no key of its is on record — and any other name
+        is not a paired device in the replay's world, said with the declared
+        listing. Neither the real registry nor the hub is touched; why a real
+        name was refused goes to the log, never to the tool.
+
+        The one exception (S29b T5): a declared device whose case declares
+        run answers resolves to a row built from its declaration (no id — it
+        has no registry row), and tools/devices then reads its ReplayAgent
+        (replay_agent) for connectivity and the command, never the hub."""
+        if name in self._runs:
+            view = self._devices[name]
+            return {
+                "id": None,
+                "name": name,
+                "platform": view["platform"],
+                "hostname": view["hostname"],
+                # The plant holds the declared VIEW (agent_view), not the
+                # agent's raw facts, so a replay's row reports none: an
+                # @folder cwd is refused there as for an agent that filed no
+                # folders (known limit, S29b T5).
+                "facts": None,
+            }
         if name in self._devices:
             raise UnknownMachine(
                 f"cannot: no command can be sent to {name}'s agent — no pairing key of its is "

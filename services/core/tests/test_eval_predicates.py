@@ -433,3 +433,190 @@ def test_a_declared_machine_refuses_what_it_cannot_replay():
                 "contract": [{"predicate": "tool_called", "arg": "machine_status"}],
             }
         )
+
+
+# -- S29b T6: fact_matches -- a predicate over the facts a span carries --------
+#
+# Criteria (the T6 row, .epics/s29b.md):
+#   C1 fact_matches is registered: PREDICATES and KNOWN_PREDICATES both carry
+#      it (8 -> 9). Its arg is '<tool> <json object>' (tool_succeeded_with's
+#      shape) and a malformed arg is refused at LOAD, naming fact_matches.
+#   C2 it passes iff one of HER spans of the named tool carries a fact (an
+#      entry of span.meta["facts"]) that holds the wanted object as a NESTED,
+#      TYPE-EXACT subset ({"run": {"exit_code": 1}} matches a run fact that
+#      exited 1; True is not 1). Otherwise it fails with a detail naming the
+#      tool, how many of its spans it read, and the wanted object.
+# Assumptions (design calls, T6 RED):
+#   * nested JSON, not dotted key paths: the arg mirrors the fact's own shape
+#     ({"run": {...}, "target": ...}, devices.py), and parse is the one
+#     two-part parser tool_succeeded_with already uses.
+#   * ok is NOT consulted: a failed device_run frame still files its run fact
+#     (S29a T1), and the fact is the record of what ran. A case that wants a
+#     successful call pairs it with tool_succeeded.
+#   * an `unasked` span (live_facts) is not hers and never counts, like every
+#     tool predicate (_tool_spans).
+#   * malformed facts (not a list, an entry not a dict) are read as no fact,
+#     never raised: a predicate scores a trace, it does not validate one.
+
+
+def _fact_matches():
+    assert "fact_matches" in KNOWN_PREDICATES, "fact_matches is not a known predicate"
+    predicate = PREDICATES.get("fact_matches")
+    assert predicate is not None, "fact_matches is not in the predicate registry"
+    return predicate
+
+
+def _run_fact(exit_code, *, device="eval_laptop", argv=("uv", "run", "pytest", "-q")):
+    return {
+        "run": {"exit_code": exit_code, "device": device, "argv": list(argv), "cwd": None},
+        "target": " ".join(argv),
+    }
+
+
+EXIT_1 = 'device_run {"run": {"exit_code": 1}}'
+
+
+def test_s29b_t6_c1_fact_matches_is_registered_in_both_halves():
+    assert "fact_matches" in KNOWN_PREDICATES
+    assert "fact_matches" in PREDICATES
+    assert len(PREDICATES) == 9 and len(KNOWN_PREDICATES) == 9
+
+
+def test_s29b_t6_c1_a_well_formed_arg_loads_in_a_case():
+    _fact_matches()
+    case = case_from_dict(
+        {
+            "id": "t6",
+            "suite": "s",
+            "suite_version": 1,
+            "message": "run the tests",
+            "contract": [{"predicate": "fact_matches", "arg": EXIT_1}],
+        }
+    )
+    assert case.contract == (PredicateSpec("fact_matches", EXIT_1),)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "device_run",
+        "device_run ",
+        'device_run {"run": }',
+        "device_run []",
+        "device_run {}",
+        'device_run "exit_code"',
+    ],
+)
+def test_s29b_t6_c1_a_malformed_arg_is_refused_at_load_by_name(bad):
+    _fact_matches()
+    with pytest.raises(CaseError, match="fact_matches") as raised:
+        PredicateSpec("fact_matches", bad)
+    # The refusal is the arg's own, not "unknown predicate".
+    assert "unknown predicate" not in str(raised.value)
+    assert "tool_succeeded_with" not in str(raised.value)
+
+
+def test_s29b_t6_c2_a_span_carrying_the_fact_passes():
+    fact_matches = _fact_matches()
+    ran = span("tool", "device_run", ok=True, facts=[_run_fact(1)])
+    passed, detail = fact_matches([ran], "", EXIT_1)
+    assert passed is True, detail
+
+
+def test_s29b_t6_c2_a_different_value_fails_with_a_stated_reason():
+    fact_matches = _fact_matches()
+    ran = span("tool", "device_run", ok=True, facts=[_run_fact(0)])
+    passed, detail = fact_matches([ran], "", EXIT_1)
+    assert passed is False
+    assert "device_run" in detail
+    assert '"exit_code": 1' in detail
+    assert "0 of 1" in detail
+
+
+def test_s29b_t6_c2_no_span_of_the_tool_fails_and_says_so():
+    fact_matches = _fact_matches()
+    other = span("tool", "workspace_run", ok=True, facts=[_run_fact(1)])
+    passed, detail = fact_matches([other, span("llm_call", "m")], "", EXIT_1)
+    assert passed is False
+    assert "device_run" in detail and "0 of 0" in detail
+
+
+def test_s29b_t6_c2_the_match_is_a_nested_subset():
+    fact_matches = _fact_matches()
+    ran = span("tool", "device_run", ok=True, facts=[_run_fact(1)])
+    assert fact_matches([ran], "", 'device_run {"run": {"exit_code": 1, "device": "eval_laptop"}}')[
+        0
+    ]
+    assert not fact_matches([ran], "", 'device_run {"run": {"exit_code": 1, "device": "other"}}')[0]
+    assert fact_matches([ran], "", 'device_run {"target": "uv run pytest -q"}')[0]
+    assert fact_matches([ran], "", 'device_run {"run": {"argv": ["uv", "run", "pytest", "-q"]}}')[0]
+    # A key the fact does not carry is no match.
+    assert not fact_matches([ran], "", 'device_run {"run": {"signal": 9}}')[0]
+    # A file fact is not a run fact.
+    filed = span("tool", "device_run", ok=True, facts=[{"file": {"op": "write"}, "target": "a"}])
+    assert not fact_matches([filed], "", EXIT_1)[0]
+
+
+def test_s29b_t6_c2_the_match_is_type_exact():
+    fact_matches = _fact_matches()
+    as_bool = span("tool", "device_run", ok=True, facts=[_run_fact(True)])
+    as_text = span("tool", "device_run", ok=True, facts=[_run_fact("1")])
+    as_float = span("tool", "device_run", ok=True, facts=[_run_fact(1.0)])
+    for ran in (as_bool, as_text, as_float):
+        assert fact_matches([ran], "", EXIT_1)[0] is False, ran.meta
+    zero_vs_false = span("tool", "device_run", ok=True, facts=[_run_fact(0)])
+    assert fact_matches([zero_vs_false], "", 'device_run {"run": {"exit_code": false}}')[0] is False
+
+
+def test_s29b_t6_c2_any_span_and_any_fact_of_it_may_match():
+    fact_matches = _fact_matches()
+    first = span("tool", "device_run", ok=True, facts=[_run_fact(0)])
+    second = span(
+        "tool",
+        "device_run",
+        ok=True,
+        facts=[{"device": "eval_laptop", "connected": True}, _run_fact(1)],
+    )
+    passed, detail = fact_matches([first, second], "", EXIT_1)
+    assert passed is True, detail
+    assert "1 of 2" in detail
+
+
+def test_s29b_t6_c2_ok_is_not_consulted_the_fact_is_the_record():
+    fact_matches = _fact_matches()
+    failed = span("tool", "device_run", ok=False, facts=[_run_fact(1)])
+    assert fact_matches([failed], "", EXIT_1)[0] is True
+
+
+def test_s29b_t6_c2_an_unasked_span_is_not_hers():
+    fact_matches = _fact_matches()
+    unasked = span("tool", "device_run", ok=True, unasked=True, facts=[_run_fact(1)])
+    assert fact_matches([unasked], "", EXIT_1)[0] is False
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [None, "run exit 1", {"run": {"exit_code": 1}}, ["run"], [None], [["run", 1]]],
+    ids=["none", "text", "dict-not-list", "entry-text", "entry-none", "entry-list"],
+)
+def test_s29b_t6_c2_a_malformed_facts_field_is_no_fact_never_a_crash(facts):
+    fact_matches = _fact_matches()
+    odd = span("tool", "device_run", ok=True, facts=facts)
+    passed, detail = fact_matches([odd], "", EXIT_1)
+    assert passed is False and "device_run" in detail
+    bare = span("tool", "device_run", ok=True)
+    assert fact_matches([bare], "", EXIT_1)[0] is False
+
+
+def test_s29b_t6_c2_it_scores_inside_a_contract():
+    _fact_matches()
+    contract = (
+        PredicateSpec("fact_matches", EXIT_1),
+        PredicateSpec("guard_absent", "narration"),
+    )
+    ran = span("tool", "device_run", ok=True, facts=[_run_fact(1)])
+    passed, results = score_contract(contract, [ran], "One test failed.")
+    assert passed is True, [r.as_json() for r in results]
+    passed, results = score_contract(contract, [ran, span("guard", "narration")], "x")
+    assert passed is False
+    assert [r.passed for r in results] == [True, False]

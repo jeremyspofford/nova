@@ -17,11 +17,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app import device_facts, machines
+from app import device_facts, devices_ws, machines, tools
+from app import devices as device_rows
 from app.checks import stack
-from app.evals.cases import FixtureMachine
+from app.evals.cases import FixtureDevice, FixtureMachine
 from app.main import app as core_app
 from app.tools import machines as machine_tools
+from app.tools.base import ToolContext
 from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
@@ -933,3 +935,217 @@ async def test_the_fixture_plant_raises_the_gateways_own_failure(mount_peers):
     with pytest.raises(machines.PlantUnavailable) as real_failure:
         await machines.GatewayPlant().model_providers(core_app)
     assert str(fixture_failure.value) == str(real_failure.value)
+
+
+# -- S29b T5: a replay's declared device answers device_run from its case ------
+#
+# Criteria (S29b T5):
+#   C1 LOAD: a case device may declare `run` answers, a list of
+#      {"argv": [str, ...], "exit_code": int, "output": str (optional)}; they
+#      round-trip through case_from_dict / as_json, and a malformed one (not a
+#      list, an entry not an object, an unknown key, an empty or non-text argv,
+#      a non-int or bool exit_code, a non-text output, the same argv twice) is
+#      a CaseError at LOAD that names `run` (tests/test_eval_corpus.py). The
+#      plant refuses run answers for a device the replay did not declare, like
+#      `updates` (here).
+#   C2 ANSWERED: in a replay whose plant holds a declared device's run answers,
+#      device_run on that device with a declared argv returns what a real
+#      frame's call returns — "<name> ran <argv> — exit <code>\n<output>",
+#      ok True whatever the exit code — and files exactly one run fact
+#      {"run": {"exit_code", "device", "argv", "cwd": None}, "target"} plus the
+#      connectivity fact {"device": <name>, "connected": True}; the hub
+#      (command, is_connected) and the real registry are never touched.
+#   C3 UNDECLARED: an argv the case did not declare is a stated CANNOT
+#      refusal ("Error: cannot: …", ok False) — never a fake success — files
+#      no run fact, touches nothing real, and says nothing about evals,
+#      replays, fixtures or declarations (S40 fix wave B3).
+#   C4 SCOPE: shell.exec only — every other acting device tool on a
+#      run-declaring device still refuses as today ("no command can be sent");
+#      a device that declares no run answers still refuses device_run as
+#      today; a declared device that is NOT connected refuses device_run in
+#      the real not-connected words, files {"connected": False} and no run
+#      fact.
+#   C5 RUNNER: runner._install_fixture_plant hands each declared device's run
+#      answers to the plant, and a whole replay (runner.run_case) through the
+#      real turn path stores a device_run span ok with the run fact carrying
+#      the declared exit code, the hub never reached
+#      (tests/test_eval_runner.py).
+#
+# Assumptions (design calls, T5 RED 2026-10-09):
+#   - The answer's shape is the real result frame's: `output` (one text, what
+#     novad's shell.exec returns), not stdout/stderr — a fixture answers in the
+#     frame's own words, so device_run's formatting runs unchanged.
+#   - Answers are keyed by argv alone (exact list match); a cwd is checked as a
+#     real call checks it and carried on the fact, never part of the key.
+#   - A declared answer is an ok frame: a nonzero exit is the program's
+#     outcome, not a failed frame. A failed frame (ok false + error) is not
+#     declarable in T5.
+#   - FixturePlant takes `runs={device: [answer dicts as declared]}`; how the
+#     plant answers (a paired_device row + a plant command hook at _command,
+#     or a plant-side admit) is GREEN's call — tests drive tools.dispatch.
+#   - Connectivity in a replay is the declaration's `connected`, never
+#     hub.is_connected.
+
+_T5_ARGV = ["pytest", "-q"]
+_T5_OUTPUT = "1 failed, 39 passed in 2.10s"
+_T5_RUNS = [
+    {"argv": _T5_ARGV, "exit_code": 1, "output": _T5_OUTPUT},
+    {"argv": ["git", "status"], "exit_code": 0, "output": "nothing to commit"},
+]
+
+
+def _t5_alarms(monkeypatch) -> list[str]:
+    """The hub and the real registry, each made an alarm that records it was
+    touched and then raises."""
+    touched: list[str] = []
+
+    def alarm(what: str, *, is_async: bool):
+        def sync(*_a, **_kw):
+            touched.append(what)
+            raise AssertionError(f"a replay touched {what}")
+
+        async def coroutine(*a, **kw):
+            return sync(*a, **kw)
+
+        return coroutine if is_async else sync
+
+    monkeypatch.setattr(devices_ws.Hub, "command", alarm("hub.command", is_async=True))
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", alarm("hub.is_connected", is_async=False))
+    for name in ("get_live_by_name", "list_devices", "get", "get_live"):
+        monkeypatch.setattr(device_rows, name, alarm(f"registry {name}", is_async=True))
+    return touched
+
+
+def _t5_plant(*, connected: bool = True, runs: list[dict] | None = None, **extra_devices):
+    laptop = FixtureDevice(
+        name="eval_laptop", platform="linux", hostname="EVAL-LAPTOP", connected=connected
+    )
+    devices = {"eval_laptop": laptop.as_view()}
+    for name, device in extra_devices.items():
+        devices[name] = device.as_view()
+    return machines.FixturePlant(
+        {}, devices=devices, runs={"eval_laptop": _T5_RUNS if runs is None else runs}
+    )
+
+
+async def _t5_dispatch(plant, tool: str, args: dict) -> tuple[str, bool, list[dict]]:
+    sink: list[dict] = []
+    ctx = ToolContext(app=None, person=None, workspace_root=Path("/tmp"), facts_sink=sink)
+    token = machines.PLANT.set(plant)
+    try:
+        result, ok = await tools.dispatch(tool, args, ctx)
+    finally:
+        machines.PLANT.reset(token)
+    return result, ok, sink
+
+
+def _t5_run_facts(sink: list[dict]) -> list[dict]:
+    return [f for f in sink if isinstance(f.get("run"), dict)]
+
+
+def test_s29b_t5_c1_the_plant_refuses_run_answers_for_an_undeclared_device():
+    with pytest.raises(ValueError, match="eval_other"):
+        machines.FixturePlant(
+            {},
+            devices={"eval_laptop": {"name": "eval_laptop"}},
+            runs={"eval_other": _T5_RUNS},
+        )
+
+
+@pytest.mark.parametrize(
+    "argv,exit_code,output",
+    [(_T5_ARGV, 1, _T5_OUTPUT), (["git", "status"], 0, "nothing to commit")],
+    ids=["exit-1", "exit-0"],
+)
+async def test_s29b_t5_c2_a_declared_argv_is_answered_as_a_real_frame_is(
+    monkeypatch, argv, exit_code, output
+):
+    touched = _t5_alarms(monkeypatch)
+    result, ok, sink = await _t5_dispatch(
+        _t5_plant(), "device_run", {"device": "eval_laptop", "argv": argv}
+    )
+    assert ok is True, result
+    # device_run's own format over the declared frame: a nonzero exit is
+    # still a call that ran.
+    assert result == f"eval_laptop ran {argv} — exit {exit_code}\n{output}"
+    assert _t5_run_facts(sink) == [
+        {
+            "run": {"exit_code": exit_code, "device": "eval_laptop", "argv": argv, "cwd": None},
+            "target": " ".join(argv),
+        }
+    ]
+    assert {"device": "eval_laptop", "connected": True} in [
+        {k: f[k] for k in ("device", "connected")} for f in sink if "connected" in f
+    ]
+    assert touched == []
+
+
+async def test_s29b_t5_c3_an_undeclared_argv_is_a_stated_cannot_never_a_success(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    result, ok, sink = await _t5_dispatch(
+        _t5_plant(), "device_run", {"device": "eval_laptop", "argv": ["rm", "-rf", "/tmp/x"]}
+    )
+    assert ok is False
+    assert result.startswith("Error: cannot"), result
+    assert "ran" not in result.split("\n", 1)[0].replace("cannot", ""), result
+    assert _t5_run_facts(sink) == []
+    assert touched == []
+    # Nothing a scored turn reads mentions the harness (S40 fix wave B3).
+    said = result.replace("eval_laptop", "").lower()
+    for word in ("eval", "replay", "fixture", "declar"):
+        assert word not in said, result
+
+
+async def test_s29b_t5_c3_a_prefix_of_a_declared_argv_is_not_declared(monkeypatch):
+    """Exact match: `pytest` alone, or `pytest -q -x`, is not `pytest -q`."""
+    _t5_alarms(monkeypatch)
+    for argv in (["pytest"], [*_T5_ARGV, "-x"]):
+        result, ok, sink = await _t5_dispatch(
+            _t5_plant(), "device_run", {"device": "eval_laptop", "argv": argv}
+        )
+        assert ok is False and result.startswith("Error: cannot"), result
+        assert _t5_run_facts(sink) == []
+
+
+_T5_OTHER_ACTING = [
+    ("device_launch_app", {"app": "notepad"}),
+    ("device_list_files", {"path": "/tmp"}),
+    ("device_read_file", {"path": "/tmp/notes.txt"}),
+    ("device_write_file", {"path": "/tmp/notes.txt", "content": "hi"}),
+    ("device_notify", {"message": "hi"}),
+]
+
+
+@pytest.mark.parametrize("tool,args", _T5_OTHER_ACTING, ids=[name for name, _ in _T5_OTHER_ACTING])
+async def test_s29b_t5_c4_only_device_run_is_answered(monkeypatch, tool, args):
+    """A precision pin (passes today, must still pass after GREEN): the seam is
+    shell.exec only."""
+    touched = _t5_alarms(monkeypatch)
+    result, ok, _sink = await _t5_dispatch(_t5_plant(), tool, {"device": "eval_laptop", **args})
+    assert ok is False
+    assert result.startswith("Error: cannot: no command can be sent to eval_laptop's agent"), result
+    assert touched == []
+
+
+async def test_s29b_t5_c4_a_device_declaring_no_runs_still_refuses_device_run(monkeypatch):
+    """A precision pin: a run answer is per device."""
+    touched = _t5_alarms(monkeypatch)
+    plant = _t5_plant(eval_pc=FixtureDevice(name="eval_pc", platform="linux", hostname="EVAL-PC"))
+    result, ok, sink = await _t5_dispatch(
+        plant, "device_run", {"device": "eval_pc", "argv": _T5_ARGV}
+    )
+    assert ok is False
+    assert result.startswith("Error: cannot: no command can be sent to eval_pc's agent"), result
+    assert sink == [] and touched == []
+
+
+async def test_s29b_t5_c4_a_declared_device_not_connected_refuses_in_the_real_words(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    result, ok, sink = await _t5_dispatch(
+        _t5_plant(connected=False), "device_run", {"device": "eval_laptop", "argv": _T5_ARGV}
+    )
+    assert ok is False
+    assert result.startswith("Error: device 'eval_laptop' is not connected"), result
+    assert _t5_run_facts(sink) == []
+    assert [f["connected"] for f in sink if f.get("device") == "eval_laptop"] == [False]
+    assert touched == []

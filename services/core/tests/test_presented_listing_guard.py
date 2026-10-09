@@ -52,12 +52,25 @@ class Span:
         kind: str = "tool",
         ok: bool = True,
         result_head: str | None = None,
+        facts: list | None = None,
     ) -> None:
         self.kind = kind
         self.name = name
         self.meta: dict = {"ok": ok}
         if result_head is not None:
             self.meta["result_head"] = result_head
+        if facts is not None:
+            # chat.py files THIS call's slice of the facts sink here (S29a).
+            self.meta["facts"] = facts
+
+
+def run_fact(argv, *, exit_code=0, device="DELL", cwd=None) -> dict:
+    """The run fact device_run files on every result frame (S29a,
+    app/tools/devices.py): the agent's own exit code, never read from prose."""
+    return {
+        "run": {"exit_code": exit_code, "device": device, "argv": list(argv), "cwd": cwd},
+        "target": " ".join(argv),
+    }
 
 
 def check(reply: str, spans=(), listing_tools=LISTING_TOOLS, user_message=""):
@@ -151,11 +164,12 @@ def test_the_same_text_is_clean_when_the_user_pasted_it(label, reply):
 def test_a_bare_ls_result_is_read_loosely_on_the_result_side():
     """`ls` prints bare names one per line — not a strict entry shape (a bare
     word on the reply side is never a file). The RESULT side reads it as a
-    listing anyway — under the shell run's own preamble — because a miss there
-    is a false correction."""
+    listing anyway — armed by the span's run fact (S29b T4), not the preamble
+    — because a miss there is a false correction."""
     bare = Span(
         "device_run",
         result_head="DELL ran ['ls', '/home/j'] — exit 0\nDesktop\nDocuments\nDownloads",
+        facts=[run_fact(["ls", "/home/j"])],
     )
     tree = "├── Desktop\n├── Documents\n└── Downloads/"
     assert check(tree, [bare]) is None
@@ -165,10 +179,9 @@ def test_a_bare_ls_result_is_read_loosely_on_the_result_side():
 
 
 def test_the_shell_preamble_pin_matches_device_runs_own_format():
-    """The loose bare-name rule leans on device_run's stated preamble
-    (app/tools/devices.py: "<name> ran <argv> — exit <code>"). If that format
-    changes, this reddens — the alternative is the guard silently starting to
-    correct honest `ls` reports."""
+    """device_run's stated preamble format (app/tools/devices.py: "<name> ran
+    <argv> — exit <code>"), kept for the model. Since S29b T4 the guard no
+    longer arms on it (the run fact does); this pins the format only."""
     assert guards._RUN_PREAMBLE.search("DELL-XPS-8950 ran ['ls', '-la', '/tmp'] — exit 0")
     assert guards._RUN_PREAMBLE.search("box ran ['find', '.'] — exit 1")
     assert guards._RUN_PREAMBLE.search("we ran out of time") is None
@@ -611,3 +624,128 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
     assert "from nowhere" not in nudge
     with pytest.raises(ValueError):
         chat.presented_listing_redirect_nudge(ran_a_tool=True)
+
+
+# -- S29b T4: the bare-name run is armed by the RUN FACT, not by prose -------
+#
+# Criteria (S29b T4):
+#   C1 a SUCCESSFUL span whose meta.facts holds a run fact arms a loose
+#      bare-name result head as a listing — with or without device_run's
+#      "ran [..] — exit N" preamble in the text, and whatever the exit code
+#      (an answered frame is a run; `ls a missing` exits 2 and still lists a).
+#   C2 the preamble in result TEXT alone arms nothing: the same head with no
+#      run fact on its span (a device_run span missing the fact, a fetched page
+#      quoting a shell transcript) backs no bare-name listing. Text cannot vouch
+#      for itself.
+#   C3 a FAILED span (ok False) carrying a run fact backs nothing.
+#   C4 only a run fact arms: a span whose facts hold a file fact, an
+#      outside_worktree mark, or a malformed run entry (not a dict) does not;
+#      a run fact under a head that is no listing at all ("(no output)", two
+#      names) backs nothing.
+#   C5 unchanged: a STRONG result-side run (slash, size, tree lead, mode
+#      string) still backs with no fact at all, and the reply side never reads
+#      a fact (is_listing on reply text is untouched).
+#
+# Assumptions (design calls):
+#   - Arming moves from _presented(strict=False) to _listing_ran, which has the
+#     span: a successful span with a `run` dict in meta.facts lets a bare-name
+#     run count. Tool-agnostic — the FACT arms, not the span's name, so a
+#     future tool that files a run fact arms by that fact alone (derived).
+#   - is_listing(text, strict=False) is a TEXT-only reading and stays one: the
+#     preamble stops arming it, so a preamble-only bare-name head is no
+#     listing to is_listing either (C2).
+#   - The exit code is not consulted: span ok is the gate (C1/C3). The
+#     preamble stays in device_run's output for the model (pinned in
+#     test_device_run_cwd / test_outside_worktree_flag).
+
+BARE_TREE = "├── Desktop\n├── Documents\n└── Downloads/"
+BARE_NAMES = "Desktop\nDocuments\nDownloads"
+PREAMBLE = "DELL ran ['ls', '/home/j'] — exit 0"
+
+
+@pytest.mark.parametrize(
+    "label,head,exit_code",
+    [
+        ("bare_names_no_preamble", BARE_NAMES, 0),
+        ("bare_names_with_preamble", f"{PREAMBLE}\n{BARE_NAMES}", 0),
+        ("nonzero_exit_still_a_run", "Downloads\nMusic\nPictures", 2),
+    ],
+)
+def test_s29b_t4_c1_a_run_fact_arms_a_bare_name_result(label, head, exit_code):
+    span = Span(
+        "device_run", result_head=head, facts=[run_fact(["ls", "/home/j"], exit_code=exit_code)]
+    )
+    reply = BARE_TREE if exit_code == 0 else "├── Downloads\n├── Music\n└── Pictures/"
+    assert check(reply, [span]) is None, label
+
+
+def test_s29b_t4_c1_the_fact_arms_whatever_tool_filed_it():
+    """Derived: the fact arms, not a tool name — the same head on a span named
+    nothing this guard knows is backed the moment it carries a run fact."""
+    span = Span("brand_new_runner", result_head=BARE_NAMES, facts=[run_fact(["ls"])])
+    assert check(BARE_TREE, [span], listing_tools=[]) is None
+
+
+@pytest.mark.parametrize(
+    "label,span",
+    [
+        (
+            "device_run_preamble_no_fact",
+            Span("device_run", result_head=f"{PREAMBLE}\n{BARE_NAMES}"),
+        ),
+        (
+            "device_run_preamble_empty_facts",
+            Span("device_run", result_head=f"{PREAMBLE}\n{BARE_NAMES}", facts=[]),
+        ),
+        (
+            "page_quoting_a_shell_transcript",
+            Span("fetch_url", result_head=f"Example session:\n{PREAMBLE}\n{BARE_NAMES}"),
+        ),
+    ],
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_s29b_t4_c2_the_preamble_in_text_alone_backs_nothing(label, span):
+    assert check(BARE_TREE, [span]) is not None, label
+
+
+def test_s29b_t4_c2_is_listing_no_longer_reads_the_preamble():
+    assert not guards.is_listing(f"{PREAMBLE}\n{BARE_NAMES}", strict=False)
+
+
+def test_s29b_t4_c3_a_failed_span_with_a_run_fact_backs_nothing():
+    for head in (BARE_NAMES, f"{PREAMBLE}\n{BARE_NAMES}"):
+        failed = Span("device_run", ok=False, result_head=head, facts=[run_fact(["ls"])])
+        assert check(BARE_TREE, [failed]) is not None, head
+
+
+@pytest.mark.parametrize(
+    "label,facts,head",
+    [
+        (
+            "file_fact",
+            [{"file": {"op": "list", "device": "DELL"}, "target": "/home/j"}],
+            BARE_NAMES,
+        ),
+        (
+            "outside_worktree_mark",
+            [{"outside_worktree": "/repo", "tool": "device_run"}],
+            BARE_NAMES,
+        ),
+        ("run_not_a_dict", [{"run": "ls", "target": "ls"}], BARE_NAMES),
+        ("no_output", [run_fact(["true"])], "(no output)"),
+        ("two_names", [run_fact(["ls"])], "Desktop\nDocuments"),
+    ],
+)
+def test_s29b_t4_c4_only_a_run_fact_over_a_listing_arms(label, facts, head):
+    span = Span("device_run", result_head=head, facts=facts)
+    assert check(BARE_TREE, [span]) is not None, label
+
+
+def test_s29b_t4_c5_strong_results_back_without_any_fact():
+    for head in ("src/\ntests\ndocs", "12K\tsrc\ntests\ndocs"):
+        assert check(MEASURED_CASE, [Span("device_run", result_head=head)]) is None, head
+    # And the reply side never reads a fact: a bare-name REPLY is still no listing.
+    assert (
+        check(BARE_NAMES, [Span("device_run", result_head=BARE_NAMES, facts=[run_fact(["ls"])])])
+        is None
+    )

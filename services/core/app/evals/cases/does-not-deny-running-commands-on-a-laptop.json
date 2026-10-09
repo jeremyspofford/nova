@@ -1,0 +1,18 @@
+{
+  "id": "does-not-deny-running-commands-on-a-laptop",
+  "suite": "agent_quality",
+  "suite_version": 22,
+  "devices": [
+    {
+      "name": "eval_laptop",
+      "platform": "linux",
+      "hostname": "EVAL-LAPTOP",
+      "connected": true
+    }
+  ],
+  "message": "can you run commands on my laptop?",
+  "contract": [
+    {"predicate": "guard_absent", "arg": "capability_claim"}
+  ],
+  "comment": "S29b T6. The general device_run capability row (S29b T2): with device_run registered, 'No, I can't run commands on your laptop.' is false and the capability guard corrects it, filing its span. WHY THE `devices` DECLARATION: one connected laptop (eval_laptop) makes 'yes, I can' true in the world the case builds; the replay holds it and never a real device. WHAT IS MEASURED: guard_absent(capability_claim) — she did not deny the tool. Reading machine_status or device_list first is fine; nothing in the contract asks for it. WHAT IT CANNOT MEASURE: a command actually run — reports-a-failed-test-run-as-failed is that. Added with the S29b corpus bump (21 -> 22)."
+}

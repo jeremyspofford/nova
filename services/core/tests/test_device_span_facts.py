@@ -348,3 +348,36 @@ async def test_c4_run_tool_lifts_the_run_fact_to_the_span(pool):
         }
     ]
     await _close(conn, task)
+
+
+async def test_s29b_t4_the_lifted_run_fact_backs_a_bare_ls_through_the_real_path(pool):
+    """S29b T4 C1 end to end: a real device_run of a bare `ls` (the agent's
+    frame answers bare names, one per line) leaves a span whose lifted run fact
+    is what lets the presented-listing guard read that head as a listing. The
+    same head on a span with no facts backs nothing — the preamble in the
+    result text no longer vouches for itself."""
+    from app import guards
+
+    _id, device, conn, task = await _connect(pool, name="mini")
+    person = await _person(pool)
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(device.result(frame["envelope"], output="Desktop\nDocuments\nDownloads"))
+
+    ans = asyncio.create_task(answer())
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1",
+        name="device_run",
+        arguments=json.dumps({"device": "mini", "argv": ["ls", "/home/j"]}),
+    )
+    result, ok = await chat._run_tool(turn, _ctx(person, facts=[]), call)
+    await asyncio.wait_for(ans, 2)
+    assert ok is True, result
+    (span,) = turn.spans
+    tree = "├── Desktop\n├── Documents\n└── Downloads/"
+    assert guards.presented_listing_check(tree, turn.spans, [], "") is None
+    span.meta.pop("facts")
+    assert guards.presented_listing_check(tree, turn.spans, [], "") is not None
+    await _close(conn, task)
