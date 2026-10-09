@@ -276,3 +276,15 @@ class Tool:
     # after the owner asked for a rewind; dispatch never reads it, and nothing
     # reads it to refuse a call.
     revert: Callable[[Any, ToolContext], Awaitable[str]] | None = None
+    # Which CLAIM KINDS a successful span of this tool makes true (S29a T2):
+    # "wrote_file", "read_file", "fetched_url", ... — the kinds the narration
+    # guard checks ("I read X", "I wrote X"). The guard derives each kind's
+    # tools from this field (tools.tool_names_backing), so a tool joins a kind
+    # by declaring it, never by a list kept in guards.py (it was
+    # guards._KIND_TOOLS, and a device read of README.md had a true "I read
+    # README.md" corrected because nobody added device_read_file there). The
+    # target a span touched is still read per tool (guards._target_of).
+    #
+    # A fact about the OUTPUT, never a permission: read after the call, never
+    # by dispatch (test_no_approvals), and nothing refuses a call over it.
+    backs: frozenset[str] = frozenset()

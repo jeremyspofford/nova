@@ -159,6 +159,11 @@ def test_tool_carries_no_precheck_or_gate_field():
     # the tool — how to put back what a recorded call changed — read only by
     # the rewind code, after the fact, when the owner rewinds. Nothing reads it
     # to refuse a call, and dispatch never does (below).
+    # 2026-10-09 (S29a T2): `backs` joins the set (12 -> 13). It is a fact
+    # about the OUTPUT — which claim kinds ("I read X", "I wrote X") a
+    # successful span of the tool makes true. The narration guard reads it
+    # after the call, through tools.tool_names_backing; nothing reads it to
+    # refuse a call, and dispatch never does (below).
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -172,6 +177,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "device_line_shown",
         "traced_as_origin",
         "revert",
+        "backs",
     }
 
 
@@ -213,6 +219,12 @@ def test_dispatch_never_reads_reads_only():
     # asked for a rewind — never dispatch.
     assert "revert" not in names, (
         "dispatch reads Tool.revert — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+    # And for `backs` (S29a T2): the narration guard reads it after the call,
+    # to know which spans make a claim true — never dispatch.
+    assert "backs" not in names, (
+        "dispatch reads Tool.backs — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

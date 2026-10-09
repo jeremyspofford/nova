@@ -512,3 +512,105 @@ describe('ActivityPage — a turn somebody linked to', () => {
     expect(final.textContent).toContain('no turn with that id is in it')
   })
 })
+
+// S29 T8: the tool row renders span.meta.facts — the list chat._run_tool
+// lifts from the call's facts sink, shapes from services/core/app/tools/
+// devices.py. Each fact is one line in the row's facts block
+// (data-testid="span-facts"); the exact line format is viewFacts'
+// (activityFormat.test.ts).
+function toolSpan(name: string, meta: Record<string, unknown>) {
+  return { kind: 'tool', name, started_at: new Date().toISOString(), duration_ms: 40, meta }
+}
+
+async function openPanel(spans: ReturnType<typeof toolSpan>[]) {
+  const api = fakeApi([[turn({ id: 't1', tool_call_count: spans.length })]], { t1: detail({ spans }) })
+  render(<ActivityPage api={api} />)
+  fireEvent.click(await screen.findByTestId('activity-row-t1'))
+  return screen.findByTestId('activity-detail-t1')
+}
+
+describe('ActivityPage — span facts (S29 T8)', () => {
+  it('C1 shows a device_run span\'s run fact: command, exit code, device, cwd', async () => {
+    const panel = await openPanel([
+      toolSpan('device_run', {
+        ok: true,
+        args_redacted: { device: 'mini-pc', argv: ['python3', '--version'], cwd: '/srv/repo' },
+        result_head: 'exit 0\nPython 3.12.3',
+        facts: [
+          { device: 'mini-pc', connected: true },
+          {
+            run: { exit_code: 0, device: 'mini-pc', argv: ['python3', '--version'], cwd: '/srv/repo' },
+            target: 'python3 --version',
+          },
+        ],
+      }),
+    ])
+    const facts = await within(panel).findByTestId('span-facts')
+    expect(within(facts).getByText('run: python3 --version · exit_code 0 · device mini-pc · cwd /srv/repo')).toBeDefined()
+    expect(within(facts).getByText('device: mini-pc · connected: true')).toBeDefined()
+  })
+
+  it('C1 shows a failed run\'s nonzero exit code and a masked argv as recorded', async () => {
+    const panel = await openPanel([
+      toolSpan('device_run', {
+        ok: true,
+        result_head: 'exit 1',
+        facts: [
+          {
+            run: { exit_code: 1, device: 'mini-pc', argv: ['env', 'GH_TOKEN=<masked:40 chars>', 'gh', 'auth', 'status'], cwd: null },
+            target: 'env GH_TOKEN=<masked:40 chars> gh auth status',
+          },
+        ],
+      }),
+    ])
+    const facts = await within(panel).findByTestId('span-facts')
+    expect(
+      within(facts).getByText('run: env GH_TOKEN=<masked:40 chars> gh auth status · exit_code 1 · device mini-pc'),
+    ).toBeDefined()
+  })
+
+  it('C2 shows a device_read_file span\'s file fact: op, path, device', async () => {
+    const panel = await openPanel([
+      toolSpan('device_read_file', {
+        ok: true,
+        args_redacted: { device: 'dell', path: 'C:\\Users\\j\\README.md' },
+        result_head: '# readme',
+        facts: [
+          { device: 'dell', connected: true },
+          { file: { op: 'read', device: 'dell' }, target: 'C:\\Users\\j\\README.md' },
+        ],
+      }),
+    ])
+    const facts = await within(panel).findByTestId('span-facts')
+    expect(within(facts).getByText('file read: C:\\Users\\j\\README.md · device dell')).toBeDefined()
+  })
+
+  it('C3 shows any other fact as key: value, and a span with no facts gets no facts block', async () => {
+    const panel = await openPanel([
+      toolSpan('device_write_file', {
+        ok: true,
+        result_head: 'Wrote 2 bytes',
+        facts: [{ outside_worktree: '/home/j/workspace/nova', tool: 'device_write_file' }],
+      }),
+      toolSpan('web_search', { ok: true, args_redacted: { query: 'x' }, result_head: 'results' }),
+    ])
+    const blocks = await within(panel).findAllByTestId('span-facts')
+    expect(blocks).toHaveLength(1)
+    expect(within(blocks[0]).getByText('outside_worktree: /home/j/workspace/nova · tool: device_write_file')).toBeDefined()
+  })
+
+  it('C4 an unknown facts shape never crashes the row; it is shown verbatim and the row still renders', async () => {
+    const panel = await openPanel([
+      toolSpan('device_run', { ok: false, result_head: 'boom', facts: [null, 'odd', { run: 'x' }] }),
+      toolSpan('device_read_file', { ok: true, result_head: 'fine', facts: 'clipped' }),
+    ])
+    const blocks = await within(panel).findAllByTestId('span-facts')
+    expect(blocks).toHaveLength(2)
+    expect(within(blocks[0]).getByText('null')).toBeDefined()
+    expect(within(blocks[0]).getByText('"odd"')).toBeDefined()
+    expect(within(blocks[0]).getByText('run: x')).toBeDefined()
+    expect(within(blocks[1]).getByText('"clipped"')).toBeDefined()
+    expect(within(panel).getByText('boom')).toBeDefined()
+    expect(within(panel).getByText('fine')).toBeDefined()
+  })
+})

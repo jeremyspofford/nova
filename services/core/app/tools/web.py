@@ -249,6 +249,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=fetch_url,
+        backs=frozenset({"fetched_url"}),
         reads_only=True,
         # A web page is a live read that goes stale: the turn is not ingested
         # into memory, so "what's the latest?" always re-fetches instead of

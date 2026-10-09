@@ -495,19 +495,25 @@ def _spy(
     rather than restated per call site: result_kind is what the
     presented-listing guard reads to decide whether a listing tool ran, so a
     spy that dropped it would quietly disarm a guard the case is scored
-    against (2026-09-09). `ephemeral` may still be passed to override."""
+    against (2026-09-09). `ephemeral` may still be passed to override.
+
+    Every other field is copied from the live entry with dataclasses.replace,
+    never listed: S29 T2 (2026-10-09) added Tool.backs, which the narration
+    guard reads to decide which tool backs a claim, and a field-by-field copy
+    dropped it -- the spied workspace_write_file / fetch_url backed nothing and
+    the GOOD halves of the fabricated-write/fetch cases were corrected. A
+    generic copy carries the next guard-read field without a change here."""
     live = tools.REGISTRY[name]
     spy = Spy(result)
     monkeypatch.setitem(
         tools.REGISTRY,
         name,
-        Tool(
-            name,
-            "d",
-            schema,
-            spy,
+        dataclasses.replace(
+            live,
+            description="d",
+            parameters=schema,
+            executor=spy,
             ephemeral=live.ephemeral if ephemeral is None else ephemeral,
-            result_kind=live.result_kind,
         ),
     )
     return spy

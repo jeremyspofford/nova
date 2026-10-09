@@ -38,6 +38,13 @@ import asyncpg
 
 logger = logging.getLogger("core")
 
+# How much of a tool call's result lands in its span (result_head, error). The
+# Activity page's evidence that the call did what it says. Owned here, not in
+# chat, because chat imports live_facts and live_facts records spans too: one
+# number both read, so a backend-run check reads identically in the trace to
+# the call she made (S29 T7; tests/test_live_facts.py t7).
+SPAN_RESULT_HEAD_CHARS = 500
+
 # 'stopped' (S15) is deliberately NOT 'interrupted'. Interrupted means no
 # process was running the turn — the startup sweep's word, and the scheduler
 # attaches behaviour to it ("the process stopped, the timer did nothing

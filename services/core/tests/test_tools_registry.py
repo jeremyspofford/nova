@@ -740,3 +740,45 @@ def test_every_tool_that_writes_says_it_changes_something():
         "start_change",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
+
+
+# -- S29a T2 (2026-10-09): which claim kinds each tool's ok span backs ----------
+
+
+def test_the_tools_that_back_a_claim_kind_are_pinned_by_name():
+    """A tripwire: `Tool.backs` decides which successful spans make a claim
+    ("I read X", "I wrote X", "I pulled X") true, and the narration guard
+    derives its sets from it (tools.tool_names_backing). Every kind keeps the
+    tools guards._KIND_TOOLS listed before T2 deleted it; S29a adds the device
+    file tools. A tool added tomorrow that reads or writes must decide here."""
+    declared = {name: tool.backs for name, tool in tools.REGISTRY.items() if tool.backs}
+    assert declared == {
+        "workspace_write_file": frozenset({"wrote_file", "file_contents"}),
+        "memory_save": frozenset({"wrote_file"}),
+        "workspace_read_file": frozenset({"read_file", "file_contents"}),
+        "workspace_delete": frozenset({"deleted_file"}),
+        "fetch_url": frozenset({"fetched_url"}),
+        "browser_open": frozenset({"fetched_url"}),
+        "browser_read": frozenset({"fetched_url"}),
+        "browser_back": frozenset({"fetched_url"}),
+        "browser_act": frozenset({"fetched_url", "browser_acted"}),
+        "model_pull": frozenset({"pulled_model"}),
+        "model_remove": frozenset({"removed_model"}),
+        "machine_configure": frozenset({"configured_machine"}),
+        "show_setup_qr": frozenset({"showed_setup_qr"}),
+        # S29a: the device file tools, target-aware through their `file` fact.
+        "device_read_file": frozenset({"read_file", "file_contents"}),
+        "device_write_file": frozenset({"wrote_file"}),
+    }
+
+
+def test_tool_names_backing_is_derived_and_sorted():
+    assert tools.tool_names_backing("read_file") == ["device_read_file", "workspace_read_file"]
+    assert tools.tool_names_backing("wrote_file") == [
+        "device_write_file",
+        "memory_save",
+        "workspace_write_file",
+    ]
+    assert tools.tool_names_backing("no_such_kind") == []
+    for tool in tools.REGISTRY.values():
+        assert isinstance(tool.backs, frozenset), tool.name

@@ -897,6 +897,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=model_pull,
+        backs=frozenset({"pulled_model"}),
     ),
     Tool(
         name="model_check_update",
@@ -939,5 +940,6 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=model_remove,
+        backs=frozenset({"removed_model"}),
     ),
 )

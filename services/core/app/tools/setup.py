@@ -364,6 +364,7 @@ SHOW_SETUP_QR = Tool(
         "additionalProperties": False,
     },
     executor=show_setup_qr,
+    backs=frozenset({"showed_setup_qr"}),
 )
 
 TOOLS: tuple[Tool, ...] = (NOVA_ADDRESS, SHOW_SETUP_QR)

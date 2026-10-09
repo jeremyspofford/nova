@@ -557,3 +557,61 @@ async def test_an_agents_last_update_is_withheld_with_its_line(monkeypatch):
         facts = _facts_of(turn, tool.name)
         assert [f.get("device") or f.get("machine_update") for f in facts[:-1]] == kept
         assert facts[-1] == {"machine": "hub", "answering": True}
+
+
+# -- S29 T7: one head length, owned by chat -------------------------------------
+#
+# C1 a check's span records result_head (and error, on a refusal) cut at exactly
+#    chat.SPAN_RESULT_HEAD_CHARS: a check reads identically in the trace to the
+#    call she made.
+# C2 live_facts never restates the number: its SPAN_RESULT_HEAD_CHARS IS chat's
+#    object, and live_facts.py holds no assignment to that name.
+
+
+@pytest.mark.asyncio
+async def test_t7_a_checks_head_is_cut_at_chats_length(monkeypatch):
+    long = "y" * (chat.SPAN_RESULT_HEAD_CHARS * 3)
+    _arm(monkeypatch, _listing_tool("device_check_head", text=long))
+    turn = _Turn()
+    await live_facts.run([_call("device_check_head")], turn, _sink_ctx())
+    (span,) = turn.spans
+    assert len(span.meta["result_head"]) == chat.SPAN_RESULT_HEAD_CHARS
+
+
+@pytest.mark.asyncio
+async def test_t7_a_refused_checks_error_is_cut_at_chats_length(monkeypatch):
+    reason = "z" * (chat.SPAN_RESULT_HEAD_CHARS * 3)
+
+    async def _run(args, ctx):
+        raise ToolFailure(reason)
+
+    check = tools.Tool(
+        name="device_check_refuses",
+        description="refuses at length",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        executor=_run,
+        reads_only=True,
+    )
+    _arm(monkeypatch, check)
+    turn = _Turn()
+    await live_facts.run([_call("device_check_refuses")], turn, _sink_ctx())
+    (span,) = turn.spans
+    assert len(span.meta["error"]) == chat.SPAN_RESULT_HEAD_CHARS
+    assert len(span.meta["result_head"]) == chat.SPAN_RESULT_HEAD_CHARS
+
+
+def test_t7_the_head_length_is_chats_never_restated():
+    import ast
+
+    assert live_facts.SPAN_RESULT_HEAD_CHARS is chat.SPAN_RESULT_HEAD_CHARS
+    source = pathlib.Path(live_facts.__file__).read_text()
+    assigned = [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(t, ast.Name) and t.id == "SPAN_RESULT_HEAD_CHARS"
+            for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+    ]
+    assert assigned == [], f"live_facts.py restates SPAN_RESULT_HEAD_CHARS at line(s) {assigned}"

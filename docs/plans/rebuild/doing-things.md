@@ -947,13 +947,15 @@ Status as of `e9c871f3`.
   (`guards.py:1755-1768`). S29.
 - **Still:** `stack_claim_check` replaces an honest report backed by a
   probe (re-measured). S29.
-- **Still:** `device_run` is `ok` on a nonzero exit with the code only in
-  prose. S29.
-- **Still:** `chat._redact` masks nothing; a token in an argv reaches the
-  Activity page. S29.
-- **Still:** Activity renders no span facts. S29.
-- **Still:** `live_facts.SPAN_RESULT_HEAD_CHARS` is 400, chat's is 500, and
-  the comment says they match. S29.
+- **Fixed (S29a):** `device_run` still returns `ok` on a nonzero exit, but
+  the exit code is now a `run` fact on the span, and "the tests passed" and
+  "I ran X" are checked against it.
+- **Fixed (S29a):** a credential-shaped argv value (`KEY=value` with a
+  credential key, or a `ghp_`/`github_pat_`/`sk-` token) is masked in the
+  span's arguments and scrubbed from its result, error and facts.
+- **Fixed (S29a):** Activity renders span facts (run, file, key: value).
+- **Fixed (S29a):** the span result head length is one constant in
+  `traces.py`, read by both chat and live_facts.
 - **Still:** the scheduler never reads `person_busy`, so a firing contends
   with his chat for the one card. S34.
 - **Still:** four relative binds in the compose file; `./install update` is

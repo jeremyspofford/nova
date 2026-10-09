@@ -57,31 +57,29 @@ from urllib.parse import urlsplit
 
 from app import native_app
 
-# Successful spans of these tools ground each kind of claim. The names come
-# from the tool registry; a new filesystem/fetch tool must be added here, or
-# the guard would flag an honest use of it — and the pinned corpus in
-# test_guards.py goes red the day that happens, which is the intended alarm.
-_WRITE_TOOLS = frozenset({"workspace_write_file", "memory_save"})
-_READ_TOOLS = frozenset({"workspace_read_file"})
-_DELETE_TOOLS = frozenset({"workspace_delete"})
-_CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
-# S38: her browser backs a fetch claim too — browser_open by the address it
-# was asked for and the one it landed on, browser_read, browser_back and
-# browser_act by the page their facts name (see _target_of): a click that
-# lands on a page is a true "I opened"/"I navigated to" it (fix round 1, I2).
+# Successful spans ground each kind of claim ("I wrote X", "I read X", ...).
+# Which tools back a kind is DERIVED from the registry — each tool declares the
+# kinds it backs (`Tool.backs`, read through tools.tool_names_backing) — so a
+# new filesystem/fetch tool joins a kind by its own declaration (S29a T2: this
+# was a dict kept here, _KIND_TOOLS, and an ok device read of README.md had a
+# true "I read README.md" corrected because no one added device_read_file).
+# test_tools_registry pins every tool's `backs`, which is the alarm now.
+#
+# The named sets below are NOT the narration kinds' tools: other guards read
+# them by name, and test_state_guard pins _CONFIGURE_TOOLS / _UPDATE_TOOLS to
+# the registry's names.
+#
+# S38: the browser tools a fetch claim may be backed by (see _target_of) —
+# browser_open by the address it was asked for and the one it landed on,
+# browser_read, browser_back and browser_act by the page their facts name. The
+# presented-listing guard keeps these tools' results (keeps= below).
 _FETCH_TOOLS = frozenset(
     {"fetch_url", "browser_open", "browser_read", "browser_back", "browser_act"}
 )
-# S38: an action on a page — a click, typing, a choice, a submitted form — is
-# backed only by an ok browser_act span this turn.
-_BROWSER_ACT_TOOLS = frozenset({"browser_act"})
-_PULL_TOOLS = frozenset({"model_pull"})
-_REMOVE_TOOLS = frozenset({"model_remove"})
 _CONFIGURE_TOOLS = frozenset({"machine_configure"})
 # test_state_guard pins _CONFIGURE_TOOLS to MACHINE_CONFIGURE.name, so a
 # rename in the registry turns that red. The READ of a machine is derived from
 # the registry instead (_machine_read_tools, S40b final fix wave C2).
-_SETUP_QR_TOOLS = frozenset({"show_setup_qr"})
 # S42b: the tool that updates an agent (machine_update). Its span facts back an
 # update claim (narration) and its recorded connectivity is a device check (the
 # state guard); test_state_guard pins it to MACHINE_UPDATE.name.
@@ -91,21 +89,6 @@ _UPDATE_TOOLS = frozenset({"machine_update"})
 # settings" after it ran is about that agent, not a machine's; test_state_guard
 # pins it to the registered tool whose executor is tools.agents.update_agent.
 _PERSONA_UPDATE_TOOLS = frozenset({"update_agent"})
-
-_KIND_TOOLS: dict[str, frozenset[str]] = {
-    "wrote_file": _WRITE_TOOLS,
-    "read_file": _READ_TOOLS,
-    "deleted_file": _DELETE_TOOLS,
-    "file_contents": _CONTENT_TOOLS,
-    "fetched_url": _FETCH_TOOLS,
-    "browser_acted": _BROWSER_ACT_TOOLS,
-    "pulled_model": _PULL_TOOLS,
-    "removed_model": _REMOVE_TOOLS,
-    "configured_machine": _CONFIGURE_TOOLS,
-    "showed_setup_qr": _SETUP_QR_TOOLS,
-    # "updated_machine" (S42b) is grounded by _update_backed, from more than
-    # one tool's facts: the update tool's, the machine reads', a specialist's.
-}
 
 
 def _spend_tools() -> frozenset[str]:
@@ -142,7 +125,15 @@ def _machine_read_tools() -> frozenset[str]:
 
 
 def _tools_for_kind(kind: str) -> frozenset[str]:
-    return _spend_tools() if kind == "stated_spend" else _KIND_TOOLS[kind]
+    """The tools whose successful span backs claim kind `kind` — DERIVED from
+    the live registry (`Tool.backs`, S29a T2), never a list kept here. The
+    spend kind keeps its own derivation (`Tool.reports_spend`). Imported
+    inside the call because app.tools imports this module."""
+    if kind == "stated_spend":
+        return _spend_tools()
+    from app import tools
+
+    return frozenset(tools.tool_names_backing(kind))
 
 
 # A stated SPEND figure — "we spent $0.0005 today", "today's spend: $3.20",
@@ -162,6 +153,362 @@ _STATED_SPEND = re.compile(
 SPEND_CORRECTION_TEXT = (
     "Correction: I did not read the spend ledger this turn — that figure is not from the record."
 )
+
+# S29a T3: her completed claim that tests passed — "All 40 tests passed.",
+# "The tests passed.", "All tests pass now." Backed ONLY by a `run` fact
+# (devices.py files one from the agent's own result frame) whose target is a
+# test-runner invocation with exit_code 0, the LAST such run deciding
+# (_tests_passed_backed). Never by prose: a log that says "40 passed" is text.
+#
+# The subject must sit right against the verb: "All 40 tests probably passed"
+# hedges between them and never matches. Present "pass" counts only at the end
+# of its clause or before "now" ("make sure the tests pass so…" never matches).
+# Every gap is bounded and each repetition is entered at a word's front, so an
+# attempt is a fixed length from its start: linear over a whole reply.
+_TESTS_PASSED_CLAIM = re.compile(
+    r"\b(?:all\s++(?:of\s++)?)?(?:(?:the|my|our|your|these|those)\s++)?(?:\d{1,6}\s++)?"
+    r"(?:(?:unit|integration|new|core|web|existing|remaining|updated)\s++){0,2}"
+    r"tests?\s++(?:(?:have|has)\s++)?(?:(?:now|all)\s++)?"
+    r"(?:passed\b|pass(?:es)?(?=\s*+(?:now\b|[.,;:!)]|$)))",
+    re.I,
+)
+# A word before the claim, in its clause, that makes it no report of a run:
+# a negation ("not all tests passed", "none of the tests"), a hedge or modal,
+# a condition ("if all 40 tests passed"), or someone else's report ("you
+# said", "CI reported"). Precision first: any of them anywhere before it.
+_TESTS_PASSED_CUT = re.compile(
+    r"\b(?:not|never|no|none|neither|nor|without|if|unless|whether|should|would|will|"
+    r"might|may|could|can|must|probably|likely|hopefully|maybe|perhaps|expect\w*|hope\w*|"
+    r"ensure\w*|make\s+sure|so\s+that|said|says|say|reported|reports|claim(?:s|ed)?|"
+    r"according|told|think\w*|believe\w*|assum\w*|suppos\w*|"
+    r"\w+n't|\w+'ll)\b",
+    re.I,
+)
+# A condition a PRESENT "pass" sits under ("once all 40 tests pass, I'll open
+# the PR"); a past "passed" after one is a report ("when I ran it, all 40
+# tests passed"), so it cuts only the present form.
+_TESTS_PASSED_PRESENT_CUT = re.compile(r"\b(?:once|when|whenever|until|after|before)\b", re.I)
+# S29a T3b: the correction names what the record shows, so it is true in every
+# case: the deciding run (the LAST test-runner run fact) by its command and exit
+# code, or that no test runner ran. "No test run exited 0" was false beside an
+# earlier `npm test` that exited 0 under a later failing `pytest`.
+TESTS_NO_RUNNER_TEXT = (
+    "Correction: no test runner ran this turn — the record does not show the tests passing."
+)
+TESTS_FAILED_RUN_TEXT = (
+    "Correction: the last test run this turn, `{command}`, {outcome} — the record does not "
+    "show the tests passing."
+)
+_TESTS_COMMAND_CHARS = 80
+
+# The programs that run a test suite, by their first word (after any wrapper:
+# env assignments, `uv run`, `npx`, a shell's `-c`). A program whose suite is
+# its `test` subcommand (`go test`, `cargo test`, `npm test`) is in _RUNNER_SUB.
+_RUNNER_PROGRAMS = frozenset(
+    {"pytest", "py.test", "vitest", "jest", "mocha", "tox", "nox", "ctest", "rspec", "phpunit"}
+)
+_RUNNER_SUB = frozenset(
+    {"go", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "dotnet", "mix", "swift", "make"}
+)
+_PYTHON_MODULES = frozenset({"pytest", "unittest", "tox", "nox"})
+_WRAPPERS = frozenset(
+    {"uv", "poetry", "pipenv", "pdm", "hatch", "npx", "bunx", "pnpx", "env", "sudo", "time"}
+)
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "cmd", "powershell", "pwsh"})
+_SHELL_SEPARATORS = ("&&", "||", ";", "|", "\n")
+
+
+def _is_test_runner(argv: Sequence[str], depth: int = 0) -> bool:
+    """Whether this argv runs a test suite — read from the argv a run fact
+    recorded, never from prose. Wrappers are stepped through (`uv run pytest`,
+    `env CI=1 npm test`); a shell's `-c` string is split on its separators and
+    each command read the same way. Bounded: a wrapper chain stops at 4."""
+    words = [w for w in argv if isinstance(w, str)]
+    if depth > 4 or not words:
+        return False
+    i = 0
+    while i < len(words) and "=" in words[i] and not words[i].startswith("-"):
+        i += 1  # KEY=value before the program (a shell's env prefix)
+    if i >= len(words):
+        return False
+    program = _program(words[i])
+    rest = words[i + 1 :]
+    args = [w for w in rest if not w.startswith("-")]
+    if program in _RUNNER_PROGRAMS:
+        return True
+    if program.startswith("python") or program == "py":
+        return any(
+            rest[j] == "-m" and j + 1 < len(rest) and rest[j + 1] in _PYTHON_MODULES
+            for j in range(len(rest))
+        )
+    if program in _RUNNER_SUB:
+        if not args:
+            return False
+        sub = args[0].lower()
+        if sub == "run" and program in {"npm", "pnpm", "yarn", "bun"} and len(args) > 1:
+            sub = args[1].lower()
+        return sub in {"test", "t", "check"} or sub.startswith("test:")
+    if program in _WRAPPERS:
+        if program in {"env", "sudo", "time"}:
+            return _is_test_runner(rest, depth + 1)
+        inner = [w for w in rest if not w.startswith("-")]
+        if inner and inner[0] == "run" and program != "npx":
+            inner = inner[1:]
+        return _is_test_runner(inner, depth + 1)
+    if program in _SHELLS:
+        for j, word in enumerate(rest):
+            if word.lower() in {"-c", "/c", "-command"} and j + 1 < len(rest):
+                script = " ".join(rest[j + 1 :])
+                for sep in _SHELL_SEPARATORS:
+                    script = script.replace(sep, "\0")
+                return any(_is_test_runner(part.split(), depth + 1) for part in script.split("\0"))
+    return False
+
+
+def _deciding_test_run(spans: Sequence[Any]) -> tuple[list[str], Any] | None:
+    """The LAST test-runner `run` fact this turn, as (argv, exit_code), or None
+    when no test runner ran. Every tool span's facts are read, ok or not: a
+    failed frame still files its run fact (T1), and a later failing run must
+    outrank an earlier pass. A run that is not a test runner changes nothing."""
+    last: tuple[list[str], Any] | None = None
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        meta = getattr(span, "meta", None) or {}
+        for fact in meta.get("facts") or ():
+            run = fact.get("run") if isinstance(fact, dict) else None
+            if not isinstance(run, dict):
+                continue
+            argv = run.get("argv")
+            if not isinstance(argv, list):
+                target = fact.get("target")
+                argv = target.split() if isinstance(target, str) else []
+            if _is_test_runner(argv):
+                last = ([w for w in argv if isinstance(w, str)], run.get("exit_code"))
+    return last
+
+
+def _tests_passed_backed(spans: Sequence[Any]) -> bool:
+    """Whether the deciding test run (_deciding_test_run) exited 0."""
+    last = _deciding_test_run(spans)
+    if last is None:
+        return False
+    code = last[1]
+    return code == 0 and not isinstance(code, bool)
+
+
+def _tests_correction_text(spans: Sequence[Any]) -> str:
+    """The tests_passed correction, built from the facts the guard decided on:
+    the deciding run's command and exit code, or that no test runner ran. The
+    command drops KEY=value words (a credential in an env prefix never reaches
+    her reply) and is bounded."""
+    last = _deciding_test_run(spans)
+    if last is None:
+        return TESTS_NO_RUNNER_TEXT
+    argv, code = last
+    command = " ".join(w for w in argv if "=" not in w).replace("`", "'")
+    if len(command) > _TESTS_COMMAND_CHARS:
+        command = command[: _TESTS_COMMAND_CHARS - 1] + "…"
+    if isinstance(code, int) and not isinstance(code, bool):
+        outcome = f"exited {code}"
+    else:
+        outcome = "has no exit code on record"
+    return TESTS_FAILED_RUN_TEXT.format(command=command, outcome=outcome)
+
+
+def _tests_passed_claims(clause: str) -> list[tuple[str, str | None, str]]:
+    """The tests_passed claim in one clause, at most one: the first match no
+    cut before it in the clause silences. Each cut is found once per clause and
+    compared by position."""
+    claims = list(_TESTS_PASSED_CLAIM.finditer(clause))
+    if not claims:
+        return []
+    cut = _TESTS_PASSED_CUT.search(clause)
+    present_cut = _TESTS_PASSED_PRESENT_CUT.search(clause)
+    for tm in claims:
+        if cut is not None and cut.start() < tm.start():
+            return []
+        if (
+            present_cut is not None
+            and present_cut.start() < tm.start()
+            and not tm.group(0).lower().endswith("passed")
+        ):
+            continue
+        return [("tests_passed", None, tm.group(0))]
+    return []
+
+
+# S29a T4: her completed claim that she ran a command — "I ran `pytest`",
+# "I ran git status", "I've run `npm test`". The target is the command's
+# program (_claimed_program); backed ONLY by a `run` fact this turn whose target
+# holds a word with that program, any exit code: running is not passing
+# (_ran_command_backed). Read over whole sentences, because "I ran `git status`
+# and then `pytest`" is split into clauses at "then" and its second command
+# would lose its verb. The subject sits right against the verb ("I never ran",
+# "CI ran", "Did I run" never match); a backticked command is bounded and holds
+# no backtick or newline, a bare one is one word. Linear over a whole reply.
+_RAN_COMMAND_CLAIM = re.compile(
+    r"\bI(?:\s++ran|['’]ve\s++run|\s++have\s++run)\s++"
+    r"(?:(?:just|also|then|now|first|already|again|finally)\s++)?"
+    r"(?:`(?P<tick>[^`\n]{1,200})`|(?P<bare>[A-Za-z][\w./+-]{0,63}+))"
+)
+# Another backticked command chained onto the claim: "…`git status` and then
+# `pytest`", "…`ls`, `pwd`". Matched at the end of the previous one, a bounded
+# number of joiners, so each step is a fixed length from where it starts.
+_RAN_COMMAND_MORE = re.compile(
+    r"(?:\s*+(?:,|and\b|then\b|also\b|&)){1,4}\s*+`(?P<tick>[^`\n]{1,200})`"
+)
+_RAN_COMMAND_CHAIN = 8  # chained commands read per claim
+# The English "ran": a bare word after "I ran" that names no program.
+_RAN_ENGLISH = frozenset(
+    (
+        "into out it them the a an this that these those some all every each both one two "
+        "my your our his her their its fine well late behind ahead short low over through "
+        "across away off up down around past to by from with for on in at as again back "
+        "errands home there here everything something nothing anything tests test checks "
+        "check command commands script scripts"
+    ).split()
+)
+RAN_NO_RUN_TEXT = (
+    "Correction: no command ran this turn — the record does not show {programs} running."
+)
+RAN_OTHER_TEXT = (
+    "Correction: what ran this turn was {commands} — the record does not show {programs} running."
+)
+_RAN_LISTED = 5  # commands named in the correction, the rest counted
+# The claim kinds a run fact alone decides, each with its own true correction.
+_RUN_FACT_KINDS = frozenset({"tests_passed", "ran_command"})
+
+
+def _claimed_program(command: str) -> str | None:
+    """A claimed command's program: its first word after KEY=value words, by
+    _program; None when nothing is left."""
+    for word in command.split():
+        if "=" in word and not word.startswith("-"):
+            continue
+        program = _program(word.rstrip(".,:;!)"))
+        return program or None
+    return None
+
+
+def _ran_command_claims(sentence: str) -> list[tuple[str, str | None, str]]:
+    """The ran_command claims in one non-question sentence: each "I ran X"
+    with no negation, hedge, condition or someone else's report before it
+    (_TESTS_PASSED_CUT, found once per sentence), and the backticked commands
+    chained onto it (_RAN_COMMAND_MORE)."""
+    claims: list[tuple[str, str | None, str]] = []
+    claimed = list(_RAN_COMMAND_CLAIM.finditer(sentence))
+    if not claimed:
+        return claims
+    cut = _TESTS_PASSED_CUT.search(sentence)
+    for rm in claimed:
+        if cut is not None and cut.start() < rm.start():
+            return claims
+        commands = []
+        if rm.group("tick") is not None:
+            commands.append((rm.group("tick"), rm.group(0)))
+        else:
+            bare = rm.group("bare").rstrip(".,:;!)")
+            low = bare.lower()
+            if low in _RAN_ENGLISH or low.endswith("ly"):
+                continue
+            commands.append((bare, rm.group(0)))
+        pos = rm.end()
+        for _ in range(_RAN_COMMAND_CHAIN):
+            more = _RAN_COMMAND_MORE.match(sentence, pos)
+            if more is None:
+                break
+            commands.append((more.group("tick"), more.group(0)))
+            pos = more.end()
+        for command, phrase in commands:
+            program = _claimed_program(command)
+            if program:
+                claims.append(("ran_command", program, phrase))
+    return claims
+
+
+def _run_facts(spans: Sequence[Any]) -> list[tuple[list[str], str]]:
+    """Every `run` fact this turn, in order, as (its words, its target): every
+    tool span's facts, ok or not (a failed frame still ran). The words are the
+    argv's and the target's, each split on whitespace, so a shell's `-c`
+    string is read word by word."""
+    runs: list[tuple[list[str], str]] = []
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        meta = getattr(span, "meta", None) or {}
+        for fact in meta.get("facts") or ():
+            run = fact.get("run") if isinstance(fact, dict) else None
+            if not isinstance(run, dict):
+                continue
+            argv = run.get("argv")
+            argv = [w for w in argv if isinstance(w, str)] if isinstance(argv, list) else []
+            target = fact.get("target")
+            target = target if isinstance(target, str) else " ".join(argv)
+            words = [w for part in [*argv, target] for w in part.split()]
+            runs.append((words, " ".join(argv) or target))
+    return runs
+
+
+def _ran_command_backed(program: str | None, spans: Sequence[Any]) -> bool:
+    """Whether a run fact this turn holds a word whose program is `program`."""
+    if not program:
+        return False
+    return any(_program(word) == program for words, _target in _run_facts(spans) for word in words)
+
+
+def _file_basename(text: str) -> str:
+    """The last path segment of a word or path, quotes and shell punctuation
+    stripped, lower-cased: "services/core/chat.py" and "'C:\\x\\chat.py';" are
+    both "chat.py". String methods only."""
+    word = text.strip().strip("'\"`<>()[]{},;:|&.!?")
+    return word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+def _edited_file_backed(
+    target: str | None, successful: Sequence[Any], spans: Sequence[Any]
+) -> bool:
+    """Whether this turn wrote the file an edited_file claim names, by name:
+    an ok span of a tool backing wrote_file whose READABLE target (_target_of)
+    ends in that file — a device write's `file` fact, a workspace write's path
+    — or a `run` fact with a word naming it (a shell edit: `sed -i`, a script;
+    any exit, ok or failed frame). A span with no readable target (a memory
+    note) backs nothing: an edit names a file, and a note is not one."""
+    if not target:
+        return False
+    needle = _file_basename(target)
+    if not needle:
+        return False
+    writers = _tools_for_kind("wrote_file")
+    for span in successful:
+        if span.name not in writers:
+            continue
+        written = _target_of(span)
+        if isinstance(written, str) and _file_basename(written) == needle:
+            return True
+    return any(
+        _file_basename(word) == needle for words, _target in _run_facts(spans) for word in words
+    )
+
+
+def _ran_correction_text(programs: Sequence[str | None], spans: Sequence[Any]) -> str:
+    """The ran_command correction, true in every case: no command ran this
+    turn, or what did run (its commands, KEY=value words dropped, bounded)."""
+    named = ", ".join(f"`{p}`" for p in dict.fromkeys(p for p in programs if p))
+    runs = _run_facts(spans)
+    if not runs:
+        return RAN_NO_RUN_TEXT.format(programs=named)
+    commands = []
+    for _words, target in runs:
+        command = " ".join(w for w in target.split() if "=" not in w).replace("`", "'")
+        if len(command) > _TESTS_COMMAND_CHARS:
+            command = command[: _TESTS_COMMAND_CHARS - 1] + "…"
+        commands.append(f"`{command}`")
+    listed = ", ".join(commands[:_RAN_LISTED])
+    if len(commands) > _RAN_LISTED:
+        listed += f" and {len(commands) - _RAN_LISTED} more"
+    return RAN_OTHER_TEXT.format(commands=listed, programs=named)
+
 
 # "I pulled / downloaded / installed <model ref>": a completed-pull claim,
 # anchored on a MODEL REFERENCE token — never a bare noun, so "I installed the
@@ -804,7 +1151,15 @@ _READ_VERB_TOKENS = frozenset({"read", "checked", "reviewed", "opened", "examine
 # which one fires is decided by the object, exactly as "read" is split between
 # a file and a URL: a model reference carries a tag, a filename an extension.
 _DELETE_VERB_TOKENS = frozenset({"deleted", "removed", "erased"})
-_ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS | _DELETE_VERB_TOKENS
+# S29a T5: an edit names a file she changed — "I edited / modified / patched /
+# changed chat.py". Its own kind (edited_file), backed only by a write of that
+# name (_edited_file_backed). In the shared set so every boundary scan treats
+# "edited" as a verb: "I read notes.md and edited todo.md" ends read's object
+# walk at it. Delegation keeps its pre-T5 verbs (_DELEGATION_VERBS).
+_EDIT_VERB_TOKENS = frozenset({"edited", "modified", "patched", "changed"})
+_ACTION_VERB_TOKENS = (
+    _WRITE_VERB_TOKENS | _READ_VERB_TOKENS | _DELETE_VERB_TOKENS | _EDIT_VERB_TOKENS
+)
 # S38: a completed action on a page. A verb alone is not enough — "I typed
 # it up" is not a page — so the claim needs a page-control noun LATER in the
 # same clause, and which nouns count depends on the verb (ruling G2):
@@ -1469,6 +1824,8 @@ def _claims_in(
             continue
         if low in _WRITE_VERB_TOKENS:
             kind = "wrote_file"
+        elif low in _EDIT_VERB_TOKENS:
+            kind = "edited_file"
         elif low in _DELETE_VERB_TOKENS:
             kind = "deleted_file"
         else:
@@ -1617,6 +1974,9 @@ def _claims_in(
     for qm in _SHOWED_SETUP_QR.finditer(clause):
         claims.append(("showed_setup_qr", None, qm.group(0)))
 
+    # the tests passed (S29a T3): no target; a passing test-runner run backs it.
+    claims += _tests_passed_claims(clause)
+
     return claims
 
 
@@ -1728,6 +2088,18 @@ def _target_of(span: Any) -> str | None:
             and isinstance(fact.get("url"), str)
             and fact["url"]
         )
+    if span.name in ("device_read_file", "device_write_file"):
+        # S29a T2: the path the AGENT confirmed — the span's `file` fact
+        # target, the checked/normalized path (T1) — before the argument, so a
+        # claim is matched against what was read or written, not what was
+        # asked for. An ok span with no file fact falls back to the argument.
+        for fact in meta.get("facts") or ():
+            if isinstance(fact, dict) and isinstance(fact.get("file"), dict):
+                target = fact.get("target")
+                if isinstance(target, str) and target:
+                    return target
+        path = args.get("path")
+        return path if isinstance(path, str) else None
     if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
@@ -2083,12 +2455,13 @@ def narration_check(
         if not is_question
         for claim in _claims_in(clause, names, on_a_page)
     ]
-    # An update's RESULT is read over whole sentences (_TookCuts says why).
+    # An update's RESULT is read over whole sentences (_TookCuts says why), and
+    # so is a ran command (_RAN_COMMAND_CLAIM says why).
     found += [
         claim
         for sentence in _sentences(reply_text)
         if sentence.strip() and not sentence.rstrip().endswith("?")
-        for claim in _results_in(sentence, names)
+        for claim in (*_results_in(sentence, names), *_ran_command_claims(sentence))
     ]
     for kind, target, phrase in found:
         verb = phrase.lower()
@@ -2127,6 +2500,21 @@ def narration_check(
             # that tool's work, not a claim about her browser.
             if (successful and not on_a_page) or _browser_downloaded(spans):
                 continue
+        elif kind == "tests_passed":
+            # Read from the run facts, never a tool's name or its prose
+            # (_tests_passed_backed): a device_run that exited 1 ran.
+            if _tests_passed_backed(spans):
+                continue
+        elif kind == "ran_command":
+            # Read from the run facts' words, any exit code: running is not
+            # passing (_ran_command_backed).
+            if _ran_command_backed(target, spans):
+                continue
+        elif kind == "edited_file":
+            # Only a write of that NAME: an ok write span's readable target,
+            # or a run fact naming the file (_edited_file_backed).
+            if _edited_file_backed(target, successful, spans):
+                continue
         else:
             if kind in _UPDATE_KINDS:
                 record = names.record()
@@ -2150,7 +2538,19 @@ def narration_check(
     base = None
     if rest:
         spend = all(claim.kind == "stated_spend" for claim in rest)
-        base = SPEND_CORRECTION_TEXT if spend else CORRECTION_TEXT
+        ran = [claim.target for claim in rest if claim.kind == "ran_command"]
+        if spend:
+            base = SPEND_CORRECTION_TEXT
+        elif all(claim.kind in _RUN_FACT_KINDS for claim in rest):
+            # Each run-fact kind says what its record shows, both true at once.
+            parts = []
+            if any(claim.kind == "tests_passed" for claim in rest):
+                parts.append(_tests_correction_text(spans))
+            if ran:
+                parts.append(_ran_correction_text(ran, spans))
+            base = " ".join([parts[0], *(part.removeprefix("Correction: ") for part in parts[1:])])
+        else:
+            base = CORRECTION_TEXT
     if not updates:
         return Correction(claims=tuple(unbacked), text=base or CORRECTION_TEXT)
     said = _update_correction(updates)
@@ -2447,9 +2847,8 @@ def consent_claim_check(reply_text: str) -> Correction | None:
 
 # Capability phrase -> the tool that satisfies it. DERIVED against the live tool
 # set at the call site: a phrase only counts as a false denial when its tool is
-# in available_tools. A new tool that provides a capability is added here the
-# same way narration's _KIND_TOOLS is — and the pinned corpus in
-# test_capability_guard.py goes red the day a shipped tool's capability is
+# in available_tools. A new tool that provides a capability is added here — and
+# the pinned corpus in test_capability_guard.py goes red the day a shipped tool's capability is
 # unmapped, which is the intended alarm. Every phrase is a GENERAL ability, never
 # a specific target: plural/indefinite nouns only, so "read files"/"read a file"
 # match but "read that file"/"read report.md" do not.
@@ -8594,7 +8993,7 @@ DELEGATION_UNBACKED_CORRECTION_AGENT = (
 # (created/wrote/written/saved/updated/appended/added/read/checked/reviewed/
 # opened/examined) plus what a delegation report says. Past or perfect forms
 # only — a base form ("write", "finish") is a future/infinitive and is absent.
-_DELEGATION_VERBS = _ACTION_VERB_TOKENS | frozenset(
+_DELEGATION_VERBS = (_ACTION_VERB_TOKENS - _EDIT_VERB_TOKENS) | frozenset(
     {
         "finished",
         "completed",
