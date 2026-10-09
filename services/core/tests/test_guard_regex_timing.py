@@ -443,11 +443,27 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
        3  per-name builders in the live walk only (the fossil is not
           evolved): `_machine_name_pattern` and `_qualifier_patterns[0..1]`
           (the possessive/adjacent name before the subject, the "on/at/in
-          <name>" after the claim)."""
+          <name>" after the claim).
+
+    S29a T3 (2026-10-09, the tests_passed claim kind) moved the two totals,
+    deliberately, and not the difference: 3 new BARE module Patterns, reached
+    by both walks — `_TESTS_PASSED_CLAIM` (the claim), `_TESTS_PASSED_CUT` (a
+    negation, hedge, condition or someone else's report before it) and
+    `_TESTS_PASSED_PRESENT_CUT` (a condition that cuts only a present "pass"):
+    212 -> 215, 285 -> 288. What backs the claim is read from run facts' argv
+    with string methods, no regex.
+
+    S29a T4 (2026-10-09, the ran_command claim kind) moved the two totals,
+    deliberately, and not the difference: 2 new BARE module Patterns, reached
+    by both walks — `_RAN_COMMAND_CLAIM` ("I ran `X`" / "I ran X" / "I've run
+    X") and `_RAN_COMMAND_MORE` (a backticked command chained onto it, "…and
+    then `pytest`"): 215 -> 217, 288 -> 290. Its cut reuses
+    `_TESTS_PASSED_CUT`; what backs it is read from run facts' words with
+    string methods, no regex."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 212, len(old)
-    assert len(new) == 285, len(new)
+    assert len(old) == 217, len(old)
+    assert len(new) == 290, len(new)
     assert len(new) - len(old) == 73
 
 
@@ -2001,3 +2017,108 @@ def test_the_stack_claim_timing_record_still_fires_on_her_own_stack():
     reply = _cycle("Ollama is down on box{i}; ")(50_000) + "; The backend is down."
     claim = guards.stack_claim_check(reply, _STACK_SPANS, purpose="chat")
     assert claim is not None and claim.subject == "The backend"
+
+
+# -- S29a T3 (2026-10-09): the tests_passed claim's regexes are swept ----------
+#
+# The claim's pattern(s) live at module level under a name holding
+# TESTS_PASSED, so the global sweep above times them by itself; and narration
+# reads 50 KB of the claim, its hedges and its negations in linear time.
+
+
+def test_the_sweep_reaches_the_tests_passed_patterns():
+    assert any("TESTS_PASSED" in name for name in _every_pattern()), sorted(
+        name for name in _every_pattern() if "TEST" in name
+    )
+
+
+TESTS_PASSED_FIFTY_KB = [
+    ("claims", _repeat("All 40 tests passed and ")),
+    ("hedged claims", _repeat("the tests should probably pass ")),
+    ("negated claims", _repeat("not all of the tests passed ")),
+    ("test words, no verb", _repeat("tests suite tests 40 all ")),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", TESTS_PASSED_FIFTY_KB, ids=[c[0] for c in TESTS_PASSED_FIFTY_KB]
+)
+def test_narration_reads_tests_passed_claims_in_50_kb_in_linear_time(label, build):
+    run = _span(
+        "tool",
+        "device_run",
+        ok=True,
+        facts=[
+            {
+                "run": {"exit_code": 1, "device": "mini-pc", "argv": ["pytest"], "cwd": None},
+                "target": "pytest",
+            }
+        ],
+    )
+    _assert_linear(f"tests_passed {label}", lambda r: guards.narration_check(r, [run]), build)
+
+
+# -- S29a T4 (2026-10-09): the ran_command claim's regexes are swept -----------
+
+
+def test_the_sweep_reaches_the_ran_command_patterns():
+    assert any("RAN_COMMAND" in name for name in _every_pattern()), sorted(
+        name for name in _every_pattern() if "RAN" in name
+    )
+
+
+RAN_COMMAND_FIFTY_KB = [
+    ("claims", _repeat("I ran `pytest -q` and ")),
+    ("bare claims", _repeat("I ran pytest then ")),
+    ("english ran", _repeat("I ran into it and ran out of ")),
+    ("unclosed backtick", _repeat("I ran `pytest ")),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", RAN_COMMAND_FIFTY_KB, ids=[c[0] for c in RAN_COMMAND_FIFTY_KB]
+)
+def test_narration_reads_ran_command_claims_in_50_kb_in_linear_time(label, build):
+    run = _span(
+        "tool",
+        "device_run",
+        ok=True,
+        facts=[
+            {
+                "run": {"exit_code": 0, "device": "mini-pc", "argv": ["ls"], "cwd": None},
+                "target": "ls",
+            }
+        ],
+    )
+    _assert_linear(f"ran_command {label}", lambda r: guards.narration_check(r, [run]), build)
+
+
+# -- S29a T5 (2026-10-09): the edited_file claim reads in linear time ----------
+# Any regex GREEN adds for it is module-level with EDITED_FILE in its name, so
+# the global sweep above reaches it (and its count pin moves deliberately).
+
+EDITED_FILE_FIFTY_KB = [
+    ("claims", _repeat("I edited chat.py and ")),
+    ("verbs", _repeat("I modified patched changed ")),
+    ("claims and hedges", _repeat("I'll edit chat.py, I changed main.py; ")),
+]
+
+
+def test_narration_finds_edited_file_claims_in_a_long_reply():
+    correction = guards.narration_check(EDITED_FILE_FIFTY_KB[0][1](12_500), [])
+    assert correction is not None
+    assert "edited_file" in [claim.kind for claim in correction.claims]
+
+
+@pytest.mark.parametrize(
+    "label,build", EDITED_FILE_FIFTY_KB, ids=[c[0] for c in EDITED_FILE_FIFTY_KB]
+)
+def test_narration_reads_edited_file_claims_in_50_kb_in_linear_time(label, build):
+    write = _span(
+        "tool",
+        "device_write_file",
+        ok=True,
+        args_redacted={"device": "mini-pc", "path": "/home/j/new.py"},
+        facts=[{"file": {"op": "write", "device": "mini-pc"}, "target": "/home/j/new.py"}],
+    )
+    _assert_linear(f"edited_file {label}", lambda r: guards.narration_check(r, [write]), build)

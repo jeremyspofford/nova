@@ -678,6 +678,7 @@ MACHINE_CONFIGURE = Tool(
         "additionalProperties": False,
     },
     executor=machine_configure,
+    backs=frozenset({"configured_machine"}),
 )
 
 

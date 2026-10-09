@@ -604,6 +604,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=browser_open,
+        backs=frozenset({"fetched_url"}),
         reads_only=True,
         # A page is a live read that goes stale, like fetch_url's: a turn that
         # read one is not ingested into memory.
@@ -636,6 +637,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=browser_read,
+        backs=frozenset({"fetched_url"}),
         reads_only=True,
         ephemeral=True,
     ),
@@ -665,12 +667,14 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=browser_act,
+        backs=frozenset({"browser_acted", "fetched_url"}),
     ),
     Tool(
         name="browser_back",
         description="Go back to the previous page in your browser.",
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
         executor=browser_back,
+        backs=frozenset({"fetched_url"}),
         reads_only=True,
         ephemeral=True,
     ),

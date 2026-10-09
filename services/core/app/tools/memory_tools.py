@@ -410,6 +410,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=save,
+        backs=frozenset({"wrote_file"}),
         revert=revert_save,
     ),
     Tool(

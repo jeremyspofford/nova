@@ -1193,3 +1193,205 @@ async def test_a_stop_lands_inside_a_long_tool_call_not_only_between_them(
     assert "slow_tool" in reply, "it says what it was doing when it stopped"
     assert "all 200 steps are done" not in reply, "the round after the stop never ran"
     assert "finished all 200 steps" not in reply, "it does not claim the call completed"
+
+
+# -- T6 (S29a): a credential typed into a command's argv never reaches the trace
+#
+# Criteria (the .epics/s29.md T6 section holds the same):
+#   C1 an argv element `KEY=value` whose KEY is credential-shaped by
+#      chat._credential_key(KEY, header=False) is recorded as
+#      `KEY=<masked:N chars>` (N = len(value)); the KEY stays readable. The same
+#      holds for such a word inside one element (`sh -c "GH_TOKEN=… gh …"`).
+#   C2 a word in an argv element that is a known token (ghp_/gho_/ghu_/ghs_/
+#      ghr_/github_pat_/sk- followed by 16+ of [A-Za-z0-9_-]) is recorded as
+#      `<masked:N chars>` wherever it sits: its own element, the value of a
+#      non-credential KEY=, or inside an `-c` string.
+#   C3 the masked bytes are added to the call's _SpanScrub, so the span's
+#      result_head, error and facts (the run fact's argv and target) hold none
+#      of them: turn_spans holds no token bytes.
+#   C4 the boundary: argv with no credential is recorded exactly as sent —
+#      `pytest -q tests/x.py`, KEY_PATH=/tmp/x, PYTHONPATH=src,
+#      TOKEN_FILE=/tmp/t, a short `ghp_fix` branch, `sk-learn`.
+
+T6_GH = "ghp_" + "a1B2" * 9  # 40 chars, the DoD's `<masked:40 chars>`
+T6_PAT = "github_pat_" + "Z9y8" * 10
+T6_SK = "sk-" + "x7Y6_" * 8
+
+
+def _t6_argv(argv: list) -> object:
+    return chat._span_arguments({"device": "mini", "argv": argv}, "device_run")["argv"]
+
+
+def test_t6_c1_a_credential_key_assignment_is_masked_and_keeps_its_key():
+    assert _t6_argv(["env", f"GH_TOKEN={T6_GH}", "gh", "auth", "status"]) == [
+        "env",
+        "GH_TOKEN=<masked:40 chars>",
+        "gh",
+        "auth",
+        "status",
+    ]
+
+
+@pytest.mark.parametrize(
+    "key", ["API_KEY", "OPENAI_API_KEY", "PASSWORD", "DB_PASSWORD", "CLIENT_SECRET", "token"]
+)
+def test_t6_c1_every_credential_shaped_key_is_masked(key):
+    value = "hunter2-correct-horse"
+    assert _t6_argv(["env", f"{key}={value}", "make"]) == [
+        "env",
+        f"{key}=<masked:{len(value)} chars>",
+        "make",
+    ]
+
+
+def test_t6_c1_an_assignment_inside_a_shell_string_is_masked():
+    recorded = _t6_argv(["sh", "-c", f"GH_TOKEN={T6_GH} gh auth status"])
+    assert recorded == ["sh", "-c", "GH_TOKEN=<masked:40 chars> gh auth status"]
+
+
+@pytest.mark.parametrize("token", [T6_GH, T6_PAT, T6_SK])
+def test_t6_c2_a_known_token_as_its_own_element_is_masked(token):
+    assert _t6_argv(["gh", "auth", "login", "--with-token", token]) == [
+        "gh",
+        "auth",
+        "login",
+        "--with-token",
+        f"<masked:{len(token)} chars>",
+    ]
+
+
+def test_t6_c2_a_known_token_under_a_plain_key_is_masked():
+    assert _t6_argv(["env", f"GITHUB_AUTH={T6_GH}", "gh"]) == [
+        "env",
+        "GITHUB_AUTH=<masked:40 chars>",
+        "gh",
+    ]
+
+
+def test_t6_c2_a_known_token_inside_a_shell_string_is_masked():
+    recorded = _t6_argv(["bash", "-c", f"echo {T6_SK} | gh auth login --with-token"])
+    assert recorded == [
+        "bash",
+        "-c",
+        f"echo <masked:{len(T6_SK)} chars> | gh auth login --with-token",
+    ]
+
+
+def test_t6_c3_the_masked_bytes_are_in_the_spans_scrub():
+    _recorded, scrub = chat._span_record(
+        {"device": "mini", "argv": ["env", f"GH_TOKEN={T6_GH}", "gh", "auth", "status"]},
+        "device_run",
+    )
+    assert T6_GH not in scrub(f"mini ran ['env', 'GH_TOKEN={T6_GH}'] — exit 0")
+    facts = [{"run": {"argv": ["env", f"GH_TOKEN={T6_GH}"]}, "target": f"env GH_TOKEN={T6_GH}"}]
+    assert T6_GH not in json.dumps(scrub.tree(facts))
+
+
+@pytest.mark.parametrize("ok", [True, False])
+async def test_t6_c3_no_token_byte_reaches_the_span(pool, monkeypatch, ok):
+    """A real device_run through chat._run_tool: the agent echoes the token in
+    its output (ok) or its error (failed frame); the run fact carries it in
+    argv and target. None of it may land in the span."""
+    from tests.test_devices_ws import _close, _connect, _ctx, _person
+
+    monkeypatch.delenv("NOVA_CHECKOUT", raising=False)
+    monkeypatch.delenv("NOVA_REPO_HOST", raising=False)
+    _id, device, conn, task = await _connect(pool, name="mini")
+    person = await _person(pool)
+    echoed = f"logged in with {T6_GH}"
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        conn.feed(
+            device.result(
+                frame["envelope"],
+                ok=ok,
+                output=echoed if ok else "",
+                exit_code=0 if ok else 1,
+                error=None if ok else echoed,
+            )
+        )
+
+    ans = asyncio.create_task(answer())
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    call = chat.ToolCall(
+        id="c1",
+        name="device_run",
+        arguments=json.dumps(
+            {"device": "mini", "argv": ["env", f"GH_TOKEN={T6_GH}", "gh", "auth", "status"]}
+        ),
+    )
+    _result, dispatched_ok = await chat._run_tool(turn, _ctx(person, facts=[]), call)
+    await asyncio.wait_for(ans, 2)
+    await _close(conn, task)
+    assert dispatched_ok is ok
+    (span,) = turn.spans
+    assert span.meta["args_redacted"]["argv"][1] == "GH_TOKEN=<masked:40 chars>"
+    assert any("run" in fact for fact in span.meta.get("facts", []))
+    assert T6_GH not in json.dumps(span.meta, default=str)
+    assert "ghp_" not in json.dumps(span.meta, default=str)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pytest", "-q", "tests/x.py"],
+        ["env", "KEY_PATH=/tmp/x", "make"],
+        ["env", "PYTHONPATH=src", "uv", "run", "pytest"],
+        ["env", "TOKEN_FILE=/tmp/t", "gh", "auth", "status"],
+        ["git", "checkout", "ghp_fix"],
+        ["pip", "install", "sk-learn"],
+        ["sh", "-c", "PYTHONPATH=src pytest -q tests/test_chat.py && echo done"],
+        ["grep", "-rn", "api_key", "app/"],
+    ],
+)
+def test_t6_c4_argv_with_no_credential_is_recorded_as_sent(argv):
+    assert _t6_argv(argv) == argv
+
+
+# T6 coverage: every prefix in C2, the 16-char floor, masking before the clip,
+# and linear time on a long element.
+
+
+@pytest.mark.parametrize("prefix", ["gho_", "ghu_", "ghs_", "ghr_"])
+def test_t6_cov_every_github_prefix_is_masked(prefix):
+    token = prefix + "q" * 16
+    assert _t6_argv(["gh", token]) == ["gh", f"<masked:{len(token)} chars>"]
+
+
+def test_t6_cov_the_floor_is_sixteen_token_characters():
+    assert _t6_argv(["git", "checkout", "ghp_" + "b" * 15]) == [
+        "git",
+        "checkout",
+        "ghp_" + "b" * 15,
+    ]
+    assert _t6_argv(["gh", "ghp_" + "b" * 16]) == ["gh", "<masked:20 chars>"]
+
+
+def test_t6_cov_masking_runs_before_the_clip():
+    """A token straddling the per-value clip: clipped first, its head would
+    stay in the record unmasked."""
+    pad = "a" * (chat.SPAN_ARG_HEAD_CHARS - 10)
+    recorded = _t6_argv(["sh", "-c", f"{pad} {T6_GH}"])
+    assert "ghp_" not in json.dumps(recorded)
+    keyed = _t6_argv(["sh", "-c", f"{pad[:-9]} GH_TOKEN={T6_GH}"])
+    assert T6_GH[:6] not in json.dumps(keyed)
+
+
+def test_t6_cov_a_long_element_is_masked_in_linear_time():
+    import time
+
+    element = ("ghp_" * 50_000) + " " + ("x" * 200_000) + " " + ("A=1 " * 50_000)
+    start = time.perf_counter()
+    chat._span_arguments({"device": "mini", "argv": [element]}, "device_run")
+    assert time.perf_counter() - start < 1.0
+
+
+def test_t6_cov_a_token_by_its_shape_is_in_the_spans_scrub():
+    """C3 for C2's path: a token masked by shape alone (no credential KEY)
+    is scrubbed from the result and the run fact too."""
+    argv = ["gh", "auth", "login", "--with-token", T6_PAT]
+    _recorded, scrub = chat._span_record({"device": "mini", "argv": argv}, "device_run")
+    assert T6_PAT not in scrub(f"mini ran {argv!r} — exit 1: bad credentials {T6_PAT}")
+    facts = [{"run": {"argv": argv}, "target": " ".join(argv)}]
+    assert T6_PAT not in json.dumps(scrub.tree(facts))

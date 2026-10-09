@@ -463,6 +463,16 @@ def _outside_checkout(
     return None
 
 
+def _file_fact(ctx: ToolContext | None, fact: dict) -> None:
+    """Record a structured fact from the agent's own result frame (S29 T1).
+    A run fact {"run": {...}, "target": <argv joined>} or a file fact
+    {"file": {...}, "target": <checked path>}. Neither has a top-level
+    "device" key: that key is read as a connectivity record (the state guard),
+    so the device sits inside the kind's own dict."""
+    if ctx is not None and ctx.facts_sink is not None:
+        ctx.facts_sink.append(fact)
+
+
 def _flag_outside(ctx: ToolContext | None, repo: str, tool: str) -> str:
     """Record the fact for this call and return the warning line."""
     if ctx is not None and ctx.facts_sink is not None:
@@ -717,6 +727,7 @@ async def device_list_files(args: dict, ctx: ToolContext) -> str:
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
     pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.read", {"path": path}, ctx=ctx), row)
+    _file_fact(ctx, {"file": {"op": "read", "device": row["name"]}, "target": path})
     return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
 
 
@@ -759,6 +770,20 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     # and ran or failed on the machine, so a flagged call is flagged either
     # way (a transport failure above sent nothing it could confirm, and says so).
     warning = _flag_outside(ctx, outside, "device_run") if outside is not None else None
+    # The run fact (S29 T1), on EVERY result frame — a nonzero exit and a failed
+    # frame included: the exit code is the agent's own, never read from prose.
+    _file_fact(
+        ctx,
+        {
+            "run": {
+                "exit_code": result.get("exit_code"),
+                "device": row["name"],
+                "argv": list(argv),
+                "cwd": cwd,
+            },
+            "target": " ".join(str(element) for element in argv),
+        },
+    )
     if not result.get("ok"):
         if cwd is not None:
             # The agent's own words for a missing directory name only the
@@ -804,6 +829,7 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
         if warning is None:
             raise
         raise ToolFailure(f"{exc}\n{warning}") from exc
+    _file_fact(ctx, {"file": {"op": "write", "device": row["name"]}, "target": path})
     done = f"Wrote {path} on {row['name']}."
     return done if warning is None else f"{done}\n{warning}"
 
@@ -940,6 +966,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_read_file,
+        backs=frozenset({"file_contents", "read_file"}),
         reads_only=True,
         ephemeral=True,
     ),
@@ -1039,6 +1066,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path", "content"],
         ),
         executor=device_write_file,
+        backs=frozenset({"wrote_file"}),
         ephemeral=False,
     ),
     Tool(

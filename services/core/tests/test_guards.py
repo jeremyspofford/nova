@@ -5384,3 +5384,736 @@ def test_no_name_is_bound_twice_at_the_top_of_guards_or_chat():
                     twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
                 seen[name] = node.lineno
         assert not twice, f"{module.__name__}: bound twice: {twice}"
+
+
+# -- S29a T2 (2026-10-09): a tool joins a claim kind by declaring `backs` --------
+#
+# Criteria (the tracker's T2 section holds the same):
+#   C1 Tool.backs is a frozenset of claim kinds (default empty), and
+#      tools.tool_names_backing(kind) is DERIVED from the live registry: a tool
+#      monkeypatched in declaring a kind backs it by that declaration alone.
+#   C2 guards._KIND_TOOLS is gone; the named sets other guards and
+#      test_state_guard pin (_CONFIGURE_TOOLS, _UPDATE_TOOLS, _FETCH_TOOLS, ...)
+#      stay.
+#   C3 device_read_file backs read_file + file_contents and device_write_file
+#      backs wrote_file, target-aware through the span's `file` fact (T1):
+#      "I read README.md on the Dell" over an ok device_read_file of
+#      .../README.md stands; "I read config.yaml" over the same span is
+#      corrected; the same for device_write_file and "I wrote notes.md".
+#   C4 every other kind keeps exactly the tools it had (the per-tool pin in
+#      test_tools_registry), so the existing claim guards behave unchanged.
+
+
+def device_file_span(name: str, op: str, path: str, *, ok: bool = True):
+    """An ok device file span as chat records it after T1: the device and path
+    in args_redacted, and the agent-confirmed `file` fact."""
+    facts = [{"file": {"op": op, "device": "dell"}, "target": path}] if ok else []
+    return SimpleNamespace(
+        kind="tool",
+        name=name,
+        meta={"ok": ok, "args_redacted": {"device": "dell", "path": path}, "facts": facts},
+    )
+
+
+def test_t2_kind_tools_dict_is_gone():
+    assert not hasattr(guards, "_KIND_TOOLS"), (
+        "guards._KIND_TOOLS is a maintained list; T2 derives the kind's tools from Tool.backs"
+    )
+
+
+def test_t2_named_sets_other_guards_pin_stay():
+    for name in ("_CONFIGURE_TOOLS", "_UPDATE_TOOLS", "_FETCH_TOOLS", "_PERSONA_UPDATE_TOOLS"):
+        assert isinstance(getattr(guards, name), frozenset), name
+
+
+def test_t2_a_tool_declaring_backs_backs_that_kind_by_the_declaration_alone(monkeypatch):
+    from app import tools
+    from app.tools.base import Tool
+
+    async def _noop(args, ctx):
+        return "ok"
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "t2_reader",
+        Tool(
+            name="t2_reader",
+            description="reads",
+            parameters={"type": "object", "properties": {}},
+            executor=_noop,
+            backs=frozenset({"read_file"}),
+        ),
+    )
+    assert "t2_reader" in tools.tool_names_backing("read_file")
+    assert "t2_reader" not in tools.tool_names_backing("wrote_file")
+    span = SimpleNamespace(kind="tool", name="t2_reader", meta={"ok": True, "args_redacted": {}})
+    assert guards.narration_check("I read report.md.", [span]) is None
+
+
+def test_t2_device_read_backs_a_read_of_that_file():
+    span = device_file_span("device_read_file", "read", "C:/src/nova/README.md")
+    assert guards.narration_check("I read README.md on the Dell.", [span]) is None
+
+
+def test_t2_device_read_does_not_back_a_read_of_another_file():
+    span = device_file_span("device_read_file", "read", "C:/src/nova/README.md")
+    correction = guards.narration_check("I read config.yaml on the Dell.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["read_file"]
+    assert targets(correction) == ["config.yaml"]
+
+
+def test_t2_device_write_backs_a_write_of_that_file():
+    span = device_file_span("device_write_file", "write", "/home/j/notes.md")
+    assert guards.narration_check("I wrote notes.md on the mini PC.", [span]) is None
+    assert guards.narration_check("I've saved notes.md.", [span]) is None
+
+
+def test_t2_device_write_does_not_back_a_write_of_another_file():
+    span = device_file_span("device_write_file", "write", "/home/j/notes.md")
+    correction = guards.narration_check("I wrote todo.md on the mini PC.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction) == ["todo.md"]
+
+
+def test_t2_a_device_read_does_not_back_a_write():
+    span = device_file_span("device_read_file", "read", "/home/j/notes.md")
+    correction = guards.narration_check("I wrote notes.md on the mini PC.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+
+
+def test_t2_a_failed_device_read_backs_nothing():
+    span = device_file_span("device_read_file", "read", "C:/src/nova/README.md", ok=False)
+    correction = guards.narration_check("I read README.md on the Dell.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["read_file"]
+
+
+# T2 COVERAGE (2026-10-09): C3's "target-aware via the span's `file` fact" —
+# the tests above give the fact and the argument the same path, so reading
+# only the argument would pass them. These pin that the agent-confirmed fact
+# target decides, and that a span with no fact falls back to its argument
+# (never to None, which would back a claim of ANY file).
+
+
+def test_t2_cov_the_file_fact_target_outranks_the_path_argument():
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_read_file",
+        meta={
+            "ok": True,
+            "args_redacted": {"device": "dell", "path": "C:/src/nova/link.md"},
+            "facts": [
+                {"file": {"op": "read", "device": "dell"}, "target": "C:/src/nova/README.md"}
+            ],
+        },
+    )
+    assert guards.narration_check("I read README.md on the Dell.", [span]) is None
+    correction = guards.narration_check("I read link.md on the Dell.", [span])
+    assert correction is not None
+    assert targets(correction) == ["link.md"]
+
+
+def test_t2_cov_an_ok_device_span_without_a_file_fact_is_read_by_its_argument():
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_write_file",
+        meta={"ok": True, "args_redacted": {"device": "dell", "path": "/home/j/notes.md"}},
+    )
+    assert guards.narration_check("I wrote notes.md on the mini PC.", [span]) is None
+    correction = guards.narration_check("I wrote todo.md on the mini PC.", [span])
+    assert correction is not None
+    assert targets(correction) == ["todo.md"]
+
+
+# -- S29a T3 (2026-10-09): "the tests passed" is backed only by a run fact ------
+#
+# Criteria (the tracker's T3 section holds the same):
+#   C1 claim kind tests_passed: her completed claim that tests passed ("All 40
+#      tests passed.", "The tests passed.", "All tests pass now.") is backed
+#      ONLY by a `run` fact (T1) whose target is a test-runner invocation
+#      (pytest, uv run pytest, python -m pytest, npm test, go test, cargo test
+#      ...) with exit_code 0. No run fact, a non-runner run (ls, cat
+#      pytest.ini), a run span with no fact, or another tool's prose result
+#      ("40 passed") backs nothing.
+#   C2 the LAST test-runner run fact this turn decides: exit 1 under "all 40
+#      tests passed" is corrected, exit 0 stands; exit 1 then exit 0 stands,
+#      exit 0 then exit 1 is corrected; a later non-runner run changes nothing.
+#   C3 derived from facts, never from the owner's message: narration_check
+#      still reads only her reply and the spans (signature pinned).
+#   C4 precision first: hedged, future, conditional, negated, other-subject
+#      and question forms stay silent with no run at all.
+#   C5 every new regex is swept by test_guard_regex_timing (a module pattern
+#      whose name holds TESTS_PASSED) and narration reads 50 KB of the claim
+#      in linear time.
+
+
+def device_run_span(argv: list[str], exit_code: int | None, *, ok: bool = True, fact: bool = True):
+    """A device_run span as chat records it after T1: args, and the run fact."""
+    facts = (
+        [
+            {
+                "run": {"exit_code": exit_code, "device": "mini-pc", "argv": argv, "cwd": None},
+                "target": " ".join(argv),
+            }
+        ]
+        if fact
+        else []
+    )
+    return SimpleNamespace(
+        kind="tool",
+        name="device_run",
+        meta={"ok": ok, "args_redacted": {"device": "mini-pc", "argv": argv}, "facts": facts},
+    )
+
+
+PYTEST = ["uv", "run", "pytest", "-q"]
+
+
+def _tests_passed(correction) -> bool:
+    return correction is not None and "tests_passed" in kinds(correction)
+
+
+@pytest.mark.parametrize(
+    "reply", ["All 40 tests passed.", "The tests passed.", "All tests pass now."]
+)
+def test_t3_a_tests_passed_claim_with_no_run_is_corrected(reply):
+    assert _tests_passed(guards.narration_check(reply, []))
+
+
+def test_t3_exit_1_under_all_40_tests_passed_is_corrected():
+    correction = guards.narration_check("All 40 tests passed.", [device_run_span(PYTEST, 1)])
+    assert _tests_passed(correction)
+
+
+def test_t3_exit_0_under_all_40_tests_passed_stands():
+    assert guards.narration_check("All 40 tests passed.", [device_run_span(PYTEST, 0)]) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pytest"],
+        ["python3", "-m", "pytest", "tests/"],
+        ["npm", "test"],
+        ["go", "test", "./..."],
+        ["cargo", "test"],
+    ],
+    ids=lambda a: " ".join(a),
+)
+def test_t3_any_test_runner_with_exit_0_backs_the_claim(argv):
+    assert guards.narration_check("The tests passed.", [device_run_span(argv, 0)]) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["ls", "-la"], ["cat", "pytest.ini"], ["echo", "all", "40", "tests", "passed"]],
+    ids=lambda a: " ".join(a),
+)
+def test_t3_a_non_runner_exit_0_backs_nothing(argv):
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", [device_run_span(argv, 0)]))
+
+
+def test_t3_a_run_span_without_a_run_fact_backs_nothing():
+    span = device_run_span(PYTEST, 0, fact=False)
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", [span]))
+
+
+def test_t3_another_tools_prose_result_backs_nothing():
+    span = SimpleNamespace(
+        kind="tool",
+        name="workspace_read_file",
+        meta={
+            "ok": True,
+            "args_redacted": {"path": "pytest.log"},
+            "result_head": "===== 40 passed in 3.21s =====",
+        },
+    )
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", [span]))
+
+
+def test_t3_a_failed_run_then_a_passing_run_stands():
+    spans = [device_run_span(PYTEST, 1), device_run_span(PYTEST, 0)]
+    assert guards.narration_check("All 40 tests passed.", spans) is None
+
+
+def test_t3_a_passing_run_then_a_failed_run_is_corrected():
+    spans = [device_run_span(PYTEST, 0), device_run_span(PYTEST, 1)]
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", spans))
+
+
+def test_t3_a_later_non_runner_run_does_not_change_the_decision():
+    passed_then_ls = [device_run_span(PYTEST, 0), device_run_span(["git", "status"], 1)]
+    assert guards.narration_check("All 40 tests passed.", passed_then_ls) is None
+    failed_then_ls = [device_run_span(PYTEST, 1), device_run_span(["ls"], 0)]
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", failed_then_ls))
+
+
+def test_t3_narration_reads_only_her_reply_and_the_spans():
+    import inspect
+
+    assert list(inspect.signature(guards.narration_check).parameters) == [
+        "reply_text",
+        "spans",
+        "device_names",
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The tests should pass now.",
+        "All 40 tests probably passed.",
+        "I'll run pytest; the tests will pass once the fixture is fixed.",
+        "Once all 40 tests pass, I'll open the PR.",
+        "If all 40 tests passed, the build is good.",
+        "Not all tests passed.",
+        "The tests did not pass.",
+        "None of the tests passed.",
+        "You said all 40 tests passed.",
+        "CI reported that all tests passed.",
+        "Did all 40 tests pass?",
+    ],
+)
+def test_t3_hedged_future_negated_and_other_subject_forms_stay_silent(reply):
+    assert not _tests_passed(guards.narration_check(reply, []))
+
+
+# T3 COVERAGE (2026-10-09): the forms the criteria name but the RED block left
+# unpinned — a failed frame's run fact (C2: every run fact decides, ok or not),
+# a shell's `-c` and a wrapper chain (C1: a runner is read through them), the
+# correction's own sentence (a failed run is a record, so "no record of the
+# action" would be false), and the present-only condition cut (C4).
+
+
+def test_t3_cov_a_failed_frame_after_a_pass_is_corrected():
+    spans = [device_run_span(PYTEST, 0), device_run_span(PYTEST, None, ok=False)]
+    assert _tests_passed(guards.narration_check("All 40 tests passed.", spans))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["bash", "-c", "cd services/core && uv run pytest -q"],
+        ["env", "CI=1", "npm", "run", "test"],
+        ["/usr/bin/python3.12", "-m", "pytest"],
+    ],
+    ids=lambda a: " ".join(a),
+)
+def test_t3_cov_a_runner_behind_a_shell_or_wrapper_backs_the_claim(argv):
+    assert guards.narration_check("The tests passed.", [device_run_span(argv, 0)]) is None
+    assert _tests_passed(guards.narration_check("The tests passed.", [device_run_span(argv, 2)]))
+
+
+def test_t3_cov_the_correction_names_the_failing_run():
+    # T3b: the text names the deciding run (was "no test run exited 0", false
+    # beside an earlier passing suite).
+    correction = guards.narration_check("All 40 tests passed.", [device_run_span(PYTEST, 1)])
+    assert correction is not None and correction.text == guards.TESTS_FAILED_RUN_TEXT.format(
+        command="uv run pytest -q", outcome="exited 1"
+    )
+    assert "no record of the action" not in correction.text
+
+
+def test_t3_cov_a_condition_cuts_only_a_present_pass():
+    assert not _tests_passed(guards.narration_check("Once all 40 tests pass, I'll merge.", []))
+    assert _tests_passed(guards.narration_check("When I ran it, all 40 tests passed.", []))
+
+
+# -- S29a T3b (2026-10-09): the tests_passed correction is true in every case --
+#
+# Criteria (the tracker's T3b section holds the same):
+#   C1 the correction names the deciding run — the LAST test-runner run fact
+#      this turn — by its command and its exit code; npm test exit 0 then
+#      pytest exit 1 names pytest's exit 1 and never says "no test run ...
+#      exited 0" (npm test did).
+#   C2 with no test-runner run fact this turn (none at all, or only non-runners)
+#      it says no test runner ran this turn.
+
+
+def test_t3b_npm_pass_then_pytest_fail_names_pytest_exit_1():
+    spans = [device_run_span(["npm", "test"], 0), device_run_span(PYTEST, 1)]
+    correction = guards.narration_check("All tests passed.", spans)
+    assert _tests_passed(correction)
+    assert "uv run pytest -q" in correction.text
+    assert "exited 1" in correction.text
+    assert "exited 0" not in correction.text
+    assert "no test run" not in correction.text
+
+
+def test_t3b_a_failing_run_is_named_with_its_exit_code():
+    correction = guards.narration_check("All 40 tests passed.", [device_run_span(["pytest"], 2)])
+    assert _tests_passed(correction)
+    assert "`pytest`" in correction.text and "exited 2" in correction.text
+
+
+def test_t3b_a_failed_frame_says_no_exit_code():
+    spans = [device_run_span(PYTEST, None, ok=False)]
+    correction = guards.narration_check("All 40 tests passed.", spans)
+    assert _tests_passed(correction)
+    assert "uv run pytest -q" in correction.text and "no exit code" in correction.text
+    assert "exited" not in correction.text
+
+
+@pytest.mark.parametrize("spans", [[], [device_run_span(["ls", "-la"], 0)]], ids=["none", "ls"])
+def test_t3b_no_runner_says_no_test_runner_ran(spans):
+    correction = guards.narration_check("The tests passed.", spans)
+    assert _tests_passed(correction)
+    assert "no test runner ran this turn" in correction.text
+    assert "exited" not in correction.text
+
+
+def test_t3b_the_named_command_drops_env_assignments():
+    argv = ["env", "GH_TOKEN=ghp_secretsecret", "npm", "test"]
+    correction = guards.narration_check("The tests passed.", [device_run_span(argv, 1)])
+    assert _tests_passed(correction)
+    assert "ghp_" not in correction.text and "npm test" in correction.text
+
+
+# -- S29a T4 (2026-10-09): "I ran X" is backed only by a run fact of X ----------
+#
+# Criteria (the tracker's T4 section holds the same):
+#   C1 claim kind ran_command: her completed claim "I ran `X`" / "I ran X" /
+#      "I've run X", target = X's program (its first word after KEY=value
+#      words, by _program). Backed by a `run` fact (T1) this turn whose target
+#      holds a word with that program (wrappers and shells included: "I ran
+#      pytest" over `uv run pytest -q` stands), ANY exit code and ok or failed
+#      frame alike: running is not passing.
+#   C2 unbacked is corrected: no run fact, a run fact of another program, a
+#      device_run span with no run fact, or another tool's prose backs nothing.
+#   C3 the correction is TRUE in every case: with no run fact this turn it says
+#      no command ran this turn; when other commands ran it names what did run
+#      (their commands, KEY=value words dropped, bounded); never "no record of
+#      the action" beside a run that is on record.
+#   C4 precision first: future, hedged, negated, other-subject and question
+#      forms, and the English "ran" (ran into / out of / it / the tests / fine)
+#      stay silent with no run at all.
+#   C5 every new regex is module-level with RAN_COMMAND in its name (the global
+#      timing sweep reaches it), and narration reads 50 KB of claims in linear
+#      time (test_guard_regex_timing).
+
+
+def _ran_command(correction) -> bool:
+    return correction is not None and "ran_command" in kinds(correction)
+
+
+def _ran_targets(correction) -> list:
+    return [t for k, t in zip(kinds(correction), targets(correction)) if k == "ran_command"]
+
+
+@pytest.mark.parametrize(
+    "reply,program",
+    [
+        ("I ran `pytest` on the mini PC.", "pytest"),
+        ("I ran pytest on the mini PC.", "pytest"),
+        ("I ran `python3 --version` on the mini PC.", "python3"),
+        ("I ran git status in the worktree.", "git"),
+        ("I've run `npm test` there.", "npm"),
+        ("I ran `CI=1 cargo build`.", "cargo"),
+    ],
+)
+def test_t4_a_ran_claim_with_no_run_is_corrected_naming_the_program(reply, program):
+    correction = guards.narration_check(reply, [])
+    assert _ran_command(correction)
+    assert program in _ran_targets(correction)
+
+
+@pytest.mark.parametrize("exit_code,ok", [(0, True), (1, True), (127, True), (None, False)])
+def test_t4_a_run_fact_of_that_program_backs_the_claim_whatever_its_exit(exit_code, ok):
+    span = device_run_span(["python3", "--version"], exit_code, ok=ok)
+    correction = guards.narration_check("I ran `python3 --version` on the mini PC.", [span])
+    assert not _ran_command(correction)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["uv", "run", "pytest", "-q"],
+        ["bash", "-c", "cd services/core && pytest -q"],
+        ["/usr/bin/pytest"],
+    ],
+    ids=lambda a: " ".join(a),
+)
+def test_t4_the_programs_word_anywhere_in_the_target_backs_it(argv):
+    assert not _ran_command(guards.narration_check("I ran pytest.", [device_run_span(argv, 1)]))
+
+
+def test_t4_a_run_of_another_program_backs_nothing():
+    correction = guards.narration_check("I ran `pytest`.", [device_run_span(["ls", "-la"], 0)])
+    assert _ran_command(correction)
+
+
+def test_t4_a_run_span_without_a_run_fact_backs_nothing():
+    span = device_run_span(["pytest"], 0, fact=False)
+    assert _ran_command(guards.narration_check("I ran `pytest`.", [span]))
+
+
+def test_t4_another_tools_prose_backs_nothing():
+    span = SimpleNamespace(
+        kind="tool",
+        name="workspace_read_file",
+        meta={"ok": True, "args_redacted": {"path": "run.log"}, "result_head": "$ pytest -q"},
+    )
+    assert _ran_command(guards.narration_check("I ran `pytest`.", [span]))
+
+
+def test_t4_the_claim_is_target_aware_per_program():
+    spans = [device_run_span(["git", "status"], 0)]
+    correction = guards.narration_check("I ran `git status` and then `pytest`.", spans)
+    assert _ran_command(correction)
+    assert _ran_targets(correction) == ["pytest"]
+
+
+def test_t4_with_no_run_the_correction_says_no_command_ran():
+    correction = guards.narration_check("I ran `pytest`.", [])
+    assert _ran_command(correction)
+    assert "no command ran this turn" in correction.text
+    assert "no record of the action" not in correction.text
+
+
+def test_t4_when_something_else_ran_the_correction_names_it():
+    spans = [device_run_span(["ls", "-la"], 0), device_run_span(["git", "status"], 1)]
+    correction = guards.narration_check("I ran `pytest`.", spans)
+    assert _ran_command(correction)
+    assert "ls -la" in correction.text and "git status" in correction.text
+    assert "no command ran" not in correction.text
+    assert "no record of the action" not in correction.text
+
+
+def test_t4_the_named_commands_drop_env_assignments():
+    spans = [device_run_span(["env", "GH_TOKEN=ghp_secretsecret", "gh", "auth", "status"], 1)]
+    correction = guards.narration_check("I ran `pytest`.", spans)
+    assert _ran_command(correction)
+    assert "ghp_" not in correction.text and "gh auth status" in correction.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I'll run `pytest` next.",
+        "I can run pytest if you like.",
+        "I should run `pytest` first.",
+        "I didn't run pytest.",
+        "I haven't run `pytest` yet.",
+        "I never ran pytest.",
+        "Maybe I ran `pytest` earlier.",
+        "You ran `pytest` yesterday.",
+        "CI ran pytest on the PR.",
+        "Did I run `pytest`?",
+        "I ran into an error.",
+        "I ran out of time.",
+        "I ran it again.",
+        "I ran the tests.",
+        "Everything ran fine.",
+    ],
+)
+def test_t4_hedged_future_negated_other_subject_and_english_ran_stay_silent(reply):
+    assert not _ran_command(guards.narration_check(reply, []))
+
+
+# -- S29a T4 COVERAGE (2026-10-09): the paths GREEN added beyond C1-C5's tests --
+
+
+def test_t4_cov_a_reply_unbacked_on_both_run_kinds_gets_both_true_texts():
+    correction = guards.narration_check("I ran `pytest` and all 40 tests passed.", [])
+    assert _ran_command(correction) and _tests_passed(correction)
+    assert "no test runner ran this turn" in correction.text
+    assert "no command ran this turn" in correction.text
+    assert "no record of the action" not in correction.text
+
+
+def test_t4_cov_a_ran_claim_backed_beside_a_failed_test_run_leaves_only_the_tests_text():
+    correction = guards.narration_check(
+        "I ran `pytest` and all 40 tests passed.", [device_run_span(PYTEST, 1)]
+    )
+    assert _tests_passed(correction) and not _ran_command(correction)
+    assert "exited 1" in correction.text and "what ran this turn" not in correction.text
+
+
+def test_t4_cov_a_comma_chain_of_commands_is_read_per_program():
+    spans = [device_run_span(["ls"], 0), device_run_span(["pwd"], 0)]
+    correction = guards.narration_check("I ran `ls`, `pwd` and `pytest`.", spans)
+    assert _ran_targets(correction) == ["pytest"]
+
+
+def test_t4_cov_the_named_commands_are_bounded():
+    spans = [device_run_span([f"cmd{i}"], 0) for i in range(7)]
+    correction = guards.narration_check("I ran `pytest`.", spans)
+    assert "`cmd4`" in correction.text and "`cmd5`" not in correction.text
+    assert "and 2 more" in correction.text
+
+
+def test_t4_cov_an_adverb_after_ran_is_english():
+    assert not _ran_command(guards.narration_check("I ran quickly through the list.", []))
+
+
+# -- S29a T5 (2026-10-09): "I edited X" is backed only by a write of X ----------
+#
+# Criteria (the tracker's T5 section holds the same):
+#   C1 claim kind edited_file: her completed first-person claim "I edited /
+#      modified / patched / changed <file>" ("I've edited", "I have modified",
+#      "I just patched"), the filename the verb's own object, target = that
+#      filename. With no write at all it is corrected, as exactly one
+#      edited_file claim (never also wrote_file).
+#   C2 backed only by an ok write to that NAME, target-aware: an ok
+#      device_write_file whose `file` fact (op write) targets …/<file>, an ok
+#      workspace_write_file of it, or a `run` fact (T1) whose words name the file
+#      (a shell edit: sed -i, a script; any exit). A write of ANOTHER file (the
+#      module docstring's case: writing new.py while claiming chat.py was
+#      edited), a device READ of the file, a failed device write, a memory note
+#      or another tool's prose backs nothing.
+#   C3 precision first: future, hedged, negated, other-subject, question and
+#      topic forms, and an edit verb with no filename ("I changed my mind", "I
+#      edited the file"), stay silent with no write at all.
+#   C4 "edited" ends another verb's object walk: "I read notes.md and edited
+#      todo.md" over a read of notes.md corrects only edited_file todo.md.
+#   C5 linear: narration reads 50 KB of edited claims in linear time and finds
+#      them (test_guard_regex_timing); any new regex is module-level with
+#      EDITED_FILE in its name, so the global sweep reaches it.
+
+
+def _edited(correction) -> bool:
+    return correction is not None and "edited_file" in kinds(correction)
+
+
+def _edited_targets(correction) -> list:
+    return [t for k, t in zip(kinds(correction), targets(correction)) if k == "edited_file"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I edited chat.py.",
+        "I modified chat.py on the mini PC.",
+        "I patched chat.py to fix the bug.",
+        "I changed chat.py.",
+        "I've edited chat.py.",
+        "I have modified chat.py.",
+        "I just patched chat.py.",
+    ],
+)
+def test_t5_an_edit_claim_with_no_write_is_corrected_naming_the_file(reply):
+    correction = guards.narration_check(reply, [])
+    assert _edited(correction)
+    assert kinds(correction) == ["edited_file"]
+    assert targets(correction) == ["chat.py"]
+
+
+def test_t5_an_ok_device_write_of_that_file_backs_it():
+    span = device_file_span("device_write_file", "write", "/home/j/nova/services/core/chat.py")
+    assert guards.narration_check("I edited chat.py on the mini PC.", [span]) is None
+
+
+def test_t5_an_ok_workspace_write_of_that_file_backs_it():
+    span = _tool_span("workspace_write_file", args={"path": "notes/chat.py"})
+    assert guards.narration_check("I modified chat.py.", [span]) is None
+
+
+@pytest.mark.parametrize("exit_code,ok", [(0, True), (1, True)])
+def test_t5_a_run_fact_naming_the_file_backs_it(exit_code, ok):
+    span = device_run_span(["sed", "-i", "s/a/b/", "services/core/app/chat.py"], exit_code, ok=ok)
+    assert not _edited(guards.narration_check("I patched chat.py.", [span]))
+
+
+def test_t5_a_write_of_another_file_backs_nothing():
+    span = device_file_span("device_write_file", "write", "/home/j/nova/new.py")
+    correction = guards.narration_check("I edited chat.py.", [span])
+    assert _edited(correction)
+    assert _edited_targets(correction) == ["chat.py"]
+
+
+def test_t5_a_device_read_of_the_file_backs_nothing():
+    span = device_file_span("device_read_file", "read", "/home/j/nova/chat.py")
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_a_failed_device_write_backs_nothing():
+    span = device_file_span("device_write_file", "write", "/home/j/nova/chat.py", ok=False)
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_a_memory_note_backs_nothing():
+    span = _tool_span("memory_save", args={"title": "chat.py", "content": "edited"})
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_a_run_fact_of_another_file_backs_nothing():
+    span = device_run_span(["sed", "-i", "s/a/b/", "app/guards.py"], 0)
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_another_tools_prose_backs_nothing():
+    span = SimpleNamespace(
+        kind="tool",
+        name="fetch_url",
+        meta={
+            "ok": True,
+            "args_redacted": {"url": "https://example.com/log"},
+            "result_head": "modified: chat.py",
+        },
+    )
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_the_claim_is_target_aware_per_file():
+    span = device_file_span("device_write_file", "write", "/home/j/nova/chat.py")
+    correction = guards.narration_check("I edited chat.py and modified guards.py.", [span])
+    assert _edited_targets(correction) == ["guards.py"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I'll edit chat.py next.",
+        "I can modify chat.py if you like.",
+        "I should patch chat.py first.",
+        "I didn't edit chat.py.",
+        "I haven't modified chat.py yet.",
+        "I never changed chat.py.",
+        "You edited chat.py yesterday.",
+        "The previous session modified chat.py.",
+        "Did I edit chat.py?",
+        "I changed my mind.",
+        "I edited the file.",
+        "I edited the notes about chat.py.",
+        "chat.py was edited by you.",
+    ],
+)
+def test_t5_hedged_future_negated_other_subject_and_fileless_forms_stay_silent(reply):
+    assert not _edited(guards.narration_check(reply, []))
+
+
+def test_t5_edited_ends_another_verbs_object_walk():
+    span = device_file_span("device_read_file", "read", "/home/j/notes.md")
+    correction = guards.narration_check("I read notes.md and edited todo.md.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["edited_file"]
+    assert targets(correction) == ["todo.md"]
+
+
+# -- S29a T5 coverage: the edges the RED block left open ------------------------
+
+
+def test_t5_cov_a_failed_frames_run_fact_naming_the_file_backs_it():
+    # C2 "any exit": a failed frame still ran (T1 files its run fact), so a
+    # shell edit it names backs the claim, as ran_command reads it (T4).
+    span = device_run_span(["sed", "-i", "s/a/b/", "app/chat.py"], None, ok=False)
+    assert not _edited(guards.narration_check("I patched chat.py.", [span]))
+
+
+def test_t5_cov_a_write_whose_name_only_contains_the_file_backs_nothing():
+    # C2 "to that NAME": the written file's own name, never a substring of it.
+    span = device_file_span("device_write_file", "write", "/home/j/nova/mychat.py")
+    assert _edited_targets(guards.narration_check("I edited chat.py.", [span])) == ["chat.py"]
+
+
+def test_t5_cov_a_run_word_that_only_contains_the_file_backs_nothing():
+    span = device_run_span(["cp", "chat.py.bak", "old_chat.py"], 0)
+    assert _edited(guards.narration_check("I edited chat.py.", [span]))
+
+
+def test_t5_cov_the_written_path_is_matched_case_insensitively_by_its_last_segment():
+    span = device_file_span("device_write_file", "write", "C:\\Users\\j\\nova\\Chat.py")
+    assert guards.narration_check("I edited chat.py on the Dell.", [span]) is None

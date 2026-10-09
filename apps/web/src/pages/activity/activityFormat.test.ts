@@ -7,6 +7,7 @@ import {
   workspacePathFrom,
   isWorkspacePathTool,
   mcpCallLabel,
+  viewFacts,
 } from './activityFormat'
 
 describe('statusBadge', () => {
@@ -148,5 +149,92 @@ describe('mcpCallLabel', () => {
   it('is null for any other span, or clipped arguments', () => {
     expect(mcpCallLabel('fetch_url', { server: 'x', tool: 'y' })).toBeNull()
     expect(mcpCallLabel('mcp_call', '{"server": "github", …')).toBeNull()
+  })
+})
+
+// S29 T8: a tool span's meta.facts — the list chat._run_tool lifts from the
+// call's facts sink (services/core/app/chat.py, span.meta["facts"]). Shapes
+// from services/core/app/tools/devices.py: a run fact {run: {exit_code,
+// device, argv, cwd}, target: argv joined}, a file fact {file: {op, device},
+// target: path}, and everything else flat (connectivity {device, connected,
+// known_as?}, {outside_worktree, tool}).
+describe('viewFacts (S29 T8)', () => {
+  it('C1 renders a run fact as its command, exit code, device and cwd', () => {
+    expect(
+      viewFacts([
+        {
+          run: { exit_code: 0, device: 'mini-pc', argv: ['python3', '--version'], cwd: '/srv/repo' },
+          target: 'python3 --version',
+        },
+      ]),
+    ).toEqual(['run: python3 --version · exit_code 0 · device mini-pc · cwd /srv/repo'])
+  })
+
+  it('C1 keeps a nonzero exit, says a missing exit code is none (never 0), and omits a null cwd', () => {
+    expect(
+      viewFacts([
+        { run: { exit_code: 1, device: 'dell', argv: ['pytest'], cwd: null }, target: 'pytest' },
+        { run: { exit_code: null, device: 'dell', argv: ['git', 'status'], cwd: null }, target: 'git status' },
+      ]),
+    ).toEqual(['run: pytest · exit_code 1 · device dell', 'run: git status · exit_code none · device dell'])
+  })
+
+  it('C2 renders a file fact as its op, path and device', () => {
+    expect(
+      viewFacts([
+        { file: { op: 'read', device: 'dell' }, target: 'C:\\Users\\j\\README.md' },
+        { file: { op: 'write', device: 'mini-pc' }, target: '/srv/repo/notes.md' },
+      ]),
+    ).toEqual(['file read: C:\\Users\\j\\README.md · device dell', 'file write: /srv/repo/notes.md · device mini-pc'])
+  })
+
+  it('C3 renders any other fact as key: value pairs, non-strings as JSON', () => {
+    expect(
+      viewFacts([
+        { device: 'dell', connected: true, known_as: ['DESKTOP-1'] },
+        { outside_worktree: '/home/j/workspace/nova', tool: 'device_run' },
+      ]),
+    ).toEqual([
+      'device: dell · connected: true · known_as: ["DESKTOP-1"]',
+      'outside_worktree: /home/j/workspace/nova · tool: device_run',
+    ])
+  })
+
+  it('C3 keeps order: a device_run span\'s connectivity fact, then its run fact', () => {
+    expect(
+      viewFacts([
+        { device: 'mini-pc', connected: true },
+        { run: { exit_code: 0, device: 'mini-pc', argv: ['ls'], cwd: null }, target: 'ls' },
+      ]),
+    ).toEqual(['device: mini-pc · connected: true', 'run: ls · exit_code 0 · device mini-pc'])
+  })
+
+  it('C4 an unknown shape never throws and is shown verbatim, never dropped; absent or empty renders nothing', () => {
+    expect(viewFacts(undefined)).toEqual([])
+    expect(viewFacts(null)).toEqual([])
+    expect(viewFacts([])).toEqual([])
+    expect(viewFacts('clipped')).toEqual(['"clipped"'])
+    expect(viewFacts({ device: 'dell' })).toEqual(['{"device":"dell"}'])
+    expect(viewFacts([null, 3, 'x', ['a']])).toEqual(['null', '3', '"x"', '["a"]'])
+  })
+
+  it('C1 a run fact with no exit_code key at all says none, never 0 or undefined', () => {
+    expect(viewFacts([{ run: { device: 'dell', argv: ['ls'] }, target: 'ls' }])).toEqual([
+      'run: ls · exit_code none · device dell',
+    ])
+  })
+
+  it('C4 a run or file key holding an array is not a run/file fact either', () => {
+    expect(viewFacts([{ run: ['pytest'], target: 'pytest' }, { file: [], target: 'a.md' }])).toEqual([
+      'run: ["pytest"] · target: pytest',
+      'file: [] · target: a.md',
+    ])
+  })
+
+  it('C4 a run or file key that is not an object falls back to key: value', () => {
+    expect(viewFacts([{ run: 'x', target: 'y' }, { file: null, target: 'z' }])).toEqual([
+      'run: x · target: y',
+      'file: null · target: z',
+    ])
   })
 })

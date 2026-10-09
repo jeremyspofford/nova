@@ -123,3 +123,56 @@ export function formatRelativeTime(iso: string, now: Date = new Date()): string 
     year: then.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
   })
 }
+
+/** A value as one line of text: a string as itself, anything else as JSON
+ * (never the empty string `JSON.stringify(undefined)` would give). */
+function factValue(v: unknown): string {
+  return typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v))
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** One fact as `key: value · key: value`; an empty object as `{}`. */
+function factPairs(fact: Record<string, unknown>): string {
+  const entries = Object.entries(fact)
+  if (entries.length === 0) return '{}'
+  return entries.map(([key, v]) => `${key}: ${factValue(v)}`).join(' · ')
+}
+
+function viewFact(fact: unknown): string {
+  if (!isPlainObject(fact)) return JSON.stringify(fact) ?? String(fact)
+  const { run, file, target } = fact
+  // A run fact (devices.py device_run): the command as the guards read it
+  // (`target`, argv joined), its exit code — a missing one is `none`, never
+  // a made-up 0 — the device, and the cwd when one was given.
+  if (isPlainObject(run)) {
+    const exit = run.exit_code === null || run.exit_code === undefined ? 'none' : factValue(run.exit_code)
+    const parts = [`run: ${factValue(target)}`, `exit_code ${exit}`]
+    if (run.device !== null && run.device !== undefined) parts.push(`device ${factValue(run.device)}`)
+    if (run.cwd !== null && run.cwd !== undefined) parts.push(`cwd ${factValue(run.cwd)}`)
+    return parts.join(' · ')
+  }
+  // A file fact (device_read_file / device_write_file): the op and the path.
+  if (isPlainObject(file)) {
+    const line = `file ${factValue(file.op)}: ${factValue(target)}`
+    return file.device !== null && file.device !== undefined ? `${line} · device ${factValue(file.device)}` : line
+  }
+  // Everything else (connectivity, outside_worktree, a shape added later,
+  // or a run/file key that is not an object) as key: value pairs.
+  return factPairs(fact)
+}
+
+/**
+ * A tool span's meta.facts as display lines (S29 T8), one per fact, in the
+ * order they were filed. The payload is chat._run_tool's list exactly as
+ * stored; a shape outside that contract (a bare string, an object, a
+ * non-object item) is shown verbatim as JSON, never dropped and never
+ * thrown on. Absent or empty facts render nothing.
+ */
+export function viewFacts(facts: unknown): string[] {
+  if (facts === undefined || facts === null) return []
+  if (!Array.isArray(facts)) return [JSON.stringify(facts) ?? String(facts)]
+  return facts.map(viewFact)
+}

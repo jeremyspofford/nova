@@ -486,8 +486,9 @@ def _said_not_done_meta(name: str, claim: object) -> dict:
 # How much of a tool call lands in its span. The result head is the
 # Activity page's evidence that the call did what it says; the argument
 # head keeps a 256 KB file body out of the trace. Both are heads, and both
-# say how much they left out.
-SPAN_RESULT_HEAD_CHARS = 500
+# say how much they left out. The result head's length is traces' (live_facts
+# records spans too and cannot import chat, which imports it).
+SPAN_RESULT_HEAD_CHARS = traces.SPAN_RESULT_HEAD_CHARS
 
 # A stop must not SWALLOW an answer. The owner's walk, 2026-09-02 23:52: the
 # model ran device_run tree (honest "executable not found"), adapted to
@@ -1964,7 +1965,7 @@ def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None 
     a `headers` object any header whose NAME is `is_credential_header`)
     becomes `<masked:N chars>` BEFORE `_bounded`, so no credential byte
     reaches turn_spans. By key, not by the shape of a value: a token typed
-    into a command's text is not caught here (a carry for doing-things S29).
+    into a command's argv is `_argv_masked`'s (S29 T6).
     """
     if isinstance(value, dict):
         out: dict = {}
@@ -2175,6 +2176,7 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
         parsed = _off_schema_masked(parsed, tool, sink)
     else:
         parsed = _typed_text_masked(_server_names_masked(parsed, tool_name, sink), tool_name, sink)
+    parsed = _argv_masked(parsed, sink)
     return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
 
 
@@ -2225,6 +2227,50 @@ def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub
             sink.add(value)
             out[key] = _masked(value)
     return out
+
+
+# A token by its own shape (S29 T6): GitHub's ghp_/gho_/ghu_/ghs_/ghr_ and
+# fine-grained github_pat_, and the sk- API keys, followed by 16 or more token
+# characters — the floor keeps a `ghp_fix` branch and `sk-learn` readable. The
+# lookbehind starts a match only at the head of a run of token characters, so
+# every run is tried once: linear in the text (it runs in core's event loop).
+_ARGV_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{16,}")
+_ARGV_WORD_RE = re.compile(r"(\s+)")
+
+
+def _argv_masked(parsed: object, sink: _SpanScrub) -> object:
+    """A credential typed into a command's argv (S29 T6): `_redact` masks by
+    argument KEY, so a token that is a WORD of `argv` passed it untouched.
+    Each element is split on whitespace (no shell parsing — `sh -c "…"` is one
+    element of words). A `KEY=value` word whose KEY is `_credential_key` keeps
+    its KEY and has its value masked; any known token (`_ARGV_TOKEN_RE`) is
+    masked wherever it sits. What is masked goes into `sink`, so the span's
+    result_head, error and facts (the run fact's argv and target) hold none of
+    it. Runs before `_redact`, so before anything is clipped."""
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("argv"), list):
+        return parsed
+    return {
+        **parsed,
+        "argv": [
+            _argv_element_masked(item, sink) if isinstance(item, str) else item
+            for item in parsed["argv"]
+        ],
+    }
+
+
+def _argv_element_masked(element: str, sink: _SpanScrub) -> str:
+    words = _ARGV_WORD_RE.split(element)
+    for index, word in enumerate(words):
+        key, sep, value = word.partition("=")
+        if sep and key and value and _credential_key(key, header=False):
+            sink.add(value)
+            words[index] = f"{key}={_masked(value)}"
+
+    def token(match: re.Match[str]) -> str:
+        sink.add(match.group(0))
+        return _masked(match.group(0))
+
+    return _ARGV_TOKEN_RE.sub(token, "".join(words))
 
 
 def _span_arguments(raw: object, tool_name: str | None = None) -> object:

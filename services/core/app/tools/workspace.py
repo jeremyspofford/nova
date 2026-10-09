@@ -532,6 +532,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=write_file,
+        backs=frozenset({"file_contents", "wrote_file"}),
         revert=revert_write,
     ),
     Tool(
@@ -549,6 +550,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=read_file,
+        backs=frozenset({"file_contents", "read_file"}),
         reads_only=True,
     ),
     Tool(
@@ -601,6 +603,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=delete,
+        backs=frozenset({"deleted_file"}),
         revert=revert_delete,
     ),
 )

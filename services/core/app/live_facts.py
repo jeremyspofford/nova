@@ -46,6 +46,7 @@ from app import guards, tools
 from app.tools import devices as device_tools
 from app.tools import schema
 from app.tools.base import ToolContext, ToolFailure, TurnStopped
+from app.traces import SPAN_RESULT_HEAD_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +59,9 @@ CHECK_TIMEOUT = 8.0
 # fact next to a note, not the turn's content, and device_list_files can be
 # thousands of lines.
 MAX_RESULT_CHARS = 600
-# The same head length a call she made records, so a check reads identically
-# in the trace to the call it is.
-SPAN_RESULT_HEAD_CHARS = 400
+# SPAN_RESULT_HEAD_CHARS (imported above) is the head length a call she makes
+# records — chat's, owned by traces because chat imports this module — so a
+# check reads identically in the trace to the call it is.
 
 
 # Which tools the backend may run on its own initiative.

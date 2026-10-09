@@ -15,6 +15,7 @@ import {
   mcpCallLabel,
   statusBadge,
   viewArgs,
+  viewFacts,
   workspacePathFrom,
 } from './activityFormat'
 import { agentRole } from '../agents/agentsFormat'
@@ -301,6 +302,9 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
     const failed = span.meta.ok === false
     const args = viewArgs(span.meta.args_redacted)
     const resultHead = typeof span.meta.result_head === 'string' ? span.meta.result_head : null
+    // S29: the facts the call filed (a run's exit code, a file's path,
+    // connectivity) — what the honesty guards read, shown as recorded.
+    const facts = viewFacts(span.meta.facts)
     // Only the two file-scoped workspace tools carry a path worth opening,
     // and only the object shape of args_redacted actually has one — the
     // clipped-string shape (oversized/unparseable calls) has nothing to
@@ -351,6 +355,13 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
           <Code inline={false} className="text-micro">
             {args.text}
           </Code>
+        )}
+        {facts.length > 0 && (
+          <div className="font-mono text-micro text-content-secondary space-y-0.5 pl-0.5 break-words" data-testid="span-facts">
+            {facts.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
+          </div>
         )}
         {resultHead && (
           <Code inline={false} className={clsx('text-micro', failed && 'border border-danger/30')}>

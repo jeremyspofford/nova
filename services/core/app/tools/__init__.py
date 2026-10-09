@@ -80,6 +80,7 @@ __all__ = [
     "live_reading_tool_names",
     "machine_read_tool_names",
     "tool_names",
+    "tool_names_backing",
     "tool_names_by_result_kind",
 ]
 
@@ -152,6 +153,16 @@ def tool_names_reporting_spend() -> list[str]:
     never keeps a list of names (S15 — `list_agents` reports each agent's cap
     and spend, and a figure quoted from it was being retracted as unread)."""
     return sorted(name for name, tool in REGISTRY.items() if tool.reports_spend)
+
+
+def tool_names_backing(kind: str) -> list[str]:
+    """The registered tools whose successful span backs claim kind `kind`
+    (`Tool.backs`), sorted; [] for a kind no tool declares.
+
+    S29a T2: the narration guard's per-kind tool sets, derived from the live
+    registry every call, so a tool backs a claim by declaring it and the guard
+    keeps no names (guards._KIND_TOOLS is gone)."""
+    return sorted(name for name, tool in REGISTRY.items() if kind in tool.backs)
 
 
 def machine_read_tool_names() -> list[str]:
