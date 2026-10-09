@@ -2366,6 +2366,113 @@ else
   report 1 "repo: both keys are passed to core and declared in .env.example" "missing:$RP_MISSING"
 fi
 
+# ── record_repo_host: WHICH machine holds her checkout ──────────────────────
+# Incident 2026-10-08: she ran `cd /home/jeremy/workspace/nova && git checkout
+# -b ...` in the owner's live checkout; nothing told core which paired machine
+# holds the checkout, so no tool could put her in a worktree of it. The path
+# is already recorded (record_build's NOVA_CHECKOUT, handed to core); the
+# machine is not. The installer runs ON that machine, so NOVA_REPO_HOST is its
+# `hostname` — the same value novad reports as the device row's hostname
+# (os.Hostname), which core matches; the door is not identity. Independent of
+# the remote: a checkout with no origin, or a non-GitHub one, is still a
+# checkout. A real throwaway git repo per case, real git, real set_env_value;
+# only REPO_ROOT, ENV_FILE and the `hostname` seam are pointed elsewhere.
+#   $1 "repo" | "plain" (a directory that is not a checkout)
+#   $2 what `hostname` prints   $3 initial .env body   $4 origin url ("" = none)
+# Prints "<exit>|<.env with ;>|<stderr>".
+run_repo_host() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    HOST_STUB="$2"
+    hostname() { printf '%s\n' "$HOST_STUB"; }
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${3:-}" > "$ENV_FILE"
+    if [ "$1" = plain ]; then
+      mkdir -p "$REPO_ROOT"
+      # GIT_CEILING_DIRECTORIES: a temp dir under some outer checkout must
+      # still read as "not a checkout".
+      export GIT_CEILING_DIRECTORIES="$tmp"
+    else
+      git init -q "$REPO_ROOT"
+      if [ -n "${4:-}" ]; then git -C "$REPO_ROOT" remote add origin "$4"; fi
+    fi
+    err="$( ( set -e; record_repo_host ) 2>&1 )"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+# C1: a checkout writes this machine's hostname, whatever its remote.
+RH_OK="$(run_repo_host repo mini-pc 'A=1\n' '')"
+expect_tn "repo host: NOVA_REPO_HOST is this machine's hostname" "$RH_OK" 0 2 "NOVA_REPO_HOST=mini-pc;"
+expect_tn "repo host: other keys untouched" "$RH_OK" 0 2 "A=1;"
+expect_tn "repo host: says what it wrote" "$RH_OK" 0 3 "NOVA_REPO_HOST=mini-pc"
+expect_tn_lacks "repo host: no second path key (NOVA_CHECKOUT is the path)" "$RH_OK" 2 "NOVA_REPO_DIR"
+RH_GITLAB="$(run_repo_host repo Jeremys-MacBook.local '' git@gitlab.com:o/r.git)"
+expect_tn "repo host: a non-GitHub remote still records it, dotted name kept" "$RH_GITLAB" 0 2 \
+  "NOVA_REPO_HOST=Jeremys-MacBook.local;"
+RH_SAME="$(run_repo_host repo mini-pc 'NOVA_REPO_HOST=mini-pc\n' '')"
+expect_tn "repo host: a re-run exits 0 and keeps the value" "$RH_SAME" 0 2 "NOVA_REPO_HOST=mini-pc;"
+expect_str "repo host: a re-run leaves exactly one NOVA_REPO_HOST line" \
+  "$(tn_field "$RH_SAME" 2 | tr ';' '\n' | grep -c '^NOVA_REPO_HOST=')" "1"
+RH_MOVED="$(run_repo_host repo new-box 'NOVA_REPO_HOST=old-box\n' '')"
+expect_tn "repo host: a changed hostname replaces the old one" "$RH_MOVED" 0 2 "NOVA_REPO_HOST=new-box;"
+# C2: not a checkout — blanked (a stale value would name a machine that does
+# not hold her code), one line saying why, never dies.
+RH_NONE="$(run_repo_host plain mini-pc 'A=1\nNOVA_REPO_HOST=old-host\n')"
+expect_tn "repo host: not a checkout blanks a stale NOVA_REPO_HOST" "$RH_NONE" 0 2 "NOVA_REPO_HOST=;"
+expect_tn "repo host: not a checkout says so" "$RH_NONE" 0 3 "not a git checkout"
+RH_NONE_FRESH="$(run_repo_host plain mini-pc 'A=1\n')"
+expect_tn "repo host: not a checkout on a fresh .env exits 0 and logs the key" "$RH_NONE_FRESH" 0 3 \
+  "NOVA_REPO_HOST"
+# C3: shape — the value lands in a prompt and a device match.
+RH_BAD="$(run_repo_host repo 'bad host' 'NOVA_REPO_HOST=old-host\n' '')"
+expect_tn "repo host: a hostname that is not DNS-ish is blanked" "$RH_BAD" 0 2 "NOVA_REPO_HOST=;"
+expect_tn "repo host: a malformed hostname says so" "$RH_BAD" 0 3 "hostname"
+RH_EMPTY="$(run_repo_host repo '' 'NOVA_REPO_HOST=old-host\n' '')"
+expect_tn "repo host: an empty hostname blanks NOVA_REPO_HOST" "$RH_EMPTY" 0 2 "NOVA_REPO_HOST=;"
+expect_tn "repo host: an empty hostname says so" "$RH_EMPTY" 0 3 "hostname"
+# Two lines that are each DNS-ish must not pass a line-wise shape check: the
+# value would split .env and name no machine.
+RH_NL="$(run_repo_host repo "$(printf 'mini\npc')" 'NOVA_REPO_HOST=old-host\n' '')"
+expect_tn "repo host: a multi-line hostname is blanked" "$RH_NL" 0 2 "NOVA_REPO_HOST=;"
+# C4: cmd_install reaches it before compose_up (delete the call, or move it
+# after the up, and this goes red: the core this run creates must read it).
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  record_repo_host$/{r=NR} f&&/^  compose_up$/{u=NR}
+        END{exit !(r && u && r < u)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "repo host: cmd_install calls record_repo_host before compose_up"
+else
+  report 1 "repo host: cmd_install calls record_repo_host before compose_up" "order or call missing"
+fi
+# C5: handed to core, declared for the backup, named in the README; and no
+# duplicate path key anywhere (NOVA_CHECKOUT already carries the path).
+RH_MISSING=""
+grep -q '^  *NOVA_REPO_HOST: ${NOVA_REPO_HOST:-}' "$SCRIPT_DIR/docker-compose.yml" \
+  || RH_MISSING="$RH_MISSING docker-compose.yml"
+awk '
+  /^# nova-backup:/ { d = 1; next }
+  /^(# )?NOVA_REPO_HOST=/ { if (d) ok = 1 }
+  { d = 0 }
+  END { exit !ok }
+' "$SCRIPT_DIR/.env.example" || RH_MISSING="$RH_MISSING .env.example"
+grep -q 'NOVA_REPO_HOST' "$SCRIPT_DIR/README.md" || RH_MISSING="$RH_MISSING README.md"
+grep -q '^  *NOVA_CHECKOUT: ${NOVA_CHECKOUT:-}' "$SCRIPT_DIR/docker-compose.yml" \
+  || RH_MISSING="$RH_MISSING docker-compose.yml:NOVA_CHECKOUT"
+grep -q 'NOVA_REPO_DIR' "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/docker-compose.yml" "$SCRIPT_DIR/.env.example" \
+  && RH_MISSING="$RH_MISSING duplicate:NOVA_REPO_DIR"
+if [ -z "$RH_MISSING" ]; then
+  report 0 "repo host: passed to core beside NOVA_CHECKOUT, declared in .env.example, named in README"
+else
+  report 1 "repo host: passed to core beside NOVA_CHECKOUT, declared in .env.example, named in README" "missing:$RH_MISSING"
+fi
+
 # ── record_build: which commit this stack is (the About page) ───────────────
 # A real throwaway repo per case, real git, real set_env_value; only REPO_ROOT
 # and ENV_FILE are pointed at a temp dir.

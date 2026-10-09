@@ -163,6 +163,15 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # to pull, download and install an update herself. It starts the
     # installer on the hub's own agent; only the installer's report and the
     # new core's own commit decide it. Nothing waits on the owner.
+    # Deliberate snapshot update (worktrees epic T5, 2026-10-08): start_change
+    # (tools/changes.py), so FIFTY-EIGHT -> FIFTY-NINE. She made a branch IN
+    # the owner's live deploy checkout and the next ./install deployed her WIP;
+    # this is the tool that starts a change in a worktree of hers instead. It
+    # runs git through the repo machine's agent; nothing waits on anyone.
+    # Deliberate snapshot update (worktrees epic T6, 2026-10-08): list_changes
+    # (tools/changes.py), so FIFTY-NINE -> SIXTY. Several changes can be open
+    # at once and a later turn has to find the one it is resuming; the list
+    # is read live from `git worktree list` on the repo machine, never stored.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -272,6 +281,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "nova_about",
         # About, part 2: she updates the hub. FIFTY-SEVEN -> FIFTY-EIGHT.
         "nova_update",
+        # Worktrees epic T5 (2026-10-08): a change of hers starts in its own
+        # git worktree on the machine holding her checkout (tools/changes.py).
+        # FIFTY-EIGHT -> FIFTY-NINE.
+        "start_change",
+        # Worktrees epic T6 (2026-10-08): her open changes, read from `git
+        # worktree list` on that machine. FIFTY-NINE -> SIXTY.
+        "list_changes",
     }
 
 
@@ -679,6 +695,11 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # devices, sessions and the gateway, and asks GitHub (one fixed
         # address, never one the caller chose) — it writes nothing.
         "nova_about",
+        # Worktrees epic T6 (2026-10-08): list_changes runs `git worktree
+        # list --porcelain` and `git status --porcelain` on the repo machine —
+        # both only read. Its twin start_change is deliberately NOT here: it
+        # fetches and adds a branch and a worktree.
+        "list_changes",
     }
 
 
@@ -715,5 +736,7 @@ def test_every_tool_that_writes_says_it_changes_something():
         "browser_screenshot",
         # About, part 2: it starts ./install update on the hub.
         "nova_update",
+        # Worktrees T5: it creates a branch and a worktree on the repo machine.
+        "start_change",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

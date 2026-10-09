@@ -45,6 +45,20 @@ line, and a value an earlier run wrote is blanked. Core shape-checks both
 values and drops the sentence, with a logged reason, on anything that is not
 a GitHub `owner/repo`. To refresh it on a running install: re-run
 `./install` (core is recreated because its environment changed).
+The installer also writes `NOVA_REPO_HOST` — this machine's `hostname`,
+whenever it runs from a git checkout, whatever the remote. The checkout's
+path is already `NOVA_CHECKOUT`; `NOVA_REPO_HOST` says which paired machine
+holds it (core matches it against the device's reported hostname), so her
+code work can run in a worktree there. Not a checkout, or a hostname that
+is not a DNS-style name: it is blanked and the installer says why.
+With both recorded, her prompt says code changes start with `start_change`
+(a worktree of hers at `.worktrees/nova-<id>` on a new `nova/<id>-<slug>`
+branch); `list_changes` lists the open ones. Nothing is refused: a
+`device_run` (by its `cwd` or argv) or `device_write_file` on that machine
+that touches the checkout outside `.worktrees/nova-*` still runs, but its
+result ends with a warning naming `start_change`, and its trace span carries
+`outside_worktree: true`. Reads never flag, and neither does a path given as
+an `@folder` (resolved on the machine, so core cannot classify it).
 
 **The deploy rule (2026-09-04).** Run compose from this directory — `cd
 deploy && docker compose …`, or `docker compose --project-directory deploy …`

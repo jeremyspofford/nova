@@ -4,6 +4,8 @@ package caps
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +110,64 @@ func TestACancelThatLandsInTheDrainWindowDoesNotShadowAProcessThatAlreadyExited(
 	}
 	if !strings.Contains(out.Output, "kept its output open") {
 		t.Fatalf("output missing the WaitDelay note: %q", out.Output)
+	}
+}
+
+// T3 (worktrees epic, 2026-10-08): core now sends args.cwd so a command runs
+// inside her change's worktree. The daemon already honoured it (shell.go);
+// these pin that it does, so a refactor that drops cmd.Dir reddens here and
+// not as a git "not a repository" in her turn.
+func TestShellExecRunsInArgsCwd(t *testing.T) {
+	d := testDeps(t)
+	dir := t.TempDir()
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Dispatch(context.Background(), "shell.exec",
+		map[string]any{"argv": []any{"pwd", "-P"}, "cwd": dir}, d)
+	if !out.OK || out.ExitCode == nil || *out.ExitCode != 0 {
+		t.Fatalf("got ok=%v code=%v %q", out.OK, out.ExitCode, out.Error)
+	}
+	if got := strings.TrimSpace(out.Output); got != want {
+		t.Fatalf("ran in %q, want args.cwd %q", got, want)
+	}
+}
+
+// Without cwd the command runs in the daemon's home (Deps.Home), as before.
+func TestShellExecWithoutCwdRunsInHome(t *testing.T) {
+	d := testDeps(t)
+	want, err := filepath.EvalSymlinks(d.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Dispatch(context.Background(), "shell.exec",
+		map[string]any{"argv": []any{"pwd", "-P"}}, d)
+	if !out.OK {
+		t.Fatalf("got ok=%v %q", out.OK, out.Error)
+	}
+	if got := strings.TrimSpace(out.Output); got != want {
+		t.Fatalf("ran in %q, want home %q", got, want)
+	}
+}
+
+// A cwd that does not exist is the daemon unable to run the command: ok:false
+// with a stated reason, never ok:true with an exit code (it did not run).
+// Go's own words here are "fork/exec /usr/bin/pwd: no such file or
+// directory" — they name the PROGRAM, not the directory — so core names the
+// cwd in its ToolFailure (tests/test_device_run_cwd.py); this pins only ok:false.
+func TestShellExecInAMissingCwdIsOkFalse(t *testing.T) {
+	d := testDeps(t)
+	missing := filepath.Join(t.TempDir(), "no-such-dir")
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("fixture: %q should not exist (%v)", missing, err)
+	}
+	out := Dispatch(context.Background(), "shell.exec",
+		map[string]any{"argv": []any{"pwd"}, "cwd": missing}, d)
+	if out.OK || out.ExitCode != nil {
+		t.Fatalf("got ok=%v code=%v: a missing cwd must not read as ran", out.OK, out.ExitCode)
+	}
+	if !strings.Contains(out.Error, "could not run") {
+		t.Fatalf("error does not state why: %q", out.Error)
 	}
 }
