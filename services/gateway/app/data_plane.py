@@ -618,21 +618,32 @@ async def _origin_window(app, row: dict, model: str, served_by: str) -> int | No
     return _window_of(resident, model, served_by)
 
 
+def _resident_entry(resident: list[dict], model: str) -> dict | None:
+    """The /api/ps entry for `model`, or None. Ollama's model names are
+    case-insensitive (the Dell lists `Qwen3:8b` while the catalog says
+    `qwen3:8b`), and a bare pull is listed as `name:latest`."""
+    wanted = {model.casefold(), f"{model}:latest".casefold()}
+    for entry in resident:
+        name = entry.get("model")
+        if isinstance(name, str) and name.casefold() in wanted:
+            return entry
+    return None
+
+
 def _window_of(resident: list[dict], model: str, served_by: str) -> int | None:
     """The served `context_length` /api/ps states for `model` (a bare pull is
     listed as `name:latest`), or None — logged with the reason."""
-    wanted = {model, f"{model}:latest"}
-    for entry in resident:
-        if entry.get("model") in wanted:
-            window = entry.get("context_length")
-            if window is None:
-                logger.info(
-                    "context window: omitted for %s — /api/ps states no usable "
-                    "context_length for %s",
-                    served_by,
-                    entry.get("model"),
-                )
-            return window
+    entry = _resident_entry(resident, model)
+    if entry is not None:
+        window = entry.get("context_length")
+        if window is None:
+            logger.info(
+                "context window: omitted for %s — /api/ps states no usable "
+                "context_length for %s",
+                served_by,
+                entry.get("model"),
+            )
+        return window
     logger.info(
         "context window: omitted for %s — /api/ps does not list %s as resident",
         served_by,
@@ -652,10 +663,9 @@ def _bytes(value: object) -> int | None:
 def _sizes_of(resident: list[dict], model: str) -> tuple[int | None, int | None]:
     """(size, size_vram) /api/ps states for `model` (a bare pull is listed as
     `name:latest`), or (None, None) when it does not list the model."""
-    wanted = {model, f"{model}:latest"}
-    for entry in resident:
-        if entry.get("model") in wanted:
-            return _bytes(entry.get("size")), _bytes(entry.get("size_vram"))
+    entry = _resident_entry(resident, model)
+    if entry is not None:
+        return _bytes(entry.get("size")), _bytes(entry.get("size_vram"))
     return None, None
 
 
