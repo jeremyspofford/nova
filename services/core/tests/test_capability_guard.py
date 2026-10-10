@@ -1021,3 +1021,598 @@ BROWSER_SO_I_CANT_DENIALS = [
 def test_t6_c1_a_denial_followed_by_so_i_cant_still_fires(label, reply):
     correction = guards.capability_claim_check(reply, ALL_TOOLS)
     assert correction is not None and "browser_open" in tgt(correction), label
+
+
+# -- S29b T1 (2026-10-09): her web search ------------------------------------
+#
+# Live 10-09 (dell:qwen3:8b), with web_search registered: "I can't search the
+# web" and "I don't have web search" -> capability_claim_check returned None.
+# _CAPABILITY_TOOLS had no web_search row (browsing is fetch_url's row, and
+# "search" is not "browse"), and _DENIAL_LEAD reads "don't have" only as
+# "don't have the ability/access to", so the possession form reached nothing.
+#
+# Criteria (RED 2026-10-09):
+#   C1 a first-person, present LEAD-form denial of the general ability to
+#      search the web ("search the web/internet/online", "do/run/perform web
+#      searches", "look things up online") draws a correction naming
+#      web_search while web_search is in the live tool list; the live
+#      "I can't search the web" is one of them.
+#   C2 a first-person, present POSSESSION denial ("I don't/do not have" + web
+#      search / a (web) search tool / internet search) draws the same
+#      correction; the live "I don't have web search" is one of them.
+#   C3 derived: the SAME sentences are silent for web_search when it is not in
+#      the tool list, and fire on a tool list of web_search alone.
+#   C4 precision: another subject, a past form, a hedge, one failed search, a
+#      stated present state ("right now because the search engine isn't
+#      answering"), a qualified limit ("websites that require your login"), a
+#      different object ("your email"), and "web search" as a MODIFIER
+#      ("web search results/history") are silent — each pinned as a PAIR
+#      against a sentence that fires.
+#   C5 the correction over itself is clean (self-reference).
+
+WEB_SEARCH_LEAD_DENIALS = [
+    ("live_1009_cant_search_the_web", "I can't search the web."),
+    ("no_cant_search_the_web", "No, I can't search the web."),
+    ("cannot_search_the_internet", "I cannot search the internet."),
+    ("unable_to_search_online", "I'm unable to search online."),
+    ("not_able_to_perform_web_searches", "I am not able to perform web searches."),
+    ("cant_do_web_searches", "I can't do web searches."),
+    ("cant_run_a_web_search", "I can't run a web search for you."),
+    ("cant_look_things_up_online", "I can't look things up online."),
+    ("no_access_to_web_search", "I don't have access to web search."),
+    ("capabilities_dont_include", "My capabilities don't include searching the web."),
+]
+
+WEB_SEARCH_POSSESSION_DENIALS = [
+    ("live_1009_dont_have_web_search", "I don't have web search."),
+    ("dont_have_web_search_so", "I don't have web search, so I can't check that."),
+    ("do_not_have_a_search_tool", "I do not have a search tool."),
+    ("dont_have_a_web_search_tool", "I don't have a web search tool."),
+    ("dont_have_web_search_capabilities", "I don't have web search capabilities."),
+    ("dont_have_internet_search", "I don't have internet search."),
+    ("curly_apostrophe", "I don’t have web search."),
+]
+
+WEB_SEARCH_DENIALS = WEB_SEARCH_LEAD_DENIALS + WEB_SEARCH_POSSESSION_DENIALS
+
+
+@pytest.mark.parametrize(
+    "label,reply", WEB_SEARCH_LEAD_DENIALS, ids=[c[0] for c in WEB_SEARCH_LEAD_DENIALS]
+)
+def test_s29b_t1_c1_a_lead_denial_of_web_search_is_corrected(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"{label!r}: a false denial of web_search went uncorrected"
+    assert "web_search" in tgt(correction), (label, tgt(correction))
+    assert "web_search" in correction.text
+
+
+@pytest.mark.parametrize(
+    "label,reply", WEB_SEARCH_POSSESSION_DENIALS, ids=[c[0] for c in WEB_SEARCH_POSSESSION_DENIALS]
+)
+def test_s29b_t1_c2_a_possession_denial_of_web_search_is_corrected(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"{label!r}: a false denial of web_search went uncorrected"
+    assert "web_search" in tgt(correction), (label, tgt(correction))
+
+
+@pytest.mark.parametrize("label,reply", WEB_SEARCH_DENIALS, ids=[c[0] for c in WEB_SEARCH_DENIALS])
+def test_s29b_t1_c3_the_web_search_denial_flips_on_the_live_tool_list(label, reply):
+    alone = guards.capability_claim_check(reply, ["web_search"])
+    assert alone is not None and tgt(alone) == ["web_search"], label
+    without = [t for t in ALL_TOOLS if t != "web_search"]
+    correction = guards.capability_claim_check(reply, without)
+    assert correction is None or "web_search" not in tgt(correction), label
+    assert guards.capability_claim_check(reply, []) is None, label
+
+
+# (label, a sentence that fires, its minimal honest edit)
+WEB_SEARCH_PAIRS = [
+    # another subject
+    (
+        "other_subject_you",
+        "I can't search the web.",
+        "You can't search the web from the lock screen.",
+    ),
+    ("other_subject_machine", "I can't search the web.", "The Dell can't search the web."),
+    ("other_subject_possession", "I don't have web search.", "You don't have web search enabled."),
+    # past
+    (
+        "past_couldnt",
+        "I can't search the web.",
+        "I couldn't search the web earlier — the engine timed out.",
+    ),
+    (
+        "past_possession",
+        "I don't have web search.",
+        "I didn't have web search in the last version.",
+    ),
+    # hedged
+    ("hedge_might", "I can't search the web.", "I might not be able to search the web from here."),
+    (
+        "hedge_possession",
+        "I don't have web search.",
+        "I might not have web search on this machine.",
+    ),
+    # one failed search
+    (
+        "one_search_came_back_empty",
+        "I can't search the web.",
+        "I can't find any results because the web search came back empty.",
+    ),
+    (
+        "one_search_result_unclear",
+        "I can't search the web.",
+        "I can't tell from the web search results whether it shipped.",
+    ),
+    # a stated present state
+    (
+        "present_state_lead",
+        "I can't search the web.",
+        "I can't search the web right now because the search engine isn't answering.",
+    ),
+    (
+        "present_state_possession",
+        "I don't have web search.",
+        "I don't have web search right now because the search engine isn't answering.",
+    ),
+    (
+        "search_engine_not_answering",
+        "I can't search the web.",
+        "The search engine isn't answering right now.",
+    ),
+    # a qualified limit
+    (
+        "qualified_login",
+        "I can't search the web.",
+        "I can't search websites that require your login.",
+    ),
+    (
+        "qualified_behind_login",
+        "I can't search the web.",
+        "I can't search web pages behind your login.",
+    ),
+    # a different object
+    ("different_object_email", "I can't search the web.", "I can't search your email."),
+    (
+        "different_object_tool_for",
+        "I don't have a web search tool.",
+        "I don't have a search tool for your email.",
+    ),
+    # "web search" as a modifier, not the thing she lacks
+    (
+        "modifier_results",
+        "I don't have web search.",
+        "I don't have web search results for that yet.",
+    ),
+    ("modifier_history", "I don't have web search.", "I don't have any web search history."),
+    (
+        "the_search_results_you_mean",
+        "I don't have web search.",
+        "I don't have the search results you mean.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,fires,honest", WEB_SEARCH_PAIRS, ids=[c[0] for c in WEB_SEARCH_PAIRS]
+)
+def test_s29b_t1_c4_an_honest_edit_of_a_web_search_denial_is_left_alone(label, fires, honest):
+    correction = guards.capability_claim_check(fires, ALL_TOOLS)
+    assert correction is not None and "web_search" in tgt(correction), (
+        f"{label!r}: the first-person form {fires!r} must fire for the pair to mean anything"
+    )
+    assert guards.capability_claim_check(honest, ALL_TOOLS) is None, (
+        f"{label!r}: {honest!r} was wrongly corrected — the guard would be the liar"
+    )
+
+
+def test_s29b_t1_c5_the_web_search_correction_is_clean_over_itself():
+    for _label, reply in WEB_SEARCH_DENIALS:
+        correction = guards.capability_claim_check(reply, ALL_TOOLS)
+        assert correction is not None and "web_search" in tgt(correction), reply
+        assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None, reply
+
+
+# COVERAGE (2026-10-09): shapes GREEN's rows read that the RED lists did not
+# pin — the trailing form through the lead row's gerund, and the honest
+# neighbours of the "access to" lookbehind, of the qualified tail, and of the
+# possession row's present-state lookahead (reached only past a capability
+# word, since the allowlist already stops a bare "… right now").
+WEB_SEARCH_COVERAGE_PAIRS = [
+    (
+        "trailing_form_vs_access_to_results",
+        "Searching the web isn't something I can do.",
+        "I don't have access to web search results for that.",
+    ),
+    (
+        "flat_vs_from_your_phone",
+        "I can't search the internet.",
+        "I can't search the internet from your phone.",
+    ),
+    (
+        "capability_word_vs_present_state",
+        "I don't have web search access.",
+        "I don't have web search access right now because the engine is down.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,fires,honest",
+    WEB_SEARCH_COVERAGE_PAIRS,
+    ids=[c[0] for c in WEB_SEARCH_COVERAGE_PAIRS],
+)
+def test_s29b_t1_coverage_the_rows_other_shapes(label, fires, honest):
+    correction = guards.capability_claim_check(fires, ALL_TOOLS)
+    assert correction is not None and tgt(correction) == ["web_search"], (label, fires)
+    assert guards.capability_claim_check(honest, ALL_TOOLS) is None, (label, honest)
+
+
+# -- S29b T1 fix (VERIFY 1, 2026-10-09): what FOLLOWS the phrase is an allowlist
+#
+# VERIFY corrected five honest replies: the lead row carried S38's qualified
+# tail (a DENYlist), so "… for your private Slack messages", "… about your bank
+# account", "… for files on your laptop" fired; the possession row borrowed the
+# browser's capability words, so "… of my own; I use searxng" and "web search
+# access to your intranet" fired. Orchestrator ruling (the browser possession
+# row's shape, local-context T6): the denial fires only when what follows the
+# phrase is (1) the end of the clause, (2) ", so/but …", (3) "for you" then 1-2,
+# (4) "or <1-3 words>" then 1-3, (5) "access"/"tool"/"capability" then 1-2 —
+# plus (6) the trailing denial itself ("Searching the web isn't something I can
+# do"), which the trailing form already fired on and is no less a lie. Anything
+# else (an object, a place, a time or a state) is silent: precision first.
+
+WEB_SEARCH_ALLOWLIST_HONEST = [
+    # VERIFY's five
+    ("verify_slack_object", "I can't search the web for your private Slack messages."),
+    (
+        "verify_about_bank_account",
+        "I can't look things up online about your bank account, that needs your login.",
+    ),
+    (
+        "verify_files_on_laptop",
+        "I can't search the internet for files on your laptop; try device_list_files.",
+    ),
+    (
+        "verify_engine_of_my_own",
+        "I don't have an internet search engine of my own; I use searxng through web_search.",
+    ),
+    ("verify_access_to_intranet", "I don't have web search access to your intranet."),
+    # more of the same kinds: object, place, time, state
+    ("object_for_your_taxes", "I can't look things up online for your taxes."),
+    ("place_this_network", "I can't search the web on this network."),
+    ("place_inside_vpn", "I can't search online from inside your VPN."),
+    ("time_today", "I can't search the web today."),
+    ("state_offline", "I can't search the web offline."),
+    ("possession_state_chat_mode", "I don't have web search access in this chat mode."),
+    (
+        "possession_built_in",
+        "I don't have a web search engine built in; I go through searxng.",
+    ),
+]
+
+WEB_SEARCH_ALLOWLIST_DENIALS = [
+    # (6) the trailing denial, now with the bare noun as its subject
+    ("verify_survivor_trailing_bare", "Web search isn't something I can do."),
+    ("trailing_bare_plural", "Internet searches aren't something I can do."),
+    ("trailing_gerund_for_you", "Searching the web isn't something I can do for you."),
+    # (4) a coordinated alternative after the possession object
+    ("possession_or_browser", "I don't have web search or a browser."),
+    ("lead_or_words_for_you", "I can't search the web or browse websites for you."),
+    # (3) for you, (5) capability wording then ", but"
+    ("lead_for_you", "I can't search the web for you."),
+    ("possession_tools_but", "I don't have web search tools, but I can read a page you send."),
+]
+
+WEB_SEARCH_ALLOWLIST_STILL_SILENT = [
+    # the bare noun only reads as a trailing denial's subject
+    ("bare_noun_after_lead", "I can't say web search."),
+    ("bare_noun_not_working", "I can't confirm web search isn't working."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    WEB_SEARCH_ALLOWLIST_HONEST + WEB_SEARCH_ALLOWLIST_STILL_SILENT,
+    ids=[c[0] for c in WEB_SEARCH_ALLOWLIST_HONEST + WEB_SEARCH_ALLOWLIST_STILL_SILENT],
+)
+def test_s29b_t1_fix_a_tail_off_the_allowlist_is_silent(label, reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        f"{label!r}: {reply!r} was wrongly corrected — the guard would be the liar"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    WEB_SEARCH_ALLOWLIST_DENIALS,
+    ids=[c[0] for c in WEB_SEARCH_ALLOWLIST_DENIALS],
+)
+def test_s29b_t1_fix_a_tail_on_the_allowlist_still_fires(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and "web_search" in tgt(correction), (label, reply)
+    alone = guards.capability_claim_check(reply, ["web_search"])
+    assert alone is not None and tgt(alone) == ["web_search"], label
+    assert guards.capability_claim_check(reply, []) is None, label
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None, label
+
+
+# -- S29b T2 (2026-10-09): her device tools, as GENERAL abilities -------------
+#
+# Live 10-09 (dell:qwen3:8b), with device_run registered: "No, I can't run
+# commands on your laptop" -> capability_claim_check returned None. The S42a
+# device_run row reads only Windows/Mac nouns, and no row maps a phrase to
+# device_read_file / device_list_files / device_write_file / device_launch_app /
+# device_notify.
+#
+# Criteria (RED 2026-10-09):
+#   C1 a first-person, present denial of a device tool's GENERAL ability on a
+#      GENERAL noun ("your laptop/computer/PC/machine(s)/devices", "a
+#      computer") draws a correction naming that device tool while it is in
+#      the live tool list: run commands/programs -> device_run, read/list/
+#      write files -> device_read_file/device_list_files/device_write_file,
+#      open apps -> device_launch_app, send notifications -> device_notify.
+#      The live "No, I can't run commands on your laptop" is one of them.
+#   C2 what FOLLOWS the device noun is an ALLOWLIST from the start (T1's and
+#      the browser row's lesson): the end of the clause, ", so/but …", "for
+#      you", "or <1-3 words>", capability wording. Anything else is silent.
+#   C3 derived: the same sentences name no device tool once that tool is out
+#      of the live list, and are silent on [].
+#   C4 precision: a NAMED device, offline/asleep/unreachable/right now, an
+#      object or a limit ("that need sudo", "with sudo", "that need admin
+#      rights"), past, hedged, another subject, an instruction to him, quoted
+#      user text and one thing ("the command") name no device tool.
+#   C5 the correction over itself is clean.
+#
+# Assumptions (design calls):
+#   * the silent cases assert no device_* tool is named, not None: the
+#     workspace rows already fire on "read/write/list files on your machine
+#     that …" (measured 10-09: "I can't read files on your machine that need
+#     sudo" -> workspace_read_file). That is a pre-existing workspace-row
+#     behaviour outside T2 (Notes, known gap).
+#   * phone is SILENT, not firing: device_notify is "a desktop notification
+#     on a paired device" and novad has no phone build, so "I can't send
+#     notifications to your phone" is true today. The firing notify case
+#     names a computer instead.
+#   * a closing quote is not the end of a clause: 'You said "I can't run
+#     commands on your laptop".' is his text, and the allowlist's end must
+#     not admit ["”'’] before [.!?].
+#   * a colon is the end of a clause for the browser/web rows; here
+#     "…on your laptop: it isn't reachable" is a stated state, so the device
+#     rows must not read ':' as an allowed end (or must read what follows it).
+
+DEVICE_TOOLS = frozenset(t for t in ALL_TOOLS if t.startswith("device_"))
+
+DEVICE_DENIALS = [
+    (
+        "live_1009_no_cant_run_commands_laptop",
+        "No, I can't run commands on your laptop",
+        "device_run",
+    ),
+    ("cant_run_programs_computer", "I can't run programs on your computer.", "device_run"),
+    (
+        "not_able_read_files_machine",
+        "I'm not able to read files on your machine.",
+        "device_read_file",
+    ),
+    ("cant_open_apps_pc", "I can't open apps on your PC.", "device_launch_app"),
+    (
+        "cant_send_notifications_computer",
+        "I can't send notifications to your computer.",
+        "device_notify",
+    ),
+    ("cant_list_files_computer", "I can't list files on your computer.", "device_list_files"),
+    ("cannot_write_files_machine", "I cannot write files on your machine.", "device_write_file"),
+    ("unable_run_commands_machines", "I'm unable to run commands on your machines.", "device_run"),
+    ("cant_run_commands_a_computer", "I can't run commands on a computer.", "device_run"),
+    # C2's allowlist: ", so/but …", "for you", "or <1-3 words>"
+    (
+        "so_tail",
+        "I can't run commands on your laptop, so you'll have to run it.",
+        "device_run",
+    ),
+    ("but_tail", "I can't run programs on your computer, but I can explain them.", "device_run"),
+    ("for_you_tail", "I can't run commands on your devices for you.", "device_run"),
+    ("or_words_tail", "I can't open apps on your computer or tablet.", "device_launch_app"),
+]
+
+
+@pytest.mark.parametrize("label,reply,tool", DEVICE_DENIALS, ids=[c[0] for c in DEVICE_DENIALS])
+def test_s29b_t2_c1_a_general_device_denial_is_corrected(label, reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"{label!r}: a false denial of {tool} went uncorrected"
+    assert tool in tgt(correction), (label, tgt(correction))
+    assert tool in correction.text
+
+
+@pytest.mark.parametrize("label,reply,tool", DEVICE_DENIALS, ids=[c[0] for c in DEVICE_DENIALS])
+def test_s29b_t2_c3_the_device_denial_flips_on_the_live_tool_list(label, reply, tool):
+    alone = guards.capability_claim_check(reply, [tool])
+    assert alone is not None and tgt(alone) == [tool], label
+    without = [t for t in ALL_TOOLS if t != tool]
+    correction = guards.capability_claim_check(reply, without)
+    assert correction is None or tool not in tgt(correction), label
+    assert guards.capability_claim_check(reply, []) is None, label
+
+
+def test_s29b_t2_c5_the_device_correction_is_clean_over_itself():
+    for _label, reply, tool in DEVICE_DENIALS:
+        correction = guards.capability_claim_check(reply, ALL_TOOLS)
+        assert correction is not None and tool in tgt(correction), reply
+        assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None, reply
+
+
+DEVICE_HONEST = [
+    # a NAMED device: one machine's state, not the ability
+    ("named_dell_offline", "I can't run commands on the Dell right now, it's offline."),
+    ("named_minipc_asleep", "I can't run commands on minipc, it's asleep."),
+    ("named_mac_until_paired", "I can't list files on the Mac until it's paired."),
+    # offline / asleep / unreachable / right now
+    ("asleep_right_now", "I can't run commands on your laptop right now because it's asleep."),
+    ("while_offline", "I can't run commands on your laptop while it's offline."),
+    ("colon_unreachable", "I can't run commands on your laptop: it isn't reachable."),
+    ("dash_offline", "I can't run programs on your computer — it's offline."),
+    # an object or a limit
+    ("object_need_sudo", "I can't read files on your machine that need sudo."),
+    ("limit_with_sudo", "I can't run commands on your laptop with sudo."),
+    ("limit_as_administrator", "I can't run programs on your computer as administrator."),
+    ("object_admin_apps", "I can't open apps on your PC that need admin rights."),
+    ("limit_outside_home", "I can't read files on your computer outside your home folder."),
+    ("phone_no_agent", "I can't send notifications to your phone."),
+    # past
+    ("past_couldnt_the_command", "I couldn't run the command on your laptop."),
+    ("past_couldnt_earlier", "I couldn't run commands on your laptop earlier."),
+    # hedged
+    ("hedged_might", "I might not be able to run commands on your laptop."),
+    # another subject
+    ("other_subject_you", "You can't run commands on your laptop from the lock screen."),
+    ("other_subject_nova_third", "Nova can't run commands on your laptop until you pair it."),
+    # an instruction to him
+    ("instruction_to_him", "Run commands on your laptop from the terminal."),
+    # quoted user text
+    ("quoted_user_text", 'You said "I can\'t run commands on your laptop".'),
+    ("quoted_in_ticket", 'You wrote "I can\'t run commands on your laptop" in the ticket.'),
+    # one thing, not the ability
+    ("one_command", "I can't run the command on your laptop."),
+]
+
+
+@pytest.mark.parametrize("label,reply", DEVICE_HONEST, ids=[c[0] for c in DEVICE_HONEST])
+def test_s29b_t2_c4_an_honest_device_sentence_names_no_device_tool(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    named = set(tgt(correction)) & DEVICE_TOOLS if correction is not None else set()
+    assert not named, f"{label!r}: {reply!r} was wrongly corrected for {sorted(named)}"
+
+
+# (label, a sentence that fires, its minimal honest edit) — each honest edit
+# is pinned against a sentence that fires, so the pair means something.
+DEVICE_PAIRS = [
+    (
+        "named_vs_general",
+        "I can't run commands on your laptop.",
+        "I can't run commands on the Dell, it's offline.",
+    ),
+    (
+        "present_state",
+        "I can't run commands on your laptop.",
+        "I can't run commands on your laptop right now.",
+    ),
+    (
+        "object_tail",
+        "I can't read files on your computer.",
+        "I can't read files on your computer that are encrypted.",
+    ),
+    ("past", "I can't open apps on your PC.", "I couldn't open apps on your PC."),
+    (
+        "hedged",
+        "I can't run programs on your computer.",
+        "I may not be able to run programs on your computer.",
+    ),
+    (
+        "other_subject",
+        "I can't list files on your machine.",
+        "You can't list files on your machine.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,fires,honest", DEVICE_PAIRS, ids=[c[0] for c in DEVICE_PAIRS])
+def test_s29b_t2_c4_an_honest_edit_of_a_device_denial_names_no_device_tool(label, fires, honest):
+    correction = guards.capability_claim_check(fires, ALL_TOOLS)
+    assert correction is not None and set(tgt(correction)) & DEVICE_TOOLS, (
+        f"{label!r}: the first-person form {fires!r} must fire for the pair to mean anything"
+    )
+    edit = guards.capability_claim_check(honest, ALL_TOOLS)
+    named = set(tgt(edit)) & DEVICE_TOOLS if edit is not None else set()
+    assert not named, f"{label!r}: {honest!r} was wrongly corrected for {sorted(named)}"
+
+
+# -- S29b T2 COVERAGE: the allowlist's edges ----------------------------------
+#
+# C2's allowlist admits a few capability words after the noun ("directly",
+# "myself", "remotely", "at all") and refuses a period INSIDE a closing quote
+# and a stated present state after ", so …". Each is pinned here; RED/GREEN
+# above pinned only the ", so/but", "for you", "or <words>" arms.
+
+DEVICE_ALLOWLIST_FIRES = [
+    ("directly", "I can't run commands on your laptop directly.", "device_run"),
+    ("myself", "I'm unable to read files on your computer myself.", "device_read_file"),
+    ("at_all", "I can't open apps on your PC at all.", "device_launch_app"),
+    ("remotely", "I cannot list files on your machine remotely.", "device_list_files"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,tool", DEVICE_ALLOWLIST_FIRES, ids=[c[0] for c in DEVICE_ALLOWLIST_FIRES]
+)
+def test_s29b_t2_c2_capability_words_after_the_noun_still_fire(label, reply, tool):
+    correction = guards.capability_claim_check(reply, [tool])
+    assert correction is not None and tgt(correction) == [tool], label
+
+
+DEVICE_ALLOWLIST_SILENT = [
+    ("period_inside_quote", 'You said "I can\'t run commands on your laptop."'),
+    (
+        "so_then_present_state",
+        "I can't run commands on your laptop, so I can't check it right now.",
+    ),
+    ("unlisted_word", "I can't list files on your PC today."),
+    ("and_another_place", "I can't write files to your computer and the NAS."),
+    # "the" names ONE machine, never the ability (design: general nouns only)
+    ("the_one_laptop", "I can't run commands on the laptop."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", DEVICE_ALLOWLIST_SILENT, ids=[c[0] for c in DEVICE_ALLOWLIST_SILENT]
+)
+def test_s29b_t2_c2_a_tail_outside_the_allowlist_names_no_device_tool(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    named = set(tgt(correction)) & DEVICE_TOOLS if correction is not None else set()
+    assert not named, f"{label!r}: {reply!r} was wrongly corrected for {sorted(named)}"
+
+
+# -- S29b T2 fix (2026-10-09): a denial hedged in its own clause --------------
+#
+# T2 VERIFY: "Maybe I can't run commands on your laptop; let me check whether
+# it's paired." was corrected for device_run, and the same hedge was already
+# corrected on every row on main ("Maybe I can't browse the web." -> fetch_url).
+# Orchestrator ruling: fix it ONCE in the shared lead (_DENIAL_LEAD) — a
+# "maybe / perhaps / possibly / probably" directly before the first-person
+# denial is a hedge, not an assertion, so the clause is silent. "I think I
+# can't …" and "Honestly, I can't …" are assertions and still fire.
+
+HEDGED_DENIALS = [
+    (
+        "verify_device_run_check_paired",
+        "Maybe I can't run commands on your laptop; let me check whether it's paired.",
+    ),
+    ("verify_device_run_perhaps", "Perhaps I can't run commands on your laptop."),
+    ("verify_device_run_maybe", "Maybe I can't run commands on your laptop."),
+    ("cross_row_browse", "Maybe I can't browse the web."),
+    ("web_search_maybe", "Maybe I can't search the web; let me try."),
+    ("web_search_possibly", "Possibly I can't search the web."),
+    ("windows_maybe", "Maybe I can't run commands on a Windows machine; let me check."),
+    ("device_read_file_probably", "Probably I can't read files on your computer."),
+    ("device_list_files_perhaps_mid", "I'll try, but perhaps I can't list files on your PC."),
+    ("device_launch_app_maybe_unable", "Maybe I'm unable to open apps on your computer."),
+]
+
+
+@pytest.mark.parametrize("label,reply", HEDGED_DENIALS, ids=[c[0] for c in HEDGED_DENIALS])
+def test_s29b_t2_fix_a_hedged_denial_is_silent(label, reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, label
+
+
+HEDGE_FIRING_CONTROLS = [
+    ("i_think", "I think I can't run commands on your laptop.", "device_run"),
+    ("honestly", "Honestly, I can't search the web.", "web_search"),
+    ("plain_after_hedged_clause", "Maybe not; I can't run commands on your laptop.", "device_run"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,tool", HEDGE_FIRING_CONTROLS, ids=[c[0] for c in HEDGE_FIRING_CONTROLS]
+)
+def test_s29b_t2_fix_an_unhedged_assertion_still_fires(label, reply, tool):
+    correction = guards.capability_claim_check(reply, [tool])
+    assert correction is not None and tgt(correction) == [tool], label

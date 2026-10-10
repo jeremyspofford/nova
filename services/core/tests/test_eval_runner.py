@@ -1885,7 +1885,7 @@ async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monke
 async def test_a_plant_that_cannot_be_built_is_ungradeable_and_leaves_none(
     pool, mount_peers, monkeypatch
 ):
-    def _broken(fixtures, devices=None, updates=None):
+    def _broken(fixtures, devices=None, updates=None, runs=None):
         raise RuntimeError("the plant would not build")
 
     monkeypatch.setattr(runner.machines, "FixturePlant", _broken)
@@ -2354,3 +2354,98 @@ async def test_a_replays_device_claim_never_reads_the_real_machine_grouping(pool
         "device_launch_app",
     )
     assert launch is not None and launch["meta"]["ok"] is False  # refused: nothing was sent
+
+
+# -- S29b T5 C5: the runner hands a case's run answers to the plant -----------
+#
+# Criteria and assumptions: tests/test_machines.py "S29b T5".
+
+
+def _run_case_t5() -> Case:
+    return cases_mod.case_from_dict(
+        {
+            "id": "t5-runs-the-tests",
+            "suite": "corpus",
+            "suite_version": 1,
+            "message": "run the tests on my laptop",
+            "contract": [{"predicate": "tool_succeeded", "arg": "device_run"}],
+            "devices": [
+                {
+                    "name": "eval_laptop",
+                    "platform": "linux",
+                    "hostname": "EVAL-LAPTOP",
+                    "run": [
+                        {"argv": ["pytest", "-q"], "exit_code": 1, "output": "1 failed, 39 passed"}
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def _hub_alarm(monkeypatch) -> list[str]:
+    touched: list[str] = []
+
+    def alarm(what: str, *, is_async: bool):
+        def sync(*_a, **_kw):
+            touched.append(what)
+            raise AssertionError(f"a replay reached {what}")
+
+        async def coroutine(*a, **kw):
+            return sync(*a, **kw)
+
+        return coroutine if is_async else sync
+
+    monkeypatch.setattr(devices_ws.Hub, "command", alarm("hub.command", is_async=True))
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", alarm("hub.is_connected", is_async=False))
+    return touched
+
+
+async def test_s29b_t5_c5_the_overlay_hands_the_plant_each_declared_run(monkeypatch):
+    touched = _hub_alarm(monkeypatch)
+    sink: list[dict] = []
+    ctx = ToolContext(app=None, person=None, workspace_root=Path("/tmp"), facts_sink=sink)
+    token = runner._install_fixture_plant(_run_case_t5())
+    try:
+        result, ok = await tools.dispatch(
+            "device_run", {"device": "eval_laptop", "argv": ["pytest", "-q"]}, ctx
+        )
+    finally:
+        machines.PLANT.reset(token)
+    assert ok is True, result
+    assert result == "eval_laptop ran ['pytest', '-q'] — exit 1\n1 failed, 39 passed"
+    assert [f["run"]["exit_code"] for f in sink if isinstance(f.get("run"), dict)] == [1]
+    assert touched == []
+
+
+async def test_s29b_t5_c5_a_replays_device_run_span_carries_the_declared_run_fact(
+    pool, mount_peers, monkeypatch
+):
+    """Through the real turn path: her device_run call in a replay is answered
+    from the case, its span is ok and carries the run fact with the declared
+    exit code — what the narration guard and presented-listing read — and the
+    hub is never reached."""
+    touched = _hub_alarm(monkeypatch)
+    _registry_alarm(monkeypatch)
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (_call("device_run", "c1", {"device": "eval_laptop", "argv": ["pytest", "-q"]}),),
+                (text("One test failed; 39 passed."),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, _run_case_t5(), MODEL)
+    assert run.ungradeable is False and run.passed is True, run.detail
+    span = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'tool' AND name = $2",
+        run.turn_id,
+        "device_run",
+    )
+    assert span is not None and span["ok"] is True, span
+    runs = [f["run"] for f in span.get("facts") or [] if isinstance(f.get("run"), dict)]
+    assert runs == [
+        {"exit_code": 1, "device": "eval_laptop", "argv": ["pytest", "-q"], "cwd": None}
+    ]
+    assert touched == []

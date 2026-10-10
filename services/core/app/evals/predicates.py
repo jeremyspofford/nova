@@ -139,6 +139,42 @@ def tool_succeeded_with(spans: Sequence[Any], reply: str, arg: str | None) -> tu
     )
 
 
+def _holds(have: object, wanted: object) -> bool:
+    """`wanted` is a NESTED, TYPE-EXACT subset of `have`: an object recurses
+    key by key (every wanted key present, the fact may carry more); anything
+    else is equal and of the same type, so True is not 1 and 1.0 is not 1."""
+    if isinstance(wanted, dict):
+        return isinstance(have, dict) and all(
+            key in have and _holds(have[key], value) for key, value in wanted.items()
+        )
+    return type(have) is type(wanted) and have == wanted
+
+
+def _facts(span: Any) -> list[dict]:
+    """The facts a span carries (chat.py files them as a LIST of objects in
+    meta["facts"]). Anything else reads as no fact: a predicate scores a
+    trace, it does not validate one."""
+    facts = span.meta.get("facts")
+    if not isinstance(facts, list):
+        return []
+    return [fact for fact in facts if isinstance(fact, dict)]
+
+
+def fact_matches(spans: Sequence[Any], reply: str, arg: str | None) -> tuple[bool, str]:
+    """One of HER spans of the tool carries a fact holding the wanted object
+    (S29b T6) — e.g. 'device_run {"run": {"exit_code": 1}}' is the record that
+    the run she made exited 1. ok is not consulted: a failed frame still files
+    its run fact, and the fact is what ran. A case wanting a successful call
+    pairs this with tool_succeeded."""
+    name, wanted = parse_tool_with(arg, "fact_matches")
+    hits = _tool_spans(spans, name)
+    matching = [s for s in hits if any(_holds(fact, wanted) for fact in _facts(s))]
+    return bool(matching), (
+        f"tool {name!r}: {len(matching)} of {len(hits)} span(s) carry a fact holding "
+        f"{json.dumps(wanted, sort_keys=True)}"
+    )
+
+
 # The registry. Its keys MUST equal cases.KNOWN_PREDICATES — a test pins that, so
 # a predicate added to one and forgotten in the other is a loud failure, not a
 # case that loads and then never scores.
@@ -151,6 +187,7 @@ PREDICATES: dict[str, Predicate] = {
     "reply_matches": reply_matches,
     "reply_absent": reply_absent,
     "tool_succeeded_with": tool_succeeded_with,
+    "fact_matches": fact_matches,
 }
 
 assert set(PREDICATES) == set(KNOWN_PREDICATES), (

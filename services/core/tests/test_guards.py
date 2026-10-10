@@ -6117,3 +6117,272 @@ def test_t5_cov_a_run_word_that_only_contains_the_file_backs_nothing():
 def test_t5_cov_the_written_path_is_matched_case_insensitively_by_its_last_segment():
     span = device_file_span("device_write_file", "write", "C:\\Users\\j\\nova\\Chat.py")
     assert guards.narration_check("I edited chat.py on the Dell.", [span]) is None
+
+
+# -- S29b T7 (2026-10-09): a mixed test report over a failing run is honest -----
+#
+# Criteria (the tracker's T7 section holds the same):
+#   C1 a passed count whose sentence also states a nonzero failure or error
+#      count ("39 tests passed and 1 failed.", "39 passed, 1 failed, 2
+#      skipped.", "38 tests passed but 2 failed.", "39 passed with 1 error.")
+#      is a report of a failing run, not a claim it passed: silent over exit 1.
+#   C2 unqualified claims still fire over exit 1 ("All 40 tests passed.", "40
+#      tests passed.", "The tests passed."), and so does a zero count: "40
+#      passed, 0 failed." / "All 40 tests passed with no failures."
+#   C3 the mixed forms stay silent over exit 0 too (backed as before).
+#   C4 the new regex is linear and swept by test_guard_regex_timing.
+#
+# T7 rework (orchestrator ruling 2026-10-09, "stop chasing sentence shapes"):
+# over a failing run the correction fires only when the WHOLE REPLY
+# acknowledges no failure — a failure word not negated ("0 failed", "no
+# failures", "none failed", "without failures", "zero errors" are negated), a
+# partial count "N of M" / "N/M" with N != M, or "except" / "but one" / "all
+# but" beside a test or pass word, or "only N" before passed. Anywhere in the
+# reply: a later sentence, a bullet list. Read in one linear pass.
+
+MIXED_TEST_REPORTS = [
+    "39 tests passed and 1 failed.",
+    "39 passed, 1 failed, 2 skipped.",
+    "38 tests passed but 2 failed.",
+    "39 tests passed; 1 test failed.",
+    "39 passed with 1 error.",
+    "All but one of the tests passed: 39 tests passed and one failed.",
+]
+
+
+@pytest.mark.parametrize("reply", MIXED_TEST_REPORTS)
+def test_s29b_t7_c1_a_mixed_report_over_a_failing_run_is_silent(reply):
+    assert not _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "All 40 tests passed.",
+        "40 tests passed.",
+        "The tests passed.",
+        "All 40 tests passed with no failures.",
+        "All 40 tests passed and 0 errors.",
+        # T7 rework: the ruling's firing set. (T7 narrowing: "40 passed, 0
+        # failed.", "40 passed with no failures.", "All 40 passed — no
+        # errors." left this list — main never read a bare "<N> passed" as a
+        # claim, and T7 may only remove corrections; see NOT_ON_MAIN_EITHER.)
+        "40/40 tests passed.",
+        "All 40 tests passed without failures.",
+    ],
+)
+def test_s29b_t7_c2_an_unqualified_or_zero_failure_claim_over_a_failing_run_fires(reply):
+    assert _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+
+
+# T7 rework: VERIFY's five honest reports it corrected, plus a failure in a
+# later sentence or a bullet list, a partial "N/M", and "but one".
+ACKNOWLEDGED_FAILURE_REPORTS = [
+    "39 of 40 tests passed; test_y failed.",
+    "39 tests passed, but test_y failed.",
+    "All tests passed except one: test_y failed.",
+    "Only 39 of 40 tests passed.",
+    "39 tests passed. One test failed: test_y.",
+    "40 tests passed. 1 failed earlier, before my fix.",
+    "The core tests passed.\n\n- test_x: ok\n- test_y: failed",
+    "The tests passed for core. The web package had 2 failures.",
+    "39/40 tests passed.",
+    "All the tests passed but one.",
+]
+
+
+@pytest.mark.parametrize("reply", ACKNOWLEDGED_FAILURE_REPORTS)
+def test_s29b_t7_rework_a_reply_that_acknowledges_a_failure_is_silent_over_a_failing_run(reply):
+    assert not _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+
+
+@pytest.mark.parametrize("reply", ACKNOWLEDGED_FAILURE_REPORTS + MIXED_TEST_REPORTS)
+def test_s29b_t7_rework_the_same_reports_over_a_passing_run_are_silent(reply):
+    assert not _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 0)]))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "All 40 tests passed. No errors.",
+        "All 40 tests passed; zero errors.",
+        "All 40 tests passed, none failed.",
+        "All 40 tests passed. Nothing to fix.",
+        "40 of 40 tests passed.",
+        "All 40 tests passed except for a slow one that took 3s.",
+    ],
+)
+def test_s29b_t7_rework_negated_failures_and_whole_counts_do_not_acknowledge(reply):
+    # A negated failure word and a whole count acknowledge nothing; "except"
+    # beside a pass word does (precision first: the last one is silent).
+    fired = _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+    assert fired == ("except" not in reply)
+
+
+@pytest.mark.parametrize("reply", MIXED_TEST_REPORTS)
+def test_s29b_t7_c3_a_mixed_report_over_a_passing_run_stays_silent(reply):
+    assert not _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 0)]))
+
+
+def test_s29b_t7_c2_a_bare_count_is_never_a_claim():
+    # T7 narrowing (orchestrator ruling 2026-10-09): main never read a bare
+    # "<N> passed" (no "tests") as a claim, with or without a tally, and T7
+    # may only remove corrections — so a bare count stays no claim anywhere.
+    failing = [device_run_span(PYTEST, 1)]
+    assert not _tests_passed(guards.narration_check("40 passed, 2 skipped.", failing))
+    assert guards.narration_check("40 passed, 2 skipped.", [device_run_span(PYTEST, 0)]) is None
+    assert not _tests_passed(guards.narration_check("Of the 5 bills, 3 passed.", []))
+    assert not _tests_passed(guards.narration_check("3 passed the exam and 2 failed it.", []))
+    assert not _tests_passed(guards.narration_check("If 40 passed, 0 failed, I'll merge.", []))
+
+
+# -- S29b T7 narrowing (orchestrator ruling 2026-10-09, after VERIFY 2) --------
+#
+# T7 is a pure NARROWING of main's tests_passed correction, scoped to turns
+# whose deciding test run FAILED:
+#   N1 with no test-runner run on record, or a passing deciding run, the
+#      correction behaves exactly as on main (same claim detection, same
+#      firing): VERIFY 2's honest no-run sentences are silent, as on main, and
+#      an acknowledged report with no run fires, as on main.
+#   N2 under a failing deciding run the reply-level acknowledgement silences
+#      it; a negation ("0 failed", "no failures", "none failed", "nothing
+#      failed", "nothing is broken", "no errors", "zero errors", "without
+#      failures") acknowledges nothing.
+#   N3 under a failing run T7 only removes corrections main makes, never adds.
+
+# VERIFY 2: honest, no spans; main silent, T7 corrected them ("no test runner
+# ran this turn") by reading a bare "<N> passed" beside a tally as a claim.
+VERIFY_2_NO_RUN_HONEST = [
+    "12 passed the audit, 0 failed it.",
+    "3 passed the exam with no errors.",
+    "Of the 30 students, 28 passed, 2 skipped the exam.",
+    "All 12 passed the inspection with zero errors.",
+    "In the trial, 40 passed with no failures recorded.",
+    "Last semester 18 passed, 0 failed.",
+    "The class did well: 22 passed with no failures.",
+    "40 passed with no failures in the driving test this year.",
+    "25 passed the vote, 3 abstained, none failed to show up.",
+]
+
+
+@pytest.mark.parametrize("reply", VERIFY_2_NO_RUN_HONEST)
+def test_s29b_t7_n1_honest_no_run_sentences_are_silent(reply):
+    assert not _tests_passed(guards.narration_check(reply, []))
+
+
+# Shapes main never fired on (a bare count): silent under every record.
+NOT_ON_MAIN_EITHER = [
+    "40 passed, 0 failed.",
+    "40 passed with no failures.",
+    "All 40 passed — no errors.",
+    "All 40 passed; nothing is broken.",
+]
+
+
+@pytest.mark.parametrize("reply", NOT_ON_MAIN_EITHER)
+@pytest.mark.parametrize("code", [None, 0, 1])
+def test_s29b_t7_n3_a_shape_main_never_fired_on_stays_silent(reply, code):
+    spans = [] if code is None else [device_run_span(PYTEST, code)]
+    assert not _tests_passed(guards.narration_check(reply, spans))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "39 tests passed, but test_y failed.",
+        "39 of 40 tests passed; test_y failed.",
+        "All the tests passed but one.",
+        "The tests passed for core. The web package had 2 failures.",
+    ],
+)
+def test_s29b_t7_n1_an_acknowledged_report_with_no_run_fires_as_on_main(reply):
+    # The acknowledgement reads only under a failing deciding run: with none
+    # on record, "<claim> … failed" is corrected exactly as main corrects it.
+    correction = guards.narration_check(reply, [])
+    assert _tests_passed(correction)
+    assert "no test runner ran this turn" in correction.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "All tests passed — nothing failed.",
+        "All 40 tests passed; nothing is broken.",
+        "All 40 tests passed, so the bug is fixed and nothing is broken.",
+        "All 40 tests passed; none failed.",
+        "All 40 tests passed, 0 failed.",
+        "All 40 tests passed with no failures.",
+        "All 40 tests passed; no errors.",
+        "All 40 tests passed with zero errors.",
+        "All 40 tests passed without failures.",
+    ],
+)
+def test_s29b_t7_n2_a_negated_failure_acknowledges_nothing_over_a_failing_run(reply):
+    assert _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+
+
+# -- S29b T7 COVERAGE (VERIFY 3: two C1 alternatives had no biting test) -------
+#
+# One sentence per acknowledgement form of _TESTS_FAILURE_ACK that ONLY that
+# form matches, so deleting the form from guards.py turns exactly its case red
+# (each was checked by deleting it). Each sentence carries a claim main
+# corrects with no run (asserted below), so silence over exit 1 is the
+# acknowledgement's doing, not a missing claim.
+ACK_FORM_REPORTS = {
+    # un-negated failure words, one each
+    "fail-fails": "The core tests passed. test_y still fails.",
+    "fail-failing": "The core tests passed. test_y is failing.",
+    "fail-failures": "The core tests passed. test_y hit one failure.",
+    "fail-errors": "The core tests passed. The web package had 2 errors.",
+    "fail-error": "The core tests passed. test_y hit an error.",
+    "fail-errored": "The core tests passed. test_y errored.",
+    "fail-broke": "The core tests passed. test_y broke.",
+    "fail-broken": "The core tests passed. test_y is broken.",
+    # a partial count, each joiner
+    "nm-of": "39 of 40 tests passed.",
+    "nm-out-of": "39 out of 40 tests passed.",
+    # a test/pass word, then the qualifier
+    "fwd-all-but": "The tests passed, all but test_y.",
+    "fwd-test-word": "All 40 tests passed. The tests ran green except on Windows.",
+    "fwd-pass-word": "All 40 tests passed. Everything passed except test_y.",
+    # the qualifier, then a test/pass word
+    "rev-except": "Except for test_y, all 40 tests passed.",
+    "rev-but-one": "All 40 tests passed. But one test hung.",
+    "rev-all-but-two": "All but two tests passed.",
+    "rev-all-but-one": "All but one test passed.",
+    "rev-test-word": "All 40 tests passed. Except test_y, the tests are green.",
+    "rev-pass-word": "All 40 tests passed. All but test_y passed.",
+    # "only N" before passed, each quantity
+    "only-digits": "Only 55 tests passed.",
+    "only-number-word": "Only nine tests passed.",
+    "only-some": "Only some tests passed.",
+    "only-half": "Only half the tests passed.",
+    "only-a-few": "Only a few tests passed.",
+}
+
+
+@pytest.mark.parametrize("reply", ACK_FORM_REPORTS.values(), ids=ACK_FORM_REPORTS.keys())
+def test_s29b_t7_cov_each_acknowledgement_form_silences_a_failing_run(reply):
+    assert not _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+    # The claim is real: with no run on record it is corrected, as on main.
+    assert _tests_passed(guards.narration_check(reply, []))
+
+
+# One sentence per negation (and the "-free" suffix) that ONLY that negation
+# keeps from acknowledging: deleting it from guards.py silences the lie.
+NEGATED_FORM_LIES = {
+    "error-free": "All 40 tests passed, error-free.",
+    "without-any": "All 40 tests passed without any failures.",
+    "none-of-the-tests": "All 40 tests passed; none of the tests failed.",
+    "none-of-them": "All 40 tests passed; none of them failed.",
+    "zero-tests": "All 40 tests passed, 0 tests failed.",
+    "no-tests": "All 40 tests passed and no tests failed.",
+    "nothing-was": "All 40 tests passed; nothing was broken.",
+    "nothing-has-been": "All 40 tests passed; nothing has been broken.",
+    "nothing-got": "All 40 tests passed; nothing got broken.",
+}
+
+
+@pytest.mark.parametrize("reply", NEGATED_FORM_LIES.values(), ids=NEGATED_FORM_LIES.keys())
+def test_s29b_t7_cov_each_negation_acknowledges_nothing(reply):
+    assert _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))

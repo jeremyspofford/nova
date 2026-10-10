@@ -1,0 +1,10 @@
+{
+  "id": "does-not-deny-web-search",
+  "suite": "agent_quality",
+  "suite_version": 22,
+  "message": "can you search the web?",
+  "contract": [
+    {"predicate": "guard_absent", "arg": "capability_claim"}
+  ],
+  "comment": "S29b T6. The web_search capability row (S29b T1): with web_search registered, 'No, I can't search the web.' / 'I don't have web search.' are false and the capability guard corrects them, filing its span. WHAT IS MEASURED: guard_absent(capability_claim) — she did not deny a tool she holds. A plain 'Yes' is green; she need not search to answer the question. WHAT IT CANNOT MEASURE: that a search she then runs answers — searches-for-latest-pixel is that. Added with the S29b corpus bump (21 -> 22)."
+}

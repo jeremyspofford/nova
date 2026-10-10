@@ -188,6 +188,31 @@ _TESTS_PASSED_CUT = re.compile(
 # the PR"); a past "passed" after one is a report ("when I ran it, all 40
 # tests passed"), so it cuts only the present form.
 _TESTS_PASSED_PRESENT_CUT = re.compile(r"\b(?:once|when|whenever|until|after|before)\b", re.I)
+# S29b T7 (rework + narrowing, orchestrator rulings 2026-10-09): over a
+# FAILING deciding run (a test runner ran, the last one did not exit 0) the
+# tests_passed correction fires only when the WHOLE REPLY acknowledges no
+# failure. With no runner on record, or a passing one, nothing here is read:
+# the guard is main's, claim for claim. T7 only ever removes a correction.
+# A reply acknowledges one with, anywhere in it: a failure word not negated
+# ("test_y failed", "2 failures"; "0 failed", "no failures", "none of them
+# failed", "without errors", "zero errors", "nothing failed", "nothing is
+# broken" are negated — the `neg` group), a partial count "N of M" / "N/M"
+# with N != M (`n`, `m`), "except" / "but one" / "all but" within 40
+# characters of a test or pass word, or "only N" before "passed". Read by
+# one finditer over the reply; every alternative is a bounded length from
+# where it starts, digit runs bounded: linear.
+_TESTS_FAILURE_ACK = re.compile(
+    r"(?P<neg>\b(?:(?:0|no|none|zero|without(?:\s++any)?)\s++"
+    r"(?:of\s++(?:the\s++|them\s++)?)?(?:tests?\s++)?"
+    r"|nothing\s++(?:(?:is|was|has\s++been|got)\s++)?))?"
+    r"\b(?P<fail>failed|fails|failing|failures?|errors?|errored|broke|broken)\b(?!-free)"
+    r"|\b(?P<n>\d{1,6})(?:\s++(?:out\s++)?of\s++|\s*+/\s*+)(?P<m>\d{1,6})\b"
+    r"|\b(?:tests?|pass\w{0,4})\b[^.!?\n]{0,40}?\b(?:except|but\s++one|all\s++but)\b"
+    r"|\b(?:except|but\s++one|all\s++but)\b[^.!?\n]{0,40}?\b(?:tests?|pass\w{0,4})\b"
+    r"|\bonly\s++(?:\d{1,6}|one|two|three|four|five|six|seven|eight|nine|ten|some|half|"
+    r"a\s++few)\b[^.!?\n]{0,40}?\bpassed\b",
+    re.I,
+)
 # S29a T3b: the correction names what the record shows, so it is true in every
 # case: the deciding run (the LAST test-runner run fact) by its command and exit
 # code, or that no test runner ran. "No test run exited 0" was false beside an
@@ -314,6 +339,23 @@ def _tests_correction_text(spans: Sequence[Any]) -> str:
     else:
         outcome = "has no exit code on record"
     return TESTS_FAILED_RUN_TEXT.format(command=command, outcome=outcome)
+
+
+def _acknowledges_failure(reply: str) -> bool:
+    """Whether the reply acknowledges a test failure anywhere
+    (_TESTS_FAILURE_ACK): a failure word with no negation before it, a
+    partial count whose two numbers differ, or an except/but-one/only-N
+    qualifier. One pass over the reply."""
+    for m in _TESTS_FAILURE_ACK.finditer(reply):
+        if m.group("fail") is not None:
+            if m.group("neg") is None:
+                return True
+        elif m.group("n") is not None:
+            if int(m.group("n")) != int(m.group("m")):
+                return True
+        else:
+            return True
+    return False
 
 
 def _tests_passed_claims(clause: str) -> list[tuple[str, str | None, str]]:
@@ -2446,6 +2488,7 @@ def narration_check(
     on_a_page = _browser_ran(spans)
     delegated: bool | None = None  # read on the first claim that asks
     failed_pages: list[Any] | None = None  # read on the first unbacked fetch claim
+    acknowledged: bool | None = None  # read on the first unbacked tests claim
     unbacked: list[UnbackedClaim] = []
     seen: set[tuple[str, str, bool]] = set()
     reported: set[tuple[str, str | None]] = set()
@@ -2504,6 +2547,17 @@ def narration_check(
             # Read from the run facts, never a tool's name or its prose
             # (_tests_passed_backed): a device_run that exited 1 ran.
             if _tests_passed_backed(spans):
+                continue
+            # S29b T7: over a FAILING deciding run (a test runner ran and the
+            # last did not exit 0), a reply that acknowledges a failure
+            # anywhere reports that run; it claims nothing the record
+            # contradicts. With no runner on record the correction is main's,
+            # unchanged. Read once per reply (_acknowledges_failure).
+            if acknowledged is None:
+                acknowledged = _deciding_test_run(spans) is not None and _acknowledges_failure(
+                    reply_text
+                )
+            if acknowledged:
                 continue
         elif kind == "ran_command":
             # Read from the run facts' words, any exit code: running is not
@@ -2989,8 +3043,110 @@ _BROWSER_OBJECT = (
     r"(?:an?|any)\s++(?:(?!(?:favou?rite|preferred|default)\b)[\w-]++\s++){0,2}?browser\b"
     + _BROWSER_HEAD_TAIL
 )
+# The trailing family's copula and body ("… isn't something I can do", "…
+# aren't among my tools"), as strings: _TRAILING_DENIAL (below) compiles them,
+# and the S29b web search rows read them as one allowed tail.
+_NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+not\b)"
+_TRAILING_DENIAL_BODY = (
+    r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
+    r"|an?\s+(?:capability|tool)\s+i\s+have"
+    r"|(?:in|part\s+of|one\s+of|among|within)\s+my\s+"
+    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)"
+    r"|available\s+to\s+me"
+)
+# S29b T1 (2026-10-09): her web search. Live 10-09 (dell:qwen3:8b), with
+# web_search registered: "I can't search the web" and "I don't have web
+# search" went uncorrected — browsing is fetch_url's row, "search" is not
+# "browse", and _DENIAL_LEAD reads "don't have" only as "the ability/access
+# to". GENERAL abilities only: the lead row reads "search the web/internet",
+# "search online", "do/run/perform a web search(es)", "look things up online",
+# "web search" right after "access to", and a bare "web/internet search(es)"
+# only as the subject of a trailing denial ("Web search isn't something I can
+# do"). "Search websites" is not here ("I can't search websites that require
+# your login" is the honest neighbour); "search on the web" is an accepted miss
+# (_SCOPE_QUALIFIER reads "on the web" as a scope).
+#
+# T1 VERIFY fix (orchestrator ruling, the browser possession row's shape):
+# what FOLLOWS the phrase is an ALLOWLIST, for both rows — VERIFY found S38's
+# qualified tail (a denylist) let "… for your private Slack messages", "…
+# about your bank account", "… of my own; I use searxng" and "web search
+# access to your intranet" through. The denial stands only when followed by:
+#   1. the end of the clause ([.!?;:] or end of text), or ", so/but …";
+#   2. "for you", then 1;
+#   3. "or <1-3 words>" (a coordinated alternative: "or browse websites"),
+#      then 1 or 2;
+#   4. capability wording — "access", "tool(s)", "capability/ies" — then 1
+#      ("I don't have web search access." fires; "… access to your intranet"
+#      does not);
+#   5. the trailing denial itself ("… isn't something I can do"), then 1 or 2.
+# Anything else is silent: an object ("for your Slack messages", "about your
+# bank account"), a place ("on this network", "from inside your VPN"), a time
+# or state ("today", "offline", "built in"). Neither row fires on a stated
+# present state anywhere in its tail ("…, so I can't check right now").
+# Literal alternatives, possessive runs, a lazy {0,2} over possessive words,
+# fixed-width lookbehinds: linear.
+_WEB_SEARCH_TAIL_END = _BROWSER_TAIL_END
+_WEB_SEARCH_TAIL_FOR_YOU = r"\s++for\s++you\b" + _WEB_SEARCH_TAIL_END
+_WEB_SEARCH_TAIL_TRAILING = (
+    r"\s++" + _NOT_COPULA + r"\s++(?:" + _TRAILING_DENIAL_BODY + r")\b"
+    r"(?:" + _WEB_SEARCH_TAIL_END + "|" + _WEB_SEARCH_TAIL_FOR_YOU + ")"
+)
+_WEB_SEARCH_TAIL_OK = (
+    "(?="
+    + _WEB_SEARCH_TAIL_END
+    + "|"
+    + _WEB_SEARCH_TAIL_FOR_YOU
+    + r"|\s++or\s++(?:[\w-]++\s++){0,2}?[\w-]++(?:"
+    + _WEB_SEARCH_TAIL_END
+    + "|"
+    + _WEB_SEARCH_TAIL_FOR_YOU
+    + r")|\s++(?:access|tools?|capabilit(?:y|ies))\b"
+    + _WEB_SEARCH_TAIL_END
+    + "|"
+    + _WEB_SEARCH_TAIL_TRAILING
+    + ")"
+)
+_CAP_WEB_SEARCH = re.compile(
+    r"(?:search(?:ing)?\s++(?:the\s++)?(?:web|internet)\b"
+    r"|search(?:ing)?\s++online\b"
+    r"|(?:do(?:ing)?|run(?:ning)?|perform(?:ing)?|mak(?:e|ing))\s++(?:an?\s++|any\s++)?"
+    r"(?:web|internet|online)\s++search(?:es)?\b"
+    r"|look(?:ing)?\s++(?:things?\s++|stuff\s++|anything\s++|information\s++)?up\s++"
+    r"(?:(?:things?|stuff|anything|information)\s++)?online\b"
+    r"|(?<=access to )(?:web|internet|online)\s++search\b"
+    r"|(?:web|internet|online)\s++search(?:es)?\b(?=\s++"
+    + _NOT_COPULA
+    + r"))"
+    + _WEB_SEARCH_TAIL_OK
+    + r"(?!"
+    + _PRESENT_STATE_TAIL
+    + r")",
+    re.I,
+)
+# Its POSSESSION form ("I don't have web search", "I do not have a search
+# tool"), the browser possession row's shape: its own lead as fixed-width
+# lookbehinds, the object web/internet/online search (optionally a tool or an
+# engine) or a/any search tool/engine, then the same allowlist. Silent, too:
+# a modifier use ("web search results", "any web search history"), a
+# different object ("a search tool for your email"), a determiner naming one
+# thing ("the search results you mean"), a present state ("… right now").
+_WEB_SEARCH_OBJECT = (
+    r"(?:(?:an?|any)\s++)?"
+    r"(?:(?:web|internet|online)\s++search(?:\s++(?:tools?|engines?))?|search\s++(?:tools?|engines?))\b"
+    + _WEB_SEARCH_TAIL_OK
+)
+_CAP_WEB_SEARCH_POSSESSION = re.compile(
+    r"(?:(?<=\bi don't have )|(?<=\bi don’t have )|(?<=\bi dont have )"
+    r"|(?<=\bi do not have ))" + _WEB_SEARCH_OBJECT + r"(?!" + _PRESENT_STATE_TAIL + r")",
+    re.I,
+)
+# The clause gate for both possession rows (browser, web search).
 _POSSESSION_LEAD = re.compile(
-    r"\bi\s++(?:don['’]?t|do\s++not)\s++have\s++(?=" + _BROWSER_OBJECT + r")",
+    r"\bi\s++(?:don['’]?t|do\s++not)\s++have\s++(?="
+    + _BROWSER_OBJECT
+    + r"|"
+    + _WEB_SEARCH_OBJECT
+    + r")",
     re.I,
 )
 _CAP_BROWSER_POSSESSION = re.compile(
@@ -3045,6 +3201,59 @@ _MCP_QUALIFIED_TAIL = (
     r"|needing|behind|on\s+(?:a|an|any|the|that|this|your)\s+server)\b"
     r"|" + _PRESENT_STATE_TAIL + r")"
 )
+
+# S29b T2 (2026-10-09): her device tools, as GENERAL abilities. Live 10-09
+# (dell:qwen3:8b), with device_run registered: "No, I can't run commands on
+# your laptop" went uncorrected — the S42a row reads only Windows/Mac nouns,
+# and no row mapped a phrase to the other acting device tools.
+#
+# The noun is GENERAL only: "your laptop/computer/PC/machine(s)/device(s)/
+# desktop", "a/an/any computer …" — never a NAME and never "the": "I can't run
+# commands on the Dell, it's offline" is an honest report about one machine.
+# A phone is no noun here: device_notify is a desktop notification and novad
+# has no phone build, so "I can't send notifications to your phone" is true.
+#
+# What FOLLOWS the noun is an ALLOWLIST from the start (T1's and the browser
+# row's lesson; precision first):
+#   1. the end of the clause — [.!?;] not followed by a closing quote (his
+#      quoted text: 'You said "I can't run commands on your laptop".'), or
+#      the end of text, or ", so/but …". NOT ':' (unlike _BROWSER_TAIL_END):
+#      "…on your laptop: it isn't reachable" is a stated state;
+#   2. "for you", "directly", "myself", "remotely", "at all", then 1;
+#   3. "or <1-3 words>" (a coordinated alternative: "or tablet"), then 1 or 2.
+# Anything else is silent: an object or limit ("that need sudo", "with sudo",
+# "as administrator", "outside your home folder"), a state ("right now",
+# "while it's offline", "— it's offline"). Nor does any row fire on a stated
+# present state later in the clause (", so I can't check right now").
+# Built as strings and compiled inline per row, like the S42a row it extends:
+# literal alternatives, possessive runs, a lazy {0,2} over possessive words,
+# bounded by _PRESENT_STATE_TAIL's own window: linear.
+_GENERAL_DEVICE_NOUN = (
+    r"(?:your\s++(?:own\s++)?|(?:an?|any)\s++)"
+    r"(?:laptops?|computers?|pcs?|machines?|devices?|desktops?)\b"
+)
+_DEVICE_TAIL_END = r"(?:\s*+[.!?;](?![\"”'’])|\s*+,\s*+(?:(?:so|but)\b|$)|\s*+$)"
+_DEVICE_TAIL_WORDS = (
+    r"(?:\s++(?:for\s++you|directly|myself|remotely|at\s++all)\b)?" + _DEVICE_TAIL_END
+)
+_DEVICE_TAIL_OK = (
+    "(?="
+    + _DEVICE_TAIL_WORDS
+    + r"|\s++or\s++(?:[\w-]++\s++){0,2}?[\w-]++"
+    + _DEVICE_TAIL_WORDS
+    + r")(?!"
+    + _PRESENT_STATE_TAIL
+    + ")"
+)
+
+
+def _device_row(verb_phrase: str) -> re.Pattern[str]:
+    """One device row: `verb_phrase` on/to a general device noun, then the
+    allowlisted tail."""
+    return re.compile(
+        r"\b(?:" + verb_phrase + r")\s++" + _GENERAL_DEVICE_NOUN + _DEVICE_TAIL_OK, re.I
+    )
+
 
 _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
@@ -3294,7 +3503,13 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"|run\s+(?:commands?|programs?|apps?|anything)\s+on)\s+"
             r"(?:(?:a|any)\s+)?(?:windows|mac(?:os)?)\s+"
             r"(?:machines?|computers?|pcs?|laptops?|desktops?|devices?)\b"
-            r"|(?:access|reach|control)\s+(?:(?:a|any)\s+)?macs\b",
+            r"|(?:access|reach|control)\s+(?:(?:a|any)\s+)?macs\b"
+            # S29b T2: the GENERAL noun, behind the device rows' allowlisted
+            # tail (see _GENERAL_DEVICE_NOUN). One device_run row, so the S42a
+            # reachability proof still selects it by its tool's name.
+            r"|\brun(?:ning)?\s++(?:any\s++)?(?:commands?|programs?|scripts?)\s++on\s++"
+            + _GENERAL_DEVICE_NOUN
+            + _DEVICE_TAIL_OK,
             re.I,
         ),
         "device_run",
@@ -3318,6 +3533,33 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         "mcp_call",
     ),
     (_CAP_BROWSER_POSSESSION, "browser_open"),
+    # S29b T1: her web search, the lead and the possession forms (see the
+    # patterns). Appended last, so no existing row's id moves.
+    (_CAP_WEB_SEARCH, "web_search"),
+    (_CAP_WEB_SEARCH_POSSESSION, "web_search"),
+    # S29b T2: her other acting device tools, on a GENERAL noun (see
+    # _GENERAL_DEVICE_NOUN; device_run's general noun is in its S42a row above).
+    # Appended last, so no existing row's id moves.
+    (_device_row(r"read(?:ing)?\s++(?:any\s++)?files?\s++(?:on|from)"), "device_read_file"),
+    (_device_row(r"list(?:ing)?\s++(?:the\s++|any\s++)?files?\s++on"), "device_list_files"),
+    (
+        _device_row(
+            r"(?:writ(?:e|ing)|sav(?:e|ing)|creat(?:e|ing))\s++(?:any\s++)?files?\s++(?:on|to)"
+        ),
+        "device_write_file",
+    ),
+    (
+        _device_row(
+            r"(?:open(?:ing)?|launch(?:ing)?|start(?:ing)?)\s++(?:any\s++)?(?:apps?|applications?)\s++on"
+        ),
+        "device_launch_app",
+    ),
+    (
+        _device_row(
+            r"send(?:ing)?\s++(?:you\s++)?(?:any\s++)?(?:desktop\s++)?notifications?\s++(?:to|on)"
+        ),
+        "device_notify",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -3326,7 +3568,14 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
 # past/attributed/hedged form is dropped without a separate blocker. The
 # optional "'m"/" am" lets the contraction ("I'm unable to") and the full form
 # ("I am unable to") share one pattern.
+#
+# S29b T2 fix (2026-10-09): a hedge word DIRECTLY before the "I" ("Maybe I
+# can't run commands on your laptop; let me check") hedges the denial in its
+# own clause — every row corrected it. Fixed-width lookbehinds, one per word,
+# so the cost is constant per "I"; "I think I can't" and "Honestly, I can't"
+# are assertions and still lead.
 _DENIAL_LEAD = re.compile(
+    r"(?<!\bmaybe )(?<!\bperhaps )(?<!\bpossibly )(?<!\bprobably )"
     r"\bi(?:'m|\s+am)?\s+(?:"
     r"cannot|can'?t|can\s+not"
     r"|unable\s+to"
@@ -3365,7 +3614,7 @@ _DENIAL_LEAD = re.compile(
 # off most of it, and what it costs is bounded: the correction states only
 # that a registered tool exists, which is TRUE of the affirmed capability too,
 # so an over-reach here reads as a redundant line and never as a false one.
-_NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+not\b)"
+# (_NOT_COPULA is defined above the S29b web search rows, which read it.)
 # "there is no <capability> in my toolbox" (S16, her sentence to the owner on
 # 2026-09-11). The lead family is first-person because a denial has to be ABOUT
 # her; this one is impersonal in grammar and self-referring in substance, so it
@@ -3384,13 +3633,7 @@ _ABSENT_FROM_TOOLSET = re.compile(
     re.I,
 )
 _TRAILING_DENIAL = re.compile(
-    _NOT_COPULA + r"\s+(?:"
-    r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
-    r"|an?\s+(?:capability|tool)\s+i\s+have"
-    r"|(?:in|part\s+of|one\s+of|among|within)\s+my\s+"
-    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)"
-    r"|available\s+to\s+me"
-    r")\b",
+    _NOT_COPULA + r"\s+(?:" + _TRAILING_DENIAL_BODY + r")\b",
     re.I,
 )
 
@@ -3546,7 +3789,7 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # phrase on the denial's own side keeps an unrelated capability
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
-                if pattern is _CAP_BROWSER_POSSESSION:
+                if pattern is _CAP_BROWSER_POSSESSION or pattern is _CAP_WEB_SEARCH_POSSESSION:
                     # The row carries its own lead (fixed-width lookbehinds),
                     # so it is after a lead by construction — even when an
                     # earlier-found lead is a LATER "I can't" in the same
@@ -8487,8 +8730,9 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
 #     prints bare names, one per line) because a miss there is a false
 #     correction, and a false correction makes the guard the liar — but a bare-
 #     name run still needs ONE line that could only be a listing (a slash, a
-#     size, a tree lead, a mode string) or a shell run's own `ran […] — exit`
-#     preamble, so three nav-menu words in a fetched page back nothing.
+#     size, a tree lead, a mode string) or a `run` fact on its span (S29a:
+#     the executor filed it from the agent's frame; prose quoting a preamble
+#     arms nothing), so three nav-menu words in a fetched page back nothing.
 #
 #   A result that merely CONTAINS the presented names is deliberately NOT a
 #   backing (adversarial review, 2026-09-03): a memory_search recalls an old
@@ -8603,8 +8847,9 @@ _PATHLIKE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,5}$")
 _BARE_NAME = re.compile(r"^[\w.@+~-]+/?$")
 _SIZE_FIRST = re.compile("^" + _SIZE + r"\s+(\S+)$")
 # A shell run's own preamble (app/tools/devices.py device_run: "<name> ran
-# [argv] — exit N"): the one context in which a run of bare names in a result
-# is known to be a program's output rather than a page's words.
+# [argv] — exit N"). The guard NO LONGER arms on it (S29b): text cannot vouch
+# for itself, so a bare-name run is armed by the span's `run` fact instead
+# (_listing_ran). Kept only as the pin on device_run's output format.
 _RUN_PREAMBLE = re.compile(r"\bran \[[^\n]*\] — exit -?\d+")
 # A table column headed Size arms the rows beneath it.
 _TABLE_SIZE_HEADER = re.compile(r"\bsize\b", re.I)
@@ -8776,12 +9021,12 @@ def _listing_lines(text: str, *, strict: bool) -> tuple[list[_Entry], tuple[str,
     return best, best_prev
 
 
-def _presented(text: str, *, strict: bool) -> list[_Entry]:
+def _presented(text: str, *, strict: bool, ran: bool = False) -> list[_Entry]:
     """The listing `text` presents, as entries, or [] — with the run-level
     cuts applied: on the reply side a tree with no sizes must carry a path-like
     name and must not be introduced as a plan; on the result side a bare-name
-    run must carry one line that could only be a listing, or a shell run's
-    preamble."""
+    run must carry one line that could only be a listing, unless `ran` — the
+    caller read a `run` fact on the span (never the text's own say-so)."""
     entries, intro = _listing_lines(text, strict=strict)
     if not entries:
         return []
@@ -8792,7 +9037,7 @@ def _presented(text: str, *, strict: bool) -> list[_Entry]:
             if any(_PLAN_MARKER.search(line) for line in intro):
                 return []  # "Proposed layout:" / "I would create:" — a plan
         return entries
-    if not any(e.strong for e in entries) and _RUN_PREAMBLE.search(text) is None:
+    if not ran and not any(e.strong for e in entries):
         return []  # three bare words in a page or a requirements file
     return entries
 
@@ -8811,10 +9056,21 @@ def _listing_ran(spans: Sequence[Any], listing_tools: Sequence[str]) -> bool:
     for span in _successful(spans):
         if span.name in declared:
             return True
-        head = (getattr(span, "meta", None) or {}).get("result_head")
-        if isinstance(head, str) and is_listing(head, strict=False):
+        meta = getattr(span, "meta", None) or {}
+        head = meta.get("result_head")
+        if isinstance(head, str) and _presented(head, strict=False, ran=_carries_run_fact(meta)):
             return True
     return False
+
+
+def _carries_run_fact(meta: dict) -> bool:
+    """Does this span's facts slice hold a run fact (S29a: device_run files
+    {"run": {exit_code, device, argv, cwd}, ...} on every answered frame)? The
+    fact, not the tool's name, says the result is a program's output."""
+    facts = meta.get("facts")
+    if not isinstance(facts, list):
+        return False
+    return any(isinstance(f, dict) and isinstance(f.get("run"), dict) for f in facts)
 
 
 def _user_names(user_message: str) -> frozenset[str]:

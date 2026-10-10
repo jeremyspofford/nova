@@ -942,9 +942,19 @@ Status as of `e9c871f3`.
 
 - **Still:** `narration_check` retracts honest device-backed reads and
   writes (re-measured). S29.
-- **Still:** `capability_claim_check` has no row for `web_search`, and the
-  device tools are covered only for "a Windows machine / a Mac" phrasing
-  (`guards.py:1755-1768`). S29.
+- **Fixed (S29b):** `capability_claim_check` has rows for `web_search` and
+  for the device tools in generic phrasing ("run commands on your laptop"),
+  each firing only on an allowlist of what may follow the denial, and a
+  hedged denial ("Maybe I can't …") is silent on every row.
+  `tests/test_capability_coverage.py` makes every registered tool either
+  covered by a row or listed with a reason.
+- **Fixed (S29b):** an honest failing test report ("39 passed and 1
+  failed") over a failing run is no longer corrected as a "tests passed"
+  claim.
+- **Still:** a capability row corrects her retracting an earlier denial
+  ("Earlier I said I can't search the web, but I can"); the correction is
+  redundant, not false. The `workspace_list_files` row corrects honest
+  location replies ("I can't list files on the Mac mini").
 - **Still:** `stack_claim_check` replaces an honest report backed by a
   probe (re-measured). S29.
 - **Fixed (S29a):** `device_run` still returns `ok` on a nonzero exit, but
