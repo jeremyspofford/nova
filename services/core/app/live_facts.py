@@ -172,6 +172,13 @@ NOT_AUTO_RUN = {
     "browser_open": "the note would choose the address; nothing checks it against this system",
     "browser_read": "it reads whatever page the shared browser is on, which no note can name",
     "browser_back": "it moves the shared browser, whose history no note can name",
+    # S30a T7: unlike device_read_file, a search walks a whole tree on the
+    # owner's machine and can run to the agent's command deadline, far past
+    # CHECK_TIMEOUT (the device_info refresh trap, S42b Task 21).
+    "device_search": (
+        "a tree walk on his machine can outlast the check's time limit, and the note "
+        "would choose the pattern"
+    ),
 }
 
 

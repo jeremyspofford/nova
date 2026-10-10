@@ -64,6 +64,20 @@ def test_every_exclusion_carries_a_reason():
         assert reason.strip(), f"{name} is excluded with no reason given"
 
 
+def test_s30a_t7_device_search_is_excluded_with_its_reason():
+    """S30a T7 (2026-10-10): a code search changes nothing, yet is NOT a check
+    the backend runs unasked — unlike device_read_file. A walk of a tree may
+    run to the agent's command deadline on the owner's machine, past
+    CHECK_TIMEOUT (the device_info refresh trap, S42b Task 21), and its
+    pattern is free text a note would choose. Classified here deliberately."""
+    assert "device_search" in tools.REGISTRY, "device_search is not registered"
+    assert tools.REGISTRY["device_search"].reads_only
+    assert "device_search" not in live_facts.AUTO_RUN
+    reason = live_facts.NOT_AUTO_RUN.get("device_search", "")
+    assert reason.strip(), "device_search is not excluded with a reason"
+    assert live_facts.may_run_unasked("device_search") == reason
+
+
 # -- runnable ----------------------------------------------------------------
 
 

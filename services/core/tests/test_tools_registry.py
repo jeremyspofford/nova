@@ -172,6 +172,16 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # (tools/changes.py), so FIFTY-NINE -> SIXTY. Several changes can be open
     # at once and a later turn has to find the one it is resuming; the list
     # is read live from `git worktree list` on the repo machine, never stored.
+    # Deliberate snapshot update (S30a T5, 2026-10-09): device_edit_file
+    # (tools/devices.py), so SIXTY -> SIXTY-ONE. She could only rewrite a whole
+    # file up to 256 KiB, and chat.py (~340 KB) and guards.py (~480 KB) could
+    # not be changed at all; this replaces one exact snippet through the
+    # agent's fs.edit. Not reads_only; nothing waits on anyone.
+    # Deliberate snapshot update (S30a T7, 2026-10-10): device_search
+    # (tools/devices.py), so SIXTY-ONE -> SIXTY-TWO. She had no way to find
+    # where something is in a tree short of reading every file; this walks a
+    # directory on a paired machine through the agent's fs.search (regex or
+    # literal, .gitignore honoured). reads_only; nothing waits on anyone.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -288,6 +298,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # Worktrees epic T6 (2026-10-08): her open changes, read from `git
         # worktree list` on that machine. FIFTY-NINE -> SIXTY.
         "list_changes",
+        # S30a T5 (2026-10-09): one exact snippet replaced in a file of any
+        # size on a paired machine (the agent's fs.edit). SIXTY -> SIXTY-ONE.
+        "device_edit_file",
+        # S30a T7 (2026-10-10): a code search over a tree on a paired machine
+        # (the agent's fs.search). SIXTY-ONE -> SIXTY-TWO.
+        "device_search",
     }
 
 
@@ -700,6 +716,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # both only read. Its twin start_change is deliberately NOT here: it
         # fetches and adds a branch and a worktree.
         "list_changes",
+        # S30a T7 (2026-10-10): device_search walks a tree and reports matching
+        # lines — it opens files for reading only. Its twin device_edit_file is
+        # deliberately NOT here: it replaces a file. 28 -> 29.
+        "device_search",
     }
 
 
@@ -738,6 +758,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "nova_update",
         # Worktrees T5: it creates a branch and a worktree on the repo machine.
         "start_change",
+        # S30a T5: it replaces a snippet in a file on a device.
+        "device_edit_file",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 
@@ -769,12 +791,15 @@ def test_the_tools_that_back_a_claim_kind_are_pinned_by_name():
         # S29a: the device file tools, target-aware through their `file` fact.
         "device_read_file": frozenset({"read_file", "file_contents"}),
         "device_write_file": frozenset({"wrote_file"}),
+        # S30a T5: a device edit, target-aware through its `edit` fact.
+        "device_edit_file": frozenset({"edited_file", "wrote_file"}),
     }
 
 
 def test_tool_names_backing_is_derived_and_sorted():
     assert tools.tool_names_backing("read_file") == ["device_read_file", "workspace_read_file"]
     assert tools.tool_names_backing("wrote_file") == [
+        "device_edit_file",
         "device_write_file",
         "memory_save",
         "workspace_write_file",

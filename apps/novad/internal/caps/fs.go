@@ -94,6 +94,22 @@ func fsRead(args map[string]any, d Deps) Outcome {
 	if err != nil {
 		return fail("%v", err)
 	}
+	if hasRange(args) {
+		// S30a: a ranged read (fs_range.go). The no-range path below is
+		// unchanged and carries no meta.
+		r, err := parseRange(args)
+		if err != nil {
+			return fail("%v", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return fail("could not read %s: %v", path, err)
+		}
+		if info.IsDir() {
+			return fail("%s is a directory, not a file", path)
+		}
+		return fsReadRange(path, r)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return fail("could not read %s: %v", path, err)

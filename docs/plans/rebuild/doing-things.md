@@ -422,6 +422,21 @@ on the fact; a probe of a port nothing listens on is `ok:false` with the
 reason.
 *Pins:* registry 44 → 50; `reads_only` 22 → 26; `ToolContext` 7 → 8.
 *Waits on:* S42b.
+*Split 2026-10-10 (owner):* S30a now, S30c and S30d later.
+*Landed (S30a):* range reads on `device_read_file` (`start_line`/`end_line`
+or `offset`/`length`; the 256 KiB cap is on the range; the fact carries the
+range and `bytes_total`); `device_edit_file`, one exact snippet replaced
+atomically in a file up to 16 MiB, keeping the permission bits but not the
+owner, setuid/setgid/sticky bits, hard links or extended attributes, with
+nothing kept to undo it; `device_search`, a native `.gitignore`-honouring
+code search (200 matches by default, 2000 at most, `NOT_AUTO_RUN`); and an
+optional `meta` object on the agent's result frame that carries those
+numbers. "Read by grep range" became the search plus a line-range read.
+*Moved:* S30c — jobs (migration 045, not 039), `device_run`'s `env` and
+`timeout_s` (`cwd` landed with the worktrees work, ac20fe09),
+`ToolContext.turn_id`. S30d — `fs.stat` / `device_stat`,
+`device_probe_http`, `hands.py`, and the `installed`, `came_up` and
+`removed_app` claims.
 
 **S31 — superseded by S42b.** S42b builds the signed update path end to
 end. Nothing of S31 is left.

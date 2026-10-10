@@ -6119,6 +6119,80 @@ def test_t5_cov_the_written_path_is_matched_case_insensitively_by_its_last_segme
     assert guards.narration_check("I edited chat.py on the Dell.", [span]) is None
 
 
+# -- S30a T5 (2026-10-09): a device edit backs "I edited X" / "I wrote X" ------
+#
+# Criterion C3 of the S30a T5 section (tests/test_device_ranges_edit_search.py
+# holds the rest): device_edit_file's ok span carries the `edit` fact
+# {"edit": {"device", "matches", "bytes_before", "bytes_after"}, "target":
+# <checked path>}; Tool.backs = {edited_file, wrote_file}, target-aware through
+# that fact (_target_of): an edit of .../chat.py backs "I edited chat.py" and
+# "I wrote chat.py", never the same claims of guards.py, and a failed edit
+# (no fact, ok False) backs nothing.
+
+
+def device_edit_span(path: str, *, ok: bool = True):
+    """A device_edit_file span as chat records it: the args, and on ok the
+    agent-confirmed `edit` fact."""
+    facts = (
+        [
+            {
+                "edit": {
+                    "device": "mini",
+                    "matches": 1,
+                    "bytes_before": 100,
+                    "bytes_after": 104,
+                },
+                "target": path,
+            }
+        ]
+        if ok
+        else []
+    )
+    return SimpleNamespace(
+        kind="tool",
+        name="device_edit_file",
+        meta={
+            "ok": ok,
+            "args_redacted": {"device": "mini", "path": path, "old": "a", "new": "b"},
+            "facts": facts,
+        },
+    )
+
+
+_EDITED_CHAT = "/home/j/nova/services/core/app/chat.py"
+
+
+def test_s30a_t5_an_ok_edit_backs_an_edit_of_that_file_and_not_of_another():
+    span = device_edit_span(_EDITED_CHAT)
+    assert guards.narration_check("I edited chat.py on the mini PC.", [span]) is None
+    correction = guards.narration_check("I edited guards.py on the mini PC.", [span])
+    assert _edited_targets(correction) == ["guards.py"]
+
+
+def test_s30a_t5_an_ok_edit_backs_a_write_of_that_file_and_not_of_another():
+    span = device_edit_span(_EDITED_CHAT)
+    assert guards.narration_check("I wrote chat.py on the mini PC.", [span]) is None
+    correction = guards.narration_check("I wrote guards.py on the mini PC.", [span])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction) == ["guards.py"]
+
+
+def test_s30a_t5_the_target_is_the_edit_facts_not_the_argument():
+    # The agent's checked path is what was edited (as for device_write_file).
+    span = device_edit_span(_EDITED_CHAT)
+    span.meta["args_redacted"]["path"] = "@home/whatever.txt"
+    assert guards.narration_check("I edited chat.py.", [span]) is None
+    assert _edited(guards.narration_check("I edited whatever.txt.", [span]))
+
+
+def test_s30a_t5_a_failed_edit_backs_nothing_where_an_ok_one_does():
+    assert guards.narration_check("I edited chat.py.", [device_edit_span(_EDITED_CHAT)]) is None
+    failed = device_edit_span(_EDITED_CHAT, ok=False)
+    assert _edited(guards.narration_check("I edited chat.py.", [failed]))
+    assert "wrote_file" in kinds(guards.narration_check("I wrote chat.py.", [failed]))
+
+
 # -- S29b T7 (2026-10-09): a mixed test report over a failing run is honest -----
 #
 # Criteria (the tracker's T7 section holds the same):

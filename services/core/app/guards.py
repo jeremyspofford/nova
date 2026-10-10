@@ -2130,13 +2130,15 @@ def _target_of(span: Any) -> str | None:
             and isinstance(fact.get("url"), str)
             and fact["url"]
         )
-    if span.name in ("device_read_file", "device_write_file"):
+    if span.name in ("device_read_file", "device_write_file", "device_edit_file"):
         # S29a T2: the path the AGENT confirmed — the span's `file` fact
-        # target, the checked/normalized path (T1) — before the argument, so a
-        # claim is matched against what was read or written, not what was
-        # asked for. An ok span with no file fact falls back to the argument.
+        # target (S30a T5: an edit's `edit` fact), the checked/normalized path
+        # (T1) — before the argument, so a claim is matched against what was
+        # read, written or edited, not what was asked for. An ok span with no
+        # such fact falls back to the argument.
+        kind = "edit" if span.name == "device_edit_file" else "file"
         for fact in meta.get("facts") or ():
-            if isinstance(fact, dict) and isinstance(fact.get("file"), dict):
+            if isinstance(fact, dict) and isinstance(fact.get(kind), dict):
                 target = fact.get("target")
                 if isinstance(target, str) and target:
                     return target
@@ -7233,9 +7235,12 @@ class DeviceCompletionClaim:
 # over-claims an update that was only SENT is the update-claim guards'
 # question (Task 23), never this one's: a successful call backs, whatever
 # outcome it reported.
+#
+# An edit is a write (S30a T5): device_edit_file changes the file it names, so
+# "I updated chat.py on minipc" beside an ok edit there is backed.
 DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
     "launch": ("device_launch_app", "device_run"),
-    "write": ("device_write_file", "device_run"),
+    "write": ("device_write_file", "device_edit_file", "device_run"),
     "notify": ("device_notify", "device_run"),
     "run": ("device_launch_app", "device_run"),
     "install": ("machine_update", "device_run"),
@@ -8021,7 +8026,7 @@ def _performs(span: Any, action: str, target: str, commands: dict[int, list[str]
         return _same_app(target, app) if isinstance(app, str) else True
     if name == "device_notify":
         return True
-    if name == "device_write_file":
+    if name in ("device_write_file", "device_edit_file"):
         path = args.get("path")
         return _same_file(target, path) if isinstance(path, str) else True
     if name == "device_run":

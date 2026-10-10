@@ -1420,7 +1420,11 @@ def test_the_third_reviews_futures_and_hypotheticals_are_silent(reply):
         ("A new Notepad window has been opened on your DELL-XPS-8950.", NONE_ON_DELL),
         (
             "Your notes have been saved to your DELL-XPS-8950.",
-            "(No device_write_file or device_run call ran on DELL-XPS-8950 this turn.)",
+            # S30a T5: device_edit_file joined the write family, so the sentence names it.
+            (
+                "(No device_write_file or device_edit_file or device_run call ran"
+                " on DELL-XPS-8950 this turn.)"
+            ),
         ),
         (
             "Everything has been deleted on your DELL-XPS-8950.",

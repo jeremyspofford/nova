@@ -84,6 +84,10 @@ READ_FILE_CAP_KIB = 256
 # too (defence in depth).
 WRITE_FILE_CAP_KIB = 256
 
+# device_edit_file's cap: the agent's EditCap (apps/novad/internal/caps/
+# fs_edit.go). Enforced ON THE DEVICE — stated here so the model knows it.
+EDIT_FILE_CAP_MIB = 16
+
 log = logging.getLogger(__name__)
 
 # The KIND of turn (traces.purpose_of) a device call is serving, set by the
@@ -743,11 +747,68 @@ async def device_list_files(args: dict, ctx: ToolContext) -> str:
     return f"{row['name']} {path}:\n{result.get('output') or '(empty)'}"
 
 
+# The range arguments device_read_file forwards to fs.read (S30a T3): a line
+# range or a byte range; the agent (apps/novad caps/fs_range.go) checks that
+# they come in pairs and are not mixed, and states it when they are not.
+_RANGE_KEYS = ("start_line", "end_line", "offset", "length")
+
+# Every released pre-S30a agent's whole-file cap refusal (fsRead on main
+# bd6bcfb7: "file is N bytes, over the 256 KiB read cap"). Those builds cannot
+# change, so the wording is frozen; a new agent's range refusals never say it.
+_OLD_AGENT_CAP_REFUSAL = re.compile(r"^file is \d+ bytes, over the ")
+
+
+def _predates_ranges(row) -> ToolFailure:
+    return ToolFailure(
+        f"{row['name']}: this agent predates range reads — it cannot read part of a "
+        "file, so nothing of the range was read. Update it with machine_update, "
+        "then read the range again."
+    )
+
+
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
     pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
-    result = _require_ok(await _command(pool, row, "fs.read", {"path": path}, ctx=ctx), row)
-    _file_fact(ctx, {"file": {"op": "read", "device": row["name"]}, "target": path})
-    return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
+    read_args: dict = {"path": path}
+    for key in _RANGE_KEYS:
+        if key in args:
+            read_args[key] = int(args[key])
+    ranged = len(read_args) > 1
+    result = await _command(pool, row, "fs.read", read_args, ctx=ctx)
+    if not ranged:
+        _require_ok(result, row)
+        _file_fact(ctx, {"file": {"op": "read", "device": row["name"]}, "target": path})
+        return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
+    # A ranged read. Only the agent's own range echo says the range was read:
+    # an agent that predates S30a ignores the range and sends the whole file
+    # (or its whole-file cap refusal), and that is never passed off as the range.
+    # Only range/bytes_total/lines_total/eof are read from meta (T1 VERIFY).
+    meta = result.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    if not result.get("ok"):
+        if _OLD_AGENT_CAP_REFUSAL.match(str(result.get("error") or "")):
+            raise _predates_ranges(row)
+        _require_ok(result, row)
+    if "range" not in meta:
+        raise _predates_ranges(row)
+    bytes_total = meta.get("bytes_total")
+    _file_fact(
+        ctx,
+        {
+            "file": {
+                "op": "read",
+                "device": row["name"],
+                "range": meta["range"],
+                "bytes_total": bytes_total,
+            },
+            "target": path,
+        },
+    )
+    size = f"the file is {bytes_total} bytes"
+    if meta.get("lines_total") is not None:
+        size += f", {meta['lines_total']} lines"
+    if meta.get("eof"):
+        size += "; the range runs past the end of the file"
+    return f"{row['name']}:{path} ({size})\n{result.get('output') or '(nothing in the range)'}"
 
 
 async def device_list_apps(args: dict, ctx: ToolContext) -> str:
@@ -851,6 +912,111 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
     _file_fact(ctx, {"file": {"op": "write", "device": row["name"]}, "target": path})
     done = f"Wrote {path} on {row['name']}."
     return done if warning is None else f"{done}\n{warning}"
+
+
+# The words every agent's dispatch answers a capability it does not have with
+# (apps/novad/internal/caps/caps.go Dispatch): an agent that predates S30a.
+_UNKNOWN_CAPABILITY = "unknown capability"
+
+# The only keys read from an fs.edit result's meta (T1 VERIFY: never ok/exit_code).
+_EDIT_META_KEYS = ("matches", "bytes_before", "bytes_after")
+
+
+async def device_edit_file(args: dict, ctx: ToolContext) -> str:
+    """Replace one exact snippet of a file on a device (S30a T5). The agent
+    counts the matches and writes atomically; the fact's numbers are the
+    agent's own (its result frame's meta), never computed or assumed here."""
+    pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
+    old, new = args["old"], args["new"]
+    if not isinstance(old, str) or not old:
+        raise ToolFailure("the 'old' argument must be a non-empty string")
+    if not isinstance(new, str):
+        raise ToolFailure("the 'new' argument must be a string")
+    outside = _outside_checkout(row, path=path)
+    result = await _command(pool, row, "fs.edit", {"path": path, "old": old, "new": new}, ctx=ctx)
+    warning = _flag_outside(ctx, outside, "device_edit_file") if outside is not None else None
+
+    def failure(text: str) -> ToolFailure:
+        return ToolFailure(text if warning is None else f"{text}\n{warning}")
+
+    if not result.get("ok"):
+        if str(result.get("error") or "").startswith(_UNKNOWN_CAPABILITY):
+            raise failure(
+                f"{row['name']}: this agent predates part-file edits — it cannot edit part of "
+                "a file, so nothing was changed. Update it with machine_update, then edit again."
+            )
+        try:
+            _require_ok(result, row)
+        except ToolFailure as exc:
+            raise failure(str(exc)) from exc
+    meta = result.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    record = {key: meta.get(key) for key in _EDIT_META_KEYS}
+    if not all(type(value) is int for value in record.values()):
+        # An ok frame without the agent's edit record: whether it changed the
+        # file is not confirmed, so no fact is filed and nothing is claimed.
+        raise failure(
+            f"{row['name']}: the agent answered ok but sent no edit record, so whether "
+            f"{path} changed is not confirmed — read the file to check."
+        )
+    _file_fact(ctx, {"edit": {"device": row["name"], **record}, "target": path})
+    done = (
+        f"Edited {path} on {row['name']}: replaced {record['matches']} match "
+        f"({record['bytes_before']} -> {record['bytes_after']} bytes)."
+    )
+    return done if warning is None else f"{done}\n{warning}"
+
+
+# The optional fs.search arguments device_search forwards (S30a T7), each only
+# when given; the agent (apps/novad caps/fs_search.go) checks their types and
+# states a bad one. max_matches's bounds are the agent's (SearchMaxMatches).
+_SEARCH_OPTIONAL_KEYS = ("literal", "ignore_case", "max_matches")
+_SEARCH_DEFAULT_MATCHES = 200
+_SEARCH_MAX_MATCHES = 2000
+
+
+async def device_search(args: dict, ctx: ToolContext) -> str:
+    """Search a directory tree on a device for a regex or literal (S30a T7).
+    A read: no outside-worktree flag. The counts in the fact and the head line
+    are the agent's own (its result frame's meta), never computed here; only
+    matches/files_scanned/capped are read from meta (T1 VERIFY)."""
+    pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
+    pattern = args["pattern"]
+    if not isinstance(pattern, str) or not pattern:
+        raise ToolFailure("the 'pattern' argument must be a non-empty string")
+    search_args: dict = {"path": path, "pattern": pattern}
+    for key in _SEARCH_OPTIONAL_KEYS:
+        if key in args:
+            search_args[key] = args[key]
+    result = await _command(pool, row, "fs.search", search_args, ctx=ctx)
+    if not result.get("ok"):
+        if str(result.get("error") or "").startswith(_UNKNOWN_CAPABILITY):
+            raise ToolFailure(
+                f"{row['name']}: this agent predates code search — it cannot search files, "
+                "so nothing was searched. Update it with machine_update, then search again."
+            )
+        _require_ok(result, row)
+    meta = result.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    matches, scanned, capped = (meta.get(k) for k in ("matches", "files_scanned", "capped"))
+    if not (type(matches) is int and type(scanned) is int and type(capped) is bool):
+        # An ok frame without the agent's search record: what it found is not
+        # confirmed, so no fact is filed and no list is presented as complete.
+        raise ToolFailure(
+            f"{row['name']}: the agent answered ok but sent no search record, so what a "
+            f"search of {path} found is not confirmed — search again."
+        )
+    _file_fact(
+        ctx,
+        {"search": {"device": row["name"], "matches": matches, "capped": capped}, "target": path},
+    )
+    head = (
+        f"{row['name']}: searched {path} for {pattern!r}: {matches} matches in {scanned} files "
+        f"(paths relative to {path})"
+    )
+    if capped:
+        head += "; more matches exist — narrow the pattern or raise max_matches"
+    return f"{head}\n{result.get('output') or ''}".rstrip("\n")
 
 
 # What no agent's apps.launch result carries, on any OS: whether a window
@@ -969,7 +1135,10 @@ TOOLS: tuple[Tool, ...] = (
             "Read a text file on a paired device. Give an absolute path in the device's "
             "own OS: /home/… on Linux and macOS; C:\\Users\\… or a share such as "
             f"\\\\wsl.localhost\\<distro>\\… on Windows. {_FOLDERS_SENTENCE} "
-            f"Files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
+            "To read part of a file of any size, give start_line and end_line (1-based, "
+            "inclusive) or offset and length (bytes); the result states the file's total "
+            f"size. The device refuses a read over {READ_FILE_CAP_KIB} KiB — of the range "
+            "when one is given, of the whole file otherwise."
         ),
         parameters=_obj(
             {
@@ -981,11 +1150,83 @@ TOOLS: tuple[Tool, ...] = (
                         "@desktop/notes.txt."
                     ),
                 },
+                "start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "First line to read (1-based); give end_line with it.",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Last line to read (inclusive); give start_line with it.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Byte offset to start reading at; give length with it.",
+                },
+                "length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Number of bytes to read from offset; give offset with it.",
+                },
             },
             ["device", "path"],
         ),
         executor=device_read_file,
         backs=frozenset({"file_contents", "read_file"}),
+        reads_only=True,
+        ephemeral=True,
+    ),
+    Tool(
+        name="device_search",
+        description=(
+            "Search the text files under a directory on a paired device for a pattern (an RE2 "
+            "regular expression, or exact text with literal true; ignore_case for either). "
+            "Each hit is one line, relpath:line: text — the path relative to the directory "
+            "searched, the 1-based line number, the line itself. Files .gitignore excludes, "
+            ".git, binary files and symlinks are skipped. At most max_matches hits come back "
+            f"(default {_SEARCH_DEFAULT_MATCHES}, up to {_SEARCH_MAX_MATCHES}); the result says "
+            "when more exist. To read around a hit, use device_read_file with start_line and "
+            "end_line. Give an absolute directory path in the device's own OS. "
+            f"{_FOLDERS_SENTENCE}"
+        ),
+        parameters=_obj(
+            {
+                "device": _DEVICE_ARG,
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute directory path in the device's own OS, or a known folder "
+                        "such as @home/project."
+                    ),
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "What to find: an RE2 regular expression, or exact text "
+                    "with literal true.",
+                },
+                "literal": {
+                    "type": "boolean",
+                    "description": "Match the pattern as exact text, not a regex.",
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Match regardless of letter case.",
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _SEARCH_MAX_MATCHES,
+                    "description": (
+                        f"Most hits to return (default {_SEARCH_DEFAULT_MATCHES}, "
+                        f"up to {_SEARCH_MAX_MATCHES})."
+                    ),
+                },
+            },
+            ["device", "path", "pattern"],
+        ),
+        executor=device_search,
         reads_only=True,
         ephemeral=True,
     ),
@@ -1086,6 +1327,45 @@ TOOLS: tuple[Tool, ...] = (
         ),
         executor=device_write_file,
         backs=frozenset({"wrote_file"}),
+        ephemeral=False,
+    ),
+    Tool(
+        name="device_edit_file",
+        description=(
+            "Edit part of a text file on a paired device: replace exactly one occurrence of "
+            "`old` (exact bytes, whitespace and line endings included) with `new`. If `old` "
+            "matches zero times or more than once nothing changes and the agent says how many "
+            "it found — include more surrounding text to make it unique. Works on files of any "
+            f"size up to the {EDIT_FILE_CAP_MIB} MiB edit cap (read the part first with "
+            "device_read_file's start_line/end_line). The file is replaced atomically by a new "
+            "file that keeps the original's permission bits; the owner, setuid/setgid/sticky "
+            "bits, hard links (another name for the file keeps the old bytes) and extended "
+            "attributes or ACLs are not kept. Give an absolute path in the device's own OS. "
+            f"{_FOLDERS_SENTENCE}"
+        ),
+        parameters=_obj(
+            {
+                "device": _DEVICE_ARG,
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute file path in the device's own OS, or a known folder such as "
+                        "@home/notes.txt."
+                    ),
+                },
+                "old": {
+                    "type": "string",
+                    "description": "The exact text to replace; must occur exactly once.",
+                },
+                "new": {
+                    "type": "string",
+                    "description": "The text to put in its place (may be empty).",
+                },
+            },
+            ["device", "path", "old", "new"],
+        ),
+        executor=device_edit_file,
+        backs=frozenset({"edited_file", "wrote_file"}),
         ephemeral=False,
     ),
     Tool(

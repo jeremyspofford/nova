@@ -278,7 +278,11 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
         "(No device_run call ran this turn.)",
         "(No device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_notify or device_run call ran on DELL-XPS-8950 this turn.)",
-        "(No device_write_file or device_run call ran on DELL-XPS-8950 this turn.)",
+        # S30a T5: device_edit_file joined the write family, so the sentence names it.
+        (
+            "(No device_write_file or device_edit_file or device_run call ran"
+            " on DELL-XPS-8950 this turn.)"
+        ),
         "(No device_launch_app or device_run call ran on your PC this turn.)",
         "(No machine_update or device_run call ran on DELL-XPS-8950 this turn.)",
     ]

@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"novad/internal/caps"
 	"novad/internal/facts"
 	"novad/internal/service"
 )
@@ -313,4 +314,49 @@ func TestTheFramesTheAgentSendsAreTheGoldenFilesCoreReads(t *testing.T) {
 	if u.WSLDistros == nil || u.WSLDistros.Distros[0].PIDs != nil || u.WSLDistros.Distros[1].PIDs == nil {
 		t.Errorf("novad_pids must be null where unknown and [] where none: %s", unreadable)
 	}
+}
+
+// S30a T1: the result frame resultFrame builds from a dispatched outcome —
+// the frame handleCommand writes — byte for byte as core receives it.
+// C1: an outcome with Meta yields a frame whose meta equals it.
+// C2: an outcome without Meta yields today's frame (result_ok_golden.json and
+// result_refused_golden.json, captured before Meta existed), with no meta key.
+// result_meta_golden.json does not exist until Meta crosses the wire; write it
+// with -update (see this file's top) and run core's test_devices_ws.
+func TestAnOutcomesMetaReachesTheResultFrame(t *testing.T) {
+	code := 0
+	meta := map[string]any{"matches": 1, "bytes_before": 10, "bytes_after": 12}
+	b, err := json.Marshal(resultFrame("00000000-0000-4000-8000-0000000000e3", caps.Outcome{OK: true, Output: "edited", ExitCode: &code, Meta: meta}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Meta map[string]any `json:"meta"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Meta == nil || got.Meta["matches"] != float64(1) || got.Meta["bytes_before"] != float64(10) || got.Meta["bytes_after"] != float64(12) {
+		t.Fatalf("the outcome's meta did not reach the result frame: %s", b)
+	}
+	// core's test_devices_ws reads this golden through its socket and
+	// expects meta to reach the awaiting command unchanged.
+	matchesGolden(t, "result_meta_golden.json", b)
+}
+
+func TestAnOutcomeWithoutMetaIsTheGoldenResultFrame(t *testing.T) {
+	code := 0
+	ok, err := json.Marshal(resultFrame("00000000-0000-4000-8000-0000000000e1", caps.Outcome{OK: true, Output: "hello", ExitCode: &code}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(ok, []byte(`"meta"`)) {
+		t.Errorf("a frame without meta carries a meta key: %s", ok)
+	}
+	matchesGolden(t, "result_ok_golden.json", ok)
+	refused, err := json.Marshal(resultFrame("00000000-0000-4000-8000-0000000000e2", caps.Outcome{OK: false, Error: "unknown capability \"fs.edit\""}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchesGolden(t, "result_refused_golden.json", refused)
 }

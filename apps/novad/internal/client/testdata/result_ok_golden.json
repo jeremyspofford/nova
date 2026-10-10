@@ -1,0 +1,8 @@
+{
+  "type": "result",
+  "envelope_id": "00000000-0000-4000-8000-0000000000e1",
+  "ok": true,
+  "output": "hello",
+  "exit_code": 0,
+  "error": ""
+}
