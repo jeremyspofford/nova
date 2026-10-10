@@ -110,6 +110,29 @@ honest.
   stated). It is native Go, so it works on every OS without ripgrep. Core's
   tool is `device_search`, `reads_only`.
 - Pins: registry +2 beyond S30's own; `reads_only` +1.
+- **Landed (S30a, 2026-10-10).** The owner cut S30 in three; S30a is the
+  file work. `device_read_file` takes `start_line`/`end_line` or
+  `offset`/`length` and reads part of a file of any size; the 256 KiB cap is
+  on the range, and the read fact carries the agent's `range` echo and
+  `bytes_total`. `device_edit_file` replaces exactly one occurrence of an
+  exact snippet in a file up to the 16 MiB edit cap (a larger file is a
+  stated refusal); its fact is `{"edit": {device, matches, bytes_before,
+  bytes_after}, "target"}`, which backs `edited_file` and `wrote_file`. The
+  file is replaced by a new one that keeps the original's permission bits
+  only: the owner, setuid/setgid/sticky bits, hard links (another name keeps
+  the old bytes) and extended attributes or ACLs are not kept, and nothing is
+  kept to undo it. `device_search` (`reads_only`, `NOT_AUTO_RUN`) walks a
+  tree natively, honours `.gitignore` from the repository root down, skips
+  `.git`, binaries and symlinks, answers `relpath:line: text` lines, at most
+  200 matches by default and 2000 at most, and files `{"search": {device,
+  matches, capped}, "target"}`. The agent's result frame gained an optional
+  `meta` object those numbers come from. An agent that predates any of the
+  three says so and names `machine_update`. Registry 60 → 62, `reads_only`
+  28 → 29.
+- **Moved out of S30a.** S30c: jobs (`job.*`, the wrapper, migration 045,
+  `device_jobs`), `device_run`'s `env` and `timeout_s`, `ToolContext.turn_id`.
+  S30d: `fs.stat`/`device_stat`, `device_probe_http`, `hands.py`, and the
+  `installed`, `came_up` and `removed_app` claim kinds.
 
 **S32 — her changes in parallel, and the rules in front of her.**
 

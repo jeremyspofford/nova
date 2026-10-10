@@ -146,6 +146,10 @@ type Result struct {
 	Output     string `json:"output"`
 	ExitCode   *int   `json:"exit_code"`
 	Error      string `json:"error"`
+	// Meta is a capability's structured result (S30a: bytes_total, matches,
+	// capped, ...). Omitted when nil or empty, so a frame without it is
+	// byte-identical to the pre-S30a frame.
+	Meta map[string]any `json:"meta,omitempty"`
 }
 
 // AuthError is core -> device before a 4401 close.

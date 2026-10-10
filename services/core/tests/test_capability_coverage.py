@@ -85,6 +85,21 @@ EXCUSED: dict[str, str] = {
         "reads the tailnet for this hub's address; a state read — 'there is "
         "no address' is a fact, not a capability denial"
     ),
+    # S30a T5 (2026-10-09): no row reads "I can't edit files on your computer"
+    # today (capability_claim_check returns None on it). A row belongs with
+    # paired negatives in test_capability_guard.py — a stated follow-up.
+    "device_edit_file": (
+        "replaces one snippet in a file on a device; 'I can't edit files on your "
+        "computer' has no row yet — device_write_file's row covers writing files"
+    ),
+    # S30a T7 (2026-10-10): capability_claim_check returns None on "I can't
+    # search files on your computer" / "I can't search your code" today. A row
+    # belongs with paired negatives in test_capability_guard.py — follow-up.
+    "device_search": (
+        "searches a directory tree on a device for a pattern; 'I can't search "
+        "your code' has no row yet — device_read_file's and device_list_files' "
+        "rows cover reading and listing"
+    ),
     "run_skill": (
         "acts only through the registered tools its steps call, each of which "
         "is classified here on its own"
@@ -234,3 +249,17 @@ def test_c4_machine_update_is_covered_and_dropping_its_row_is_red(monkeypatch):
     monkeypatch.setattr(guards, "_CAPABILITY_TOOLS", rows)
     problems = _classification_problems(EXCUSED, NO_OUTSIDE_ACTION)
     assert any(p.startswith("machine_update: unclassified") for p in problems), problems
+
+
+def test_s30a_t5_device_edit_file_is_registered_and_excused_with_its_reason():
+    assert "device_edit_file" in tools.REGISTRY
+    assert EXCUSED["device_edit_file"].strip()
+    assert "device_edit_file" not in _covered()
+    assert "device_edit_file" not in NO_OUTSIDE_ACTION
+
+
+def test_s30a_t7_device_search_is_registered_and_excused_with_its_reason():
+    assert "device_search" in tools.REGISTRY
+    assert EXCUSED["device_search"].strip()
+    assert "device_search" not in _covered()
+    assert "device_search" not in NO_OUTSIDE_ACTION

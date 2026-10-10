@@ -37,6 +37,10 @@ type Outcome struct {
 	// result and audit frames are written (daemon.update, P7). Never set on
 	// a refusal.
 	Restart bool
+
+	// Meta is the capability's structured result, carried to core in the
+	// result frame's meta (S30a). Nil means no meta key on the wire.
+	Meta map[string]any
 }
 
 // Deps are the ambient facts a handler needs: the default working directory

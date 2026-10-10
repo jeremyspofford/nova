@@ -799,18 +799,7 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
 	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
-	errStr := ""
-	if !outcome.OK {
-		errStr = outcome.Error
-	}
-	a.emit(ctx, c, wire.Result{
-		Type:       wire.TypeResult,
-		EnvelopeID: envelopeID,
-		OK:         outcome.OK,
-		Output:     outcome.Output,
-		ExitCode:   outcome.ExitCode,
-		Error:      errStr,
-	}, envelopeID, capability, summarize(capability, outcome), outcome.OK, outcome.ExitCode)
+	a.emit(ctx, c, resultFrame(envelopeID, outcome), envelopeID, capability, summarize(capability, outcome), outcome.OK, outcome.ExitCode)
 
 	if outcome.OK && outcome.Restart {
 		// The result and its audit entry are written: now end the session
@@ -825,6 +814,25 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 		if cf := a.sessionCancel.Load(); cf != nil {
 			(*cf)()
 		}
+	}
+}
+
+// resultFrame is the result frame for one dispatched outcome. An error is
+// sent only on a refusal. The outcome's Meta is carried as the frame's meta
+// (S30a); nil or empty Meta leaves no meta key on the wire.
+func resultFrame(envelopeID string, outcome caps.Outcome) wire.Result {
+	errStr := ""
+	if !outcome.OK {
+		errStr = outcome.Error
+	}
+	return wire.Result{
+		Type:       wire.TypeResult,
+		EnvelopeID: envelopeID,
+		OK:         outcome.OK,
+		Output:     outcome.Output,
+		ExitCode:   outcome.ExitCode,
+		Error:      errStr,
+		Meta:       outcome.Meta,
 	}
 }
 

@@ -276,6 +276,57 @@ async def test_a_command_is_signed_by_core_and_answered_by_the_device(pool):
     await _close(conn, task)
 
 
+# S30a T1 C3: the result frames novad really sends (apps/novad/internal/client/
+# testdata/result_*_golden.json, captured by golden_test.go) reach the awaiting
+# command whole — a frame's `meta` (bytes_total, matches, capped, ...) arrives
+# unchanged, and a frame without one arrives with no meta key, so a tool can
+# tell "this agent filed no meta" (an agent that predates S30a) from an empty one.
+_RESULT_GOLDEN = Path(__file__).resolve().parents[3] / "apps/novad/internal/client/testdata"
+
+
+async def test_the_result_frames_novad_sends_reach_the_command_with_their_meta(pool):
+    meta_golden = _RESULT_GOLDEN / "result_meta_golden.json"
+    assert meta_golden.exists(), (
+        f"{meta_golden} is missing: novad's result frame does not carry meta yet "
+        "(write it with golden_test.go -update once Result.Meta crosses the wire)"
+    )
+    goldens = {
+        name: json.loads((_RESULT_GOLDEN / name).read_text())
+        for name in (
+            "result_ok_golden.json",
+            "result_refused_golden.json",
+            "result_meta_golden.json",
+        )
+    }
+    assert goldens["result_meta_golden.json"].get("meta", {}).keys() >= {
+        "matches",
+        "bytes_before",
+        "bytes_after",
+    }
+    device_id, _device, conn, task = await _connect(pool)
+    for name, golden in goldens.items():
+        cmd = asyncio.create_task(
+            devices_ws.hub.command(
+                pool,
+                device_id=device_id,
+                name="laptop",
+                capability="system.info",
+                args={},
+                timeout=5,
+            )
+        )
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        sent = dict(golden, envelope_id=frame["envelope"]["envelope_id"])
+        conn.feed(sent)
+        result = await asyncio.wait_for(cmd, 2)
+        assert result == sent, name
+        if "meta" in golden:
+            assert result["meta"] == golden["meta"], name
+        else:
+            assert "meta" not in result, name
+    await _close(conn, task)
+
+
 async def test_a_silent_device_times_out_as_a_stated_refusal(pool):
     device_id, _device, conn, task = await _connect(pool)
     with pytest.raises(devices.DeviceRefused) as exc:

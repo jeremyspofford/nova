@@ -1,0 +1,13 @@
+{
+  "type": "result",
+  "envelope_id": "00000000-0000-4000-8000-0000000000e3",
+  "ok": true,
+  "output": "edited",
+  "exit_code": 0,
+  "error": "",
+  "meta": {
+    "bytes_after": 12,
+    "bytes_before": 10,
+    "matches": 1
+  }
+}

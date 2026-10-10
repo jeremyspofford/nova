@@ -15,6 +15,8 @@ var table = map[string]Handler{
 	"fs.list":       func(_ context.Context, r Request) Outcome { return fsList(r.Args, r.Deps) },
 	"fs.read":       func(_ context.Context, r Request) Outcome { return fsRead(r.Args, r.Deps) },
 	"fs.write":      func(_ context.Context, r Request) Outcome { return fsWrite(r.Args, r.Deps) },
+	"fs.edit":       func(_ context.Context, r Request) Outcome { return fsEdit(r.Args, r.Deps) },
+	"fs.search":     func(ctx context.Context, r Request) Outcome { return fsSearch(ctx, r.Args, r.Deps) },
 	"apps.list":     func(ctx context.Context, _ Request) Outcome { return appsList(ctx) },
 	"apps.launch":   func(ctx context.Context, r Request) Outcome { return appsLaunch(ctx, r.Args) },
 	"shell.exec":    func(ctx context.Context, r Request) Outcome { return shellExec(ctx, r.Args, r.Deps) },

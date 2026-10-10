@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 )
 
@@ -334,5 +335,49 @@ func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
 	reply["proof"], reply["sig"] = tampered, v.SigHex
 	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
 		t.Fatal("a one-character change to the proof's device_id must be refused")
+	}
+}
+
+// S30a T1 C1: a Result carrying Meta crosses the wire with a "meta" object
+// equal to it.
+func TestAResultWithMetaCarriesItOnTheWire(t *testing.T) {
+	code := 0
+	r := Result{Type: TypeResult, EnvelopeID: "e1", OK: true, Output: "x", ExitCode: &code,
+		Meta: map[string]any{"bytes_total": 1048576, "range": map[string]any{"start_line": 3, "end_line": 9}}}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := got["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("the result frame carries no meta object: %s", b)
+	}
+	if meta["bytes_total"] != float64(1048576) {
+		t.Errorf("meta.bytes_total = %v, want 1048576: %s", meta["bytes_total"], b)
+	}
+	rng, _ := meta["range"].(map[string]any)
+	if rng["start_line"] != float64(3) || rng["end_line"] != float64(9) {
+		t.Errorf("meta.range = %v, want start_line 3 end_line 9: %s", meta["range"], b)
+	}
+}
+
+// S30a T1 C2: a Result without Meta is byte-identical to the pre-S30a frame —
+// no meta key at all, not "meta": null — so an old core and every golden
+// stay unchanged. Nil and empty Meta both omit it.
+func TestAResultWithoutMetaIsTodaysFrameByteForByte(t *testing.T) {
+	code := 0
+	const want = `{"type":"result","envelope_id":"e1","ok":true,"output":"x","exit_code":0,"error":""}`
+	for _, meta := range []map[string]any{nil, {}} {
+		b, err := json.Marshal(Result{Type: TypeResult, EnvelopeID: "e1", OK: true, Output: "x", ExitCode: &code, Meta: meta})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != want {
+			t.Errorf("Meta=%v: got %s, want %s", meta, b, want)
+		}
 	}
 }

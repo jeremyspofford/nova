@@ -1,0 +1,8 @@
+{
+  "type": "result",
+  "envelope_id": "00000000-0000-4000-8000-0000000000e2",
+  "ok": false,
+  "output": "",
+  "exit_code": null,
+  "error": "unknown capability \"fs.edit\""
+}
