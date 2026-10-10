@@ -239,7 +239,7 @@ def _repeat_spec(repeat: Any) -> dict:
         raise ToolFailure(str(exc)) from exc
 
 
-async def _paired_device_or_refuse(app, name: Any) -> None:
+async def _paired_device_or_refuse(app, name: Any) -> str:
     """A named device must be a paired machine NOW — otherwise the tool would
     confirm "as a notification on 'dsek'" and nothing would check the promise
     until the firing. Connected-ness is transient and is the firing's
@@ -255,9 +255,16 @@ async def _paired_device_or_refuse(app, name: Any) -> None:
     takes a timer an eval person owns (scheduler.tick_once)."""
     if not isinstance(name, str) or not name.strip():
         raise ToolFailure("device is empty — name a paired device, or omit it to notify them all")
-    names = [machine["name"] for machine in await machines.plant().paired_machines(app)]
-    if name in names:
-        return
+    paired = await machines.plant().paired_machines(app)
+    names = [machine["name"] for machine in paired]
+    try:
+        resolved = machines.resolve_name(
+            name, [(machine["name"], machine.get("hostname")) for machine in paired]
+        )
+    except machines.UnknownMachine as exc:
+        raise ToolFailure(str(exc)) from exc
+    if resolved is not None:
+        return resolved
     if not names:
         raise ToolFailure(
             f"no paired device named {name!r} — no device is paired at all; omit device "
@@ -334,7 +341,7 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             f"time) or repeat (a recurring schedule) — you gave {have}"
         )
     if device is not None:
-        await _paired_device_or_refuse(ctx.app, device)
+        device = await _paired_device_or_refuse(ctx.app, device)
     agent = await _agent_or_refuse(pool, agent_name) if agent_name is not None else None
     zone, zone_set = await household_timezone(pool)
     now = await pool.fetchval("SELECT now()")

@@ -86,7 +86,7 @@ func fsSearch(ctx context.Context, args map[string]any, d Deps) Outcome {
 	}
 	max := SearchDefaultMatches
 	if v, present := args["max_matches"]; present {
-		f, isNum := v.(float64)
+		f, isNum := numberArg(v)
 		if !isNum || math.IsNaN(f) || f != math.Trunc(f) || f < 1 || f > SearchMaxMatches {
 			return fail("fs.search 'max_matches' must be a whole number from 1 to %d, got %v", SearchMaxMatches, v)
 		}

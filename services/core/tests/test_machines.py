@@ -1149,3 +1149,177 @@ async def test_s29b_t5_c4_a_declared_device_not_connected_refuses_in_the_real_wo
     assert _t5_run_facts(sink) == []
     assert [f["connected"] for f in sink if f.get("device") == "eval_laptop"] == [False]
     assert touched == []
+
+
+# -- walk-fixes T2: a machine named by its hostname or a spacing/case variant --
+#
+# The S30a walk (turn 198796df): machine_update {"machine": "mini pc"} said "no
+# paired machine named 'mini pc'" although the device's own row carries
+# hostname mini-pc. Every name a tool resolves goes through one resolver,
+# derived from the stored rows (name + hostname), never an alias list.
+
+
+async def _row(pool, name: str, hostname: str) -> None:
+    await pool.execute(
+        "INSERT INTO devices (name, platform, hostname, pubkey) VALUES ($1, 'linux', $2, $3)",
+        name,
+        hostname,
+        uuid.uuid4().hex * 2,
+    )
+
+
+@requires_db
+@pytest.mark.parametrize("asked", ["mini pc", "MINI-PC", "mini_pc", "Mini-PC"])
+async def test_t2_a_hostname_variant_resolves_the_device_tools_device(pool, asked):
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    await _row(pool, "DELL-XPS-8950", "dell")
+    row = await machines.GatewayPlant().paired_device(None, asked)
+    assert row["name"] == "Beelink Mini S"
+
+
+@requires_db
+async def test_t2_machine_update_resolves_a_hostname_variant(pool, monkeypatch):
+    from app import agent_updates
+
+    sent: list[str] = []
+
+    async def update_now(_pool, *, name, **_kw):
+        sent.append(name)
+        return agent_updates.UpdateOutcome(
+            machine=name, outcome="current", version="v", from_version="v"
+        )
+
+    monkeypatch.setattr(agent_updates, "update_now", update_now)
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    await _row(pool, "DELL-XPS-8950", "dell")
+    out = await machines.GatewayPlant().update_agent(None, "mini pc", requested_by="nova")
+    assert sent == ["Beelink Mini S"] and out["machine"] == "Beelink Mini S"
+
+
+@requires_db
+async def test_t2_a_loose_name_two_devices_match_is_a_cannot_naming_both(pool):
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    await _row(pool, "Mini PC", "other")
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await machines.GatewayPlant().paired_device(None, "mini_pc")
+    said = str(exc.value)
+    assert said.startswith("cannot: ") and "'mini_pc'" in said
+    assert "more than one paired" in said
+    assert "Beelink Mini S" in said and "Mini PC" in said
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await machines.GatewayPlant().update_agent(None, "mini_pc", requested_by="nova")
+    assert "more than one paired" in str(exc.value)
+    assert "Beelink Mini S" in str(exc.value) and "Mini PC" in str(exc.value)
+
+
+@requires_db
+async def test_t2_an_exact_name_wins_over_a_looser_match(pool):
+    await _row(pool, "mini-pc", "box")
+    await _row(pool, "Beelink Mini S", "Mini-PC")
+    assert (await machines.GatewayPlant().paired_device(None, "mini-pc"))["name"] == "mini-pc"
+    # An exact hostname wins over a loose name too.
+    assert (await machines.GatewayPlant().paired_device(None, "Mini-PC"))[
+        "name"
+    ] == "Beelink Mini S"
+
+
+@requires_db
+async def test_t2_an_unknown_name_keeps_the_listing_error(pool):
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    await _row(pool, "DELL-XPS-8950", "dell")
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await machines.GatewayPlant().update_agent(None, "laptop", requested_by="nova")
+    assert str(exc.value) == (
+        "cannot: no paired machine named 'laptop' — the paired machines are: "
+        "Beelink Mini S, DELL-XPS-8950"
+    )
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await machines.GatewayPlant().paired_device(None, "laptop")
+    assert str(exc.value).startswith(
+        "cannot: no paired device named 'laptop' — the paired devices are: "
+        "Beelink Mini S, DELL-XPS-8950;"
+    )
+
+
+async def test_t2_a_replay_resolves_a_declared_hostname_variant_the_same_way():
+    plant = machines.FixturePlant(
+        {},
+        devices={
+            "eval_mini": {"name": "eval_mini", "hostname": "mini-pc", "agent_version": None},
+            "eval_dell": {"name": "eval_dell", "hostname": "dell", "agent_version": None},
+        },
+    )
+    out = await plant.update_agent(None, "Mini PC", requested_by="nova")
+    assert out["machine"] == "eval_mini"
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await plant.update_agent(None, "laptop", requested_by="nova")
+    assert str(exc.value) == (
+        "cannot: no paired machine named 'laptop' — the paired machines are: eval_mini, eval_dell"
+    )
+
+
+@requires_db
+async def test_t2_setup_and_timers_resolve_the_same_way(pool):
+    from app.tools import setup, timers
+
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    assert (await setup._paired_machine(None, "mini pc"))["name"] == "Beelink Mini S"
+    assert await timers._paired_device_or_refuse(None, "MINI_PC") == "Beelink Mini S"
+
+
+# -- walk-fixes T2b: a machine named by one whole token of its name/hostname --
+#
+# VERIFY T2's note: "dell" / "the dell" resolved to nothing although exactly
+# one paired machine, DELL-XPS-8950, carries the token "dell". A LAST tier:
+# the name (minus a leading "the ") equals one whole token (split on space,
+# hyphen, underscore; casefold) of exactly one machine's name or hostname.
+
+_T2B_LIVE = [("Beelink Mini S", "mini-pc"), ("DELL-XPS-8950", "DELL-XPS-8950")]
+
+
+@pytest.mark.parametrize("asked", ["dell", "the dell", "Dell", "The Dell", "xps", "8950"])
+def test_t2b_one_whole_token_names_the_dell(asked):
+    assert machines.resolve_name(asked, _T2B_LIVE) == "DELL-XPS-8950"
+
+
+@pytest.mark.parametrize("asked", ["beelink", "Beelink", "the beelink", "mini"])
+def test_t2b_one_whole_token_names_the_beelink(asked):
+    assert machines.resolve_name(asked, _T2B_LIVE) == "Beelink Mini S"
+
+
+def test_t2b_a_token_two_machines_share_is_a_cannot_naming_both():
+    known = [*_T2B_LIVE, ("Dell Laptop", "dell-laptop")]
+    with pytest.raises(machines.UnknownMachine) as exc:
+        machines.resolve_name("the dell", known)
+    said = str(exc.value)
+    assert said.startswith("cannot: ") and "more than one paired" in said
+    assert "DELL-XPS-8950" in said and "Dell Laptop" in said
+
+
+@pytest.mark.parametrize("asked", ["del", "dell-x", "pc mini", "the", ""])
+def test_t2b_a_part_of_a_token_names_nothing(asked):
+    assert machines.resolve_name(asked, _T2B_LIVE) is None
+
+
+def test_t2b_earlier_tiers_still_win():
+    # an exact name "dell" wins over the token of DELL-XPS-8950
+    known = [*_T2B_LIVE, ("dell", "box")]
+    assert machines.resolve_name("dell", known) == "dell"
+    # a loose full match wins over a token match on another machine
+    known = [*_T2B_LIVE, ("Dell PC", "dell-pc")]
+    assert machines.resolve_name("dell_pc", known) == "Dell PC"
+
+
+@requires_db
+async def test_t2b_the_device_tools_and_machine_update_resolve_the_dell(pool):
+    await _row(pool, "Beelink Mini S", "mini-pc")
+    await _row(pool, "DELL-XPS-8950", "DELL-XPS-8950")
+    assert (await machines.GatewayPlant().paired_device(None, "the dell"))[
+        "name"
+    ] == "DELL-XPS-8950"
+    with pytest.raises(machines.UnknownMachine) as exc:
+        await machines.GatewayPlant().paired_device(None, "del")
+    assert str(exc.value).startswith(
+        "cannot: no paired device named 'del' — the paired devices are: "
+        "Beelink Mini S, DELL-XPS-8950;"
+    )

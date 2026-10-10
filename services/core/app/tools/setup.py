@@ -256,8 +256,14 @@ async def _paired_machine(app, name: str) -> dict:
     case's declared devices alone, never a real one. Else a stated refusal
     naming the ones there are, which is what she needs to try again herself."""
     paired = await machines.plant().paired_machines(app)
+    try:
+        resolved = machines.resolve_name(
+            name, [(machine["name"], machine.get("hostname")) for machine in paired]
+        )
+    except machines.UnknownMachine as exc:
+        raise ToolFailure(str(exc)) from exc
     for machine in paired:
-        if machine["name"] == name:
+        if machine["name"] == resolved:
             return machine
     names = [machine["name"] for machine in paired]
     listing = (

@@ -6460,3 +6460,223 @@ NEGATED_FORM_LIES = {
 @pytest.mark.parametrize("reply", NEGATED_FORM_LIES.values(), ids=NEGATED_FORM_LIES.keys())
 def test_s29b_t7_cov_each_negation_acknowledges_nothing(reply):
     assert _tests_passed(guards.narration_check(reply, [device_run_span(PYTEST, 1)]))
+
+
+# -- walk-fixes T3 (2026-10-10): a write claim naming a PATH is backed only by --
+# a write to that path
+#
+# Turn 8719a8f1 (dell:qwen3:8b): start_change made the worktree
+# /home/jeremy/workspace/nova/.worktrees/nova-3e8ab0, then she called
+# workspace_write_file {"path": "README.md"} — her notes workspace on the hub —
+# and replied that the worktree's README.md was updated. No correction fired.
+# Criteria (the tracker's T3 section holds the same):
+#   C1 a wrote_file/edited_file claim whose target has a directory part is
+#      backed only by an ok write/edit whose path ENDS WITH it, component-wise
+#      (separators normalized): a workspace write of README.md does not back
+#      .../nova-3e8ab0/README.md; a device edit of /home/.../services/core/app/
+#      chat.py backs "services/core/app/chat.py"; one of .../apps/web/chat.py
+#      does not.
+#   C2 a bare file name keeps today's matching ("I updated README.md" over the
+#      workspace write stands).
+#   C3 the 8719a8f1 reply is a claim: the quoted file name with a short
+#      locative before the passive verb, and the reply's ONE directory path
+#      ending in that name is the claim's target.
+#   C4 linear: the new pattern is swept by test_guard_regex_timing.
+
+WALK_8719A8F1_REPLY = (
+    "The first line of `README.md` in the `edit test` worktree has been updated to:\n"
+    "\n"
+    "```\n"
+    "# Nova (test edit)\n"
+    "```\n"
+    "\n"
+    "\u2705 The file was overwritten successfully (19 bytes written).  \n"
+    "\U0001f4c2 File location: `/home/jeremy/workspace/nova/.worktrees/nova-3e8ab0/README.md`\n"
+    "\n"
+    "Would you like to commit this change, check the file, or make another edit?"
+)
+_WORKTREE_README = "/home/jeremy/workspace/nova/.worktrees/nova-3e8ab0/README.md"
+
+
+def _workspace_readme_write():
+    return tool_span("workspace_write_file", path="README.md")
+
+
+def _written(correction) -> list:
+    if correction is None:
+        return []
+    pairs = zip(kinds(correction), targets(correction))
+    return [t for k, t in pairs if k in ("wrote_file", "edited_file")]
+
+
+def test_walk_t3_the_8719a8f1_reply_over_a_workspace_write_is_corrected():
+    correction = guards.narration_check(WALK_8719A8F1_REPLY, [_workspace_readme_write()])
+    assert correction is not None
+    assert kinds(correction) == ["wrote_file"]
+    assert targets(correction)[0].endswith("nova-3e8ab0/README.md")
+
+
+def test_walk_t3_the_8719a8f1_reply_with_no_write_at_all_is_corrected():
+    assert _written(guards.narration_check(WALK_8719A8F1_REPLY, []))
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        device_file_span("device_write_file", "write", _WORKTREE_README),
+        device_edit_span(_WORKTREE_README),
+    ],
+    ids=["device_write_file", "device_edit_file"],
+)
+def test_walk_t3_the_8719a8f1_reply_over_a_write_to_that_path_stands(span):
+    assert guards.narration_check(WALK_8719A8F1_REPLY, [span]) is None
+
+
+def test_walk_t3_a_write_to_another_directory_with_that_name_does_not_back_it():
+    span = device_file_span("device_write_file", "write", "/home/jeremy/workspace/nova/README.md")
+    assert _written(guards.narration_check(WALK_8719A8F1_REPLY, [span]))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["I updated README.md.", "README.md has been updated.", "I edited README.md."],
+)
+def test_walk_t3_a_bare_name_over_the_workspace_write_still_stands(reply):
+    assert guards.narration_check(reply, [_workspace_readme_write()]) is None
+
+
+def test_walk_t3_a_relative_path_claim_is_backed_by_an_edit_ending_in_it():
+    span = device_edit_span("/home/jeremy/workspace/nova/services/core/app/chat.py")
+    assert guards.narration_check("I edited services/core/app/chat.py.", [span]) is None
+    assert guards.narration_check("I updated services/core/app/chat.py.", [span]) is None
+
+
+def test_walk_t3_a_relative_path_claim_is_not_backed_by_that_name_elsewhere():
+    span = device_edit_span("/home/jeremy/workspace/nova/apps/web/chat.py")
+    assert _written(guards.narration_check("I edited services/core/app/chat.py.", [span]))
+    assert _written(guards.narration_check("I updated services/core/app/chat.py.", [span]))
+
+
+def test_walk_t3_a_partial_component_is_not_a_suffix():
+    # "core/app/chat.py" ends ".../xcore/app/chat.py" as a string, not by parts.
+    span = device_edit_span("/home/j/xcore/app/chat.py")
+    assert _written(guards.narration_check("I edited core/app/chat.py.", [span]))
+
+
+def test_walk_t3_windows_separators_are_normalized():
+    span = device_edit_span("C:\\src\\nova\\services\\core\\app\\chat.py")
+    assert guards.narration_check("I edited services/core/app/chat.py.", [span]) is None
+
+
+def test_walk_t3_a_shell_edit_naming_the_path_backs_it():
+    span = device_run_span(["sed", "-i", "s/a/b/", "/home/j/nova/services/core/app/chat.py"], 0)
+    assert guards.narration_check("I edited services/core/app/chat.py.", [span]) is None
+    other = device_run_span(["sed", "-i", "s/a/b/", "/home/j/nova/apps/web/chat.py"], 0)
+    assert _written(guards.narration_check("I edited services/core/app/chat.py.", [other]))
+
+
+def test_walk_t3_a_memory_note_backs_no_path_claim():
+    note = SimpleNamespace(kind="tool", name="memory_save", meta={"ok": True, "args_redacted": {}})
+    assert _written(guards.narration_check("I updated services/core/app/chat.py.", [note]))
+    # A bare name keeps today's leniency for a target-less span.
+    assert guards.narration_check("I updated chat.py.", [note]) is None
+
+
+def test_walk_t3_two_paths_with_the_name_keep_the_bare_claim():
+    # Ambiguous: the reply names two README.md paths; the bare claim stands
+    # on the workspace write as it does today (precision first).
+    reply = (
+        "I updated README.md.\n"
+        "The repo's copy is at /home/j/nova/README.md and the worktree's at "
+        "/home/j/nova/.worktrees/x/README.md."
+    )
+    assert guards.narration_check(reply, [_workspace_readme_write()]) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "`README.md` in the worktree will be updated next.",
+        "`README.md` in the worktree was not updated.",
+        "`README.md` in the worktree has been updated by the CI.",
+        "Was `README.md` in the worktree updated?",
+    ],
+)
+def test_walk_t3_the_located_passive_keeps_precision(reply):
+    assert not _written(guards.narration_check(reply, []))
+
+
+# walk-fixes T3 round 2 (VERIFY's gaps, 2026-10-10):
+#   R1 a path whose components start with a dot (".worktrees/…", "~/.config/…")
+#      keeps that dot; a leading "./" is the current directory and is dropped.
+#   R2 an ACTIVE claim naming an absolute or "~" path is a claim: backed by a
+#      matching write/edit, corrected over another directory's or no write.
+_DOT_DIR_README = "/home/jeremy/workspace/nova/.worktrees/nova-3e8ab0/README.md"
+_DOT_CONFIG = "/home/jeremy/.config/nova/agent.toml"
+
+
+@pytest.mark.parametrize(
+    "reply, path",
+    [
+        ("`.worktrees/nova-3e8ab0/README.md` has been updated.", _DOT_DIR_README),
+        ("The config at ~/.config/nova/agent.toml has been updated.", _DOT_CONFIG),
+    ],
+    ids=["dot-directory", "tilde-dot-directory"],
+)
+def test_walk_t3r2_verify_honest_dot_paths_stand(reply, path):
+    assert guards.narration_check(reply, [device_edit_span(path)]) is None
+
+
+@pytest.mark.parametrize(
+    "reply, path",
+    [
+        (
+            "I updated /home/jeremy/workspace/nova/README.md.",
+            "/home/jeremy/workspace/nova/README.md",
+        ),
+        ("I wrote ~/x/notes.md.", "/home/jeremy/x/notes.md"),
+        ("I edited .worktrees/nova-3e8ab0/README.md.", _DOT_DIR_README),
+        ("I edited ./services/core/app/chat.py.", "/home/j/nova/services/core/app/chat.py"),
+        (
+            "I updated `/home/jeremy/workspace/nova/.worktrees/nova-3e8ab0/README.md` "
+            "with the new heading.",
+            _DOT_DIR_README,
+        ),
+        ("I edited ~/.config/nova/agent.toml.", _DOT_CONFIG),
+    ],
+    ids=["absolute", "tilde", "dot-relative", "dot-slash", "backticked-absolute", "tilde-dot"],
+)
+def test_walk_t3r2_honest_absolute_and_dot_path_claims_stand(reply, path):
+    assert guards.narration_check(reply, [device_edit_span(path)]) is None
+    assert (
+        guards.narration_check(reply, [device_file_span("device_write_file", "write", path)])
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["I updated /home/j/nova/README.md.", "I wrote ~/x/notes.md."],
+    ids=["absolute", "tilde"],
+)
+def test_walk_t3r2_an_active_absolute_path_claim_with_no_write_is_corrected(reply):
+    assert _written(guards.narration_check(reply, []))
+
+
+def test_walk_t3r2_an_active_absolute_path_claim_over_another_directory_is_corrected():
+    other = device_file_span("device_write_file", "write", "/home/j/other/README.md")
+    assert _written(guards.narration_check("I updated /home/j/nova/README.md.", [other]))
+    elsewhere = device_file_span("device_write_file", "write", "/home/j/y/notes.md")
+    assert _written(guards.narration_check("I wrote ~/x/notes.md.", [elsewhere]))
+    # the walk's lie in its most direct phrasing: a workspace write of README.md
+    reply = (
+        "I updated `/home/jeremy/workspace/nova/.worktrees/nova-3e8ab0/README.md` "
+        "with the new heading."
+    )
+    assert _written(guards.narration_check(reply, [_workspace_readme_write()]))
+
+
+def test_walk_t3r2_a_dot_directory_is_not_its_undotted_namesake():
+    span = device_edit_span("/home/jeremy/workspace/nova/worktrees/nova-3e8ab0/README.md")
+    reply = "`.worktrees/nova-3e8ab0/README.md` has been updated."
+    assert _written(guards.narration_check(reply, [span]))

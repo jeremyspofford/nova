@@ -166,6 +166,10 @@ async def start_change(args: dict, ctx: ToolContext) -> str:
         f"Base: {_ORIGIN}{base} at {commit}\n"
         f"Work only inside it: run every command with cwd {worktree} and write files under "
         "it — never in the checkout itself.\n"
+        f"The worktree's files are on {row['name']}: read them with device_read_file or "
+        "device_search, change part of a file with device_edit_file, write a new file with "
+        f"device_write_file, and run commands with device_run with cwd {worktree}. Your "
+        "workspace_* tools are your notes workspace on the hub, not this worktree.\n"
         f"{agents_path}:\n"
         f"{agents}"
     )
@@ -219,6 +223,13 @@ async def list_changes(args: dict, ctx: ToolContext) -> str:
     lines = [f"Your open changes on {row['name']} ({len(hers)}):"]
     for entry in hers:
         path = posixpath.normpath(entry["path"])
+        # The same fact start_change records (walk-fixes T4): a change is open
+        # this turn, so a later workspace write says it is not this worktree.
+        if ctx.facts_sink is not None:
+            change = posixpath.basename(path)[len(code_repo.WORKTREE_PREFIX) :]
+            ctx.facts_sink.append(
+                {"change": change, "worktree_path": path, "branch": entry["branch"]}
+            )
         branch = entry["branch"] or "detached"
         head = entry["head"][:_SHORT_SHA] or "unknown"
         try:

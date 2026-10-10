@@ -468,3 +468,22 @@ async def test_c5_no_device_fact_and_no_outside_flag_on_the_span(pool, recorded)
     # guard): the only one allowed is the funnel's own {"device", "connected"}.
     assert all(set(f) == {"device", "connected"} for f in facts if "device" in f)
     await _close(conn, task)
+
+
+# -- walk-fixes T4: a listed change is an open change this turn ----------------------
+
+
+@requires_db
+async def test_walk_t4_each_listed_change_lands_a_change_fact(pool, recorded):
+    # The same {"change", "worktree_path", "branch"} fact start_change records,
+    # so a workspace write later in the turn knows a change is open.
+    device, conn, task = await _connect(pool)
+    listing = MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A) + _entry(WT_B, SHA_B, None)
+    _result, ok, facts = await _list(pool, conn, device, FakeRepo(listing=listing))
+    assert ok is True
+    changed = [f for f in facts if "change" in f]
+    assert changed == [
+        {"change": "a1b2c3", "worktree_path": WT_A, "branch": BRANCH_A},
+        {"change": "d4e5f6", "worktree_path": WT_B, "branch": None},
+    ]
+    await _close(conn, task)

@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// S30a T2: fs.read by line or byte range, on a file of any size. Args arrive
-// from JSON, so every number here is a float64 exactly as core's frame
-// decodes it.
+// S30a T2: fs.read by line or byte range, on a file of any size. These tests
+// build args in Go (numbers as float64); the agent really receives json.Number
+// (client.readFrame decodes with UseNumber), which wire_args_test.go covers.
 
 // bigLineFile writes "line 0000001\n" .. until the file is at least 1 MiB
 // (13 bytes a line), built here, never a checked-in blob. It returns the path,

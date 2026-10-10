@@ -609,3 +609,21 @@ async def test_c6_a_missing_title_executes_nothing(monkeypatch, tmp_path):
     result, ok = await tools.dispatch("start_change", {}, ctx)
     assert ok is False and called == []
     assert "title" in result
+
+
+# -- walk-fixes T4 (turn 8719a8f1): the result names the tools for the worktree ----
+
+
+@requires_db
+async def test_walk_t4_the_result_names_the_device_tools_for_the_worktree(pool, recorded, fixed_id):
+    # After start_change she wrote README.md with workspace_write_file — her
+    # notes workspace on the hub. The result must name what edits the worktree.
+    device, conn, task = await _connect(pool)
+    result, ok, _facts = await _start(pool, conn, device, FakeRepo())
+    assert ok is True
+    for tool in ("device_edit_file", "device_write_file", "device_read_file", "device_search"):
+        assert tool in result, tool
+    assert f"device_run with cwd {WT}" in result
+    assert "workspace" in result and "not this worktree" in result
+    assert result.rstrip().endswith(AGENTS.rstrip())
+    await _close(conn, task)
