@@ -507,6 +507,43 @@ def _file_basename(text: str) -> str:
     return word.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
 
+def _path_parts(text: str) -> list[str]:
+    """A path's components, lower-cased, quotes and shell punctuation
+    stripped, either separator, empty and "." parts and a leading "~"
+    dropped: "~/nova/./services\\core/chat.py" is [nova, services, core,
+    chat.py], "~/.config/x.toml" is [.config, x.toml]. String methods only."""
+    word = text.strip().strip("'\"`<>()[]{},;:|&!?").rstrip(".")
+    parts = [p for p in word.replace("\\", "/").lower().split("/") if p and p != "."]
+    if parts and parts[0] == "~":
+        parts = parts[1:]
+    # A leading ".." climbs out of a directory the reply never names: compare
+    # what follows it (round 2). A dot that STARTS a name (".worktrees",
+    # ".config") is part of that name and is kept.
+    start = 0
+    while start < len(parts) and parts[start] == "..":
+        start += 1
+    return parts[start:]
+
+
+def _names_a_directory(target: str | None) -> bool:
+    """A claim target with a directory part ("services/core/app/chat.py",
+    "/home/j/x/README.md"), not a bare file name (walk-fixes T3)."""
+    return bool(target) and len(_path_parts(target)) > 1
+
+
+def _path_backs(claimed: str, written: str) -> bool:
+    """Whether a write to `written` is the file the claim names (walk-fixes
+    T3). A bare name: the basename, as before. A path with a directory: the
+    written path ENDS WITH it, component by component — a workspace write of
+    README.md does not back .../nova-3e8ab0/README.md, and .../xcore/app/
+    chat.py does not end with core/app/chat.py."""
+    want = _path_parts(claimed)
+    if len(want) <= 1:
+        return _file_basename(written) == _file_basename(claimed)
+    got = _path_parts(written)
+    return len(got) >= len(want) and got[-len(want) :] == want
+
+
 def _edited_file_backed(
     target: str | None, successful: Sequence[Any], spans: Sequence[Any]
 ) -> bool:
@@ -518,19 +555,16 @@ def _edited_file_backed(
     note) backs nothing: an edit names a file, and a note is not one."""
     if not target:
         return False
-    needle = _file_basename(target)
-    if not needle:
+    if not _file_basename(target):
         return False
     writers = _tools_for_kind("wrote_file")
     for span in successful:
         if span.name not in writers:
             continue
         written = _target_of(span)
-        if isinstance(written, str) and _file_basename(written) == needle:
+        if isinstance(written, str) and _path_backs(target, written):
             return True
-    return any(
-        _file_basename(word) == needle for words, _target in _run_facts(spans) for word in words
-    )
+    return any(_path_backs(target, word) for words, _target in _run_facts(spans) for word in words)
 
 
 def _ran_correction_text(programs: Sequence[str | None], spans: Sequence[Any]) -> str:
@@ -1137,6 +1171,23 @@ _FILENAME = re.compile(r"\b" + _FILENAME_RE + r"\b", re.I)
 # anchored and so linear.
 _FILE_RUN_FRONT = r"(?<![\w./-])[./-]*+"
 _FILENAME_IN = re.compile(_FILE_RUN_FRONT + r"(" + _FILENAME_RE + r")\b", re.I)
+
+
+def _run_target(text: str, m: re.Match[str]) -> str:
+    """The file a _FILE_RUN_FRONT match names, with the front's dot or slash
+    put back (walk-fixes T3 round 2): group 1 starts past every leading
+    [./-], which dropped the dot of ".worktrees/…" and the "/." of
+    "~/.config/…", so the path compared as "worktrees/…" and an honest claim
+    was corrected. A leading "-" and each leading "./" or "../" are still
+    dropped (the current directory, a climb the reply does not name); the
+    rest of the front — "/", ".", "/." — is part of the path. String methods
+    only; the pinned patterns are unchanged."""
+    front = text[m.start() : m.start(1)].lstrip("-")
+    while front.startswith(("./", "../")):
+        front = front[front.index("/") + 1 :]
+    return front + m.group(1)
+
+
 _URL = re.compile(r"https?://[^\s)>\]]+", re.I)
 # Sentence punctuation the URL/whitespace regex glues onto the end of a token.
 # A URL captured mid-sentence ("…/data." or "…/data,") must be trimmed to its
@@ -1175,6 +1226,34 @@ _PASSIVE_CLAIM = re.compile(
     r"(?P<verb>created|written|saved|updated|appended|added"
     r"|read|opened|reviewed|checked|examined"
     r"|deleted|removed|erased)\b",
+    re.I,
+)
+# walk-fixes T3 (turn 8719a8f1, 2026-10-10): the passive WRITE claim with a
+# QUOTED file name and/or a short locative between it and the auxiliary —
+# "`README.md` in the `edit test` worktree has been updated". _PASSIVE_CLAIM
+# stays byte-identical (its oracle in test_guard_regex_timing pins it); this
+# one needs a closing quote or the locative, so a plain "notes.md has been
+# updated" is still read by _PASSIVE_CLAIM alone. The locative is one of
+# in/inside/under/within and at most five words, none of them an auxiliary,
+# a negation, a modal or a conjunction (each word possessive, the count
+# bounded: one filename start reads at most five words — linear). Write verbs
+# only: a read or a delete keeps _PASSIVE_CLAIM's shape.
+_LOCATED_WORD = (
+    r"\s+(?!(?:has|have|had|was|were|is|are|been|not|never|will|would|can|could"
+    r"|should|may|might|and|but|or|so|then|which|that|it|this|when|if)\b)"
+    r"[^\s.,;:!?]++"
+)
+_LOCATED_WROTE_FILE = re.compile(
+    _FILE_RUN_FRONT
+    + r"("
+    + _FILENAME_RE
+    + r")\b(?:[`'\"](?:\s+(?:in|inside|under|within)(?:"
+    + _LOCATED_WORD
+    + r"){1,5}?)?|\s+(?:in|inside|under|within)(?:"
+    + _LOCATED_WORD
+    + r"){1,5}?)"
+    r"\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
+    r"(?:created|written|saved|updated|appended|added)\b",
     re.I,
 )
 _PASSIVE_READ_VERBS = frozenset({"read", "opened", "reviewed", "checked", "examined"})
@@ -1610,7 +1689,8 @@ def _clauses(text: str):
                 yield clause, is_question
 
 
-_TOKEN = re.compile(r"[A-Za-z0-9_./'-]+|[^\sA-Za-z0-9]")
+# "~" joins a token (walk-fixes T3 round 2) so "~/x/notes.md" is one path.
+_TOKEN = re.compile(r"[A-Za-z0-9_./'~-]+|[^\sA-Za-z0-9]")
 
 
 def _tokenize(clause: str) -> list[str]:
@@ -1620,9 +1700,17 @@ def _tokenize(clause: str) -> list[str]:
 def _filename_at(token: str) -> str | None:
     """The filename this token starts with, if any — tolerant of a trailing
     period or comma ('report.md.', 'notes.md,') that the tokenizer keeps
-    attached at a clause end."""
-    m = _FILENAME.match(token)
-    return m.group(0) if m is not None else None
+    attached at a clause end. An absolute, "~" or dot path is one too
+    (walk-fixes T3 round 2): "/home/j/README.md", "~/x/notes.md",
+    ".worktrees/x/README.md" and "./a/b.md" — _FILENAME's leading \\b fails
+    before "/" or ".", so the front is skipped by string methods and the
+    match starts past it (still anchored, so linear); the name returned
+    keeps the front."""
+    start = 2 if token.startswith("~/") else 0
+    while start < len(token) and token[start] in "./":
+        start += 1
+    m = _FILENAME.match(token, start)
+    return token[: m.end()] if m is not None else None
 
 
 def _first_person_subject(tokens: list[str], vi: int) -> bool:
@@ -1661,7 +1749,7 @@ def _is_content_noun(token: str) -> bool:
     adjective, or a clause boundary). Used to spot the noun a pre-nominal
     filename modifies ("config.yaml PARSING", "backup.sh DOCS")."""
     low = token.lower()
-    if _filename_at(token) is not None:
+    if _filename_at(token) is not None or token == "`":
         return False
     if token in _STOP_PUNCT or low in _STOP_WORDS or low in _LIST_CONT:
         return False
@@ -1739,6 +1827,12 @@ def _objects_of(tokens: list[str], vi: int) -> list[str]:
                 steps += 1
                 continue
             break
+        if tok == "`":
+            # a code quote around the object ("I updated `/home/…/README.md`")
+            # is transparent: it fills no slot (walk-fixes T3 round 2).
+            j += 1
+            steps += 1
+            continue
         if tok in _STOP_PUNCT or low in _STOP_WORDS:
             break
         if low in _ABOUTNESS or tok == "'s":
@@ -1972,11 +2066,16 @@ def _claims_in(
         else:
             kind = "wrote_file"
         # The phrase runs from the filename, not from any "./" before it.
-        claims.append((kind, pm.group(1), clause[pm.start(1) : pm.end()]))
+        claims.append((kind, _run_target(clause, pm), clause[pm.start(1) : pm.end()]))
+
+    # walk-fixes T3: the same passive write with a quoted name or a locative
+    # ("`README.md` in the `edit test` worktree has been updated").
+    for lm in _LOCATED_WROTE_FILE.finditer(clause):
+        claims.append(("wrote_file", _run_target(clause, lm), clause[lm.start(1) : lm.end()]))
 
     # content DUMP: "<file> contains the following / says:", filename-as-subject.
     for cm in _CONTENT_CLAIM.finditer(clause):
-        claims.append(("file_contents", cm.group(1), clause[cm.start(1) : cm.end()]))
+        claims.append(("file_contents", _run_target(clause, cm), clause[cm.start(1) : cm.end()]))
 
     # a spend figure with no ledger read behind it (target: the clause).
     sm = _STATED_SPEND.search(clause)
@@ -2331,6 +2430,11 @@ def _backed(
     if not matching:
         return False
     span_targets = [_target_of(span) for span in matching]
+    if kind == "wrote_file" and _names_a_directory(target):
+        # walk-fixes T3: a claim naming a PATH is backed only by a write whose
+        # readable target ends with it (_path_backs) — before the leniency
+        # below, since a target-less span (a memory note) is at no path.
+        return any(t is not None and _path_backs(target, t) for t in span_targets)
     # A matching tool ran but its target is unreadable, or the claim named no
     # file: kind-level presence is enough — do not flag on what we cannot see.
     if any(t is None for t in span_targets) or not target:
@@ -2466,6 +2570,39 @@ def _failed_pages(spans: Sequence[Any]) -> list[Any]:
     return out
 
 
+def _located_claims(
+    found: list[tuple[str, str | None, str]], reply_text: str
+) -> list[tuple[str, str | None, str]]:
+    """walk-fixes T3 (turn 8719a8f1): a bare-name write/edit claim reads the
+    reply's directory path for that file name — "`README.md` … has been
+    updated" with "File location: `/home/…/nova-3e8ab0/README.md`" on its own
+    line claims the worktree's file. Only when the reply names exactly ONE
+    distinct directory path with that name: two are ambiguous, and the bare
+    claim is kept (precision first). The reply's paths are read once, by the
+    linear _FILENAME_IN, and only when such a claim exists."""
+    if not any(
+        kind in ("wrote_file", "edited_file") and target and not _names_a_directory(target)
+        for kind, target, _phrase in found
+    ):
+        return found
+    paths: dict[str, set[tuple[str, ...]]] = {}
+    spelled: dict[tuple[str, ...], str] = {}
+    for m in _FILENAME_IN.finditer(reply_text):
+        spelling = _run_target(reply_text, m)
+        parts = tuple(_path_parts(spelling))
+        if len(parts) > 1:
+            paths.setdefault(parts[-1], set()).add(parts)
+            spelled.setdefault(parts, spelling)
+    located = []
+    for kind, target, phrase in found:
+        if kind in ("wrote_file", "edited_file") and target and not _names_a_directory(target):
+            named = paths.get(_file_basename(target), set())
+            if len(named) == 1:
+                target = spelled[next(iter(named))]
+        located.append((kind, target, phrase))
+    return located
+
+
 def narration_check(
     reply_text: str, spans: Sequence[Any], device_names: Sequence[str] = ()
 ) -> Correction | None:
@@ -2508,6 +2645,7 @@ def narration_check(
         if sentence.strip() and not sentence.rstrip().endswith("?")
         for claim in (*_results_in(sentence, names), *_ran_command_claims(sentence))
     ]
+    found = _located_claims(found, reply_text)
     for kind, target, phrase in found:
         verb = phrase.lower()
         reach = kind == "fetched_url" and verb in _REACH_FETCH_VERBS

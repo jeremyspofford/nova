@@ -3428,6 +3428,11 @@ async def _run_tool(
                 # mark after the fact — the call already ran; nothing reads it
                 # to decide anything.
                 span.meta["outside_worktree"] = True
+            if any(tools.workspace.NOT_THE_WORKTREE in fact for fact in facts[facts_before:]):
+                # walk-fixes T4: THIS workspace write or delete landed in her
+                # notes workspace while a change was open this turn (the result
+                # states it). A mark after the fact; nothing reads it to decide.
+                span.meta["not_the_worktree"] = True
         if not ok:
             span.meta["error"] = head
     return result, ok

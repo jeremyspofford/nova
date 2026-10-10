@@ -58,6 +58,55 @@ TRASH_KEEP_DAYS = 7
 TRASH_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
+# -- not the worktree (walk-fixes T4, turn 8719a8f1) -------------------------
+#
+# After start_change she wrote README.md with workspace_write_file — this
+# notes workspace on the hub, not the change's worktree — and said the
+# worktree's file was updated. Under the 09-03 no-approvals ruling the write
+# STILL RUNS; then, when a change is open this turn, its result ends with a
+# stated warning and the turn's facts carry {"not_the_worktree": <path>,
+# "tool": <name>}, which chat._run_tool lifts to span.meta["not_the_worktree"]
+# (the same shape as S29's outside_worktree). "A change is open this turn" is
+# derived from the turn's own facts_sink — the append-only channel every call
+# of the turn shares: start_change and list_changes each record
+# {"change", "worktree_path", "branch"} there. No sink (outside a turn): no
+# warning. Reads never warn: they change nothing.
+
+NOT_THE_WORKTREE = "not_the_worktree"
+WORKSPACE_IS = (
+    "This is your notes workspace on the hub — not a code repository, not a device, "
+    "not a change's worktree. For files on a machine or in a worktree use "
+    "device_read_file, device_edit_file or device_write_file."
+)
+
+
+def _open_worktrees(ctx: ToolContext) -> list[str]:
+    """The worktree paths of the changes this turn's facts name, in order."""
+    paths: list[str] = []
+    for fact in ctx.facts_sink or ():
+        path = fact.get("worktree_path") if isinstance(fact, dict) and "change" in fact else None
+        if isinstance(path, str) and path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def not_the_worktree_warning(did: str, worktrees: list[str]) -> str:
+    named = " or ".join(worktrees)
+    return (
+        f"Warning: this {did} your notes workspace on the hub, not the change's worktree "
+        f"{named} — to change a file there use device_edit_file (part of a file) or "
+        "device_write_file (a new file) with a path under it."
+    )
+
+
+def _warn_if_change_open(ctx: ToolContext, result: str, did: str, tool: str) -> str:
+    worktrees = _open_worktrees(ctx)
+    if not worktrees:
+        return result
+    ctx.facts_sink.append({NOT_THE_WORKTREE: " ".join(worktrees), "tool": tool})
+    return f"{result}\n{not_the_worktree_warning(did, worktrees)}"
+
+
 def root_from_env() -> Path:
     return Path(os.environ.get(WORKSPACE_ROOT_ENV) or DEFAULT_WORKSPACE_ROOT)
 
@@ -156,7 +205,9 @@ async def write_file(args: dict, ctx: ToolContext) -> str:
                 "sha256": hashlib.sha256(data).hexdigest(),
             }
         )
-    return f"Wrote {_display(root, path)} ({landed} bytes)"
+    return _warn_if_change_open(
+        ctx, f"Wrote {_display(root, path)} ({landed} bytes)", "wrote to", "workspace_write_file"
+    )
 
 
 async def read_file(args: dict, ctx: ToolContext) -> str:
@@ -395,7 +446,7 @@ async def delete(args: dict, ctx: ToolContext) -> str:
     if pruned:
         plural = "y" if pruned == 1 else "ies"
         lines.append(f"Also emptied {pruned} trash entr{plural} older than that.")
-    return "\n".join(lines)
+    return _warn_if_change_open(ctx, "\n".join(lines), "deleted from", "workspace_delete")
 
 
 def _payload_root(payload: dict) -> Path:
@@ -517,7 +568,8 @@ TOOLS: tuple[Tool, ...] = (
         name="workspace_write_file",
         description=(
             "Write a text file in your workspace, creating parent directories as needed. "
-            "Overwrites the file if it already exists. Read it back afterwards to confirm."
+            "Overwrites the file if it already exists. Read it back afterwards to confirm. "
+            + WORKSPACE_IS
         ),
         parameters={
             "type": "object",
@@ -537,7 +589,7 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="workspace_read_file",
-        description="Read a text file from your workspace.",
+        description="Read a text file from your workspace. " + WORKSPACE_IS,
         parameters={
             "type": "object",
             "properties": {
@@ -555,7 +607,9 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="workspace_list_files",
-        description="List the files in your workspace, recursively, with their sizes.",
+        description=(
+            "List the files in your workspace, recursively, with their sizes. " + WORKSPACE_IS
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -582,7 +636,7 @@ TOOLS: tuple[Tool, ...] = (
             "Delete a file, or a directory and everything in it, from your workspace. "
             "What you delete is moved to a trash that empties itself after a week, so a "
             "mistake can be undone. List the directory first if you are not sure what is "
-            "in it."
+            "in it. " + WORKSPACE_IS
         ),
         parameters={
             "type": "object",

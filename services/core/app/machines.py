@@ -36,7 +36,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from collections.abc import Callable, Collection
+import re
+from collections.abc import Callable, Collection, Iterable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -65,6 +66,68 @@ class UnknownMachine(LookupError):
     """No engine by that name (the gateway's 404, in its own words) — or, for
     update_agent, no paired machine machine_update can send to, as a stated
     cannot (S42b)."""
+
+
+# Runs of spaces, hyphens and underscores read alike in a machine's name
+# (walk-fixes T2): "mini pc", "Mini-PC" and "mini_pc" are one name.
+_LOOSE_SEP = re.compile(r"[\s_\-]+")
+
+
+def _loose(text: str) -> str:
+    return _LOOSE_SEP.sub("-", text.strip().casefold()).strip("-")
+
+
+def _tokens(name: str, hostname: str | None) -> set[str]:
+    """The whole words of a machine's name and hostname, casefold, split on
+    runs of space, hyphen and underscore (walk-fixes T2b)."""
+    words = _loose(name).split("-")
+    if isinstance(hostname, str):
+        words += _loose(hostname).split("-")
+    return {w for w in words if w}
+
+
+def resolve_name(name: object, known: Iterable[tuple[str, str | None]]) -> str | None:
+    """The ONE resolver every tool that names a paired machine goes through
+    (walk-fixes T2): the paired name `name` means, among `known` — each live
+    machine's (name, hostname), read from the stored rows (or a replay's
+    declared devices), never an alias list kept here. None when nothing
+    matches; the caller says its own listing.
+
+    Tiers, the first that matches wins: the exact name; the exact hostname;
+    then the name or hostname compared loosely (casefold, runs of space,
+    hyphen and underscore alike); last (walk-fixes T2b), the name less a
+    leading "the " equal to one WHOLE token of a machine's name or hostname
+    (split on space, hyphen, underscore; casefold) — "the dell" is
+    DELL-XPS-8950, "del" is nothing. Two machines in the winning tier is
+    never guessed between: UnknownMachine, a stated cannot naming each."""
+    if not isinstance(name, str):
+        return None
+    known = list(known)
+    asked = name.strip()
+    want = _loose(name)
+    token = want.removeprefix("the-")
+    if "-" in token:
+        token = ""  # more than one word is not one token
+    tiers = (
+        [n for n, _h in known if n == name],
+        [n for n, h in known if isinstance(h, str) and h.strip() == asked and asked],
+        [
+            n
+            for n, h in known
+            if want and (_loose(n) == want or (isinstance(h, str) and _loose(h) == want))
+        ],
+        [n for n, h in known if token and token in _tokens(n, h)],
+    )
+    for tier in tiers:
+        names = list(dict.fromkeys(tier))
+        if len(names) == 1:
+            return names[0]
+        if names:
+            raise UnknownMachine(
+                f"cannot: {name!r} matches more than one paired machine — "
+                f"{', '.join(names)}; name one of them exactly"
+            )
+    return None
 
 
 def _error_of(response: httpx.Response) -> str:
@@ -209,7 +272,15 @@ class GatewayPlant:
         devices alone."""
         pool = await db.get_pool()
         rows = await devices.rows_with_last_update(pool, live_only=True)
-        return [{"id": row["id"], "name": row["name"], "platform": row["platform"]} for row in rows]
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "platform": row["platform"],
+                "hostname": row["hostname"],
+            }
+            for row in rows
+        ]
 
     async def machine_groups(self, app) -> dict[str, str | None]:
         """Every live paired device's name and the machine its agent reported
@@ -232,9 +303,13 @@ class GatewayPlant:
         (Task 22 fix round 1, 6) — read through the plant so that a replay
         answers instead: no real row is resolved, and so no command reaches
         a real agent, during an eval. A name no live row has is
-        UnknownMachine, said with the live names (_no_paired_device)."""
+        UnknownMachine, said with the live names (_no_paired_device). The
+        name is resolved by resolve_name against each live row's name and
+        hostname (walk-fixes T2)."""
         pool = await db.get_pool()
-        row = await devices.get_live_by_name(pool, name)
+        known = await pool.fetch("SELECT name, hostname FROM devices WHERE revoked_at IS NULL")
+        resolved = resolve_name(name, [(r["name"], r["hostname"]) for r in known])
+        row = await devices.get_live_by_name(pool, resolved) if resolved is not None else None
         if row is None:
             live = sorted(
                 d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
@@ -290,9 +365,13 @@ class GatewayPlant:
         pool = await db.get_pool()
         rows = await devices.rows_with_last_update(pool, live_only=True)
         paired = [(row["name"], row["last_transport"] == "host") for row in rows]
-        row = next((r for r in rows if r["name"] == name), None)
-        if row is None or devices._reserved(name):
+        if devices._reserved(name):
             raise UnknownMachine(_cannot_update(name, paired))
+        resolved = resolve_name(name, [(r["name"], r["hostname"]) for r in rows])
+        row = next((r for r in rows if r["name"] == resolved), None)
+        if row is None:
+            raise UnknownMachine(_cannot_update(name, paired))
+        name = row["name"]
         outcome = await agent_updates.update_now(
             pool,
             name=name,
@@ -715,7 +794,12 @@ class FixturePlant(GatewayPlant):
         list one, or bind a code to one. A declared device has no row, so no
         id; the replay's code (runner._fixture_mint) binds nothing anyway."""
         return [
-            {"id": None, "name": name, "platform": view["platform"]}
+            {
+                "id": None,
+                "name": name,
+                "platform": view["platform"],
+                "hostname": view.get("hostname"),
+            }
             for name, view in sorted(self._devices.items())
         ]
 
@@ -739,6 +823,12 @@ class FixturePlant(GatewayPlant):
             answers=copy.deepcopy(self._runs[name]),
         )
 
+    def _resolved(self, name: str) -> str:
+        """The declared device `name` means (resolve_name over the declared
+        names and hostnames), or `name` as given when none does."""
+        known = [(device, view.get("hostname")) for device, view in self._devices.items()]
+        return resolve_name(name, known) or name
+
     async def paired_device(self, app, name: str):
         """Never a real row (Task 22 fix round 1, 6): a replay acts on no real
         machine. A declared device has no agent a command could reach — it
@@ -750,7 +840,11 @@ class FixturePlant(GatewayPlant):
         The one exception (S29b T5): a declared device whose case declares
         run answers resolves to a row built from its declaration (no id — it
         has no registry row), and tools/devices then reads its ReplayAgent
-        (replay_agent) for connectivity and the command, never the hub."""
+        (replay_agent) for connectivity and the command, never the hub.
+
+        The name is resolved against the declared names and hostnames by
+        resolve_name first (walk-fixes T2), as a real hub resolves its rows."""
+        name = self._resolved(name)
         if name in self._runs:
             view = self._devices[name]
             return {
@@ -797,6 +891,8 @@ class FixturePlant(GatewayPlant):
         never updated from inside a replay; why goes to the log, where a
         person reads it — never to the tool, which a scored turn reads."""
         paired = [(device, bool(view.get("hub"))) for device, view in self._devices.items()]
+        if not devices._reserved(name):
+            name = self._resolved(name)
         if name not in self._devices or devices._reserved(name):
             if not devices._reserved(name):
                 logger.info(

@@ -510,11 +510,17 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     main never read, and it corrected honest no-run sentences ("12 passed the
     audit, 0 failed it."). `_TESTS_FAILURE_ACK` was widened in place (the
     "nothing [is] failed/broken" negation). Two bare Patterns out, reached by
-    both walks: 224 -> 222, 305 -> 303, the difference 81 unchanged."""
+    both walks: 224 -> 222, 305 -> 303, the difference 81 unchanged.
+
+    walk-fixes T3 (2026-10-10, turn 8719a8f1: "`README.md` in the `edit test`
+    worktree has been updated" was no claim at all) added ONE bare module
+    Pattern, `_LOCATED_WROTE_FILE` (the passive write with a quoted name or a
+    short locative), reached by both walks: 222 -> 223, 303 -> 304, the
+    difference 81 unchanged. `_PASSIVE_CLAIM` was left byte-identical."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 222, len(old)
-    assert len(new) == 303, len(new)
+    assert len(old) == 223, len(old)
+    assert len(new) == 304, len(new)
     assert len(new) - len(old) == 81
 
 
@@ -632,6 +638,10 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "possession_then_spaces": "I don't have" + pad + "a browser",
         "article_then_spaces": "I don't have an" + pad + "browser",
         "browser_then_spaces": "I don't have a browser" + pad + "right now",
+        # walk-fixes T3: a quoted file name walking to its locative, and the
+        # locative walking to its auxiliary.
+        "quoted_file_then_spaces": "`README.md`" + pad + "in",
+        "locative_then_spaces": "`README.md` in the" + pad + "has been updated",
     }
 
 
@@ -1895,13 +1905,38 @@ FILENAME_RUNS = [
 ]
 
 
-@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+# walk-fixes T3: `_LOCATED_WROTE_FILE` reads at most five locative words per
+# file name, each possessive — a chain of quoted names and locatives, and one
+# name followed by a long locative that never reaches its verb, stay linear.
+LOCATED_RUNS = [
+    ("located_chain", _repeat("`a.md` in the `x y` tree ")),
+    ("located_no_verb", lambda n: "`a.md` in " + _repeat("the ")(n)),
+    ("located_long_word", lambda n: "`a.md` in " + _repeat("a`")(n) + " was saved"),
+]
+
+
+# walk-fixes T3 round 2: `_TOKEN` now keeps "~" inside a token, and
+# `_filename_at` skips a token's "~/", "." and "/" front by string methods
+# before an anchored match; a code quote is transparent in `_objects_of`. Long
+# fronts, "~" runs and quote chains after a first-person verb stay linear. No
+# Pattern was added (the 223 / 304 pins are unmoved, deliberately).
+ACTIVE_PATH_RUNS = [
+    ("dot_slash_front", lambda n: "I updated " + _repeat("./")(n) + "a.md"),
+    ("tilde_run", lambda n: "I wrote " + _repeat("~/")(n) + "notes.md"),
+    ("dotted_front_no_name", lambda n: "I edited /" + _repeat(".")(n)),
+    ("quoted_objects", _repeat("I updated `/a/b.md` and `~/.c/d.md` ")),
+]
+
+
+@pytest.mark.parametrize("label, build", FILENAME_RUNS + LOCATED_RUNS + ACTIVE_PATH_RUNS)
 def test_narration_reads_a_long_dotted_or_dashed_token_in_linear_time(label, build):
     _assert_linear(f"narration {label}", lambda text: guards.narration_check(text, []), build)
 
 
-@pytest.mark.parametrize("name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM", "_FILENAME_IN"])
-@pytest.mark.parametrize("label, build", FILENAME_RUNS)
+@pytest.mark.parametrize(
+    "name", ["_CONTENT_CLAIM", "_PASSIVE_CLAIM", "_FILENAME_IN", "_LOCATED_WROTE_FILE"]
+)
+@pytest.mark.parametrize("label, build", FILENAME_RUNS + LOCATED_RUNS)
 def test_the_filename_patterns_enter_a_run_once(name, label, build):
     pattern = getattr(guards, name)
     _assert_linear(f"{name} {label}", lambda text: list(pattern.finditer(text)), build)

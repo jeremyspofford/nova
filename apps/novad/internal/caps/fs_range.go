@@ -3,6 +3,7 @@ package caps
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,10 +44,30 @@ func hasRange(args map[string]any) bool {
 	return false
 }
 
-// wholeArg reads a non-negative whole number sent as a JSON number (float64).
+// numberArg reads a JSON number as the agent actually receives it: the client
+// decodes every frame with UseNumber (client.readFrame), so a number on the
+// wire arrives as json.Number. float64, int and int64 are accepted too, for
+// args built in Go. Anything else (a string, a bool) is not a number.
+func numberArg(v any) (float64, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// wholeArg reads a non-negative whole number sent as a JSON number.
 // A string, a fraction, a negative, NaN/Inf or a value past 2^53 is refused.
 func wholeArg(args map[string]any, key string) (int64, error) {
-	f, ok := args[key].(float64)
+	f, ok := numberArg(args[key])
 	if !ok {
 		return 0, fmt.Errorf("fs.read '%s' must be a whole number, got %T", key, args[key])
 	}
