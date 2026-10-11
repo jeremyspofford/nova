@@ -1,5 +1,6 @@
 """Bearer-auth and health/status contract — identical shape across all
 three services."""
+
 from __future__ import annotations
 
 from urllib.parse import unquote
@@ -47,11 +48,18 @@ async def test_wrong_bearer_rejected(monkeypatch):
 async def test_right_bearer_reaches_status(monkeypatch):
     monkeypatch.setenv("SERVICE_TOKEN", "correct-token")
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("NOVA_BUILD_SHA", raising=False)
+    monkeypatch.delenv("NOVA_CONTENT_HASH", raising=False)
     async with _client() as client:
         resp = await client.get("/status", headers={"Authorization": "Bearer correct-token"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"service": SERVICE_NAME, "version": "0.0.1", "db_reachable": False}
+    assert body == {
+        "service": SERVICE_NAME,
+        "build_sha": None,
+        "content_hash": None,
+        "db_reachable": False,
+    }
 
 
 async def test_status_db_unreachable_returns_false_never_raises(monkeypatch):

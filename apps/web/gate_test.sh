@@ -23,6 +23,12 @@
 # that every proxied location forwards X-Real-IP as nginx's own $remote_addr
 # and Cf-Connecting-IP as sent — the facts core counts its rate limits by.
 #
+# Since S32 it also pins the build identity web reports (apps/web/Dockerfile
+# + the /build.json location): an image built with NOVA_BUILD_SHA /
+# NOVA_CONTENT_HASH answers /build.json with exactly those, behind the gate,
+# never through the SPA fallback; one built without them, or with malformed
+# ones, answers null for that key — never a string that reads as a value.
+#
 # No stack needs to be running. Leaves nothing behind — every container,
 # network and temp dir this script creates is removed on exit, success or
 # failure. Names carry GATE_TEST_PREFIX (default nova-gate-test) so a run can
@@ -55,6 +61,14 @@ DEVICE_ID="00000000-0000-4000-8000-000000000001"
 # changing either number is a deliberate change to both files.
 ENROLL_BODY_MAX=8192
 AGENT_BODY_MAX=1024
+# The build identity the main image is built with: a 40-hex commit and a
+# 64-hex tree hash (both lengths a git object id can have), fresh per run.
+BUILD_SHA="$(openssl rand -hex 20)"
+CONTENT_HASH="$(openssl rand -hex 32)"
+# Images built with no or malformed identity args (see build_identity_case).
+IDENT_IMAGES=""
+IDENT_RUN="${PREFIX}-ident-$$"
+LAST_IDENT_IMAGE=""
 STUB_DIR=""
 PASS=0
 FAIL=0
@@ -72,7 +86,10 @@ report() {
 cleanup() {
   docker rm -f "$ON" "$OFF" "$FWD" "$NOTRUST" "$STUB" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker rm -f "$IDENT_RUN" >/dev/null 2>&1 || true
   docker rmi "$IMAGE" >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086 # a space-separated list of image names
+  [ -n "$IDENT_IMAGES" ] && docker rmi $IDENT_IMAGES >/dev/null 2>&1
   [ -n "$STUB_DIR" ] && rm -rf "$STUB_DIR"
 }
 trap cleanup EXIT
@@ -174,7 +191,8 @@ wait_for_nginx() {
 }
 
 echo "building $IMAGE from $SCRIPT_DIR ..."
-if ! docker build -q -t "$IMAGE" "$SCRIPT_DIR" >/dev/null; then
+if ! docker build -q -t "$IMAGE" --build-arg NOVA_BUILD_SHA="$BUILD_SHA" \
+    --build-arg NOVA_CONTENT_HASH="$CONTENT_HASH" "$SCRIPT_DIR" >/dev/null; then
   echo "FAIL image build"
   exit 1
 fi
@@ -239,6 +257,18 @@ else
     [ "$code" = "401" ] && report 0 "gate on, no cookie, as sent: $path -> 401" \
       || report 1 "gate on, no cookie, as sent: $path -> 401" "got $code"
   done
+
+  # /build.json is behind the gate like everything but the carve-outs.
+  code="$(status_of "$ON_BASE" "/build.json")"
+  [ "$code" = "401" ] && report 0 "gate on, no cookie: /build.json -> 401" \
+    || report 1 "gate on, no cookie: /build.json -> 401" "got $code"
+  code="$(status_of "$ON_BASE" "/build.json" -b "nova_gate=$TOKEN")"
+  [ "$code" = "200" ] && report 0 "gate on, correct cookie: /build.json -> 200" \
+    || report 1 "gate on, correct cookie: /build.json -> 200" "got $code"
+  body="$(curl -s -b "nova_gate=$TOKEN" "$ON_BASE/build.json")"
+  want="{\"build_sha\":\"$BUILD_SHA\",\"content_hash\":\"$CONTENT_HASH\"}"
+  [ "$body" = "$want" ] && report 0 "gate on, correct cookie: /build.json is the build args" \
+    || report 1 "gate on, correct cookie: /build.json is the build args" "got $(printf '%s' "$body" | head -c 200)"
 
   code="$(status_of "$ON_BASE" "/gate?token=$WRONG")"
   [ "$code" = "401" ] && report 0 "gate on: /gate?token=wrong -> 401" \
@@ -693,6 +723,21 @@ else
     *) report 0 "gate off: /healthz never sets a cookie" ;;
   esac
 
+  # ── build identity, gate off ───────────────────────────────────────
+  body="$(curl -s "$OFF_BASE/build.json")"
+  want="{\"build_sha\":\"$BUILD_SHA\",\"content_hash\":\"$CONTENT_HASH\"}"
+  [ "$body" = "$want" ] && report 0 "gate off: /build.json is the build args" \
+    || report 1 "gate off: /build.json is the build args" "want $want, got $(printf '%s' "$body" | head -c 200)"
+  BUILD_HEADERS="$(curl -s -D - -o /dev/null "$OFF_BASE/build.json")"
+  case "$BUILD_HEADERS" in
+    *"Content-Type: application/json"*) report 0 "gate off: /build.json is application/json" ;;
+    *) report 1 "gate off: /build.json is application/json" "$BUILD_HEADERS" ;;
+  esac
+  case "$BUILD_HEADERS" in
+    *"Cache-Control: no-cache"*) report 0 "gate off: /build.json is no-cache" ;;
+    *) report 1 "gate off: /build.json is no-cache" "$BUILD_HEADERS" ;;
+  esac
+
   # ── envsubst-filter proof ────────────────────────────────────────────
   # NGINX_ENVSUBST_FILTER=^NOVA_ must leave every nginx-native `$var` alone
   # and substitute only the NOVA_* vars. Derived from the checked-in
@@ -741,6 +786,77 @@ else
       report 0 "envsubst filter: NOVA_TAILSCALE_ADDR itself IS substituted" ;;
   esac
 fi
+
+# ── build identity: labels, missing and malformed args, no SPA fallback ──
+label_of() {
+  docker image inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null
+}
+[ "$(label_of "$IMAGE" nova.build-sha)" = "$BUILD_SHA" ] \
+  && report 0 "image label nova.build-sha is the arg" \
+  || report 1 "image label nova.build-sha is the arg" "got $(label_of "$IMAGE" nova.build-sha)"
+[ "$(label_of "$IMAGE" nova.content-hash)" = "$CONTENT_HASH" ] \
+  && report 0 "image label nova.content-hash is the arg" \
+  || report 1 "image label nova.content-hash is the arg" "got $(label_of "$IMAGE" nova.content-hash)"
+
+# Starts $1, prints its /build.json body; the container is removed after.
+build_json_of() {
+  local code base
+  docker rm -f "$IDENT_RUN" >/dev/null 2>&1
+  docker run -d --name "$IDENT_RUN" -p "127.0.0.1::80" "$1" >/dev/null || return 1
+  base="http://127.0.0.1:$(port_of "$IDENT_RUN")"
+  wait_for_nginx "$base" || return 1
+  curl -s "$base/build.json"
+  docker rm -f "$IDENT_RUN" >/dev/null 2>&1
+}
+
+# $1 name, $2 the expected body, $3... docker build args. Builds a throwaway
+# image (cached up to the identity layer) and checks what it reports.
+build_identity_case() {
+  local name="$1" want="$2" img body
+  shift 2
+  img="${PREFIX}-ident-image-$(printf '%s' "$name" | tr -c 'a-z0-9' '-')-$$"
+  IDENT_IMAGES="$IDENT_IMAGES $img"
+  LAST_IDENT_IMAGE="$img"
+  if ! docker build -q -t "$img" "$@" "$SCRIPT_DIR" >/dev/null; then
+    report 1 "build identity, $name: image builds" ""
+    return
+  fi
+  body="$(build_json_of "$img")"
+  [ "$body" = "$want" ] && report 0 "build identity, $name: /build.json is $want" \
+    || report 1 "build identity, $name: /build.json is $want" "got $(printf '%s' "$body" | head -c 200)"
+}
+
+SHORT="$(printf '%s' "$BUILD_SHA" | cut -c1-12)"
+UPPER="$(printf '%s' "$BUILD_SHA" | tr 'a-f' 'A-F')"
+build_identity_case "no args" '{"build_sha":null,"content_hash":null}'
+BARE_IMAGE="$LAST_IDENT_IMAGE"
+build_identity_case "uppercase sha, valid hash" \
+  "{\"build_sha\":null,\"content_hash\":\"$CONTENT_HASH\"}" \
+  --build-arg NOVA_BUILD_SHA="$UPPER" --build-arg NOVA_CONTENT_HASH="$CONTENT_HASH"
+build_identity_case "valid sha, 12-char hash" \
+  "{\"build_sha\":\"$BUILD_SHA\",\"content_hash\":null}" \
+  --build-arg NOVA_BUILD_SHA="$BUILD_SHA" --build-arg NOVA_CONTENT_HASH="$SHORT"
+build_identity_case "two lines of hex, the word unknown" '{"build_sha":null,"content_hash":null}' \
+  --build-arg NOVA_BUILD_SHA="$BUILD_SHA
+$BUILD_SHA" --build-arg NOVA_CONTENT_HASH=unknown
+
+[ -n "$BARE_IMAGE" ] && [ "$(label_of "$BARE_IMAGE" nova.build-sha)|$(label_of "$BARE_IMAGE" nova.content-hash)" = "|" ] \
+  && report 0 "no args: both labels empty" \
+  || report 1 "no args: both labels empty" "$(docker image inspect -f '{{json .Config.Labels}}' "$BARE_IMAGE" 2>&1)"
+
+# Never the SPA fallback: with the file gone, /build.json is a 404, not a
+# 200 index.html that a reader would have to recognise as "not the answer".
+docker rm -f "$IDENT_RUN" >/dev/null 2>&1
+docker run -d --name "$IDENT_RUN" -p "127.0.0.1::80" "$IMAGE" >/dev/null
+IDENT_BASE="http://127.0.0.1:$(port_of "$IDENT_RUN")"
+if wait_for_nginx "$IDENT_BASE" && docker exec "$IDENT_RUN" rm /usr/share/nginx/html/build.json; then
+  code="$(status_of "$IDENT_BASE" "/build.json")"
+  [ "$code" = "404" ] && report 0 "build.json missing: /build.json -> 404, never index.html" \
+    || report 1 "build.json missing: /build.json -> 404, never index.html" "got $code"
+else
+  report 1 "build.json missing: /build.json -> 404, never index.html" "could not start or remove the file"
+fi
+docker rm -f "$IDENT_RUN" >/dev/null 2>&1
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

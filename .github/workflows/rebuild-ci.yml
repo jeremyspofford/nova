@@ -296,6 +296,11 @@ jobs:
       # against fake tailscale/containerboot binaries, plus a compose `create`
       # of the service on a throwaway project (never started). Docker-backed.
       - run: bash ../../deploy/tailscale/start_test.sh
+      # S32.1's build identity as baked: core, gateway and memory built from
+      # their real Dockerfiles with known NOVA_BUILD_SHA / NOVA_CONTENT_HASH
+      # args and with none; the labels ./install verifies and the env /status
+      # reads are read back off the images. Throwaway tags, removed on exit.
+      - run: bash ../../deploy/build_identity_test.sh
 
   # The daemon is the first code that runs OUTSIDE the compose stack. Its
   # interop risk is one encoder that must be byte-identical to core's canonical

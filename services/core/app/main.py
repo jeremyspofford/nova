@@ -46,13 +46,13 @@ from app import (
     workspace_api,
 )
 from app.browser import agent as browser_agent
+from app.build_identity import build_identity
 from app.evals import runner as eval_runner
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
 
 SERVICE_NAME = "core"
-SERVICE_VERSION = "0.0.1"
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 configure_logging(SERVICE_NAME)
@@ -178,7 +178,7 @@ async def health_live() -> dict:
 async def status() -> dict:
     return {
         "service": SERVICE_NAME,
-        "version": SERVICE_VERSION,
+        **build_identity(),
         "db_reachable": await _db_reachable(),
     }
 

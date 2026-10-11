@@ -13,8 +13,12 @@ services:
       # Long syntax, not `./postgres-init:/docker-entrypoint-initdb.d:ro`,
       # because only the long form can carry the x-nova-backup rows below —
       # and a bind with no disposition refuses every backup (deploy/backup.sh).
+      # Every host path in this file is rooted at NOVA_CHECKOUT, the checkout
+      # ./install recorded (record_build) and exports to every compose call,
+      # never at compose's project directory; the :? makes a render without
+      # it fail naming the key instead of binding a path at the root (S32.1).
       - type: bind
-        source: ./postgres-init
+        source: ${NOVA_CHECKOUT:?NOVA_CHECKOUT is unset - run ./install}/deploy/postgres-init
         target: /docker-entrypoint-initdb.d
         read_only: true
         # Implied by short syntax, NOT by long: stated so the resolved
@@ -33,8 +37,19 @@ services:
       retries: 10
 
   core:
+    # Tagged by the content hash of the source it was built from (./install,
+    # record_service_builds), never by project: a deploy whose hash is unchanged
+    # keeps this image, so compose does not recreate the container, and the
+    # previous tag stays for a rollback (S33). Unhashed = built outside
+    # ./install (tests/e2e/isolated.sh), never a hub hash.
+    image: nova-core:h-${NOVA_HASH_CORE:-unhashed}
     build:
       context: ../services/core
+      # Baked into the image (ENV + labels) and reported on /status:
+      # the commit it was built from and the hash of its source.
+      args:
+        NOVA_BUILD_SHA: ${NOVA_COMMIT:-}
+        NOVA_CONTENT_HASH: ${NOVA_HASH_CORE:-}
     restart: unless-stopped
     # How long a redeploy waits after SIGTERM before SIGKILL. Compose's
     # default is 10s; a 27B chat turn runs 13-55s, so every `up -d core`
@@ -146,7 +161,7 @@ services:
       DIST_DIR: /dist
     volumes:
       - type: bind
-        source: ./agent-dist
+        source: ${NOVA_CHECKOUT:?NOVA_CHECKOUT is unset - run ./install}/deploy/agent-dist
         target: /build
         read_only: true
         x-nova-backup: exclude-code
@@ -156,8 +171,15 @@ services:
       - v4_agent_build_cache:/cache
 
   gateway:
+    # Tagged by content hash, like core (see there).
+    image: nova-gateway:h-${NOVA_HASH_GATEWAY:-unhashed}
     build:
       context: ../services/gateway
+      # Baked into the image (ENV + labels) and reported on /status:
+      # the commit it was built from and the hash of its source.
+      args:
+        NOVA_BUILD_SHA: ${NOVA_COMMIT:-}
+        NOVA_CONTENT_HASH: ${NOVA_HASH_GATEWAY:-}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8001:8001"
@@ -166,10 +188,9 @@ services:
       SERVICE_TOKEN: ${CORE_GATEWAY_TOKEN}
       OLLAMA_URL: http://ollama:11434
     volumes:
-      # Ruling R2: install.sh writes <repo>/data/hardware.json on the host;
-      # this compose file lives in deploy/, so the repo root is one level up.
+      # Ruling R2: install.sh writes <repo>/data/hardware.json on the host.
       - type: bind
-        source: ../data
+        source: ${NOVA_CHECKOUT:?NOVA_CHECKOUT is unset - run ./install}/data
         target: /data
         read_only: true
         # Implied by short syntax, NOT by long: stated so the resolved
@@ -192,8 +213,15 @@ services:
       retries: 10
 
   memory:
+    # Tagged by content hash, like core (see there).
+    image: nova-memory:h-${NOVA_HASH_MEMORY:-unhashed}
     build:
       context: ../services/memory
+      # Baked into the image (ENV + labels) and reported on /status:
+      # the commit it was built from and the hash of its source.
+      args:
+        NOVA_BUILD_SHA: ${NOVA_COMMIT:-}
+        NOVA_CONTENT_HASH: ${NOVA_HASH_MEMORY:-}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8002:8002"
@@ -212,8 +240,15 @@ services:
       retries: 10
 
   web:
+    # Tagged by content hash, like core (see there).
+    image: nova-web:h-${NOVA_HASH_WEB:-unhashed}
     build:
       context: ../apps/web
+      # Baked into the image (ENV + labels) and reported on /build.json:
+      # the commit it was built from and the hash of its source.
+      args:
+        NOVA_BUILD_SHA: ${NOVA_COMMIT:-}
+        NOVA_CONTENT_HASH: ${NOVA_HASH_WEB:-}
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:80"
@@ -301,7 +336,7 @@ services:
       # (v3 lost web search for 43h that way). Read-only: the service never
       # writes its own config.
       - type: bind
-        source: ../searxng
+        source: ${NOVA_CHECKOUT:?NOVA_CHECKOUT is unset - run ./install}/searxng
         target: /etc/searxng
         read_only: true
         # Implied by short syntax, NOT by long: stated so the resolved
@@ -494,7 +529,7 @@ services:
       # mount resolves to a host inode at create time and dies with exit 127
       # when Docker Desktop recycles its WSL mount; searxng above says why).
       - type: bind
-        source: ./tailscale
+        source: ${NOVA_CHECKOUT:?NOVA_CHECKOUT is unset - run ./install}/deploy/tailscale
         target: /config
         read_only: true
         # Implied by short syntax, NOT by long: stated so the resolved

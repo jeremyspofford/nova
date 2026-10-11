@@ -10,9 +10,11 @@ switch. Each file carries its reasoning inline; this is the operator's map.
 `./install` is idempotent: preflight (docker, compose, openssl, disk, ports,
 whether a bundled ollama can start), hardware detection into
 `data/hardware.json`, secrets generated into `deploy/.env` (never
-overwritten), `docker compose up -d --build`, then a wait on every service's
-healthcheck and a status table. A red row is a real failure and the script
-exits non-zero.
+overwritten), a build of only the images whose source changed, `docker
+compose up -d` (never `--build`), a check that every running service is this
+checkout's source, then a wait on every service's healthcheck and a status
+table. A red row is a real failure and the script exits non-zero. The build
+steps are under "Builds: what each service is running" below.
 
 Two optional profiles:
 
@@ -79,6 +81,84 @@ cannot read — because every healthcheck is green either way (`ollama list`
 passes on the CPU) and a 27B model on the CPU only shows up as the next chat
 turn timing out, which is exactly what happened.
 
+### Builds: what each service is running
+
+Every image ./install builds for `core`, `gateway`, `memory` and `web` says
+which source it was built from, and only a service whose source changed is
+rebuilt.
+
+- **The content hash.** `record_service_builds` writes `NOVA_HASH_CORE`,
+  `NOVA_HASH_GATEWAY`, `NOVA_HASH_MEMORY` and `NOVA_HASH_WEB` to
+  `deploy/.env`: the git tree hash of the service's build context
+  (`services/<svc>`, or `apps/web`) **as it is in the working tree** —
+  tracked plus untracked-not-ignored files, uncommitted edits included —
+  computed through a temporary index, so your real index is never touched. On
+  a clean tree it equals `git rev-parse HEAD:services/core`. It is derived on
+  every run, never typed in; an unchanged hash leaves `.env` byte-identical,
+  and the run logs which services changed (`core (old12 -> new12)`). When it
+  cannot be computed (not a git checkout, git failing) the key is written
+  blank with one line naming the service, and that service is rebuilt every
+  time.
+- **Image tags.** Compose tags each image `nova-<svc>:h-<NOVA_HASH_<SVC>>`
+  (`h-unhashed` when the key is blank). The names are not project-scoped any
+  more: `nova-core:h-<hash>` is the same image whichever compose project built
+  it. A deploy leaves the previous tag in the local store — `docker image ls
+  nova-core` lists every build still there — which is what a rollback (S33)
+  starts from. Nothing prunes them yet.
+- **Build only what changed.** `compose_up` checks each of the four tags with
+  `docker image inspect`; a present tag holds exactly that source, so it is
+  not rebuilt ("unchanged, not rebuilt: gateway memory"). It then runs
+  `docker compose build <the missing ones> browser` (`browser` has no content
+  tag and is always built; a cached build keeps its image ID, so it is not
+  recreated) and `docker compose up -d` with **no `--build`**. An unchanged
+  service keeps its image and compose leaves its container running. A failing
+  build stops there, naming the services, and nothing is started.
+- **The build identity, baked in.** Two build args go into each of the four
+  images: `NOVA_BUILD_SHA` (the commit, `NOVA_COMMIT` from `record_build`) and
+  `NOVA_CONTENT_HASH` (that service's hash). Each image carries them as the
+  labels `nova.build-sha` and `nova.content-hash`; core, gateway and memory
+  also carry them as ENV. Because an unchanged service is not rebuilt, its
+  `build_sha` is the **earlier** commit that built that same content — "is
+  this service running HEAD's source" is its content hash equal to HEAD's
+  hash, not its SHA equal to HEAD.
+- **Reading it back.** `GET /status` on core, gateway and memory (with the
+  service's bearer — core's is `CORE_TOKEN`, gateway's `CORE_GATEWAY_TOKEN`,
+  memory's `CORE_MEMORY_TOKEN`) returns `{service, build_sha, content_hash,
+  db_reachable}`; web serves `GET /build.json` = `{"build_sha",
+  "content_hash"}`, behind the same gate as the app (401 without the session
+  cookie when the gate is on), `no-cache`, and a 404 — never the app's
+  index.html — if the file is missing. Each value is the full 40- or 64-hex
+  id, or `null` when the image was built without one (or with anything that
+  is not one): never `unknown` or a short SHA that reads as a value. The old
+  `version` field and `SERVICE_VERSION` are gone. `docker inspect -f '{{index
+  .Config.Labels "nova.content-hash"}}' <container>` reads the label directly.
+- **The verify step.** After `up`, `verify_service_builds` reads each of the
+  four running containers' `nova.content-hash` label and compares it with the
+  hash recomputed from the files (not read back from `.env`). A mismatch, or
+  no container to read, refuses "Nova is up", naming the service, both hashes
+  and the command that fixes it (`docker compose --project-directory deploy
+  build <svc> && docker compose --project-directory deploy up -d
+  --force-recreate <svc>`). A service whose hash could not be computed is
+  skipped with a line saying it was not checked.
+- **Do not build by hand with the hub's `.env`.** Any `build` or `up --build`
+  on `deploy/docker-compose.yml` that reads the hub's `NOVA_HASH_*` (a
+  hand-run compose in the checkout) tags whatever it built with the hub's
+  hash. The verify step catches it on the next `./install`; re-run
+  `./install` rather than building by hand. The isolated e2e stack
+  (`tests/e2e/isolated.sh`) uses its own env and tags `h-unhashed`.
+
+**The checkout path, and the five binds.** `record_build` writes
+`NOVA_CHECKOUT` (the checkout's absolute path) to `.env` — whether or not
+there is a git commit — and `install.sh` exports it to every compose call it
+makes. The five host binds in `docker-compose.yml` (`deploy/postgres-init`,
+`deploy/agent-dist`, `data`, `searxng`, `deploy/tailscale`) are written as
+`${NOVA_CHECKOUT:?…}/<path>`, so they resolve to the same absolute paths
+whichever directory compose is run from. A render without it (no `.env`
+written by `./install`, and nothing in the environment) fails loudly, naming
+the variable — it never falls back to a relative path. Anything that renders
+the file outside `./install` (the isolated e2e stack, the tailnet start
+test) sets its own.
+
 ## Machines
 
 Since S40 the gateway treats local inference as **engines**: a provider row with
@@ -105,6 +185,8 @@ state). Today there is one, the bundled container, and its provider name is
   3. `pg_restore -U postgres -d <db>` the pre-S40 dumps.
   4. `docker tag nova-<svc>:pre-s40 nova-<svc>:latest`.
   5. `up -d --no-deps --no-build --force-recreate gateway core web`.
+
+  (Written before S32.1: images are no longer `nova-<svc>:latest` but `nova-<svc>:h-<hash>` — see "Builds" above. Step 4 now means tagging the pre-S40 image as the tag `.env`'s `NOVA_HASH_<SVC>` names, and `./install`'s verify step will refuse it as not this checkout's source.)
 
 **Since S42a, `machine_status` also lists Nova's agents** — hands and facts,
 never models — as a separate listing from the engines above, grouping the

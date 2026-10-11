@@ -16,11 +16,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import router as memory_router
 from app.api import start_vector_backfill, warm_context
 from app.auth import bearer_auth_middleware
+from app.build_identity import build_identity
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
 
 SERVICE_NAME = "memory"
-SERVICE_VERSION = "0.0.1"
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 configure_logging(SERVICE_NAME)
@@ -100,7 +100,7 @@ async def health_live() -> dict:
 async def status() -> dict:
     return {
         "service": SERVICE_NAME,
-        "version": SERVICE_VERSION,
+        **build_identity(),
         "db_reachable": await _db_reachable(),
     }
 
