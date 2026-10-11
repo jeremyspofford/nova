@@ -518,7 +518,7 @@ export function SchedulesPage({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-            <table className="w-full text-compact">
+            <table className="stack-table w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
                   {['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', ''].map((heading, i) => (
@@ -625,7 +625,7 @@ function ScheduleRow({
         onClick={onToggle}
         className="cursor-pointer hover:bg-surface-card-hover transition-colors align-top"
       >
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Kind" className="px-4 py-2.5 whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5">
             {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
             <Badge size="sm" color={kind.color}>
@@ -633,7 +633,7 @@ function ScheduleRow({
             </Badge>
           </span>
         </td>
-        <td className="px-4 py-2.5 min-w-[220px]">
+        <td data-label="Schedule" className="px-4 py-2.5 min-w-[220px]">
           <div className="text-content-primary font-medium">{timer.title}</div>
           {/* core's describe() words, verbatim — never recomputed here. */}
           <div className="text-caption text-content-tertiary" data-testid="schedule-words">
@@ -641,7 +641,7 @@ function ScheduleRow({
           </div>
         </td>
         {/* Runs as (S12). The select never toggles the row. */}
-        <td className="px-4 py-2.5 whitespace-nowrap" onClick={e => e.stopPropagation()} data-testid="runs-as">
+        <td data-label="Runs as" className="px-4 py-2.5 whitespace-nowrap" onClick={e => e.stopPropagation()} data-testid="runs-as">
           {timer.kind === 'scheduled' ? (
             <RunsAsSelect
               timer={timer}
@@ -656,7 +656,7 @@ function ScheduleRow({
             </span>
           )}
         </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Next fire" className="px-4 py-2.5 whitespace-nowrap">
           {state.state === 'paused' ? (
             <span className="text-content-tertiary" title={timer.paused_reason ?? undefined}>
               paused
@@ -670,7 +670,7 @@ function ScheduleRow({
             </span>
           )}
         </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Status" className="px-4 py-2.5 whitespace-nowrap">
           <Badge size="sm" color={state.color}>
             {state.label}
           </Badge>
@@ -680,7 +680,7 @@ function ScheduleRow({
             </span>
           )}
         </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Last outcome" className="px-4 py-2.5 whitespace-nowrap">
           {outcome === null ? (
             <span className="text-content-tertiary" title="never fired">
               —
@@ -699,7 +699,7 @@ function ScheduleRow({
           )}
         </td>
         {/* Actions never toggle the row. */}
-        <td className="px-4 py-2.5 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
+        <td className="stack-actions px-4 py-2.5 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
           <span className="inline-flex items-center gap-1.5">
             {state.state === 'paused' ? (
               <Button

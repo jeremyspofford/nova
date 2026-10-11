@@ -111,7 +111,7 @@ export function ActivityTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-      <table className="w-full text-compact">
+      <table className="stack-table w-full text-compact">
         <thead>
           <tr className="bg-surface-elevated">
             {HEADINGS.map(heading => (
@@ -176,22 +176,22 @@ function ActivityRow({
         onClick={onToggle}
         className="cursor-pointer hover:bg-surface-card-hover transition-colors"
       >
-        <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
+        <td data-label="Time" className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
           <span className="inline-flex items-center gap-1">
             {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
             {formatRelativeTime(turn.started_at)}
           </span>
         </td>
-        <td className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+        <td data-label="Kind" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5">
             {turn.kind}
             {turn.agent && <AgentBadge name={turn.agent} role={turn.role} />}
           </span>
         </td>
-        <td className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
+        <td data-label="Model" className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
           {turn.model ?? <span className="text-content-tertiary">—</span>}
         </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Status" className="px-4 py-2.5 whitespace-nowrap">
           <Badge
             color={badge.color}
             size="sm"
@@ -200,10 +200,10 @@ function ActivityRow({
             {badge.label}
           </Badge>
         </td>
-        <td className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+        <td data-label="Duration" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
           {duration ?? <span className="text-content-tertiary">—</span>}
         </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
+        <td data-label="Tools" className="px-4 py-2.5 whitespace-nowrap">
           {turn.tool_call_count > 0 && (
             <span data-testid="tool-count-badge">
               <Badge size="sm" color="accent">

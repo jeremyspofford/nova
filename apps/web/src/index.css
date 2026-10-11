@@ -495,3 +495,65 @@ html.dark .skeleton {
 .dark .markdown-body hr {
   border-top-color: rgb(var(--neutral-700));
 }
+
+/* ── Stacked tables on a phone (UI review R4, 2026-10-11) ────────────────────
+   Below md a `table.stack-table` drops its header row and draws each row as
+   a card of "label  value" lines; each cell names its column in
+   `data-label`. Every data table here scrolled sideways on a phone with no
+   hint, hiding Status, Next fire and the row's actions off to the right.
+   `stack-title` is the row's lead cell (no label), `stack-actions` its
+   buttons; a `hidden` cell stays hidden; a colSpan row (an expanded detail)
+   is a plain block. stackTable.test pins these rules and every table's
+   cells (expectStacked). */
+@media (max-width: 767px) {
+  .stack-table,
+  .stack-table > tbody {
+    display: block;
+    width: 100%;
+  }
+  .stack-table > thead {
+    display: none;
+  }
+  .stack-table > tbody > tr {
+    display: block;
+    padding: 0.75rem 1rem;
+  }
+  /* A block, not a flex row: a cell holding several elements (a title and
+     its timing words) must flow as it does in the table, not split into
+     side-by-side columns. The label sits in a fixed left gutter. */
+  .stack-table > tbody > tr > td {
+    display: block;
+    position: relative;
+    min-width: 0;
+    max-width: none;
+    padding: 0.125rem 0 0.125rem 7.25rem;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .stack-table > tbody > tr > td.hidden {
+    display: none;
+  }
+  .stack-table > tbody > tr > td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    top: 0.25rem;
+    width: 6.5rem;
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    color: rgb(var(--text-tertiary));
+  }
+  .stack-table > tbody > tr > td.stack-title {
+    padding-left: 0;
+    padding-bottom: 0.25rem;
+    font-weight: 500;
+  }
+  .stack-table > tbody > tr > td.stack-actions {
+    padding-left: 0;
+    padding-top: 0.5rem;
+  }
+  .stack-table > tbody > tr > td[colspan] {
+    padding-left: 0;
+  }
+}

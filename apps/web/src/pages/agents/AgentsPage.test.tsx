@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { expectStacked } from '../../test/expectStacked'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AgentsPage } from './AgentsPage'
@@ -91,6 +92,8 @@ describe('AgentsPage — the roster', () => {
     renderPage(api)
     const list = await screen.findByTestId('agents-list')
     const coder = within(list).getByTestId('agent-row-coder')
+    // R4: the table stacks on a phone, every cell labelled.
+    expectStacked()
     const link = within(coder).getByRole('link', { name: /coder/ })
     expect(link.getAttribute('href')).toBe('/agents/coder')
     expect(within(coder).getByText('writes code')).toBeDefined()
