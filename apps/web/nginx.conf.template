@@ -602,6 +602,20 @@ server {
         try_files $uri =404;
     }
 
+    # Build identity (S32): {"build_sha", "content_hash"} written into the
+    # image at build time (apps/web/Dockerfile) — which commit and which
+    # apps/web content this web container is serving. Gated like everything
+    # else (not a carve-out). no-cache: a redeploy changes it under the same
+    # URL. `try_files $uri =404`, never the SPA fallback: a missing file must
+    # not answer 200 with index.html, a body no reader would take for "no
+    # identity".
+    location = /build.json {
+        include /etc/nginx/gate/gate_check.conf;
+        default_type application/json;
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
+    }
+
     # index.html must NOT be cached: a phone holding yesterday's shell while
     # /assets serves today's chunks is the classic "the feature isn't there".
     location / {

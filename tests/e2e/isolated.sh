@@ -64,7 +64,12 @@ SERVICES=(postgres core gateway memory web ollama)
 # never leaves this file — a fresh 32 hex characters per machine is strictly
 # safer than anything a human would type twice.
 ensure_env() {
-  [ -f "$ENV_FILE" ] && return 0
+  # The compose file roots its binds at NOVA_CHECKOUT (S32.1): this checkout,
+  # added to a file generated before that existed, once.
+  if [ -f "$ENV_FILE" ]; then
+    grep -q '^NOVA_CHECKOUT=' "$ENV_FILE" || echo "NOVA_CHECKOUT=$REPO_ROOT" >> "$ENV_FILE"
+    return 0
+  fi
   mkdir -p "$(dirname "$ENV_FILE")"
   umask 077
   {
@@ -78,6 +83,7 @@ ensure_env() {
     echo "NOVA_E2E_UID=$(id -u)"
     echo "NOVA_E2E_GID=$(id -g)"
     echo "NOVA_E2E_DOCKER_GID=$(getent group docker | cut -d: -f3)"
+    echo "NOVA_CHECKOUT=$REPO_ROOT"
   } > "$ENV_FILE"
   echo "generated $ENV_FILE"
 }
@@ -97,7 +103,13 @@ compose_run() {
     esac
     shift
   done
-  "${COMPOSE[@]}" "${extra[@]}" --env-file "$ENV_FILE" --profile inference "$@"
+  # The shell beats --env-file in compose, so a shell that exported the
+  # hub's NOVA_HASH_* would tag this stack's images as the hub's (and a
+  # later hub deploy would trust them): dropped here, so they read
+  # h-unhashed. NOVA_CHECKOUT is this checkout's, whatever the shell says.
+  env -u NOVA_HASH_CORE -u NOVA_HASH_GATEWAY -u NOVA_HASH_MEMORY -u NOVA_HASH_WEB \
+    NOVA_CHECKOUT="$REPO_ROOT" \
+    "${COMPOSE[@]}" "${extra[@]}" --env-file "$ENV_FILE" --profile inference "$@"
 }
 
 case "${1:-}" in

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Nova v4 installer. Idempotent: safe to re-run.
-# ./install.sh          preflight -> hardware detect -> secrets -> compose
-#                        up -d --build -> wait for health -> status table
+# ./install.sh          preflight -> hardware detect -> secrets -> build the
+#                        images whose source changed -> compose up -d ->
+#                        wait for health -> status table
 #                        -> ollama's own word on the GPU -> this machine's
 #                        own agent (built, checked, paired by environment)
 # ./install.sh update   pull the newest commit on the branch and reinstall
@@ -30,6 +31,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# The compose file roots every host bind at ${NOVA_CHECKOUT:?} (S32.1). Exported
+# so every compose call this script makes renders — including the ones before
+# record_build writes it to .env on a first install — and from THIS checkout,
+# never a stale value the caller's shell carried (the shell beats .env).
+export NOVA_CHECKOUT="$REPO_ROOT"
 DEPLOY_DIR="$SCRIPT_DIR"
 ENV_FILE="$DEPLOY_DIR/.env"
 ENV_EXAMPLE="$DEPLOY_DIR/.env.example"
@@ -2254,7 +2260,7 @@ record_repo_host() {
 #
 # NOVA_INSTALLED_AT moves only when the stamp itself does: a re-run on the same
 # commit changes nothing in .env, so compose has no new config to recreate
-# core for. Not a checkout: every key blanked and one line saying so — a stamp
+# core for. Not a checkout: every key but NOVA_CHECKOUT blanked and one line saying so — a stamp
 # left over from an earlier install would name a build that is not this one.
 BUILD_KEYS="NOVA_COMMIT NOVA_VERSION NOVA_COMMIT_DATE NOVA_DIRTY NOVA_INSTALLED_AT NOVA_CHECKOUT"
 
@@ -2264,8 +2270,12 @@ record_build() {
     || ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
     log "build: $REPO_ROOT has no git commit to read — no build stamp; the About page says the build is unknown"
     for key in $BUILD_KEYS; do
+      [ "$key" != NOVA_CHECKOUT ] || continue
       [ -z "$(get_env_value "$key")" ] || set_env_value "$key" ""
     done
+    # The path is a fact without git: the absolute binds in the compose file
+    # are built from it, so it is written whether or not there is a commit.
+    [ "$(get_env_value NOVA_CHECKOUT)" = "$REPO_ROOT" ] || set_env_value NOVA_CHECKOUT "$REPO_ROOT"
     return 0
   fi
   version="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null)" || version=""
@@ -2287,6 +2297,106 @@ record_build() {
     log "build: ${commit:0:12} (${version:-no describe}) plus uncommitted changes — the About page says so"
   else
     log "build: ${commit:0:12} (${version:-no describe})"
+  fi
+}
+
+# ---- each service's content hash: what its build context holds -------------
+#
+# The image tag (nova-<svc>:h-<hash>) and the nova.content-hash label carry
+# this: the git tree hash of every file `docker build` would copy for that
+# service — tracked plus untracked-not-ignored, AS THEY ARE IN THE WORKING
+# TREE. Not `git rev-parse HEAD:<dir>`: that ignores uncommitted edits, and a
+# dirty deploy would reuse the old tag with stale code. The working tree goes
+# through a temp GIT_INDEX_FILE (a copy of the real index, so tracked files a
+# .gitignore matches still count); the real index is never written.
+
+# The source paths each service's image is built from, relative to the
+# checkout. The slot for shared files a Dockerfile copies from outside its own
+# directory is empty today: every Dockerfile copies only its own context.
+service_source_paths() {
+  case "$1" in
+    core|gateway|memory) printf '%s\n' "services/$1" ;;
+    web) printf '%s\n' "apps/web" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prints the hash (40 or 64 hex) for service $1. One path: its subtree, so a
+# clean tree prints exactly HEAD:<path>. Several: a tree holding exactly those
+# subtrees at their real places. Exit 1 with nothing on stdout when it cannot
+# be computed (not a checkout, unknown service, any git step failing) — never
+# a value made up to fill the slot.
+service_content_hash() {
+  local paths p real_index work out=""
+  paths="$(service_source_paths "$1")" || return 1
+  git -C "$REPO_ROOT" rev-parse --show-toplevel >/dev/null 2>&1 || return 1
+  real_index="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-path index 2>/dev/null)" \
+    || return 1
+  work="$(mktemp -d 2>/dev/null)" || return 1
+  if _service_tree "$work" "$real_index" $paths; then
+    out="$(cat "$work/out")"
+  fi
+  rm -rf "$work"
+  printf '%s' "$out" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' || return 1
+  printf '%s\n' "$out"
+}
+
+# $1 work dir  $2 real index  $3.. source paths. Writes the hash to $1/out.
+_service_tree() {
+  local work="$1" real_index="$2" p sub
+  shift 2
+  if [ -f "$real_index" ]; then
+    cp "$real_index" "$work/index" || return 1
+  else
+    GIT_INDEX_FILE="$work/index" git -C "$REPO_ROOT" read-tree --empty >/dev/null 2>&1 || return 1
+  fi
+  GIT_INDEX_FILE="$work/index" git -C "$REPO_ROOT" add -A -- "$@" >/dev/null 2>&1 || return 1
+  if [ "$#" -eq 1 ]; then
+    GIT_INDEX_FILE="$work/index" git -C "$REPO_ROOT" write-tree --prefix="$1/" \
+      > "$work/out" 2>/dev/null
+    return
+  fi
+  GIT_INDEX_FILE="$work/only" git -C "$REPO_ROOT" read-tree --empty >/dev/null 2>&1 || return 1
+  for p in "$@"; do
+    sub="$(GIT_INDEX_FILE="$work/index" git -C "$REPO_ROOT" write-tree --prefix="$p/" 2>/dev/null)" \
+      || return 1
+    GIT_INDEX_FILE="$work/only" git -C "$REPO_ROOT" read-tree --prefix="$p/" "$sub" >/dev/null 2>&1 \
+      || return 1
+  done
+  GIT_INDEX_FILE="$work/only" git -C "$REPO_ROOT" write-tree > "$work/out" 2>/dev/null
+}
+
+# ---- each service's content hash, recorded for compose ---------------------
+#
+# NOVA_HASH_<SVC> in .env is what compose tags the service's image with
+# (nova-<svc>:h-<hash>) and bakes into it as a build arg. Derived from the
+# files on every run (service_content_hash), never typed in. An unchanged
+# hash writes nothing, so .env stays byte-identical and compose has no new
+# config. A hash that cannot be computed is written BLANK with one line
+# naming the service — never a value made up to fill the slot (a blank hash
+# means that service is always rebuilt).
+SERVICE_BUILDS="core gateway memory web"
+
+record_service_builds() {
+  local svc key have want changed=""
+  for svc in $SERVICE_BUILDS; do
+    key="NOVA_HASH_$(printf '%s' "$svc" | tr '[:lower:]' '[:upper:]')"
+    have="$(get_env_value "$key")"
+    if ! want="$(service_content_hash "$svc")"; then
+      want=""
+      log "build: could not compute $svc's content hash ($REPO_ROOT is not a git checkout, or git failed) — $key left blank, so $svc is rebuilt every time"
+      grep -q "^${key}=" "$ENV_FILE" 2>/dev/null && [ -z "$have" ] && continue
+      set_env_value "$key" ""
+      continue
+    fi
+    [ "$have" = "$want" ] && continue
+    set_env_value "$key" "$want"
+    changed="$changed $svc (${have:0:12}${have:+ -> }${want:0:12})"
+  done
+  if [ -n "$changed" ]; then
+    log "build: source changed:$changed"
+  else
+    log "build: every service's source unchanged since the last install"
   fi
 }
 
@@ -2368,11 +2478,78 @@ verify_tailscale_scripts() {
   die "the tailscale sidecar was created from scripts ${have:-(unknown: no running container, or no $TAILSCALE_SCRIPTS_LABEL label)}, but $TAILSCALE_DIR holds ${want} — it is not running this checkout's start.sh. Recreate it: docker compose --project-directory $DEPLOY_DIR up -d --force-recreate tailscale"
 }
 
+# ---- the running images, checked against this checkout -------------------
+#
+# compose_up runs nova-<svc>:h-<hash> from .env, and that tag is a name, not
+# a proof: a hand-run compose with other NOVA_HASH_* values, or a caller's
+# exported one, can leave a container on an image built from other source.
+# The image carries the hash it was built from as a label (the build arg),
+# so after `up` each running container's label is compared with the hash
+# recomputed from the files here — not read back from .env — and ./install
+# refuses "Nova is up" when they differ.
+SERVICE_HASH_LABEL="nova.content-hash"
+
+# THE SEAM. The content-hash label on service $1's running container; exit 1
+# when there is no container to read it from.
+running_service_label() {
+  local cid
+  cid="$(docker compose "${COMPOSE_ARGS[@]}" ps -q "$1" 2>/dev/null)" || return 1
+  [ -n "$cid" ] || return 1
+  docker inspect --format "{{index .Config.Labels \"$SERVICE_HASH_LABEL\"}}" "$cid" 2>/dev/null
+}
+
+verify_service_builds() {
+  local svc want have bad="" ok=""
+  for svc in $SERVICE_BUILDS; do
+    if ! want="$(service_content_hash "$svc")"; then
+      log "build: $svc's content hash could not be computed ($REPO_ROOT is not a git checkout, or git failed) — the running $svc is NOT checked against this checkout"
+      continue
+    fi
+    have="$(running_service_label "$svc")" || have=""
+    have="$(printf '%s' "$have" | tr -d '[:space:]')"
+    if [ -n "$have" ] && [ "$have" = "$want" ]; then
+      ok="$ok $svc"
+      continue
+    fi
+    bad="$bad
+  $svc is not running this checkout's source: its container's $SERVICE_HASH_LABEL is ${have:-(unknown: no running container, or no $SERVICE_HASH_LABEL label)}, but $(service_source_paths "$svc" | tr '\n' ' ')hashes to $want. Rebuild and recreate it: docker compose --project-directory $DEPLOY_DIR build $svc && docker compose --project-directory $DEPLOY_DIR up -d --force-recreate $svc"
+  done
+  [ -z "$bad" ] || die "a running image is not this checkout's source:$bad"
+  [ -z "$ok" ] || log "build:$ok run this checkout's source"
+}
+
 # ---- bring-up + status ----------------------------------------------------
 
+# THE SEAM. Exit 0 when the image $1 (name:tag) is in the local store.
+image_present() { docker image inspect "$1" >/dev/null 2>&1; }
+
+# Build only what is missing, then start without --build. Each of
+# SERVICE_BUILDS runs nova-<svc>:h-<NOVA_HASH_<SVC>> (the tag compose renders
+# from .env); a present tag holds exactly that source, so it is not rebuilt,
+# compose sees the same image, and the container is left running. A blank
+# hash renders h-unhashed, which proves nothing, so that service is always
+# built. browser has no content tag and is always built: a cached build keeps
+# its image ID, so compose does not recreate it. `up --build` would rebuild
+# every image and stamp a new build SHA into the unchanged ones.
 compose_up() {
-  log "starting services (docker compose ${COMPOSE_ARGS[*]} up -d --build)…"
-  docker compose "${COMPOSE_ARGS[@]}" up -d --build
+  local svc key hash build="" unchanged=""
+  for svc in $SERVICE_BUILDS; do
+    key="NOVA_HASH_$(printf '%s' "$svc" | tr '[:lower:]' '[:upper:]')"
+    hash="$(get_env_value "$key")"
+    if [ -n "$hash" ] && image_present "nova-$svc:h-$hash"; then
+      unchanged="$unchanged $svc"
+    else
+      build="$build $svc"
+    fi
+  done
+  build="$build browser"
+  [ -z "$unchanged" ] || log "unchanged, not rebuilt:$unchanged"
+  log "building:$build (docker compose ${COMPOSE_ARGS[*]} build)…"
+  # shellcheck disable=SC2086 # the list is service names, split on purpose
+  docker compose "${COMPOSE_ARGS[@]}" build $build \
+    || die "the image build failed for:$build — nothing was started; the running services are as they were"
+  log "starting services (docker compose ${COMPOSE_ARGS[*]} up -d)…"
+  docker compose "${COMPOSE_ARGS[@]}" up -d
 }
 
 container_health() {
@@ -2461,11 +2638,17 @@ cmd_install() {
   # Before compose_up, for the same reason: the core this run creates is the
   # one whose About page names this commit.
   record_build
+  # After record_build, before compose_up: the hashes it writes are the image
+  # tags compose builds and runs this time.
+  record_service_builds
   # Before compose_up: the hash it writes is what makes compose recreate the
   # sidecar when, and only when, one of its scripts changed.
   record_tailscale_scripts
   compose_up
   verify_tailscale_scripts
+  # After `up`: every running core/gateway/memory/web must be this
+  # checkout's source, read off its image label, before "Nova is up".
+  verify_service_builds
   wait_for_health || true
   print_status
   local unhealthy

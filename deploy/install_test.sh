@@ -1193,7 +1193,16 @@ run_install() {
     ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
     # shellcheck disable=SC2034
     INFERENCE_COMPUTE_TIMEOUT=0
-    NVIDIA="$1"; FAKE_LOG="$2"; HUB_AGENT="${3:-ok}"
+    NVIDIA="$1"; FAKE_LOG="$2"; HUB_AGENT="${3:-ok}"; LABELS="${4:-ok}"
+    # The running images' content labels (verify_service_builds has its own
+    # cases, run_vsb): ok = each is this checkout's hash; stale = core's is not.
+    running_service_label() {
+      if [ "$LABELS" = stale ] && [ "$1" = core ]; then
+        printf '%s\n' 0000000000000000000000000000000000000000
+      else
+        service_content_hash "$1"
+      fi
+    }
     install_hub_agent() {
       log "HUB AGENT REACHED"
       [ "$HUB_AGENT" = ok ] || die "the hub's agent was not installed (stub) — the stack is up"
@@ -1203,7 +1212,9 @@ run_install() {
         info)
           if [ "$NVIDIA" = 1 ]; then printf 'Runtimes: nvidia runc\n'; else printf 'Runtimes: runc\n'; fi ;;
         "compose version") ;;
-        *" up -d --build") ;;
+        "image inspect "*) return 1 ;;
+        *" build "*) ;;
+        *" up -d") ;;
         *" ps -q "*) printf 'cid\n' ;;
         "inspect "*) printf 'healthy\n' ;;
         *" logs --no-log-prefix ollama") printf '%b' "$FAKE_LOG" ;;
@@ -1251,6 +1262,15 @@ expect_tn "install, hub agent fails: ./install fails" "$INST_HUBFAIL" 1 3 "the h
 expect_tn_lacks "install, hub agent fails: never says Nova is up" "$INST_HUBFAIL" 3 "Nova is up"
 expect_tn_lacks "install, hub agent fails: nothing is taken down (no other docker call)" "$INST_HUBFAIL" 3 \
   "unexpected docker call"
+
+# A running image that is not this checkout's source fails the install
+# before the hub agent and before "Nova is up".
+INST_STALE="$(run_install 0 "$DECOY_LINE\n$CPU_LINE\n" ok stale)"
+expect_tn "install, a stale running image: ./install fails naming it" "$INST_STALE" 1 3 \
+  "core is not running this checkout's source"
+expect_tn_lacks "install, a stale running image: never says Nova is up" "$INST_STALE" 3 "Nova is up"
+expect_tn_lacks "install, a stale running image: the hub's agent is never reached" "$INST_STALE" 3 \
+  "HUB AGENT REACHED"
 
 INST_CPU="$(run_install 1 "$DECOY_LINE\n$CPU_LINE\n")"
 expect_tn "install, gpu + cpu: refuses after a green table" "$INST_CPU" 1 3 "came up WITHOUT the GPU"
@@ -1473,7 +1493,9 @@ run_moved() {
       case "$*" in
         info) printf 'Runtimes: runc\n' ;;
         "compose version") ;;
-        *" up -d --build") ;;
+        "image inspect "*) return 1 ;;
+        *" build "*) ;;
+        *" up -d") ;;
         *" ps -q "*) printf 'cid\n' ;;
         "inspect "*) printf 'healthy\n' ;;
         *" logs --no-log-prefix ollama") printf 'inference compute id=0 library=cpu\n' ;;
@@ -1488,6 +1510,8 @@ run_moved() {
     # The hub machine's own agent has its own cases (run_hub_agent); here it
     # must not reach out — its real seams would build and fetch.
     install_hub_agent() { :; }
+    # verify_service_builds has its own cases (run_vsb).
+    running_service_label() { service_content_hash "$1"; }
     unset NOVA_TAILNET NOVA_SKIP_INFERENCE
     out="$(cmd_install 2>&1)"; code=$?
     printf '%s|%s|%s' "$code" "$(grep -c . "$tmp/docker-calls" 2>/dev/null)" \
@@ -2119,11 +2143,16 @@ run_ts_install() {
     TAILSCALE_DIR="$W/tailscale"
     install_hub_agent() { log "HUB AGENT REACHED"; }
     tailnet_dns_name() { printf 'nova.example.ts.net'; }
+    # verify_service_builds has its own cases (run_vsb); here every running
+    # image is this checkout's source.
+    running_service_label() { service_content_hash "$1"; }
     docker() {
       case "$*" in
         info) printf 'Runtimes: runc\n' ;;
         "compose version") ;;
-        *" up -d --build")
+        "image inspect "*) return 1 ;;
+        *" build "*) ;;
+        *" up -d")
           local wanted
           wanted="$(get_env_value NOVA_TAILSCALE_SCRIPTS)"
           if [ "$COMPOSE" = honest ] && [ "$wanted" != "$(cat "$W/label" 2>/dev/null)" ]; then
@@ -2477,7 +2506,7 @@ fi
 # A real throwaway repo per case, real git, real set_env_value; only REPO_ROOT
 # and ENV_FILE are pointed at a temp dir.
 #   $1 "commit" | "dirty" | "none"   $2 initial .env body
-# Prints "<exit>|<.env with ;>|<stderr>|<HEAD or ->".
+# Prints "<exit>|<.env with ;>|<stderr>|<HEAD or ->|<REPO_ROOT>".
 run_build() {
   (
     # shellcheck source=/dev/null
@@ -2501,8 +2530,8 @@ run_build() {
     fi
     if [ "$1" = dirty ]; then printf 'b\n' > "$REPO_ROOT/f"; fi
     err="$( ( set -e; record_build ) 2>&1 )"; code=$?
-    printf '%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
-      "$(printf '%s' "$err" | tr '\n' ' ')" "$head"
+    printf '%s|%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$head" "$REPO_ROOT"
   )
 }
 RB_CLEAN="$(run_build commit 'A=1\n')"
@@ -2520,6 +2549,9 @@ expect_tn "build: and it says so out loud" "$RB_DIRTY" 0 3 "uncommitted changes"
 RB_NONE="$(run_build none 'NOVA_COMMIT=0123456789abcdef0123456789abcdef01234567\nNOVA_DIRTY=0\n')"
 expect_tn "build: no commit blanks a stale stamp" "$RB_NONE" 0 2 "NOVA_COMMIT=;"
 expect_tn "build: no commit says so" "$RB_NONE" 0 3 "no build stamp"
+# The binds (T3) need the checkout's path whether or not git has a commit.
+expect_tn "build: no commit still records NOVA_CHECKOUT" "$RB_NONE" 0 2 \
+  "NOVA_CHECKOUT=$(tn_field "$RB_NONE" 5);"
 # A re-run on the same commit writes nothing, so compose has no new config to
 # recreate core for: the first stamp's time stands.
 RB_SAME="$(run_build commit 'NOVA_INSTALLED_AT=2026-01-01T00:00:00Z\n')"
@@ -2567,6 +2599,472 @@ if [ -z "$RB_MISSING" ]; then
   report 0 "build: every key is passed to core and declared in .env.example"
 else
   report 1 "build: every key is passed to core and declared in .env.example" "missing:$RB_MISSING"
+fi
+
+# ── service_content_hash: what each service's build context holds ───────────
+# A real throwaway repo per case, real git. The hash is of the WORKING TREE
+# (what `docker build` would copy), not HEAD: a dirty deploy must get a new
+# tag. "want" is what that tree would hash to if committed, computed in a copy
+# so the repo under test is never committed to. Prints
+#   "<exit>|<stdout>|<want>|<status same?>|<index same?>|<TMPDIR left>"
+#   $1 scenario  $2 service  $3 extra shell run after sourcing (stubs)
+run_sch() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g() { git -c user.name=t -c user.email=t@t "$@"; }
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    fmt=sha1
+    [ "$1" = sha256 ] && fmt=sha256
+    if [ "$1" = notrepo ]; then
+      mkdir -p "$REPO_ROOT/services/core"
+      printf 'x\n' > "$REPO_ROOT/services/core/a.py"
+    else
+      git init -q --object-format="$fmt" "$REPO_ROOT"
+      mkdir -p "$REPO_ROOT/services/core/app" "$REPO_ROOT/services/gateway" "$REPO_ROOT/apps/web/src"
+      printf '*.log\n' > "$REPO_ROOT/.gitignore"
+      printf 'core\n' > "$REPO_ROOT/services/core/app/main.py"
+      printf 'gw\n' > "$REPO_ROOT/services/gateway/main.py"
+      printf 'web\n' > "$REPO_ROOT/apps/web/src/main.ts"
+      g -C "$REPO_ROOT" add -A
+      g -C "$REPO_ROOT" commit -q -m init
+    fi
+    case "$2" in web) dir=apps/web ;; *) dir="services/$2" ;; esac
+    want="$(git -C "$REPO_ROOT" rev-parse "HEAD:$dir" 2>/dev/null)" || want="-"
+    case "$1" in
+      edit) printf 'core2\n' >> "$REPO_ROOT/services/core/app/main.py" ;;
+      untracked) mkdir -p "$REPO_ROOT/services/core/new"
+                 printf 'n\n' > "$REPO_ROOT/services/core/new/x.py" ;;
+      ignored) printf 'noise\n' > "$REPO_ROOT/services/core/app/debug.log" ;;
+      other) printf 'gw2\n' >> "$REPO_ROOT/services/gateway/main.py"
+             printf 'u\n' > "$REPO_ROOT/apps/web/src/new.ts" ;;
+      multi) printf 'core2\n' >> "$REPO_ROOT/services/core/app/main.py"
+             printf 'u\n' > "$REPO_ROOT/apps/web/src/new.ts"
+             printf 'gw2\n' >> "$REPO_ROOT/services/gateway/main.py" ;;
+    esac
+    case "$1" in
+      edit|untracked)
+        cp -R "$REPO_ROOT" "$tmp/copy"
+        g -C "$tmp/copy" add -A
+        g -C "$tmp/copy" commit -q -m wt
+        want="$(git -C "$tmp/copy" rev-parse "HEAD:$dir")" ;;
+      multi)
+        # Two source paths: the tree of exactly those, at their real places.
+        cp -R "$REPO_ROOT" "$tmp/copy"
+        rm -rf "$tmp/copy/services/gateway" "$tmp/copy/.gitignore"
+        g -C "$tmp/copy" add -A
+        g -C "$tmp/copy" commit -q -m wt
+        want="$(git -C "$tmp/copy" rev-parse "HEAD^{tree}")" ;;
+    esac
+    idx="$(git -C "$REPO_ROOT" rev-parse --git-path index 2>/dev/null)"
+    case "$idx" in /*) ;; *) idx="$REPO_ROOT/$idx" ;; esac
+    st_before="$(git -C "$REPO_ROOT" status --porcelain --ignored -uall 2>/dev/null)"
+    ix_before="$(cksum < "$idx" 2>/dev/null)"
+    mkdir -p "$tmp/t"
+    eval "${3:-:}"
+    out="$(TMPDIR="$tmp/t" service_content_hash "$2" 2>/dev/null)"; code=$?
+    ix_after="$(cksum < "$idx" 2>/dev/null)"
+    st_after="$(git -C "$REPO_ROOT" status --porcelain --ignored -uall 2>/dev/null)"
+    st_same=no; [ "$st_before" = "$st_after" ] && st_same=yes
+    ix_same=no; [ "$ix_before" = "$ix_after" ] && ix_same=yes
+    printf '%s|%s|%s|%s|%s|%s' "$code" "$(printf '%s' "$out" | tr '\n' ';')" "$want" \
+      "$st_same" "$ix_same" "$(ls -A "$tmp/t")"
+  )
+}
+# $1 name  $2 result: exit 0, stdout one 40/64-hex line equal to want.
+expect_sch_want() {
+  local code out want
+  code="$(tn_field "$2" 1)"; out="$(tn_field "$2" 2)"; want="$(tn_field "$2" 3)"
+  if [ "$code" = 0 ] && [ "$out" = "$want" ] \
+     && printf '%s' "$out" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$'; then
+    report 0 "$1"
+  else
+    report 1 "$1" "exit $code, stdout '$out', wanted '$want'"
+  fi
+}
+expect_sch_refused() {
+  if [ "$(tn_field "$2" 1)" = 1 ] && [ -z "$(tn_field "$2" 2)" ]; then
+    report 0 "$1"
+  else
+    report 1 "$1" "wanted exit 1 and no stdout — got $2"
+  fi
+}
+SCH_CLEAN="$(run_sch clean core)"
+expect_sch_want "content hash: clean tree is HEAD:services/core" "$SCH_CLEAN"
+expect_sch_want "content hash: web is HEAD:apps/web" "$(run_sch clean web)"
+expect_sch_want "content hash: gateway is HEAD:services/gateway" "$(run_sch clean gateway)"
+SCH_256="$(run_sch sha256 core)"
+expect_sch_want "content hash: a sha256 repo gives the 64-hex HEAD:services/core" "$SCH_256"
+expect_str "content hash: (and it is 64 hex)" "$(tn_field "$SCH_256" 2 | tr -d ';\n' | wc -c | tr -d ' ')" "64"
+SCH_EDIT="$(run_sch edit core)"
+expect_sch_want "content hash: an edited tracked file hashes as the working tree" "$SCH_EDIT"
+if [ "$(tn_field "$SCH_EDIT" 2)" != "$(tn_field "$SCH_CLEAN" 2)" ]; then
+  report 0 "content hash: (and differs from the clean value)"
+else
+  report 1 "content hash: (and differs from the clean value)" "both $(tn_field "$SCH_EDIT" 2)"
+fi
+SCH_UNTR="$(run_sch untracked core)"
+expect_sch_want "content hash: an untracked file in a new subdir counts" "$SCH_UNTR"
+if [ "$(tn_field "$SCH_UNTR" 2)" != "$(tn_field "$SCH_CLEAN" 2)" ]; then
+  report 0 "content hash: (and differs from the clean value)"
+else
+  report 1 "content hash: (and differs from the clean value)" "both $(tn_field "$SCH_UNTR" 2)"
+fi
+expect_sch_want "content hash: an ignored file does not count" "$(run_sch ignored core)"
+expect_sch_want "content hash: another service's edits do not count" "$(run_sch other core)"
+SCH_ST=same
+for SCH_R in "$SCH_EDIT" "$SCH_UNTR" "$(run_sch ignored core)" "$(run_sch other core)"; do
+  # The call must have hashed (a no-op that never touched git proves nothing).
+  [ "$(tn_field "$SCH_R" 1)" = 0 ] && [ -n "$(tn_field "$SCH_R" 2)" ] || SCH_ST="no hash"
+  [ "$(tn_field "$SCH_R" 4)" = yes ] || SCH_ST=changed
+done
+expect_str "content hash: real git status byte-identical after (dirty trees)" "$SCH_ST" "same"
+SCH_IX=same
+for SCH_R in "$SCH_EDIT" "$SCH_UNTR"; do
+  [ "$(tn_field "$SCH_R" 1)" = 0 ] && [ -n "$(tn_field "$SCH_R" 2)" ] || SCH_IX="no hash"
+  [ "$(tn_field "$SCH_R" 5)" = yes ] || SCH_IX=changed
+done
+expect_str "content hash: the real index file is byte-identical after" "$SCH_IX" "same"
+SCH_LEFT="$(tn_field "$SCH_EDIT" 6)$(tn_field "$SCH_UNTR" 6)$(tn_field "$SCH_CLEAN" 6)"
+[ -n "$(tn_field "$SCH_EDIT" 2)" ] || SCH_LEFT="no hash was made"
+SCH_FAILW="$(run_sch edit core 'git() { case " $* " in *" write-tree "*) return 1 ;; esac; command git "$@"; }')"
+expect_str "content hash: no temp file left behind (also when git fails)" \
+  "$SCH_LEFT$(tn_field "$SCH_FAILW" 6)" ""
+# The "shared files" slot (empty today): a service built from two paths gets
+# a real tree hash of exactly those two, working-tree content, nothing else.
+expect_sch_want "content hash: two source paths -> the tree of exactly those" \
+  "$(run_sch multi core 'service_source_paths() { printf "%s\n" services/core apps/web; }')"
+expect_sch_refused "content hash: not a checkout -> exit 1, nothing printed" "$(run_sch notrepo core)"
+expect_sch_refused "content hash: an unknown service -> exit 1, nothing printed" "$(run_sch clean nosuch)"
+expect_sch_refused "content hash: git write-tree failing -> exit 1, nothing printed" "$SCH_FAILW"
+
+# ── record_service_builds: each service's content hash into .env ────────────
+# A real throwaway repo, real git, real service_content_hash and set_env_value;
+# only REPO_ROOT and ENV_FILE point at a temp dir.
+#   $1 "clean" | "rerun" | "change" | "notrepo"   $2 initial .env body
+# Prints "<exit>|<.env with ;>|<stderr>|<core>|<gateway>|<memory>|<web>|<rerun same?>"
+# where the hashes are HEAD:<dir> after the scenario's commits ("-" if none).
+run_rsb() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g() { git -c user.name=t -c user.email=t@t "$@"; }
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${2:-}" > "$ENV_FILE"
+    mkdir -p "$REPO_ROOT/services/core" "$REPO_ROOT/services/gateway" \
+      "$REPO_ROOT/services/memory" "$REPO_ROOT/apps/web"
+    for d in services/core services/gateway services/memory apps/web; do
+      printf '%s\n' "$d" > "$REPO_ROOT/$d/main"
+    done
+    if [ "$1" != notrepo ]; then
+      git init -q "$REPO_ROOT"
+      g -C "$REPO_ROOT" add -A
+      g -C "$REPO_ROOT" commit -q -m init
+    fi
+    same=-
+    case "$1" in
+      rerun)
+        record_service_builds 2>/dev/null
+        before="$(cat "$ENV_FILE")"
+        ;;
+      change)
+        record_service_builds 2>/dev/null
+        printf 'more\n' >> "$REPO_ROOT/services/core/main"
+        g -C "$REPO_ROOT" commit -q -am core
+        ;;
+    esac
+    err="$( ( set -e; record_service_builds ) 2>&1 )"; code=$?
+    if [ "$1" = rerun ]; then
+      same=changed; [ "$(cat "$ENV_FILE")" = "$before" ] && same=same
+    fi
+    hs=""
+    for d in services/core services/gateway services/memory apps/web; do
+      h="$(git -C "$REPO_ROOT" rev-parse "HEAD:$d" 2>/dev/null)" || h="-"
+      hs="$hs|$h"
+    done
+    printf '%s|%s|%s%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$hs" "$same"
+  )
+}
+RSB_CLEAN="$(run_rsb clean 'A=1\n')"
+expect_tn "service builds: NOVA_HASH_CORE is core's tree hash" "$RSB_CLEAN" 0 2 \
+  "NOVA_HASH_CORE=$(tn_field "$RSB_CLEAN" 4);"
+expect_tn "service builds: NOVA_HASH_GATEWAY is gateway's" "$RSB_CLEAN" 0 2 \
+  "NOVA_HASH_GATEWAY=$(tn_field "$RSB_CLEAN" 5);"
+expect_tn "service builds: NOVA_HASH_MEMORY is memory's" "$RSB_CLEAN" 0 2 \
+  "NOVA_HASH_MEMORY=$(tn_field "$RSB_CLEAN" 6);"
+expect_tn "service builds: NOVA_HASH_WEB is web's" "$RSB_CLEAN" 0 2 \
+  "NOVA_HASH_WEB=$(tn_field "$RSB_CLEAN" 7);"
+expect_tn "service builds: other keys untouched" "$RSB_CLEAN" 0 2 "A=1;"
+if [ "$(tn_field "$RSB_CLEAN" 4)" != "$(tn_field "$RSB_CLEAN" 5)" ] \
+   && printf '%s' "$(tn_field "$RSB_CLEAN" 4)" | grep -Eq '^[0-9a-f]{40}$'; then
+  report 0 "service builds: (the four hashes are real and distinct)"
+else
+  report 1 "service builds: (the four hashes are real and distinct)" "$RSB_CLEAN"
+fi
+RSB_RERUN="$(run_rsb rerun '')"
+expect_tn "service builds: a re-run with nothing changed leaves .env byte-identical" \
+  "$RSB_RERUN" 0 8 "same"
+expect_tn "service builds: (and says nothing changed)" "$RSB_RERUN" 0 3 "unchanged"
+expect_tn "service builds: (the re-run did hash: keys present)" "$RSB_RERUN" 0 2 \
+  "NOVA_HASH_CORE=$(tn_field "$RSB_RERUN" 4);"
+RSB_CHANGE="$(run_rsb change '')"
+expect_tn "service builds: a core-only commit moves NOVA_HASH_CORE" "$RSB_CHANGE" 0 2 \
+  "NOVA_HASH_CORE=$(tn_field "$RSB_CHANGE" 4);"
+expect_tn "service builds: (gateway's key unchanged)" "$RSB_CHANGE" 0 2 \
+  "NOVA_HASH_GATEWAY=$(tn_field "$RSB_CHANGE" 5);"
+RSB_CORE_NEW="$(tn_field "$RSB_CHANGE" 4)"
+expect_tn "service builds: logs the change as core (old12 -> new12)" "$RSB_CHANGE" 0 3 \
+  " -> ${RSB_CORE_NEW:0:12})"
+expect_tn "service builds: (names core)" "$RSB_CHANGE" 0 3 "core ("
+expect_tn_lacks "service builds: (does not name gateway as changed)" "$RSB_CHANGE" 3 "gateway ("
+expect_tn_lacks "service builds: (does not name web as changed)" "$RSB_CHANGE" 3 "web ("
+RSB_NONE="$(run_rsb notrepo 'NOVA_HASH_CORE=0123456789abcdef0123456789abcdef01234567\nB=2\n')"
+expect_tn "service builds: no checkout clears a stale hash (blank, not made up)" "$RSB_NONE" 0 2 \
+  "NOVA_HASH_CORE=;"
+expect_tn "service builds: no checkout writes an absent key blank" "$RSB_NONE" 0 2 "NOVA_HASH_WEB=;"
+expect_tn "service builds: (other keys untouched)" "$RSB_NONE" 0 2 "B=2;"
+for RSB_SVC in core gateway memory web; do
+  expect_tn "service builds: no checkout logs a line naming $RSB_SVC" "$RSB_NONE" 0 3 \
+    "could not compute $RSB_SVC's content hash"
+done
+expect_tn_lacks "service builds: (the stale value is gone)" "$RSB_NONE" 2 "0123456789abcdef"
+RSB_NONE2="$(run_rsb notrepo 'NOVA_HASH_CORE=\nNOVA_HASH_GATEWAY=\nNOVA_HASH_MEMORY=\nNOVA_HASH_WEB=\n')"
+expect_str "service builds: no checkout, already blank: .env as it was (each key once)" \
+  "$(tn_field "$RSB_NONE2" 1)|$(tn_field "$RSB_NONE2" 2)" \
+  "0|NOVA_HASH_CORE=;NOVA_HASH_GATEWAY=;NOVA_HASH_MEMORY=;NOVA_HASH_WEB=;"
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  record_build$/{b=NR} f&&/^  record_service_builds$/{s=NR} f&&/^  compose_up$/{u=NR}
+        END{exit !(b && s && u && b < s && s < u)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "service builds: cmd_install records them after record_build, before compose_up"
+else
+  report 1 "service builds: cmd_install records them after record_build, before compose_up" \
+    "order or call missing"
+fi
+
+# ── compose_up: build only what is missing, then start without --build ──────
+# install.sh sourced for real; only `docker` is stubbed: it records every call
+# and answers `image inspect <ref>` 0 for the refs in $2, so the real
+# image_present seam runs. compose recreates a service only when its image or
+# config changed, so an unchanged tag must never be rebuilt.
+#   $1 .env body   $2 present image refs (space-separated)   $3 build rc
+# Prints "<exit>|<docker calls, ; separated>|<stderr>"
+run_cup() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "$1" > "$ENV_FILE"
+    : > "$tmp/calls"
+    # shellcheck disable=SC2034
+    COMPOSE_ARGS=(-f /x/compose.yml --profile tailnet)
+    CUP_PRESENT=" ${2:-} "
+    CUP_BUILD_RC="${3:-0}"
+    docker() {
+      local last a
+      printf '%s\n' "$*" >> "$tmp/calls"
+      if [ "${1:-}" = image ] && [ "${2:-}" = inspect ]; then
+        for a in "$@"; do last="$a"; done
+        case "$CUP_PRESENT" in *" $last "*) return 0 ;; esac
+        return 1
+      fi
+      case " $* " in *" compose "*" build "*) return "$CUP_BUILD_RC" ;; esac
+      return 0
+    }
+    err="$( ( set -e; compose_up ) 2>&1 )"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/calls")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+# The compose call whose verb (after the COMPOSE_ARGS) is $2, or "(none)".
+cup_call() {
+  local line found="(none)"
+  local IFS=';'
+  for line in $(tn_field "$1" 2); do
+    case "$line" in "compose -f /x/compose.yml --profile tailnet $2"*) found="$line" ;; esac
+  done
+  printf '%s' "$found"
+}
+CUP_C=1111111111111111111111111111111111111111
+CUP_G=2222222222222222222222222222222222222222
+CUP_M=3333333333333333333333333333333333333333
+CUP_W=4444444444444444444444444444444444444444
+CUP_ENV="NOVA_HASH_CORE=$CUP_C\nNOVA_HASH_GATEWAY=$CUP_G\nNOVA_HASH_MEMORY=$CUP_M\nNOVA_HASH_WEB=$CUP_W\n"
+CUP_PFX="compose -f /x/compose.yml --profile tailnet"
+CUP_MIX="$(run_cup "$CUP_ENV" "nova-gateway:h-$CUP_G nova-memory:h-$CUP_M nova-core:h-0000000000000000000000000000000000000000")"
+expect_str "compose up: present tags not built, absent (or only an older tag) built, browser last" \
+  "$(tn_field "$CUP_MIX" 1)|$(cup_call "$CUP_MIX" build)" "0|$CUP_PFX build core web browser"
+expect_str "compose up: up -d with no --build" "$(cup_call "$CUP_MIX" up)" "$CUP_PFX up -d"
+case "$(tn_field "$CUP_MIX" 2)" in
+  *"$CUP_PFX build "*";$CUP_PFX up -d"*|*"$CUP_PFX build "*";"*"$CUP_PFX up -d"*)
+    report 0 "compose up: build runs before up" ;;
+  *) report 1 "compose up: build runs before up" "$(tn_field "$CUP_MIX" 2)" ;;
+esac
+expect_tn "compose up: logs the unchanged ones" "$CUP_MIX" 0 3 "unchanged, not rebuilt: gateway memory"
+expect_tn "compose up: (checked the exact tag)" "$CUP_MIX" 0 2 "image inspect nova-web:h-$CUP_W"
+CUP_ALL="$(run_cup "$CUP_ENV" "nova-core:h-$CUP_C nova-gateway:h-$CUP_G nova-memory:h-$CUP_M nova-web:h-$CUP_W")"
+expect_str "compose up: all four present -> only browser built" \
+  "$(tn_field "$CUP_ALL" 1)|$(cup_call "$CUP_ALL" build)" "0|$CUP_PFX build browser"
+expect_tn "compose up: (all four named unchanged)" "$CUP_ALL" 0 3 \
+  "unchanged, not rebuilt: core gateway memory web"
+expect_str "compose up: (and still up -d, no --build)" "$(cup_call "$CUP_ALL" up)" "$CUP_PFX up -d"
+CUP_NONE="$(run_cup "$CUP_ENV" "")"
+expect_str "compose up: none present -> all four and browser built" \
+  "$(tn_field "$CUP_NONE" 1)|$(cup_call "$CUP_NONE" build)" \
+  "0|$CUP_PFX build core gateway memory web browser"
+expect_tn_lacks "compose up: (no unchanged line when nothing is)" "$CUP_NONE" 3 "unchanged, not rebuilt"
+CUP_BLANK="$(run_cup "NOVA_HASH_CORE=\nNOVA_HASH_GATEWAY=$CUP_G\nNOVA_HASH_MEMORY=$CUP_M\n" \
+  "nova-core:h- nova-core:h-unhashed nova-web:h-unhashed nova-web:h- nova-gateway:h-$CUP_G nova-memory:h-$CUP_M")"
+expect_str "compose up: a blank or absent hash is always built (h-unhashed present or not)" \
+  "$(tn_field "$CUP_BLANK" 1)|$(cup_call "$CUP_BLANK" build)" "0|$CUP_PFX build core web browser"
+CUP_FAIL="$(run_cup "$CUP_ENV" "" 1)"
+expect_str "compose up: a failing build never starts the stack" \
+  "$(tn_field "$CUP_FAIL" 1 | grep -vx 0 >/dev/null && echo nonzero)|$(cup_call "$CUP_FAIL" up)" \
+  "nonzero|(none)"
+expect_tn "compose up: (and says the build failed)" "$CUP_FAIL" "$(tn_field "$CUP_FAIL" 1)" 3 "build failed"
+if awk '/^compose_up\(\)/{f=1} f&&/^}/{exit} f&&/--build/{bad=1} f{n++} END{exit !(n>1 && !bad)}' \
+     "$SCRIPT_DIR/install.sh"; then
+  report 0 "compose up: compose_up never passes --build"
+else
+  report 1 "compose up: compose_up never passes --build" "--build found in compose_up (or no compose_up)"
+fi
+
+# ── verify_service_builds: the running images are this checkout's source ───
+# After `up`, each of core/gateway/memory/web must run a container whose
+# nova.content-hash label is the hash recomputed from the files (never read
+# back from .env). install.sh sourced for real, a throwaway repo per case;
+# only `docker` is stubbed, so the real running_service_label seam runs:
+# `compose ... ps -q <svc>` prints cid-<svc> (nothing for the services in
+# $3), and the label inspect prints $tmp/label-<svc> (absent = no label).
+#   $1 scenario: match | mismatch | stale_env | notrepo
+#   $2 labels to override, "svc=value ..." ("svc=" = empty label)
+#   $3 services with no running container (space-separated)
+# Prints "<exit>|<docker calls, ; separated>|<stderr>|<core's real hash>"
+run_vsb() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g() { git -c user.name=t -c user.email=t@t "$@"; }
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    : > "$ENV_FILE"
+    : > "$tmp/calls"
+    # shellcheck disable=SC2034
+    COMPOSE_ARGS=(-f /x/compose.yml)
+    mkdir -p "$REPO_ROOT/services/core" "$REPO_ROOT/services/gateway" \
+      "$REPO_ROOT/services/memory" "$REPO_ROOT/apps/web"
+    for d in services/core services/gateway services/memory apps/web; do
+      printf '%s\n' "$d" > "$REPO_ROOT/$d/main"
+    done
+    core_hash=-
+    if [ "$1" != notrepo ]; then
+      git init -q "$REPO_ROOT"
+      g -C "$REPO_ROOT" add -A
+      g -C "$REPO_ROOT" commit -q -m init
+      for s in core gateway memory; do
+        git -C "$REPO_ROOT" rev-parse "HEAD:services/$s" > "$tmp/label-$s"
+      done
+      git -C "$REPO_ROOT" rev-parse "HEAD:apps/web" > "$tmp/label-web"
+      core_hash="$(cat "$tmp/label-core")"
+    fi
+    if [ "$1" = stale_env ]; then
+      # .env and the running label agree on the committed hash; the working
+      # tree has moved on since. Only a recomputed hash sees it.
+      printf 'NOVA_HASH_CORE=%s\n' "$core_hash" > "$ENV_FILE"
+      printf 'edited\n' >> "$REPO_ROOT/services/core/main"
+      core_hash="$(service_content_hash core)"
+    fi
+    for kv in ${2:-}; do
+      printf '%s\n' "${kv#*=}" > "$tmp/label-${kv%%=*}"
+      [ -n "${kv#*=}" ] || : > "$tmp/label-${kv%%=*}"
+    done
+    VSB_MISSING=" ${3:-} "
+    docker() {
+      local last a
+      printf '%s\n' "$*" >> "$tmp/calls"
+      for a in "$@"; do last="$a"; done
+      case "$*" in
+        "compose -f /x/compose.yml ps -q "*)
+          case "$VSB_MISSING" in *" $last "*) return 0 ;; esac
+          printf 'cid-%s\n' "$last" ;;
+        "inspect --format {{index .Config.Labels \"nova.content-hash\"}} cid-"*)
+          cat "$tmp/label-${last#cid-}" 2>/dev/null; printf '\n' ;;
+        *) printf 'unexpected docker call: %s\n' "$*" >&2; return 1 ;;
+      esac
+    }
+    err="$( ( set -e; verify_service_builds ) 2>&1 )"; code=$?
+    printf '%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/calls")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$core_hash"
+  )
+}
+VSB_BAD=0000000000000000000000000000000000000000
+VSB_OK="$(run_vsb match)"
+expect_tn "service builds verified: all four labels match -> passes" "$VSB_OK" 0 3 \
+  "core gateway memory web run this checkout's source"
+expect_tn "service builds verified: (read core's label off its container)" "$VSB_OK" 0 2 \
+  "inspect --format {{index .Config.Labels \"nova.content-hash\"}} cid-core"
+expect_tn "service builds verified: (and web's)" "$VSB_OK" 0 2 "compose -f /x/compose.yml ps -q web"
+VSB_MIS="$(run_vsb mismatch "core=$VSB_BAD")"
+expect_tn "service builds verified: a stale core label refuses, naming core" "$VSB_MIS" 1 3 \
+  "core is not running this checkout's source"
+expect_tn "service builds verified: (names the running hash)" "$VSB_MIS" 1 3 "$VSB_BAD"
+expect_tn "service builds verified: (names the checkout's hash)" "$VSB_MIS" 1 3 "$(tn_field "$VSB_MIS" 4)"
+expect_tn "service builds verified: (gives the recreate command)" "$VSB_MIS" 1 3 \
+  "build core && docker compose --project-directory $SCRIPT_DIR up -d --force-recreate core"
+expect_tn_lacks "service builds verified: (a matching gateway is not named)" "$VSB_MIS" 3 \
+  "gateway is not running"
+VSB_TWO="$(run_vsb mismatch "core=$VSB_BAD web=$VSB_BAD")"
+expect_tn "service builds verified: two stale -> core named" "$VSB_TWO" 1 3 "core is not running"
+expect_tn "service builds verified: (and web named in the same refusal)" "$VSB_TWO" 1 3 "web is not running"
+VSB_GONE="$(run_vsb mismatch "" "gateway")"
+expect_tn "service builds verified: no gateway container refuses, naming gateway" "$VSB_GONE" 1 3 \
+  "gateway is not running this checkout's source"
+expect_tn "service builds verified: (says the label could not be read)" "$VSB_GONE" 1 3 \
+  "no running container, or no nova.content-hash label"
+VSB_NOLABEL="$(run_vsb mismatch "memory=")"
+expect_tn "service builds verified: an empty label refuses, naming memory" "$VSB_NOLABEL" 1 3 \
+  "memory is not running this checkout's source"
+VSB_STALE="$(run_vsb stale_env)"
+expect_tn "service builds verified: .env agrees with the label but the files moved -> refuses" \
+  "$VSB_STALE" 1 3 "core is not running this checkout's source"
+expect_tn "service builds verified: (names the working tree's hash)" "$VSB_STALE" 1 3 \
+  "$(tn_field "$VSB_STALE" 4)"
+VSB_NONE="$(run_vsb notrepo)"
+expect_tn "service builds verified: uncomputable hash -> skipped, exits 0" "$VSB_NONE" 0 3 \
+  "core's content hash could not be computed"
+for VSB_SVC in gateway memory web; do
+  expect_tn "service builds verified: (skip names $VSB_SVC)" "$VSB_NONE" 0 3 \
+    "$VSB_SVC's content hash could not be computed"
+done
+expect_str "service builds verified: (docker never asked about a skipped service)" \
+  "$(tn_field "$VSB_NONE" 2)" ""
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  compose_up$/{u=NR} f&&/^  verify_service_builds$/{v=NR} f&&/^  install_hub_agent$/{h=NR}
+        f&&/Nova is up/{n=NR}
+        END{exit !(u && v && h && n && u < v && v < h && v < n)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "service builds verified: cmd_install verifies after compose_up, before the hub agent and 'Nova is up'"
+else
+  report 1 "service builds verified: cmd_install verifies after compose_up, before the hub agent and 'Nova is up'" \
+    "order or call missing"
 fi
 
 # ── ./install update: fast-forward, back up, reinstall, roll back, report ───

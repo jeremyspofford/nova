@@ -50,4 +50,28 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # dist build ever produced a same-named file.
 COPY gate-page.html /usr/share/nginx/html/gate-page.html
 
+# Build identity (S32): the commit this image was built from and the content
+# hash of apps/web, passed by deploy/docker-compose.yml from ./install's
+# NOVA_COMMIT / NOVA_HASH_WEB. Declared LAST, after every COPY: a new commit
+# then reruns only the one cheap RUN below, never the npm stage or the dist
+# layer. Read back on /build.json (nginx.conf.template, behind the gate) and
+# by ./install from the labels.
+#
+# build.json carries a value only when it is a full lowercase git object id
+# (40 or 64 hex), else null — never a string that reads as an identity
+# (unset, empty, "unknown", a short SHA). Same rule as the Python services'
+# app/build_identity.py. Pure sh, no grep: grep matches line by line, so a
+# value with a newline in it would pass.
+ARG NOVA_BUILD_SHA=
+ARG NOVA_CONTENT_HASH=
+RUN set -eu; \
+    json_id() { \
+      case "$1" in ''|*[!0-9a-f]*) echo null; return ;; esac; \
+      case "${#1}" in 40|64) printf '"%s"' "$1" ;; *) echo null ;; esac; \
+    }; \
+    printf '{"build_sha":%s,"content_hash":%s}\n' \
+      "$(json_id "$NOVA_BUILD_SHA")" "$(json_id "$NOVA_CONTENT_HASH")" \
+      > /usr/share/nginx/html/build.json
+LABEL nova.build-sha="$NOVA_BUILD_SHA" nova.content-hash="$NOVA_CONTENT_HASH"
+
 EXPOSE 80
