@@ -448,13 +448,15 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     the outcome its declaration names (cases.FixtureDevice.update — S42b
     Task 24), sending nothing anywhere. S29b T5: a declared device's run
     answers (cases.FixtureDevice.run) are what device_run gets on it, from
-    the plant, never the hub."""
+    the plant, never the hub; uac-timeout T3: its admin answers
+    (cases.FixtureDevice.admin) are what device_admin_path gets."""
     return machines.PLANT.set(
         machines.FixturePlant(
             {m.name: m.as_row() for m in case.machines},
             devices={d.name: d.as_view() for d in case.devices},
             updates={d.name: d.update for d in case.devices if d.update},
             runs={d.name: list(d.run) for d in case.devices if d.run},
+            admins={d.name: d.admin for d in case.devices if d.admin},
         )
     )
 

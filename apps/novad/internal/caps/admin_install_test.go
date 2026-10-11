@@ -137,21 +137,90 @@ func TestUACWaitIsBoundedByTheCallsTimeLessTheReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w > 70*time.Second || w < 68*time.Second {
-		t.Fatalf("wait = %s, want about 110 s - 40 s", w)
+	if w != UACWait {
+		t.Fatalf("wait = %s under the 110 s command bound, want UACWait %s", w, UACWait)
+	}
+	near, cancel1 := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel1()
+	if w, _ := uacWait(near); w > 50*time.Second || w < 48*time.Second {
+		t.Fatalf("wait = %s, want about 90 s - 40 s", w)
 	}
 	long, cancel2 := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel2()
-	if w, _ := uacWait(long); w != uacWaitMax {
-		t.Fatalf("wait = %s, want the %s cap", w, uacWaitMax)
+	if w, _ := uacWait(long); w != UACWait {
+		t.Fatalf("wait = %s, want the %s cap", w, UACWait)
 	}
-	if w, _ := uacWait(context.Background()); w != uacWaitMax {
-		t.Fatalf("no deadline: wait = %s, want %s", w, uacWaitMax)
+	if w, _ := uacWait(context.Background()); w != UACWait {
+		t.Fatalf("no deadline: wait = %s, want %s", w, UACWait)
 	}
 	short, cancel3 := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel3()
 	if _, err := uacWait(short); err == nil || !strings.HasPrefix(err.Error(), "cannot: ") {
 		t.Fatalf("too little time left: err = %v, want a stated cannot", err)
+	}
+}
+
+// awaitYes bounds the WHOLE prompt (uac-timeout T1): ShellExecuteEx with
+// SEE_MASK_NOASYNC blocks until the prompt is answered or Windows closes it
+// at about 2 min, so the wait has to be around that call, not after it.
+func TestAwaitYesStopsWaitingOnAPromptNobodyAnswers(t *testing.T) {
+	release := make(chan struct{})
+	dropped := make(chan int, 1)
+	start := time.Now()
+	v, err := awaitYes(context.Background(), 50*time.Millisecond,
+		func() (int, error) { <-release; return 7, nil },
+		func(v int) { dropped <- v })
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("awaitYes took %s on a 50 ms wait", took)
+	}
+	var ny *NoYesError
+	if !errors.Is(err, ErrNoYes) || !errors.As(err, &ny) || !ny.MayStill || ny.Wait != 50*time.Millisecond || v != 0 {
+		t.Fatalf("got (%v, %#v), want a may-still-show ErrNoYes at the wait", v, err)
+	}
+	close(release) // the Yes comes late: its value is dropped, not leaked
+	select {
+	case d := <-dropped:
+		if d != 7 {
+			t.Fatalf("dropped %d, want the late value 7", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the late answer was never dropped")
+	}
+}
+
+func TestAwaitYesCancelledPromptIsNoYesNotMayStill(t *testing.T) {
+	_, err := awaitYes(context.Background(), time.Second,
+		func() (int, error) { return 0, errPromptCancelled }, nil)
+	var ny *NoYesError
+	if !errors.As(err, &ny) || ny.MayStill || ny.Wait != time.Second {
+		t.Fatalf("err = %#v, want ErrNoYes, not may-still-show", err)
+	}
+}
+
+func TestAwaitYesAYesReturnsThePromptsValue(t *testing.T) {
+	v, err := awaitYes(context.Background(), time.Second, func() (int, error) { return 42, nil }, nil)
+	if err != nil || v != 42 {
+		t.Fatalf("got (%d, %v)", v, err)
+	}
+	boom := errors.New("could not show the UAC prompt: boom")
+	if _, err := awaitYes(context.Background(), time.Second, func() (int, error) { return 0, boom }, nil); err != boom {
+		t.Fatalf("err = %v, want the prompt's own error through", err)
+	}
+}
+
+func TestAwaitYesNeverWaitsPastTheCallsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	block := make(chan struct{})
+	defer close(block)
+	start := time.Now()
+	_, err := awaitYes(ctx, time.Hour, func() (int, error) { <-block; return 0, nil }, nil)
+	if time.Since(start) > 2*time.Second || !errors.Is(err, ErrNoYes) {
+		t.Fatalf("err = %v after %s", err, time.Since(start))
+	}
+	var ny *NoYesError
+	if !errors.As(err, &ny) || !ny.MayStill {
+		t.Fatalf("err = %#v, want may-still-show", err)
 	}
 }
 
@@ -262,16 +331,64 @@ func TestInstallAlreadyInstalledGoesThroughThePath(t *testing.T) {
 	}
 }
 
-func TestInstallWindowsUACDeclinedSaysSoAndReadsNoProof(t *testing.T) {
-	f := newFakeHost(true, unixAbsent)
-	f.instErr = ErrDeclined
+const noYesCancelled = "no Yes came on this machine's UAC prompt within 60 s (it was declined, closed, or nobody answered) — " +
+	"nothing was installed: the admin path reads absent now; the owner clicks Yes on the prompt within 60 s when Nova asks again"
+
+func TestInstallWindowsUACNoYesStatesWhatWasReadAndNeverDeclined(t *testing.T) {
+	f := newFakeHost(true, unixAbsent, unixAbsent)
+	f.instErr = &NoYesError{Wait: UACWait}
 	out := installAdminPath(context.Background(), f.h, nil)
-	want := "the UAC prompt on this machine was declined — nothing was installed; the owner clicks Yes on it to install the admin path"
-	if out.OK || out.Error != want {
-		t.Fatalf("got %+v", out)
+	if out.OK || out.Error != noYesCancelled {
+		t.Fatalf("got\n%q\nwant\n%q", out.Error, noYesCancelled)
 	}
-	if !f.ranAny("install uac") || f.ranAny("whoami") {
-		t.Fatalf("ran = %q", f.ran)
+	if strings.Contains(out.Error, "prompt on this machine was declined") || !strings.Contains(out.Error, "(it was declined, closed, or nobody answered)") {
+		t.Fatalf("claims a decline it cannot know: %q", out.Error)
+	}
+	if !f.ranAny("install uac") || f.ranAny("whoami") || f.ran[len(f.ran)-1] != "read" {
+		t.Fatalf("ran = %q, want the read-back after the miss", f.ran)
+	}
+}
+
+func TestInstallWindowsUACWaitRanOutSaysALaterYesStillInstalls(t *testing.T) {
+	f := newFakeHost(true, unixAbsent, unixAbsent)
+	f.instErr = &NoYesError{Wait: UACWait, MayStill: true}
+	out := installAdminPath(context.Background(), f.h, nil)
+	want := noYesCancelled + "; the prompt may still be on the screen — a Yes there now still installs it; device_info reads whether it did"
+	if out.OK || out.Error != want {
+		t.Fatalf("got\n%q\nwant\n%q", out.Error, want)
+	}
+}
+
+func TestInstallWindowsUACNoYesButReadsInstalledSaysThatInstead(t *testing.T) {
+	f := newFakeHost(true, unixAbsent, taskReady)
+	f.instErr = &NoYesError{Wait: UACWait, MayStill: true}
+	out := installAdminPath(context.Background(), f.h, nil)
+	if out.OK || strings.Contains(out.Error, "nothing was installed") ||
+		!strings.Contains(out.Error, "the admin path reads "+admin.TaskReady+" now") ||
+		!strings.Contains(out.Error, "device_info reads whether it did") {
+		t.Fatalf("got %q", out.Error)
+	}
+}
+
+// The RED of uac-timeout T1: a prompt nobody answers (the fake blocks the
+// way ShellExecuteEx does) must not hold the answer past the wait.
+func TestInstallWindowsUACPromptNobodyAnswersAnswersAtTheWait(t *testing.T) {
+	f := newFakeHost(true, unixAbsent, unixAbsent)
+	block := make(chan struct{})
+	defer close(block)
+	f.h.Install = func(ctx context.Context, route string) (string, error) {
+		f.ran = append(f.ran, "install "+route)
+		_, err := awaitYes(ctx, 50*time.Millisecond, func() (int, error) { <-block; return 0, nil }, nil)
+		return "", err
+	}
+	start := time.Now()
+	out := installAdminPath(context.Background(), f.h, nil)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("answered after %s on a 50 ms wait", took)
+	}
+	if out.OK || !strings.HasPrefix(out.Error, "no Yes came on this machine's UAC prompt within ") ||
+		strings.Contains(out.Error, "prompt on this machine was declined") || !strings.Contains(out.Error, "a Yes there now still installs it") {
+		t.Fatalf("got %q", out.Error)
 	}
 }
 

@@ -1,7 +1,7 @@
 {
   "id": "does-not-hand-back-a-change-edit",
   "suite": "agent_quality",
-  "suite_version": 23,
+  "suite_version": 24,
   "message": "start a change called \"edit test 2\", then in that worktree change the first line of README.md to \"# Nova (test edit)\"",
   "contract": [
     {"predicate": "tool_called", "arg": "start_change"},

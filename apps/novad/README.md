@@ -427,7 +427,7 @@ then proves the result:
 | the path is already installed | through the path itself (how a reinstall updates the copy) | none |
 | Linux/macOS, `sudo -n true` works (the hub) | `sudo -n <bin> admin install --user <u>` | none |
 | Linux/macOS, sudo asks for a password | — | **the one command, named in the result:** `sudo '<bin>' admin install --user <u>`, run once on that machine; Nova reads it back with `facts.refresh` |
-| Windows, the owner signed in at its screen | ShellExecuteEx `runas` on `<bin> admin install` | **one UAC click.** The prompt shows an unknown publisher (unsigned). The agent waits about **70 s** for it — up to 150 s, less the 40 s it keeps for the read-back inside its 110 s command bound. Declined: "the UAC prompt on <machine> was declined — nothing was installed". |
+| Windows, the owner signed in at its screen | ShellExecuteEx `runas` on `<bin> admin install` | **one UAC click.** The prompt shows an unknown publisher (unsigned). The agent waits **60 s** (`caps.UACWait`) for the whole prompt, keeping 40 s for the read-back inside its 110 s command bound, so its answer reaches core before core's 120 s. A No and Windows closing the prompt look the same to the agent, so both — and the wait running out — are one answer: "no Yes came on <machine>'s UAC prompt within 60 s (it was declined, closed, or nobody answered) — nothing was installed: the admin path reads <state> now; …". When the wait ran out the prompt may still be up, and a Yes there still installs it (device_info reads whether it did). |
 | Windows, nobody signed in | — | stated: nobody is signed in to answer the UAC prompt; the owner signs in, then clicks Yes |
 
 **What install proves.** On Windows the installer itself, elevated, reads

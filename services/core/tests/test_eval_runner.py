@@ -1885,7 +1885,7 @@ async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monke
 async def test_a_plant_that_cannot_be_built_is_ungradeable_and_leaves_none(
     pool, mount_peers, monkeypatch
 ):
-    def _broken(fixtures, devices=None, updates=None, runs=None):
+    def _broken(fixtures, devices=None, updates=None, runs=None, admins=None):
         raise RuntimeError("the plant would not build")
 
     monkeypatch.setattr(runner.machines, "FixturePlant", _broken)

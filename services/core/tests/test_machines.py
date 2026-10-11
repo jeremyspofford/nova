@@ -1323,3 +1323,151 @@ async def test_t2b_the_device_tools_and_machine_update_resolve_the_dell(pool):
         "cannot: no paired device named 'del' — the paired devices are: "
         "Beelink Mini S, DELL-XPS-8950;"
     )
+
+
+# -- uac-timeout T3: a declared admin.install / admin.uninstall answer --------
+#
+# The replay seam for device_admin_path, mirroring S29b T5's run seam: a case
+# device declares {"admin": {"install": {"ok": false, "error": "..."}}} — the
+# words of a real admin.* result frame — checked at LOAD, refused for an
+# undeclared device at construction, answered by machines.ReplayAgent without
+# reaching the hub. Turn 153578ab is the evidence: the agent's no-Yes answer.
+
+_T3_NO_YES = (
+    "no Yes came on this machine's UAC prompt within 60 s (it was declined, closed, or nobody "
+    "answered) — nothing was installed: the admin path reads none now; the owner clicks Yes on "
+    "the prompt within 60 s when Nova asks again; the prompt may still be on the screen — a Yes "
+    "there now still installs it; device_info reads whether it did"
+)
+_T3_ADMIN = {"install": {"ok": False, "error": _T3_NO_YES}}
+
+
+def _t3_plant(*, admin: dict | None = None, connected: bool = True, **extra):
+    dell = FixtureDevice(
+        name="eval_dell", platform="windows", hostname="EVAL-DELL", connected=connected
+    )
+    devices = {"eval_dell": dell.as_view()}
+    for name, device in extra.items():
+        devices[name] = device.as_view()
+    return machines.FixturePlant(
+        {}, devices=devices, admins={"eval_dell": _T3_ADMIN if admin is None else admin}
+    )
+
+
+def test_uac_t3_the_plant_refuses_admin_answers_for_an_undeclared_device():
+    with pytest.raises(ValueError, match="eval_other"):
+        machines.FixturePlant(
+            {}, devices={"eval_dell": {"name": "eval_dell"}}, admins={"eval_other": _T3_ADMIN}
+        )
+
+
+@pytest.mark.parametrize(
+    "raw,match",
+    [
+        ({}, "non-empty"),
+        ([], "object"),
+        ({"repair": {"ok": True}}, "install, uninstall"),
+        ({"install": "no"}, "object"),
+        ({"install": {"ok": False, "error": "x", "exit_code": 1}}, "exit_code"),
+        ({"install": {"ok": "false", "error": "x"}}, "ok must be true or false"),
+        ({"install": {"ok": False}}, "error"),
+        ({"install": {"ok": False, "error": "  "}}, "error"),
+        ({"install": {"ok": True, "error": "x"}}, "error"),
+        ({"install": {"ok": True, "meta": "installed"}}, "meta"),
+        ({"install": {"ok": True, "output": 3}}, "output"),
+    ],
+)
+def test_uac_t3_a_malformed_admin_answer_is_refused_at_load(raw, match):
+    from app.evals import cases as cases_mod
+
+    with pytest.raises(ValueError, match=match):
+        machines.admin_answers(raw)
+    with pytest.raises(cases_mod.CaseError, match=match):
+        cases_mod.device_from_dict(
+            {"name": "eval_dell", "platform": "windows", "hostname": "EVAL-DELL", "admin": raw}
+        )
+
+
+def test_uac_t3_a_case_device_carries_its_admin_answers_through_load_and_json():
+    from app.evals import cases as cases_mod
+
+    device = cases_mod.device_from_dict(
+        {"name": "eval_dell", "platform": "windows", "hostname": "EVAL-DELL", "admin": _T3_ADMIN}
+    )
+    # normalized as run answers are: output defaults to ""
+    normalized = {"install": {**_T3_ADMIN["install"], "output": ""}}
+    assert device.admin == normalized
+    assert device.as_json()["admin"] == normalized
+    plain = cases_mod.device_from_dict(
+        {"name": "eval_dell", "platform": "windows", "hostname": "EVAL-DELL"}
+    )
+    assert plain.admin is None and "admin" not in plain.as_json()
+
+
+async def test_uac_t3_a_declared_install_is_answered_as_the_real_frame_is(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    result, ok, sink = await _t5_dispatch(
+        _t3_plant(), "device_admin_path", {"device": "the dell", "action": "install"}
+    )
+    assert ok is False
+    # device_admin_path's own _admin_failure over the declared frame:
+    # "this machine" -> the name, the agent's words otherwise verbatim.
+    assert result == "Error: eval_dell: " + _T3_NO_YES.replace("this machine", "eval_dell")
+    assert {"admin_path": "install", "machine": "eval_dell", "installed": None} in sink
+    assert touched == []
+
+
+async def test_uac_t3_a_declared_ok_install_reads_back_as_installed(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    plant = _t3_plant(
+        admin={
+            "install": {
+                "ok": True,
+                "output": "installed",
+                "meta": {"installed": True, "kind": "task", "route": "uac", "proof": "task ready"},
+            }
+        }
+    )
+    result, ok, sink = await _t5_dispatch(
+        plant, "device_admin_path", {"device": "eval_dell", "action": "install"}
+    )
+    assert ok is True, result
+    assert result.startswith("eval_dell: admin path installed (an elevated scheduled task)")
+    assert {"admin_path": "install", "machine": "eval_dell", "installed": True} in sink
+    assert touched == []
+
+
+async def test_uac_t3_an_undeclared_action_is_a_stated_cannot(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    result, ok, sink = await _t5_dispatch(
+        _t3_plant(), "device_admin_path", {"device": "eval_dell", "action": "uninstall"}
+    )
+    assert ok is False
+    assert "no command can be sent to eval_dell's agent" in result, result
+    assert not [f for f in sink if "admin_path" in f]
+    assert touched == []
+    said = result.replace("eval_dell", "").lower()
+    for word in ("eval", "replay", "fixture", "declar"):
+        assert word not in said, result
+
+
+async def test_uac_t3_an_admin_only_device_answers_no_run(monkeypatch):
+    """Per capability: declaring admin answers declares no shell.exec."""
+    touched = _t5_alarms(monkeypatch)
+    result, ok, _sink = await _t5_dispatch(
+        _t3_plant(), "device_run", {"device": "eval_dell", "argv": ["whoami"]}
+    )
+    assert ok is False
+    assert result.startswith("Error: cannot: no command can be sent to eval_dell's agent"), result
+    assert touched == []
+
+
+async def test_uac_t3_a_device_declaring_no_admin_still_refuses_the_admin_path(monkeypatch):
+    touched = _t5_alarms(monkeypatch)
+    plant = _t3_plant(eval_pc=FixtureDevice(name="eval_pc", platform="windows", hostname="EVAL-PC"))
+    result, ok, sink = await _t5_dispatch(
+        plant, "device_admin_path", {"device": "eval_pc", "action": "install"}
+    )
+    assert ok is False
+    assert result.startswith("Error: cannot: no command can be sent to eval_pc's agent"), result
+    assert sink == [] and touched == []

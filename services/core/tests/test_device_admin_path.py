@@ -19,6 +19,9 @@ Criteria (tracker .epics/s30b.md, T7):
   C4 the agent's cannot / declined words restated with the machine's name,
      the owner's one step kept verbatim; no admin path to remove; an old agent
      -> machine_update; no answer -> not known, device_info.
+     uac-timeout T2 (.epics/uac-timeout.md): the no-answer words name the wait
+     and, for install, the owner's Yes if a prompt is up — no guessed cause;
+     core's wait pinned against the agent's UACWait/ReadBackReserve/CommandTimeout.
   C5 (pins elsewhere) test_tools_registry +1, test_capability_coverage
      EXCUSED, test_live_facts refuses it unasked, test_no_approvals unchanged.
 """
@@ -66,6 +69,14 @@ NOBODY = (
     "in at its screen, then clicks Yes on the one UAC prompt"
 )
 NO_PATH = "cannot: no admin path on this machine"
+# uac-timeout T1: the agent's words when no Yes came within caps.UACWait
+# (apps/novad/internal/caps/admin_install.go noYesWords), wait ran out.
+NO_YES = (
+    "no Yes came on this machine's UAC prompt within 60 s (it was declined, closed, or nobody "
+    "answered) — nothing was installed: the admin path reads none now; the owner clicks Yes on "
+    "the prompt within 60 s when Nova asks again; the prompt may still be on the screen — a Yes "
+    "there now still installs it; device_info reads whether it did"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -397,18 +408,143 @@ async def test_c4_an_agent_before_the_admin_path_needs_machine_update(pool, acti
 
 
 @requires_db
-async def test_c4_no_answer_is_stated_as_not_known(pool, monkeypatch):
+async def test_c4_the_no_yes_words_pass_through_with_the_machines_name(pool):
+    """uac-timeout T2: the agent's own T1 answer is restated as T1 worded it,
+    "this machine" -> the name; nothing added, nothing guessed."""
+    _id, device, conn, task = await _connect(pool, name="DELL-XPS-8950")
+    result, ok, _f, _fr = await _call(
+        pool,
+        conn,
+        device,
+        {"device": "DELL-XPS-8950", "action": "install"},
+        ok=False,
+        error=NO_YES,
+    )
+    assert ok is False
+    assert result == "Error: DELL-XPS-8950: " + NO_YES.replace("this machine", "DELL-XPS-8950")
+    await _close(conn, task)
+
+
+async def _no_answer(pool, monkeypatch, action):
     async def silent(pool_, **kw):
-        raise device_tools.devices.DeviceRefused("DELL-XPS-8950 did not answer within 120s")
+        # hub.command's own shape: a DeviceRefused raised from the TimeoutError.
+        raise device_tools.devices.DeviceRefused(
+            f"device 'DELL-XPS-8950' did not answer within {int(kw['timeout'])}s"
+        ) from TimeoutError()
 
     monkeypatch.setattr(devices_ws.hub, "command", silent)
     _id, _device, conn, task = await _connect(pool, name="DELL-XPS-8950")
     person = await _person(pool)
     result, ok = await tools.dispatch(
+        TOOL, {"device": "DELL-XPS-8950", "action": action}, _ctx(person, facts=[])
+    )
+    await _close(conn, task)
+    assert ok is False
+    return result
+
+
+# What a no-answer result may never say: a cause it cannot know, or a step
+# that is not the owner's one click (turn 153578ab invented an ollama script).
+_GUESSED = ("declined", "denied", "refused", "irm ", "iex", "powershell", "run as administrator")
+
+
+@requires_db
+async def test_c4_install_no_answer_is_stated_as_not_known(pool, monkeypatch):
+    """uac-timeout T2: no answer -> what is known (no answer within N s, the
+    install state unknown, device_info reads it) and the one owner step if a
+    UAC prompt is up — never a guessed cause."""
+    n = device_tools.COMMAND_TIMEOUT_SECONDS
+    result = await _no_answer(pool, monkeypatch, "install")
+    assert f"the install's answer from DELL-XPS-8950 did not come back within {n} s" in result
+    assert "whether the admin path is installed on DELL-XPS-8950 is not known" in result
+    assert "device_info reads it now" in result
+    assert (
+        "If a UAC prompt is up on DELL-XPS-8950, the owner clicks Yes on it, then asks again"
+        in result
+    )
+    assert "read-back did not come back" not in result
+    low = result.lower()
+    for word in _GUESSED:
+        assert word not in low, word
+
+
+@requires_db
+async def test_c4_uninstall_no_answer_is_stated_as_not_known_without_a_uac_step(pool, monkeypatch):
+    """Uninstall never prompts (it runs through the path or already
+    elevated), so its no-answer names no UAC click."""
+    n = device_tools.COMMAND_TIMEOUT_SECONDS
+    result = await _no_answer(pool, monkeypatch, "uninstall")
+    assert f"the uninstall's answer from DELL-XPS-8950 did not come back within {n} s" in result
+    assert "whether the admin path is removed on DELL-XPS-8950 is not known" in result
+    assert "device_info reads it now" in result
+    assert "UAC" not in result
+    low = result.lower()
+    for word in _GUESSED:
+        assert word not in low, word
+
+
+@requires_db
+async def test_c4_a_dropped_socket_says_no_answer_without_a_wait_it_did_not_run(pool, monkeypatch):
+    async def dropped(pool_, **kw):
+        raise device_tools.devices.DeviceRefused("device connection closed: socket lost")
+
+    monkeypatch.setattr(devices_ws.hub, "command", dropped)
+    _id, _device, conn, task = await _connect(pool, name="DELL-XPS-8950")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
         TOOL, {"device": "DELL-XPS-8950", "action": "install"}, _ctx(person, facts=[])
     )
-    assert ok is False
-    assert "did not answer" in result
-    assert "whether the admin path is installed on DELL-XPS-8950 is not known" in result
-    assert "device_info" in result
     await _close(conn, task)
+    assert ok is False
+    assert "device connection closed: socket lost" in result
+    assert "the install's answer from DELL-XPS-8950 did not come back," in result
+    assert "within" not in result
+    assert "whether the admin path is installed on DELL-XPS-8950 is not known" in result
+
+
+@requires_db
+async def test_c4_not_sent_says_nothing_was_sent_and_names_no_prompt(pool, monkeypatch):
+    """A refusal before the write (NotSent) reached nothing: no prompt can be
+    up and the state was not touched — never "not known" or a UAC step."""
+
+    async def unsent(pool_, **kw):
+        raise devices_ws.NotSent("device 'DELL-XPS-8950' is not connected — its tile is stale")
+
+    monkeypatch.setattr(devices_ws.hub, "command", unsent)
+    _id, _device, conn, task = await _connect(pool, name="DELL-XPS-8950")
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        TOOL, {"device": "DELL-XPS-8950", "action": "install"}, _ctx(person, facts=[])
+    )
+    await _close(conn, task)
+    assert ok is False
+    assert "is not connected" in result
+    assert "nothing was sent to DELL-XPS-8950" in result
+    assert "not known" not in result
+    assert "UAC" not in result
+
+
+def _go_seconds(path: str, pattern: str) -> int:
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[3] / path).read_text()
+    m = re.search(pattern, src, re.M)
+    assert m, f"{path} names no {pattern}"
+    return int(m.group(1))
+
+
+def test_c2_cores_wait_covers_the_agents_uac_wait_and_read_back_with_margin():
+    """uac-timeout T2: core's wait is COMMAND_TIMEOUT_SECONDS, pinned against
+    the agent's constants read from its source (never copied): caps.UACWait +
+    caps.ReadBackReserve < client.CommandTimeout < core's wait, and the UAC
+    wait core names equals the agent's."""
+    caps = "apps/novad/internal/caps/admin_install.go"
+    uac = _go_seconds(caps, r"^\s*UACWait\s*=\s*(\d+)\s*\*\s*time\.Second")
+    reserve = _go_seconds(caps, r"^\s*ReadBackReserve\s*=\s*(\d+)\s*\*\s*time\.Second")
+    bound = _go_seconds(
+        "apps/novad/internal/client/client.go",
+        r"^const CommandTimeout = (\d+) \* time\.Second",
+    )
+    assert uac + reserve < bound < device_tools.COMMAND_TIMEOUT_SECONDS
+    assert getattr(device_tools, "ADMIN_UAC_WAIT_SECONDS", None) == uac
