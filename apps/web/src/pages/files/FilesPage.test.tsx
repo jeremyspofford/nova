@@ -275,3 +275,29 @@ describe('FilesPage — the open file is the page', () => {
   })
 })
 
+describe('FilesPage — the list on any width (2026-10-11)', () => {
+  it('each file is a button, reachable by keyboard, carrying its size and date', async () => {
+    const api = fakeApi(
+      listing({
+        files: [{ path: 'cookbook/soup.md', size: 42, modified: new Date().toISOString() }],
+        total: 1,
+      }),
+      { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md' }) },
+    )
+    render(<FilesPage api={api} />)
+    const row = await screen.findByTestId('files-row-cookbook/soup.md')
+    expect(row.tagName).toBe('BUTTON')
+    expect(within(row).getByText(/42 B/)).toBeDefined()
+    expect(within(row).getByText(/just now|ago|now/i)).toBeDefined()
+    fireEvent.click(row)
+    expect(api.getWorkspaceFile).toHaveBeenCalledWith('cookbook/soup.md')
+  })
+
+  it('draws no table, whose columns pushed size and date off a phone', async () => {
+    const api = fakeApi(listing({ files: [{ path: 'a.md', size: 1, modified: new Date().toISOString() }], total: 1 }))
+    render(<FilesPage api={api} />)
+    await screen.findByTestId('files-row-a.md')
+    expect(document.querySelector('table')).toBeNull()
+  })
+})
+

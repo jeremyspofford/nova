@@ -158,41 +158,43 @@ export function FilesPage({
 
       {list.status === 'ready' && list.files.length > 0 && (
         <>
-          <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-            <table className="w-full text-compact">
-              <thead>
-                <tr className="bg-surface-elevated">
-                  {['Path', 'Size', 'Modified'].map(heading => (
-                    <th
-                      key={heading}
-                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {list.files.map(f => (
-                  <tr
-                    key={f.path}
+          {/* One list for every width (2026-10-11). The table it replaces
+              pushed Size and Modified off a phone's screen, and its rows
+              were <tr onClick> — clickable, but not reachable by keyboard.
+              Each file is a button: path above, size and date below on a
+              phone; three columns from sm up. */}
+          <div className="rounded-lg border border-border glass-card dark:border-white/[0.08] overflow-hidden">
+            <div
+              aria-hidden="true"
+              className="hidden sm:grid grid-cols-[minmax(0,1fr)_6rem_7rem] gap-4 px-4 py-3 bg-surface-elevated text-caption font-medium text-content-tertiary uppercase tracking-wider"
+            >
+              <span>Path</span>
+              <span>Size</span>
+              <span>Modified</span>
+            </div>
+            <ul className="divide-y divide-border-subtle">
+              {list.files.map(f => (
+                <li key={f.path}>
+                  <button
+                    type="button"
                     data-testid={`files-row-${f.path}`}
                     onClick={() => setSelected(f.path)}
-                    className="cursor-pointer hover:bg-surface-card-hover transition-colors"
+                    className="w-full text-left px-4 py-3 sm:py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_6rem_7rem] sm:gap-4 sm:items-center hover:bg-surface-card-hover focus-visible:outline-none focus-visible:bg-surface-card-hover transition-colors"
                   >
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-primary">
+                    <span className="block font-mono text-compact sm:text-caption text-content-primary break-all">
                       {f.path}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+                    </span>
+                    <span className="mt-0.5 inline sm:mt-0 sm:block font-mono text-caption text-content-tertiary sm:text-content-secondary whitespace-nowrap">
                       {formatBytes(f.size)}
-                    </td>
-                    <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
+                    </span>
+                    <span className="sm:hidden text-caption text-content-tertiary"> · </span>
+                    <span className="inline sm:block text-caption text-content-tertiary whitespace-nowrap">
                       {formatRelativeTime(f.modified)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
           {list.truncated && (
             <p className="mt-3 text-caption text-content-tertiary">
