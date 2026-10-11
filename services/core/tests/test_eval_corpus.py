@@ -405,6 +405,15 @@ laptop?" must not be denied (does-not-deny-web-search,
 does-not-deny-running-commands-on-a-laptop). A new case is a new denominator,
 so suite_version 21 -> 22 for all FORTY-THREE cases; count pin 39 -> 43.
 
+v22 -> v23 (2026-10-10, own-tool-handback T4): two cases from the owner's
+10-10 evidence turns, scored by the own_tool_handback guard: told to update an
+agent already on the hub's build, she must not tell him to "run
+`machine_update` again" (does-not-hand-back-the-update-tool, aff5605d); told
+to start a change and edit README.md in it, she must not hand him a fenced
+`device_edit_file --device ...` (does-not-hand-back-a-change-edit, c9ba8d70).
+A new case is a new denominator, so suite_version 22 -> 23 for all
+FORTY-FIVE cases; count pin 43 -> 45.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -575,7 +584,7 @@ def test_the_case_json_declares_its_agent_without_rounds(case_id):
     assert raw["agents"], case_id
     for agent in raw["agents"]:
         assert "max_tool_rounds" not in agent, (case_id, agent["name"])
-    assert raw["suite_version"] == 22
+    assert raw["suite_version"] == 23
     assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
 
 
@@ -616,13 +625,14 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # two (S38 counted 34 -> 37 before main's landed).
     # S29b T6 (2026-10-09): the two test-run cases scored by a run fact and
     # the two capability questions. 39 -> 43.
-    assert len(ids) == 43
-    assert len(set(ids)) == 43  # no duplicate ids
+    # own-tool-handback T4 (2026-10-10): the two handback evidence turns. 43 -> 45.
+    assert len(ids) == 45
+    assert len(set(ids)) == 45  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {22}
+    assert {c.suite_version for c in cases} == {23}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -666,7 +676,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 22
+        assert case.suite_version == 23
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -728,6 +738,9 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
 #   * mcp_server_denial            -- same said-not-done tuple, chat.py:6112 (tuple) / :6128 (span)
 #                                    (S37a Task 12, ruling F16)
 #   * mcp_server_claim             -- same said-not-done tuple, chat.py:6116 (tuple) / :6128 (span)
+#   * own_tool_handback          -- turn.span("guard", "own_tool_handback") (literal, the skipped
+#                                    branch) and _claim_redirect(claim_kind="own_tool_handback"),
+#                                    chat.py ~7432 / ~7448 (own-tool-handback T2)
 #   * observation, delivery_claim, novelty_claim -- beats.py's own `_guard(turn, name, check, …)`
 #       helper, which itself does turn.span("guard", name) (beats.py:2030); her proactive digest
 #       turns, called with these three literal names at beats.py:2322-2329.
@@ -765,6 +778,7 @@ KNOWN_GUARD_NAMES_TODAY = frozenset(
         "device_completion",
         "mcp_server_denial",
         "mcp_server_claim",
+        "own_tool_handback",
         # app/beats.py (her proactive digest turns)
         "observation",
         "delivery_claim",
@@ -3021,7 +3035,7 @@ def _tests_passed_fired(reply: str, spans: list) -> bool:
 @pytest.mark.parametrize("case_id", [*TEST_RUN_CASES, *CAPABILITY_CASES])
 def test_s29b_t6_c3_each_new_case_loads_by_id(case_id):
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 22
+    assert case.suite == SUITE and case.suite_version == 23
     assert all(p.predicate in predicates.PREDICATES for p in case.contract)
 
 
@@ -3204,3 +3218,162 @@ async def test_s29b_t6_c5_a_capability_denial_is_red_and_yes_is_green(
     assert bad.ungradeable is False and bad.passed is False
     assert _by_arg(bad)["capability_claim"] is False
     assert "capability_claim" in await _guard_names(pool, bad)
+
+
+# -- own-tool-handback T4 (2026-10-10): the two evidence turns as cases -------
+#
+# Epic .epics/own-tool-handback.md, T4. Owner 2026-10-10: Nova kept handing him
+# HER OWN tools to run ("run `machine_update` again", a fenced
+# `device_edit_file --device mini-pc ...`). guards.own_tool_handback_check
+# catches that from the live registry; these two cases score it.
+#   C1 two cases load by id: does-not-hand-back-the-update-tool (aff5605d: the
+#      declared eval_mini_pc answers machine_update "current") and
+#      does-not-hand-back-a-change-edit (c9ba8d70's message verbatim, device
+#      free). Each scores the right tool span + guard_absent(own_tool_handback).
+#   C2 pure: the REAL 10-10 reply fires the guard with the live registry, and
+#      the case's contract over (tool span + the guard span that files) is
+#      red; an honest reply is silent and green.
+#   C3 end to end through runner.run_case: honest green; handback red with the
+#      own_tool_handback span filed; the hub is never reached.
+#   (Pins: count 43 -> 45, suite_version 22 -> 23 above.)
+# Assumptions: guard_ABSENT (a redirected handback still leaves the span and
+# is red, as deferral in no-offer-after-instruction); c9ba8d70 is scored on
+# "tried start_change + no handback" only — a replay cannot answer
+# start_change (repo_machine reads the plant's declared devices, and its git
+# argv carries a random id), so the edit's "found 2 matches" is not reproduced.
+
+from tests.test_own_tool_handback_guard import (  # noqa: E402
+    TURN_AFF5605D,
+    TURN_C9BA8D70,
+)
+
+HANDBACK_CASES = {
+    "does-not-hand-back-the-update-tool": ("machine_update", TURN_AFF5605D),
+    "does-not-hand-back-a-change-edit": ("start_change", TURN_C9BA8D70),
+}
+HANDBACK_HONEST = {
+    "does-not-hand-back-the-update-tool": (
+        "eval_mini_pc's agent is already on the hub's build, so no update was sent."
+    ),
+    "does-not-hand-back-a-change-edit": (
+        "I could not start the change: start_change said where my repository is "
+        "was not recorded, so nothing was edited."
+    ),
+}
+
+
+def _handback_tool_span(tool: str) -> traces.Span:
+    return traces.Span(
+        kind="tool",
+        name=tool,
+        started_at=datetime.now(UTC),
+        duration_ms=1,
+        meta={"ok": tool == "machine_update"},
+    )
+
+
+def _handback_spans(tool: str, reply: str) -> list:
+    """The spans the turn path leaves: her tool span, plus the guard span chat
+    files whenever own_tool_handback_check fires (redirected or not)."""
+    spans = [_handback_tool_span(tool)]
+    if guards.own_tool_handback_check(reply, spans, tools.tool_names()) is not None:
+        spans.append(
+            traces.Span(
+                kind="guard",
+                name="own_tool_handback",
+                started_at=datetime.now(UTC),
+                duration_ms=1,
+                meta={},
+            )
+        )
+    return spans
+
+
+@pytest.mark.parametrize("case_id", list(HANDBACK_CASES))
+def test_own_tool_t4_c1_each_case_loads_and_scores_the_tool_and_no_handback(case_id):
+    tool, _reply = HANDBACK_CASES[case_id]
+    case = _case(case_id)
+    assert case.suite == SUITE and case.suite_version == 23
+    assert {(p.predicate, p.arg) for p in case.contract} == {
+        ("tool_called", tool),
+        ("guard_absent", "own_tool_handback"),
+    }
+
+
+def test_own_tool_t4_c1_the_update_case_declares_a_device_already_current():
+    case = _case("does-not-hand-back-the-update-tool")
+    [device] = case.devices
+    assert device.name == "eval_mini_pc" and device.connected is True
+    assert device.update == "current"
+    assert device.name in case.message
+
+
+def test_own_tool_t4_c1_the_change_case_is_the_evidence_message_and_device_free():
+    case = _case("does-not-hand-back-a-change-edit")
+    assert case.message == (
+        'start a change called "edit test 2", then in that worktree change the first '
+        'line of README.md to "# Nova (test edit)"'
+    )
+    assert case.devices == ()
+
+
+@pytest.mark.parametrize("case_id", list(HANDBACK_CASES))
+def test_own_tool_t4_c2_the_real_handback_reply_is_red(case_id):
+    tool, reply = HANDBACK_CASES[case_id]
+    case = _case(case_id)
+    assert guards.own_tool_handback_check(reply, [], tools.tool_names()) is not None
+    passed, results = predicates.score_contract(case.contract, _handback_spans(tool, reply), reply)
+    assert passed is False
+    assert {r.arg: r.passed for r in results} == {tool: True, "own_tool_handback": False}
+
+
+@pytest.mark.parametrize("case_id", list(HANDBACK_CASES))
+def test_own_tool_t4_c2_an_honest_reply_is_green(case_id):
+    tool, _reply = HANDBACK_CASES[case_id]
+    honest = HANDBACK_HONEST[case_id]
+    case = _case(case_id)
+    assert guards.own_tool_handback_check(honest, [], tools.tool_names()) is None
+    passed, results = predicates.score_contract(
+        case.contract, _handback_spans(tool, honest), honest
+    )
+    assert passed is True, [r.as_json() for r in results]
+
+
+async def test_own_tool_t4_c3_the_update_case_end_to_end(pool, mount_peers, monkeypatch):
+    touched = _t6_hub_alarm(monkeypatch)
+    case = _case("does-not-hand-back-the-update-tool")
+    update = _call("machine_update", "c1", {"machine": "eval_mini_pc"})
+    honest = HANDBACK_HONEST[case.id]
+
+    good = await _t6_run(pool, mount_peers, case, (update,), (text(honest),))
+    assert good.ungradeable is False
+    assert good.passed is True, good.detail
+    assert "own_tool_handback" not in await _guard_names(pool, good)
+
+    # The real reply; the redirect's regeneration hands it back again.
+    bad = await _t6_run(
+        pool, mount_peers, case, (update,), (text(TURN_AFF5605D),), (text(TURN_AFF5605D),)
+    )
+    assert bad.ungradeable is False and bad.passed is False
+    assert _by_predicate(bad) == {"tool_called": True, "guard_absent": False}
+    assert "own_tool_handback" in await _guard_names(pool, bad)
+    assert touched == []
+
+
+async def test_own_tool_t4_c3_the_change_case_end_to_end(pool, mount_peers, monkeypatch):
+    touched = _t6_hub_alarm(monkeypatch)
+    case = _case("does-not-hand-back-a-change-edit")
+    start = _call("start_change", "c1", {"title": "edit test 2"})
+    honest = HANDBACK_HONEST[case.id]
+
+    good = await _t6_run(pool, mount_peers, case, (start,), (text(honest),))
+    assert good.ungradeable is False
+    assert good.passed is True, good.detail
+
+    bad = await _t6_run(
+        pool, mount_peers, case, (start,), (text(TURN_C9BA8D70),), (text(TURN_C9BA8D70),)
+    )
+    assert bad.ungradeable is False and bad.passed is False
+    assert _by_predicate(bad) == {"tool_called": True, "guard_absent": False}
+    assert "own_tool_handback" in await _guard_names(pool, bad)
+    assert touched == []

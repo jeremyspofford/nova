@@ -516,11 +516,19 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     worktree has been updated" was no claim at all) added ONE bare module
     Pattern, `_LOCATED_WROTE_FILE` (the passive write with a quoted name or a
     short locative), reached by both walks: 222 -> 223, 303 -> 304, the
-    difference 81 unchanged. `_PASSIVE_CLAIM` was left byte-identical."""
+    difference 81 unchanged. `_PASSIVE_CLAIM` was left byte-identical.
+
+    own-tool-handback T1 GREEN (2026-10-10, her own tools handed to the owner:
+    turns c9ba8d70 / aff5605d / 1dfb9652 / f9cacb88) added FOUR bare module
+    Patterns, reached by both walks — `_HANDBACK_CODE_SPAN` (a bounded code
+    span), `_HANDBACK_CLAUSE_BREAK`, `_HANDBACK_MODAL` (a second-person modal)
+    and `_HANDBACK_OFFER` (her offer, not this guard's): 223 -> 227,
+    304 -> 308, the difference 81 unchanged. Tool names are matched as tokens
+    against the live list with string methods, no per-tool builder."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 223, len(old)
-    assert len(new) == 304, len(new)
+    assert len(old) == 227, len(old)
+    assert len(new) == 308, len(new)
     assert len(new) - len(old) == 81
 
 
@@ -642,6 +650,13 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # locative walking to its auxiliary.
         "quoted_file_then_spaces": "`README.md`" + pad + "in",
         "locative_then_spaces": "`README.md` in the" + pad + "has been updated",
+        # own-tool-handback T1: an unclosed code span walking padding, a
+        # second-person modal walking to its modal word, an offer walking to
+        # "me", and a clause of commas.
+        "backtick_then_spaces": "`" + pad + "x",
+        "modal_then_spaces": "you" + pad + "could",
+        "offer_then_spaces": "ask" + pad + "me",
+        "commas": "," * n,
     }
 
 
@@ -2363,3 +2378,61 @@ def test_the_sweep_reaches_the_device_rows():
     assert general, "no device_run row reads a general noun ('your laptop')"
     for pattern in general:
         assert any(p is pattern for p in swept), pattern.pattern
+
+
+# -- own-tool-handback T1 (2026-10-10): the whole guard reads 50 KB linearly ---
+# Her own tool handed to the owner: every shape below is silent (one fires only
+# at its very end), so the guard walks all of it. Cap 100 ms at 50 KB (the
+# epic's budget).
+
+OWN_TOOL_HANDBACK_FIFTY_KB = [
+    ("named_in_one_clause", _repeat("That came from `device_info` and ")),
+    ("her_own_runs", _repeat("I ran `device_info` and I checked with `nova_about`. ")),
+    ("offers", _repeat("You can ask me to run `device_info`, ")),
+    ("one_long_line", lambda n: "The " + "word " * (n // 5) + "`device_info`"),
+    ("unclosed_backticks", _repeat("` " + "a" * 40)),
+    ("modal_padding", lambda n: "you" + " " * n + "could run `device_info`"),
+    (
+        "one_long_lead_many_fences",
+        lambda n: "I ran " + "a" * (n * 2 // 5) + ":\n" + "```\n```\n" * (n * 3 // 20),
+    ),
+    ("first_person_fences", _repeat("I ran this:\n```\ndevice_info --device x\n```\n")),
+    ("trace_rows", _repeat("```\ndevice_edit_file  failed Error: 2 matches\n```\n")),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", OWN_TOOL_HANDBACK_FIFTY_KB, ids=[c[0] for c in OWN_TOOL_HANDBACK_FIFTY_KB]
+)
+def test_own_tool_handback_reads_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"own_tool_handback {label}",
+        lambda r: guards.own_tool_handback_check(r, [], _NAMES),
+        build,
+        cap_s=0.1,
+    )
+
+
+def test_the_own_tool_handback_timing_shapes_are_read_to_the_end():
+    """The pins above time a whole read only because no shape fires early:
+    each is silent at 50 KB except modal_padding, whose one handback sits at
+    its very end — the walk really reaches the end of every shape."""
+    for label, build in OWN_TOOL_HANDBACK_FIFTY_KB:
+        text = build(50_000)
+        verdict = guards.own_tool_handback_check(text, [], _NAMES)
+        if label == "modal_padding":
+            assert verdict is not None and verdict.tool == "device_info", label
+        else:
+            assert verdict is None, label
+
+
+def test_the_sweep_reaches_the_own_tool_handback_patterns():
+    swept = _every_pattern().values()
+    for name in (
+        "_HANDBACK_CODE_SPAN",
+        "_HANDBACK_CLAUSE_BREAK",
+        "_HANDBACK_MODAL",
+        "_HANDBACK_OFFER",
+    ):
+        pattern = getattr(guards, name)
+        assert any(p is pattern for p in swept), name

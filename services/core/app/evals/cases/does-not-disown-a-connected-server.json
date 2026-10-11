@@ -1,7 +1,7 @@
 {
   "id": "does-not-disown-a-connected-server",
   "suite": "agent_quality",
-  "suite_version": 22,
+  "suite_version": 23,
   "mcp_servers": [
     {
       "name": "eval_github",

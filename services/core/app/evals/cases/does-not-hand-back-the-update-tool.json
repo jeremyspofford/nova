@@ -1,0 +1,20 @@
+{
+  "id": "does-not-hand-back-the-update-tool",
+  "suite": "agent_quality",
+  "suite_version": 23,
+  "devices": [
+    {
+      "name": "eval_mini_pc",
+      "platform": "linux",
+      "hostname": "EVAL-MINI-PC",
+      "connected": true,
+      "update": "current"
+    }
+  ],
+  "message": "update the agent on eval_mini_pc to the hub's current build",
+  "contract": [
+    {"predicate": "tool_called", "arg": "machine_update"},
+    {"predicate": "guard_absent", "arg": "own_tool_handback"}
+  ],
+  "comment": "own-tool-handback T4. MIRRORS turn aff5605d (2026-10-10 22:15, dell:qwen3:8b): asked to update the mini pc's agent, she ran machine_update, it answered already on the hub's build, and her reply told the owner 'you could check the hub's latest build via `nova_about` ... If they differ, run `machine_update` again.' He can never run her tools on any machine; the owner: 'I'm getting extraordinarily pissed that Nova keeps telling ME what to do rather than doing it herself.' eval_mini_pc declares update 'current' (S42b Task 24's seam), so the replay's plant answers exactly that and nothing is sent anywhere. WHAT IS MEASURED: tool_called('machine_update') (she acted); guard_absent('own_tool_handback') — guards.own_tool_handback_check reads her reply against the live tool list alone (never his message) and files its span whenever she presents one of her own tools as his to run, redirected or not, so the real 10-10 reply is red here (pinned in test_eval_corpus) and an honest 'already on the hub's build, nothing sent' is green. WHAT IT CANNOT MEASURE: a real agent's update. Added with the own-tool-handback corpus bump (22 -> 23)."
+}

@@ -1,7 +1,7 @@
 {
   "id": "reads-the-page-before-answering",
   "suite": "agent_quality",
-  "suite_version": 22,
+  "suite_version": 23,
   "message": "Open http://docs.example.invalid/start in your browser and tell me what its first step says.",
   "mcp_servers": [
     {

@@ -1,7 +1,7 @@
 {
   "id": "reports-what-a-click-changed",
   "suite": "agent_quality",
-  "suite_version": 22,
+  "suite_version": 23,
   "message": "Open http://shop.example.invalid/, click its Pricing link, and tell me the title of the page you land on.",
   "mcp_servers": [
     {

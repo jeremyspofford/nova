@@ -499,6 +499,15 @@ def _ran_command_backed(program: str | None, spans: Sequence[Any]) -> bool:
     return any(_program(word) == program for words, _target in _run_facts(spans) for word in words)
 
 
+def _ran_her_tool(program: str | None, successful: Sequence[Any]) -> bool:
+    """Whether `program` is the name of one of her tools that ran ok this turn:
+    a tool call, read from the ok spans (the live registry dispatched them),
+    never a shell command and never a list kept by hand."""
+    if not program:
+        return False
+    return any(str(span.name).lower() == program for span in successful)
+
+
 def _file_basename(text: str) -> str:
     """The last path segment of a word or path, quotes and shell punctuation
     stripped, lower-cased: "services/core/chat.py" and "'C:\\x\\chat.py';" are
@@ -2701,8 +2710,10 @@ def narration_check(
                 continue
         elif kind == "ran_command":
             # Read from the run facts' words, any exit code: running is not
-            # passing (_ran_command_backed).
-            if _ran_command_backed(target, spans):
+            # passing (_ran_command_backed). Her own tool is not a shell
+            # command: "I ran `machine_update`" is backed by that tool's ok
+            # span this turn (own-tool-handback T5); a failed one backs nothing.
+            if _ran_command_backed(target, spans) or _ran_her_tool(target, successful):
                 continue
         elif kind == "edited_file":
             # Only a write of that NAME: an ok write span's readable target,
@@ -12629,4 +12640,218 @@ def server_claim_check(
                 phrase=found.group(0)[:120],
                 text=f"(No call to {server.name} {outcome} this turn.)",
             )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Own-tool handback (epic own-tool-handback, owner 2026-10-10): a reply that
+# hands the OWNER one of HER OWN registered tools to run ("Run `device_info`",
+# "you could check via `nova_about`", a fenced `device_edit_file --device ...`).
+# He can never run her tools on any machine, so the handback is wrong wherever
+# it points. Narrow by owner decision: the trigger is a registered tool NAME
+# from the live list the turn was shown; it never reads his message.
+#
+# How it reads (T1 GREEN): a tool is only ever found as the FIRST token of a
+# code span (`` `device_info` ``, `` `machine_update "Beelink"` ``) or of a
+# fenced line, and only if that token is in `available_tools`. A prose span
+# fires when its clause hands it to him: the clause opens with an imperative
+# (after a bullet, a number, **bold**, a fronted if-clause cut at its comma,
+# or an adverb such as "first"/"manually") or carries a second-person modal
+# ("you could/should/'ll need to"), AND the word right before the span is a
+# verb of running or an instrument preposition ("Run `x`", "... with `x`").
+# A fenced line fires only in CLI shape (`tool --flag` or `tool \`) under a
+# lead whose last sentence is neither hers ("I ran this:") nor a report
+# ("Here is what ran:"). Everything else — her own action, a quoted refusal,
+# an offer ("ask me to", "want me to"), naming a tool, a trace row — is
+# silent. Linear: each line is walked once, every clause break is found once,
+# and the per-span look-back is a fixed window.
+# ---------------------------------------------------------------------------
+
+# A code span on one line. Bounded so an unclosed backtick costs a fixed read.
+_HANDBACK_CODE_SPAN = re.compile(r"`([^`\n]{1,300})`")
+# A clause break in prose (outside code spans): sentence and clause marks
+# before whitespace or the end, and every comma (a fronted if-clause ends at
+# one: "If they differ, run `machine_update` again.").
+_HANDBACK_CLAUSE_BREAK = re.compile(r"[.!?;:](?=\s|$)|,")
+# A second-person modal: the owner as the one who would run it.
+_HANDBACK_MODAL = re.compile(
+    r"\byou(?:'ll|'d| will| would)?[ \t]+"
+    r"(?:could|can|should|may|might|must|need[ \t]+to|have[ \t]+to|want[ \t]+to|'ll|'d)\b",
+    re.IGNORECASE,
+)
+# An offer to run it herself is the deferral guard's (offer kind), not this.
+_HANDBACK_OFFER = re.compile(
+    r"\b(?:ask[ \t]+me|want[ \t]+me|let[ \t]+me|me[ \t]+to)\b", re.IGNORECASE
+)
+
+# Verbs of running a tool, as the word right before the span or as the
+# clause's opening imperative.
+_HANDBACK_VERBS = frozenset(
+    {
+        "run", "rerun", "re-run", "use", "try", "retry", "call", "execute",
+        "invoke", "check", "verify", "confirm", "trigger", "force", "read",
+        "inspect", "query", "fetch", "launch", "issue", "fire", "start",
+        "perform", "test", "compare", "update", "edit", "search", "list",
+        "open", "scan", "restart", "send", "install", "pull", "apply",
+    }
+)  # fmt: skip
+# The span as the instrument: "... with/via/using `x`", "by running `x`".
+_HANDBACK_INSTRUMENT = frozenset(
+    {"with", "via", "using", "through", "running", "calling", "invoking", "executing"}
+)
+# Words that may open an imperative clause before its verb.
+_HANDBACK_LEAD_ADVERBS = frozenset(
+    {
+        "first", "then", "also", "please", "just", "now", "manually", "simply",
+        "next", "finally", "again", "optionally", "alternatively", "instead",
+        "so", "and", "or", "and/or",
+    }
+)  # fmt: skip
+# A fence's lead that makes its CLI lines hers or a report, not his to run.
+_HANDBACK_LEAD_NOT_HIS = frozenset(
+    {
+        "i", "i'll", "i've", "i'm", "i'd", "me", "my", "we", "we'll", "we've",
+        "we're", "us", "let's", "ran", "was", "were", "failed", "refused",
+        "returned", "called", "sent", "tried", "executed", "output", "result",
+        "results", "trace", "log", "logs",
+    }
+)  # fmt: skip
+_HANDBACK_STRIP = "*_\"'()[]{}<>.,:;!?`~"
+_HANDBACK_WINDOW = 80
+_HANDBACK_LEAD_WINDOW = 300
+
+
+def _handback_words(text: str) -> list[str]:
+    words = (word.strip(_HANDBACK_STRIP).lower() for word in text.split())
+    return [word for word in words if word]
+
+
+def _handback_imperative(clause_head: str) -> bool:
+    """The clause opens with an imperative verb of running: after a list
+    bullet or number, **bold**, and lead adverbs ("first", "manually")."""
+    for word in _handback_words(clause_head)[:6]:
+        if word in ("-", "+", "#", ">") or word.rstrip(".)").isdigit():
+            continue
+        if word in _HANDBACK_LEAD_ADVERBS:
+            continue
+        return word in _HANDBACK_VERBS
+    return False
+
+
+def _handback_lead_is_his(lead: str) -> bool:
+    """A fence's lead (the last prose line before it) hands its lines to him
+    unless its last sentence is hers or a report."""
+    tail = lead[-_HANDBACK_LEAD_WINDOW:]
+    cut = max(tail.rfind(". "), tail.rfind("! "), tail.rfind("? "))
+    if cut >= 0:
+        tail = tail[cut + 2 :]
+    return not any(word in _HANDBACK_LEAD_NOT_HIS for word in _handback_words(tail))
+
+
+def _handback_cli_tool(line: str, names: frozenset[str]) -> str | None:
+    """The registered tool a code line runs in CLI shape (`tool --flag ...`
+    or `tool \\` continued), else None. A trace row has neither."""
+    parts = line.split(None, 2)
+    if parts and parts[0] == "$":
+        parts = parts[1:3]
+    if len(parts) < 2:
+        return None
+    first = parts[0].removesuffix("()")
+    if first not in names:
+        return None
+    second = parts[1]
+    if second == "\\" or (second.startswith("--") and len(second) > 2):
+        return first
+    return None
+
+
+@dataclass(frozen=True)
+class OwnToolHandbackClaim:
+    """Her own registered tool presented as the owner's action. `tool` is the
+    registered name, `phrase` the matched text for the guard span."""
+
+    tool: str
+    phrase: str
+
+
+def own_tool_handback_check(
+    reply_text: str,
+    spans: Sequence[Any],
+    available_tools: Sequence[str],
+) -> OwnToolHandbackClaim | None:
+    """The first of her registered tools the reply hands the owner to run, or
+    None. Pure, linear, fail-open; derived from `available_tools` only.
+    `spans` is unused here (T2 reads it for the redirect's nudge)."""
+    try:
+        return _own_tool_handback(reply_text or "", frozenset(available_tools or ()))
+    except Exception:  # fail open: a guard that crashes a turn is worse than a miss
+        return None
+
+
+def _own_tool_handback(text: str, names: frozenset[str]) -> OwnToolHandbackClaim | None:
+    if not names or "`" not in text:
+        return None
+    lead = ""
+    fence_open = False
+    fence_his = False
+    for raw in text.split("\n"):
+        line = raw.replace("\u2019", "'")
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            fence_open = not fence_open
+            if fence_open:
+                fence_his = _handback_lead_is_his(lead)
+            continue
+        if fence_open:
+            if fence_his:
+                tool = _handback_cli_tool(stripped, names)
+                if tool is not None:
+                    return OwnToolHandbackClaim(tool=tool, phrase=stripped[:160])
+            continue
+        if not stripped:
+            continue
+        claim = _handback_in_prose(line, names, lead)
+        if claim is not None:
+            return claim
+        lead = line
+    return None
+
+
+def _handback_in_prose(line: str, names: frozenset[str], lead: str) -> OwnToolHandbackClaim | None:
+    """The first code span on a prose line that hands him one of her tools."""
+    # A line that is one CLI-shaped code span reads like a fenced line.
+    body = line.strip().lstrip("-*+> ").strip()
+    if body.startswith("`") and body.endswith("`") and body.count("`") == 2:
+        tool = _handback_cli_tool(body.strip("`"), names)
+        if tool is not None and _handback_lead_is_his(lead):
+            return OwnToolHandbackClaim(tool=tool, phrase=body[:160])
+    clause_start = 0
+    scanned = 0
+    modal = offer = False
+    imperative: bool | None = None
+    for span in _HANDBACK_CODE_SPAN.finditer(line):
+        segment = line[scanned : span.start()]
+        last_break = None
+        for mark in _HANDBACK_CLAUSE_BREAK.finditer(segment):
+            last_break = mark.end()
+        if last_break is not None:
+            clause_start = scanned + last_break
+            modal = offer = False
+            imperative = None
+            segment = line[clause_start : span.start()]
+        modal = modal or _HANDBACK_MODAL.search(segment) is not None
+        offer = offer or _HANDBACK_OFFER.search(segment) is not None
+        scanned = span.end()
+        tool = span.group(1).split(None, 1)[0].removesuffix("()") if span.group(1).strip() else ""
+        if tool not in names or offer:
+            continue
+        if imperative is None:
+            imperative = _handback_imperative(line[clause_start : clause_start + _HANDBACK_WINDOW])
+        if not (imperative or modal):
+            continue
+        window = line[max(clause_start, span.start() - _HANDBACK_WINDOW) : span.start()]
+        before = _handback_words(window)
+        if before and (before[-1] in _HANDBACK_VERBS or before[-1] in _HANDBACK_INSTRUMENT):
+            phrase = line[clause_start : span.end()].strip()
+            return OwnToolHandbackClaim(tool=tool, phrase=phrase[-160:])
     return None

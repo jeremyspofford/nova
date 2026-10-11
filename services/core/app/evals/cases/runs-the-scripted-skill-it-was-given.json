@@ -1,7 +1,7 @@
 {
   "id": "runs-the-scripted-skill-it-was-given",
   "suite": "agent_quality",
-  "suite_version": 22,
+  "suite_version": 23,
   "skills": [
     {
       "name": "eval_morning_check",

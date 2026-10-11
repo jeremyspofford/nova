@@ -6680,3 +6680,50 @@ def test_walk_t3r2_a_dot_directory_is_not_its_undotted_namesake():
     span = device_edit_span("/home/jeremy/workspace/nova/worktrees/nova-3e8ab0/README.md")
     reply = "`.worktrees/nova-3e8ab0/README.md` has been updated."
     assert _written(guards.narration_check(reply, [span]))
+
+
+# -- own-tool-handback T5 (2026-10-10): "I ran `<her tool>`" is not a shell claim --
+#
+# Criteria (the epic tracker's T5 section holds the same):
+#   C1 "I ran `<tool>`" / "I ran <tool>" is not a ran_command claim when <tool>
+#      is the name of a tool span that ran ok THIS turn: a tool call is not a
+#      shell command, and its ok span is the record.
+#   C2 still corrected when that tool did not run this turn, or ran and failed.
+#   C3 a real program ("I ran `pytest`") keeps today's behaviour: the name of
+#      an ok span of ANOTHER tool backs nothing.
+
+T5_UPDATE_REPLY = "I ran `machine_update` on the Beelink Mini S and it's already current."
+
+
+def test_own_t5_ran_her_tool_over_its_ok_span_is_not_corrected():
+    correction = guards.narration_check(T5_UPDATE_REPLY, [tool_span("machine_update")])
+    assert correction is None
+
+
+def test_own_t5_ran_her_tool_with_no_span_is_corrected():
+    correction = guards.narration_check(T5_UPDATE_REPLY, [])
+    assert _ran_command(correction)
+    assert "machine_update" in _ran_targets(correction)
+
+
+def test_own_t5_ran_her_tool_over_a_failed_span_is_corrected():
+    correction = guards.narration_check(T5_UPDATE_REPLY, [tool_span("machine_update", ok=False)])
+    assert _ran_command(correction)
+    assert "machine_update" in _ran_targets(correction)
+
+
+def test_own_t5_bare_tool_name_over_its_ok_span_is_not_corrected():
+    correction = guards.narration_check("I ran device_info.", [tool_span("device_info")])
+    assert not _ran_command(correction)
+
+
+def test_own_t5_bare_tool_name_over_another_tools_ok_span_is_corrected():
+    correction = guards.narration_check("I ran device_info.", [tool_span("device_list")])
+    assert _ran_command(correction)
+    assert _ran_targets(correction) == ["device_info"]
+
+
+def test_own_t5_a_program_named_like_no_ok_span_keeps_todays_correction():
+    correction = guards.narration_check("I ran `pytest`.", [tool_span("device_info")])
+    assert _ran_command(correction)
+    assert _ran_targets(correction) == ["pytest"]

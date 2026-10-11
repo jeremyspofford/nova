@@ -503,6 +503,85 @@ def _flag_outside(ctx: ToolContext | None, repo: str, tool: str) -> str:
     return outside_worktree_warning(repo)
 
 
+# -- the current-change warning (own-tool-handback T3, turn c9ba8d70) --------
+#
+# After start_change returned .worktrees/nova-3ff482 she edited README.md in
+# .worktrees/nova-3e8ab0 — an older change's worktree. Under the 09-03
+# no-approvals ruling the call STILL RUNS; then its result ends with this
+# stated warning and the turn's facts carry {"other_change_worktree": <other>,
+# "tool": <name>}, which chat._run_tool lifts to span.meta (the same seam as
+# outside_worktree). "The change started this turn" is the LAST facts_sink
+# fact with "started": True (start_change's); list_changes' facts carry no
+# marker — a listed change is an old one. "Other" is derived from the current
+# path alone: its <repo>/.worktrees/nova- prefix followed by a different id.
+# Reads never warn.
+
+OTHER_CHANGE_WORKTREE = "other_change_worktree"
+
+
+def _started_worktree(ctx: ToolContext | None) -> str | None:
+    started = None
+    for fact in (ctx.facts_sink if ctx is not None else None) or ():
+        if isinstance(fact, dict) and fact.get("started") is True and "change" in fact:
+            path = fact.get("worktree_path")
+            if isinstance(path, str) and path:
+                started = path
+    return started
+
+
+def _other_worktree_in(text: str, current: str) -> str | None:
+    """The first <repo>/.worktrees/nova-<id> in `text` whose id is not the
+    current one's. Linear: str.find walks forward, each id read once."""
+    cut = current.rstrip("/")
+    slash = cut.rfind("/")
+    name = cut[slash + 1 :]
+    if slash < 0 or not name.startswith(code_repo.WORKTREE_PREFIX):
+        return None
+    prefix = cut[: slash + 1] + code_repo.WORKTREE_PREFIX
+    start = 0
+    while (at := text.find(prefix, start)) != -1:
+        end = at + len(prefix)
+        tail = end
+        while tail < len(text) and text[tail] not in "/ \t\n'\";&|)":
+            tail += 1
+        start = max(tail, at + 1)
+        found = text[at:tail]
+        if tail > end and found != cut:
+            return found
+    return None
+
+
+def _flag_other_change(
+    ctx: ToolContext | None,
+    tool: str,
+    *,
+    cwd: str | None = None,
+    argv: list | None = None,
+    path: str | None = None,
+) -> str | None:
+    """Record the fact and return the warning line when this call aims inside a
+    worktree other than the change started this turn; None otherwise."""
+    current = _started_worktree(ctx)
+    if current is None:
+        return None
+    targets = [t for t in (cwd, path) if isinstance(t, str)]
+    targets += [element for element in argv or () if isinstance(element, str)]
+    for target in targets:
+        other = _other_worktree_in(target, current)
+        if other is not None:
+            ctx.facts_sink.append({OTHER_CHANGE_WORKTREE: other, "tool": tool})
+            return (
+                f"Warning: the change you started this turn is {current.rstrip('/')}; "
+                f"this touched {other}."
+            )
+    return None
+
+
+def _join_warnings(*lines: str | None) -> str | None:
+    kept = [line for line in lines if line]
+    return "\n".join(kept) if kept else None
+
+
 # -- the executors -----------------------------------------------------------
 
 
@@ -849,7 +928,10 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     # Past here the agent answered with a result frame: the command was sent
     # and ran or failed on the machine, so a flagged call is flagged either
     # way (a transport failure above sent nothing it could confirm, and says so).
-    warning = _flag_outside(ctx, outside, "device_run") if outside is not None else None
+    warning = _join_warnings(
+        _flag_outside(ctx, outside, "device_run") if outside is not None else None,
+        _flag_other_change(ctx, "device_run", cwd=cwd, argv=argv),
+    )
     # The run fact (S29 T1), on EVERY result frame — a nonzero exit and a failed
     # frame included: the exit code is the agent's own, never read from prose.
     _file_fact(
@@ -902,7 +984,10 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
         )
     outside = _outside_checkout(row, path=path)
     result = await _command(pool, row, "fs.write", {"path": path, "content": content}, ctx=ctx)
-    warning = _flag_outside(ctx, outside, "device_write_file") if outside is not None else None
+    warning = _join_warnings(
+        _flag_outside(ctx, outside, "device_write_file") if outside is not None else None,
+        _flag_other_change(ctx, "device_write_file", path=path),
+    )
     try:
         _require_ok(result, row)
     except ToolFailure as exc:
@@ -934,7 +1019,10 @@ async def device_edit_file(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure("the 'new' argument must be a string")
     outside = _outside_checkout(row, path=path)
     result = await _command(pool, row, "fs.edit", {"path": path, "old": old, "new": new}, ctx=ctx)
-    warning = _flag_outside(ctx, outside, "device_edit_file") if outside is not None else None
+    warning = _join_warnings(
+        _flag_outside(ctx, outside, "device_edit_file") if outside is not None else None,
+        _flag_other_change(ctx, "device_edit_file", path=path),
+    )
 
     def failure(text: str) -> ToolFailure:
         return ToolFailure(text if warning is None else f"{text}\n{warning}")
