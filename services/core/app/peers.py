@@ -100,6 +100,10 @@ HEADER_PURPOSE = "X-Nova-Purpose"
 HEADER_ROLE = "X-Nova-Role"
 HEADER_TIMEZONE = "X-Nova-Timezone"
 HEADER_PASS_OVER = "X-Nova-Pass-Over"
+#: The owner's hub last-resort switch (settings routing.hub_last_resort),
+#: stated per call as "1"; absent is off, which is what the gateway reads for
+#: anything else (epic hub-last-resort).
+HEADER_HUB_LAST_RESORT = "X-Nova-Hub-Last-Resort"
 
 
 def pass_over_header(pass_over: Mapping[str, str]) -> str:
@@ -138,7 +142,8 @@ def attribution_headers(turn, purpose: str, role: str | None = None) -> dict[str
 
 
 def route_fields(header: str | None) -> dict[str, str]:
-    """The header's fields by name, `reason` already decoded; {} for none."""
+    """The header's fields by name, `reason` already decoded; {} for none.
+    `last_resort` is "1" when the hub last resort served (absent otherwise)."""
     if not header:
         return {}
     fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)

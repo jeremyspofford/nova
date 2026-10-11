@@ -237,6 +237,7 @@ async def complete(
     timeout: httpx.Timeout,
     max_tokens: int,
     budget: float | None = None,
+    hub_last_resort: bool = False,
 ) -> str:
     """One completion, every content delta concatenated —
     chat._collect_completion's path, followed rather than reused because that
@@ -267,6 +268,11 @@ async def complete(
     different facts and only one of them is about the conversation.
     """
     from app import chat
+
+    # The owner's hub last-resort switch, read by the caller where it holds
+    # the database and passed in — a beat read walks the beat role's chain
+    # like any round of hers (epic hub-last-resort). Not passed: off.
+    headers = chat.hub_last_resort_headers(dict(headers), hub_last_resort)
 
     # Read at CALL time, not bound as a default: a default is evaluated when
     # this function is defined, so a test that lowers the constant would still

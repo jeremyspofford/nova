@@ -1125,7 +1125,13 @@ async def route_explain(request: Request) -> dict:
     the kinds of decision model the owner allows (decision-role spec §6),
     which core states from his switches. A link of another kind is judged
     `kind_off`; absent allows every kind. It is refused, in words, on a role
-    that has no decision models."""
+    that has no decision models.
+
+    `?hub_last_resort=1` is what X-Nova-Hub-Last-Resort says: the owner's
+    switch to fall back to the hub's own model when every link and the
+    standby fail. Exactly "1" is on; anything else, or absent, is off."""
+    from app import data_plane
+
     role = request.query_params.get("role") or "chat"
     try:
         routing.validate_role(role)
@@ -1143,6 +1149,7 @@ async def route_explain(request: Request) -> dict:
         fit_context=_fit_context,
         latest_probes=_latest_probes,
         kinds=kinds,
+        hub_last_resort=data_plane.hub_last_resort_on(request.query_params.get("hub_last_resort")),
     )
 
 

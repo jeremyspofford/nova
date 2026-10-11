@@ -433,8 +433,9 @@ async def delete_route(role: str, request: Request) -> Response:
     return await _forward(request, "DELETE", f"/admin/routes/{role}")
 
 
-#: The parameter explain states the decision switches in: core's alone to state.
-DECISION_KINDS_PARAMS = frozenset({"decision_kinds"})
+#: The parameters explain states the owner's switches in — the decision kinds
+#: and the hub last resort: core's alone to state.
+DECISION_KINDS_PARAMS = frozenset({"decision_kinds", "hub_last_resort"})
 
 
 @router.get("/routes/explain")
@@ -443,12 +444,17 @@ async def route_explain(request: Request) -> Response:
     names the kinds of decision model the owner has switched on (decision-role
     spec §6), and the gateway reads none of core's settings — so the decision
     role's walk is explained with them too, and "right now: X would answer"
-    names the link that would. A browser's own `decision_kinds` never reaches
+    names the link that would. The hub last-resort switch is stated the same
+    way. A browser's own `decision_kinds` or `hub_last_resort` never reaches
     the gateway, for any role."""
     params: dict[str, str] = {}
     if (request.query_params.get("role") or "chat") == decisions.ROLE:
         kinds = await settings_store.decision_kinds(await db.get_pool())
         params["decision_kinds"] = decisions.kinds_value(kinds)
+    # The hub last-resort switch, stated as a chat call states it, so "right
+    # now: X would answer" names the hub when it would (epic hub-last-resort).
+    if await settings_store.hub_last_resort(await db.get_pool()):
+        params["hub_last_resort"] = "1"
     return await _forward(
         request,
         "GET",

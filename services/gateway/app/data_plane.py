@@ -67,6 +67,11 @@ KINDS_HEADER = "X-Nova-Decision-Kinds"
 # `quote(link)=quote(words)` pairs keyed by served id (routing.resolve's
 # `passed_over`). Never a wall; meaningless without a role's chain.
 PASS_OVER_HEADER = "X-Nova-Pass-Over"
+# The owner's hub last-resort switch (core's routing.hub_last_resort), stated
+# per role-walked chat completion: exactly "1" is on, anything else — absent
+# included — is off (routing.resolve's `hub_last_resort`). Never read on a
+# call with no role, nor on /v1/systemone.
+HUB_LAST_RESORT_HEADER = "X-Nova-Hub-Last-Resort"
 _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 # ollama's /api/ps is local and answers in milliseconds; bounded so a wedged
 # engine costs the stamp (omitted), never the reply (S40 ruling C2: 2 s).
@@ -132,6 +137,12 @@ def parse_pass_over(value: str | None) -> dict[str, str]:
     return passed
 
 
+def hub_last_resort_on(value: str | None) -> bool:
+    """X-Nova-Hub-Last-Resort (or explain's `hub_last_resort`): on only when it
+    says exactly "1"."""
+    return value == "1"
+
+
 def _nothing_runnable(exc: routing.NothingRunnable) -> str:
     """The 503's words: the walk's own sentence, then every link's verdict. A
     chain with no links (the empty decisions chain) is the sentence alone —
@@ -174,7 +185,14 @@ async def chat_completions(request: Request) -> Response:
                 "/v1/systemone — a chat completion cannot be served from its chain",
             )
         return await serve_by_role(
-            request, pool, attribution.role, requested, body, attribution, passed_over
+            request,
+            pool,
+            attribution.role,
+            requested,
+            body,
+            attribution,
+            passed_over,
+            hub_last_resort=hub_last_resort_on(request.headers.get(HUB_LAST_RESORT_HEADER)),
         )
     row, model = await providers.resolve(pool, requested)
     # No role: the explicit model, as before — but a capped provider is
@@ -206,6 +224,7 @@ async def walk_role(
     serve: Callable[[routing.Decision], Awaitable[Response]],
     kinds: frozenset[str] | None = None,
     passed_over: dict[str, str] | None = None,
+    hub_last_resort: bool = False,
 ) -> Response:
     """Walk the role's chain (app/routing.py) and serve from the first link
     that can — the ONE loop both data-plane routes use, so walls and fallback
@@ -220,7 +239,9 @@ async def walk_role(
     `kind_off`), so it is neither dialled nor walled. `passed_over` is the
     caller's own pass-over for this request (X-Nova-Pass-Over): those links
     are judged `passed_over` in the caller's words, never dialled, never
-    walled."""
+    walled. `hub_last_resort` is the owner's switch the caller stated
+    (X-Nova-Hub-Last-Resort): routing.resolve's last resort to the hub's own
+    model, off by default."""
     from app import admin  # the fit context and probe query /admin/suggest uses
 
     skip: set[str] = set()
@@ -247,6 +268,7 @@ async def walk_role(
                 unreachable=passed,
                 kinds=kinds,
                 passed_over=passed_over,
+                hub_last_resort=hub_last_resort,
             )
         except routing.NothingRunnable as exc:
             raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
@@ -299,6 +321,8 @@ async def serve_by_role(
     body,
     attribution,
     passed_over: dict[str, str] | None = None,
+    *,
+    hub_last_resort: bool = False,
 ) -> Response:
     """A chat completion, walked through the role's chain (walk_role)."""
 
@@ -314,7 +338,14 @@ async def serve_by_role(
         )
 
     return await walk_role(
-        request, pool, role, requested, attribution, serve, passed_over=passed_over
+        request,
+        pool,
+        role,
+        requested,
+        attribution,
+        serve,
+        passed_over=passed_over,
+        hub_last_resort=hub_last_resort,
     )
 
 

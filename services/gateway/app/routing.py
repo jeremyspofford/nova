@@ -187,6 +187,9 @@ class Decision:
     role: str
     verdicts: list[dict] = field(default_factory=list)
     standby: bool = False
+    #: Served by the hub last resort (hub_last_resort): the hub engine's own
+    #: derived chat model after every link and the standby failed.
+    last_resort: bool = False
 
     def header(self) -> str:
         from urllib.parse import quote
@@ -196,6 +199,8 @@ class Decision:
             parts.append(f"reason={quote(self.reason, safe='')}")
         if self.standby:
             parts.append("standby=1")
+        if self.last_resort:
+            parts.append("last_resort=1")
         return ";".join(parts)
 
     def as_route(self) -> dict:
@@ -205,6 +210,7 @@ class Decision:
             "reason": self.reason,
             "served_by": providers.served_by(self.row, self.model),
             "standby": self.standby,
+            "last_resort": self.last_resort,
             # Where the serving provider sits — its own `local` flag, the same
             # fact the decision kinds read. Core reads it to decide whether a
             # turn can run beside another one (chat sessions): a cloud turn
@@ -1167,6 +1173,7 @@ async def resolve(
     unreachable: dict[str, str] | None = None,
     kinds: frozenset[str] | None = None,
     passed_over: dict[str, str] | None = None,
+    hub_last_resort: bool = False,
 ) -> Decision:
     """The link that serves this call, decided BEFORE any provider is
     called. `skip` names links already refused in this request (the
@@ -1182,7 +1189,14 @@ async def resolve(
     otherwise be runnable is judged `passed_over` in those words and the
     walk goes on. It overrides only `runnable` — a link not runnable for its
     own reason keeps that verdict, and `unreachable`/`skip` (live facts of
-    this request) outrank it. It is never a wall."""
+    this request) outrank it. It is never a wall.
+
+    `hub_last_resort` is the owner's opt-in switch, stated by the caller per
+    call (core's routing.hub_last_resort; X-Nova-Hub-Last-Resort): when the
+    chain AND the cross-tier standby fail on a CHAT-protocol role, the hub
+    engine's own derived chat model (standby() over the hub row alone) serves,
+    stated as the last resort. Off (the default) is the walk exactly as it was;
+    on with a hub that cannot help is the same 503 saying why."""
     validate_role(role)
     protocol = protocol_of(role)
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
@@ -1300,12 +1314,16 @@ async def resolve(
                 role=role,
                 verdicts=verdicts,
             )
+    # The standby's pick on the hub, when it chose one and it could not serve:
+    # its verdict stands, and the last resort never judges the hub twice.
+    standby_tried_hub = False
     if not has_local and protocol == CHAT:
         candidates = [by_name[name] for name in engine_names]
         fallback = await standby(app, pool, fit_context, latest_probes, candidates, seen)
         if fallback is not None:
             row, model, why = fallback
             standby_id = f"{row['name']}:{model}"
+            standby_tried_hub = row["name"] == providers.BUILTIN
             entry = {
                 "id": standby_id,
                 "provider": row["name"],
@@ -1334,7 +1352,108 @@ async def resolve(
                     verdicts=verdicts,
                     standby=True,
                 )
-    raise NothingRunnable(role, verdicts)
+    why = None
+    if hub_last_resort and protocol == CHAT and not standby_tried_hub:
+        last = await _last_resort(
+            app,
+            pool,
+            role,
+            by_name,
+            walled,
+            seen,
+            verdicts,
+            fit_context,
+            latest_probes,
+            skip=skip,
+            unreachable=unreachable,
+            passed_over=passed_over,
+        )
+        if isinstance(last, Decision):
+            return last
+        why = last
+    raise NothingRunnable(role, verdicts, why=why)
+
+
+async def _hub_cannot(app, pool, row: dict | None, seen: dict[str, engines.EngineView]) -> str:
+    """Why the hub has no chat model to serve, in words — read off the same
+    facts standby() reads, never assumed."""
+    if row is None:
+        return f"there is no {providers.BUILTIN} engine"
+    off = switched_off(row)
+    if off is not None:
+        return off
+    view = seen.get(row["name"]) or await engines.observe(app, pool, row, live=False)
+    if not view.tags:
+        return view.reason or f"{row['name']} lists no installed models"
+    return f"none of the models installed on {row['name']} can take a chat turn"
+
+
+async def _last_resort(
+    app,
+    pool,
+    role: str,
+    by_name: dict[str, dict],
+    walled: dict,
+    seen: dict[str, engines.EngineView],
+    verdicts: list[dict],
+    fit_context,
+    latest_probes,
+    *,
+    skip: set[str] | None,
+    unreachable: dict[str, str] | None,
+    passed_over: dict[str, str] | None,
+) -> Decision | str | None:
+    """The hub last resort: a Decision when the hub's own derived chat model
+    can serve, None when its verdict was appended (refused, unreachable,
+    passed over or walled in this request — never dialled again), or the
+    words for the 503 when the hub has no chat model at all."""
+    row = by_name.get(providers.BUILTIN)
+    fallback = None
+    if row is not None and engines.is_engine(row):
+        fallback = await standby(app, pool, fit_context, latest_probes, [row], seen)
+    if fallback is None:
+        cannot = await _hub_cannot(app, pool, row, seen)
+        return f"the hub last resort is on but the hub has no chat model to serve ({cannot})"
+    row, model, why = fallback
+    hub_id = f"{row['name']}:{model}"
+    entry = {
+        "id": hub_id,
+        "provider": row["name"],
+        "model": model,
+        "local": True,
+        "link": len(verdicts) + 1,
+        "last_resort": True,
+    }
+    wall = wall_for(walled, row["name"], model)
+    if unreachable and hub_id in unreachable:
+        reason = f"last resort: {unreachable[hub_id]}"
+        verdicts.append({**entry, "verdict": "unreachable", "reason": reason})
+    elif skip and hub_id in skip:
+        reason = f"last resort: {hub_id} refused this request"
+        verdicts.append({**entry, "verdict": "refused", "reason": reason})
+    elif passed_over and hub_id in passed_over:
+        reason = f"last resort: passed over: {passed_over[hub_id]}"
+        verdicts.append({**entry, "verdict": "passed_over", "reason": reason})
+    elif wall is not None:
+        reason = f"last resort: {wall['reason']}"
+        verdicts.append({**entry, "verdict": "walled", "reason": reason})
+    else:
+        skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)
+        verdicts.append({**entry, "verdict": "runnable", "reason": f"last resort: {why}"})
+        return Decision(
+            row=row,
+            model=model,
+            link=len(verdicts),
+            reason=(
+                f"fell back to the hub's own model {hub_id} ({why}; last resort, "
+                f"CPU-only, slower) — {skipped}"
+            ),
+            role=role,
+            verdicts=verdicts,
+            standby=True,
+            last_resort=True,
+        )
+    return None
 
 
 async def explain(
@@ -1347,9 +1466,11 @@ async def explain(
     fit_context,
     latest_probes,
     kinds: frozenset[str] | None = None,
+    hub_last_resort: bool = False,
 ) -> dict:
     """The same walk without serving: every link's verdict and what would
-    serve — with `kinds`, the decision-model kinds a call would allow."""
+    serve — with `kinds`, the decision-model kinds a call would allow, and
+    `hub_last_resort`, the owner's last-resort switch a call would state."""
     try:
         decision = await resolve(
             app,
@@ -1360,6 +1481,7 @@ async def explain(
             fit_context=fit_context,
             latest_probes=latest_probes,
             kinds=kinds,
+            hub_last_resort=hub_last_resort,
         )
     except NothingRunnable as exc:
         return {"role": role, "chain": exc.verdicts, "would_serve": None, "reason": str(exc)}

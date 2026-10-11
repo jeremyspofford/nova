@@ -3824,6 +3824,18 @@ def _markup_tool_calls(
 # local models — NOT factual accuracy, which the mechanical guards and tools own.
 
 
+def hub_last_resort_headers(headers: dict[str, str], on: bool) -> dict[str, str]:
+    """`headers` with the owner's hub last-resort switch stated. `on` is read
+    by the caller where it already holds the database (traces.open_turn for a
+    turn's rounds, the beat reads' own callers) and passed down — the round
+    never touches the database for it. Only a call that walks a role's chain —
+    one carrying X-Nova-Role — states it: a call with no role (an eval, a
+    warm-up) walks no chain. Off sends nothing, which is the gateway's off."""
+    if on is True and headers.get(peers.HEADER_ROLE):
+        headers[peers.HEADER_HUB_LAST_RESORT] = "1"
+    return headers
+
+
 async def _gateway_round(
     app,
     turn: traces.Turn,
@@ -3897,7 +3909,9 @@ async def _gateway_round(
     reasoning_chars = 0
     purpose = purpose or traces.purpose_of(turn)
     role = role if role is not None else _role_of(turn)
-    headers = peers.attribution_headers(turn, purpose, role)
+    headers = hub_last_resort_headers(
+        peers.attribution_headers(turn, purpose, role), getattr(turn, "hub_last_resort", False)
+    )
     if pass_over:
         # A pass-over names links of a ROLE's chain; a call with no role walks
         # no chain (an eval names its model, rail 17) and the gateway refuses
@@ -4355,6 +4369,11 @@ def _note_route(span, header: str | None) -> None:
         span.meta["route_link"] = int(fields["link"])
     if fields.get("reason"):
         span.meta["route_reason"] = fields["reason"]
+    if fields.get("last_resort") == "1":
+        # Served by the hub's own model after every link and the standby
+        # failed (epic hub-last-resort); the route frame states it with the
+        # gateway's own reason, never composed here.
+        span.meta["last_resort"] = True
 
 
 def _note_served(span, headers, requested: str | None = None) -> None:
@@ -4644,7 +4663,10 @@ async def _collect_completion(
                     "POST",
                     "/v1/chat/completions",
                     json=payload,
-                    headers=peers.attribution_headers(turn, purpose, role),
+                    headers=hub_last_resort_headers(
+                        peers.attribution_headers(turn, purpose, role),
+                        getattr(turn, "hub_last_resort", False),
+                    ),
                 ) as response:
                     _note_served(span, response.headers, requested)
                     _note_route(span, response.headers.get("x-nova-route"))

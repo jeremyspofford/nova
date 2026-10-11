@@ -244,9 +244,27 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "per message."
         ),
     ),
+    # The hub last resort (epic hub-last-resort, owner 2026-10-10): opt-in,
+    # default off. Core states it per call in X-Nova-Hub-Last-Resort; the
+    # gateway reads none of core's settings. The description is the notice
+    # Settings shows under its switch.
+    SettingDef(
+        key="routing.hub_last_resort",
+        type="bool",
+        default=False,
+        description=(
+            "When every link of a chat chain and the standby cannot answer, the hub's own "
+            "model answers instead of nothing — whichever chat model the hub has now. "
+            "CPU-only on the hub, so slower. Off by default. Unlike adding a hub:<model> "
+            "link to the chain, it names no fixed model and runs only after every link failed."
+        ),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
+
+#: The hub last-resort switch's key (epic hub-last-resort).
+HUB_LAST_RESORT = "routing.hub_last_resort"
 
 #: The decision switches by the kind of decision model each allows. A decision
 #: link's kind is its provider's own `local` flag, which the gateway reads;
@@ -311,6 +329,13 @@ async def decision_kinds(pool: asyncpg.Pool | asyncpg.Connection) -> frozenset[s
         if await read_value(pool, key) is True:
             allowed.add(kind)
     return frozenset(allowed)
+
+
+async def hub_last_resort(pool: asyncpg.Pool | asyncpg.Connection) -> bool:
+    """The owner's hub last-resort switch, read now — the one reader every
+    role-carrying chat call and every explain share (X-Nova-Hub-Last-Resort,
+    explain's `hub_last_resort`). Only a stored `true` is on."""
+    return await read_value(pool, HUB_LAST_RESORT) is True
 
 
 @router.get("")

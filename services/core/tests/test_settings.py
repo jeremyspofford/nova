@@ -66,6 +66,10 @@ KNOWN_KEYS = {
     # update: two defs landed, so the set moved by two.
     "decisions.local",
     "decisions.cloud",
+    # Epic hub-last-resort (owner 2026-10-10): the opt-in, default-off switch
+    # to fall back to the hub's own model when every chat link and the standby
+    # fail. Deliberate tripwire update: one def landed, so the set moved by one.
+    "routing.hub_last_resort",
 }
 
 

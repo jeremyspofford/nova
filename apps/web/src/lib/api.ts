@@ -782,7 +782,17 @@ export interface RouteVerdict {
 export interface RouteExplain {
   role: RouteRole
   chain: RouteVerdict[]
-  would_serve: { role: string; link: number; reason: string | null; served_by: string; standby: boolean } | null
+  would_serve: {
+    role: string
+    link: number
+    reason: string | null
+    served_by: string
+    standby: boolean
+    /** the hub's own model answers only because routing.hub_last_resort is on
+     * and every link and the standby failed (epic hub-last-resort); absent on
+     * a gateway that predates it. */
+    last_resort?: boolean
+  } | null
   reason: string | null
 }
 

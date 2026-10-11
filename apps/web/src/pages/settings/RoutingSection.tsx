@@ -94,6 +94,18 @@ export function decisionSwitchDefs(settings: SettingDef[]): SettingDef[] | null 
   return defs.every((def): def is SettingDef => def !== undefined) ? defs : null
 }
 
+/** The hub last-resort switch (epic hub-last-resort, owner 2026-10-10): opt-in,
+ * default off. Core holds it and states it to the gateway on every chat call;
+ * its notice is core's own description of the setting. */
+export const HUB_LAST_RESORT_KEY = 'routing.hub_last_resort'
+const HUB_LAST_RESORT_LABEL = "Fall back to the hub's own model"
+
+/** The hub last-resort switch's def out of core's settings listing; null when
+ * core does not list it (then no switch is drawn). */
+export function hubLastResortDef(settings: SettingDef[]): SettingDef | null {
+  return settings.find(s => s.key === HUB_LAST_RESORT_KEY) ?? null
+}
+
 /** What the decisions panel says while both switches are off: the step does
  * not run at all, so nothing answers and nothing is spent. */
 const DECISIONS_OFF =
@@ -193,6 +205,7 @@ export function RoutingSection({
   api = DEFAULT_API,
   onChatModelChanged,
   decisionSwitches = null,
+  hubLastResort = null,
   onSettingChanged = () => {},
 }: {
   chatModel: string
@@ -205,6 +218,9 @@ export function RoutingSection({
   /** The decision switches' defs as core listed them (decisionSwitchDefs);
    * null draws no switch. */
   decisionSwitches?: SettingDef[] | null
+  /** The hub last-resort switch's def as core listed it (hubLastResortDef);
+   * null draws no switch. */
+  hubLastResort?: SettingDef | null
   /** Hands the parent the value CORE stored for a switch, so the page
    * re-renders from it — the switch moves with that, never with the click. */
   onSettingChanged?: (key: string, value: unknown) => void
@@ -264,6 +280,10 @@ export function RoutingSection({
   // fails — the error above says why.
   const [explainedAt, setExplainedAt] = useState(0)
   const [switchedAt, setSwitchedAt] = useState(0)
+  // The same for chat's walk and the hub last-resort switch: core states the
+  // switch when it explains chat, so a walk read before it was stored is not
+  // shown beside it.
+  const [hubSwitchedAt, setHubSwitchedAt] = useState(0)
 
   const load = useCallback((overrideChatModel?: string): Promise<void> => {
     const seq = ++loadSeq.current
@@ -380,6 +400,15 @@ export function RoutingSection({
     await load()
   }
 
+  // The hub last-resort switch: the same write — core stores it, the switch
+  // moves with what core stored, and chat's explanation is read again.
+  const onHubLastResort = async (on: boolean): Promise<void> => {
+    const { value: stored } = storedFrom(await api.putSetting(HUB_LAST_RESORT_KEY, on), HUB_LAST_RESORT_KEY, 'boolean')
+    setHubSwitchedAt(loadSeq.current)
+    onSettingChanged(HUB_LAST_RESORT_KEY, stored)
+    await load()
+  }
+
   return (
     <Section
       icon={Waypoints}
@@ -419,7 +448,11 @@ export function RoutingSection({
               protocol={entry.protocol ?? 'chat'}
               // The decisions walk only once it was read under the switches
               // as they are now stored (see `switchedAt`).
-              explain={entry.protocol === 'systemone' && explainedAt <= switchedAt ? undefined : explains[entry.role]}
+              explain={
+                (entry.protocol === 'systemone' && explainedAt <= switchedAt) || (entry.role === 'chat' && explainedAt <= hubSwitchedAt)
+                  ? undefined
+                  : explains[entry.role]
+              }
               router={entry.router ?? null}
               routerLink={routerLink}
               routerUnavailableReason={routerUnavailableReason}
@@ -428,6 +461,10 @@ export function RoutingSection({
               // decisions role's, read off its protocol like the picker is.
               decisionSwitches={entry.protocol === 'systemone' ? decisionSwitches : null}
               onDecisionSwitch={onDecisionSwitch}
+              // Chat's chain only: the gateway falls to the hub for the chat
+              // role's whole-chain failure (the flag rides every chat call).
+              hubLastResort={entry.role === 'chat' ? hubLastResort : null}
+              onHubLastResort={onHubLastResort}
               onRouter={async on => {
                 const result = await api.putJevRouter(entry.role, on, on ? routerLink ?? undefined : undefined)
                 // Reload with the model the ANSWER just named, not this
@@ -511,6 +548,8 @@ function RoleEditor({
   catalogProviders,
   decisionSwitches,
   onDecisionSwitch,
+  hubLastResort,
+  onHubLastResort,
   onRouter,
   onSave,
   onMakePrimary,
@@ -543,6 +582,11 @@ function RoleEditor({
   decisionSwitches: SettingDef[] | null
   /** Writes one decision switch; a refusal is thrown, in core's own words. */
   onDecisionSwitch: (key: string, on: boolean) => Promise<void>
+  /** The hub last-resort switch's def — null on every role but chat, and
+   * when core does not list it. */
+  hubLastResort: SettingDef | null
+  /** Writes the hub last-resort switch; a refusal is thrown, in core's words. */
+  onHubLastResort: (on: boolean) => Promise<void>
   /** Flips the switch. Resolves to the gateway's `note` (undefined for none)
    * on success; a refusal is thrown, in the gateway's own words. */
   onRouter: (on: boolean) => Promise<string | undefined>
@@ -856,6 +900,7 @@ function RoleEditor({
         </p>
       )}
       {decisionSwitches && editable && <DecisionSwitches defs={decisionSwitches} onSwitch={onDecisionSwitch} />}
+      {hubLastResort && editable && <HubLastResortSwitch def={hubLastResort} onSwitch={onHubLastResort} />}
       {removeError && (
         <p role="alert" className="mt-2 text-caption text-danger" data-testid={`route-${role}-remove-error`}>
           could not remove — {removeError}
@@ -871,7 +916,7 @@ function RoleEditor({
         !('error' in explain) && (
           <p className="mt-2 text-caption text-content-tertiary" data-testid={`route-${role}-would-serve`}>
             {explain.would_serve
-              ? `right now: ${explain.would_serve.served_by} would answer${explain.would_serve.link > 1 ? ` — ${explain.would_serve.reason}` : ''}`
+              ? `right now${explain.would_serve.last_resort ? ' (last resort)' : ''}: ${explain.would_serve.served_by} would answer${explain.would_serve.link > 1 ? ` — ${explain.would_serve.reason}` : ''}`
               : `right now: nothing could answer — ${explain.reason}`}
           </p>
         )
@@ -947,6 +992,41 @@ function DecisionSwitches({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** The hub last-resort switch, as core stored it, with core's description as
+ * its notice. Like the decision switches, it moves only when the page
+ * re-renders with what core stored; a refused write leaves it, with why. */
+function HubLastResortSwitch({ def, onSwitch }: { def: SettingDef; onSwitch: (on: boolean) => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const flip = async (on: boolean) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onSwitch(on)
+    } catch (err) {
+      setError(reasonOf(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-3 space-y-1" data-testid="hub-last-resort-switch">
+      <div className="flex flex-wrap items-center gap-2">
+        <Toggle id="hub-last-resort-switch" size="sm" checked={def.value === true} disabled={busy} onChange={on => void flip(on)} label={HUB_LAST_RESORT_LABEL} />
+      </div>
+      <p className="text-caption text-content-tertiary" data-testid="hub-last-resort-notice">
+        {def.description}
+      </p>
+      {error && (
+        <p role="alert" className="text-caption text-danger">
+          could not switch — {error}
+        </p>
+      )}
     </div>
   )
 }

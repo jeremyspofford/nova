@@ -17,7 +17,7 @@ import { AddToNovaSection } from './AddToNovaSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
-import { RoutingSection, decisionSwitchDefs } from './RoutingSection'
+import { RoutingSection, decisionSwitchDefs, hubLastResortDef } from './RoutingSection'
 import { ProactiveSection } from './ProactiveSection'
 import { SETTINGS_TABS, resolveTab } from './tabs'
 
@@ -113,6 +113,8 @@ export function SettingsPage() {
   // The decision role's two switches (decision-role spec §6), off the same
   // one settings fetch: drawn only when core lists both keys.
   const decisionSwitches = settings ? decisionSwitchDefs(settings) : null
+  // The hub last-resort switch (epic hub-last-resort), off the same fetch.
+  const hubLastResort = settings ? hubLastResortDef(settings) : null
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -199,6 +201,7 @@ export function SettingsPage() {
                   chatModel={chatModel}
                   onChatModelChanged={onChatModelChanged}
                   decisionSwitches={decisionSwitches}
+                  hubLastResort={hubLastResort}
                   // The value CORE stored, handed straight back into the one
                   // settings state this page renders from.
                   onSettingChanged={updateSettingValue}

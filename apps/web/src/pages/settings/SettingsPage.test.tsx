@@ -315,3 +315,55 @@ describe('SettingsPage — the decision switches', () => {
     expect(screen.queryByRole('switch', { name: 'Local decision model' })).toBeNull()
   })
 })
+
+/**
+ * The hub last-resort switch (epic hub-last-resort) is drawn from core's
+ * routing.hub_last_resort def off the one settings fetch, and written back
+ * into it. A core that does not list the key draws no switch.
+ */
+describe('SettingsPage — the hub last-resort switch', () => {
+  const WITH_HUB = [
+    { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+    { key: 'routing.hub_last_resort', type: 'bool', default: false, description: 'the hub notice', value: false },
+  ] as const
+
+  function routingReads() {
+    vi.mocked(getRoutes).mockResolvedValue({
+      roles: [{ role: 'chat', chain: ['hub:qwen3:8b'], reserved: false, builtin: true, protocol: 'chat', router: null }],
+      walls: [],
+    })
+    vi.mocked(getCatalog).mockResolvedValue({ fetched_at: 't', sources: [], rows: [] })
+    vi.mocked(listAgents).mockResolvedValue([])
+    vi.mocked(explainRoute).mockResolvedValue({ role: 'chat', chain: [], would_serve: null, reason: 'no chain' })
+  }
+
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api')
+    vi.mocked(getRoutes).mockImplementation(actual.getRoutes)
+    vi.mocked(getCatalog).mockImplementation(actual.getCatalog)
+    vi.mocked(listAgents).mockImplementation(actual.listAgents)
+    vi.mocked(explainRoute).mockImplementation(actual.explainRoute)
+  })
+
+  it('draws it in Routing from the def core listed, and a switch writes back into the page', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...WITH_HUB])
+    routingReads()
+    renderApp('models')
+
+    const hub = (await screen.findByRole('switch', { name: "Fall back to the hub's own model" })) as HTMLInputElement
+    expect(hub.checked).toBe(false)
+    expect(screen.getByTestId('hub-last-resort-notice').textContent).toBe('the hub notice')
+
+    fireEvent.click(hub)
+    await waitFor(() => expect(putSetting).toHaveBeenCalledWith('routing.hub_last_resort', true))
+    await waitFor(() => expect(hub.checked).toBe(true))
+  })
+
+  it('draws no switch on a core that does not list the key', async () => {
+    routingReads()
+    renderApp('models')
+
+    await screen.findByTestId('route-chat')
+    expect(screen.queryByTestId('hub-last-resort-switch')).toBeNull()
+  })
+})

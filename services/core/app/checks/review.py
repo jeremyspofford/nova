@@ -82,7 +82,7 @@ from datetime import timedelta
 
 import httpx
 
-from app import identity, model_read, peers
+from app import identity, model_read, peers, settings_store
 from app.checks import CannotCheck, Check, Finding, NotDue, prose
 
 CHECK_NAME = "review_commitments"
@@ -485,6 +485,7 @@ async def _ask(app, pool, owner: identity.Person, brief: str) -> str:
             headers=_attribution(owner),
             timeout=REVIEW_TIMEOUT,
             max_tokens=REVIEW_MAX_TOKENS,
+            hub_last_resort=await settings_store.hub_last_resort(pool),
         )
     except model_read.GatewayRefused as exc:
         raise CannotCheck(str(exc)) from exc
