@@ -19,6 +19,7 @@ export default {
           card: 'rgb(var(--surface-card) / <alpha-value>)',
           'card-hover': 'rgb(var(--surface-card-hover) / <alpha-value>)',
           elevated: 'rgb(var(--surface-elevated) / <alpha-value>)',
+          selected: 'rgb(var(--surface-selected) / <alpha-value>)',
           input: 'rgb(var(--surface-input) / <alpha-value>)',
           sidebar: 'rgb(var(--surface-sidebar) / <alpha-value>)',
         },

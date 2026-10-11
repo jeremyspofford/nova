@@ -365,7 +365,7 @@ function SessionRow({
           'flex w-full items-center gap-2 rounded-md pr-8 text-left transition-colors duration-fast',
           touch ? 'py-2.5 pl-3 text-body' : 'py-1.5 pl-2.5 text-compact',
           focused
-            ? 'bg-surface-elevated text-content-primary font-medium'
+            ? 'bg-surface-selected text-content-primary font-medium'
             : shown
               ? 'text-content-primary'
               : 'text-content-secondary hover:bg-surface-card hover:text-content-primary',

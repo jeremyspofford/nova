@@ -12,9 +12,12 @@
  * `text-neutral-200`, following the app's `darkMode: 'class'` (`html.dark`)
  * mechanism. The colours below are the app's own tokens read against that
  * ground: the CSS custom properties `index.css` defines (`--accent-*`,
- * `--neutral-*`) and the status colours `tailwind.config.js` defines
- * (`theme()` resolves them at build time, so a palette change there lands
- * here too). Contrast against neutral-900 (28 25 23): accent-300 ~11:1,
+ * `--neutral-*`), and the status hues as LITERALS — the light steps the
+ * dark block needs. They read `theme('colors.success')` etc. until
+ * 2026-10-11, but the status tiers became per-mode (700-800 in light mode),
+ * so in light mode strings, numbers and types went dark-on-dark.
+ * lightModeSurfaces.test.ts refuses a mode-flipping colour here and checks
+ * every literal at 4.5:1 on each palette's 900. Contrast against neutral-900 (28 25 23): accent-300 ~11:1,
  * success ~9:1, warning ~11:1, info ~7:1, neutral-400 ~6.5:1. A dark-mode
  * override, if one is ever wanted, goes under `html.dark .hljs …` — same
  * selector index.css uses for its tokens.
@@ -43,7 +46,7 @@
 .hljs-regexp,
 .hljs-meta .hljs-string,
 .hljs-char.escape_ {
-  color: theme('colors.success.DEFAULT');
+  color: rgb(52 211 153);
 }
 
 .hljs-number,
@@ -52,7 +55,7 @@
 .hljs-bullet,
 .hljs-link,
 .hljs-variable.constant_ {
-  color: theme('colors.warning.DEFAULT');
+  color: rgb(251 191 36);
 }
 
 .hljs-built_in,
@@ -66,7 +69,7 @@
 .hljs-attr,
 .hljs-attribute,
 .hljs-property {
-  color: theme('colors.info.DEFAULT');
+  color: rgb(96 165 250);
 }
 
 .hljs-title,
@@ -110,13 +113,13 @@
 
 /* diff: whole lines, so a background reads as a gutter would. */
 .hljs-addition {
-  color: theme('colors.success.DEFAULT');
-  background-color: theme('colors.success.dim');
+  color: rgb(52 211 153);
+  background-color: rgb(52 211 153 / 0.12);
 }
 
 .hljs-deletion {
-  color: theme('colors.danger.DEFAULT');
-  background-color: theme('colors.danger.dim');
+  color: rgb(248 113 113);
+  background-color: rgb(248 113 113 / 0.12);
 }
 
 html.dark .hljs-comment,

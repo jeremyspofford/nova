@@ -384,7 +384,7 @@ export function Sidebar({
                 </div>
               )}
               {collapsed && section.label && (
-                <div className="h-px bg-border-subtle mx-2 mb-2" />
+                <div className="h-px bg-border mx-2 mb-2" />
               )}
               <div className="space-y-0.5">
                 {visibleItems.map(item => {
@@ -403,7 +403,7 @@ export function Sidebar({
                         // one a session row gets (2026-10-11) — the accent fill
                         // here plus an accent session row read as two places.
                         active
-                          ? 'bg-surface-elevated text-content-primary'
+                          ? 'bg-surface-selected text-content-primary'
                           : 'text-content-secondary hover:text-content-primary hover:bg-surface-card',
                       )}
                     >
@@ -428,7 +428,7 @@ export function Sidebar({
           <>
             {/* Pages above, conversations below — a rule and real space
                 between them, so the session list never reads as more nav. */}
-            <div className="h-px bg-border-subtle mx-2.5" aria-hidden="true" />
+            <div className="h-px bg-border mx-2.5" aria-hidden="true" />
             <SessionsList />
           </>
         )}
@@ -438,7 +438,7 @@ export function Sidebar({
           showed `people.name` — an email on this instance, so a 240px column
           read "jeremyspofford@gmail…." and said nothing about who that is. */}
       {!collapsed && (
-        <div className="shrink-0 border-t border-border-subtle pt-2">
+        <div className="shrink-0 border-t border-border pt-2">
           <AccountMenu />
         </div>
       )}
