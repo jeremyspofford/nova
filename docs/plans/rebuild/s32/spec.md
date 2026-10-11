@@ -1,8 +1,8 @@
 # S32: her changes, a sealed box per change, and her landing step — the spec
 
-**Status:** a proposal, 2026-10-11. **Nothing here is approved yet.** The
-decisions marked **OPEN** in §9 are the owner's; everything else follows from
-rulings already on record, which are cited where they are used.
+**Status:** approved 2026-10-11. The owner took every proposal in §9 ("go
+with your proposed"). Everything else follows from rulings already on record,
+which are cited where they are used.
 
 The owner asked for this on 2026-10-08, after Nova built a feature inside the
 live checkout through `device_run`:
@@ -135,7 +135,7 @@ her branch.
 
 ### 4.3 Dependencies without egress
 
-A sealed box cannot fetch from PyPI or npm. Proposed (**OPEN, §9.1**):
+A sealed box cannot fetch from PyPI or npm. Ruled (§9.1, 2026-10-11):
 
 - The box image carries the dependency caches for `main`'s lockfiles
   (`uv.lock` for each service, `apps/web/package-lock.json`, `go.sum` for
@@ -233,7 +233,7 @@ One landing at a time per repo (a lock). Steps:
      `main`, so a change cannot shorten it for itself.
 7. **Merge on green** into `main` — fast-forward, since step 2 rebased —
    then `git -C <checkout> merge --ff-only` so the deploy checkout has it.
-   How it reaches GitHub is **OPEN, §9.2**. A checkout whose tree is dirty
+   It reaches GitHub as a PR merged at once (§9.2). A checkout whose tree is dirty
    gets `dirty_outside: <files>` on the row; that never blocks and never
    enters the judged copy.
 8. **Close.** The box, its Postgres and the worktree are removed after a
@@ -305,7 +305,11 @@ read a trace by turn id). No machine identifiers — the repo is public.
 From the day `repo_land` is deployed, Claude no longer commits in her tree
 (Q14). Claude's own lanes go through `repo_land` too, as an outside coder.
 
-## 9. Decisions for the owner — OPEN
+## 9. Decisions — answered 2026-10-11: the proposals
+
+The owner's answer to all six: "go with your proposed". Each *Proposed* line
+below is the ruling; the *Otherwise* lines stay as the record of what was
+turned down.
 
 1. **Dependencies (§4.3).** *Proposed:* the fetch step — egress, but only
    lockfiles and manifests mounted. *Otherwise:* (a) no fetching at all: a
