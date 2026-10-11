@@ -48,5 +48,14 @@ describe('word spacing per face', () => {
     expect(css.length).toBeGreaterThan(1000)
     expect(css).toMatch(/body\s*\{[^}]*word-spacing:\s*var\(--font-word-spacing,\s*normal\)/)
     expect(css).toMatch(/code,\s*pre,\s*kbd,\s*samp,\s*\.font-mono\s*\{[^}]*word-spacing:\s*normal/)
+    // No rule that reaches the body may reset it. Found live on 2026-10-11:
+    // the reset was pasted into the middle of the `.dark body, html.dark
+    // body` selector list, so dark mode — the default — read as normal.
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const [, selector, body] of withoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/word-spacing:\s*normal/.test(body)) {
+        expect(selector, `a word-spacing reset reaches the body: ${selector.trim()}`).not.toMatch(/\bbody\b/)
+      }
+    }
   })
 })

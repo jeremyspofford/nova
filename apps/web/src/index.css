@@ -163,13 +163,13 @@ html.dark {
       rgb(var(--neutral-50));
     color: rgb(var(--neutral-900));
   }
-  .dark body,
   /* Monospace has its own fixed advance; extra word spacing would misalign
      columns in code and listings. */
   code, pre, kbd, samp, .font-mono {
     word-spacing: normal;
   }
 
+  .dark body,
   html.dark body {
     background:
       radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1) / 0.45) 0%, transparent 50%),
