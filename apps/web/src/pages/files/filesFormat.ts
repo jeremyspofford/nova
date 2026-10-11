@@ -31,3 +31,26 @@ export function notShownMessage(detail: {
   const reason = detail.too_large ? 'too large to preview' : 'binary'
   return `${detail.size} bytes, not shown (${reason}) — download to view`
 }
+
+export type PreviewKind = 'markdown' | 'image' | 'pdf' | 'word' | 'text'
+
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'])
+
+/**
+ * How the detail view shows a file, from its extension alone. The image
+ * and PDF sets match what core's /raw?inline=1 will serve inline
+ * (INLINE_TYPES in services/core/app/workspace_api.py) — anything else
+ * would come back as a download and never display. A name that is only a
+ * dot-extension (`.md`) is a dotfile, not markdown.
+ */
+export function previewKind(path: string): PreviewKind {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return 'text'
+  const ext = name.slice(dot + 1).toLowerCase()
+  if (ext === 'md' || ext === 'markdown') return 'markdown'
+  if (IMAGE_EXTS.has(ext)) return 'image'
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'docx' || ext === 'doc') return 'word'
+  return 'text'
+}

@@ -237,6 +237,62 @@ async def test_raw_route_refuses_paths_that_leave_the_workspace(
     assert resp.status_code == 400
 
 
+# -- GET /raw?inline=1: viewing in the page, not downloading ---------------
+#
+# The Files page shows an image in an <img> and a PDF in the browser's own
+# viewer, both pointed at /raw. Only types a browser renders without running
+# anything are ever served inline; everything else ignores the flag and stays
+# an attachment, because a workspace file is something Nova WROTE, and an
+# HTML file served inline from this origin would run her script with the
+# owner's session cookie.
+
+INLINE_OK = [
+    ("photo.png", "image/png"),
+    ("photo.jpg", "image/jpeg"),
+    ("anim.gif", "image/gif"),
+    ("pic.webp", "image/webp"),
+    ("report.pdf", "application/pdf"),
+    ("chart.svg", "image/svg+xml"),
+]
+
+
+@pytest.mark.parametrize(("name", "media_type"), INLINE_OK, ids=[n for n, _ in INLINE_OK])
+async def test_raw_inline_serves_viewable_types_inline(owner_client, workspace, name, media_type):
+    (workspace / name).write_bytes(b"bytes")
+    resp = await owner_client.get(f"/api/v1/workspace/raw?path={name}&inline=1")
+    assert resp.status_code == 200
+    assert resp.content == b"bytes"
+    assert resp.headers["content-type"].startswith(media_type)
+    disposition = resp.headers["content-disposition"]
+    assert disposition.startswith("inline;")
+    assert name in disposition
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize("name", ["page.html", "page.htm", "notes.md", "blob.bin", "doc.docx"])
+async def test_raw_inline_never_serves_other_types_inline(owner_client, workspace, name):
+    (workspace / name).write_bytes(b"<script>alert(1)</script>")
+    resp = await owner_client.get(f"/api/v1/workspace/raw?path={name}&inline=1")
+    assert resp.status_code == 200
+    assert resp.headers["content-disposition"].startswith("attachment;")
+
+
+async def test_raw_inline_svg_cannot_run_script(owner_client, workspace):
+    """SVG is markup and may carry <script>. Opened directly (the Open
+    button), it is sandboxed: no script, no same-origin access."""
+    (workspace / "chart.svg").write_bytes(b"<svg xmlns='http://www.w3.org/2000/svg'/>")
+    resp = await owner_client.get("/api/v1/workspace/raw?path=chart.svg&inline=1")
+    csp = resp.headers["content-security-policy"]
+    assert "sandbox" in csp
+    assert "default-src 'none'" in csp
+
+
+async def test_raw_without_inline_is_still_a_download_for_viewable_types(owner_client, workspace):
+    (workspace / "photo.png").write_bytes(b"bytes")
+    resp = await owner_client.get("/api/v1/workspace/raw?path=photo.png")
+    assert resp.headers["content-disposition"].startswith("attachment;")
+
+
 # -- Content-Disposition: a filename is not a trusted string ----------------
 #
 # workspace_write_file's own path argument goes through _resolve_within, but

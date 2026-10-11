@@ -265,6 +265,9 @@ describe('agents (S12): the routes and the bodies, verbatim', () => {
 
   it('encodes characters that would otherwise break the query string', () => {
     expect(workspaceRawUrl('a b&c.md')).toBe('/api/v1/workspace/raw?path=a%20b%26c.md')
+    expect(workspaceRawUrl('a b&c.png', { inline: true })).toBe(
+      '/api/v1/workspace/raw?path=a%20b%26c.png&inline=1',
+    )
   })
 })
 

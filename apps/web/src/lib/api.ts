@@ -1229,10 +1229,13 @@ export const getWorkspaceFile = (path: string) =>
   apiGet<WorkspaceFileDetail>(`/api/v1/workspace/file?path=${encodeURIComponent(path)}`)
 
 /** Not fetched through apiGet — this is handed straight to an <a href>,
- * so the browser's own download machinery (and core's Content-Disposition
- * header) does the work, same origin, same session cookie. */
-export function workspaceRawUrl(path: string): string {
-  return `/api/v1/workspace/raw?path=${encodeURIComponent(path)}`
+ * <img src> or <iframe src>, so the browser's own machinery (and core's
+ * Content-Disposition header) does the work, same origin, same session
+ * cookie. `inline` asks core to serve it for viewing rather than download;
+ * core honours that only for images and PDFs and ignores it otherwise. */
+export function workspaceRawUrl(path: string, opts: { inline?: boolean } = {}): string {
+  const url = `/api/v1/workspace/raw?path=${encodeURIComponent(path)}`
+  return opts.inline ? `${url}&inline=1` : url
 }
 
 // ── model pull (newline-delimited JSON, not SSE) ────────────────────────

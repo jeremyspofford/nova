@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatBytes, notShownMessage } from './filesFormat'
+import { formatBytes, notShownMessage, previewKind } from './filesFormat'
 
 describe('formatBytes', () => {
   it('renders sub-1024 sizes in bytes, including the small workspace files this page mostly shows', () => {
@@ -37,5 +37,34 @@ describe('notShownMessage', () => {
   it('never claims both reasons when only one applies', () => {
     const msg = notShownMessage({ size: 10, binary: true, too_large: false })
     expect(msg).not.toContain('too large')
+  })
+})
+
+describe('previewKind', () => {
+  it('renders markdown', () => {
+    expect(previewKind('notes.md')).toBe('markdown')
+    expect(previewKind('docs/README.MARKDOWN')).toBe('markdown')
+  })
+
+  it('displays images, SVG included', () => {
+    for (const p of ['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.webp', 'f.avif', 'g.bmp', 'h.svg']) {
+      expect(previewKind(p)).toBe('image')
+    }
+  })
+
+  it('displays PDFs', () => {
+    expect(previewKind('report.pdf')).toBe('pdf')
+  })
+
+  it('names Word documents so the page can say why they are not shown', () => {
+    expect(previewKind('letter.docx')).toBe('word')
+    expect(previewKind('old.doc')).toBe('word')
+  })
+
+  it('treats everything else as text, including dotfiles and extensionless names', () => {
+    expect(previewKind('main.py')).toBe('text')
+    expect(previewKind('Makefile')).toBe('text')
+    expect(previewKind('.md')).toBe('text')
+    expect(previewKind('page.html')).toBe('text')
   })
 })
