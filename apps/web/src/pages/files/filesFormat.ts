@@ -54,3 +54,60 @@ export function previewKind(path: string): PreviewKind {
   if (ext === 'docx' || ext === 'doc') return 'word'
   return 'text'
 }
+
+// Extension -> highlight.js grammar name. Explicit rather than leaning on
+// each grammar's alias list, so what highlights is readable here and the
+// lazy grammars (EXTRA_GRAMMARS in components/Markdown.tsx) resolve by
+// their canonical name. Prose, logs and plain .txt are deliberately absent:
+// a wrong colouring is worse than none.
+const CODE_EXTS: Record<string, string> = {
+  py: 'python', pyi: 'python',
+  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  json: 'json', jsonc: 'json',
+  yml: 'yaml', yaml: 'yaml',
+  go: 'go',
+  sql: 'sql',
+  html: 'xml', htm: 'xml', xml: 'xml', xhtml: 'xml', plist: 'xml',
+  css: 'css', scss: 'scss', less: 'less',
+  md: 'markdown', markdown: 'markdown',
+  diff: 'diff', patch: 'diff',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  ini: 'ini', toml: 'ini', cfg: 'ini', conf: 'ini',
+  rs: 'rust',
+  java: 'java',
+  c: 'c', h: 'c',
+  cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp',
+  cs: 'csharp',
+  rb: 'ruby',
+  php: 'php',
+  kt: 'kotlin', kts: 'kotlin',
+  swift: 'swift',
+  lua: 'lua',
+  mk: 'makefile',
+  ps1: 'powershell', psm1: 'powershell',
+  r: 'r',
+  pl: 'perl', pm: 'perl',
+  scala: 'scala',
+  dart: 'dart',
+  ex: 'elixir', exs: 'elixir',
+  hs: 'haskell',
+  graphql: 'graphql', gql: 'graphql',
+  proto: 'protobuf',
+}
+
+const CODE_NAMES: Record<string, string> = {
+  dockerfile: 'dockerfile',
+  containerfile: 'dockerfile',
+  makefile: 'makefile',
+  gnumakefile: 'makefile',
+}
+
+/** The grammar a file's contents highlight with, or undefined for none. */
+export function codeLanguage(path: string): string | undefined {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  if (CODE_NAMES[name]) return CODE_NAMES[name]
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return undefined
+  return CODE_EXTS[name.slice(dot + 1)]
+}

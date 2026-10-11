@@ -1,19 +1,22 @@
 import {
   createContext,
+  createElement,
   memo,
   useContext,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
+  type ReactNode,
 } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { createLowlight, type LanguageFn } from 'lowlight'
 import { visit } from 'unist-util-visit'
-import type { Element, Root } from 'hast'
+import type { Element, Root, RootContent } from 'hast'
 import clsx from 'clsx'
 import { Check, Copy, X } from 'lucide-react'
 import bash from 'highlight.js/lib/languages/bash'
@@ -384,3 +387,98 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const deferred = useDeferredValue(text)
   return <MarkdownBody text={deferred} />
 })
+
+/**
+ * Grammars chat does not ship, loaded on demand for a whole FILE whose
+ * extension names one (the Files viewer — see `codeLanguage` in
+ * pages/files/filesFormat.ts). Each is its own lazy chunk, so the chat
+ * bundle is unchanged; once loaded it is registered on the same `lowlight`
+ * instance, so a fence in a later reply tagged with it highlights too.
+ */
+const EXTRA_GRAMMARS: Record<string, () => Promise<{ default: LanguageFn }>> = {
+  c: () => import('highlight.js/lib/languages/c'),
+  cpp: () => import('highlight.js/lib/languages/cpp'),
+  csharp: () => import('highlight.js/lib/languages/csharp'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
+  graphql: () => import('highlight.js/lib/languages/graphql'),
+  haskell: () => import('highlight.js/lib/languages/haskell'),
+  java: () => import('highlight.js/lib/languages/java'),
+  kotlin: () => import('highlight.js/lib/languages/kotlin'),
+  less: () => import('highlight.js/lib/languages/less'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  makefile: () => import('highlight.js/lib/languages/makefile'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  perl: () => import('highlight.js/lib/languages/perl'),
+  php: () => import('highlight.js/lib/languages/php'),
+  powershell: () => import('highlight.js/lib/languages/powershell'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
+  r: () => import('highlight.js/lib/languages/r'),
+  ruby: () => import('highlight.js/lib/languages/ruby'),
+  rust: () => import('highlight.js/lib/languages/rust'),
+  scala: () => import('highlight.js/lib/languages/scala'),
+  scss: () => import('highlight.js/lib/languages/scss'),
+  swift: () => import('highlight.js/lib/languages/swift'),
+}
+
+/** Registers `language` if it is a lazy grammar; true once it is usable. */
+async function ensureGrammar(language: string): Promise<boolean> {
+  if (lowlight.registered(language)) return true
+  const load = EXTRA_GRAMMARS[language]
+  if (!load) return false
+  lowlight.register(language, (await load()).default)
+  return true
+}
+
+/**
+ * lowlight's tree as React elements. Every element is emitted as a `<span>`
+ * whatever its tagName says (lowlight only ever builds spans), and text
+ * stays text — so a file full of `<script>` renders those characters and
+ * never an element, with no `dangerouslySetInnerHTML` anywhere.
+ */
+function hastToReact(nodes: RootContent[]): ReactNode[] {
+  return nodes.map((node, i) => {
+    if (node.type === 'text') return node.value
+    if (node.type !== 'element') return null
+    const cls = node.properties.className
+    return createElement(
+      'span',
+      { key: i, className: Array.isArray(cls) ? cls.join(' ') : undefined },
+      ...hastToReact(node.children),
+    )
+  })
+}
+
+/**
+ * A whole file as a highlighted code block — same `<pre>`, palette and copy
+ * button as a fenced block in a reply. Renders the plain text first and
+ * re-renders highlighted once a lazy grammar arrives; an unknown language
+ * just stays plain.
+ */
+export function CodeView({ text, language }: { text: string; language: string }) {
+  const [ready, setReady] = useState(() => lowlight.registered(language))
+  useEffect(() => {
+    let live = true
+    if (!ready) {
+      ensureGrammar(language).then(
+        ok => {
+          if (live && ok) setReady(true)
+        },
+        () => {},
+      )
+    }
+    return () => {
+      live = false
+    }
+  }, [language, ready])
+  const body = useMemo(
+    () => (ready ? hastToReact(lowlight.highlight(language, text).children) : text),
+    [ready, language, text],
+  )
+  return (
+    <CodeBlock>
+      <code className={clsx(ready && 'hljs', `language-${language}`)}>{body}</code>
+    </CodeBlock>
+  )
+}
+

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatBytes, notShownMessage, previewKind } from './filesFormat'
+import { codeLanguage, formatBytes, notShownMessage, previewKind } from './filesFormat'
 
 describe('formatBytes', () => {
   it('renders sub-1024 sizes in bytes, including the small workspace files this page mostly shows', () => {
@@ -66,5 +66,31 @@ describe('previewKind', () => {
     expect(previewKind('Makefile')).toBe('text')
     expect(previewKind('.md')).toBe('text')
     expect(previewKind('page.html')).toBe('text')
+  })
+})
+
+describe('codeLanguage', () => {
+  it('maps common code extensions to a grammar', () => {
+    expect(codeLanguage('app/main.py')).toBe('python')
+    expect(codeLanguage('x.tsx')).toBe('typescript')
+    expect(codeLanguage('x.mjs')).toBe('javascript')
+    expect(codeLanguage('run.sh')).toBe('bash')
+    expect(codeLanguage('compose.yml')).toBe('yaml')
+    expect(codeLanguage('page.html')).toBe('xml')
+    expect(codeLanguage('pyproject.toml')).toBe('ini')
+    expect(codeLanguage('lib.rs')).toBe('rust')
+    expect(codeLanguage('Main.JAVA')).toBe('java')
+  })
+
+  it('knows the extensionless code files by name', () => {
+    expect(codeLanguage('deploy/Dockerfile')).toBe('dockerfile')
+    expect(codeLanguage('Makefile')).toBe('makefile')
+  })
+
+  it('leaves prose, logs and unknown files unhighlighted', () => {
+    expect(codeLanguage('notes.txt')).toBeUndefined()
+    expect(codeLanguage('server.log')).toBeUndefined()
+    expect(codeLanguage('README')).toBeUndefined()
+    expect(codeLanguage('.py')).toBeUndefined()
   })
 })
