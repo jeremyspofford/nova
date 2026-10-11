@@ -39,14 +39,17 @@ const MD = '(min-width: 768px)'
 /** Drive `useIsMobile`, which reads matchMedia('(min-width: 768px)'), and
  *  size the window to match — the phone menu is the full screen wide, so
  *  its drag maths reads `innerWidth`, and jsdom's default is a 1024px desktop. */
-function setViewport(width: 'mobile' | 'desktop') {
+const LG = '(min-width: 1024px)'
+
+function setViewport(width: 'mobile' | 'tablet' | 'desktop') {
   const isDesktop = width === 'desktop'
-  vi.stubGlobal('innerWidth', isDesktop ? 1280 : 393)
+  const atLeastMd = width !== 'mobile'
+  vi.stubGlobal('innerWidth', isDesktop ? 1280 : width === 'tablet' ? 820 : 393)
   vi.stubGlobal(
     'matchMedia',
     (query: string) =>
       ({
-        matches: query === MD ? isDesktop : false,
+        matches: query === MD ? atLeastMd : query === LG ? isDesktop : false,
         media: query,
         onchange: null,
         addListener: () => {},
@@ -386,11 +389,11 @@ describe('AppLayout — the show-sidebar control has its own space', () => {
     await screen.findByText('page')
     const main = document.querySelector('main')!
 
-    expect(main.className).not.toContain('md:pl-11')
+    expect(main.className).not.toContain('lg:pl-11')
 
     fireEvent.click(screen.getByTestId('sidebar-handle'))
     await screen.findByTestId('show-sidebar')
-    expect(main.className).toContain('md:pl-11')
+    expect(main.className).toContain('lg:pl-11')
   })
 
   it('reserves no sidebar room on a phone, even with a collapsed sidebar remembered from desktop', async () => {
@@ -401,7 +404,7 @@ describe('AppLayout — the show-sidebar control has its own space', () => {
     renderShell()
     await screen.findByText('page')
 
-    expect(document.querySelector('main')!.className).not.toContain('md:pl-11')
+    expect(document.querySelector('main')!.className).not.toContain('lg:pl-11')
   })
 })
 
@@ -504,13 +507,13 @@ describe('AppLayout — the menu button has its own opaque chip', () => {
     expect(findUndefinedColorTokens(menuButton()!.className, resolvedColors)).toEqual([])
   })
 
-  it('fits the 3rem reserve: h-9 at safe-top + 0.75rem, fixed, z-[60], md:hidden (crit 4)', async () => {
+  it('fits the 3rem reserve: h-9 at safe-top + 0.75rem, fixed, z-[60], lg:hidden (crit 4; md until 2026-10-11)', async () => {
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
     const tokens = buttonTokens()
-    for (const t of ['h-9', 'fixed', 'z-[60]', 'md:hidden']) expect(tokens).toContain(t)
+    for (const t of ['h-9', 'fixed', 'z-[60]', 'lg:hidden']) expect(tokens).toContain(t)
     expect(menuButton()!.style.top).toBe('calc(var(--nova-safe-top, 0px) + 0.75rem)')
   })
 
@@ -589,6 +592,37 @@ describe('AppLayout — Settings in the phone top bar', () => {
     await screen.findByText('page')
     const bar = await screen.findByTestId('mobile-top-bar')
     await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Appearance' })).toBeDefined())
+  })
+})
+
+describe('AppLayout — a tablet gets the menu, not the sidebar (2026-10-11, UI review R3)', () => {
+  // At 820px the 240px sidebar left pages ~530px while their md: layouts
+  // assumed room for columns. Below 1024 the shell is the phone's: a menu
+  // button, a drawer, the title in the top bar.
+  it('renders the menu button and the top bar at 820px', async () => {
+    setViewport('tablet')
+    renderShell(0, <><PageHeader title="Inbox" /><div>page</div></>)
+    await screen.findByText('page')
+    expect(menuButton()).not.toBeNull()
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Inbox' })).toBeDefined())
+  })
+
+  it('hides the sidebar below lg rather than md', async () => {
+    setViewport('tablet')
+    renderShell()
+    await screen.findByText('page')
+    const aside = screen.getByTestId('sidebar')
+    expect(aside.className).toContain('lg:flex')
+    expect(aside.className).not.toContain('md:flex')
+  })
+
+  it('the menu button and drawer hide from lg up, not md', async () => {
+    setViewport('tablet')
+    renderShell()
+    await screen.findByText('page')
+    expect(menuButton()!.className).toContain('lg:hidden')
+    expect(menuButton()!.className).not.toContain('md:hidden')
   })
 })
 

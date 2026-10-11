@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar'
 import { MobileNav } from './MobileNav'
 import { MobileNavProvider } from '../../hooks/useMobileNav'
 import { UnseenNoticesProvider } from '../../hooks/useUnseenNotices'
-import { useIsMobile } from '../../hooks/useIsMobile'
+import { useIsCompactShell } from '../../hooks/useIsMobile'
 import { MobileTitleSlot } from './PageHeader'
 
 const STORAGE_KEY = 'nova-sidebar-collapsed'
@@ -26,7 +26,9 @@ export function AppLayout({
   fullWidth?: boolean
 }) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
-  const isMobile = useIsMobile()
+  // "Mobile" for the SHELL means below lg (1024) since 2026-10-11: a tablet
+  // gets the phone's menu button, drawer and top bar, not the sidebar.
+  const isMobile = useIsCompactShell()
   const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null)
 
   // Ctrl+B / Cmd+B, the shortcut the edge handle's tooltip promises. Closing
@@ -122,7 +124,7 @@ export function AppLayout({
               // title, in the first screenshot after this shipped. Reserved
               // rather than moved into each header, because "every page"
               // includes the ones nobody has written yet.
-              !isMobile && collapsed && 'md:pl-11',
+              !isMobile && collapsed && 'lg:pl-11',
             )}
           >
             <MobileTitleSlot.Provider value={isMobile ? titleSlot : null}>

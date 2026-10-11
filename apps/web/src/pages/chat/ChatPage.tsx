@@ -604,10 +604,14 @@ export function ChatPage({
           `min-h` is the honest question: the header costs vertical space,
           so vertical space is what decides whether it is affordable. The
           sidebar already says which page this is; on a short screen the
-          word "Chat" is the least useful 56px on it. */}
+          word "Chat" is the least useful 56px on it.
+
+          1024, not 768, since 2026-10-11: below lg the shell draws the
+          phone's top bar instead of the sidebar, and this header would sit
+          under it as a second bar. */}
       <header
         data-testid="chat-header"
-        className="hidden [@media(min-width:768px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
+        className="hidden [@media(min-width:1024px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
       >
         {header ?? <h1 className="text-h3 text-content-primary">Chat</h1>}
       </header>

@@ -259,7 +259,7 @@ export function Sidebar({
         // tooltip appearing behind the Settings page while dragging the
         // edge. Raising the aside lifts its whole context, once, instead of
         // escalating z-indexes inside it forever.
-        'hidden md:flex flex-col h-full bg-surface-sidebar shrink-0 glass-nav relative z-20',
+        'hidden lg:flex flex-col h-full bg-surface-sidebar shrink-0 glass-nav relative z-20',
         // No border and no content when closed: a 1px line down the left of
         // the window is the icon rail's ghost.
         collapsed ? 'overflow-hidden' : 'border-r border-border-subtle dark:border-white/[0.06]',

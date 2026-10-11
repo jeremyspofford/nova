@@ -19,6 +19,9 @@ function mediaStore(query: string) {
 }
 
 const md = mediaStore(MQ)
+/** Where the shell can afford its 240px sidebar (Tailwind `lg`). */
+export const SIDEBAR_QUERY = '(min-width: 1024px)'
+const lg = mediaStore(SIDEBAR_QUERY)
 const wide = mediaStore(WIDE_QUERY)
 
 /** Returns true when viewport is below Tailwind's `md` breakpoint (768px). */
@@ -35,3 +38,13 @@ export function useIsMobile() {
 export function useIsWide() {
   return useSyncExternalStore(wide.subscribe, wide.matches, () => true)
 }
+
+/** True below 1024px: the shell draws the phone's menu button, drawer and
+ *  top bar instead of the sidebar (2026-10-11, UI review R3). A tablet at
+ *  820px with the sidebar open left pages ~530px, narrower than the md:
+ *  layouts inside them assumed. Distinct from useIsMobile, which still
+ *  means "a phone" to pages that lay themselves out by it. */
+export function useIsCompactShell() {
+  return !useSyncExternalStore(lg.subscribe, lg.matches, () => true)
+}
+

@@ -158,7 +158,7 @@ export function MobileNav() {
         data-testid="menu-button"
         onClick={() => setOpen(true)}
         className={clsx(
-          'md:hidden fixed left-3 z-[60] inline-flex items-center justify-center',
+          'lg:hidden fixed left-3 z-[60] inline-flex items-center justify-center',
           'h-9 w-9 rounded-md text-content-secondary bg-surface-root/90 backdrop-blur',
           'hover:text-content-primary hover:bg-surface-card transition-colors duration-fast',
           (hidden || open) && 'opacity-0 pointer-events-none',
@@ -171,7 +171,7 @@ export function MobileNav() {
       {/* The PANEL. Mounted whenever it is open OR mid-drag, so a gesture has
           something to pull; unmounted at rest so it costs nothing. */}
       {(open || dragX !== null) && (
-        <div className="md:hidden fixed inset-0 z-50" data-testid="mobile-drawer">
+        <div className="lg:hidden fixed inset-0 z-50" data-testid="mobile-drawer">
           {/* The backdrop darkens WITH the drag rather than snapping, which
               is most of what makes the motion read as a physical object. */}
           <div
