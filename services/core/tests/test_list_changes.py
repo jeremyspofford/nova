@@ -49,7 +49,7 @@ import pytest
 
 from app import chat, devices, devices_ws, tools, traces
 from app.tools import changes
-from app.tools.base import RESULT_KIND_LISTING
+from app.tools.base import RESULT_KIND_LISTING, ToolFailure
 from tests.conftest import requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
 from tests.test_devices_ws import _clean_hub, _close, _ctx, _person  # noqa: F401
@@ -95,9 +95,21 @@ class FakeRepo:
     dirty: dict = field(default_factory=dict)
     fail: dict = field(default_factory=dict)
     seen: list[dict] = field(default_factory=list)
+    # T10: what the agent says to box.status (None -> no boxes at all).
+    box: dict | None = None
 
     def answer(self, envelope: dict) -> dict:
         self.seen.append(envelope)
+        if envelope["capability"] == "box.status":
+            if self.box is not None:
+                return dict(self.box)
+            return {
+                "ok": True,
+                "output": "no boxes",
+                "exit_code": 0,
+                "error": None,
+                "meta": {"boxes": {}},
+            }
         argv = envelope["args"].get("argv") or []
         if argv[3:5] == ["worktree", "list"]:
             key, output = "list", self.listing
@@ -150,7 +162,12 @@ async def _serve(conn: FakeWSConn, device: FakeDevice, repo: FakeRepo) -> None:
         frame = await conn.next_sent()
         if not isinstance(frame, dict) or frame.get("type") != "command":
             continue
-        conn.feed(device.result(frame["envelope"], **repo.answer(frame["envelope"])))
+        answer = dict(repo.answer(frame["envelope"]))
+        meta = answer.pop("meta", None)
+        reply = device.result(frame["envelope"], **answer)
+        if meta is not None:
+            reply["meta"] = meta
+        conn.feed(reply)
 
 
 async def _list(pool, conn, device, repo: FakeRepo, args: dict | None = None):
@@ -232,7 +249,8 @@ async def test_c2_the_listing_is_one_argv_only_worktree_list(pool, recorded):
     repo = FakeRepo(listing=MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A))
     _result, ok, _facts = await _list(pool, conn, device, repo)
     assert ok is True
-    assert {e["capability"] for e in repo.seen} == {"shell.exec"}
+    # T10 (S32.2): one box.status joins the git reads (pinned in the T10 tests).
+    assert {e["capability"] for e in repo.seen} == {"shell.exec", "box.status"}
     argvs = repo.argvs()
     assert argvs[0] == ["git", "-C", REPO, "worktree", "list", "--porcelain"]
     assert [a for a in argvs if a[3:5] == ["worktree", "list"]] == [argvs[0]]
@@ -486,4 +504,173 @@ async def test_walk_t4_each_listed_change_lands_a_change_fact(pool, recorded):
         {"change": "a1b2c3", "worktree_path": WT_A, "branch": BRANCH_A},
         {"change": "d4e5f6", "worktree_path": WT_B, "branch": None},
     ]
+    await _close(conn, task)
+
+
+# -- T10 (S32.2): each change's box state and the repo's environment --------------
+#
+# Criteria (tracker .epics/s32-2.md, ## T10):
+#   C4 one box.status (args {}) when she has a change; each line ends
+#      "— box running|stopped|not created — environment box"; host says the
+#      owner set it; no change -> no box.status.
+#   C5 a box.status that cannot be read -> "box state unknown: <why>" on every
+#      line, never running / not created; the listing stays ok.
+
+WT_C = f"{REPO}/.worktrees/nova-0f9e8d"
+BRANCH_C = "nova/0f9e8d-third"
+THREE = (
+    MAIN_ENTRY
+    + _entry(WT_A, SHA_A, BRANCH_A)
+    + _entry(WT_B, SHA_B, BRANCH_B)
+    + _entry(WT_C, SHA_B, BRANCH_C)
+)
+
+
+def _status(boxes) -> dict:
+    return {"ok": True, "output": "", "exit_code": 0, "error": None, "meta": {"boxes": boxes}}
+
+
+def _box_statuses(repo: FakeRepo) -> list[dict]:
+    return [e for e in repo.seen if e["capability"] == "box.status"]
+
+
+async def _repo_row(pool, *, environment: str):
+    await pool.execute(
+        "INSERT INTO code_repos (name, machine, checkout, default_branch, environment) "
+        "VALUES ('nova', $1, $2, 'main', $3)",
+        HOST,
+        REPO,
+        environment,
+    )
+
+
+@requires_db
+async def test_t10_c4_one_box_status_and_each_line_says_its_box(pool, recorded):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(
+        listing=THREE,
+        box=_status({"a1b2c3": "running", "d4e5f6": "stopped", "999999": "running"}),
+    )
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True, result
+    (status,) = _box_statuses(repo)
+    assert status["args"] == {}
+    assert _line_naming(result, WT_A).endswith("— box running — environment box")
+    assert _line_naming(result, WT_B).endswith("— box stopped — environment box")
+    assert _line_naming(result, WT_C).endswith("— box not created — environment box")
+    assert "999999" not in result
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c4_box_status_is_asked_before_the_per_change_reads(pool, recorded):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(listing=THREE)
+    _result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True
+    caps = [e["capability"] for e in repo.seen]
+    assert caps.count("box.status") == 1
+    statuses = [
+        i
+        for i, e in enumerate(repo.seen)
+        if (e["args"].get("argv") or [])[3:5] == ["status", "--porcelain"]
+    ]
+    assert caps.index("box.status") < min(statuses)
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c4_environment_host_is_said_as_the_owners(pool, recorded):
+    await _repo_row(pool, environment="host")
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(listing=MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A), box=_status({}))
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True
+    line = _line_naming(result, WT_A)
+    assert line.endswith("— box not created — environment host (set by the owner)")
+    assert "environment box" not in result
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c4_no_change_of_hers_asks_no_box_status(pool, recorded):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(listing=MAIN_ENTRY)
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True
+    assert result.strip() == changes.NO_CHANGES
+    assert _box_statuses(repo) == []
+    await _close(conn, task)
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("answer", "why"),
+    [
+        (
+            {
+                "ok": False,
+                "output": "",
+                "exit_code": None,
+                "error": "cannot read the boxes: docker: permission denied",
+            },
+            "cannot read the boxes: docker: permission denied",
+        ),
+        (
+            {
+                "ok": False,
+                "output": "",
+                "exit_code": None,
+                "error": 'unknown capability "box.status"',
+            },
+            "Beelink Mini S's agent predates the box — update it with machine_update",
+        ),
+        (
+            {"ok": True, "output": "", "exit_code": 0, "error": None},
+            "the agent's box.status named no boxes",
+        ),
+        (
+            _status(["a1b2c3"]),
+            "the agent's box.status named no boxes",
+        ),
+        (
+            _status({"a1b2c3": "paused"}),
+            "the agent's box.status said 'paused'",
+        ),
+    ],
+)
+async def test_t10_c5_an_unreadable_box_status_is_unknown_never_running(
+    pool, recorded, answer, why
+):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(listing=MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A), box=answer)
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True, result
+    line = _line_naming(result, WT_A)
+    assert "box state unknown: " in line and why in line, line
+    assert "box running" not in line and "not created" not in line
+    assert "clean" in line  # the git state is still read
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c5_a_transport_failure_is_unknown_on_every_line(pool, recorded, monkeypatch):
+    real = changes._command
+
+    async def flaky(pool_, row, capability, args, **kw):
+        if capability == "box.status":
+            raise ToolFailure("Beelink Mini S disconnected before answering")
+        return await real(pool_, row, capability, args, **kw)
+
+    monkeypatch.setattr(changes, "_command", flaky)
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(
+        listing=MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A) + _entry(WT_B, SHA_B, BRANCH_B)
+    )
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True, result
+    for path in (WT_A, WT_B):
+        line = _line_naming(result, path)
+        assert "box state unknown: Beelink Mini S disconnected before answering" in line
+        assert "box running" not in line
     await _close(conn, task)

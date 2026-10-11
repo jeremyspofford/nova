@@ -22,6 +22,7 @@ from app import (
     auth_api,
     beats,
     chat,
+    code_repos,
     conversations,
     db,
     devices_api,
@@ -70,6 +71,9 @@ async def lifespan(app: FastAPI):
         logger.exception("migrations failed — refusing to start")
         raise
     pool = await db.init_pool()
+    # Her repository's row (S32.2): written from what ./install recorded, so
+    # routing reads a row, never the env; the owner's `environment` survives.
+    await code_repos.sync_from_env(pool)
     # This process is starting, not stopping (S15): begin_shutdown() below is a
     # latch on a module global, and a process that went through a lifespan once
     # already would otherwise never drain another queue.
@@ -159,6 +163,7 @@ app.include_router(attachments_api.router)
 app.include_router(agent_dist_api.router)
 app.include_router(mcp_api.router)
 app.include_router(about_api.router)
+app.include_router(code_repos.router)
 
 
 @app.exception_handler(StarletteHTTPException)

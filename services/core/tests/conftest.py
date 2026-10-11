@@ -77,6 +77,9 @@ _TABLES = (
     # The About page, part 2: nova_updates references nothing; listed so the
     # second run of the suite does not collide on its CREATE TABLE.
     "nova_updates",
+    # S32.2 T1: code_repos references nothing; listed so the re-migration
+    # does not collide on its CREATE TABLE.
+    "code_repos",
     # chat-rewind T1: turn_actions references turns, conversations AND
     # rewinds; rewinds references conversations, people and messages while
     # messages references rewinds back (withdrawn_by, rewind_id) — a cycle

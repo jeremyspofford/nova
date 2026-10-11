@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"novad/internal/box"
 )
 
 // Caps for the byte budgets in the plan. ReadCap and WriteCap share the same
@@ -58,6 +60,10 @@ type Deps struct {
 
 	// Admin is the admin path's seams (admin.exec); nil = the real machine.
 	Admin *AdminDeps
+
+	// Box runs a change's sealed box (S32.2 box.*); nil where this agent
+	// has none (a handler then says cannot).
+	Box *box.Manager
 }
 
 // Request is one verified call as its handler receives it.

@@ -2518,6 +2518,94 @@ verify_service_builds() {
   [ -z "$ok" ] || log "build:$ok run this checkout's source"
 }
 
+# ---- the devbox image (S32.2 T11): her sealed box's image -------------------
+#
+# Every command she runs in a change worktree runs in nova-box-<id> (novad's
+# internal/box), on nova-devbox:t-<tree hash of deploy/devbox>. novad reads
+# that hash off the default branch's COMMITTED tree (`git rev-parse
+# <branch>:deploy/devbox`), so this builds exactly that tag from exactly the
+# committed files: the context is a `git archive` of HEAD — deploy/devbox plus
+# the lockfiles and their manifests the image prefetches — never the working
+# tree. Unlike service_content_hash (S32.1), a dirty edit here must NOT count:
+# the box's shape is main's commit, never a change's (spec §4.1).
+#
+# Built here, not by the agent: a cold build takes minutes and every agent
+# command is cut at 110 s (S32.2 D4). The image LABELs nova.lock.<rel> =
+# sha256 of each lockfile it was built from; novad's fetch step compares a
+# change's lockfiles with them (internal/box/fetch.go).
+DEVBOX_IMAGE="nova-devbox"
+
+# Prints nova-devbox:t-<HEAD:deploy/devbox>. Exit 1, nothing printed, when it
+# cannot be read (not a checkout, no deploy/devbox committed at HEAD).
+devbox_tag() {
+  local h
+  git -C "$REPO_ROOT" rev-parse --show-toplevel >/dev/null 2>&1 || return 1
+  h="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "HEAD:deploy/devbox" 2>/dev/null)" || return 1
+  [ "$(git -C "$REPO_ROOT" cat-file -t "$h" 2>/dev/null)" = tree ] || return 1
+  printf '%s' "$h" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' || return 1
+  printf '%s:t-%s\n' "$DEVBOX_IMAGE" "$h"
+}
+
+# The lockfiles committed at HEAD that the image prefetches, one per line,
+# sorted: services/<svc>/uv.lock, apps/web/package-lock.json, apps/novad/go.sum
+# (the set novad's ReadLocks hashes).
+devbox_lock_paths() {
+  local all
+  all="$(git -C "$REPO_ROOT" ls-tree -r --name-only HEAD -- services apps/web apps/novad 2>/dev/null)" \
+    || return 1
+  printf '%s\n' "$all" \
+    | grep -E '^(services/[A-Za-z0-9._-]+/uv\.lock|apps/web/package-lock\.json|apps/novad/go\.sum)$' \
+    || true
+}
+
+# The manifest a lockfile's tool needs beside it (fetch.go's manifestOf).
+devbox_manifest_of() {
+  case "$1" in
+    */uv.lock) printf '%s/pyproject.toml' "${1%/*}" ;;
+    */package-lock.json) printf '%s/package.json' "${1%/*}" ;;
+    */go.sum) printf '%s/go.mod' "${1%/*}" ;;
+    *) return 1 ;;
+  esac
+}
+
+build_devbox() {
+  local tag locks rel man sha ctx paths="deploy/devbox"
+  # The box's CPU lock lives in deploy/state (gitignored, S32.2 D6).
+  mkdir -p "$REPO_ROOT/deploy/state" \
+    || die "could not create $REPO_ROOT/deploy/state, where her boxes' CPU lock lives"
+  tag="$(devbox_tag)" \
+    || die "could not build the devbox image $DEVBOX_IMAGE: $REPO_ROOT has no deploy/devbox committed at HEAD (not a git checkout, or git failed) — her change boxes cannot start until it is built"
+  if image_present "$tag"; then
+    log "devbox: $tag unchanged, not rebuilt"
+    return 0
+  fi
+  locks="$(devbox_lock_paths)" \
+    || die "could not build the devbox image $tag: git could not list HEAD's lockfiles"
+  set -- --build-arg "OWNER_UID=$(id -u)" --build-arg "OWNER_GID=$(id -g)"
+  for rel in $locks; do
+    man="$(devbox_manifest_of "$rel")" || die "could not build the devbox image $tag: no manifest known for $rel"
+    sha="$(git -C "$REPO_ROOT" cat-file blob "HEAD:$rel" | sha256_stdin)" \
+      || die "could not build the devbox image $tag: could not hash HEAD's $rel"
+    printf '%s' "$sha" | grep -Eq '^[0-9a-f]{64}$' \
+      || die "could not build the devbox image $tag: could not hash HEAD's $rel"
+    set -- "$@" --label "nova.lock.$rel=$sha"
+    paths="$paths $rel $man"
+  done
+  ctx="$(mktemp)" || die "could not build the devbox image $tag: no temp file for its context"
+  # shellcheck disable=SC2086 # repo-relative paths, split on purpose
+  if ! git -C "$REPO_ROOT" archive --format=tar -o "$ctx" HEAD -- $paths 2>/dev/null; then
+    rm -f "$ctx"
+    die "could not build the devbox image $tag: git could not pack HEAD's$(printf ' %s' $paths)"
+  fi
+  log "devbox: building $tag from HEAD's deploy/devbox (a cold build takes minutes)…"
+  if ! docker build -t "$tag" -f deploy/devbox/Dockerfile "$@" - < "$ctx"; then
+    rm -f "$ctx"
+    die "could not build the devbox image $tag (docker build failed, above) — her change boxes cannot start until it is built; nothing else was changed"
+  fi
+  rm -f "$ctx"
+  log "devbox: built $tag"
+}
+
 # ---- bring-up + status ----------------------------------------------------
 
 # THE SEAM. Exit 0 when the image $1 (name:tag) is in the local store.
@@ -2649,6 +2737,10 @@ cmd_install() {
   # After `up`: every running core/gateway/memory/web must be this
   # checkout's source, read off its image label, before "Nova is up".
   verify_service_builds
+  # Her change boxes' image (S32.2): after the stack is verified, before her
+  # hub agent (which runs the boxes) is installed. A failed build fails
+  # ./install, naming it.
+  build_devbox
   wait_for_health || true
   print_status
   local unhealthy

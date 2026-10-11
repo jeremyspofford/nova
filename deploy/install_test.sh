@@ -1207,6 +1207,8 @@ run_install() {
       log "HUB AGENT REACHED"
       [ "$HUB_AGENT" = ok ] || die "the hub's agent was not installed (stub) — the stack is up"
     }
+    # The devbox image has its own cases (run_dbx); here it must not build.
+    build_devbox() { log "DEVBOX REACHED"; }
     docker() {
       case "$*" in
         info)
@@ -1510,6 +1512,8 @@ run_moved() {
     # The hub machine's own agent has its own cases (run_hub_agent); here it
     # must not reach out — its real seams would build and fetch.
     install_hub_agent() { :; }
+    # The devbox image has its own cases (run_dbx); here it must not build.
+    build_devbox() { :; }
     # verify_service_builds has its own cases (run_vsb).
     running_service_label() { service_content_hash "$1"; }
     unset NOVA_TAILNET NOVA_SKIP_INFERENCE
@@ -2142,6 +2146,8 @@ run_ts_install() {
     # shellcheck disable=SC2034
     TAILSCALE_DIR="$W/tailscale"
     install_hub_agent() { log "HUB AGENT REACHED"; }
+    # The devbox image has its own cases (run_dbx); here it must not build.
+    build_devbox() { :; }
     tailnet_dns_name() { printf 'nova.example.ts.net'; }
     # verify_service_builds has its own cases (run_vsb); here every running
     # image is this checkout's source.
@@ -3843,6 +3849,211 @@ HA_ABORT="$(run_hub_agent 0 aaaaaaaaaaaa 0 minipc 'running_in_wsl() { exit 9; }'
 ha_is "a run cut short by something unforeseen: ends as it did" "$HA_ABORT" 1 9
 ha_is "a run cut short by something unforeseen: no download folder left behind" "$HA_ABORT" 2 \
   "built aaaaaaaaaaaa "
+
+# ── the devbox image (S32.2 T11): devbox_tag + build_devbox ──────────────────
+# Her box (nova-box-<id>) runs nova-devbox:t-<tree hash of deploy/devbox>; novad
+# reads that tag off the default branch's COMMITTED tree, so ./install must
+# build exactly that tag from exactly the committed files: the context is a
+# `git archive` of HEAD, never the working tree. install.sh sourced for real, a
+# throwaway repo per case; only `docker` is stubbed: it records every call,
+# answers `image inspect <ref>` 0 for the refs in $DBX_PRESENT, and saves the
+# build's stdin (the context tar).
+#   $1 scenario: clean | dirty | notrepo | nodevbox | devboxfile (deploy/devbox is a file)
+#   $2 "present" (the tag is in the store) | "absent"   $3 build rc
+# Prints "<exit>|<docker calls ;>|<stderr>|<expected tag>|<context files>|
+#   <context bytes: ok or the first path that differs from HEAD>|
+#   <expected build argv>|<deploy/state exists>|<devbox_tag stdout>|<devbox_tag exit>"
+dbx_sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+run_dbx() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    g() { git -c user.name=t -c user.email=t@t "$@"; }
+    # shellcheck disable=SC2034
+    REPO_ROOT="$tmp/repo"
+    mkdir -p "$REPO_ROOT/services/core" "$REPO_ROOT/services/gateway" "$REPO_ROOT/apps/web/src" \
+      "$REPO_ROOT/apps/novad" "$REPO_ROOT/deploy"
+    if [ "$1" = devboxfile ]; then
+      printf 'not a directory\n' > "$REPO_ROOT/deploy/devbox"
+    elif [ "$1" != nodevbox ]; then
+      mkdir -p "$REPO_ROOT/deploy/devbox"
+      printf 'FROM scratch\n' > "$REPO_ROOT/deploy/devbox/Dockerfile"
+      printf '[[suite]]\n' > "$REPO_ROOT/deploy/devbox/suites.toml"
+    fi
+    printf 'core-lock\n' > "$REPO_ROOT/services/core/uv.lock"
+    printf '[project]\nname="core"\n' > "$REPO_ROOT/services/core/pyproject.toml"
+    printf 'print(1)\n' > "$REPO_ROOT/services/core/main.py"
+    printf '[project]\nname="gw"\n' > "$REPO_ROOT/services/gateway/pyproject.toml"
+    printf '{"name":"web"}\n' > "$REPO_ROOT/apps/web/package.json"
+    printf '{"lockfileVersion":3}\n' > "$REPO_ROOT/apps/web/package-lock.json"
+    printf 'x\n' > "$REPO_ROOT/apps/web/src/a.ts"
+    printf 'module novad\n' > "$REPO_ROOT/apps/novad/go.mod"
+    printf 'h1:x\n' > "$REPO_ROOT/apps/novad/go.sum"
+    printf 'package main\n' > "$REPO_ROOT/apps/novad/main.go"
+    printf 'POSTGRES_PASSWORD=secret\n' > "$REPO_ROOT/deploy/.env"
+    if [ "$1" != notrepo ]; then
+      git init -q "$REPO_ROOT"
+      g -C "$REPO_ROOT" add -A
+      g -C "$REPO_ROOT" commit -q -m init
+    fi
+    if [ "$1" = dirty ]; then
+      printf 'RUN echo --privileged\n' >> "$REPO_ROOT/deploy/devbox/Dockerfile"
+      printf 'untracked\n' > "$REPO_ROOT/deploy/devbox/extra"
+      printf 'dirty\n' >> "$REPO_ROOT/services/core/uv.lock"
+      printf 'dirty\n' >> "$REPO_ROOT/apps/novad/go.sum"
+    fi
+    want_tag="-"
+    h="$(git -C "$REPO_ROOT" rev-parse HEAD:deploy/devbox 2>/dev/null)" && want_tag="nova-devbox:t-$h"
+    DBX_PRESENT=" "
+    [ "$2" = present ] && DBX_PRESENT=" $want_tag "
+    DBX_BUILD_RC="${3:-0}"
+    : > "$tmp/calls"
+    docker() {
+      local last a
+      printf '%s\n' "$*" >> "$tmp/calls"
+      if [ "${1:-}" = image ] && [ "${2:-}" = inspect ]; then
+        for a in "$@"; do last="$a"; done
+        case "$DBX_PRESENT" in *" $last "*) return 0 ;; esac
+        return 1
+      fi
+      if [ "${1:-}" = build ]; then
+        cat > "$tmp/ctx.tar"
+        return "$DBX_BUILD_RC"
+      fi
+      return 0
+    }
+    tag_out="$(devbox_tag 2>/dev/null)"; tag_rc=$?
+    err="$( ( set -e; build_devbox ) 2>&1 )"; code=$?
+    files="-"; bytes="-"
+    if [ -s "$tmp/ctx.tar" ]; then
+      files="$(tar -tf "$tmp/ctx.tar" | grep -v '/$' | LC_ALL=C sort | tr '\n' ' ')"
+      mkdir -p "$tmp/x" && tar -xf "$tmp/ctx.tar" -C "$tmp/x"
+      bytes=ok
+      for f in $files; do
+        if [ "$(git -C "$REPO_ROOT" cat-file blob "HEAD:$f" 2>/dev/null | dbx_sha)" != "$(dbx_sha < "$tmp/x/$f")" ]; then
+          bytes="$f"; break
+        fi
+      done
+    fi
+    want_argv="build -t $want_tag -f deploy/devbox/Dockerfile --build-arg OWNER_UID=$(id -u) --build-arg OWNER_GID=$(id -g)"
+    for f in apps/novad/go.sum apps/web/package-lock.json services/core/uv.lock; do
+      want_argv="$want_argv --label nova.lock.$f=$(git -C "$REPO_ROOT" cat-file blob "HEAD:$f" 2>/dev/null | dbx_sha)"
+    done
+    want_argv="$want_argv -"
+    state=no; [ -d "$REPO_ROOT/deploy/state" ] && state=yes
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/calls")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$want_tag" "$files" "$bytes" "$want_argv" "$state" \
+      "$tag_out" "$tag_rc"
+  )
+}
+# The docker call whose verb is $2 ("build", "image inspect"), or "(none)".
+dbx_call() {
+  local line found="(none)"
+  local IFS=';'
+  for line in $(tn_field "$1" 2); do
+    case "$line" in "$2"*) found="$line" ;; esac
+  done
+  printf '%s' "$found"
+}
+DBX_WANT_FILES="apps/novad/go.mod apps/novad/go.sum apps/web/package-lock.json apps/web/package.json deploy/devbox/Dockerfile deploy/devbox/suites.toml services/core/pyproject.toml services/core/uv.lock "
+
+DBX_CLEAN="$(run_dbx clean absent)"
+expect_str "devbox: the tag is HEAD's deploy/devbox tree hash" \
+  "$(tn_field "$DBX_CLEAN" 10)|$(tn_field "$DBX_CLEAN" 9)" "0|$(tn_field "$DBX_CLEAN" 4)"
+case "$(tn_field "$DBX_CLEAN" 4)" in
+  nova-devbox:t-????????????????????????????????????????*) report 0 "devbox: (the expected tag is a real tree hash)" ;;
+  *) report 1 "devbox: (the expected tag is a real tree hash)" "$(tn_field "$DBX_CLEAN" 4)" ;;
+esac
+expect_str "devbox: an absent tag is built once, with exactly the spec's argv" \
+  "$(tn_field "$DBX_CLEAN" 1)|$(dbx_call "$DBX_CLEAN" build)" "0|$(tn_field "$DBX_CLEAN" 7)"
+expect_str "devbox: (the store was asked for exactly that tag first)" \
+  "$(dbx_call "$DBX_CLEAN" "image inspect")" "image inspect $(tn_field "$DBX_CLEAN" 4)"
+expect_str "devbox: the context is deploy/devbox + the lockfiles and their manifests, nothing else" \
+  "$(tn_field "$DBX_CLEAN" 5)" "$DBX_WANT_FILES"
+expect_str "devbox: (each with HEAD's bytes)" "$(tn_field "$DBX_CLEAN" 6)" "ok"
+expect_str "devbox: deploy/state exists after a build" "$(tn_field "$DBX_CLEAN" 8)" "yes"
+expect_tn "devbox: says what it built" "$DBX_CLEAN" 0 3 "$(tn_field "$DBX_CLEAN" 4)"
+
+DBX_DIRTY="$(run_dbx dirty absent)"
+expect_str "devbox: an uncommitted edit or untracked file in deploy/devbox does not move the tag" \
+  "$(tn_field "$DBX_DIRTY" 10)|$(tn_field "$DBX_DIRTY" 9)" "0|$(tn_field "$DBX_CLEAN" 4)"
+expect_str "devbox: (a dirty tree still builds exactly the committed tag and labels)" \
+  "$(tn_field "$DBX_DIRTY" 1)|$(dbx_call "$DBX_DIRTY" build)" "0|$(tn_field "$DBX_DIRTY" 7)"
+expect_str "devbox: a dirty tree's context is the same file set (the untracked file never enters)" \
+  "$(tn_field "$DBX_DIRTY" 5)" "$DBX_WANT_FILES"
+expect_str "devbox: (and HEAD's bytes, not the dirty Dockerfile or lockfiles)" \
+  "$(tn_field "$DBX_DIRTY" 6)" "ok"
+
+DBX_HAVE="$(run_dbx clean present)"
+expect_str "devbox: a present tag is not rebuilt" \
+  "$(tn_field "$DBX_HAVE" 1)|$(dbx_call "$DBX_HAVE" build)" "0|(none)"
+expect_tn "devbox: (and says it is unchanged)" "$DBX_HAVE" 0 3 "unchanged"
+expect_str "devbox: (deploy/state exists without a build too)" "$(tn_field "$DBX_HAVE" 8)" "yes"
+
+DBX_FAIL="$(run_dbx clean absent 1)"
+expect_str "devbox: a failed build dies" \
+  "$(tn_field "$DBX_FAIL" 1 | grep -vx 0 >/dev/null && echo nonzero)" "nonzero"
+expect_tn "devbox: (naming the image it could not build)" "$DBX_FAIL" "$(tn_field "$DBX_FAIL" 1)" 3 \
+  "ERROR: could not build the devbox image $(tn_field "$DBX_FAIL" 4)"
+for DBX_CASE in notrepo nodevbox devboxfile; do
+  DBX_NO="$(run_dbx "$DBX_CASE" absent)"
+  expect_str "devbox ($DBX_CASE): the tag cannot be computed -> exit 1, nothing printed" \
+    "$(tn_field "$DBX_NO" 10)|$(tn_field "$DBX_NO" 9)" "1|"
+  expect_str "devbox ($DBX_CASE): build_devbox dies and builds nothing" \
+    "$(tn_field "$DBX_NO" 1 | grep -vx 0 >/dev/null && echo nonzero)|$(dbx_call "$DBX_NO" build)" "nonzero|(none)"
+  expect_tn "devbox ($DBX_CASE): (naming nova-devbox)" "$DBX_NO" "$(tn_field "$DBX_NO" 1)" 3 \
+    "ERROR: could not build the devbox image nova-devbox"
+done
+
+if awk '/^cmd_install\(\)/{f=1} f&&/^}/{exit}
+        f&&/^  verify_service_builds$/{v=NR} f&&/^  build_devbox$/{b=NR} f&&/^  install_hub_agent$/{h=NR}
+        END{exit !(v && b && h && v < b && b < h)}' "$SCRIPT_DIR/install.sh"; then
+  report 0 "devbox: cmd_install builds it after verify_service_builds, before install_hub_agent"
+else
+  report 1 "devbox: cmd_install builds it after verify_service_builds, before install_hub_agent" \
+    "order or call missing"
+fi
+
+# The Dockerfile itself (static): every base pinned by digest, the offline
+# layout novad's fetch step writes into (internal/box/fetch.go: /deps/{uv,npm,go}),
+# and the caches owned by the build's OWNER_UID:OWNER_GID so a copy-up keeps the owner's uid.
+DBX_DF="$SCRIPT_DIR/devbox/Dockerfile"
+if [ -f "$DBX_DF" ] && grep -q '^FROM ' "$DBX_DF" \
+   && ! grep -E '^FROM ' "$DBX_DF" | grep -vqE '^FROM [^ ]+@sha256:[0-9a-f]{64}( AS [A-Za-z0-9_-]+)?$'; then
+  report 0 "devbox Dockerfile: every FROM is pinned by digest"
+else
+  report 1 "devbox Dockerfile: every FROM is pinned by digest" "$(grep -n '^FROM' "$DBX_DF" 2>&1)"
+fi
+# The final stage's ENV words, continuation lines joined: what the box runs with.
+dbx_env() {
+  awk '{ if (sub(/\\$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" }' "$DBX_DF" 2>/dev/null \
+    | awk '$1 == "FROM" { n = 0; delete w } $1 == "ENV" { for (i = 2; i <= NF; i++) w[++n] = $i }
+           END { for (i = 1; i <= n; i++) print w[i] }'
+}
+for DBX_ENV in UV_CACHE_DIR=/deps/uv UV_OFFLINE=1 npm_config_cache=/deps/npm npm_config_offline=true \
+               GOMODCACHE=/deps/go GOPROXY=off GOFLAGS=-mod=mod; do
+  if dbx_env | grep -qx -- "$DBX_ENV"; then
+    report 0 "devbox Dockerfile: the box's ENV has $DBX_ENV"
+  else
+    report 1 "devbox Dockerfile: the box's ENV has $DBX_ENV" "final stage ENV: $(dbx_env | tr '\n' ' ')"
+  fi
+done
+if grep -Eq 'chown -R "?\$\{?OWNER_UID\}?:\$\{?OWNER_GID\}?"? /deps' "$DBX_DF" 2>/dev/null \
+   && grep -q '^ARG OWNER_UID' "$DBX_DF" && grep -q '^ARG OWNER_GID' "$DBX_DF"; then
+  report 0 "devbox Dockerfile: /deps is chowned to the build's UID:GID"
+else
+  report 1 "devbox Dockerfile: /deps is chowned to the build's UID:GID" "no ARG OWNER_UID/OWNER_GID + chown -R OWNER_UID:OWNER_GID /deps"
+fi
+for DBX_TOOL in "uv sync --frozen --no-install-project" "npm ci --ignore-scripts" "go mod download"; do
+  if grep -q -- "$DBX_TOOL" "$DBX_DF" 2>/dev/null; then
+    report 0 "devbox Dockerfile: prefetches with $DBX_TOOL (the fetch step's own command)"
+  else
+    report 1 "devbox Dockerfile: prefetches with $DBX_TOOL (the fetch step's own command)" "absent"
+  fi
+done
 
 # ── install.ps1 (D20): a Windows hub is told cannot, and the one step ────────
 # Its parse is CI's (pwsh). What a shell can hold it to: Windows PowerShell

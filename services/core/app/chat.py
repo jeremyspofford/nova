@@ -3514,6 +3514,16 @@ async def _run_tool(
                     # decide. No "device" key — that is the connectivity record.
                     span.meta["elevated"] = True
                     span.meta["machine"] = fact["machine"]
+            for fact in facts[facts_before:]:
+                run = fact.get("run") if isinstance(fact, dict) else None
+                if isinstance(run, dict) and run.get(tools.devices.RAN_IN) in ("box", "host"):
+                    # S32.2 T9: where THIS device_run was sent to run — its
+                    # change's sealed box, or the host — read from the run
+                    # fact device_run filed from the route it took. A mark
+                    # after the fact; nothing reads it to decide.
+                    span.meta["ran_in"] = run[tools.devices.RAN_IN]
+                    if isinstance(run.get("box"), str):
+                        span.meta["box"] = run["box"]
         if not ok:
             span.meta["error"] = head
     return result, ok

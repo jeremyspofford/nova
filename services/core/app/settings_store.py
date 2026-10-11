@@ -78,6 +78,21 @@ def _max_notices_problem(value: Any) -> str | None:
     return None
 
 
+def _int_range(lo: int, hi: int, what: str) -> Callable[[Any], str | None]:
+    """A validate hook for an int that must lie in [lo, hi]. The bound named in
+    the refusal is the bound checked — one pair of numbers, no second copy in
+    words."""
+
+    def problem(value: Any) -> str | None:
+        if value < lo:
+            return f"{value} is below the minimum {lo} ({what})"
+        if value > hi:
+            return f"{value} is above the maximum {hi} ({what})"
+        return None
+
+    return problem
+
+
 # The decision step's budget as its notice says it — read off the step's own
 # constant, so the words cannot say one budget while the step runs another.
 _DECISION_BUDGET = f"{decisions.TURN_BUDGET_S:g} s"
@@ -259,9 +274,62 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "link to the chain, it names no fixed model and runs only after every link failed."
         ),
     ),
+    # The sealed box's limits (S32.2, spec §9.5, owner 2026-10-11). Core reads
+    # them per call (code_repos.box_limits) and sends them with every box.*
+    # call; novad bounds-checks them again at its edge.
+    SettingDef(
+        key="box.cpus",
+        type="int",
+        default=2,
+        description=(
+            "CPUs one change's box may use while her commands run in it (1 to 16). "
+            "Two leaves the rest of the machine to chat and the stack."
+        ),
+        validate=_int_range(1, 16, "CPUs per box"),
+    ),
+    SettingDef(
+        key="box.memory_gb",
+        type="int",
+        default=3,
+        description=(
+            "Memory one change's box may use, in GB (1 to 64). A command that needs "
+            "more is stopped by the limit, and the result says so."
+        ),
+        validate=_int_range(1, 64, "GB of memory per box"),
+    ),
+    SettingDef(
+        key="box.pids",
+        type="int",
+        default=512,
+        description=(
+            "The most processes one change's box may run at once (64 to 65536) — "
+            "a runaway fork stops at this ceiling instead of filling the machine."
+        ),
+        validate=_int_range(64, 65536, "processes per box"),
+    ),
+    SettingDef(
+        key="box.max_running",
+        type="int",
+        default=2,
+        description=(
+            "How many change boxes may run at once (1 to 8). Starting one more is "
+            "refused with the names of the running boxes; an idle box stops by itself "
+            "after 30 minutes."
+        ),
+        validate=_int_range(1, 8, "boxes running at once"),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
+
+#: The box limit settings by the name each box.* call carries it under
+#: (S32.2 T2) — code_repos.box_limits reads exactly these.
+BOX_LIMIT_KEYS: dict[str, str] = {
+    "cpus": "box.cpus",
+    "memory_gb": "box.memory_gb",
+    "pids": "box.pids",
+    "max_running": "box.max_running",
+}
 
 #: The hub last-resort switch's key (epic hub-last-resort).
 HUB_LAST_RESORT = "routing.hub_last_resort"

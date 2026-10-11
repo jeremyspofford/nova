@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +34,7 @@ import (
 	"github.com/coder/websocket"
 
 	"novad/internal/audit"
+	"novad/internal/box"
 	"novad/internal/caps"
 	"novad/internal/config"
 	"novad/internal/facts"
@@ -95,6 +98,10 @@ var defaultBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time
 // P12's own heartbeat-gap rule stays exactly as it is — the watchdog is a
 // second, faster, I/O-free path beside it, not a replacement for it.
 const WatchdogEvery = 1 * time.Second
+
+// BoxReapEvery is how often the agent checks its boxes for idle stop (S32.2
+// T7): a box idle box.IdleStop stops within a minute of crossing it.
+const BoxReapEvery = 1 * time.Minute
 
 // sleepGap is the watchdog's own threshold: a wall-clock gap between its
 // samples wider than this means the machine slept, not just a scheduler
@@ -200,6 +207,7 @@ type Agent struct {
 	factsMinGap    time.Duration
 	backoffs       []time.Duration
 	watchdogEvery  time.Duration
+	reapEvery      time.Duration
 
 	// factsSendMu serializes the whole build (frameBytes) -> write -> record
 	// sequence across every path that can send a facts frame on a
@@ -245,7 +253,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		cfg:              cfg,
 		priv:             priv,
 		audit:            log,
-		deps:             caps.Deps{Home: home},
+		deps:             caps.Deps{Home: home, Box: newBoxManager()},
 		locators:         locators,
 		logf:             logf,
 		verifier:         verifier,
@@ -260,6 +268,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		factsMinGap:      FactsMinGap,
 		backoffs:         defaultBackoffs,
 		watchdogEvery:    WatchdogEvery,
+		reapEvery:        BoxReapEvery,
 	}
 	// Set after the Agent exists, so it can read update.json through
 	// a.lastUpdate() — the last outcome daemon.update or supervise recorded.
@@ -358,6 +367,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	runCtx, stop := context.WithCancel(ctx)
 	defer a.workers.Wait()
 	defer stop()
+	if m := a.deps.Box; m != nil {
+		// Idle stop runs for the agent's life, connected or not (S32.2 T7).
+		a.workers.Go(func() { a.reapBoxes(runCtx, m) })
+	}
 	attempt := 0
 	for {
 		if a.restart.Load() {
@@ -1072,4 +1085,60 @@ func short(hexKey string) string {
 		return hexKey
 	}
 	return hexKey[:8]
+}
+
+// newBoxManager is the agent's one box manager (S32.2): docker and git run
+// for real, as the owner this agent runs as. Windows has none — the box is
+// Linux-hub only, and box.* say cannot there.
+func newBoxManager() *box.Manager {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return &box.Manager{
+		Docker: box.ExecRunner{Bin: "docker"},
+		Git:    box.ExecRunner{Bin: "git"},
+		Now:    time.Now,
+		UID:    os.Getuid(),
+		GID:    os.Getgid(),
+	}
+}
+
+// reapBoxes stops idle boxes (S32.2 T7) every reapEvery until ctx ends.
+// What it stopped and why a stop failed go to logf; an error repeated
+// unchanged on the next tick is not logged again (an agent on a machine
+// without docker would otherwise say so every minute). A panic in a tick is
+// logged and the next tick runs.
+func (a *Agent) reapBoxes(ctx context.Context, m *box.Manager) {
+	ticker := time.NewTicker(a.reapEvery)
+	defer ticker.Stop()
+	lastErr := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		lastErr = a.reapOnce(ctx, m, lastErr)
+	}
+}
+
+func (a *Agent) reapOnce(ctx context.Context, m *box.Manager, lastErr string) (next string) {
+	defer func() {
+		if p := recover(); p != nil {
+			a.logf("box idle stop: panicked: %v", p)
+			next = ""
+		}
+	}()
+	stopped, err := m.Reap(ctx)
+	for _, b := range stopped {
+		a.logf("box idle stop: stopped %s (idle %s or more)", b, box.IdleStop)
+	}
+	if err == nil {
+		return ""
+	}
+	if msg := err.Error(); msg != lastErr {
+		a.logf("box idle stop: %s", msg)
+		return msg
+	}
+	return lastErr
 }

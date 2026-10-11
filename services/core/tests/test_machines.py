@@ -1070,7 +1070,15 @@ async def test_s29b_t5_c2_a_declared_argv_is_answered_as_a_real_frame_is(
     assert result == f"eval_laptop ran {argv} — exit {exit_code}\n{output}"
     assert _t5_run_facts(sink) == [
         {
-            "run": {"exit_code": exit_code, "device": "eval_laptop", "argv": argv, "cwd": None},
+            # ran_in (S32.2 T9): a replay's declared device is never the repo
+            # machine, so its run is on the host.
+            "run": {
+                "exit_code": exit_code,
+                "device": "eval_laptop",
+                "argv": argv,
+                "cwd": None,
+                "ran_in": "host",
+            },
             "target": " ".join(argv),
         }
     ]

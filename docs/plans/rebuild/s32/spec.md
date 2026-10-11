@@ -63,6 +63,9 @@ which deploys what S32 lands.
 - **`AGENTS.md`** is titled "Nova v3", written as Claude's "I", and its
   "When you change code" section (`:124`) is the only part addressed to her.
 - **Migrations:** core is at `044`; S30c has `045` reserved.
+  *As built (S32.2, 2026-10-11):* `046` is `046_code_repos.sql` — S32.2
+  needed `code_repos` before any landing exists — so S32.3's `landings` takes
+  `047` (§5.3).
 
 ## 2. Rulings that bind this design
 
@@ -117,6 +120,17 @@ her branch.
 - A change that edits `deploy/devbox/` does not change its own box. Its edit
   takes effect for changes started after it lands — the same reason the v3
   lesson gives.
+- *As built (S32.2, 2026-10-11):* **`./install` builds the image, not the
+  agent** (`build_devbox` in `deploy/install.sh`, after the stack is
+  verified). A cold build of Python, Node, Go and their caches takes minutes
+  and every agent command is killed at 110 s (`client.CommandTimeout`). The
+  tag is `nova-devbox:t-<git rev-parse HEAD:deploy/devbox>` — the committed
+  tree, built from a `git archive` of HEAD holding only `deploy/devbox` and
+  the lockfiles with their manifests. novad computes the same tag from the
+  repo's default branch; when that image is not in the store, a box start is
+  an `Error:` naming the tag and saying `./install` builds it — nothing runs.
+  So a `main` commit that changes `deploy/devbox/` reaches new boxes on the
+  next `./install`, not on its own.
 
 ### 4.2 What the box can and cannot do
 
@@ -133,6 +147,23 @@ her branch.
 | Limits | a memory cap, a pids cap, and 2 CPUs (settings; §9.5) |
 | Lifetime | starts on `start_change`; stops when idle 30 minutes; removed with its Postgres when the change lands or is closed |
 
+*As built (S32.2, 2026-10-11):*
+
+- **The network is `--internal` with `gateway_mode_ipv4=isolated`** (docker
+  28+; docker refuses `isolated` without `--internal`). Measured: a plain
+  `--internal` network still gives its bridge an address on the host, and a
+  box reached a host listener on `0.0.0.0` through it (`172.21.0.1`).
+  `isolated` leaves the bridge with no address, so that route is gone; the
+  box and its Postgres still reach each other. `inhibit_ipv4` did not close
+  it. The seal test probes every host IPv4 (LAN, tailnet, every bridge
+  gateway) on a listener it holds open.
+- **`/tmp` is a tmpfs mounted `exec`.** `noexec` broke `go test` (it builds
+  and runs its test binary under `/tmp`) and sealed nothing: the worktree is
+  executable anyway.
+- **Removal is S32.3's.** S32.2 starts boxes and stops idle ones; removing a
+  box, its Postgres, network and cache volume comes with `close_change` /
+  `repo_land` (§5.4). Until then every change's network and volume persist.
+
 ### 4.3 Dependencies without egress
 
 A sealed box cannot fetch from PyPI or npm. Ruled (§9.1, 2026-10-11):
@@ -148,6 +179,22 @@ A sealed box cannot fetch from PyPI or npm. Ruled (§9.1, 2026-10-11):
 - Downside: a package's own build step (a Python sdist) runs with egress in
   that container. It sees no source of hers and no secret, so what it can
   leak is the lockfile.
+- *As built (S32.2, 2026-10-11): the uv part of the cache is read-write in
+  the box.* uv 0.10.2 takes a lock inside its cache, so `uv sync` and `uv run
+  pytest` fail against a read-only `/deps` ("Could not acquire lock …
+  Read-only file system"); `npm ci` and `go mod download` work read-only. The
+  box mounts the change's cache volume at `/deps` read-only and its `uv`
+  subpath at `/deps/uv` read-write (`--mount …,volume-subpath=uv`). Ruled by
+  the orchestrator within this spec: the volume is per change
+  (`nova-box-<id>-cache`), what happens inside a sealed box is not a threat
+  (the 08-10 threat model), and a landing is judged in a fresh box with a
+  fresh cache, so tampering can only spoil that change's own box, never a
+  verdict. The fetch step's marker (`/deps/.nova-locks`, which lockfiles were
+  fetched) sits at the volume root, which stays read-only, so the box cannot
+  forge it to skip its own refetch; it can only alter or poison its own uv
+  cache. The fetch compares a change's lockfiles to the image's
+  `nova.lock.<path>` labels and to that marker, not to `main`, so `main`
+  moving without a devbox rebuild is covered too.
 
 ### 4.4 How her command reaches the box
 
@@ -175,6 +222,13 @@ A sealed box cannot fetch from PyPI or npm. Ruled (§9.1, 2026-10-11):
   from `deploy/devbox/suites.toml`, §5.2) with no test selector.
 - The Claude lanes move to the same path, so one lock serves both. While a
   run waits on the lock, its result says so, with how long it waited.
+- *As built (S32.2, 2026-10-11):* the lock is `<checkout>/deploy/state/cpu.lock`
+  (`deploy/state/` is gitignored). novad reads `suites.toml` and the image tag
+  from the **repo's default branch** that core sends (`code_repos`
+  `default_branch`, else what `start_change` branches from) — never the
+  change's `nova/<id>-*` branch, which could empty its own suite list and
+  skip the lock. A run that cannot get the lock before its call's deadline is
+  an `Error:` naming the lock and the wait, and nothing runs.
 
 ### 4.6 The per-repo setting
 
@@ -184,6 +238,14 @@ A sealed box cannot fetch from PyPI or npm. Ruled (§9.1, 2026-10-11):
 - `host` is the owner's escape hatch for a repo whose work cannot run in a
   box. It is his setting, not hers, and it is shown on the change's record.
   S32 ships one row, for her own repo. S32c generalizes it to other repos.
+- *As built (S32.2, 2026-10-11):* migration `046_code_repos.sql`. Core
+  writes the `nova` row at startup from `NOVA_REPO_HOST`, `NOVA_CHECKOUT` and
+  `NOVA_REPO_BRANCH`, never touching `environment`. The only writer of
+  `environment` is `PUT /api/v1/code-repos/{name}` (an authenticated session;
+  no tool imports it, and a test pins that). There is **no UI control yet**:
+  it arrives with S32.4's Changes page (§7). Until then it is reachable only
+  by that API call, against the discoverable-by-navigation rule.
+  `start_change` and `list_changes` show it.
 
 ## 5. Her landing step
 
@@ -241,11 +303,12 @@ One landing at a time per repo (a lock). Steps:
 
 ### 5.3 The record
 
-- Migration `046_landings.sql` (`045` is S30c's): `landings` — id, change
+- Migration `047_landings.sql` (`045` is S30c's; `046` became
+  `code_repos`, built by S32.2 — note 2026-10-11): `landings` — id, change
   id, repo, branch, base SHA, commit SHA, author, coder, turn id, verdict,
   per-suite results (`{suite, exit, passed, failed, skipped, seconds,
   tail}`), `protected`, `dirty_outside`, the stored patch, merged SHA, push
-  result, timestamps. Plus `code_repos` (§4.6).
+  result, timestamps. (`code_repos` (§4.6) is already `046`.)
 - `landing_status(id)` reads a row back. Every claim about a landing is held
   to its row: S29's `tests_passed` claim gains the landing as a backing
   fact, and a new claim kind `landed` ("merged", "landed", "it's on main")
@@ -348,8 +411,11 @@ the build and its tests, not the live walk.
 1. **S32.1 Build identity** (§6) — about 3 h. Also unblocks S33.
 2. **S32.2 The box** (§4: recipe, run spec in `novad`, routing in
    `device_run`, `ran_in`, the CPU lock, `code_repos`) — about 6 h.
+   *As built:* about 9¾ h planned — the fetch step, the idle stop and the
+   docker-backed seal test were each a task; `suites.toml` came with it (the
+   lock needs it), so S32.3 reads it rather than writing it.
 3. **S32.3 The landing step** (§5: `change_commit`, `repo_land` on S30c's
-   jobs, `suites.toml`, migration 046, the tools, the `landed` claim) —
+   jobs, migration 047, the tools, the `landed` claim) —
    about 7 h. **Waits on S30c.**
 4. **S32.4 The Changes page and the Inbox notice** (§7) — about 3 h.
 5. **S32.5 `AGENTS.md`** (§8) — about 1½ h.
