@@ -51,11 +51,28 @@ FRAME_SECTIONS: tuple[str, ...] = (
     "service",
     "elevation",
     "wsl_distros",
+    "admin_path",
     "probed_at",
 )
 # The sections ONE run of the probes carries (S42b P29), and with its time the
 # keys that run is recorded under — always as one unit (merge_frame).
-PROBE_SECTIONS: tuple[str, ...] = ("service", "elevation", "wsl_distros")
+PROBE_SECTIONS: tuple[str, ...] = ("service", "elevation", "wsl_distros", "admin_path")
+# S30b: the standing admin path as the agent read it (apps/novad/internal/
+# admin/path.go PathState). kind is "none" exactly when it is not installed.
+ADMIN_PATH_KINDS: tuple[str, ...] = ("sudoers", "task", "none")
+ADMIN_PATH_STATES: tuple[str, ...] = (
+    "ready",
+    "running",
+    "disabled",
+    "absent",
+    "incomplete",
+    "unknown",
+    "pending_restart",
+)
+# The platform each installed kind belongs to: a kind reported on another
+# platform is stated as unknown, never read as installed.
+_ADMIN_PATH_PLATFORMS = {"sudoers": ("linux", "darwin"), "task": ("windows",)}
+_MAX_PENDING = 32
 PROBE_KEYS: tuple[str, ...] = (*PROBE_SECTIONS, "probed_at")
 # S42b P16: the folders a fs path may name as @<name>, as the agent's OS names them.
 FOLDER_NAMES: tuple[str, ...] = ("home", "desktop", "documents", "downloads")
@@ -531,6 +548,36 @@ def _wsl_distros(raw: object) -> dict:
     }
 
 
+def _admin_path(raw: object) -> dict:
+    a = _object(raw, "facts.admin_path")
+    installed = _bool(a.get("installed"), "facts.admin_path.installed")
+    kind = _line(a.get("kind"), "facts.admin_path.kind")
+    if kind not in ADMIN_PATH_KINDS:
+        raise FactsRejected(
+            f"facts.admin_path.kind {kind!r} is not one of {', '.join(ADMIN_PATH_KINDS)}"
+        )
+    if installed != (kind != "none"):
+        raise FactsRejected(
+            f"facts.admin_path.installed is {str(installed).lower()} with kind {kind!r} — "
+            'an installed path names its kind and only an uninstalled one is "none"'
+        )
+    state = _line(a.get("state"), "facts.admin_path.state")
+    if state not in ADMIN_PATH_STATES:
+        raise FactsRejected(
+            f"facts.admin_path.state {state!r} is not one of {', '.join(ADMIN_PATH_STATES)}"
+        )
+    pending = _list(a.get("pending"), "facts.admin_path.pending")
+    if len(pending) > _MAX_PENDING:
+        raise FactsRejected(f"facts.admin_path.pending lists more than {_MAX_PENDING} paths")
+    return {
+        "installed": installed,
+        "kind": kind,
+        "state": state,
+        "said": _line(a.get("said", ""), "facts.admin_path.said"),
+        "pending": [_line(p, f"facts.admin_path.pending[{i}]") for i, p in enumerate(pending)],
+    }
+
+
 def _probed_at(raw: object) -> str:
     text = _line(raw, "facts.probed_at")
     try:
@@ -561,6 +608,20 @@ def validate_frame(raw: object) -> dict:
         out["elevation"] = _elevation(frame["elevation"])
     if "wsl_distros" in frame:
         out["wsl_distros"] = _wsl_distros(frame["wsl_distros"])
+    if "admin_path" in frame:
+        # S30b: a malformed admin_path is DROPPED with the reason, never
+        # guessed — and never takes the frame down with it: net, the probe
+        # and the rest rode in beside it and said nothing wrong. The reason
+        # is filed as the probe's own unreadable item, so admin_path_line
+        # states it instead of "predates".
+        try:
+            out["admin_path"] = _admin_path(frame["admin_path"])
+        except FactsRejected as exc:
+            dropped = {
+                "item": "admin_path",
+                "reason": f"core dropped the admin_path section: {exc.reason}",
+            }
+            out["unreadable"] = [*out.get("unreadable", []), dropped]
     if "probed_at" in frame:
         out["probed_at"] = _probed_at(frame["probed_at"])
     if not out:
@@ -987,6 +1048,76 @@ def elevation_line(facts: dict | None, platform: str) -> str | None:
     return f"elevation: {sudo}"
 
 
+def admin_path_of(facts: dict | None, platform: str) -> dict | None:
+    """The admin path for the device tile (device_spec): {installed, kind,
+    line}, or None when there is no line (the agent never probed).
+
+    `line` IS admin_path_line — the words Nova says — so the tile can never
+    word a state differently (T8 G1: it once said "not installed" where core
+    said unknown, or that part of it is left). `installed` is core's own
+    platform-checked verdict: a kind foreign to the platform is not."""
+    line = admin_path_line(facts, platform)
+    if line is None:
+        return None
+    a = facts.get("admin_path") if isinstance(facts, dict) else None
+    a = a if isinstance(a, dict) else {}
+    kind = a.get("kind") if isinstance(a.get("kind"), str) else None
+    installed = a.get("installed") is True and platform in _ADMIN_PATH_PLATFORMS.get(kind, ())
+    return {"installed": installed, "kind": kind, "line": line}
+
+
+def _pending_words(pending: list) -> str:
+    paths = [_sanitized_line(p) for p in pending if isinstance(p, str)]
+    if not paths:
+        return ""
+    if len(paths) == 1:
+        return f"; the agent copy moved aside to {paths[0]} is deleted at the next restart"
+    joined = " and ".join(paths)
+    return f"; the agent copies moved aside to {joined} are deleted at the next restart"
+
+
+def admin_path_line(facts: dict | None, platform: str) -> str | None:
+    """The standing admin path (S30b) as the agent last read it — one line
+    for device_info, device_list and machine_status. Only what was read:
+    an agent that probed without the section predates the admin path; one
+    whose section core dropped is unknown with core's reason; one that has
+    never probed gets no line (the probe line already says so)."""
+    if not isinstance(facts, dict):
+        return None
+    a = facts.get("admin_path")
+    if not isinstance(a, dict):
+        dropped = _reason_for(facts, "admin_path")
+        if dropped:
+            return f"admin path: unknown — {dropped}"
+        if _has_probed(facts):
+            return "admin path: unknown — this agent predates the admin path"
+        return None
+    kind, state = a.get("kind"), a.get("state")
+    said = _sanitized_line(a.get("said") or "") if isinstance(a.get("said"), str) else ""
+    pending = _pending_words(a.get("pending") or [])
+    if a.get("installed") is True:
+        if platform not in _ADMIN_PATH_PLATFORMS.get(kind, ()):
+            return (
+                f"admin path: unknown — the agent reported a {_sanitized_line(str(kind))} "
+                f"admin path on a {platform} machine, which has none of that kind"
+            )
+        if kind == "sudoers":
+            return (
+                "admin path: installed (sudoers rule) — an elevated run goes through "
+                f"sudo as root{pending}"
+            )
+        task_state = "" if state in ("ready", "running") else f"; the task is {state}"
+        return (
+            "admin path: installed (scheduled task) — an elevated run runs as the signed-in "
+            f"user, elevated{task_state}{pending}"
+        )
+    if state == "unknown":
+        return f"admin path: unknown — {said or 'the agent could not read it'}{pending}"
+    if state == "incomplete":
+        return f"admin path: not installed — part of it is left ({said or 'unnamed'}){pending}"
+    return f"admin path: not installed{pending}"
+
+
 def _nova_agent_in(d: dict, why: dict[str, str]) -> str:
     pids = d["novad_pids"]
     pids_said = why.get(_distro_item(d["name"], "novad_pids"))
@@ -1141,6 +1272,7 @@ def _has_probed(facts: dict | None) -> bool:
         "service" in facts
         or "elevation" in facts
         or "wsl_distros" in facts
+        or "admin_path" in facts
         or "probed_at" in facts
         or bool(_reason_for(facts, "probe"))
     )
@@ -1164,7 +1296,15 @@ def acting_lines(facts: dict | None, platform: str) -> list[str]:
     lines above it — "how it runs: … pid 812" from a probe of any age, read
     as current. Said first, any line she is shown has its time before it."""
     lines = [runs_line(facts)]
-    lines.extend(line for line in (elevation_line(facts, platform), wsl_line(facts)) if line)
+    lines.extend(
+        line
+        for line in (
+            elevation_line(facts, platform),
+            admin_path_line(facts, platform),
+            wsl_line(facts),
+        )
+        if line
+    )
     if not _has_probed(facts):
         return lines
     # A Windows probe also walks the WSL distributions beside it (P29), the

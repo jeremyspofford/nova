@@ -5289,8 +5289,8 @@ def test_a_result_that_names_no_machine_is_no_claim(reply):
 
 def test_an_install_or_an_update_done_is_read_only_beside_this_turns_update_of_it():
     """Without this turn's update of that machine an install is
-    device_completion's claim — "(No machine_update or device_run call ran on
-    minipc this turn.)", the one true sentence (MF4's division) — and "the
+    device_completion's claim — "(No machine_update or device_admin_path or
+    device_run call ran on minipc this turn.)", the one true sentence (MF4's division) — and "the
     update" may be apt's or Windows'. The build it RUNS is read beside any
     update fact this turn holds for it: machine_status's row too. device_list
     states an agent's build and records no update fact, so nothing it showed

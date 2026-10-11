@@ -24,6 +24,10 @@ type UninstallOptions struct {
 	Forget     bool
 	Now        func() time.Time
 	Out        io.Writer
+	// AdminPath removes the standing admin path (S30b) through the path
+	// itself, first: its words when it removed one, "" when there was none.
+	// Nil = nothing to remove.
+	AdminPath func(ctx context.Context) (string, error)
 }
 
 // Uninstall stops and removes the service and the binaries: the build,
@@ -45,6 +49,17 @@ func Uninstall(ctx context.Context, o UninstallOptions) error {
 		return fmt.Errorf("uninstall needs an absolute install directory, not %q", o.InstallDir)
 	}
 	var errs []error
+	// The admin path goes first, while the agent that set it up is still
+	// here to run its own uninstall through it.
+	if o.AdminPath != nil {
+		said, err := o.AdminPath(ctx)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("removing the admin path: %w", err))
+		case said != "":
+			fmt.Fprintf(o.Out, "removed:    the admin path (%s)\n", said)
+		}
+	}
 	registered := o.Service.Installed()
 	stopErr, err := o.Service.Uninstall(ctx)
 	if stopErr != nil {

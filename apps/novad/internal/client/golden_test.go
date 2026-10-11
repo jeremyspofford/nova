@@ -120,7 +120,8 @@ func goldenFrame(unread ...facts.Unreadable) func([]facts.Unreadable) facts.Fram
 }
 
 // goldenProbe is one run of the probes on that agent: how it runs, what
-// elevating would meet, and two distributions beside it — one running and
+// elevating would meet, its admin path (the scheduled task, ready), and two
+// distributions beside it — one running and
 // looked inside, one stopped (novad_pids [], known to be none).
 func goldenProbe() facts.Probed {
 	admin := true
@@ -136,6 +137,7 @@ func goldenProbe() facts.Probed {
 			User:          `FIXTURE-PC\fixture`,
 		},
 		Elevation: &facts.Elevation{Elevated: false, Admin: &admin, Sudo: "off"},
+		AdminPath: &facts.AdminPath{Installed: true, Kind: "task", State: "ready"},
 		WSL: &facts.WSLDistros{Distros: []facts.Distro{
 			{Name: "Ubuntu-Fixture", Default: true, Version: 2, Running: true, Looked: true, PID1: "systemd",
 				User: "fixture", Sudo: "no_password", Root: true,
@@ -147,13 +149,16 @@ func goldenProbe() facts.Probed {
 
 // goldenProbeWithUnreadable is a probe that could not read everything: a
 // running distribution whose look printed no answer — novad_pids null,
-// unknown — and the elevation it could not read.
+// unknown — the elevation it could not read, and an admin path whose task
+// could not be read.
 func goldenProbeWithUnreadable() facts.Probed {
 	p := goldenProbe()
 	p.Elevation = &facts.Elevation{Elevated: false, Sudo: "unknown", SudoSaid: "the sudo setting could not be read: fixture"}
 	p.WSL.Distros[0] = facts.Distro{Name: "Ubuntu-Fixture", Default: true, Version: 2, Running: true}
+	p.AdminPath = &facts.AdminPath{Kind: "none", State: "unknown", Said: "the task could not be read: fixture"}
 	p.Unreadable = []facts.Unreadable{
 		{Item: "elevation", Reason: "reading whether this account is in Administrators: fixture"},
+		{Item: "admin_path", Reason: "the task could not be read: fixture"},
 		{Item: "wsl_distros.Ubuntu-Fixture", Reason: "the look printed no answer"},
 	}
 	return p

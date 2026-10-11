@@ -78,6 +78,21 @@ def test_s30a_t7_device_search_is_excluded_with_its_reason():
     assert live_facts.may_run_unasked("device_search") == reason
 
 
+def test_s30b_t7_device_admin_path_is_never_run_unasked():
+    """S30b T7 (2026-10-11): NOT in NOT_AUTO_RUN on purpose — that table
+    classifies reads_only tools, and this one is not: it installs or removes
+    a machine's admin path and can pop a UAC prompt on the owner's screen.
+    live_facts refuses it by that fact, by name."""
+    assert "device_admin_path" in tools.REGISTRY, "device_admin_path is not registered"
+    assert tools.REGISTRY["device_admin_path"].reads_only is False
+    assert "device_admin_path" not in live_facts.AUTO_RUN
+    assert "device_admin_path" not in live_facts.NOT_AUTO_RUN
+    refusal = live_facts.runnable(
+        _call("device_admin_path", {"device": "mini", "action": "install"})
+    )
+    assert refusal and "changes something" in refusal
+
+
 # -- runnable ----------------------------------------------------------------
 
 

@@ -882,7 +882,8 @@ _NAME_WORD = re.compile(r"[a-z0-9]++")
 # correction contradicts what the record shows, never a sentence it cannot
 # place: an install and an update done only beside THIS turn's update of that
 # machine — without one, an install is device_completion's claim ("(No
-# machine_update or device_run call ran on minipc this turn.)", one true
+# machine_update or device_admin_path or device_run call ran on minipc this
+# turn.)", one true
 # sentence, never two), and "the update" may be apt's or Windows'; the build it
 # runs beside any update fact this turn holds for that machine — device_list
 # states an agent's build and records no update fact, so a build it showed is
@@ -7387,18 +7388,28 @@ class DeviceCompletionClaim:
 #
 # An edit is a write (S30a T5): device_edit_file changes the file it names, so
 # "I updated chat.py on minipc" beside an ok edit there is backed.
+#
+# The admin path is installed by its own tool (S30b T7): "I installed the
+# admin path on minipc" beside an ok device_admin_path call there is backed.
+#
+# And uninstalled by it (S30b END): "uninstall" is its own kind, so "I
+# uninstalled the admin path on minipc" beside an ok device_admin_path call
+# there is backed; "I uninstalled Steam" is still backed by device_run.
+# "I removed the admin path" is a delete, a command, device_run only — a
+# known residual: telling the admin path from a file needs the object.
 DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
     "launch": ("device_launch_app", "device_run"),
     "write": ("device_write_file", "device_edit_file", "device_run"),
     "notify": ("device_notify", "device_run"),
     "run": ("device_launch_app", "device_run"),
-    "install": ("machine_update", "device_run"),
+    "install": ("machine_update", "device_admin_path", "device_run"),
+    "uninstall": ("device_admin_path", "device_run"),
     "command": ("device_run",),
 }
 
 # The ACTIONS a claim can name, by the words it writes them with. The kind of
-# tool that performs one is its own name for launch, write, notify, run and
-# install, and a command for every other (`_kind_of`).
+# tool that performs one is its own name for launch, write, notify, run,
+# install and uninstall, and a command for every other (`_kind_of`).
 _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "launch": (
         "open",
@@ -7424,7 +7435,7 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "run": ("ran", "run", "executed"),
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
-_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install"})
+_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install", "uninstall"})
 
 
 def _kind_of(action: str) -> str:
@@ -7441,7 +7452,8 @@ def _kind_of(action: str) -> str:
 # hub's build is read as the install kind instead: backed by machine_update or
 # device_run on that machine, through MF4's mapping, and never read as a
 # notification — so with no call it still draws exactly one sentence, "(No
-# machine_update or device_run call ran on minipc this turn.)". A notification,
+# machine_update or device_admin_path or device_run call ran on minipc this
+# turn.)". A notification,
 # a message or an alert sent stays the notify kind, and so does a send whose
 # object the guard cannot read ("I sent it to minipc").
 #

@@ -249,9 +249,13 @@ it on 2026-09-30 (S42c) and chose S30b's standing admin path instead. What
 replaces it:
 
 - **What runs elevated.** A fix that needs admin runs through S30b's standing
-  admin path on that machine: the elevated service the agent drives on
-  Windows, and on Linux and macOS whatever S30b installs there. S46a adds no
-  channel of its own.
+  admin path on that machine: on Windows the elevated scheduled task
+  `\Nova\NovaAdmin`, which runs as the owner with highest privileges from
+  the protected agent copy `%ProgramFiles%\Nova\Admin\novad.exe`; on Linux
+  and macOS the sudoers drop-in `/etc/sudoers.d/nova-admin` naming the
+  root-owned copy `/usr/local/libexec/nova/novad` (*amended 2026-10-11*, as
+  S30b landed; `apps/novad/README.md`, "The admin path"). S46a adds no
+  channel for its fixes.
 - **The named fixes stay, as the know-how, not as a boundary.** S30b runs any
   command as admin, so the compiled table no longer keeps anything out. The
   owner dropped that boundary on 2026-09-30 (`doing-things.md`, Q17). What the
@@ -265,10 +269,15 @@ replaces it:
   `cannot: no admin path on <machine>`, and the change becomes one of the
   user's steps (§5.5), with the same read-back once they have done it. That
   states a fact. It gates nothing.
-- **On Windows, S46a needs S30b's path to be a service,** not a scheduled
-  task. Only a service receives Windows' pre-shutdown notice, and §5.4
-  suspends BitLocker there, just before the restart, instead of when the
-  firmware change is written.
+- ~~**On Windows, S46a needs S30b's path to be a service,** not a scheduled
+  task.~~ *Amended 2026-10-11:* S30b landed as a scheduled task (the owner's
+  decision, after an automated safety check stopped the token-based service
+  design; `doing-things.md` S30b *Landed*). Only a service receives Windows'
+  pre-shutdown notice, and §5.4 suspends BitLocker there, just before the
+  restart, instead of when the firmware change is written — so **the
+  pre-shutdown service is S46a's own addition**: a small service that does
+  that one step and nothing else. Every other elevated fix still runs
+  through S30b's task.
 
 ### 4.3 Core
 
@@ -748,8 +757,11 @@ Dell; there is no helper. The walk now starts at install.)*
     diagnostic operation that proves the install end to end;~~ not built: the
     helper (S42c) was paused on 2026-09-30, and S30b replaces it;
   - the hub-host agent, which is the relay.
-- **It depends on S30b** *(2026-10-06)*: the standing admin path, as a service
-  on Windows (§4.2).
+- **It depends on S30b** *(2026-10-06)*: the standing admin path ~~, as a
+  service on Windows~~ (§4.2). *Amended 2026-10-11:* S30b landed it on
+  Windows as the elevated scheduled task `\Nova\NovaAdmin` with the protected
+  copy under `%ProgramFiles%\Nova\Admin`; the pre-shutdown service the
+  BitLocker step needs is S46a's own addition, not S30b's.
 - **S30b moves ahead of S30.** In `doing-things.md` it waited on S30's jobs,
   because an install outlives a turn. Ahead of S30, its elevated `device_run`
   runs inside a turn, and an install that outlives one waits for S30's jobs.

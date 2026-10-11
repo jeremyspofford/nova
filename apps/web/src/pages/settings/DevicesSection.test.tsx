@@ -451,4 +451,41 @@ describe('DevicesSection', () => {
     expect(await screen.findByText('Windows 11 Pro 24H2 (build 26100) · thinkpad · agent 0.2.0')).toBeTruthy()
     expect(screen.getByText(/Runs inside WSL \(Ubuntu-26\.04\)/)).toBeTruthy()
   })
+  it('each tile states its admin path in core\'s words, and the section states the surface once (S30b)', async () => {
+    const ap = (installed: boolean, kind: string | null, line: string) => ({ installed, kind, line })
+    renderSection({
+      listDevices: vi.fn().mockResolvedValue([
+        device({ id: 'd-1', name: 'mini', admin_path: ap(true, 'sudoers', 'admin path: installed (sudoers rule) — an elevated run goes through sudo as root'), last_seen: freshIso() }),
+        device({ id: 'd-2', name: 'dell', platform: 'windows', admin_path: ap(true, 'task', 'admin path: installed (scheduled task) — an elevated run runs as the signed-in user, elevated'), last_seen: freshIso() }),
+        device({ id: 'd-3', name: 'mac', platform: 'darwin', admin_path: ap(false, 'none', 'admin path: not installed'), last_seen: freshIso() }),
+        device({ id: 'd-4', name: 'old', last_seen: freshIso() }),
+        device({ id: 'd-5', name: 'odd', admin_path: ap(false, 'none', 'admin path: unknown — sudo -n -l failed: exit 1'), last_seen: freshIso() }),
+        device({ id: 'd-6', name: 'laptop', platform: 'windows', admin_path: ap(false, 'none', 'admin path: not installed — part of it is left (the copy is left)'), last_seen: freshIso() }),
+        device({ id: 'd-7', name: 'pc', platform: 'windows', admin_path: ap(false, 'none', 'admin path: not installed; the agent copy moved aside to C:\\N\\x.exe is deleted at the next restart'), last_seen: freshIso() }),
+      ]),
+    })
+    const mini = await screen.findByTestId('device-d-1')
+    expect(within(mini).getByText('Admin path: installed (sudoers rule) — an elevated run goes through sudo as root')).toBeTruthy()
+    expect(within(screen.getByTestId('device-d-2')).getByText('Admin path: installed (scheduled task) — an elevated run runs as the signed-in user, elevated')).toBeTruthy()
+    expect(within(screen.getByTestId('device-d-3')).getByText('Admin path: not installed')).toBeTruthy()
+    expect(within(screen.getByTestId('device-d-4')).queryByText(/Admin path/)).toBeNull()
+    expect(within(screen.getByTestId('device-d-5')).getByText('Admin path: unknown — sudo -n -l failed: exit 1')).toBeTruthy()
+    expect(within(screen.getByTestId('device-d-6')).getByText('Admin path: not installed — part of it is left (the copy is left)')).toBeTruthy()
+    expect(within(screen.getByTestId('device-d-7')).getByText('Admin path: not installed; the agent copy moved aside to C:\\N\\x.exe is deleted at the next restart')).toBeTruthy()
+    const surface = screen.getAllByText(/Machines with the admin path: a compromise of Nova's core is root\/admin/)
+    expect(surface).toHaveLength(1)
+    // A statement, never a control (no approvals).
+    expect(surface[0].closest('button')).toBeNull()
+  })
+
+  it('no surface statement when no live machine has the admin path', async () => {
+    renderSection({
+      listDevices: vi.fn().mockResolvedValue([
+        device({ id: 'd-1', name: 'mini', admin_path: { installed: false, kind: 'none', line: 'admin path: not installed' }, last_seen: freshIso() }),
+        device({ id: 'd-2', name: 'gone', admin_path: { installed: true, kind: 'sudoers', line: 'admin path: installed (sudoers rule) — an elevated run goes through sudo as root' }, revoked_at: '2026-09-01T00:00:00Z' }),
+      ]),
+    })
+    expect(await screen.findByText('Admin path: not installed')).toBeTruthy()
+    expect(screen.queryByText(/Machines with the admin path/)).toBeNull()
+  })
 })

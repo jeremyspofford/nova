@@ -185,6 +185,8 @@ def test_the_shell_preamble_pin_matches_device_runs_own_format():
     assert guards._RUN_PREAMBLE.search("DELL-XPS-8950 ran ['ls', '-la', '/tmp'] — exit 0")
     assert guards._RUN_PREAMBLE.search("box ran ['find', '.'] — exit 1")
     assert guards._RUN_PREAMBLE.search("we ran out of time") is None
+    # S30b T6: an elevated run states who it ran as AFTER the code.
+    assert guards._RUN_PREAMBLE.search("mini ran ['apt-get', 'update'] — exit 0 elevated (as root)")
 
 
 def test_a_find_or_du_result_backs_the_listing():

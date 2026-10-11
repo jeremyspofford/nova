@@ -34,7 +34,13 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 	if c, ok := strArg(args, "cwd"); ok && c != "" {
 		cwd = c
 	}
+	return runArgv(ctx, argv, cwd)
+}
 
+// runArgv is shell.exec's run: argv in cwd under ctx, output capped, the
+// ok/exit_code seam judged. admin.exec's unix route runs its sudo argv
+// through it too, so both are bounded and judged the same way.
+func runArgv(ctx context.Context, argv []string, cwd string) Outcome {
 	cw := &capWriter{limit: OutputCap}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = cwd

@@ -173,6 +173,10 @@ def device_spec(
         ],
         "hub_version": hub_version,
         "last_update": last_update,
+        # S30b: the standing admin path as the agent last read it, with
+        # core's own line (admin_path_line) so the tile says what Nova says;
+        # None when the agent never probed.
+        "admin_path": device_facts.admin_path_of(facts, row["platform"]),
     }
 
 

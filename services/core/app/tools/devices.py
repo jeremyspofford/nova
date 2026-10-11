@@ -904,6 +904,53 @@ async def device_notify(args: dict, ctx: ToolContext) -> str:
     return f"Sent a notification to {row['name']}."
 
 
+# -- the elevated run (S30b T6) ---------------------------------------------
+#
+# device_run(elevated: true) sends the agent's "admin.exec" — a NEW capability
+# name, so an agent from before S30b answers "unknown capability" and nothing is
+# ever run unelevated in its place. Under the 09-03 no-approvals ruling nothing
+# here asks or refuses: a machine without the admin path is the agent's stated
+# cannot, restated with the machine's name and the tool that installs it. The
+# fact {"elevated": True, "machine": <name>} is lifted by chat._run_tool to
+# span.meta["elevated"] / ["machine"].
+
+ELEVATED = "elevated"
+_NO_ADMIN_PATH = "cannot: no admin path on this machine"
+
+
+def _elevated_failure(result: dict, row) -> str:
+    error = str(result.get("error") or _NO_REASON)
+    name = row["name"]
+    if error.startswith(_NO_ADMIN_PATH):
+        rest = error[len(_NO_ADMIN_PATH) :]
+        return (
+            f"cannot: no admin path on {name}{rest} — nothing was run. Install it with "
+            f"device_admin_path (action install) on {name}, then run this again."
+        )
+    if error.startswith(_UNKNOWN_CAPABILITY):
+        return (
+            f"{name}'s agent predates the admin path — it cannot run anything elevated, so "
+            "nothing was run. Update it with machine_update, then run this again."
+        )
+    return f"{name}: {error}"
+
+
+def _elevated_words(meta: object) -> str:
+    """Who an elevated run ran as, from the agent's own meta only."""
+    meta = meta if isinstance(meta, dict) else {}
+    ran_as = meta.get("ran_as")
+    user = meta.get("user")
+    user = user.strip() if isinstance(user, str) and user.strip() else "the signed-in user"
+    if meta.get(ELEVATED) is True:
+        if ran_as == "root":
+            return " elevated (as root)"
+        if ran_as == "user_elevated":
+            return f" elevated (as {user}, elevated)"
+        if ran_as == "user_not_elevated":
+            return f" NOT elevated (as {user}, without admin rights)"
+    return " elevation not confirmed (the agent sent no elevated record)"
+
+
 async def device_run(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, ctx=ctx)
     argv = args["argv"]
@@ -924,7 +971,14 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         )
         exec_args["cwd"] = cwd
     outside = _outside_checkout(row, cwd=cwd, argv=argv)
-    result = await _command(pool, row, "shell.exec", exec_args, ctx=ctx)
+    elevated = args.get("elevated") is True
+    if elevated:
+        # S30b T6: filed BEFORE the send, so every elevated call to a resolved
+        # machine is marked on its span — an ok run, the agent's cannot, a
+        # failed frame, a transport failure. No "device" key (connectivity).
+        _file_fact(ctx, {ELEVATED: True, "machine": row["name"]})
+    capability = "admin.exec" if elevated else "shell.exec"
+    result = await _command(pool, row, capability, exec_args, ctx=ctx)
     # Past here the agent answered with a result frame: the command was sent
     # and ran or failed on the machine, so a flagged call is flagged either
     # way (a transport failure above sent nothing it could confirm, and says so).
@@ -934,20 +988,22 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     )
     # The run fact (S29 T1), on EVERY result frame — a nonzero exit and a failed
     # frame included: the exit code is the agent's own, never read from prose.
+    run_record = {
+        "exit_code": result.get("exit_code"),
+        "device": row["name"],
+        "argv": list(argv),
+        "cwd": cwd,
+    }
+    if elevated:
+        run_record[ELEVATED] = True
     _file_fact(
         ctx,
-        {
-            "run": {
-                "exit_code": result.get("exit_code"),
-                "device": row["name"],
-                "argv": list(argv),
-                "cwd": cwd,
-            },
-            "target": " ".join(str(element) for element in argv),
-        },
+        {"run": run_record, "target": " ".join(str(element) for element in argv)},
     )
     if not result.get("ok"):
-        if cwd is not None:
+        if elevated:
+            failure = _elevated_failure(result, row)
+        elif cwd is not None:
             # The agent's own words for a missing directory name only the
             # program ("could not run \"git\": fork/exec ...: no such file or
             # directory"), which reads as the binary missing — so the cwd is
@@ -963,9 +1019,131 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     # presented-listing guard no longer arms on it (S29b) — the run fact filed
     # above arms a bare-name `ls`. Its format stays pinned (_RUN_PREAMBLE).
     # The cwd goes AFTER the code so the preamble still matches.
+    how = _elevated_words(result.get("meta")) if elevated else ""
     where = f" in {cwd}" if cwd is not None else ""
-    text = f"{row['name']} ran {argv} — exit {exit_code}{where}\n{output}"
+    text = f"{row['name']} ran {argv} — exit {exit_code}{how}{where}\n{output}"
     return text if warning is None else f"{text}\n{warning}"
+
+
+# -- the admin path itself (S30b T7) -------------------------------------------
+#
+# device_admin_path installs or removes a machine's standing admin path through
+# the agent's admin.install / admin.uninstall. The agent picks how to elevate
+# the installer (already elevated, through the path, sudo -n, or the owner's one
+# UAC click) and reads the result back itself; success here is ONLY that
+# read-back, carried in the result's meta — an ok frame without it is stated as
+# not confirmed. Nothing here asks or refuses (owner ruling 2026-09-03): the UAC
+# prompt is the operating system's, answered by the owner at that machine.
+#
+# Sent with COMMAND_TIMEOUT_SECONDS: the agent bounds every command at 110 s
+# (apps/novad client.CommandTimeout) and its UAC wait inside that (<= 70 s), so
+# a longer wait here would wait on nothing.
+
+ADMIN_PATH = "admin_path"
+_ADMIN_ACTIONS = ("install", "uninstall")
+_ADMIN_KIND_WORDS = {"sudoers": "a sudoers rule", "task": "an elevated scheduled task"}
+_ADMIN_ROUTE_WORDS = {
+    "direct": "by the agent, already elevated",
+    "path": "through the admin path already there",
+    "sudo -n": "through sudo -n, with no prompt",
+    "uac": "after the owner's Yes on the UAC prompt",
+}
+
+
+def _admin_failure(error: str, row, action: str) -> str:
+    name = row["name"]
+    if error.startswith(_UNKNOWN_CAPABILITY):
+        return (
+            f"{name}'s agent predates the admin path — it cannot {action} it, so nothing was "
+            "done. Update it with machine_update, then run this again."
+        )
+    if action == "uninstall" and error.startswith(_NO_ADMIN_PATH):
+        rest = error[len(_NO_ADMIN_PATH) :].replace("this machine", name)
+        return f"cannot: no admin path on {name} — nothing to remove{rest}"
+    return f"{name}: {error.replace('this machine', name)}"
+
+
+def _admin_installed_words(meta: dict, name: str) -> str | None:
+    """The install's ok words from the agent's read-back, or None when the
+    meta does not carry one."""
+    proof = meta.get("proof")
+    if meta.get("installed") is not True or not isinstance(proof, str) or not proof.strip():
+        return None
+    kind = meta.get("kind")
+    route = meta.get("route")
+    kind_words = _ADMIN_KIND_WORDS.get(kind, str(kind)) if isinstance(kind, str) else "kind unsaid"
+    route_words = _ADMIN_ROUTE_WORDS.get(route, str(route)) if isinstance(route, str) else ""
+    how = f" {route_words}" if route_words else ""
+    return (
+        f"{name}: admin path installed ({kind_words}){how}; proven by the agent's read-back: "
+        f"{proof.strip()}"
+    )
+
+
+def _admin_removed_words(meta: dict, name: str) -> str | None:
+    """The uninstall's ok words from the agent's read-back, or None."""
+    if meta.get("installed") is not False:
+        return None
+    route = meta.get("route")
+    route_words = _ADMIN_ROUTE_WORDS.get(route, str(route)) if isinstance(route, str) else ""
+    how = f" ({route_words})" if route_words else ""
+    pending = meta.get("pending_restart")
+    paths = (
+        [p for p in pending if isinstance(p, str) and p.strip()]
+        if isinstance(pending, list)
+        else []
+    )
+    if paths:
+        moved = "; ".join(f"{p} is deleted at the next restart" for p in paths)
+        return (
+            f"{name}: admin path removed{how} — the agent's read-back found the task, the "
+            f"request directory and the protected copy gone; {moved} — scheduled, not proven."
+        )
+    return f"{name}: admin path removed{how} — the agent's read-back found none of it left."
+
+
+async def device_admin_path(args: dict, ctx: ToolContext) -> str:
+    action = args["action"]
+    if action not in _ADMIN_ACTIONS:
+        # dispatch's schema check does not read `enum` (tools/schema.validate),
+        # so the choice is checked here, before anything is resolved or sent.
+        raise ToolFailure(f"action must be install or uninstall, got {action!r} — nothing was sent")
+    pool, row, _ = await _admit(args, ctx=ctx)
+    name = row["name"]
+    done = "installed" if action == "install" else "removed"
+    try:
+        result = await _command(pool, row, f"admin.{action}", {}, ctx=ctx)
+    except ToolFailure as exc:
+        raise ToolFailure(
+            f"{exc} — the agent's read-back did not come back, so whether the admin path is "
+            f"{done} on {name} is not known; device_info reads it now."
+        ) from exc
+    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    words = None
+    if result.get("ok"):
+        words = (
+            _admin_installed_words(meta, name)
+            if action == "install"
+            else _admin_removed_words(meta, name)
+        )
+    _file_fact(
+        ctx,
+        {
+            ADMIN_PATH: action,
+            "machine": name,
+            "installed": meta.get("installed") if words else None,
+        },
+    )
+    said = str(result.get("output") or "").strip()
+    if not result.get("ok"):
+        raise ToolFailure(_admin_failure(str(result.get("error") or _NO_REASON), row, action))
+    if words is None:
+        raise ToolFailure(
+            f"{name}: the agent answered ok but sent no read-back of the admin path, so whether "
+            f"it is {done} is not confirmed; device_info reads it now."
+            + (f" The agent said: {said}" if said else "")
+        )
+    return f"{words}\nThe agent said: {said}" if said else words
 
 
 async def device_write_file(args: dict, ctx: ToolContext) -> str:
@@ -1361,7 +1539,11 @@ TOOLS: tuple[Tool, ...] = (
             "input: anything that asks for input (a sudo password, a yes/no question) gets no "
             "answer and fails at once with its own message. On Windows, whether a command "
             "that asks for input fails at once has not been measured yet. Give `cwd` to run "
-            "in a directory: relative paths and git then run from it."
+            "in a directory: relative paths and git then run from it. Give `elevated` true "
+            "to run it elevated — as root on Linux and macOS, as the signed-in user with admin "
+            "rights on Windows — through the machine's admin path: nothing asks and nothing "
+            "prompts on the machine, and the result says who it ran as. A machine without the "
+            "admin path says so; device_admin_path installs it there."
         ),
         parameters=_obj(
             {
@@ -1382,10 +1564,47 @@ TOOLS: tuple[Tool, ...] = (
                         "does not exist fails, naming it."
                     ),
                 },
+                ELEVATED: {
+                    "type": "boolean",
+                    "description": (
+                        "true runs the command elevated through the machine's admin path: as "
+                        "root on Linux and macOS, as the signed-in user with admin rights on "
+                        "Windows. Default false."
+                    ),
+                },
             },
             ["device", "argv"],
         ),
         executor=device_run,
+        ephemeral=False,
+    ),
+    Tool(
+        name="device_admin_path",
+        description=(
+            "Install or remove a paired machine's admin path — what lets device_run with "
+            "`elevated` true run commands as root (Linux, macOS) or as the signed-in user with "
+            "admin rights (Windows), with no prompt. Installing asks the operating system at "
+            "most once per machine: on Windows the owner clicks Yes on one UAC prompt at that "
+            "machine's screen (he must be signed in there); on Linux and macOS there is no "
+            "prompt when the agent's user has passwordless sudo, and otherwise the result names "
+            "the one sudo command the owner runs there. Install and uninstall each prove "
+            "themselves: the result states the agent's read-back, or says exactly what it "
+            "could not confirm. Whether a machine has the path is device_info's to read. The "
+            "surface: with the path installed, a compromise of Nova's core is root/admin on "
+            "that machine."
+        ),
+        parameters=_obj(
+            {
+                "device": _DEVICE_ARG,
+                "action": {
+                    "type": "string",
+                    "enum": list(_ADMIN_ACTIONS),
+                    "description": "install sets the admin path up; uninstall removes it.",
+                },
+            },
+            ["device", "action"],
+        ),
+        executor=device_admin_path,
         ephemeral=False,
     ),
     Tool(

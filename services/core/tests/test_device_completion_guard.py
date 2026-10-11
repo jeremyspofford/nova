@@ -364,11 +364,16 @@ def test_the_action_map_is_the_live_registrys_acting_device_tools():
     # (fix round 3) "I ran Notepad" is running a program, which a launch does;
     # closing, deleting or restarting only a command does.
     assert "device_launch_app" in guards.DEVICE_ACTION_TOOLS[guards._kind_of("run")]
-    for action in ("close", "restart", "shutdown", "delete", "move", "uninstall"):
+    for action in ("close", "restart", "shutdown", "delete", "move"):
         assert guards.DEVICE_ACTION_TOOLS[guards._kind_of(action)] == ("device_run",), action
-    # (Task 32, MF4) an install is a command's, and machine_update's.
+    # (Task 32, MF4) an install is a command's, and machine_update's; (S30b T7)
+    # and device_admin_path's, which installs the admin path.
     install = guards.DEVICE_ACTION_TOOLS[guards._kind_of("install")]
-    assert install == ("machine_update", "device_run")
+    assert install == ("machine_update", "device_admin_path", "device_run")
+    # (S30b END) an uninstall left the command kind: device_admin_path also
+    # uninstalls the admin path, so it is a command's and that tool's.
+    uninstall = guards.DEVICE_ACTION_TOOLS[guards._kind_of("uninstall")]
+    assert uninstall == ("device_admin_path", "device_run")
 
 
 def test_every_tool_the_action_map_names_is_a_registered_tool_that_acts():
@@ -1975,7 +1980,10 @@ MINIPC = "minipc"
 PAIRED = (MINIPC, DEVICE)
 TWO_MACHINES = {MINIPC: "e" * 64, DEVICE: "d" * 64}
 INSTALLED = "I installed the new build on minipc."
-NO_INSTALL_ON_MINIPC = "(No machine_update or device_run call ran on minipc this turn.)"
+# S30b T7: device_admin_path joined the install family, so the sentence names it.
+NO_INSTALL_ON_MINIPC = (
+    "(No machine_update or device_admin_path or device_run call ran on minipc this turn.)"
+)
 # Phase A's probe (scratch/t32a/update_vs_device_completion_probe.py), as it
 # was run: ten replies an update may get.
 UPDATE_REPLIES = (
@@ -2056,6 +2064,113 @@ def test_a_machine_update_of_another_machine_backs_no_claim_about_this_one():
     )
 
 
+# -- S30b T7: the admin path is installed by its own tool ----------------------
+
+ADMIN_INSTALLED = "I installed the admin path on minipc."
+
+
+def _admin_path(device: str = MINIPC, *, ok: bool = True) -> SimpleNamespace:
+    """device_admin_path's span as its executor leaves it (tools/devices.py)."""
+    return _span(
+        "device_admin_path",
+        ok=ok,
+        args_redacted={"device": device, "action": "install"},
+        facts=[{"admin_path": "install", "machine": device, "installed": True if ok else None}],
+    )
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_admin_path_install_beside_its_ok_call_there_is_backed(grouping):
+    claim = guards.device_completion_check(
+        ADMIN_INSTALLED, [_admin_path()], NAMES, PAIRED, machines=grouping
+    )
+    assert claim is None, claim.text
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_admin_path_install_with_no_call_is_corrected(grouping):
+    claim = guards.device_completion_check(ADMIN_INSTALLED, [], NAMES, PAIRED, machines=grouping)
+    assert claim is not None
+    assert (claim.kind, claim.action, claim.device) == ("install", "install", MINIPC)
+    assert claim.record == guards.DeviceRecord()
+    assert claim.text == NO_INSTALL_ON_MINIPC
+
+
+def test_an_admin_path_install_on_another_machine_backs_nothing_about_this_one():
+    claim = guards.device_completion_check(
+        ADMIN_INSTALLED, [_admin_path(DEVICE)], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.text == NO_INSTALL_ON_MINIPC
+    # Its own machine's call still backs its own claim.
+    assert (
+        guards.device_completion_check(
+            f"I installed the admin path on {DEVICE}.",
+            [_admin_path(DEVICE)],
+            NAMES,
+            PAIRED,
+            machines=TWO_MACHINES,
+        )
+        is None
+    )
+
+
+# -- S30b END: the admin path is uninstalled by its own tool ------------------
+#
+# "uninstall" was a command (device_run only), so the honest "I uninstalled the
+# admin path on minipc." beside an ok device_admin_path(uninstall) there drew
+# "(No device_run call ran on minipc this turn.)". It is now its own kind.
+# Known residual: "I removed the admin path" is a delete — still a command.
+
+ADMIN_UNINSTALLED = "I uninstalled the admin path on minipc."
+NO_UNINSTALL_ON_MINIPC = "(No device_admin_path or device_run call ran on minipc this turn.)"
+
+
+def _admin_path_uninstall(device: str = MINIPC) -> SimpleNamespace:
+    return _span(
+        "device_admin_path",
+        args_redacted={"device": device, "action": "uninstall"},
+        facts=[{"admin_path": "uninstall", "machine": device, "installed": False}],
+    )
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_admin_path_uninstall_beside_its_ok_call_there_is_backed(grouping):
+    claim = guards.device_completion_check(
+        ADMIN_UNINSTALLED, [_admin_path_uninstall()], NAMES, PAIRED, machines=grouping
+    )
+    assert claim is None, claim.text
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_admin_path_uninstall_with_no_call_is_corrected(grouping):
+    claim = guards.device_completion_check(ADMIN_UNINSTALLED, [], NAMES, PAIRED, machines=grouping)
+    assert claim is not None
+    assert (claim.kind, claim.action, claim.device) == ("uninstall", "uninstall", MINIPC)
+    assert claim.record == guards.DeviceRecord()
+    assert claim.text == NO_UNINSTALL_ON_MINIPC
+
+
+def test_an_admin_path_uninstall_on_another_machine_backs_nothing_about_this_one():
+    claim = guards.device_completion_check(
+        ADMIN_UNINSTALLED, [_admin_path_uninstall(DEVICE)], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.text == NO_UNINSTALL_ON_MINIPC
+
+
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_an_uninstall_by_a_command_there_is_still_backed(grouping):
+    claim = guards.device_completion_check(
+        "I uninstalled Steam on minipc.",
+        [_run(["winget", "uninstall", "Valve.Steam"], device=MINIPC)],
+        NAMES,
+        PAIRED,
+        machines=grouping,
+    )
+    assert claim is None, claim.text
+
+
 # -- Task 32 Phase B round 3: a send of the hub's build is an install ----------
 #
 # "sent" is a notify word, so after a REAL machine_update on minipc the honest
@@ -2088,7 +2203,8 @@ SENT_BUILD_REPLIES = (
 )
 # Her own send that names no machine: "it" is the recipient, or none is written.
 SENT_TO_NO_MACHINE = ("I sent it the update.", "I sent the update.")
-NO_INSTALL = "(No machine_update or device_run call ran this turn.)"
+# S30b T7: device_admin_path joined the install family, so the sentence names it.
+NO_INSTALL = "(No machine_update or device_admin_path or device_run call ran this turn.)"
 NOTIFICATIONS_SENT = (
     "I sent a notification to minipc.",
     "I sent a message to minipc.",

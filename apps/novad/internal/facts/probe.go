@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"novad/internal/admin"
 	"novad/internal/platform"
 	"novad/internal/service"
 )
@@ -94,9 +95,19 @@ type Probed struct {
 	Service    Service
 	Elevation  *Elevation
 	WSL        *WSLDistros
+	AdminPath  *AdminPath
 	Unreadable []Unreadable
 	OutOfTime  bool
 }
+
+// AdminPath is the standing admin path (S30b) as read at this probe:
+// installed, its kind (sudoers | task | none), its state, and one line when
+// the read failed or found it incomplete. Read from the machine every
+// probe, never remembered from an install.
+type AdminPath = admin.PathState
+
+// readAdminPath reads the admin path; a variable so a test hands in its own.
+var readAdminPath = admin.ReadPath
 
 const (
 	maxDistros   = 8 // keeps the frame far inside core's 16 KiB with the rest
@@ -141,6 +152,15 @@ func Probe(ctx context.Context, r platform.Runner, self Self) Probed {
 		if p.Elevation.Sudo == "" {
 			p.Elevation.Sudo, p.Elevation.SudoSaid = "unknown", failed(err)
 		}
+	}
+	// The admin path (S30b), read from the machine at every probe.
+	actx, acancel := context.WithTimeout(ctx, probeProgram)
+	ap := readAdminPath(actx)
+	acancel()
+	ap.Kind, ap.State, ap.Said, ap.Left = line(ap.Kind), line(ap.State), said(ap.Said), nil
+	p.AdminPath = &ap
+	if ap.State == admin.PathUnknown {
+		p.Unreadable = append(p.Unreadable, Unreadable{Item: "admin_path", Reason: ap.Said})
 	}
 	if probesWSL {
 		w, unread := probeWSL(ctx, r)
@@ -339,6 +359,11 @@ func (p Probed) ApplyTo(f *Frame) {
 	svc := p.Service
 	f.Service = &svc
 	f.Elevation = p.Elevation
+	f.AdminPath = nil
+	if p.AdminPath != nil {
+		ap := *p.AdminPath
+		f.AdminPath = &ap
+	}
 	f.WSLDistros = nil
 	if p.WSL != nil {
 		w := *p.WSL

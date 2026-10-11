@@ -464,6 +464,36 @@ elevated `device_run` runs inside a turn; an install that outlives a turn waits
 for S30's jobs, so the htop and winget proofs above are short installs. On
 Windows the path must be a service, not a scheduled task: S46a suspends
 BitLocker from its pre-shutdown handler.
+*Landed 2026-10-11:* the path, as built (`apps/novad/README.md`, "The admin
+path"). Linux and macOS: a sudoers drop-in, `/etc/sudoers.d/nova-admin`
+(visudo-checked, atomic), naming a root-owned copy of the agent at
+`/usr/local/libexec/nova/novad` and its `admin exec` only; macOS is the same
+code, built and tested, not walked. Windows: an elevated scheduled task
+`\Nova\NovaAdmin` for the owner's own account (his SID from the installing
+token, interactive token, highest run level, on demand), whose only action is
+a protected copy of the agent under `%ProgramFiles%\Nova\Admin` (SYSTEM and
+Administrators only), fed through a request directory
+`%ProgramData%\NovaAdmin` that only he, SYSTEM and Administrators can open.
+Nova installs and removes it with her own tool `device_admin_path`; the
+owner's one prompt is the UAC click on Windows, and on Linux nothing with
+passwordless sudo (the hub), otherwise the one `sudo` command her result
+names. Install and uninstall each answer only from the agent's own read-back
+(an elevated `admin whoami` through the path; everything gone, or the
+Windows copy moved aside and deleted at the next restart, said as
+scheduled). `device_run(elevated: true)` sends `admin.exec`; every elevated
+call is a span with `elevated: true` and the machine; the facts carry
+`admin_path`; a machine without it answers "no admin path on <machine>".
+The Devices page states the surface. **The owner's decision 2026-10-11:** a
+scheduled task, not a service. The service design (LocalSystem, a named
+pipe, running each command with the signed-in user's linked elevated token)
+was stopped by an automated safety check while its code was being written;
+the owner chose "Elevated scheduled task (Recommended)" — created once with
+his one UAC click, running her commands as him with highest privileges
+through the documented Task Scheduler API, so winget installs work. This
+supersedes the *Moved* note's "must be a service": **S46a adds a small
+service of its own later, only for the pre-shutdown BitLocker step**
+([`s46a/spec.md`](s46a/spec.md) §4.2). The live walks (mini PC, Dell) are
+the close-out's.
 
 **S32 — Build identity and her landing step (L).** `NOVA_BUILD_SHA` and a
 per-service content hash baked into all four images, reported on `/status`

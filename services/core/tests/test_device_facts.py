@@ -594,7 +594,10 @@ def test_the_acting_lines_say_how_it_runs_and_whether_elevation_asks():
         "commands would stop at a UAC prompt has not been measured yet; "
         "Windows sudo is on (inline)"
     )
-    assert lines[3].startswith("WSL on it") and len(lines) == 4
+    # Pin moved (S30b T5): the admin path line follows elevation; this
+    # probe carries no admin_path, so the agent predates it.
+    assert lines[3] == "admin path: unknown — this agent predates the admin path"
+    assert lines[4].startswith("WSL on it") and len(lines) == 5
     assert all("\n" not in line for line in lines)
 
 
@@ -1625,6 +1628,9 @@ def test_an_active_units_zero_main_pid_is_never_said_as_not_running():
 
 OLDER_PROBE = {
     **PROBED,
+    # S30b T5: admin_path is a probe section too, so the older probe carries
+    # one and the merges below keep or replace it with the rest.
+    "admin_path": {"installed": True, "kind": "task", "state": "ready"},
     "unreadable": [
         {
             "item": "wsl_distros",
@@ -1653,6 +1659,7 @@ def test_a_probe_frame_replaces_every_probe_section_as_one_unit():
     assert merged["probed_at"] == "2026-09-29T08:00:00Z" and merged["service"]["pid"] == 900
     # Omitted by the newer probe: removed, never kept from the older one.
     assert "wsl_distros" not in merged and "elevation" not in merged
+    assert "admin_path" not in merged  # S30b T5: a probe section like the rest
     # The older probe's own reasons went with it; the newer frame's list is whole.
     assert merged["unreadable"] == NEWER_PROBE["unreadable"]
     assert merged["agent"] == df.validate_auth(WINDOWS_RUN_KEY)["agent"]  # not a probe section
@@ -1737,7 +1744,8 @@ def test_the_probes_time_comes_before_every_line_it_dates():
     shown, a line from the probe never stands without the time before it."""
     lines = df.acting_lines(_merged(), "windows")
     assert lines[0].startswith("as probed at 2026-09-28T17:40:00Z")
-    assert [line.startswith("as probed at") for line in lines] == [True, False, False, False]
+    # Pin moved (S30b T5): one more dated line, the admin path.
+    assert [line.startswith("as probed at") for line in lines] == [True, False, False, False, False]
 
 
 def test_a_frame_lands_on_no_stored_facts_as_itself():
@@ -1798,7 +1806,9 @@ def test_the_live_frame_a_probe_with_a_null_unreadable_list_is_recorded():
     got = df.validate_frame(frame)
     assert got["unreadable"] == []
     assert got["net"]["ifaces"][0]["ipv4_cidr"] == ["192.0.2.7/24"]
-    assert {k: got[k] for k in df.PROBE_KEYS} == {
+    # Pin moved (S30b T5): PROBED (that build's probe) carries no admin_path,
+    # so the keys compared are the probe keys the frame has.
+    assert {k: got[k] for k in df.PROBE_KEYS if k in got} == {
         k: v for k, v in df.validate_frame(PROBED).items() if k in df.PROBE_KEYS
     }
 
@@ -1910,7 +1920,9 @@ def test_the_frame_the_build_in_the_field_sends_is_recorded_whole():
     frame = json.loads(_FIELD_BUILD.read_text(encoding="utf-8"))
     assert frame["unreadable"] is None
     got = df.validate_frame(frame)
-    assert got["unreadable"] == [] and set(got) == set(df.FRAME_SECTIONS)
+    # Pin moved (S30b T5): that build predates the admin path, so it sends
+    # every section but admin_path.
+    assert got["unreadable"] == [] and set(got) == set(df.FRAME_SECTIONS) - {"admin_path"}
 
 
 # -- the frames novad really sends (golden) ------------------------------------
