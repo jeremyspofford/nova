@@ -68,3 +68,36 @@ def test_items_without_a_declared_element_type_accepts_anything():
         "additionalProperties": False,
     }
     assert schema.validate(permissive, {"xs": [1, "a", True]}) is None
+
+
+# -- enum ---------------------------------------------------------------------
+# Found 2026-10-11 (S30b): validate never read `enum`, so device_admin_path's
+# action "reinstall" reached the executor and went out as `admin.reinstall`.
+
+ENUM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": ["install", "uninstall"]},
+        "requires": {"type": "array", "items": {"type": "string", "enum": ["tools", "vision"]}},
+    },
+    "additionalProperties": False,
+}
+
+
+def test_a_value_inside_the_enum_passes():
+    assert schema.validate(ENUM_SCHEMA, {"action": "install", "requires": ["vision"]}) is None
+
+
+def test_a_value_outside_the_enum_is_refused_naming_the_choices_and_the_value():
+    problem = schema.validate(ENUM_SCHEMA, {"action": "reinstall"})
+    assert problem is not None
+    assert "'action'" in problem
+    assert '"install"' in problem and '"uninstall"' in problem
+    assert '"reinstall"' in problem
+
+
+def test_an_array_element_outside_items_enum_is_refused_naming_its_index():
+    problem = schema.validate(ENUM_SCHEMA, {"requires": ["tools", "smell"]})
+    assert problem is not None
+    assert "'requires'[1]" in problem
+    assert '"smell"' in problem and '"tools"' in problem

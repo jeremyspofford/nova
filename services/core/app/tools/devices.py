@@ -1105,8 +1105,9 @@ def _admin_removed_words(meta: dict, name: str) -> str | None:
 async def device_admin_path(args: dict, ctx: ToolContext) -> str:
     action = args["action"]
     if action not in _ADMIN_ACTIONS:
-        # dispatch's schema check does not read `enum` (tools/schema.validate),
-        # so the choice is checked here, before anything is resolved or sent.
+        # dispatch's schema check refuses this first (tools/schema.validate reads
+        # `enum`); this stays so a caller that reaches the executor directly
+        # still cannot send `admin.<anything>`.
         raise ToolFailure(f"action must be install or uninstall, got {action!r} — nothing was sent")
     pool, row, _ = await _admit(args, ctx=ctx)
     name = row["name"]

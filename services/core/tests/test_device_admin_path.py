@@ -144,7 +144,8 @@ async def test_c1_an_unknown_action_runs_nothing(pool):
         TOOL, {"device": "mini", "action": "reinstall"}, _ctx(person, facts=[])
     )
     assert ok is False
-    assert "install or uninstall" in result
+    # the schema check refuses it before the executor: nothing is resolved or sent
+    assert 'must be one of "install", "uninstall", got "reinstall"' in result
     assert _command_frames(conn) == []
     await _close(conn, task)
 

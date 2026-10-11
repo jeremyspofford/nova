@@ -114,9 +114,10 @@ async def test_a_view_nobody_defined_is_refused_in_the_stores_words(pool, tmp_pa
     assert ok is False
     # Named, with what the views ARE — a refusal she can act on rather than
     # one she has to guess past.
-    assert "no view called 'handled'" in result
+    # The schema check refuses it before the store is read (the enum).
+    assert "argument 'state' must be one of" in result and '"handled"' in result
     for view in ("unread", "muted", "cleared", "all"):
-        assert view in result
+        assert f'"{view}"' in result
 
 
 async def test_a_check_nobody_registered_is_refused_rather_than_answered_empty(pool, tmp_path):
