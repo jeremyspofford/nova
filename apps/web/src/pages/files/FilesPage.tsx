@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, Download, ExternalLink, FolderOpen } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Markdown } from '../../components/Markdown'
+import { CodeView, Markdown } from '../../components/Markdown'
 import { Button, Code, EmptyState, Skeleton } from '../../components/ui'
 import {
   getWorkspaceFiles as apiGetWorkspaceFiles,
@@ -11,7 +11,7 @@ import {
   type WorkspaceFileDetail,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { formatBytes, notShownMessage, previewKind } from './filesFormat'
+import { codeLanguage, formatBytes, notShownMessage, previewKind } from './filesFormat'
 
 /**
  * The operator's read-only window into Nova's workspace volume
@@ -311,6 +311,8 @@ function FilePreview({
       </div>
     )
   }
+  const language = codeLanguage(detail.path)
+  if (language) return <CodeView text={detail.text} language={language} />
   return (
     <Code inline={false} className="max-h-[60vh] overflow-auto whitespace-pre-wrap">
       {detail.text}

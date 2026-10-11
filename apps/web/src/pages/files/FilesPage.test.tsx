@@ -220,9 +220,37 @@ describe('FilesPage — previews', () => {
     expect(screen.getByTestId('download-file')).toBeDefined()
   })
 
-  it('leaves code and other text as plain text', async () => {
-    open('main.py', { text: '# not a heading\nprint(1)\n' })
-    expect(await screen.findByText(/# not a heading/)).toBeDefined()
+  it('highlights a code file by its extension, never as markdown', async () => {
+    open('main.py', { text: '# not a heading\ndef f():\n    return 1\n' })
+    const comment = await screen.findByText('# not a heading')
+    expect(comment.className).toContain('hljs-comment')
+    expect(screen.getByText('def').className).toContain('hljs-keyword')
     expect(screen.queryByRole('heading', { name: /not a heading/ })).toBeNull()
+  })
+
+  it('loads a grammar chat does not ship, then highlights', async () => {
+    open('lib.rs', { text: 'fn main() {}\n' })
+    const kw = await screen.findByText('fn')
+    expect(kw.className).toContain('hljs-keyword')
+  })
+
+  it('a highlighted file never renders its contents as markup', async () => {
+    open('page.html', { text: '<script>alert(1)</script><b>x</b>' })
+    expect((await screen.findAllByText('script')).length).toBe(2)
+    expect(document.querySelector('script')).toBeNull()
+    expect(document.querySelector('b')).toBeNull()
+  })
+
+  it('leaves plain text unhighlighted', async () => {
+    open('notes.txt', { text: 'def plain words\n' })
+    const el = await screen.findByText(/def plain words/)
+    expect(el.querySelector('.hljs-keyword')).toBeNull()
+  })
+
+  it('highlights markdown source as markdown', async () => {
+    open('notes.md', { text: '# Plan\n' })
+    await screen.findByRole('heading', { name: 'Plan' })
+    fireEvent.click(screen.getByRole('button', { name: /source/i }))
+    expect(screen.getByText('# Plan').className).toContain('hljs-section')
   })
 })
