@@ -58,6 +58,7 @@ function renderSection(
   props: Partial<{
     onChatModelChanged: (model: string) => void
     decisionSwitches: SettingDef[] | null
+    hubLastResort: SettingDef | null
     onSettingChanged: (key: string, value: unknown) => void
   }> = {},
 ) {
@@ -1111,6 +1112,170 @@ describe('RoutingSection', () => {
       expect(badge?.innerHTML).not.toContain('danger')
       expect(screen.getByTestId('route-decisions-would-serve').textContent).toBe(
         `right now: ${JEV} would answer — fell back to link 2 (${JEV}) — ${KEV}: ${LOCAL_OFF}`,
+      )
+    })
+  })
+  describe('the hub last-resort switch (epic hub-last-resort)', () => {
+    // Core's def, as GET /api/v1/settings lists it: the description is the notice.
+    const HUB_NOTICE =
+      "When every link of a chat chain and the standby cannot answer, the hub's own model answers instead of nothing — whichever chat model the hub has now. CPU-only on the hub, so slower. Off by default. Unlike adding a hub:<model> link to the chain, it names no fixed model and runs only after every link failed."
+    const hubDef = (value: boolean): SettingDef => ({ key: 'routing.hub_last_resort', type: 'bool', default: false, description: HUB_NOTICE, value })
+    const hubSwitch = () => screen.getByRole('switch', { name: "Fall back to the hub's own model" }) as HTMLInputElement
+    const EXPLAIN_LAST_RESORT: RouteExplain = {
+      role: 'chat',
+      chain: [
+        { link: 1, id: 'openrouter:openai/gpt-x', verdict: 'walled', reason: 'openrouter refused (402)' },
+        { link: 2, id: 'dell:qwen3:8b', verdict: 'unreachable', reason: 'could not reach dell' },
+      ],
+      would_serve: {
+        role: 'chat', link: 3, served_by: 'hub:qwen3:4b', standby: true, last_resort: true,
+        reason: "fell back to the hub's own model hub:qwen3:4b (installed; last resort, CPU-only, slower) — dell:qwen3:8b: could not reach dell",
+      },
+      reason: "fell back to the hub's own model hub:qwen3:4b (installed; last resort, CPU-only, slower) — dell:qwen3:8b: could not reach dell",
+    }
+
+    it('sits in the chat panel only, OFF as core stored it, with core\'s description as its notice', async () => {
+      renderSection({}, { hubLastResort: hubDef(false) })
+      await waitFor(() => expect(screen.getByTestId('route-chat')).toBeTruthy())
+      const chat = screen.getByTestId('route-chat')
+      const sw = within(chat).getByTestId('hub-last-resort-switch')
+      expect((within(sw).getByRole('switch', { name: "Fall back to the hub's own model" }) as HTMLInputElement).checked).toBe(false)
+      expect(within(sw).getByTestId('hub-last-resort-notice').textContent).toBe(HUB_NOTICE)
+      for (const role of ['scheduled', 'judge', 'decisions']) {
+        expect(within(screen.getByTestId(`route-${role}`)).queryByTestId('hub-last-resort-switch')).toBeNull()
+      }
+    })
+
+    it('draws no switch on a core that does not list it', async () => {
+      renderSection({}, { hubLastResort: null })
+      await waitFor(() => expect(screen.getByTestId('route-chat')).toBeTruthy())
+      expect(screen.queryByTestId('hub-last-resort-switch')).toBeNull()
+    })
+
+    it('writes routing.hub_last_resort, moves with what core stored, and re-reads the chat explanation', async () => {
+      const onSettingChanged = vi.fn()
+      const api = {
+        getRoutes: vi.fn(async () => ROUTES),
+        putRoute: vi.fn(), putJevRouter: vi.fn(), clearWall: vi.fn(), deleteRoute: vi.fn(), setChatPrimary: vi.fn(),
+        explainRoute: vi.fn(async (role: string) => (role === 'chat' ? EXPLAIN_CHAT : { role, chain: [], would_serve: null, reason: 'no chain' })),
+        getCatalog: catalogWith(),
+        listAgents: vi.fn(async () => AGENTS),
+        putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
+      }
+      function Parent() {
+        const [def, setDef] = useState(hubDef(false))
+        return (
+          <RoutingSection
+            chatModel="openrouter:openai/gpt-x"
+            api={api as never}
+            onChatModelChanged={() => {}}
+            hubLastResort={def}
+            onSettingChanged={(key, value) => {
+              onSettingChanged(key, value)
+              if (key === def.key) setDef(prev => ({ ...prev, value }))
+            }}
+          />
+        )
+      }
+      render(<Parent />)
+      await waitFor(() => expect(hubSwitch().checked).toBe(false))
+      const chatExplains = () => api.explainRoute.mock.calls.filter(([role]) => role === 'chat').length
+      await waitFor(() => expect(chatExplains()).toBe(1))
+      fireEvent.click(hubSwitch())
+      await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('routing.hub_last_resort', true))
+      await waitFor(() => expect(hubSwitch().checked).toBe(true))
+      expect(onSettingChanged).toHaveBeenCalledWith('routing.hub_last_resort', true)
+      await waitFor(() => expect(chatExplains()).toBe(2))
+    })
+
+    /** RoutingSection under a parent that renders the switch from what
+     * onSettingChanged hands it, as SettingsPage does. */
+    function renderHubParent(over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {}) {
+      const onSettingChanged = vi.fn()
+      const api = {
+        getRoutes: vi.fn(async () => ROUTES),
+        putRoute: vi.fn(), putJevRouter: vi.fn(), clearWall: vi.fn(), deleteRoute: vi.fn(), setChatPrimary: vi.fn(),
+        explainRoute: vi.fn(async (role: string) => (role === 'chat' ? EXPLAIN_CHAT : { role, chain: [], would_serve: null, reason: 'no chain' })),
+        getCatalog: catalogWith(),
+        listAgents: vi.fn(async () => AGENTS),
+        putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
+        ...over,
+      }
+      function Parent() {
+        const [def, setDef] = useState(hubDef(false))
+        return (
+          <RoutingSection
+            chatModel="openrouter:openai/gpt-x"
+            api={api as never}
+            onChatModelChanged={() => {}}
+            hubLastResort={def}
+            onSettingChanged={(key, value) => {
+              onSettingChanged(key, value)
+              if (key === def.key) setDef(prev => ({ ...prev, value }))
+            }}
+          />
+        )
+      }
+      render(<Parent />)
+      return { api, onSettingChanged }
+    }
+
+    it('moves with what core stored, even when core stored something other than what was clicked', async () => {
+      const { api, onSettingChanged } = renderHubParent({ putSetting: vi.fn(async (key: string) => ({ key, value: false })) })
+      await waitFor(() => expect(hubSwitch().checked).toBe(false))
+      fireEvent.click(hubSwitch())
+      await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('routing.hub_last_resort', true))
+      await waitFor(() => expect(onSettingChanged).toHaveBeenCalledWith('routing.hub_last_resort', false))
+      expect(onSettingChanged).not.toHaveBeenCalledWith('routing.hub_last_resort', true)
+      expect(hubSwitch().checked).toBe(false)
+    })
+
+    it('while chat re-reads, shows no chat walk read under the switch as it was', async () => {
+      // The switch moves as soon as core stored it; chat's walk beside it was
+      // read with the last resort off and must not stand beside it reading ON.
+      let release: (routes: Routes) => void = () => {}
+      const getRoutes = vi
+        .fn()
+        .mockResolvedValueOnce(ROUTES)
+        .mockReturnValueOnce(new Promise<Routes>(resolve => { release = resolve }))
+      renderHubParent({ getRoutes })
+      await waitFor(() => expect(screen.getByTestId('route-chat-would-serve').textContent).toContain('hub:qwen3:8b would answer'))
+
+      fireEvent.click(hubSwitch())
+      await waitFor(() => expect(getRoutes).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(hubSwitch().checked).toBe(true))
+
+      // Held: nothing chat read before the write is still shown.
+      expect(screen.queryByTestId('route-chat-would-serve')).toBeNull()
+      expect(screen.getByTestId('route-chat').querySelector('[data-verdict]')).toBeNull()
+
+      release(ROUTES)
+      await waitFor(() => expect(screen.getByTestId('route-chat-would-serve').textContent).toContain('hub:qwen3:8b would answer'))
+    })
+
+    it('a refused write leaves the switch where it was, with core\'s reason under it', async () => {
+      renderSection(
+        { putSetting: vi.fn(async () => { throw new Error('setting routing.hub_last_resort expects bool, got str') }) },
+        { hubLastResort: hubDef(false) },
+      )
+      await waitFor(() => expect(hubSwitch()).toBeTruthy())
+      fireEvent.click(hubSwitch())
+      await waitFor(() =>
+        expect(within(screen.getByTestId('hub-last-resort-switch')).getByRole('alert').textContent).toBe(
+          'could not switch — setting routing.hub_last_resort expects bool, got str',
+        ),
+      )
+      expect(hubSwitch().checked).toBe(false)
+    })
+
+    it('says "last resort" on the would-serve line when the explanation says the hub fallback would answer', async () => {
+      renderSection(
+        { explainRoute: vi.fn(async (role: string) => (role === 'chat' ? EXPLAIN_LAST_RESORT : { role, chain: [], would_serve: null, reason: 'no chain' })) },
+        { hubLastResort: hubDef(true) },
+      )
+      await waitFor(() => expect(screen.getByTestId('route-chat-would-serve')).toBeTruthy())
+      expect(screen.getByTestId('route-chat-would-serve').textContent).toBe(
+        `right now (last resort): hub:qwen3:4b would answer — ${EXPLAIN_LAST_RESORT.reason}`,
       )
     })
   })

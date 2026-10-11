@@ -191,6 +191,8 @@ async def test_a_decision_goes_to_the_first_link_with_its_own_model_id_and_key(
         "reason": None,
         "served_by": f"openrouter:{JEV}",
         "standby": False,
+        # Moved (hub-last-resort T1): as_route states the last resort too.
+        "last_resort": False,
         "local": False,
     }
     # Unchanged but for `model`, which is the LINK's own id.

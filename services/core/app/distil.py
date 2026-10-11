@@ -104,7 +104,7 @@ from datetime import time as dtime
 
 import httpx
 
-from app import model_read, peers
+from app import model_read, peers, settings_store
 
 logger = logging.getLogger("core")
 
@@ -784,6 +784,7 @@ async def distil(
             headers=model_read.attribution(person.id, PURPOSE),
             timeout=DISTIL_TIMEOUT,
             max_tokens=DISTIL_MAX_TOKENS,
+            hub_last_resort=await settings_store.hub_last_resort(pool),
         )
     except model_read.GatewayRefused as exc:
         return Distillation(read=len(window), limits=tuple(limits), reason=str(exc))

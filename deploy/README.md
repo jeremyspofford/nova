@@ -169,6 +169,14 @@ name or URL. Each line carries the gateway's last verdict, read live from
 - **She can make the pick herself.** Ask her in chat ("use the Dell first, then
   OpenRouter"): her `set_chat_model` tool makes the same write and answers with chat's
   order as stored; `route_explain` says which model would answer right now.
+- **The hub as a last resort (off by default).** Settings → Models → Routing has a
+  switch, "Fall back to the hub's own model". When it is on and every model in chat's
+  order cannot answer (a machine asleep, a provider out of credit), the reply comes
+  from the hub's own chat model instead of failing, and the chat says it was the
+  last resort. It is slower: the hub runs models on its CPU. Off, chat behaves as if
+  the switch did not exist. Adding a hub model to the order in Routing does the same
+  for one role at a fixed place in the list; the switch picks the hub's chat model at
+  the time and only after everything else has failed.
 - **The model list.** The Models page is the one list of models (install, compare,
   probe, remove). The catalogue remembers a provider that could not be reached at all
   for 60 seconds, so a machine that is off does not hold every page that reads the list;

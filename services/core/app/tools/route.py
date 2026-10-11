@@ -110,6 +110,18 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
                 f"cannot be explained — {peers.reason(exc)}"
             ) from exc
         params["decision_kinds"] = decisions.kinds_value(kinds)
+    # The hub last-resort switch, read as a chat call reads it. A read that
+    # fails is said: a walk explained without it could name nothing where the
+    # hub would answer (epic hub-last-resort).
+    try:
+        last_resort = await settings_store.hub_last_resort(await db.get_pool())
+    except Exception as exc:  # noqa: BLE001 — the reason is the answer
+        raise ToolFailure(
+            "the hub last-resort switch in Settings could not be read, so the walk cannot "
+            f"be explained — {peers.reason(exc)}"
+        ) from exc
+    if last_resort:
+        params["hub_last_resort"] = "1"
     try:
         async with peers.client(ctx.app, peers.GATEWAY, EXPLAIN_TIMEOUT) as client:
             resp = await client.get("/admin/route/explain", params=params)

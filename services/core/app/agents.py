@@ -641,9 +641,22 @@ async def _explain(app, role: str, *, own_chain_empty: bool | None) -> str:
     from its explain walk. `own_chain_empty` is what we know about the
     stored chain (None: unknown) — an empty chain walks the chat chain by
     the gateway's rule, said when the gateway gives no reason of its own."""
+    from app import db, settings_store
+
+    params = {"role": role, "model": ""}
+    # The hub last-resort switch, stated as the agent's own rounds state it
+    # (epic hub-last-resort). A read that fails is said, not guessed.
+    try:
+        if await settings_store.hub_last_resort(await db.get_pool()):
+            params["hub_last_resort"] = "1"
+    except Exception as exc:  # noqa: BLE001 — the reason is the answer
+        return (
+            "the gateway could not say what would serve it: the hub last-resort switch "
+            f"could not be read — {peers.reason(exc)}"
+        )
     try:
         async with peers.client(app, peers.GATEWAY, ROUTE_TIMEOUT) as client:
-            resp = await client.get("/admin/route/explain", params={"role": role, "model": ""})
+            resp = await client.get("/admin/route/explain", params=params)
     except (peers.PeerUnconfigured, httpx.HTTPError) as exc:
         return f"the gateway could not say what would serve it: {peers.reason(exc)}"
     if resp.status_code != 200:

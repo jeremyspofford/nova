@@ -773,3 +773,26 @@ async def test_the_owners_stop_ends_the_turn_between_thinking_only_re_asks(
     assert len(gateway.requests) == 1
     assert ran.status == "stopped"
     assert "must never be asked" not in "".join(ran.rows)
+
+
+# -- the hub last resort never reaches into a round (epic hub-last-resort) -----
+
+
+async def test_a_round_with_no_database_and_no_switch_sends_todays_headers(mount_peers):
+    """The owner's hub last-resort switch is read where the turn is opened
+    (traces.open_turn holds the database) and carried on the Turn; the round
+    itself never touches the database for it. A Turn that carries no switch —
+    every turn these tests drive, with no DATABASE_URL — sends exactly the
+    headers it sent before the switch existed."""
+    gateway = BodyGateway(_chunk(content="hi") + DONE)
+
+    turn, text, _, failure, _ = await _round(gateway, mount_peers)
+
+    assert (text, failure) == ("hi", None)
+    (sent,) = gateway.requests
+    assert {k: v for k, v in sent.items() if k.startswith("x-nova-")} == {
+        "x-nova-turn-id": str(turn.id),
+        "x-nova-purpose": "chat",
+        "x-nova-timezone": "UTC",
+        "x-nova-role": "chat",
+    }

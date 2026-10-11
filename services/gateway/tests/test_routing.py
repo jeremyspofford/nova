@@ -105,6 +105,8 @@ async def test_the_explicit_pick_is_link_one_and_the_chain_is_the_fallbacks(
         "reason": None,
         "served_by": "openrouter:remote-model",
         "standby": False,
+        # Moved (hub-last-resort T1): as_route states the last resort too.
+        "last_resort": False,
         # A cloud provider: core lets a turn on it run beside another.
         "local": False,
     }
@@ -464,6 +466,8 @@ async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_
         "reason": None,
         "served_by": "hub:qwen3:4b",
         "standby": False,
+        # Moved (hub-last-resort T1): as_route states the last resort too.
+        "last_resort": False,
         "local": True,
     }
     (row,) = await pool.fetch("SELECT role, served_by FROM usage_events")

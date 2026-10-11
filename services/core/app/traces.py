@@ -200,6 +200,11 @@ class Turn:
     # above stays the owner the work is FOR — his money, his Activity page.
     agent_id: uuid.UUID | None = None
     role: str | None = None
+    # epic hub-last-resort: the owner's switch (routing.hub_last_resort), read
+    # ONCE when the turn opens — open_turn holds the database — and stated on
+    # every role-carrying gateway call the turn makes. A round never reads the
+    # database for it; a Turn built without it is off, today's headers.
+    hub_last_resort: bool = False
     spans: list[Span] = field(default_factory=list)
     # chat-rewind: the action ledger, appended synchronously by chat._run_tool
     # and chat._run_script_step, written by close_turn beside the spans.
@@ -234,6 +239,8 @@ async def open_turn(
     agent_id: uuid.UUID | None = None,
     role: str | None = None,
 ) -> Turn:
+    from app import settings_store
+
     # An agent_id naming no agents row is refused by the foreign key, never
     # stored as a dangling reference — the caller learns the agent is gone
     # before the turn exists rather than after it has spent money.
@@ -260,6 +267,8 @@ async def open_turn(
         # Turn carries what the ledger actually holds.
         agent_id=row["agent_id"],
         role=row["role"],
+        # Read now, per turn: a Settings write moves the next turn, no restart.
+        hub_last_resort=await settings_store.hub_last_resort(pool),
     )
 
 
