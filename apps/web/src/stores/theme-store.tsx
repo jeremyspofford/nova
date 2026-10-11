@@ -4,7 +4,7 @@ import {
   type ColorScale,
 } from '../lib/color-palettes'
 import { appIconHref, knownAppIcon, touchIconHref, DEFAULT_APP_ICON } from '../lib/app-icon'
-import { DEFAULT_FONT, fontStack, knownFont, loadFont, sanitizeFamily } from '../lib/fonts'
+import { DEFAULT_FONT, fontStack, knownFont, loadFont, sanitizeFamily, fontWordSpacing } from '../lib/fonts'
 
 type Mode = 'light' | 'dark'
 type ModePreference = 'light' | 'dark' | 'system'
@@ -261,6 +261,8 @@ export function themeVariables(
     // tailwind.config.js reads this for `font-sans`, so it reaches every
     // element that has not asked for the mono face by name.
     `--font-sans:${fontStack(font, customFont)}`,
+    // index.css's body reads this; code resets it (fonts.ts wordSpacing).
+    `--font-word-spacing:${fontWordSpacing(font)}`,
   ].join(';')
 }
 

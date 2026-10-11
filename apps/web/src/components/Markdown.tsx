@@ -250,8 +250,13 @@ function Image({ src, alt }: ImageProps) {
 
 type PreProps = ComponentProps<'pre'> & { node?: unknown }
 
-const PRE =
-  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 text-neutral-200 p-3 font-mono text-mono-sm leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
+const PRE_BASE =
+  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 text-neutral-200 p-3 font-mono leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
+// ONE size class per block, chosen here — never a second text-* passed in
+// beside the first, where the stylesheet's order rather than this code would
+// pick the winner (the R1 padding bug, 2026-10-06).
+const PRE = `${PRE_BASE} text-mono-sm`
+const PRE_FILE = `${PRE_BASE} text-mono`
 
 const COPY_BUTTON =
   'absolute top-1.5 right-1.5 rounded-sm p-1 bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 dark:hover:bg-neutral-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-400 transition-colors duration-fast'
@@ -266,7 +271,13 @@ type CopyState = 'idle' | 'copied' | 'failed'
  * promise, not the click: `writeText` rejecting (permission denied, page not
  * focused) shows a cross, never a tick.
  */
-function CodeBlock({ node: _node, className, children, ...props }: PreProps) {
+function CodeBlock({
+  node: _node,
+  className,
+  children,
+  size = 'reply',
+  ...props
+}: PreProps & { size?: 'reply' | 'file' }) {
   const ref = useRef<HTMLPreElement>(null)
   const [state, setState] = useState<CopyState>('idle')
   const timer = useRef<ReturnType<typeof setTimeout>>()
@@ -290,7 +301,7 @@ function CodeBlock({ node: _node, className, children, ...props }: PreProps) {
   const Icon = state === 'copied' ? Check : state === 'failed' ? X : Copy
   return (
     <div className="relative my-2">
-      <pre ref={ref} className={clsx(PRE, className)} {...props}>
+      <pre ref={ref} className={clsx(size === 'file' ? PRE_FILE : PRE, className)} {...props}>
         {children}
       </pre>
       {clipboard && (
@@ -451,7 +462,8 @@ function hastToReact(nodes: RootContent[]): ReactNode[] {
 
 /**
  * A whole file as a highlighted code block — same `<pre>`, palette and copy
- * button as a fenced block in a reply. Renders the plain text first and
+ * button as a fenced block in a reply, at 13px rather than a reply's 12: a
+ * file is read, not glanced at. Renders the plain text first and
  * re-renders highlighted once a lazy grammar arrives; an unknown language
  * just stays plain.
  */
@@ -476,7 +488,7 @@ export function CodeView({ text, language }: { text: string; language: string })
     [ready, language, text],
   )
   return (
-    <CodeBlock>
+    <CodeBlock size="file">
       <code className={clsx(ready && 'hljs', `language-${language}`)}>{body}</code>
     </CodeBlock>
   )

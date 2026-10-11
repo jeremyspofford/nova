@@ -20,6 +20,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Vitest stubs every .css to '' by default; typeFloor.test.ts reads the
+    // real index.css to pin that word spacing reaches the body and not code.
+    css: { include: [/src\/index\.css/] },
     // A test's own budget must exceed the longest wait INSIDE it, or the
     // wait can never finish and the failure arrives as an opaque "Test
     // timed out" instead of the assertion that actually broke.

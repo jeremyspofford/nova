@@ -27,6 +27,9 @@ export type FontChoice = {
   /** Pulls the face in on demand. Absent means there is nothing to fetch —
    *  the system stack, or a family the operator already has installed. */
   load?: () => Promise<unknown>
+  /** Extra space between words, for a face whose own space glyph is too
+   *  narrow to read as one. Absent means the face's own. */
+  wordSpacing?: string
 }
 
 export const DEFAULT_FONT = 'jakarta'
@@ -37,6 +40,11 @@ export const fontChoices: Record<string, FontChoice> = {
     description: "Nova's own. Geometric, slightly rounded, a little warm.",
     stack: '"Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif',
     load: () => import('@fontsource-variable/plus-jakarta-sans'),
+    // Its space glyph is 0.170em (measured from the shipped woff2 with
+    // fontTools, 2026-10-11) against Inter's 0.281 and Figtree's 0.250, so
+    // "What Nova has written" read as "WhatNovahaswritten" (UI review R2).
+    // +0.08em brings it to ~0.25em.
+    wordSpacing: '0.08em',
   },
   inter: {
     label: 'Inter',
@@ -115,4 +123,11 @@ export async function loadFont(key: string): Promise<void> {
   } catch {
     loaded.delete(key)
   }
+}
+
+/** The word spacing a face needs, as a CSS value (`normal` for most). A
+ *  custom family is the operator's own and is left as it is. */
+export function fontWordSpacing(key: string): string {
+  if (key === 'custom') return 'normal'
+  return (fontChoices[knownFont(key) ?? DEFAULT_FONT] ?? fontChoices[DEFAULT_FONT]).wordSpacing ?? 'normal'
 }

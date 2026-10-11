@@ -10,7 +10,7 @@ import { SessionsProvider, type SessionsApi } from '../../stores/sessions-store'
 import type { ChatSession } from '../../lib/api'
 import { ToastProvider } from '../ToastProvider'
 import { navSections } from './Sidebar'
-import { PageHeader } from './PageHeader'
+import { InShellContext, PageHeader, ScreenTitle } from './PageHeader'
 import resolveConfig from 'tailwindcss/resolveConfig'
 // @ts-expect-error -- plain JS config, no declaration file
 import tailwindConfig from '../../../tailwind.config.js'
@@ -565,6 +565,30 @@ describe('AppLayout — the phone top bar (2026-10-11)', () => {
     const box = screen.getByText('page').parentElement!
     expect(box.className).toContain('px-4')
     expect(box.className).toContain('md:px-6')
+  })
+})
+
+describe('AppLayout — Settings in the phone top bar', () => {
+  it("puts the Settings list's title in the bar on a phone", async () => {
+    setViewport('mobile')
+    renderShell(0, <><ScreenTitle className="x">Settings</ScreenTitle><div>page</div></>)
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Settings' })).toBeDefined())
+  })
+
+  it('puts a settings page title in the bar too', async () => {
+    setViewport('mobile')
+    renderShell(
+      0,
+      <InShellContext.Provider value={true}>
+        <PageHeader title="Appearance" />
+        <div>page</div>
+      </InShellContext.Provider>,
+    )
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Appearance' })).toBeDefined())
   })
 })
 

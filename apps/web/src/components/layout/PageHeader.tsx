@@ -21,6 +21,16 @@ export const InShellContext = createContext(false)
  */
 export const MobileTitleSlot = createContext<HTMLElement | null>(null)
 
+/** A screen title that is not a PageHeader (the Settings list): in the
+ *  phone's top bar when there is one, in the page otherwise. */
+export function ScreenTitle({ children, className }: { children: string; className: string }) {
+  const slot = useContext(MobileTitleSlot)
+  if (slot) {
+    return createPortal(<h1 className="min-w-0 truncate text-h3 text-content-primary">{children}</h1>, slot)
+  }
+  return <h1 className={className}>{children}</h1>
+}
+
 export function PageHeader({
   title,
   description,
@@ -35,7 +45,9 @@ export function PageHeader({
   const inShell = useContext(InShellContext)
   const slot = useContext(MobileTitleSlot)
   const hasActions = Boolean(actions) || (helpEntries?.length ?? 0) > 0
-  if (slot && !inShell) {
+  // In Settings' shell too: on a phone the shell shows its list OR one page,
+  // never both, so the bar carries exactly one title either way.
+  if (slot) {
     return (
       <>
         {createPortal(<h1 className="min-w-0 truncate text-h3 text-content-primary">{title}</h1>, slot)}

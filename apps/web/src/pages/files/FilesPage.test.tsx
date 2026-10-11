@@ -225,6 +225,10 @@ describe('FilesPage — previews', () => {
     const comment = await screen.findByText('# not a heading')
     expect(comment.className).toContain('hljs-comment')
     expect(screen.getByText('def').className).toContain('hljs-keyword')
+    // A file is read, not glanced at: 13px, one size class on the block.
+    const pre = comment.closest('pre')!
+    expect(pre.className).toContain('text-mono')
+    expect(pre.className).not.toContain('text-mono-sm')
     expect(screen.queryByRole('heading', { name: /not a heading/ })).toBeNull()
   })
 
