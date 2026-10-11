@@ -37,6 +37,10 @@
       "reason": "reading whether this account is in Administrators: fixture"
     },
     {
+      "item": "admin_path",
+      "reason": "the task could not be read: fixture"
+    },
+    {
       "item": "wsl_distros.Ubuntu-Fixture",
       "reason": "the look printed no answer"
     }
@@ -76,6 +80,12 @@
         "novad_pids": []
       }
     ]
+  },
+  "admin_path": {
+    "installed": false,
+    "kind": "none",
+    "state": "unknown",
+    "said": "the task could not be read: fixture"
   },
   "probed_at": "2026-10-06T12:00:00Z"
 }

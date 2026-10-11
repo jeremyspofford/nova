@@ -1379,6 +1379,12 @@ export interface Device {
   build_state?: 'current' | 'behind' | 'unknown'
   hub_version?: string | null
   last_update?: { version: string; outcome: string; at: string | null; reason: string | null } | null
+  /** S30b: the standing admin path as the agent last read it (core's
+   *  device_facts.admin_path_of): `installed` is core's platform-checked
+   *  verdict; `kind` 'sudoers' | 'task' | 'none' | null; `line` is core's
+   *  admin_path_line — the words Nova says, shown as-is. null when the agent
+   *  never probed. */
+  admin_path?: { installed: boolean; kind: string | null; line: string } | null
 }
 
 /** A freshly minted pairing code — shown ONCE (core stores only its hash). */

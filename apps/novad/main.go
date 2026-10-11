@@ -3,7 +3,7 @@
 // one-use signed command envelopes it verifies on-device. The LLM never talks
 // to novad; only core does.
 //
-// Subcommands: enroll | repoint | run | status | version | install | uninstall | supervise.
+// Subcommands: enroll | repoint | run | status | version | install | uninstall | supervise | admin.
 package main
 
 import (
@@ -58,6 +58,8 @@ func main() {
 		cmdSupervise(os.Args[2:])
 	case "status":
 		cmdStatus(os.Args[2:])
+	case "admin":
+		cmdAdmin(os.Args[2:])
 	case "version":
 		fmt.Printf("novad %s\n", version)
 	default:
@@ -80,6 +82,11 @@ usage:
   novad supervise --mode <systemd-user|launch-agent|run-key>
   novad status
   novad version
+  novad admin install --user <u>     (as root: the sudoers rule + root copy; Windows: elevated, no --user)
+  novad admin uninstall              (as root / elevated)
+  novad admin exec --timeout <s> [--cwd <d>] -- argv...
+  novad admin whoami
+  novad admin run-queued             (Windows: the \Nova\NovaAdmin task's own action)
 `, version)
 }
 

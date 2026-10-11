@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"novad/internal/caps"
 	"novad/internal/config"
 	"novad/internal/install"
 	"novad/internal/platform"
@@ -104,10 +105,28 @@ func cmdUninstall(argv []string) {
 	if err != nil {
 		fail("could not find where novad is installed: %v", err)
 	}
-	if err := install.Uninstall(context.Background(), install.UninstallOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := install.Uninstall(ctx, install.UninstallOptions{
 		Paths: paths, InstallDir: dir, Service: service.New(paths, platform.Exec{}), Forget: *forget,
-		Now: time.Now, Out: os.Stdout,
+		Now: time.Now, Out: os.Stdout, AdminPath: adminPathHook(caps.Dispatch),
 	}); err != nil {
 		fail("%v", err)
+	}
+}
+
+// adminPathHook is `novad uninstall`'s first step (S30b): admin.uninstall
+// through dispatch (caps.Dispatch), as the agent would run it for Nova. No
+// admin path is nothing to say; any other failure is an error.
+func adminPathHook(dispatch func(context.Context, string, map[string]any, caps.Deps) caps.Outcome) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		out := dispatch(ctx, "admin.uninstall", nil, caps.Deps{})
+		switch {
+		case out.OK:
+			return out.Output, nil
+		case out.Error == caps.NoAdminPath:
+			return "", nil
+		}
+		return "", errors.New(out.Error)
 	}
 }

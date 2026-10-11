@@ -354,6 +354,143 @@ perform the capability at all (an unverifiable envelope, an over-cap read, an
 unstartable binary, a timeout, or notify with no backend) — and a refusal is
 still a result frame **and** an audit entry, never silent.
 
+## The admin path
+
+S30b. One standing admin path per machine, so Nova can run **any** argv as
+root (Linux, macOS) or as the owner elevated (Windows) with no prompt. It is
+installed once, with at most one OS prompt — the owner's — and from then on
+nothing asks and nothing refuses. Three capabilities carry it:
+`admin.install`, `admin.uninstall` (Nova's tool `device_admin_path`, action
+`install` or `uninstall`) and `admin.exec` (`device_run` with
+`elevated: true`). Whether a machine has it is a fact, not a call: the
+`admin_path` section below, which `device_info` and `machine_status` read.
+
+**What it is.**
+
+- **Linux and macOS — a sudoers drop-in naming a root-owned copy of the
+  agent.** `novad admin install --user <u>` (run as root) copies the running
+  binary to `/usr/local/libexec/nova/novad` (root, 0755, in a root-owned
+  0755 directory) and writes `/etc/sudoers.d/nova-admin` (0440; the name has
+  no `.` or `~`, or sudo ignores it):
+
+  ```
+  <u> ALL=(root) NOPASSWD: /usr/local/libexec/nova/novad admin exec *
+  Defaults!/usr/local/libexec/nova/novad !requiretty
+  ```
+
+  The rule is checked with `visudo -cf` on a temp file before an atomic
+  rename into place; a rule visudo refuses leaves no file and states
+  visudo's words. Re-running replaces both. The rule names the root copy,
+  never the agent's own binary under the user's home, which the user could
+  rewrite. The kind is `sudoers`. macOS is the same code (its sudoers
+  includes `/private/etc/sudoers.d` by default) — **built and tested, not
+  walked**: no Mac is paired. `admin install` finds `visudo` on `PATH`;
+  Linux sudo's `secure_path` covers that, macOS has none (not walked).
+- **Windows — an elevated scheduled task for the owner's own account**
+  (owner decision 2026-10-11; see the note in
+  [`doing-things.md`](../../docs/plans/rebuild/doing-things.md) S30b). The
+  task is `\Nova\NovaAdmin`, registered for the SID of the token that
+  installed it — the owner's, read from the token, never a typed name —
+  with an interactive token, run level highest, start on demand only (no
+  triggers, no stored password: it runs only while he is signed in). Its
+  one action is `<the protected copy> admin run-queued`. Two more parts:
+  - **The protected copy** `%ProgramFiles%\Nova\Admin\novad.exe`. Its
+    directory's DACL is protected and grants SYSTEM and Administrators
+    only; the owner's unelevated token carries Administrators deny-only, so
+    nothing running as him can replace it. Install verifies the copy's size
+    and sha256 against the agent's own binary, and the runner refuses to
+    run from anywhere else. The task never runs the agent's own executable
+    under `%LocalAppData%`, which anything running as the owner could
+    rewrite. (The runner does not re-read this directory's ACL at run
+    time; it relies on Program Files' own ACL and the install-time check.)
+  - **The request directory** `%ProgramData%\NovaAdmin`, owned by
+    Administrators, a protected DACL granting SYSTEM, Administrators and
+    the owner's SID only (created in one call; a directory someone else
+    made there first is removed and recreated; cleared at install). The
+    agent writes `<id>.req.json` there atomically and starts the task; the
+    runner re-checks the directory's security on every pass, checks each
+    request's owner, claims it by rename, runs it, and writes
+    `<id>.res.json`. Anything running as the owner unelevated can place a
+    request — the same trust as his own SID, which is exactly whom the task
+    runs as.
+
+  The kind is `task`. A console window may flash on the owner's screen per
+  run (to be recorded on the Dell walk).
+
+**How it is installed.** By Nova, through `device_admin_path` (action
+`install`). The agent picks how to run the installer from what it reads,
+then proves the result:
+
+| What the agent reads | Route | The owner's prompt |
+|---|---|---|
+| it already runs as root / elevated | runs `novad admin install` directly | none |
+| the path is already installed | through the path itself (how a reinstall updates the copy) | none |
+| Linux/macOS, `sudo -n true` works (the hub) | `sudo -n <bin> admin install --user <u>` | none |
+| Linux/macOS, sudo asks for a password | — | **the one command, named in the result:** `sudo '<bin>' admin install --user <u>`, run once on that machine; Nova reads it back with `facts.refresh` |
+| Windows, the owner signed in at its screen | ShellExecuteEx `runas` on `<bin> admin install` | **one UAC click.** The prompt shows an unknown publisher (unsigned). The agent waits about **70 s** for it — up to 150 s, less the 40 s it keeps for the read-back inside its 110 s command bound. Declined: "the UAC prompt on <machine> was declined — nothing was installed". |
+| Windows, nobody signed in | — | stated: nobody is signed in to answer the UAC prompt; the owner signs in, then clicks Yes |
+
+**What install proves.** On Windows the installer itself, elevated, reads
+back what it built before it exits 0: the task's definition (the SID,
+interactive token, highest run level, the copy as its command), the request
+directory's security, and an elevated `whoami` through the task. Then, on
+every OS, the result is `ok` only after the agent, unelevated, reads it back
+itself: the path reads installed (Linux/macOS: the root copy is there and
+`sudo -n -l <copy> admin exec` allows it; Windows: the task, the request
+directory and the copy are there), **and** an elevated round trip through
+the path ran
+`<copy> admin whoami` and answered euid 0 (unix) or an elevated token for the
+owner (Windows). Fresh facts go to core before the answer. Either read-back
+failing is `ok:false` with what was read. Core says "installed" only from
+that read-back; an `ok` without it is "not confirmed".
+
+**How it is removed, and what removal proves.** `device_admin_path` (action
+`uninstall`) runs `admin uninstall` through the path itself — no prompt —
+and keeps reading back (up to 20 s on Windows) until nothing of it is left.
+On Linux/macOS it removes the drop-in **first**, then the copy, and stops on
+a failed drop-in removal; the read-back sees the copy gone, but the agent's
+user cannot read `/etc/sudoers.d`, so the rule's absence rests on that order
+(a stale rule would name a root-owned path in a root-owned directory that no
+longer holds a binary). On Windows it ends and deletes the task, removes the
+request directory and the protected copy, and reads all three back. Through
+the path the running copy cannot delete itself, so it is moved aside to
+`%ProgramFiles%\Nova\novad-admin-removed-<8 hex>.exe` and marked to be
+deleted at the next restart; the facts carry it as `pending` (state
+`pending_restart`) until it is gone, and the result says "the task, the
+request directory and the protected copy are gone; the agent copy is moved
+aside to <path> and is deleted at the next restart" — never "nothing of it is
+left", and the restart's deletion is scheduled, not proven. With no path
+there, uninstall says "no admin path on <machine> — nothing to remove".
+`novad uninstall` removes the admin path first, through the path, and says
+so; a failure is in its error, never swallowed.
+
+**`device_run(elevated: true)`** sends `admin.exec` (argv, optional cwd).
+Linux/macOS: `sudo -n <copy> admin exec --timeout <s> [--cwd <d>] -- argv`;
+the root side runs argv in its own session and kills the group itself at the
+deadline (the agent's user cannot kill a root process group), set 2 s before
+the agent's own; the child's exit code is the result's, and the root side's
+own timeout (124) or start failure (127, with its line) is `ok:false`.
+Windows: a request through the task; the runner runs argv as the owner,
+elevated, in a kill-on-close job; stdout and stderr capped at 64 KiB each
+like `shell.exec`; the default elevated run is about 93 s inside the 110 s
+command bound (the task's start and the result write get the rest). The
+result's first line says how it ran: "exit <code> elevated (as root)", "(as
+<user>, elevated)", or — a standard user's highest token — NOT elevated.
+Every elevated call, a cannot or a failure included, is a span with
+`meta.elevated = true` and `meta.machine`. The stated cannots:
+
+- "no admin path on <machine>" — nothing is installed (or the task is
+  absent); nothing runs, never an unelevated fallback;
+- "<machine>'s agent predates the admin path — update it with
+  machine_update" — an agent without `admin.exec`;
+- Windows: the task is disabled; nobody is signed in on the machine (the
+  task runs only while the owner is).
+
+**The surface.** Each machine with the path runs whatever core signs as root
+or admin, with no prompt. **A compromise of Nova's core is root/admin on
+every machine with the path.** The Devices page states this once, naming
+those machines; removing the path from a machine is the way out.
+
 ## Facts
 
 Two shapes, both riding the socket core already authenticated (TLS, or
@@ -430,6 +567,12 @@ again just before each look. `novad_pids` is `null` — unknown, never "none" �
 distribution is stopped or a finished look found none. `wsl.exe` always runs with
 `WSL_UTF8=1`, and what a program said (a refusal, an error) is carried as its first line
 only — core refuses a control character in these fields.
+
+From S30b the frame also carries `admin_path` — `{installed, kind:
+"sudoers"|"task"|"none", state, said?, pending?}` — read at every probe
+(Linux/macOS: the root copy's stat and `sudo -n -l <copy> admin exec`;
+Windows: the task's query, the request directory and copy, and any
+moved-aside copy waiting for a restart). See "The admin path", above.
 
 A fact that could not be read is never dropped silently: it is named in
 `unreadable`, with why.

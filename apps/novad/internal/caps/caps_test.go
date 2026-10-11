@@ -167,7 +167,7 @@ func TestSystemInfoReportsRealNumbers(t *testing.T) {
 // Names), never because a name was written twice.
 func TestNamesAreDerivedFromTheTable(t *testing.T) {
 	want := []string{
-		"apps.launch", "apps.list", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
+		"admin.exec", "admin.install", "admin.uninstall", "apps.launch", "apps.list", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
 		"fs.read", "fs.search", "fs.write", "shell.exec", "system.info", "system.notify",
 	}
 	if got := Names(); !reflect.DeepEqual(got, want) {

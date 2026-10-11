@@ -10,18 +10,21 @@ import "context"
 // exist: the same names answer on every OS, and an OS that cannot do one
 // says "cannot" from inside its handler.
 var table = map[string]Handler{
-	"system.info":   func(ctx context.Context, r Request) Outcome { return systemInfo(ctx, r.Deps) },
-	"system.notify": func(ctx context.Context, r Request) Outcome { return systemNotify(ctx, r.Args) },
-	"fs.list":       func(_ context.Context, r Request) Outcome { return fsList(r.Args, r.Deps) },
-	"fs.read":       func(_ context.Context, r Request) Outcome { return fsRead(r.Args, r.Deps) },
-	"fs.write":      func(_ context.Context, r Request) Outcome { return fsWrite(r.Args, r.Deps) },
-	"fs.edit":       func(_ context.Context, r Request) Outcome { return fsEdit(r.Args, r.Deps) },
-	"fs.search":     func(ctx context.Context, r Request) Outcome { return fsSearch(ctx, r.Args, r.Deps) },
-	"apps.list":     func(ctx context.Context, _ Request) Outcome { return appsList(ctx) },
-	"apps.launch":   func(ctx context.Context, r Request) Outcome { return appsLaunch(ctx, r.Args) },
-	"shell.exec":    func(ctx context.Context, r Request) Outcome { return shellExec(ctx, r.Args, r.Deps) },
-	"facts.refresh": factsRefresh,
-	"daemon.update": daemonUpdate,
+	"system.info":     func(ctx context.Context, r Request) Outcome { return systemInfo(ctx, r.Deps) },
+	"system.notify":   func(ctx context.Context, r Request) Outcome { return systemNotify(ctx, r.Args) },
+	"fs.list":         func(_ context.Context, r Request) Outcome { return fsList(r.Args, r.Deps) },
+	"fs.read":         func(_ context.Context, r Request) Outcome { return fsRead(r.Args, r.Deps) },
+	"fs.write":        func(_ context.Context, r Request) Outcome { return fsWrite(r.Args, r.Deps) },
+	"fs.edit":         func(_ context.Context, r Request) Outcome { return fsEdit(r.Args, r.Deps) },
+	"fs.search":       func(ctx context.Context, r Request) Outcome { return fsSearch(ctx, r.Args, r.Deps) },
+	"apps.list":       func(ctx context.Context, _ Request) Outcome { return appsList(ctx) },
+	"apps.launch":     func(ctx context.Context, r Request) Outcome { return appsLaunch(ctx, r.Args) },
+	"shell.exec":      func(ctx context.Context, r Request) Outcome { return shellExec(ctx, r.Args, r.Deps) },
+	"admin.exec":      adminExec,
+	"admin.install":   adminInstall,
+	"admin.uninstall": adminUninstall,
+	"facts.refresh":   factsRefresh,
+	"daemon.update":   daemonUpdate,
 }
 
 // factsRefresh answers core's facts.refresh: it writes a fresh facts frame

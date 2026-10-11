@@ -304,6 +304,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # S30a T7 (2026-10-10): a code search over a tree on a paired machine
         # (the agent's fs.search). SIXTY-ONE -> SIXTY-TWO.
         "device_search",
+        # S30b T7 (2026-10-11): she installs and removes a machine's standing
+        # admin path herself (the agent's admin.install / admin.uninstall,
+        # each proven by its read-back). SIXTY-TWO -> SIXTY-THREE. Not
+        # reads_only; the one OS prompt per machine is the owner's UAC click.
+        "device_admin_path",
     }
 
 
@@ -760,6 +765,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "start_change",
         # S30a T5: it replaces a snippet in a file on a device.
         "device_edit_file",
+        # S30b T7: it installs or removes a machine's admin path.
+        "device_admin_path",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 

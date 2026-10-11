@@ -104,6 +104,7 @@ type Frame struct {
 	Service    *Service    `json:"service,omitempty"`
 	Elevation  *Elevation  `json:"elevation,omitempty"`
 	WSLDistros *WSLDistros `json:"wsl_distros,omitempty"`
+	AdminPath  *AdminPath  `json:"admin_path,omitempty"`
 	ProbedAt   string      `json:"probed_at,omitempty"`
 }
 

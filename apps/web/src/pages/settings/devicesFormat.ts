@@ -179,3 +179,37 @@ export function splitDevicesByRevoked(devices: Device[]): { live: Device[]; revo
 export function revokedToggleLabel(revokedCount: number, showRevoked: boolean): string {
   return showRevoked ? 'Hide revoked' : `Show revoked (${revokedCount})`
 }
+
+function adminPathInstalled(d: Device): boolean {
+  // core's verdict (device_facts.admin_path_of): a kind foreign to the
+  // platform is already installed:false there — never re-derived here.
+  return d.revoked_at === null && d.admin_path?.installed === true
+}
+
+/**
+ * The standing admin path (S30b) as the agent last read it — core's own line
+ * (device_facts.admin_path_line, the words Nova says), capitalised for the
+ * tile. The web never words a state itself, so it cannot say "not installed"
+ * where core says unknown or that part of it is left. null when the agent
+ * never probed, or for a revoked device.
+ */
+export function adminPathLine(device: Device): string | null {
+  const line = device.admin_path?.line
+  if (!line || device.revoked_at !== null) return null
+  return line.charAt(0).toUpperCase() + line.slice(1)
+}
+
+/**
+ * The surface the admin path opens (S30b spec: "The Devices page states the
+ * surface"), said once for the section — null unless some live machine has
+ * it installed. A statement, never a control: nothing asks, nothing refuses.
+ */
+export function adminPathSurface(devices: Device[]): string | null {
+  const names = devices.filter(adminPathInstalled).map(d => d.name)
+  if (names.length === 0) return null
+  return (
+    "Machines with the admin path: a compromise of Nova's core is root/admin on each of them. " +
+    `On ${names.join(', ')}, Nova's core can run any command as root/admin with no prompt. ` +
+    'To take it away, ask Nova to remove the admin path from that machine.'
+  )
+}

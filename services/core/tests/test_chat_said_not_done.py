@@ -284,7 +284,11 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
             " on DELL-XPS-8950 this turn.)"
         ),
         "(No device_launch_app or device_run call ran on your PC this turn.)",
-        "(No machine_update or device_run call ran on DELL-XPS-8950 this turn.)",
+        # S30b T7: device_admin_path joined the install family, so the sentence names it.
+        (
+            "(No machine_update or device_admin_path or device_run call ran"
+            " on DELL-XPS-8950 this turn.)"
+        ),
     ]
     for said in (WROTE_LAUNCH, *texts_):
         lowered = said.lower()

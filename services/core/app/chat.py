@@ -3501,6 +3501,19 @@ async def _run_tool(
                 # other than the change started this turn (the result states
                 # it). A mark after the fact; nothing reads it to decide.
                 span.meta["other_change_worktree"] = True
+            for fact in facts[facts_before:]:
+                if (
+                    isinstance(fact, dict)
+                    and fact.get(tools.devices.ELEVATED) is True
+                    and "run" not in fact
+                    and isinstance(fact.get("machine"), str)
+                ):
+                    # S30b T6: THIS call was an elevated run on that machine
+                    # (filed before the send, so a cannot or a failure is
+                    # marked too). A mark after the fact; nothing reads it to
+                    # decide. No "device" key — that is the connectivity record.
+                    span.meta["elevated"] = True
+                    span.meta["machine"] = fact["machine"]
         if not ok:
             span.meta["error"] = head
     return result, ok

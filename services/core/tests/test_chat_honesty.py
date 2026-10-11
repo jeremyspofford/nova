@@ -367,7 +367,10 @@ async def test_the_same_send_with_no_update_draws_exactly_one_sentence(
 
     sent = await _say(owner_client, "update the agent on minipc now")
 
-    expected = "(No machine_update or device_run call ran on minipc this turn.)"
+    # S30b T7: device_admin_path joined the install family, so the sentence names it.
+    expected = (
+        "(No machine_update or device_admin_path or device_run call ran on minipc this turn.)"
+    )
     assert [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f] == [
         expected
     ]

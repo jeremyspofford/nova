@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"novad/internal/admin"
 	"novad/internal/client"
 	"novad/internal/config"
 )
@@ -112,5 +113,36 @@ func TestCheckEnrolledDistinguishesMissingFromAnyOtherError(t *testing.T) {
 	}
 	if err := p.CheckEnrolled(); err != nil {
 		t.Fatalf("both files present must report no error, got %v", err)
+	}
+}
+
+// `novad admin exec` exits with the child's code, and a deadline is exit 124
+// (coreutils timeout's convention) — the agent reads both from sudo's exit.
+func TestAdminExecExitsWithTheChildsCodeAnd124AtTheDeadline(t *testing.T) {
+	env := admin.DefaultEnv()
+	if got := adminMain([]string{"exec", "--timeout", "10", "--", "sh", "-c", "exit 9"}, env); got != 9 {
+		t.Errorf("exit 9 child: novad admin exec exited %d", got)
+	}
+	if got := adminMain([]string{"exec", "--timeout", "1", "--", "sleep", "30"}, env); got != 124 {
+		t.Errorf("deadline: novad admin exec exited %d, want 124", got)
+	}
+	if got := adminMain([]string{"exec", "--", "true"}, env); got != 2 {
+		t.Errorf("no --timeout: exited %d, want 2", got)
+	}
+	if got := adminMain([]string{"install"}, env); got != 2 {
+		t.Errorf("install without --user: exited %d, want 2", got)
+	}
+}
+
+func TestTheUsageNamesTheAdminVerbs(t *testing.T) {
+	for _, want := range []string{
+		"novad admin install --user <u>",
+		"novad admin uninstall",
+		"novad admin exec --timeout <s> [--cwd <d>] -- argv...",
+		"novad admin whoami",
+	} {
+		if !strings.Contains(usageText(), want) {
+			t.Errorf("the usage is missing %q", want)
+		}
 	}
 }

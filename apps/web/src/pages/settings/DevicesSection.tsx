@@ -13,6 +13,8 @@ import {
   type Device,
 } from '../../lib/api'
 import {
+  adminPathLine,
+  adminPathSurface,
   deviceLiveness,
   deviceSubtitle,
   lastUpdateLine,
@@ -165,6 +167,7 @@ export function DevicesSection({
   }, [refresh])
 
   const { live: liveDevices, revoked: revokedDevices } = splitDevicesByRevoked(devices ?? [])
+  const surface = adminPathSurface(devices ?? [])
 
   return (
     <Section
@@ -244,6 +247,11 @@ export function DevicesSection({
               </Button>
             </div>
           </div>
+          {surface && (
+            <p className="text-caption text-content-secondary break-words" data-testid="admin-path-surface">
+              {surface}
+            </p>
+          )}
           <div className="divide-y divide-border-subtle">
             {liveDevices.map(device => (
               <DeviceTile
@@ -302,6 +310,7 @@ function DeviceTile({
   const live = deviceLiveness(device)
   const revoked = live.state === 'revoked'
   const note = wslNote(device)
+  const adminLine = adminPathLine(device)
 
   // Rename
   const [renaming, setRenaming] = useState(false)
@@ -451,6 +460,7 @@ function DeviceTile({
       {revokeError && <p className="mt-2 text-caption text-danger">Could not revoke: {revokeError}</p>}
       {note && <p className="mt-2 text-caption text-content-secondary">{note}</p>}
       {device.starts && <p className="mt-2 text-caption text-content-secondary">Starts {device.starts}</p>}
+      {adminLine && <p className="mt-2 text-caption text-content-secondary">{adminLine}</p>}
       {device.last_update && (
         <p className="mt-2 text-caption text-content-secondary">{lastUpdateLine(device.last_update)}</p>
       )}

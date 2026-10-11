@@ -100,6 +100,15 @@ EXCUSED: dict[str, str] = {
         "your code' has no row yet — device_read_file's and device_list_files' "
         "rows cover reading and listing"
     ),
+    # S30b T7 (2026-10-11): no row reads "I can't get admin rights on your
+    # computer" / "I can't run that as root" today; device_run(elevated)'s
+    # stated cannot names this tool on a machine without the path. A row
+    # belongs with paired negatives in test_capability_guard.py — follow-up.
+    "device_admin_path": (
+        "installs or removes a machine's admin path through the agent; 'I can't "
+        "run things as root on your computer' has no row yet — device_run's "
+        "elevated cannot names this tool"
+    ),
     "run_skill": (
         "acts only through the registered tools its steps call, each of which "
         "is classified here on its own"
@@ -263,3 +272,10 @@ def test_s30a_t7_device_search_is_registered_and_excused_with_its_reason():
     assert EXCUSED["device_search"].strip()
     assert "device_search" not in _covered()
     assert "device_search" not in NO_OUTSIDE_ACTION
+
+
+def test_s30b_t7_device_admin_path_is_registered_and_excused_with_its_reason():
+    assert "device_admin_path" in tools.REGISTRY
+    assert EXCUSED["device_admin_path"].strip()
+    assert "device_admin_path" not in _covered()
+    assert "device_admin_path" not in NO_OUTSIDE_ACTION

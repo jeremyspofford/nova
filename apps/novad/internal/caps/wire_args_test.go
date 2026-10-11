@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"novad/internal/admin"
 )
 
 // Args as the agent really receives them: client.readFrame decodes every frame
@@ -71,5 +74,15 @@ func TestFsSearchTakesMaxMatchesAsTheWireSendsIt(t *testing.T) {
 	}
 	if n := strings.Count(out.Output, "NEEDLE"); n != 2 {
 		t.Fatalf("max_matches 2 from the wire gave %d matches: %q", n, out.Output)
+	}
+}
+
+// admin.exec's timeout_s as the wire sends it (S30b T3): a json.Number,
+// read whole — the S30a lesson above, applied before it bites.
+func TestAdminExecTakesTimeoutAsTheWireSendsIt(t *testing.T) {
+	f := &fakeSubmit{res: admin.TaskResult{OK: true, Elevated: true}}
+	out := taskExec(withDeadline(t, time.Minute), wireArgs(t, `{"argv": ["x"], "timeout_s": 7}`), f.submit)
+	if !out.OK || f.called != 1 || f.req.TimeoutS.String() != "7" || f.timeout != 7*time.Second {
+		t.Fatalf("ok=%v err=%q called=%d timeout_s=%q timeout=%v", out.OK, out.Error, f.called, f.req.TimeoutS, f.timeout)
 	}
 }

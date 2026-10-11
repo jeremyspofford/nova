@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   ONLINE_THRESHOLD_SECONDS,
+  adminPathLine,
+  adminPathSurface,
   buildLine,
   deviceLiveness,
   deviceSubtitle,
@@ -239,5 +241,112 @@ describe('revokedToggleLabel', () => {
 
   it('drops the count once they are revealed', () => {
     expect(revokedToggleLabel(3, true)).toBe('Hide revoked')
+  })
+})
+
+// core's device_spec admin_path: {installed (core's platform-checked verdict),
+// kind, line (device_facts.admin_path_line — the words Nova says)}. The tile
+// shows that line, capitalised; it never words the path itself (T8 G1).
+const SUDO = {
+  installed: true,
+  kind: 'sudoers',
+  line: 'admin path: installed (sudoers rule) — an elevated run goes through sudo as root',
+}
+const TASK = {
+  installed: true,
+  kind: 'task',
+  line: 'admin path: installed (scheduled task) — an elevated run runs as the signed-in user, elevated',
+}
+const ABSENT = { installed: false, kind: 'none', line: 'admin path: not installed' }
+const UNKNOWN = { installed: false, kind: 'none', line: 'admin path: unknown — sudo -n -l failed: exit 1' }
+const PREDATES = { installed: false, kind: null, line: 'admin path: unknown — this agent predates the admin path' }
+const INCOMPLETE = {
+  installed: false,
+  kind: 'none',
+  line: 'admin path: not installed — part of it is left (the task is absent but the copy is left)',
+}
+const PENDING = {
+  installed: false,
+  kind: 'none',
+  line: 'admin path: not installed; the agent copy moved aside to C:\\Nova\\novad-admin-removed-1.exe is deleted at the next restart',
+}
+const FOREIGN = {
+  installed: false,
+  kind: 'task',
+  line: 'admin path: unknown — the agent reported a task admin path on a linux machine, which has none of that kind',
+}
+
+describe('adminPathLine — the standing admin path (S30b), in core\'s words', () => {
+  it('an installed sudoers rule and an installed scheduled task', () => {
+    expect(adminPathLine(device({ admin_path: SUDO }))).toBe(
+      'Admin path: installed (sudoers rule) — an elevated run goes through sudo as root',
+    )
+    expect(adminPathLine(device({ platform: 'windows', admin_path: TASK }))).toBe(
+      'Admin path: installed (scheduled task) — an elevated run runs as the signed-in user, elevated',
+    )
+  })
+
+  it('not installed is said', () => {
+    expect(adminPathLine(device({ admin_path: ABSENT }))).toBe('Admin path: not installed')
+  })
+
+  it('unknown is unknown, never "not installed"', () => {
+    expect(adminPathLine(device({ admin_path: UNKNOWN }))).toBe('Admin path: unknown — sudo -n -l failed: exit 1')
+    expect(adminPathLine(device({ admin_path: PREDATES }))).toBe(
+      'Admin path: unknown — this agent predates the admin path',
+    )
+  })
+
+  it('an incomplete path says what is left', () => {
+    expect(adminPathLine(device({ platform: 'windows', admin_path: INCOMPLETE }))).toBe(
+      'Admin path: not installed — part of it is left (the task is absent but the copy is left)',
+    )
+  })
+
+  it('a pending restart names the leftover path', () => {
+    expect(adminPathLine(device({ platform: 'windows', admin_path: PENDING }))).toBe(
+      'Admin path: not installed; the agent copy moved aside to C:\\Nova\\novad-admin-removed-1.exe is deleted at the next restart',
+    )
+  })
+
+  it('a kind foreign to the platform is said as core says it — unknown, never "installed"', () => {
+    expect(adminPathLine(device({ admin_path: FOREIGN }))).toBe(
+      'Admin path: unknown — the agent reported a task admin path on a linux machine, which has none of that kind',
+    )
+  })
+
+  it('never probed (null or absent) has no line', () => {
+    expect(adminPathLine(device({ admin_path: null }))).toBeNull()
+    expect(adminPathLine(device())).toBeNull()
+  })
+
+  it('a revoked device has no line, installed or not', () => {
+    const revoked_at = '2026-09-01T00:00:00Z'
+    expect(adminPathLine(device({ revoked_at, admin_path: SUDO }))).toBeNull()
+    // T8 G2: installed:false has a line of its own — only the revoked check hides it.
+    expect(adminPathLine(device({ revoked_at, admin_path: ABSENT }))).toBeNull()
+    expect(adminPathLine(device({ revoked_at, admin_path: UNKNOWN }))).toBeNull()
+  })
+})
+
+describe('adminPathSurface — one statement of what the path exposes', () => {
+  const mini = device({ id: 'a', name: 'mini', admin_path: SUDO })
+  const dell = device({ id: 'b', name: 'dell', platform: 'windows', admin_path: TASK })
+
+  it('null when no live device has the path installed', () => {
+    expect(adminPathSurface([])).toBeNull()
+    expect(adminPathSurface([device({ admin_path: ABSENT }), device()])).toBeNull()
+    expect(adminPathSurface([device({ admin_path: UNKNOWN }), device({ admin_path: FOREIGN })])).toBeNull()
+    expect(adminPathSurface([{ ...mini, revoked_at: '2026-09-01T00:00:00Z' }])).toBeNull()
+  })
+
+  it('states the surface, names the machines, what it means and how to remove it', () => {
+    const s = adminPathSurface([mini, device({ id: 'c', name: 'laptop' }), dell]) ?? ''
+    expect(s).toMatch(/^Machines with the admin path: a compromise of Nova's core is root\/admin on each of them\./)
+    expect(s).toContain('mini')
+    expect(s).toContain('dell')
+    expect(s).not.toContain('laptop')
+    expect(s).toMatch(/any command/)
+    expect(s).toMatch(/ask Nova to remove the admin path/i)
   })
 })

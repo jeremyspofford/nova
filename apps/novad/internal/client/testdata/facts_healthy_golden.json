@@ -72,5 +72,10 @@
       }
     ]
   },
+  "admin_path": {
+    "installed": true,
+    "kind": "task",
+    "state": "ready"
+  },
   "probed_at": "2026-10-06T12:00:00Z"
 }

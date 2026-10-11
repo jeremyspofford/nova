@@ -548,6 +548,9 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
         "build_state",
         "hub_version",
         "last_update",
+        # S30b T5: the admin path as the agent read it ({installed, kind} or
+        # None) — a fact, not a grant.
+        "admin_path",
     }
 
 

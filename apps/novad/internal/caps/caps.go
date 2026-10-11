@@ -55,6 +55,9 @@ type Deps struct {
 	// Update is what daemon.update needs; nil where there is no connected
 	// agent (a handler then says cannot).
 	Update *UpdateDeps
+
+	// Admin is the admin path's seams (admin.exec); nil = the real machine.
+	Admin *AdminDeps
 }
 
 // Request is one verified call as its handler receives it.
