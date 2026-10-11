@@ -7860,9 +7860,22 @@ def _span_args(span: Any) -> dict | None:
 
 
 def _span_device(span: Any) -> str | None:
-    """The device a call's record names: its `device` argument — or, for the
-    update tool (_UPDATE_TOOLS), its `machine`, the paired machine whose agent
-    it updates (Task 32, MF4). None when the record names none."""
+    """The device a call's record names. First the paired name the call itself
+    resolved and filed as its connectivity fact ({"device": <paired name>,
+    "connected": ...}): a call may name its machine by hostname or a loose
+    form ("mini-pc", "mini pc"), and the shared resolver (machines.resolve_name)
+    turns that into the paired name — live 2026-10-11 (turns 890781c5,
+    the uninstall turn): calls on "mini-pc" ran on Beelink Mini S, and the
+    sentence said none had. Else its `device` argument — or, for the update
+    tool (_UPDATE_TOOLS), its `machine`, the paired machine whose agent it
+    updates (Task 32, MF4). None when the record names none."""
+    facts = (getattr(span, "meta", None) or {}).get("facts")
+    if isinstance(facts, list):
+        for fact in facts:
+            if isinstance(fact, dict) and "connected" in fact:
+                named = fact.get("device")
+                if isinstance(named, str) and named.strip():
+                    return named
     args = _span_args(span)
     key = "machine" if getattr(span, "name", None) in _UPDATE_TOOLS else "device"
     device = args.get(key) if args is not None else None

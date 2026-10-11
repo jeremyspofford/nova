@@ -2343,3 +2343,67 @@ def test_a_send_beside_a_failed_update_states_the_failure():
         "machine_update",
     )
     assert claim.text == "(machine_update failed: minipc is offline.)"
+
+
+
+# -- a call names its machine by hostname (live 2026-10-11) -------------------
+
+BEELINK = "Beelink Mini S"
+BEELINK_FACT = {"device": BEELINK, "known_as": [BEELINK, "mini-pc"], "connected": True}
+TWO = (BEELINK, DEVICE)
+# The live check passes the paired machine groups (chat._paired_machines); the
+# false correction only showed with them.
+GROUPS = {BEELINK: "machine-beelink", DEVICE: "machine-dell"}
+
+
+def check_live(reply: str, spans) -> object:
+    return guards.device_completion_check(reply, list(spans), NAMES, TWO, machines=GROUPS)
+
+
+def test_the_live_install_turn_named_by_hostname_is_backed():
+    """Turn 890781c5: device_admin_path was called with device "mini pc"; the
+    resolver ran it on Beelink Mini S and filed that name as the connectivity
+    fact — and the guard still appended "No machine_update or
+    device_admin_path or device_run call ran on Beelink Mini S". The call's
+    own resolved fact is the machine it ran on."""
+    installed = _span(
+        "device_admin_path",
+        facts=[BEELINK_FACT, {"machine": BEELINK, "installed": True, "admin_path": "install"}],
+        args_redacted={"action": "install", "device": "mini pc"},
+        result_head=f"{BEELINK}: admin path installed (a sudoers rule) through sudo -n",
+    )
+    reply = (
+        "The admin path has been successfully installed on the mini pc. The Beelink "
+        "Mini S's agent now has the sudoers rule configured."
+    )
+    assert check_live(reply, [installed]) is None
+
+
+def test_the_live_whoami_turn_named_by_hostname_is_backed():
+    ran = _span(
+        "device_run",
+        facts=[BEELINK_FACT],
+        args_redacted={"argv": ["whoami"], "device": "mini-pc", "elevated": True},
+        result_head=f"{BEELINK} ran ['whoami'] — exit 0 elevated (as root) root",
+    )
+    reply = (
+        "The `whoami` command was successfully executed with elevated privileges on "
+        "the Beelink Mini S, returning `root`."
+    )
+    assert check_live(reply, [ran]) is None
+
+
+def test_a_call_resolved_to_another_machine_still_backs_nothing_here():
+    """The fix reads the RESOLVED name: a call that ran on the Dell backs no
+    claim about the Beelink, whatever its argument said."""
+    elsewhere = _span(
+        "device_run",
+        facts=[{"device": DEVICE, "connected": True}],
+        args_redacted={"argv": ["whoami"], "device": "mini-pc"},
+        result_head=f"{DEVICE} ran ['whoami'] — exit 0",
+    )
+    reply = (
+        "The `whoami` command was successfully executed with elevated privileges on "
+        "the Beelink Mini S, returning `root`."
+    )
+    assert check_live(reply, [elsewhere]) is not None
