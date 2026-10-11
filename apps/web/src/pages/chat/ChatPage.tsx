@@ -773,7 +773,14 @@ export function ChatPage({
       {/* Only the home indicator to clear now: the bottom tab bar was
           replaced by a left-edge handle on 2026-09-15, so nothing is pinned
           across the bottom and the composer reclaims its 3.5rem. */}
-      <div className="shrink-0 w-full px-2 md:px-0 pb-[max(var(--nova-safe-bottom,0px),0.5rem)] md:pb-4">
+      {/* The composer sits PARTLY into the home-indicator inset (2026-10-11),
+          the way iOS's own bars do: the full 34pt reserve plus a control row
+          under the box left ~71px of nothing-much at the bottom of a phone.
+          The indicator is a thin line ~8px off the edge, so 20px clears it. */}
+      <div
+        data-testid="composer-dock"
+        className="shrink-0 w-full px-2 md:px-0 pb-[max(calc(var(--nova-safe-bottom,0px)-0.875rem),0.5rem)] md:pb-4"
+      >
         <div className="mx-auto max-w-none md:max-w-[1200px] md:px-6 space-y-1.5">
           {/* Stop (S15). Shown whenever a turn is in flight — whether this tab
               is streaming it or found it already running after a reload — and
@@ -848,14 +855,17 @@ export function ChatPage({
             draftKey={
               state.conversationId ? `nova-chat-draft:${state.conversationId}` : undefined
             }
-          />
-          {/* The control row lives with the input, not the header: the model
-              selector (switch inline) and the Clear control. */}
-          <ChatControls
-            currentModel={model}
-            onModelChanged={setModel}
-            clearChat={clearChat}
-            promptTokens={state.promptTokens}
+            // The control row lives IN the composer, on the send button's
+            // line (2026-10-11): the model selector, the context gauge and
+            // Clear — not the header, and not a second row under the box.
+            toolbar={
+              <ChatControls
+                currentModel={model}
+                onModelChanged={setModel}
+                clearChat={clearChat}
+                promptTokens={state.promptTokens}
+              />
+            }
           />
         </div>
       </div>

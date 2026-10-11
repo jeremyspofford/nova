@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { ArrowUp, Bot, Paperclip, X } from 'lucide-react'
 import {
@@ -84,6 +84,7 @@ export function ChatInput({
   queueing = false,
   api = DEFAULT_API,
   conversationId,
+  toolbar,
 }: {
   /** His sent messages in this conversation, oldest -> newest (chat rewind
    * T6): what ArrowUp recalls into an empty composer. */
@@ -102,6 +103,10 @@ export function ChatInput({
    * an upload with nowhere to go is a file that lands in a folder named
    * after nothing. */
   conversationId?: string | null
+  /** Controls drawn inside the box on the send button's row (2026-10-11):
+   * the model picker, context gauge and Clear, as Claude's composer carries
+   * its tools. Absent, the box is the single row it always was. */
+  toolbar?: ReactNode
 }) {
   const [input, setInput] = useState(() => (draftKey ? readLocal(draftKey, '') : ''))
   // S28: files on their way in. Composer state, not page state — they belong
@@ -388,6 +393,28 @@ export function ChatInput({
       active ? 'bg-surface-card-hover' : 'hover:bg-surface-card-hover',
     )
 
+  const textarea = (
+    <textarea
+      ref={textareaRef}
+      value={input}
+      onChange={e => changeInput(e.target.value)}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+      /* The hint is desktop-only: at 393px the full string wraps inside a
+         rows={1} textarea and is clipped mid-word, so a phone reads
+         "…(type / for commands, @ for" and stops. Seen on the owner's
+         iPhone, 2026-09-15. The affordances still work on mobile; a
+         truncated sentence advertises them worse than silence. */
+      placeholder={
+        isMobile ? 'Message Nova…' : 'Message Nova…  (type / for commands, @ for an agent)'
+      }
+      aria-label="Message Nova"
+      rows={1}
+      className="flex-1 min-w-0 bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 py-3"
+      style={{ minHeight: '44px', maxHeight: '240px', fontSize: '16px' }}
+    />
+  )
+
   return (
     <div className="relative">
       {showDropdown && (
@@ -527,6 +554,7 @@ export function ChatInput({
             </span>
           </div>
         )}
+        {toolbar && <div className="flex">{textarea}</div>}
         <div className="flex items-end gap-2 pr-2 pb-2">
         {/* The paperclip: the way in that can be FOUND. Drop and paste are
             faster once you know they work, and neither advertises itself. */}
@@ -557,25 +585,8 @@ export function ChatInput({
             </button>
           </>
         )}
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={e => changeInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          /* The hint is desktop-only: at 393px the full string wraps inside a
-             rows={1} textarea and is clipped mid-word, so a phone reads
-             "…(type / for commands, @ for" and stops. Seen on the owner's
-             iPhone, 2026-09-15. The affordances still work on mobile; a
-             truncated sentence advertises them worse than silence. */
-          placeholder={
-            isMobile ? 'Message Nova…' : 'Message Nova…  (type / for commands, @ for an agent)'
-          }
-          aria-label="Message Nova"
-          rows={1}
-          className="flex-1 min-w-0 bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 py-3"
-          style={{ minHeight: '44px', maxHeight: '240px', fontSize: '16px' }}
-        />
+        {!toolbar && textarea}
+        {toolbar && <div className="min-w-0 flex-1 self-center">{toolbar}</div>}
           <button
             type="submit"
             disabled={(!input.trim() && ready.length === 0) || disabled || uploading}
