@@ -49,8 +49,8 @@ router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
 _UNSAFE_IN_QUOTED_ASCII = re.compile(r'["\x00-\x1f\x7f]')
 
 
-def _content_disposition(filename: str) -> str:
-    """An `attachment` Content-Disposition value safe to interpolate
+def _content_disposition(filename: str, disposition: str = "attachment") -> str:
+    """An `attachment` (or `inline`) Content-Disposition value safe to interpolate
     verbatim into a response header, whatever `filename` actually
     contains. The RFC 5987 `filename*` parameter carries the real name
     intact — percent-encoding neutralises the quote, CR/LF and everything
@@ -63,7 +63,29 @@ def _content_disposition(filename: str) -> str:
     ascii_name = filename.encode("ascii", "replace").decode("ascii")
     ascii_name = _UNSAFE_IN_QUOTED_ASCII.sub("_", ascii_name)
     encoded = quote(filename, safe="")
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+
+
+# What /raw?inline=1 will actually serve inline: the types a browser shows
+# without running anything — raster images and PDF — plus SVG, which IS
+# markup and may carry <script>, so it also gets a sandboxing CSP. Keyed by
+# extension rather than mimetypes.guess_type, whose answer depends on the
+# host's /etc/mime.types. Anything not listed (HTML above all: Nova wrote
+# it, and inline it would run with the owner's session cookie on this
+# origin) ignores the flag and stays an attachment.
+INLINE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+}
+_SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
 
 
 # The listing cap protects the response size the same way the tool's
@@ -181,11 +203,22 @@ async def get_workspace_file(
 
 @router.get("/raw")
 async def get_workspace_raw(
-    path: str = Query(...), _person: Person = Depends(identity.require_person)
+    path: str = Query(...),
+    inline: bool = Query(False),
+    _person: Person = Depends(identity.require_person),
 ) -> Response:
     root = root_from_env().resolve()
     target = _existing_file_or_error(root, path)
     data = target.read_bytes()
+    inline_type = INLINE_TYPES.get(target.suffix.lower()) if inline else None
+    if inline_type is not None:
+        headers = {
+            "Content-Disposition": _content_disposition(target.name, "inline"),
+            "X-Content-Type-Options": "nosniff",
+        }
+        if inline_type == "image/svg+xml":
+            headers["Content-Security-Policy"] = _SVG_CSP
+        return Response(content=data, media_type=inline_type, headers=headers)
     media_type, _ = mimetypes.guess_type(target.name)
     return Response(
         content=data,

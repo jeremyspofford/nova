@@ -93,8 +93,8 @@ describe('FilesPage — detail', () => {
     fireEvent.click(await screen.findByTestId('files-row-groceries.md'))
 
     expect(api.getWorkspaceFile).toHaveBeenCalledWith('groceries.md')
-    expect(await screen.findByText(/- milk/)).toBeDefined()
-    expect(screen.getByText(/- eggs/)).toBeDefined()
+    expect(await screen.findByText('milk')).toBeDefined()
+    expect(screen.getByText('eggs')).toBeDefined()
     expect(screen.getByText('groceries.md')).toBeDefined()
     const download = screen.getByTestId('download-file') as HTMLAnchorElement
     expect(download.getAttribute('href')).toBe('/api/v1/workspace/raw?path=groceries.md')
@@ -109,11 +109,11 @@ describe('FilesPage — detail', () => {
 
   it('shows the stated reason instead of contents for a binary file', async () => {
     const api = fakeApi(
-      listing({ files: [{ path: 'photo.png', size: 4096, modified: new Date().toISOString() }] }),
-      { 'photo.png': detail({ path: 'photo.png', text: null, binary: true, size: 4096 }) },
+      listing({ files: [{ path: 'blob.bin', size: 4096, modified: new Date().toISOString() }] }),
+      { 'blob.bin': detail({ path: 'blob.bin', text: null, binary: true, size: 4096 }) },
     )
     render(<FilesPage api={api} />)
-    fireEvent.click(await screen.findByTestId('files-row-photo.png'))
+    fireEvent.click(await screen.findByTestId('files-row-blob.bin'))
     expect(await screen.findByText(/4096 bytes/)).toBeDefined()
     expect(screen.getByText(/not shown/i)).toBeDefined()
     expect(screen.getByText(/download to view/i)).toBeDefined()
@@ -121,11 +121,11 @@ describe('FilesPage — detail', () => {
 
   it('shows the stated reason instead of contents for a too-large file', async () => {
     const api = fakeApi(
-      listing({ files: [{ path: 'big.md', size: 500000, modified: new Date().toISOString() }] }),
-      { 'big.md': detail({ path: 'big.md', text: null, too_large: true, size: 500000 }) },
+      listing({ files: [{ path: 'big.txt', size: 500000, modified: new Date().toISOString() }] }),
+      { 'big.txt': detail({ path: 'big.txt', text: null, too_large: true, size: 500000 }) },
     )
     render(<FilesPage api={api} />)
-    fireEvent.click(await screen.findByTestId('files-row-big.md'))
+    fireEvent.click(await screen.findByTestId('files-row-big.txt'))
     expect(await screen.findByText(/500000 bytes/)).toBeDefined()
     expect(screen.getByText(/too large/i)).toBeDefined()
   })
@@ -154,5 +154,75 @@ describe('FilesPage — detail', () => {
     render(<FilesPage api={api} />)
     fireEvent.click(await screen.findByTestId('files-row-a.md'))
     expect(await screen.findByText(/gone missing between listing and open/i)).toBeDefined()
+  })
+})
+
+describe('FilesPage — previews', () => {
+  function open(path: string, d: Partial<WorkspaceFileDetail>) {
+    const api = fakeApi(listing(), { [path]: detail({ path, ...d }) })
+    render(<FilesPage api={api} initialPath={path} />)
+  }
+
+  it('renders markdown, not its syntax', async () => {
+    open('notes.md', { text: '# Plan\n\nSome **bold** words\n' })
+    const heading = await screen.findByRole('heading', { name: 'Plan' })
+    expect(heading.tagName).toBe('H1')
+    expect(screen.getByText('bold').tagName).toBe('STRONG')
+    expect(screen.queryByText(/# Plan/)).toBeNull()
+  })
+
+  it('switches a markdown file to its source and back', async () => {
+    open('notes.md', { text: '# Plan\n' })
+    await screen.findByRole('heading', { name: 'Plan' })
+    fireEvent.click(screen.getByRole('button', { name: /source/i }))
+    expect(screen.getByText('# Plan')).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'Plan' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /rendered/i }))
+    expect(screen.getByRole('heading', { name: 'Plan' })).toBeDefined()
+  })
+
+  it('a markdown file too large to preview still says so', async () => {
+    open('big.md', { text: null, too_large: true, size: 500000 })
+    expect(await screen.findByText(/500000 bytes/)).toBeDefined()
+  })
+
+  it('displays an image from the inline raw URL, even though it is binary', async () => {
+    open('pics/photo.png', { text: null, binary: true, size: 4096 })
+    const img = (await screen.findByRole('img', { name: 'pics/photo.png' })) as HTMLImageElement
+    expect(img.getAttribute('src')).toBe('/api/v1/workspace/raw?path=pics%2Fphoto.png&inline=1')
+    expect(screen.queryByText(/not shown/i)).toBeNull()
+  })
+
+  it('displays an image too large for the text preview', async () => {
+    open('huge.jpg', { text: null, too_large: true, size: 5_000_000 })
+    expect(await screen.findByRole('img', { name: 'huge.jpg' })).toBeDefined()
+  })
+
+  it('shows an SVG as an image, not as its markup', async () => {
+    open('chart.svg', { text: '<svg xmlns="http://www.w3.org/2000/svg"/>' })
+    expect(await screen.findByRole('img', { name: 'chart.svg' })).toBeDefined()
+    expect(screen.queryByText(/<svg/)).toBeNull()
+  })
+
+  it('displays a PDF in the browser viewer, with a link to open it full-screen', async () => {
+    open('report.pdf', { text: null, binary: true, size: 90000 })
+    const frame = await screen.findByTitle('report.pdf')
+    expect(frame.tagName).toBe('IFRAME')
+    expect(frame.getAttribute('src')).toBe('/api/v1/workspace/raw?path=report.pdf&inline=1')
+    const openLink = screen.getByTestId('open-file') as HTMLAnchorElement
+    expect(openLink.getAttribute('href')).toBe('/api/v1/workspace/raw?path=report.pdf&inline=1')
+    expect(openLink.getAttribute('target')).toBe('_blank')
+  })
+
+  it('says plainly that a Word document cannot be previewed', async () => {
+    open('letter.docx', { text: null, binary: true, size: 12000 })
+    expect(await screen.findByText(/word documents can.t be previewed/i)).toBeDefined()
+    expect(screen.getByTestId('download-file')).toBeDefined()
+  })
+
+  it('leaves code and other text as plain text', async () => {
+    open('main.py', { text: '# not a heading\nprint(1)\n' })
+    expect(await screen.findByText(/# not a heading/)).toBeDefined()
+    expect(screen.queryByRole('heading', { name: /not a heading/ })).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Download, FolderOpen } from 'lucide-react'
+import { ArrowLeft, Download, ExternalLink, FolderOpen } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
+import { Markdown } from '../../components/Markdown'
 import { Button, Code, EmptyState, Skeleton } from '../../components/ui'
 import {
   getWorkspaceFiles as apiGetWorkspaceFiles,
@@ -10,7 +11,7 @@ import {
   type WorkspaceFileDetail,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { formatBytes, notShownMessage } from './filesFormat'
+import { formatBytes, notShownMessage, previewKind } from './filesFormat'
 
 /**
  * The operator's read-only window into Nova's workspace volume
@@ -198,39 +199,121 @@ export function FilesPage({
   )
 }
 
+// Button.tsx always renders a <button>, and a <button> nested in an <a> is
+// invalid HTML — so the links below borrow its secondary/sm classes directly
+// rather than wrapping one, to look identical anyway.
+const LINK_BUTTON =
+  'inline-flex items-center justify-center gap-1 h-7 px-2.5 text-caption font-medium rounded-sm transition-all duration-fast bg-surface-elevated border border-border text-content-primary hover:bg-surface-card-hover active:bg-surface-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40'
+
 function FileDetail({ detail }: { detail: WorkspaceFileDetail }) {
+  const kind = previewKind(detail.path)
+  const inlineUrl = workspaceRawUrl(detail.path, { inline: true })
+  const [showSource, setShowSource] = useState(false)
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <p className="font-mono text-compact text-content-primary">{detail.path}</p>
+        <div className="min-w-0">
+          <p className="font-mono text-compact text-content-primary break-all">{detail.path}</p>
           <p className="text-caption text-content-tertiary">
             {formatBytes(detail.size)} · modified {formatRelativeTime(detail.modified)}
           </p>
         </div>
-        {/* Button.tsx always renders a <button>, and a <button> nested in an
-         * <a> is invalid HTML — so this borrows its secondary/sm classes
-         * directly rather than wrapping one, to look identical anyway. */}
-        <a
-          data-testid="download-file"
-          href={workspaceRawUrl(detail.path)}
-          download
-          className="inline-flex items-center justify-center gap-1 h-7 px-2.5 text-caption font-medium rounded-sm transition-all duration-fast bg-surface-elevated border border-border text-content-primary hover:bg-surface-card-hover active:bg-surface-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40"
-        >
-          <Download size={12} />
-          Download
-        </a>
+        <div className="flex items-center gap-2">
+          {kind === 'markdown' && detail.text !== null && (
+            <Button variant="secondary" size="sm" onClick={() => setShowSource(v => !v)}>
+              {showSource ? 'Rendered' : 'Source'}
+            </Button>
+          )}
+          {(kind === 'image' || kind === 'pdf') && (
+            <a
+              data-testid="open-file"
+              href={inlineUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={LINK_BUTTON}
+            >
+              <ExternalLink size={12} />
+              Open
+            </a>
+          )}
+          <a
+            data-testid="download-file"
+            href={workspaceRawUrl(detail.path)}
+            download
+            className={LINK_BUTTON}
+          >
+            <Download size={12} />
+            Download
+          </a>
+        </div>
       </div>
 
-      {detail.text !== null ? (
-        <Code inline={false} className="max-h-[60vh] overflow-auto whitespace-pre-wrap">
-          {detail.text}
-        </Code>
-      ) : (
-        <div className="rounded-lg border border-border-subtle p-6 text-center text-compact text-content-secondary">
-          {notShownMessage(detail)}
-        </div>
-      )}
+      <FilePreview detail={detail} kind={kind} inlineUrl={inlineUrl} showSource={showSource} />
     </div>
+  )
+}
+
+/**
+ * Images and PDFs are drawn by the browser from /raw?inline=1, so they show
+ * whether or not core decoded them as text (they are binary, and often over
+ * the text cap). Markdown is rendered through the same component chat
+ * replies use — no raw HTML, images as links — so a file Nova wrote gets no
+ * more power in the page than a reply she sent.
+ */
+function FilePreview({
+  detail,
+  kind,
+  inlineUrl,
+  showSource,
+}: {
+  detail: WorkspaceFileDetail
+  kind: ReturnType<typeof previewKind>
+  inlineUrl: string
+  showSource: boolean
+}) {
+  if (kind === 'image') {
+    return (
+      <div className="flex justify-center rounded-lg border border-border-subtle p-4">
+        <img src={inlineUrl} alt={detail.path} className="max-w-full max-h-[70vh] object-contain" />
+      </div>
+    )
+  }
+  if (kind === 'pdf') {
+    return (
+      <iframe
+        src={inlineUrl}
+        title={detail.path}
+        className="w-full h-[75vh] rounded-lg border border-border-subtle bg-white"
+      />
+    )
+  }
+  if (kind === 'word') {
+    return (
+      <div className="rounded-lg border border-border-subtle p-6 text-center text-compact text-content-secondary">
+        Word documents can't be previewed here — download to open it.
+      </div>
+    )
+  }
+  if (detail.text === null) {
+    return (
+      <div className="rounded-lg border border-border-subtle p-6 text-center text-compact text-content-secondary">
+        {notShownMessage(detail)}
+      </div>
+    )
+  }
+  if (kind === 'markdown' && !showSource) {
+    return (
+      // Markdown's heading sizes are tuned for a chat reply (h1 renders at
+      // h2 size); a file is a document, so they step back up here only.
+      <div className="rounded-lg border border-border-subtle p-4 sm:p-6 max-h-[75vh] overflow-auto text-body [&_h1]:text-h1 [&_h2]:text-h2 [&_h3]:text-h3 [&_h1]:mt-6 [&_h2]:mt-5 [&_h3]:mt-4 [&_h1]:mb-2 [&_h2]:mb-2 [&_h1:first-child]:mt-0 [&_h2:first-child]:mt-0">
+        <Markdown text={detail.text} />
+      </div>
+    )
+  }
+  return (
+    <Code inline={false} className="max-h-[60vh] overflow-auto whitespace-pre-wrap">
+      {detail.text}
+    </Code>
   )
 }
