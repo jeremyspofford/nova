@@ -15,7 +15,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
   danger:
     'bg-danger text-on-accent hover:brightness-110 active:brightness-90',
   outline:
-    'border border-border text-content-primary hover:bg-surface-elevated active:bg-surface-card',
+    'border border-border-control text-content-primary hover:bg-surface-elevated active:bg-surface-card',
 }
 
 const SIZES: Record<ButtonSize, string> = {

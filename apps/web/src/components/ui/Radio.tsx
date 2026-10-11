@@ -49,7 +49,7 @@ export function RadioGroup({
                 'peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500/40',
                 value === option.value
                   ? 'border-accent'
-                  : 'border-border',
+                  : 'border-border-control',
               )}
             >
               {value === option.value && (

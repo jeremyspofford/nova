@@ -92,8 +92,12 @@ input[type="number"] {
   --text-secondary: var(--tier-secondary, var(--neutral-600));
   --text-tertiary: var(--tier-tertiary, var(--neutral-550));
   --text-disabled: var(--neutral-300);
-  --border-default: var(--neutral-200);
-  --border-subtle: var(--neutral-100);
+  /* One step off every surface (R6, 2026-10-11): subtle was neutral-100 —
+     the sidebar's and elevated's own step, 1.05:1 on the page — so lines
+     drawn in it on those grounds did not exist. */
+  --border-default: var(--neutral-300);
+  --border-subtle: var(--neutral-200);
+  --border-control: var(--tier-control, var(--neutral-500));
   --border-focus: var(--accent-700);
   /* accent as TEXT and as a FILL: the 500 step that reads on a dark ground
      is 2-3:1 on paper (teal 2.8, amber 2.1), so light mode uses the 700 step
@@ -127,8 +131,10 @@ html.dark {
   --text-secondary: var(--tier-secondary, var(--neutral-400));
   --text-tertiary: var(--tier-tertiary, var(--neutral-450));
   --text-disabled: var(--neutral-700);
-  --border-default: var(--neutral-800);
+  /* default was neutral-800, the elevated surface's own step (R6). */
+  --border-default: var(--neutral-700);
   --border-subtle: var(--neutral-800);
+  --border-control: var(--tier-control, var(--neutral-500));
   --border-focus: var(--accent-400);
   /* DESIGN.md "Dark Mode Strategy": 400 for text in dark, not 500 — 500 on
      the active-nav tint was 4.2:1 */

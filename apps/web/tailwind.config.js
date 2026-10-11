@@ -27,6 +27,9 @@ export default {
         border: {
           DEFAULT: 'rgb(var(--border-default) / <alpha-value>)',
           subtle: 'rgb(var(--border-subtle) / <alpha-value>)',
+          // checkbox, radio, outline button, off toggle: 3:1, derived per
+          // palette (theme-store controlTier)
+          control: 'rgb(var(--border-control) / <alpha-value>)',
           focus: 'rgb(var(--border-focus) / <alpha-value>)',
         },
         // Semantic text tokens

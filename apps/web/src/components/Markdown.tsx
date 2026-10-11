@@ -250,8 +250,10 @@ function Image({ src, alt }: ImageProps) {
 
 type PreProps = ComponentProps<'pre'> & { node?: unknown }
 
+// dark:border — the block was neutral-950 on a neutral-950 page in dark mode,
+// so a command read as stray mono text with no box (UI review R6).
 const PRE_BASE =
-  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 text-neutral-200 p-3 font-mono leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
+  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 dark:border dark:border-border text-neutral-200 p-3 font-mono leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
 // ONE size class per block, chosen here — never a second text-* passed in
 // beside the first, where the stylesheet's order rather than this code would
 // pick the winner (the R1 padding bug, 2026-10-06).
