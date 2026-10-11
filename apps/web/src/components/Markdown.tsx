@@ -250,8 +250,11 @@ function Image({ src, alt }: ImageProps) {
 
 type PreProps = ComponentProps<'pre'> & { node?: unknown }
 
+// dark:border — the block was neutral-950 on a neutral-950 page in dark mode,
+// so a command read as stray mono text with no box (UI review R6). pr-10:
+// room for the copy button, which sat on the first line of long code.
 const PRE_BASE =
-  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 text-neutral-200 p-3 font-mono leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
+  'overflow-x-auto rounded-md bg-neutral-900 dark:bg-neutral-950 dark:border dark:border-border text-neutral-200 p-3 pr-10 touch:pr-12 font-mono leading-relaxed [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-inherit'
 // ONE size class per block, chosen here — never a second text-* passed in
 // beside the first, where the stylesheet's order rather than this code would
 // pick the winner (the R1 padding bug, 2026-10-06).
@@ -259,7 +262,7 @@ const PRE = `${PRE_BASE} text-mono-sm`
 const PRE_FILE = `${PRE_BASE} text-mono`
 
 const COPY_BUTTON =
-  'absolute top-1.5 right-1.5 rounded-sm p-1 bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 dark:hover:bg-neutral-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-400 transition-colors duration-fast'
+  'absolute top-1.5 right-1.5 rounded-sm p-1 touch:p-2 bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 dark:hover:bg-neutral-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-400 transition-colors duration-fast'
 
 type CopyState = 'idle' | 'copied' | 'failed'
 

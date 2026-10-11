@@ -151,7 +151,7 @@ export function GovernancePage({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-            <table className="w-full text-compact">
+            <table className="stack-table w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
                   {['Time', 'Event', 'Actor'].map(heading => (
@@ -171,15 +171,15 @@ export function GovernancePage({
                   return (
                     <Fragment key={event.id}>
                       <tr data-testid={`governance-row-${event.id}`}>
-                        <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
+                        <td data-label="Time" className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
                           {new Date(event.created_at).toLocaleString()}
                         </td>
-                        <td className="px-4 py-2.5 whitespace-nowrap">
+                        <td data-label="Event" className="px-4 py-2.5 whitespace-nowrap">
                           <Badge size="sm" color={KIND_COLOR[event.kind] ?? 'neutral'}>
                             {event.kind}
                           </Badge>
                         </td>
-                        <td className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
+                        <td data-label="Actor" className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
                           {event.actor ?? <span className="text-content-tertiary">—</span>}
                         </td>
                       </tr>

@@ -460,7 +460,7 @@ export function AgentPage({
                 ) : (
                   <>
                     <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-                      <table className="w-full text-compact">
+                      <table className="stack-table w-full text-compact">
                         <thead>
                           <tr className="bg-surface-elevated">
                             {['Path', 'Size', 'Modified'].map(heading => (
@@ -473,13 +473,13 @@ export function AgentPage({
                         <tbody className="divide-y divide-border-subtle">
                           {artifacts.data.files.map(f => (
                             <tr key={f.path} data-testid={`artifact-row-${f.path}`} className="hover:bg-surface-card-hover transition-colors">
-                              <td className="px-4 py-2.5 font-mono text-caption">
+                              <td className="stack-title px-4 py-2.5 font-mono text-caption">
                                 <Link to={`/files?path=${encodeURIComponent(f.path)}`} className="text-accent hover:underline">
                                   {f.path}
                                 </Link>
                               </td>
-                              <td className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">{formatBytes(f.size)}</td>
-                              <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">{formatRelativeTime(f.modified)}</td>
+                              <td data-label="Size" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">{formatBytes(f.size)}</td>
+                              <td data-label="Modified" className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">{formatRelativeTime(f.modified)}</td>
                             </tr>
                           ))}
                         </tbody>

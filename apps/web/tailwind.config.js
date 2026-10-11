@@ -27,6 +27,9 @@ export default {
         border: {
           DEFAULT: 'rgb(var(--border-default) / <alpha-value>)',
           subtle: 'rgb(var(--border-subtle) / <alpha-value>)',
+          // checkbox, radio, outline button, off toggle: 3:1, derived per
+          // palette (theme-store controlTier)
+          control: 'rgb(var(--border-control) / <alpha-value>)',
           focus: 'rgb(var(--border-focus) / <alpha-value>)',
         },
         // Semantic text tokens
@@ -178,5 +181,10 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // `touch:` — a touch screen, by its INPUT rather than its width (UI
+    // review R9): small controls grow to a finger's size on a phone, a
+    // tablet or a touch laptop, and stay compact under a mouse.
+    ({ addVariant }) => addVariant('touch', '@media (pointer: coarse)'),
+  ],
 }

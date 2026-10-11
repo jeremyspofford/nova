@@ -62,7 +62,7 @@ export function Toggle({
             'block rounded-full transition-colors duration-fast',
             'peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500/40',
             TRACK_SIZES[size],
-            checked ? 'bg-accent' : 'bg-neutral-300 dark:bg-neutral-600',
+            checked ? 'bg-accent' : 'bg-border-control',
           )}
         />
         <span

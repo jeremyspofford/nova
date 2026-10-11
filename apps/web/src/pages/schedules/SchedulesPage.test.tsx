@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { expectStacked } from '../../test/expectStacked'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { SchedulesPage } from './SchedulesPage'
 import type { Agent, Timer, TimerFiring } from '../../lib/api'
@@ -107,6 +108,8 @@ describe('SchedulesPage — the list', () => {
       />,
     )
     const row1 = await screen.findByTestId('schedules-row-t1')
+    // R4: the table stacks on a phone, every cell labelled.
+    expectStacked()
     expect(within(row1).getByText('reminder')).toBeDefined()
     expect(within(row1).getByText('stretch')).toBeDefined()
     expect(within(row1).getByText('once, Sat 6 Sep 2026 14:32 EDT (in 2 minutes)')).toBeDefined()

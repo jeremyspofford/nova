@@ -39,7 +39,7 @@ export function Section({
       {collapsible ? (
         <button
           type="button"
-          className="flex justify-between items-center w-full px-5 py-3 border-b border-border-subtle text-left"
+          className="flex justify-between items-center w-full px-4 sm:px-5 py-3 border-b border-border-subtle text-left"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
@@ -52,7 +52,7 @@ export function Section({
           />
         </button>
       ) : (
-        <div className="px-5 py-3 border-b border-border-subtle">{headerContent}</div>
+        <div className="px-4 sm:px-5 py-3 border-b border-border-subtle">{headerContent}</div>
       )}
       <div
         className={clsx(
@@ -61,7 +61,7 @@ export function Section({
         )}
       >
         <div className="overflow-hidden">
-          <div className="px-5 py-4 space-y-4">{children}</div>
+          <div className="px-4 sm:px-5 py-4 space-y-4">{children}</div>
         </div>
       </div>
     </Card>

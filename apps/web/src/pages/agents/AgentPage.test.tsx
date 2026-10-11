@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { expectStacked } from '../../test/expectStacked'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AgentPage } from './AgentPage'
@@ -294,6 +295,8 @@ describe('AgentPage — Artifacts', () => {
     await screen.findByTestId('agent-facts')
     fireEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
     const row = await screen.findByTestId('artifact-row-agents/coder/haiku.md')
+    // R4: the table stacks on a phone, every cell labelled.
+    expectStacked()
     expect(api.getWorkspaceFiles).toHaveBeenCalledWith('agents/coder/')
     expect(within(row).getByRole('link', { name: 'agents/coder/haiku.md' }).getAttribute('href')).toBe(
       '/files?path=agents%2Fcoder%2Fhaiku.md',

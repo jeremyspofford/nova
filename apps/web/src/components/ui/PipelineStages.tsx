@@ -6,7 +6,7 @@ type StageStatus = 'done' | 'active' | 'pending' | 'failed'
 const statusStyles: Record<StageStatus, string> = {
   done: 'bg-accent',
   active: 'bg-accent animate-pulse-slow',
-  pending: 'bg-border-subtle',
+  pending: 'bg-border',
   failed: 'bg-danger',
 }
 

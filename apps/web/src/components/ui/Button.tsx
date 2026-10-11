@@ -15,11 +15,11 @@ const VARIANTS: Record<ButtonVariant, string> = {
   danger:
     'bg-danger text-on-accent hover:brightness-110 active:brightness-90',
   outline:
-    'border border-border text-content-primary hover:bg-surface-elevated active:bg-surface-card',
+    'border border-border-control text-content-primary hover:bg-surface-elevated active:bg-surface-card',
 }
 
 const SIZES: Record<ButtonSize, string> = {
-  sm: 'h-7 px-2.5 gap-1 text-caption rounded-sm',
+  sm: 'h-7 touch:h-9 px-2.5 gap-1 text-caption rounded-sm',
   md: 'h-9 px-3.5 gap-1.5 text-compact rounded-sm',
   lg: 'h-11 px-5 gap-2 text-body rounded-md',
 }

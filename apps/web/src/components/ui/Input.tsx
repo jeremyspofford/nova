@@ -1,5 +1,6 @@
 import { forwardRef } from 'react'
 import clsx from 'clsx'
+import { splitWidth } from './fieldWidth'
 
 type InputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'prefix'> & {
   label?: string
@@ -12,9 +13,10 @@ type InputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'prefix'> & 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ label, description, error, prefix, suffix, className, id, ...rest }, ref) => {
     const inputId = id || (label ? `input-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined)
+    const width = splitWidth(className)
 
     return (
-      <div className="w-full">
+      <div className={width.wrapper}>
         {label && (
           <label
             htmlFor={inputId}
@@ -42,7 +44,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
               'disabled:opacity-50 disabled:cursor-not-allowed',
               prefix && 'pl-8',
               suffix && 'pr-8',
-              className,
+              width.field,
             )}
             aria-invalid={error ? true : undefined}
             aria-describedby={

@@ -43,7 +43,9 @@ export function Table<T extends Record<string, unknown>>({
 
   return (
     <div className={clsx('overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]', className)}>
-      <table className="w-full text-compact">
+      {/* stack-table: below md each row is a card of labelled lines
+          (index.css, UI review R4) — each cell names its column. */}
+      <table className="stack-table w-full text-compact">
         <thead>
           <tr className="bg-surface-elevated">
             {columns.map((col) => (
@@ -94,7 +96,11 @@ export function Table<T extends Record<string, unknown>>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
                 {columns.map((col) => (
-                  <td key={col.key} className={clsx('px-4 py-3 text-content-primary', col.className)}>
+                  <td
+                    key={col.key}
+                    data-label={col.header || undefined}
+                    className={clsx('px-4 py-3 text-content-primary', !col.header && 'stack-actions', col.className)}
+                  >
                     {col.render
                       ? col.render(row)
                       : (row[col.key] as ReactNode)}

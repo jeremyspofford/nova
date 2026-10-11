@@ -62,7 +62,7 @@ export function Checkbox({
             'peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500/40',
             filled
               ? 'bg-accent border-accent'
-              : 'bg-surface-input border-border',
+              : 'bg-surface-input border-border-control',
           )}
         >
           {filled && (

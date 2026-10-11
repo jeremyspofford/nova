@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { expectStacked } from '../../test/expectStacked'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { ActivityPage } from './ActivityPage'
 import type { ActivityTurn, ActivityTurnDetail } from '../../lib/api'
@@ -61,6 +62,8 @@ describe('ActivityPage — the list', () => {
       />,
     )
     const row = await screen.findByTestId('activity-row-t1')
+    // R4: the table stacks on a phone, every cell labelled.
+    expectStacked()
     expect(within(row).getByText('ok')).toBeDefined()
     expect(within(row).getByText('qwen3:8b')).toBeDefined()
     expect(within(row).getByText('482ms')).toBeDefined()

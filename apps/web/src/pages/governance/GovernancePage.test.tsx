@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { expectStacked } from '../../test/expectStacked'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { GovernancePage } from './GovernancePage'
 import type { GovernanceEvent } from '../../lib/api'
@@ -41,6 +42,8 @@ describe('GovernancePage', () => {
     await waitFor(() => expect(screen.getByText('device.audit_break')).toBeTruthy())
     expect(screen.getByText('device.enrolled')).toBeTruthy()
     expect(screen.getByText('p-1')).toBeTruthy()
+    // R4: the table stacks on a phone, every cell labelled.
+    expectStacked()
     // Rows in the order the server gave them — the server's newest-first is
     // the page's newest-first, never re-sorted client-side.
     const rows = screen.getAllByTestId(/governance-row-/)

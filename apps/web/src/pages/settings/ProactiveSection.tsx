@@ -223,6 +223,7 @@ export function ProactiveSection({
       <div className="space-y-2">
         <Input
           label="Daily digest at"
+          className="w-40"
           type="time"
           value={digestDraft}
           disabled={saving === DIGEST_AT_KEY}
@@ -254,6 +255,7 @@ export function ProactiveSection({
       <div className="space-y-2">
         <Input
           label="Most findings in one digest"
+          className="w-24"
           type="number"
           value={maxDraft}
           disabled={saving === MAX_NOTICES_KEY}

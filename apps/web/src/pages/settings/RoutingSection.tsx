@@ -802,12 +802,17 @@ function RoleEditor({
         )}
       </ol>
       {editable && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          {/* items-end: the Select carries its label above, so the row lines
+              up on the controls. A width, so Add sits beside the picker
+              instead of alone on the next line, six times down this page
+              (R7). */}
           <Select
             value={adding}
             onChange={e => setAdding(e.target.value)}
             items={[{ value: '', label: wantsDecisions ? 'add a decision model…' : 'add a fallback…' }, ...options]}
             label={`add to ${role}`}
+            className="w-full sm:w-80"
           />
           <Button
             size="sm"

@@ -228,6 +228,11 @@ export function themeVariables(
   const tertiaryTier = legibleTier(dark ? mid(neutral[400], neutral[500]) : half(neutral[500], neutral[600]), grounds, towards)
   // accent as text, also on its own dim tint (active nav, accent badges)
   const cardBg = dark ? card.dark : card.light
+  // the control border (UI review R6, 2026-10-11): the edge of a checkbox,
+  // radio, outline button and off toggle — 3:1 on every ground, the WCAG
+  // bar for a control's boundary. 500 clears it in most palettes; Daylight's
+  // dark (2.5) and Gruvbox's light (2.8) do not, hence derived, not a step.
+  const controlTier = legibleTier(neutral[500], grounds, towards, 3)
   const accentTier = legibleTier(dark ? accent[400] : accent[700],
     [...grounds, ...grounds.map(g => blendOver(accent[500], g, TINT_ALPHA.accentDim))], towards)
   // status text, also on its own dim tint (badges) over every ground — the
@@ -243,6 +248,7 @@ export function themeVariables(
     `--tier-secondary:${secondaryTier}`,
     `--tier-tertiary:${tertiaryTier}`,
     `--tier-accent:${accentTier}`,
+    `--tier-control:${controlTier}`,
     ...statusTiers,
     `--card:${mode === 'dark' ? card.dark : card.light}`,
     // atmosphere: the two families' deep ends tint the dark ground, their

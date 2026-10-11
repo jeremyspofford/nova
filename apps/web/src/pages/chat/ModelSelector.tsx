@@ -288,7 +288,7 @@ export function ModelSelector({
             ? `${currentModel} cannot answer right now${verdictOf(currentModel)?.reason ? ` — ${verdictOf(currentModel)?.reason}` : ''}. ${serving.served_by} answers.`
             : 'Model Nova answers with — click to switch'
         }
-        className="flex min-w-0 items-center gap-1.5 rounded-sm px-2 py-1 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast disabled:opacity-60"
+        className="flex min-w-0 items-center gap-1.5 rounded-sm px-2 py-1 touch:py-2 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast disabled:opacity-60"
       >
         <Cpu size={13} className="shrink-0" />
         {/* The pick alone lives in this span — the icon, the fallback and the

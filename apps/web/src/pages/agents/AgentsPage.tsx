@@ -214,7 +214,7 @@ export function AgentsPage({
         />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-          <table className="w-full text-compact" data-testid="agents-list">
+          <table className="stack-table w-full text-compact" data-testid="agents-list">
             <thead>
               <tr className="bg-surface-elevated">
                 {['Name', 'Purpose', 'State', 'Spent this month', 'Last active', 'Tools'].map(heading => (
@@ -281,7 +281,7 @@ export function SpendCell({ agent }: { agent: Pick<Agent, 'spent_month_usd' | 's
 function AgentRow({ agent }: { agent: Agent }) {
   return (
     <tr data-testid={`agent-row-${agent.name}`} className="hover:bg-surface-card-hover transition-colors">
-      <td className="px-4 py-2.5 whitespace-nowrap">
+      <td className="stack-title px-4 py-2.5 whitespace-nowrap">
         <Link
           to={`/agents/${encodeURIComponent(agent.name)}`}
           className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline"
@@ -290,21 +290,21 @@ function AgentRow({ agent }: { agent: Agent }) {
           {agent.name}
         </Link>
       </td>
-      <td className="px-4 py-2.5 text-content-secondary max-w-[360px]">{agent.purpose}</td>
-      <td className="px-4 py-2.5 whitespace-nowrap">
+      <td data-label="Purpose" className="px-4 py-2.5 text-content-secondary max-w-[360px]">{agent.purpose}</td>
+      <td data-label="State" className="px-4 py-2.5 whitespace-nowrap">
         <StatePill agent={agent} />
       </td>
-      <td className="px-4 py-2.5 whitespace-nowrap">
+      <td data-label="Spent this month" className="px-4 py-2.5 whitespace-nowrap">
         <SpendCell agent={agent} />
       </td>
-      <td className="px-4 py-2.5 whitespace-nowrap text-micro text-content-tertiary">
+      <td data-label="Last active" className="px-4 py-2.5 whitespace-nowrap text-micro text-content-tertiary">
         {agent.last_active === null ? (
           <span title="has never run">never</span>
         ) : (
           formatRelativeTime(agent.last_active)
         )}
       </td>
-      <td className="px-4 py-2.5 whitespace-nowrap">
+      <td data-label="Tools" className="px-4 py-2.5 whitespace-nowrap">
         <span data-testid="tools-count">
           <Badge size="sm" color="accent">
             {agent.tools.length}

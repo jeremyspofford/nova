@@ -1,5 +1,6 @@
 import { forwardRef } from 'react'
 import clsx from 'clsx'
+import { splitWidth } from './fieldWidth'
 
 type SelectItem = {
   value: string
@@ -18,9 +19,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ label, description, error, items, className, id, children, ...rest }, ref) => {
     const selectId =
       id || (label ? `select-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined)
+    const width = splitWidth(className)
 
     return (
-      <div className={clsx('w-full', className)}>
+      // Select's className has always styled the wrapper; only its width
+      // classes needed rescuing from the fixed w-full (fieldWidth.ts).
+      <div className={clsx(width.wrapper, width.field)}>
         {label && (
           <label
             htmlFor={selectId}
