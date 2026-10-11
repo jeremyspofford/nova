@@ -448,7 +448,10 @@ async def test_a_stored_zone_that_no_longer_loads_is_stated_not_defaulted(pool, 
         ),
         # the flat fields
         ({"text": "   ", "in_minutes": 2}, "text is empty"),
-        ({"text": "x", "kind": "job", "in_minutes": 2}, "kind must be one of reminder, scheduled"),
+        (
+            {"text": "x", "kind": "job", "in_minutes": 2},
+            'argument \'kind\' must be one of "reminder", "scheduled"',
+        ),
         (
             {"text": "x", "kind": "scheduled", "in_minutes": 2, "device": "desk"},
             "device only applies to a reminder",

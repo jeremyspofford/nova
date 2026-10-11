@@ -2,10 +2,10 @@
 
 Hand-rolled rather than a dependency because the whole vocabulary in use
 here is: an object, typed scalar properties, `required`, integer bounds,
-and no extra keys. A general-purpose validator would be a lot of surface
-area to carry for that, and the error strings would be written for a
-developer reading a stack trace rather than for a model reading a tool
-result and deciding what to send next.
+`enum` (on a property or an array's `items`), and no extra keys. A
+general-purpose validator would be a lot of surface area to carry for that,
+and the error strings would be written for a developer reading a stack trace
+rather than for a model reading a tool result and deciding what to send next.
 
 Everything here returns a stated reason (or None); nothing raises, because
 the caller's whole job is to turn "what was wrong" into text the model can
@@ -86,6 +86,9 @@ def validate(schema: dict, arguments: Any) -> str | None:
                 f"argument {name!r} must be {_article(expected)} {expected}, "
                 f"got {json_type_name(value)}"
             )
+        miss = _enum_failure(repr(name), value, spec)
+        if miss is not None:
+            return miss
         if expected == "array":
             bad = _array_failure(name, value, spec)
             if bad is not None:
@@ -124,7 +127,23 @@ def _array_failure(name: str, value: Any, spec: dict) -> str | None:
                 f"argument {name!r}[{index}] must be {_article(item_type)} {item_type}, "
                 f"got {json_type_name(element)}"
             )
+        miss = _enum_failure(f"{name!r}[{index}]", element, items)
+        if miss is not None:
+            return miss
     return None
+
+
+def _enum_failure(label: str, value: Any, spec: dict) -> str | None:
+    """A value outside a declared `enum`, named with the choices it had — the
+    S30b defect: device_admin_path's action "reinstall" passed a check that
+    never read `enum` and went out as `admin.reinstall`. `label` is the
+    argument as the refusal names it (`'action'`, or `'requires'[1]` for an
+    array element checked against `items.enum`)."""
+    enum = spec.get("enum")
+    if not isinstance(enum, list) or not enum or value in enum:
+        return None
+    choices = ", ".join(json.dumps(v) for v in enum[:20])
+    return f"argument {label} must be one of {choices}, got {json.dumps(value)}"
 
 
 def _range_failure(name: str, value: Any, spec: dict) -> str | None:
@@ -199,10 +218,9 @@ def _validate_foreign(schema: dict, arguments: dict) -> str | None:
                 f"argument {name!r} must be {_article(simple[0])} {' or '.join(simple)}, "
                 f"got {json_type_name(value)}"
             )
-        enum = spec.get("enum")
-        if isinstance(enum, list) and enum and value not in enum:
-            choices = ", ".join(json.dumps(v) for v in enum[:20])
-            return f"argument {name!r} must be one of {choices}, got {json.dumps(value)}"
+        miss = _enum_failure(repr(name), value, spec)
+        if miss is not None:
+            return miss
     return None
 
 
