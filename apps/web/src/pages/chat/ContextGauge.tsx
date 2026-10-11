@@ -125,7 +125,7 @@ export function ContextGauge({
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
         title={title}
-        className="inline-flex items-center gap-1.5 rounded-sm px-1 py-0.5 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast font-mono"
+        className="inline-flex items-center gap-1.5 rounded-sm px-1 py-0.5 touch:px-2 touch:py-2 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast font-mono"
       >
       {fraction !== null && (
         <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} className="shrink-0" aria-hidden="true">

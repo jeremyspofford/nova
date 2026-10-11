@@ -87,7 +87,7 @@ export function ChatControls({
             data-testid="chat-clear"
             aria-label="Clear chat"
             title="Clear chat"
-            className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast"
+            className="flex items-center gap-1.5 rounded-sm px-2 py-1 touch:py-2 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast"
           >
             <Trash2 size={14} />
             <span className="hidden sm:inline">Clear</span>

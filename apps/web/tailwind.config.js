@@ -181,5 +181,10 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // `touch:` — a touch screen, by its INPUT rather than its width (UI
+    // review R9): small controls grow to a finger's size on a phone, a
+    // tablet or a touch laptop, and stay compact under a mouse.
+    ({ addVariant }) => addVariant('touch', '@media (pointer: coarse)'),
+  ],
 }
