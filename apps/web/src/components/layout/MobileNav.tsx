@@ -8,7 +8,7 @@ import { useMobileNav } from '../../hooks/useMobileNav'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { AccountMenu } from './AccountMenu'
-import { SessionsList } from './SessionsList'
+import { NewChatButton, SessionsList } from './SessionsList'
 import { NavCountBadge, navBadgeState, navSections } from './Sidebar'
 
 // The nav config is Sidebar's, rendered whole: the drawer is the phone's only
@@ -222,7 +222,8 @@ export function MobileNav() {
                 so when the bottom tab bar was deleted earlier on 2026-09-15
                 it took the only route back to chat with it, and the owner
                 had to force-quit the app to return to it. */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+              <NewChatButton onNavigate={close} touch />
               {navSections.map((section, sIdx) => {
                 const visibleItems = filterNavItemsByPreset(section.items, SURFACE_PRESET).filter(
                   item => hasMinRole(userRole, item.minRole),
@@ -247,15 +248,15 @@ export function MobileNav() {
                             title={badge.title}
                             onClick={close}
                             className={clsx(
-                              'flex items-center gap-3 px-3 py-3 rounded-md text-body font-medium transition-colors duration-fast',
+                              'flex items-center gap-3 px-3 py-2.5 rounded-md text-body font-medium transition-colors duration-fast',
                               active
-                                ? 'bg-accent-dim text-accent'
+                                ? 'bg-surface-elevated text-content-primary'
                                 : 'text-content-secondary hover:text-content-primary hover:bg-surface-card',
                             )}
                           >
-                            <Icon className="w-5 h-5 shrink-0" />
+                            <Icon className={clsx('w-5 h-5 shrink-0', active && 'text-accent')} />
                             <span className="flex-1">{item.label}</span>
-                            {badge.count !== null && <NavCountBadge count={badge.count} />}
+                            {badge.count !== null && badge.count > 0 && <NavCountBadge count={badge.count} />}
                           </NavLink>
                         )
                       })}
@@ -264,6 +265,7 @@ export function MobileNav() {
                 )
               })}
               {/* The phone shows one session at a time; tapping one opens it. */}
+              <div className="h-px bg-border-subtle mx-3" aria-hidden="true" />
               <SessionsList onNavigate={close} touch />
             </div>
             {/* HIS NAME, on the phone too (2026-09-16). It was desktop-only,

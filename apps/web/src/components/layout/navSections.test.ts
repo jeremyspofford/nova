@@ -14,15 +14,16 @@ import { SETTINGS_NAV } from '../../pages/settings/settingsNav'
 describe('the sidebar (navSections)', () => {
   // 2026-10-08, the owner's call: the sidebar is for the work. Pinned whole
   // and in order — this list is a decision, and a fifth entry or a reshuffle
-  // should be one too, made here on purpose.
-  it('is Chat → Schedules → Inbox → Files, and nothing else', () => {
+  // should be one too, made here on purpose. 2026-10-11: "Chat" left it —
+  // the New chat action and the Main/Recents session list above and below
+  // it are the way into chat, as in Claude's own sidebar.
+  it('is Schedules → Inbox → Files, and nothing else', () => {
     expect(navSections.flatMap(s => s.items.map(i => i.to))).toEqual([
-      '/chat',
       '/schedules',
       '/inbox',
       '/files',
     ])
-    expect(navSections.flatMap(s => s.items.map(i => i.label))).toEqual(['Chat', 'Schedules', 'Inbox', 'Files'])
+    expect(navSections.flatMap(s => s.items.map(i => i.label))).toEqual(['Schedules', 'Inbox', 'Files'])
   })
 
   // Pinned as ABSENCES, because putting one back would quietly give it two
@@ -43,9 +44,8 @@ describe('the sidebar (navSections)', () => {
     }
   })
 
-  it('offers Chat to everyone and the rest to admins', () => {
+  it('offers every entry to admins only (chat is reached through sessions)', () => {
     const items = navSections.flatMap(s => s.items)
-    expect(items.find(i => i.to === '/chat')?.minRole).toBe('guest')
     for (const to of ['/schedules', '/inbox', '/files']) {
       expect(items.find(i => i.to === to)?.minRole, to).toBe('admin')
     }
