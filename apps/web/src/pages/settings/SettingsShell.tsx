@@ -4,7 +4,7 @@ import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useIsWide } from '../../hooks/useIsMobile'
-import { InShellContext } from '../../components/layout/PageHeader'
+import { InShellContext, ScreenTitle } from '../../components/layout/PageHeader'
 import { SETTINGS_INDEX, SETTINGS_NAV, settingsLocation, type SettingsNavGroup } from './settingsNav'
 
 /**
@@ -40,7 +40,7 @@ export function SettingsShell() {
     <InShellContext.Provider value={true}>
       <div data-testid="settings-shell">
         {showList ? (
-          <h1 className="text-h1 text-content-primary mb-6">Settings</h1>
+          <ScreenTitle className="text-h1 text-content-primary mb-6">Settings</ScreenTitle>
         ) : (
           here.top && (
             // The way back on a narrow screen. Only on an entry's own page:

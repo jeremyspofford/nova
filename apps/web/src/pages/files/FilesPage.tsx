@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowLeft, Download, ExternalLink, FolderOpen } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { CodeView, Markdown } from '../../components/Markdown'
@@ -101,28 +101,34 @@ export function FilesPage({
   }, [api, selected])
 
   if (selected !== null) {
+    const back = (
+      <Button variant="secondary" size="sm" onClick={() => setSelected(null)} aria-label="Back to files">
+        <ArrowLeft size={14} />
+        <span className="hidden sm:inline ml-1">Files</span>
+      </Button>
+    )
+    // The open file IS the page: its own name is the title (on a phone, the
+    // top bar), and Back sits in the one row with the file's facts and
+    // actions rather than in a header block of its own (2026-10-11).
     return (
       <div>
-        <PageHeader
-          title="Files"
-          description="What Nova has written into her workspace."
-          actions={
-            <Button variant="secondary" size="sm" onClick={() => setSelected(null)}>
-              <ArrowLeft size={14} className="mr-1" />
-              Back to files
-            </Button>
-          }
-        />
-        {detail?.status === 'loading' && <Skeleton lines={6} />}
-        {detail?.status === 'error' && (
-          <div
-            role="alert"
-            className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
-          >
-            Could not open {selected}: {detail.reason}
+        <PageHeader title={baseName(selected)} />
+        {detail?.status === 'ready' ? (
+          <FileDetail detail={detail.detail} back={back} />
+        ) : (
+          <div className="space-y-4">
+            {back}
+            {detail?.status === 'loading' && <Skeleton lines={6} />}
+            {detail?.status === 'error' && (
+              <div
+                role="alert"
+                className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+              >
+                Could not open {selected}: {detail.reason}
+              </div>
+            )}
           </div>
         )}
-        {detail?.status === 'ready' && <FileDetail detail={detail.detail} />}
       </div>
     )
   }
@@ -152,41 +158,43 @@ export function FilesPage({
 
       {list.status === 'ready' && list.files.length > 0 && (
         <>
-          <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-            <table className="w-full text-compact">
-              <thead>
-                <tr className="bg-surface-elevated">
-                  {['Path', 'Size', 'Modified'].map(heading => (
-                    <th
-                      key={heading}
-                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {list.files.map(f => (
-                  <tr
-                    key={f.path}
+          {/* One list for every width (2026-10-11). The table it replaces
+              pushed Size and Modified off a phone's screen, and its rows
+              were <tr onClick> — clickable, but not reachable by keyboard.
+              Each file is a button: path above, size and date below on a
+              phone; three columns from sm up. */}
+          <div className="rounded-lg border border-border glass-card dark:border-white/[0.08] overflow-hidden">
+            <div
+              aria-hidden="true"
+              className="hidden sm:grid grid-cols-[minmax(0,1fr)_6rem_7rem] gap-4 px-4 py-3 bg-surface-elevated text-caption font-medium text-content-tertiary uppercase tracking-wider"
+            >
+              <span>Path</span>
+              <span>Size</span>
+              <span>Modified</span>
+            </div>
+            <ul className="divide-y divide-border-subtle">
+              {list.files.map(f => (
+                <li key={f.path}>
+                  <button
+                    type="button"
                     data-testid={`files-row-${f.path}`}
                     onClick={() => setSelected(f.path)}
-                    className="cursor-pointer hover:bg-surface-card-hover transition-colors"
+                    className="w-full text-left px-4 py-3 sm:py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_6rem_7rem] sm:gap-4 sm:items-center hover:bg-surface-card-hover focus-visible:outline-none focus-visible:bg-surface-card-hover transition-colors"
                   >
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-primary">
+                    <span className="block font-mono text-compact sm:text-caption text-content-primary break-all">
                       {f.path}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+                    </span>
+                    <span className="mt-0.5 inline sm:mt-0 sm:block font-mono text-caption text-content-tertiary sm:text-content-secondary whitespace-nowrap">
                       {formatBytes(f.size)}
-                    </td>
-                    <td className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
+                    </span>
+                    <span className="sm:hidden text-caption text-content-tertiary"> · </span>
+                    <span className="inline sm:block text-caption text-content-tertiary whitespace-nowrap">
                       {formatRelativeTime(f.modified)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
           {list.truncated && (
             <p className="mt-3 text-caption text-content-tertiary">
@@ -205,18 +213,29 @@ export function FilesPage({
 const LINK_BUTTON =
   'inline-flex items-center justify-center gap-1 h-7 px-2.5 text-caption font-medium rounded-sm transition-all duration-fast bg-surface-elevated border border-border text-content-primary hover:bg-surface-card-hover active:bg-surface-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40'
 
-function FileDetail({ detail }: { detail: WorkspaceFileDetail }) {
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+function folderOf(path: string): string | null {
+  const i = path.lastIndexOf('/')
+  return i > 0 ? path.slice(0, i) : null
+}
+
+function FileDetail({ detail, back }: { detail: WorkspaceFileDetail; back: ReactNode }) {
   const kind = previewKind(detail.path)
   const inlineUrl = workspaceRawUrl(detail.path, { inline: true })
   const [showSource, setShowSource] = useState(false)
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <p className="font-mono text-compact text-content-primary break-all">{detail.path}</p>
-          <p className="text-caption text-content-tertiary">
-            {formatBytes(detail.size)} · modified {formatRelativeTime(detail.modified)}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {back}
+          <p data-testid="file-meta" className="min-w-0 truncate text-caption text-content-tertiary">
+            {[folderOf(detail.path), formatBytes(detail.size), `modified ${formatRelativeTime(detail.modified)}`]
+              .filter(Boolean)
+              .join(' · ')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -231,20 +250,22 @@ function FileDetail({ detail }: { detail: WorkspaceFileDetail }) {
               href={inlineUrl}
               target="_blank"
               rel="noopener noreferrer"
+              aria-label="Open"
               className={LINK_BUTTON}
             >
               <ExternalLink size={12} />
-              Open
+              <span className="hidden sm:inline">Open</span>
             </a>
           )}
           <a
             data-testid="download-file"
             href={workspaceRawUrl(detail.path)}
             download
+            aria-label="Download"
             className={LINK_BUTTON}
           >
             <Download size={12} />
-            Download
+            <span className="hidden sm:inline">Download</span>
           </a>
         </div>
       </div>
@@ -305,8 +326,10 @@ function FilePreview({
   if (kind === 'markdown' && !showSource) {
     return (
       // Markdown's heading sizes are tuned for a chat reply (h1 renders at
-      // h2 size); a file is a document, so they step back up here only.
-      <div className="rounded-lg border border-border-subtle p-4 sm:p-6 max-h-[75vh] overflow-auto text-body [&_h1]:text-h1 [&_h2]:text-h2 [&_h3]:text-h3 [&_h1]:mt-6 [&_h2]:mt-5 [&_h3]:mt-4 [&_h1]:mb-2 [&_h2]:mb-2 [&_h1:first-child]:mt-0 [&_h2:first-child]:mt-0">
+      // h2 size); a file is a document, so they step back up here only. No
+      // card on a phone and no inner scroll anywhere: the text runs the
+      // screen's width and the page scrolls (2026-10-11).
+      <div className="sm:rounded-lg sm:border sm:border-border-subtle sm:p-6 text-body [&_h1]:text-h1 [&_h2]:text-h2 [&_h3]:text-h3 [&_h1]:mt-6 [&_h2]:mt-5 [&_h3]:mt-4 [&_h1]:mb-2 [&_h2]:mb-2 [&_h1:first-child]:mt-0 [&_h2:first-child]:mt-0">
         <Markdown text={detail.text} />
       </div>
     )
@@ -314,7 +337,7 @@ function FilePreview({
   const language = codeLanguage(detail.path)
   if (language) return <CodeView text={detail.text} language={language} />
   return (
-    <Code inline={false} className="max-h-[60vh] overflow-auto whitespace-pre-wrap">
+    <Code inline={false} className="overflow-x-auto whitespace-pre-wrap">
       {detail.text}
     </Code>
   )

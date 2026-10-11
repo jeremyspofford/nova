@@ -110,9 +110,9 @@ export default {
         body: ['calc(14px * var(--font-scale, 1))', { lineHeight: '1.5' }],
         compact: ['calc(13px * var(--font-scale, 1))', { lineHeight: '1.5' }],
         caption: ['calc(12px * var(--font-scale, 1))', { lineHeight: '1.4' }],
-        micro: ['calc(11px * var(--font-scale, 1))', { lineHeight: '1.3' }],
+        micro: ['calc(12px * var(--font-scale, 1))', { lineHeight: '1.3' }],
         mono: ['calc(13px * var(--font-scale, 1))', { lineHeight: '1.4' }],
-        'mono-sm': ['calc(11px * var(--font-scale, 1))', { lineHeight: '1.3' }],
+        'mono-sm': ['calc(12px * var(--font-scale, 1))', { lineHeight: '1.3' }],
       },
       boxShadow: {
         sm: '0 1px 2px rgba(0,0,0,0.05)',

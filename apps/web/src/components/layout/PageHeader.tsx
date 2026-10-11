@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { PageHelp } from '../ui/PageHelp'
 
 /**
@@ -10,6 +11,25 @@ import { PageHelp } from '../ui/PageHelp'
  * The same page rendered on its own is unchanged.
  */
 export const InShellContext = createContext(false)
+
+/**
+ * The phone's top bar (AppLayout), or null off a phone. On a phone the page
+ * title goes UP into the bar beside the menu button, and the description is
+ * dropped: a 24px title, a sentence about it and the 3rem row the button
+ * sat alone in used to take ~170px before any content (2026-10-11 spike —
+ * a markdown file's text started at y=357 of 852).
+ */
+export const MobileTitleSlot = createContext<HTMLElement | null>(null)
+
+/** A screen title that is not a PageHeader (the Settings list): in the
+ *  phone's top bar when there is one, in the page otherwise. */
+export function ScreenTitle({ children, className }: { children: string; className: string }) {
+  const slot = useContext(MobileTitleSlot)
+  if (slot) {
+    return createPortal(<h1 className="min-w-0 truncate text-h3 text-content-primary">{children}</h1>, slot)
+  }
+  return <h1 className={className}>{children}</h1>
+}
 
 export function PageHeader({
   title,
@@ -23,6 +43,23 @@ export function PageHeader({
   helpEntries?: { term: string; definition: string }[]
 }) {
   const inShell = useContext(InShellContext)
+  const slot = useContext(MobileTitleSlot)
+  const hasActions = Boolean(actions) || (helpEntries?.length ?? 0) > 0
+  // In Settings' shell too: on a phone the shell shows its list OR one page,
+  // never both, so the bar carries exactly one title either way.
+  if (slot) {
+    return (
+      <>
+        {createPortal(<h1 className="min-w-0 truncate text-h3 text-content-primary">{title}</h1>, slot)}
+        {hasActions && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            {helpEntries && helpEntries.length > 0 && <PageHelp entries={helpEntries} />}
+            {actions}
+          </div>
+        )}
+      </>
+    )
+  }
   return (
     <div className={inShell ? 'space-y-0 mb-6' : 'space-y-0 mb-8'}>
       {/* On a phone the actions sit under the title: side by side, they

@@ -604,10 +604,14 @@ export function ChatPage({
           `min-h` is the honest question: the header costs vertical space,
           so vertical space is what decides whether it is affordable. The
           sidebar already says which page this is; on a short screen the
-          word "Chat" is the least useful 56px on it. */}
+          word "Chat" is the least useful 56px on it.
+
+          1024, not 768, since 2026-10-11: below lg the shell draws the
+          phone's top bar instead of the sidebar, and this header would sit
+          under it as a second bar. */}
       <header
         data-testid="chat-header"
-        className="hidden [@media(min-width:768px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
+        className="hidden [@media(min-width:1024px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
       >
         {header ?? <h1 className="text-h3 text-content-primary">Chat</h1>}
       </header>
@@ -773,7 +777,14 @@ export function ChatPage({
       {/* Only the home indicator to clear now: the bottom tab bar was
           replaced by a left-edge handle on 2026-09-15, so nothing is pinned
           across the bottom and the composer reclaims its 3.5rem. */}
-      <div className="shrink-0 w-full px-2 md:px-0 pb-[max(var(--nova-safe-bottom,0px),0.5rem)] md:pb-4">
+      {/* The composer sits PARTLY into the home-indicator inset (2026-10-11),
+          the way iOS's own bars do: the full 34pt reserve plus a control row
+          under the box left ~71px of nothing-much at the bottom of a phone.
+          The indicator is a thin line ~8px off the edge, so 20px clears it. */}
+      <div
+        data-testid="composer-dock"
+        className="shrink-0 w-full px-2 md:px-0 pb-[max(calc(var(--nova-safe-bottom,0px)-0.875rem),0.5rem)] md:pb-4"
+      >
         <div className="mx-auto max-w-none md:max-w-[1200px] md:px-6 space-y-1.5">
           {/* Stop (S15). Shown whenever a turn is in flight — whether this tab
               is streaming it or found it already running after a reload — and
@@ -848,14 +859,17 @@ export function ChatPage({
             draftKey={
               state.conversationId ? `nova-chat-draft:${state.conversationId}` : undefined
             }
-          />
-          {/* The control row lives with the input, not the header: the model
-              selector (switch inline) and the Clear control. */}
-          <ChatControls
-            currentModel={model}
-            onModelChanged={setModel}
-            clearChat={clearChat}
-            promptTokens={state.promptTokens}
+            // The control row lives IN the composer, on the send button's
+            // line (2026-10-11): the model selector, the context gauge and
+            // Clear — not the header, and not a second row under the box.
+            toolbar={
+              <ChatControls
+                currentModel={model}
+                onModelChanged={setModel}
+                clearChat={clearChat}
+                promptTokens={state.promptTokens}
+              />
+            }
           />
         </div>
       </div>

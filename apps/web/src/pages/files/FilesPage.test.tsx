@@ -225,6 +225,10 @@ describe('FilesPage — previews', () => {
     const comment = await screen.findByText('# not a heading')
     expect(comment.className).toContain('hljs-comment')
     expect(screen.getByText('def').className).toContain('hljs-keyword')
+    // A file is read, not glanced at: 13px, one size class on the block.
+    const pre = comment.closest('pre')!
+    expect(pre.className).toContain('text-mono')
+    expect(pre.className).not.toContain('text-mono-sm')
     expect(screen.queryByRole('heading', { name: /not a heading/ })).toBeNull()
   })
 
@@ -254,3 +258,46 @@ describe('FilesPage — previews', () => {
     expect(screen.getByText('# Plan').className).toContain('hljs-section')
   })
 })
+
+describe('FilesPage — the open file is the page', () => {
+  it("titles the page with the file's own name, not \"Files\"", async () => {
+    const api = fakeApi(listing(), { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md', text: 'hi' }) })
+    render(<FilesPage api={api} initialPath="cookbook/soup.md" />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'soup.md' })).toBeDefined()
+  })
+
+  it('names the folder and size beside the back control', async () => {
+    const api = fakeApi(listing(), { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md', text: 'hi', size: 20 }) })
+    render(<FilesPage api={api} initialPath="cookbook/soup.md" />)
+    const meta = await screen.findByTestId('file-meta')
+    expect(meta.textContent).toContain('cookbook')
+    expect(meta.textContent).toContain('20 B')
+  })
+})
+
+describe('FilesPage — the list on any width (2026-10-11)', () => {
+  it('each file is a button, reachable by keyboard, carrying its size and date', async () => {
+    const api = fakeApi(
+      listing({
+        files: [{ path: 'cookbook/soup.md', size: 42, modified: new Date().toISOString() }],
+        total: 1,
+      }),
+      { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md' }) },
+    )
+    render(<FilesPage api={api} />)
+    const row = await screen.findByTestId('files-row-cookbook/soup.md')
+    expect(row.tagName).toBe('BUTTON')
+    expect(within(row).getByText(/42 B/)).toBeDefined()
+    expect(within(row).getByText(/just now|ago|now/i)).toBeDefined()
+    fireEvent.click(row)
+    expect(api.getWorkspaceFile).toHaveBeenCalledWith('cookbook/soup.md')
+  })
+
+  it('draws no table, whose columns pushed size and date off a phone', async () => {
+    const api = fakeApi(listing({ files: [{ path: 'a.md', size: 1, modified: new Date().toISOString() }], total: 1 }))
+    render(<FilesPage api={api} />)
+    await screen.findByTestId('files-row-a.md')
+    expect(document.querySelector('table')).toBeNull()
+  })
+})
+

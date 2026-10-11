@@ -1,3 +1,4 @@
+import type React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -9,6 +10,7 @@ import { SessionsProvider, type SessionsApi } from '../../stores/sessions-store'
 import type { ChatSession } from '../../lib/api'
 import { ToastProvider } from '../ToastProvider'
 import { navSections } from './Sidebar'
+import { InShellContext, PageHeader, ScreenTitle } from './PageHeader'
 import resolveConfig from 'tailwindcss/resolveConfig'
 // @ts-expect-error -- plain JS config, no declaration file
 import tailwindConfig from '../../../tailwind.config.js'
@@ -37,14 +39,17 @@ const MD = '(min-width: 768px)'
 /** Drive `useIsMobile`, which reads matchMedia('(min-width: 768px)'), and
  *  size the window to match — the phone menu is the full screen wide, so
  *  its drag maths reads `innerWidth`, and jsdom's default is a 1024px desktop. */
-function setViewport(width: 'mobile' | 'desktop') {
+const LG = '(min-width: 1024px)'
+
+function setViewport(width: 'mobile' | 'tablet' | 'desktop') {
   const isDesktop = width === 'desktop'
-  vi.stubGlobal('innerWidth', isDesktop ? 1280 : 393)
+  const atLeastMd = width !== 'mobile'
+  vi.stubGlobal('innerWidth', isDesktop ? 1280 : width === 'tablet' ? 820 : 393)
   vi.stubGlobal(
     'matchMedia',
     (query: string) =>
       ({
-        matches: query === MD ? isDesktop : false,
+        matches: query === MD ? atLeastMd : query === LG ? isDesktop : false,
         media: query,
         onchange: null,
         addListener: () => {},
@@ -56,7 +61,7 @@ function setViewport(width: 'mobile' | 'desktop') {
   )
 }
 
-function renderShell(unseen = 0) {
+function renderShell(unseen = 0, page: React.ReactNode = <div>page</div>) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -82,7 +87,7 @@ function renderShell(unseen = 0) {
           <ChatProvider>
             <SessionsProvider api={sessionsApi()} pollMs={60_000} personId="p1">
               <AppLayout>
-                <div>page</div>
+                {page}
                 <Where />
               </AppLayout>
             </SessionsProvider>
@@ -384,11 +389,11 @@ describe('AppLayout — the show-sidebar control has its own space', () => {
     await screen.findByText('page')
     const main = document.querySelector('main')!
 
-    expect(main.className).not.toContain('md:pl-11')
+    expect(main.className).not.toContain('lg:pl-11')
 
     fireEvent.click(screen.getByTestId('sidebar-handle'))
     await screen.findByTestId('show-sidebar')
-    expect(main.className).toContain('md:pl-11')
+    expect(main.className).toContain('lg:pl-11')
   })
 
   it('reserves no sidebar room on a phone, even with a collapsed sidebar remembered from desktop', async () => {
@@ -399,7 +404,7 @@ describe('AppLayout — the show-sidebar control has its own space', () => {
     renderShell()
     await screen.findByText('page')
 
-    expect(document.querySelector('main')!.className).not.toContain('md:pl-11')
+    expect(document.querySelector('main')!.className).not.toContain('lg:pl-11')
   })
 })
 
@@ -502,13 +507,13 @@ describe('AppLayout — the menu button has its own opaque chip', () => {
     expect(findUndefinedColorTokens(menuButton()!.className, resolvedColors)).toEqual([])
   })
 
-  it('fits the 3rem reserve: h-9 at safe-top + 0.75rem, fixed, z-[60], md:hidden (crit 4)', async () => {
+  it('fits the 3rem reserve: h-9 at safe-top + 0.75rem, fixed, z-[60], lg:hidden (crit 4; md until 2026-10-11)', async () => {
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
     const tokens = buttonTokens()
-    for (const t of ['h-9', 'fixed', 'z-[60]', 'md:hidden']) expect(tokens).toContain(t)
+    for (const t of ['h-9', 'fixed', 'z-[60]', 'lg:hidden']) expect(tokens).toContain(t)
     expect(menuButton()!.style.top).toBe('calc(var(--nova-safe-top, 0px) + 0.75rem)')
   })
 
@@ -526,3 +531,98 @@ describe('AppLayout — the menu button has its own opaque chip', () => {
     expect(buttonTokens()).toContain('pointer-events-none')
   })
 })
+
+describe('AppLayout — the phone top bar (2026-10-11)', () => {
+  const page = (
+    <>
+      <PageHeader title="Files" description="What Nova has written." actions={<button>Refresh</button>} />
+      <div>page</div>
+    </>
+  )
+
+  it('on a phone, puts the page title in the bar beside the menu button and drops the description', async () => {
+    setViewport('mobile')
+    renderShell(0, page)
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { level: 1, name: 'Files' })).toBeDefined())
+    expect(screen.queryByText('What Nova has written.')).toBeNull()
+    // Actions stay reachable, in the page.
+    expect(within(bar).queryByRole('button', { name: 'Refresh' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDefined()
+  })
+
+  it('on a desktop, draws no bar and keeps title and description in the page', async () => {
+    setViewport('desktop')
+    renderShell(0, page)
+    await screen.findByText('page')
+    expect(screen.queryByTestId('mobile-top-bar')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Files' })).toBeDefined()
+    expect(screen.getByText('What Nova has written.')).toBeDefined()
+  })
+
+  it('pads the page 16px at the sides on a phone, 24px from md up', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const box = screen.getByText('page').parentElement!
+    expect(box.className).toContain('px-4')
+    expect(box.className).toContain('md:px-6')
+  })
+})
+
+describe('AppLayout — Settings in the phone top bar', () => {
+  it("puts the Settings list's title in the bar on a phone", async () => {
+    setViewport('mobile')
+    renderShell(0, <><ScreenTitle className="x">Settings</ScreenTitle><div>page</div></>)
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Settings' })).toBeDefined())
+  })
+
+  it('puts a settings page title in the bar too', async () => {
+    setViewport('mobile')
+    renderShell(
+      0,
+      <InShellContext.Provider value={true}>
+        <PageHeader title="Appearance" />
+        <div>page</div>
+      </InShellContext.Provider>,
+    )
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Appearance' })).toBeDefined())
+  })
+})
+
+describe('AppLayout — a tablet gets the menu, not the sidebar (2026-10-11, UI review R3)', () => {
+  // At 820px the 240px sidebar left pages ~530px while their md: layouts
+  // assumed room for columns. Below 1024 the shell is the phone's: a menu
+  // button, a drawer, the title in the top bar.
+  it('renders the menu button and the top bar at 820px', async () => {
+    setViewport('tablet')
+    renderShell(0, <><PageHeader title="Inbox" /><div>page</div></>)
+    await screen.findByText('page')
+    expect(menuButton()).not.toBeNull()
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { name: 'Inbox' })).toBeDefined())
+  })
+
+  it('hides the sidebar below lg rather than md', async () => {
+    setViewport('tablet')
+    renderShell()
+    await screen.findByText('page')
+    const aside = screen.getByTestId('sidebar')
+    expect(aside.className).toContain('lg:flex')
+    expect(aside.className).not.toContain('md:flex')
+  })
+
+  it('the menu button and drawer hide from lg up, not md', async () => {
+    setViewport('tablet')
+    renderShell()
+    await screen.findByText('page')
+    expect(menuButton()!.className).toContain('lg:hidden')
+    expect(menuButton()!.className).not.toContain('md:hidden')
+  })
+})
+

@@ -362,10 +362,29 @@ describe('ChatPage — Clear chat button (with a light confirm)', () => {
     expect(within(controls).getByTestId('chat-clear')).toBeDefined()
     expect(within(controls).getByTestId('chat-model')).toBeDefined()
 
+    // 2026-10-11: and the row is INSIDE the composer, on the send button's
+    // line, as in Claude's composer — not a second row under it eating the
+    // bottom of a phone screen.
+    const composer = controls.closest('form')
+    expect(composer).not.toBeNull()
+    expect(within(composer!).getByRole('button', { name: /send message/i })).toBeDefined()
+
     // ...and the header no longer carries the Clear control or the model badge.
     const header = screen.getByTestId('chat-header')
     expect(within(header).queryByTestId('chat-clear')).toBeNull()
     expect(within(header).queryByTestId('chat-model')).toBeNull()
+  })
+
+  it('reserves less than the full home-indicator inset below the composer', async () => {
+    renderChatWithClear(loadedApi, vi.fn(async () => ({ id: 'c1', cleared: 2 })))
+    await screen.findByText('a real reply')
+    const dock = screen.getByTestId('chat-controls').closest('form')!.closest('[data-testid="composer-dock"]')
+    expect(dock).not.toBeNull()
+    const cls = dock!.className
+    // The bare inset (34pt on an iPhone) was the whole reserve; the composer
+    // now sits partly into it, the way iOS's own bars do.
+    expect(cls).not.toContain('pb-[max(var(--nova-safe-bottom,0px),0.5rem)]')
+    expect(cls).toMatch(/pb-\[max\(calc\(var\(--nova-safe-bottom,0px\)-/)
   })
 
   it('cancel dismisses the confirm without clearing anything', async () => {
@@ -1547,3 +1566,4 @@ describe('ChatPage — jump to the latest message', () => {
     await waitFor(() => expect(screen.queryByTestId('jump-to-latest')).toBeNull())
   })
 })
+
