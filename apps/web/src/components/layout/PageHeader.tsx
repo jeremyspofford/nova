@@ -73,13 +73,16 @@ export function PageHeader({
             <h1 className="text-h1 text-content-primary">{title}</h1>
           )}
           {description && (
-            <p className="text-body text-content-secondary mt-1">{description}</p>
+            // A readable measure: it ran the full content width (R10).
+            <p className="max-w-prose text-body text-content-secondary mt-1">{description}</p>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
-          {helpEntries && helpEntries.length > 0 && <PageHelp entries={helpEntries} />}
-          {actions}
-        </div>
+        {hasActions && (
+          <div data-testid="page-actions" className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
+            {helpEntries && helpEntries.length > 0 && <PageHelp entries={helpEntries} />}
+            {actions}
+          </div>
+        )}
       </div>
     </div>
   )
