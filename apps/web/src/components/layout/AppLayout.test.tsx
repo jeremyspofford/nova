@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { AppLayout } from './AppLayout'
 import { AuthProvider } from '../../stores/auth-store'
 import { ThemeProvider } from '../../stores/theme-store'
+import { ChatProvider } from '../../stores/chat-store'
+import { SessionsProvider, type SessionsApi } from '../../stores/sessions-store'
+import type { ChatSession } from '../../lib/api'
+import { ToastProvider } from '../ToastProvider'
 import { navSections } from './Sidebar'
 import resolveConfig from 'tailwindcss/resolveConfig'
 // @ts-expect-error -- plain JS config, no declaration file
@@ -71,16 +75,55 @@ function renderShell(unseen = 0) {
     }),
   )
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/files']}>
       <ThemeProvider>
         <AuthProvider>
-          <AppLayout>
-            <div>page</div>
-          </AppLayout>
+          <ToastProvider>
+          <ChatProvider>
+            <SessionsProvider api={sessionsApi()} pollMs={60_000} personId="p1">
+              <AppLayout>
+                <div>page</div>
+                <Where />
+              </AppLayout>
+            </SessionsProvider>
+          </ChatProvider>
+          </ToastProvider>
         </AuthProvider>
       </ThemeProvider>
     </MemoryRouter>,
   )
+}
+
+const MAIN: ChatSession = {
+  id: 'm',
+  title: null,
+  label: 'the main one',
+  created_at: '2026-10-07T10:00:00Z',
+  last_activity_at: '2026-10-07T10:00:00Z',
+  archived_at: null,
+  message_count: 2,
+  main: true,
+  busy: false,
+}
+
+function sessionsApi(): SessionsApi {
+  const no = vi.fn(async () => {
+    throw new Error('not in this test')
+  })
+  return {
+    listSessions: vi.fn(async () => [MAIN]),
+    createSession: no,
+    renameSession: no,
+    setSessionArchived: no,
+    makeSessionMain: no,
+    deleteSession: no,
+  } as unknown as SessionsApi
+}
+
+/** Where the router is, for the tests that follow a tap. */
+function Where() {
+  const location = useLocation()
+  return <span data-testid="where">{location.pathname}</span>
 }
 
 /** The phone's way out of chat. A bottom tab bar until 2026-09-15 (pinned to
@@ -170,9 +213,12 @@ describe('AppLayout — which nav renders', () => {
     fireEvent.click(menuButton()!)
     const drawer = await screen.findByTestId('mobile-drawer')
 
-    expect(
-      within(drawer).getByRole('link', { name: /chat/i }).getAttribute('href'),
-    ).toBe('/chat')
+    // 2026-10-11: the drawer has no "Chat" link any more — New chat and the
+    // Main session are the way back, as in Claude's sidebar. So the pin is
+    // that tapping the Main session from another page lands on the chat.
+    expect(within(drawer).getByTestId('new-session')).toBeDefined()
+    fireEvent.click(await within(drawer).findByText('the main one'))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/chat'))
   })
 
   it('every Sidebar route is in the drawer, since the drawer is now the only nav', async () => {

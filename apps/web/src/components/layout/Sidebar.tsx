@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { CalendarClock, FolderOpen, Inbox, MessageSquare, PanelLeft } from 'lucide-react'
+import { CalendarClock, FolderOpen, Inbox, PanelLeft, type LucideIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -8,7 +8,7 @@ import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useTheme } from '../../stores/theme-store'
 import { AccountMenu } from './AccountMenu'
-import { SessionsList } from './SessionsList'
+import { NewChatButton, SessionsList } from './SessionsList'
 import { appIcon, appIconHref } from '../../lib/app-icon'
 
 /** The one count a nav entry can carry (S11). A KEY, not a number: this
@@ -19,7 +19,7 @@ export type NavBadge = 'unseen_notices'
 export type NavItem = {
   to: string
   label: string
-  icon: typeof MessageSquare
+  icon: LucideIcon
   minRole: Role
   presetVisibility?: SurfacePreset[]
   badge?: NavBadge
@@ -91,13 +91,16 @@ function readWidth(): number {
 // doing. One home each — navSections.test.ts pins every one of these as an
 // ABSENCE, because putting one back here would quietly give it two.
 //
-// One unlabelled group: four entries need no heading, and "System" no longer
+// No "Chat" entry (2026-10-11): New chat above the list and the Main /
+// Recents sessions below it are the way into chat, as in Claude's sidebar —
+// a Chat link beside them was a third route to the same place.
+//
+// One unlabelled group: three entries need no heading, and "System" no longer
 // describes them. `SURFACE_PRESET` is hardcoded to 'advanced' until a real
 // feature-flag source lands — see brief adaptation notes.
 export const navSections: NavSection[] = [
   {
     items: [
-      { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
       { to: '/schedules', label: 'Schedules', icon: CalendarClock, minRole: 'admin' },
       // S11: what she noticed without being asked, and what she did about
       // it. After Schedules — the beats are the last thing that acts on its
@@ -368,6 +371,7 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-2 space-y-4">
+        {!collapsed && <NewChatButton />}
         {navSections.map((section, sIdx) => {
           const visibleItems = filterNavItemsByPreset(section.items, SURFACE_PRESET)
             .filter(item => hasMinRole(userRole, item.minRole))
@@ -395,15 +399,15 @@ export function Sidebar({
                       className={clsx(
                         'relative flex items-center gap-2.5 rounded-md text-compact font-medium transition-colors duration-fast',
                         collapsed ? 'justify-center px-2 py-2' : 'px-2.5 py-2',
+                        // One neutral highlight for "where you are", the same
+                        // one a session row gets (2026-10-11) — the accent fill
+                        // here plus an accent session row read as two places.
                         active
-                          ? 'bg-accent-dim text-accent dark:shadow-[inset_0_0_20px_rgb(var(--accent-500)/0.06)]'
+                          ? 'bg-surface-elevated text-content-primary'
                           : 'text-content-secondary hover:text-content-primary hover:bg-surface-card',
                       )}
                     >
-                      {active && (
-                        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full bg-accent" />
-                      )}
-                      <Icon className="w-[18px] h-[18px] shrink-0" />
+                      <Icon className={clsx('w-[18px] h-[18px] shrink-0', active && 'text-accent')} />
                       {!collapsed && <span className="truncate">{item.label}</span>}
                       {badge.count !== null && badge.count > 0 && (
                         <span className={clsx(collapsed ? 'absolute -top-0.5 right-0.5' : 'ml-auto')}>
@@ -420,13 +424,24 @@ export function Sidebar({
         {/* Chat sessions (2026-10-07): every conversation he has open, the
             way Claude lists its chats — click to open, drag onto the chat to
             split it. Hidden when the panel is collapsed, like every label. */}
-        {!collapsed && <SessionsList />}
+        {!collapsed && (
+          <>
+            {/* Pages above, conversations below — a rule and real space
+                between them, so the session list never reads as more nav. */}
+            <div className="h-px bg-border-subtle mx-2.5" aria-hidden="true" />
+            <SessionsList />
+          </>
+        )}
       </nav>
 
       {/* Who is signed in, and where to go next. The card was static and
           showed `people.name` — an email on this instance, so a 240px column
           read "jeremyspofford@gmail…." and said nothing about who that is. */}
-      {!collapsed && <AccountMenu />}
+      {!collapsed && (
+        <div className="shrink-0 border-t border-border-subtle pt-2">
+          <AccountMenu />
+        </div>
+      )}
 
       {/* The "Collapse" row that stood here until 2026-09-15 is gone: the
           edge handle above does its job, in the place a resize has to live

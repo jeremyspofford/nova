@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import {
   Archive,
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
-  Columns2,
   Home,
+  Columns2,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -27,6 +28,51 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
  * never claims a rename, archive or delete that core did not confirm. A
  * failure is said in a toast with core's own reason.
  */
+/**
+ * "New chat", the first row of the sidebar and the phone's drawer — as in
+ * Claude's own sidebar: an action, drawn with its own filled mark so it never
+ * reads as one more page link. It was a 14px "+" beside the SESSIONS label
+ * until 2026-10-11.
+ */
+export function NewChatButton(props: { onNavigate?: () => void; touch?: boolean }) {
+  // Outside a SessionsProvider there is nothing to start a session in.
+  return useSessions() ? <NewChatButtonBody {...props} /> : null
+}
+
+function NewChatButtonBody({ onNavigate, touch = false }: { onNavigate?: () => void; touch?: boolean }) {
+  const sessions = useSessions()!
+  const { addToast } = useToast()
+  return (
+    <button
+      type="button"
+      data-testid="new-session"
+      onClick={() => {
+        void sessions.newSession().then(onNavigate, (err: unknown) =>
+          addToast({
+            variant: 'error',
+            message: `Could not start a session: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+        )
+      }}
+      className={clsx(
+        'flex w-full items-center rounded-md font-medium text-content-primary hover:bg-surface-card transition-colors duration-fast',
+        touch ? 'gap-3 px-3 py-2.5 text-body' : 'gap-2.5 px-2.5 py-1.5 text-compact',
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={clsx(
+          'inline-flex shrink-0 items-center justify-center rounded-full bg-accent-dim text-accent',
+          touch ? 'h-6 w-6' : 'h-[22px] w-[22px]',
+        )}
+      >
+        <Plus size={14} />
+      </span>
+      New chat
+    </button>
+  )
+}
+
 export function SessionsList(props: { onNavigate?: () => void; touch?: boolean }) {
   // Outside a SessionsProvider (a layout rendered alone) there is no list,
   // and nothing is drawn rather than an empty one that reads as "none".
@@ -45,8 +91,32 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
       message: `Could not ${what}: ${err instanceof Error ? err.message : String(err)}`,
     })
 
+  // A session is "current" only while the chat is what is on screen: on
+  // Files the page is current, and two highlights at once (the page's and a
+  // session's) made it impossible to tell which one you were in.
+  const onChat = useLocation().pathname === '/chat'
   const openIds = new Set(sessions.panes.map(p => p.effectiveSessionId))
-  const focusedId = sessions.panes.find(p => p.id === sessions.focused)?.effectiveSessionId
+  const focusedId = onChat
+    ? sessions.panes.find(p => p.id === sessions.focused)?.effectiveSessionId
+    : undefined
+  const main = sessions.sessions.filter(s => s.main)
+  const recents = sessions.sessions.filter(s => !s.main)
+  const row = (session: ChatSession) => (
+    <SessionRow
+      key={session.id}
+      session={session}
+      open={openIds.has(session.id)}
+      shown={onChat && openIds.has(session.id)}
+      focused={focusedId === session.id}
+      touch={touch}
+      onOpen={() => {
+        sessions.openSession(session.id)
+        onNavigate?.()
+      }}
+      onDelete={() => setConfirming(session)}
+      fail={fail}
+    />
+  )
 
   const toggleArchived = () => {
     const next = !showArchived
@@ -72,56 +142,38 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
     }
   }
 
+  const heading = clsx('text-caption text-content-tertiary mb-1', touch ? 'px-3' : 'px-2.5')
   return (
     <div data-testid="sessions-list">
-      <div className="flex items-center justify-between px-2.5 mb-1">
-        <span className="text-micro font-semibold uppercase tracking-wider text-content-tertiary">
-          Sessions
-        </span>
-        <button
-          type="button"
-          data-testid="new-session"
-          title="New session"
-          aria-label="New session"
-          onClick={() => {
-            void sessions.newSession().then(onNavigate, fail('start a session'))
-          }}
-          className="rounded-md p-1 text-content-tertiary hover:bg-surface-card hover:text-content-primary"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
-
       {sessions.error && (
         <p role="alert" className="px-2.5 py-1 text-caption text-danger">
           {sessions.error}
         </p>
       )}
 
-      <ul className="space-y-0.5">
-        {sessions.sessions.map(session => (
-          <SessionRow
-            key={session.id}
-            session={session}
-            open={openIds.has(session.id)}
-            focused={focusedId === session.id}
-            touch={touch}
-            onOpen={() => {
-              sessions.openSession(session.id)
-              onNavigate?.()
-            }}
-            onDelete={() => setConfirming(session)}
-            fail={fail}
-          />
-        ))}
-      </ul>
+      {main.length > 0 && (
+        <div data-testid="sessions-main">
+          <div className={heading}>Main</div>
+          <ul className="space-y-0.5">{main.map(row)}</ul>
+        </div>
+      )}
+
+      {recents.length > 0 && (
+        <div data-testid="sessions-recents" className={main.length > 0 ? 'mt-4' : undefined}>
+          <div className={heading}>Recents</div>
+          <ul className="space-y-0.5">{recents.map(row)}</ul>
+        </div>
+      )}
 
       <button
         type="button"
         data-testid="toggle-archived"
         onClick={toggleArchived}
         aria-expanded={showArchived}
-        className="mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1 text-caption text-content-tertiary hover:text-content-primary"
+        className={clsx(
+          'mt-2 flex w-full items-center gap-1 rounded-md py-1 text-caption text-content-tertiary hover:text-content-primary',
+          touch ? 'px-3' : 'px-2.5',
+        )}
       >
         {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         Archived
@@ -191,6 +243,7 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
 function SessionRow({
   session,
   open,
+  shown,
   focused,
   touch,
   onOpen,
@@ -199,6 +252,8 @@ function SessionRow({
 }: {
   session: ChatSession
   open: boolean
+  /** In a pane that is on screen right now (open, and the chat is showing). */
+  shown: boolean
   focused: boolean
   touch: boolean
   onOpen: () => void
@@ -300,29 +355,29 @@ function SessionRow({
       <button
         type="button"
         onClick={onOpen}
+        aria-current={focused ? 'page' : undefined}
         title={touch ? session.label : `${session.label}\nDrag onto the chat to open it side by side`}
         className={clsx(
-          'flex w-full items-center gap-2 rounded-md py-1.5 pl-2.5 pr-8 text-left text-compact transition-colors duration-fast',
+          // Plain text, no leading icon: the page links above carry icons,
+          // conversations do not — the same split Claude's sidebar makes, so
+          // the two kinds of row are told apart at a glance. One neutral
+          // highlight, the same one the current page gets, never the accent.
+          'flex w-full items-center gap-2 rounded-md pr-8 text-left transition-colors duration-fast',
+          touch ? 'py-2.5 pl-3 text-body' : 'py-1.5 pl-2.5 text-compact',
           focused
-            ? 'bg-accent-dim text-accent'
-            : open
-              ? 'bg-surface-card text-content-primary'
+            ? 'bg-surface-elevated text-content-primary font-medium'
+            : shown
+              ? 'text-content-primary'
               : 'text-content-secondary hover:bg-surface-card hover:text-content-primary',
         )}
       >
-        {session.busy ? (
+        <span className="min-w-0 flex-1 truncate">{session.label}</span>
+        {session.busy && (
           <span
             title="Nova is working in this session"
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse"
           />
-        ) : session.main ? (
-          <span title="Main session: where digests and outside reminders land">
-            <Home size={12} className="shrink-0 opacity-70" />
-          </span>
-        ) : (
-          <span className="h-1.5 w-1.5 shrink-0" />
         )}
-        <span className="truncate">{session.label}</span>
       </button>
       <div ref={menuRef} className="absolute right-1 top-1/2 -translate-y-1/2">
         <button

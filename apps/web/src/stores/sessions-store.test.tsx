@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { ChatProvider } from './chat-store'
 import { SessionsProvider, useSessions, type SessionsApi, type SessionsStore } from './sessions-store'
 import { ToastProvider } from '../components/ToastProvider'
-import { SessionsList } from '../components/layout/SessionsList'
+import { NewChatButton, SessionsList } from '../components/layout/SessionsList'
 import type { ChatSession } from '../lib/api'
 
 const session = (id: string, over: Partial<ChatSession> = {}): ChatSession => ({
@@ -75,6 +75,7 @@ function mount(api: SessionsApi, path = '/chat') {
         <ChatProvider>
           <SessionsProvider api={api} pollMs={60_000} personId="p1">
             <Probe out={out} />
+            <NewChatButton />
             <SessionsList />
           </SessionsProvider>
         </ChatProvider>
@@ -292,3 +293,57 @@ describe('SessionsProvider and the sidebar list', () => {
     expect(out.store!.panes).toHaveLength(2)
   })
 })
+
+describe('SessionsList — layout (Main, then Recents)', () => {
+  it('puts the main session under Main and the rest under Recents', async () => {
+    mount(fakeApi([session('b'), session('a', { main: true }), session('c')]))
+    await screen.findByText('label c')
+    const main = screen.getByTestId('sessions-main')
+    const recents = screen.getByTestId('sessions-recents')
+    expect(main.textContent).toContain('Main')
+    expect(main.textContent).toContain('label a')
+    expect(main.textContent).not.toContain('label b')
+    expect(recents.textContent).toContain('Recents')
+    expect(recents.textContent).toContain('label b')
+    expect(recents.textContent).toContain('label c')
+    expect(recents.textContent).not.toContain('label a')
+  })
+
+  it('draws no Recents heading when the main session is the only one', async () => {
+    mount(fakeApi([session('a', { main: true })]))
+    await screen.findByText('label a')
+    expect(screen.queryByTestId('sessions-recents')).toBeNull()
+  })
+
+  it('marks the session being viewed as current while on the chat', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b')]), '/chat?session=b')
+    await screen.findByText('label b')
+    await waitFor(() =>
+      expect(screen.getByTestId('session-b').querySelector('button')!.getAttribute('aria-current')).toBe('page'),
+    )
+    expect(screen.getByTestId('session-a').querySelector('button')!.getAttribute('aria-current')).toBeNull()
+  })
+
+  it('marks no session as current while another page is showing', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b')]), '/files')
+    await screen.findByText('label b')
+    for (const id of ['a', 'b']) {
+      expect(screen.getByTestId(`session-${id}`).querySelector('button')!.getAttribute('aria-current')).toBeNull()
+    }
+  })
+
+  it('says a busy session is working, at the row\'s end', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b', { busy: true })]))
+    await screen.findByText('label b')
+    const dot = screen.getByTitle('Nova is working in this session')
+    const row = screen.getByTestId('session-b').querySelector('button')!
+    expect(row.lastElementChild).toBe(dot)
+  })
+
+  it('offers New chat as a labelled action', async () => {
+    mount(fakeApi([session('a', { main: true })]))
+    await screen.findByText('label a')
+    expect(screen.getByTestId('new-session').textContent).toContain('New chat')
+  })
+})
+
