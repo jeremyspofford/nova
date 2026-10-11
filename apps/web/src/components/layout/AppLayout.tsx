@@ -6,6 +6,7 @@ import { MobileNav } from './MobileNav'
 import { MobileNavProvider } from '../../hooks/useMobileNav'
 import { UnseenNoticesProvider } from '../../hooks/useUnseenNotices'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { MobileTitleSlot } from './PageHeader'
 
 const STORAGE_KEY = 'nova-sidebar-collapsed'
 
@@ -26,6 +27,7 @@ export function AppLayout({
 }) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const isMobile = useIsMobile()
+  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null)
 
   // Ctrl+B / Cmd+B, the shortcut the edge handle's tooltip promises. Closing
   // the sidebar to NOTHING (2026-09-16) makes a keyboard route matter more
@@ -123,13 +125,15 @@ export function AppLayout({
               !isMobile && collapsed && 'md:pl-11',
             )}
           >
-            {fullWidth ? (
-              children
-            ) : (
-              <div className="mx-auto max-w-[1200px] w-full px-6 py-8 animate-fade-in">
-                {children}
-              </div>
-            )}
+            <MobileTitleSlot.Provider value={isMobile ? titleSlot : null}>
+              {fullWidth ? (
+                children
+              ) : (
+                <div className="mx-auto max-w-[1200px] w-full px-4 pt-4 pb-8 md:px-6 md:py-8 animate-fade-in">
+                  {children}
+                </div>
+              )}
+            </MobileTitleSlot.Provider>
           </main>
           {/* isMobile is TRUE below 768px. This read `!isMobile` from the
               2026-08-27 design-system port until 2026-09-15, which rendered
@@ -138,6 +142,27 @@ export function AppLayout({
               the phone had no navigation at all: no tabs, no "More" drawer,
               no way to reach Settings. The owner reported it as "it's chat
               only". AppLayout.test.tsx pins both directions. */}
+          {/* THE PHONE'S TOP BAR (2026-10-11): the 3rem row <main> reserves
+              for the menu button, given a ground and a title. PageHeader
+              portals the page's title into it, so on a phone the title sits
+              beside the button instead of in a second block below it. A page
+              without a PageHeader (Chat) leaves it as it was: the button
+              alone. Opaque, because <main> scrolls under it. */}
+          {isMobile && (
+            <div
+              data-testid="mobile-top-bar"
+              className="absolute inset-x-0 top-0 z-40 pl-14 pr-4 bg-surface-root/90 backdrop-blur"
+              style={{
+                // Exactly the 3rem <main> reserves, and the title row is the
+                // button's own h-9 at the button's own top, so the two share
+                // a centre line by construction.
+                paddingTop: 'calc(var(--nova-safe-top, 0px) + 0.75rem)',
+                height: 'calc(var(--nova-safe-top, 0px) + 3rem)',
+              }}
+            >
+              <div ref={setTitleSlot} className="flex h-9 min-w-0 items-center" />
+            </div>
+          )}
           {isMobile && <MobileNav />}
         </div>
       </UnseenNoticesProvider>

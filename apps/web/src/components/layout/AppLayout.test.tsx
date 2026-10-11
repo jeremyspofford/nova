@@ -1,3 +1,4 @@
+import type React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -9,6 +10,7 @@ import { SessionsProvider, type SessionsApi } from '../../stores/sessions-store'
 import type { ChatSession } from '../../lib/api'
 import { ToastProvider } from '../ToastProvider'
 import { navSections } from './Sidebar'
+import { PageHeader } from './PageHeader'
 import resolveConfig from 'tailwindcss/resolveConfig'
 // @ts-expect-error -- plain JS config, no declaration file
 import tailwindConfig from '../../../tailwind.config.js'
@@ -56,7 +58,7 @@ function setViewport(width: 'mobile' | 'desktop') {
   )
 }
 
-function renderShell(unseen = 0) {
+function renderShell(unseen = 0, page: React.ReactNode = <div>page</div>) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -82,7 +84,7 @@ function renderShell(unseen = 0) {
           <ChatProvider>
             <SessionsProvider api={sessionsApi()} pollMs={60_000} personId="p1">
               <AppLayout>
-                <div>page</div>
+                {page}
                 <Where />
               </AppLayout>
             </SessionsProvider>
@@ -526,3 +528,43 @@ describe('AppLayout — the menu button has its own opaque chip', () => {
     expect(buttonTokens()).toContain('pointer-events-none')
   })
 })
+
+describe('AppLayout — the phone top bar (2026-10-11)', () => {
+  const page = (
+    <>
+      <PageHeader title="Files" description="What Nova has written." actions={<button>Refresh</button>} />
+      <div>page</div>
+    </>
+  )
+
+  it('on a phone, puts the page title in the bar beside the menu button and drops the description', async () => {
+    setViewport('mobile')
+    renderShell(0, page)
+    await screen.findByText('page')
+    const bar = await screen.findByTestId('mobile-top-bar')
+    await waitFor(() => expect(within(bar).getByRole('heading', { level: 1, name: 'Files' })).toBeDefined())
+    expect(screen.queryByText('What Nova has written.')).toBeNull()
+    // Actions stay reachable, in the page.
+    expect(within(bar).queryByRole('button', { name: 'Refresh' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDefined()
+  })
+
+  it('on a desktop, draws no bar and keeps title and description in the page', async () => {
+    setViewport('desktop')
+    renderShell(0, page)
+    await screen.findByText('page')
+    expect(screen.queryByTestId('mobile-top-bar')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Files' })).toBeDefined()
+    expect(screen.getByText('What Nova has written.')).toBeDefined()
+  })
+
+  it('pads the page 16px at the sides on a phone, 24px from md up', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const box = screen.getByText('page').parentElement!
+    expect(box.className).toContain('px-4')
+    expect(box.className).toContain('md:px-6')
+  })
+})
+

@@ -254,3 +254,20 @@ describe('FilesPage — previews', () => {
     expect(screen.getByText('# Plan').className).toContain('hljs-section')
   })
 })
+
+describe('FilesPage — the open file is the page', () => {
+  it("titles the page with the file's own name, not \"Files\"", async () => {
+    const api = fakeApi(listing(), { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md', text: 'hi' }) })
+    render(<FilesPage api={api} initialPath="cookbook/soup.md" />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'soup.md' })).toBeDefined()
+  })
+
+  it('names the folder and size beside the back control', async () => {
+    const api = fakeApi(listing(), { 'cookbook/soup.md': detail({ path: 'cookbook/soup.md', text: 'hi', size: 20 }) })
+    render(<FilesPage api={api} initialPath="cookbook/soup.md" />)
+    const meta = await screen.findByTestId('file-meta')
+    expect(meta.textContent).toContain('cookbook')
+    expect(meta.textContent).toContain('20 B')
+  })
+})
+
