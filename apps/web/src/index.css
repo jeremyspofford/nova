@@ -81,6 +81,9 @@ input[type="number"] {
      ivory 100 step beside a 50-step page). It used to be the card colour — white —
      which made the nav brighter than the content it navigates. */
   --surface-sidebar: var(--neutral-100);
+  /* "You are here" in the sidebar and drawer — one step off the sidebar
+     ground in both modes (elevated IS the sidebar's step in light mode). */
+  --surface-selected: var(--neutral-200);
   /* Every text tier clears WCAG AA on the ground AND on a card in every
      built-in theme (color-palettes.test.ts computes it): secondary is the
      600 step, tertiary a derived 550 — the 400 that used to be tertiary was
@@ -116,6 +119,7 @@ html.dark {
   --surface-elevated: var(--neutral-800);
   --surface-input: var(--neutral-900);
   --surface-sidebar: var(--neutral-950);
+  --surface-selected: var(--neutral-800);
   --text-primary: var(--neutral-50);
   /* --tier-*: the store proves these against the ground, the card and an
      input for the palette in play (a community grey that misses gets

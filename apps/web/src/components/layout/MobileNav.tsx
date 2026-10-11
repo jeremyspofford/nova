@@ -207,7 +207,7 @@ export function MobileNav() {
                 dragX !== null ? 'none' : 'transform 220ms cubic-bezier(.22,.61,.36,1)',
             }}
           >
-            <div className="flex items-center justify-between px-4 h-14 border-b border-border-subtle shrink-0">
+            <div className="flex items-center justify-between px-4 h-14 border-b border-border shrink-0">
               <span className="text-h3 text-content-primary">Menu</span>
               <button
                 onClick={close}
@@ -250,7 +250,7 @@ export function MobileNav() {
                             className={clsx(
                               'flex items-center gap-3 px-3 py-2.5 rounded-md text-body font-medium transition-colors duration-fast',
                               active
-                                ? 'bg-surface-elevated text-content-primary'
+                                ? 'bg-surface-selected text-content-primary'
                                 : 'text-content-secondary hover:text-content-primary hover:bg-surface-card',
                             )}
                           >
@@ -265,7 +265,7 @@ export function MobileNav() {
                 )
               })}
               {/* The phone shows one session at a time; tapping one opens it. */}
-              <div className="h-px bg-border-subtle mx-3" aria-hidden="true" />
+              <div className="h-px bg-border mx-3" aria-hidden="true" />
               <SessionsList onNavigate={close} touch />
             </div>
             {/* HIS NAME, on the phone too (2026-09-16). It was desktop-only,
@@ -274,7 +274,7 @@ export function MobileNav() {
                 carries — and this is now their ONLY home, since the nav
                 above stopped listing them. It sits at the foot, where a
                 person looks for their own account. */}
-            <div className="shrink-0 border-t border-border-subtle p-2" data-testid="mobile-account">
+            <div className="shrink-0 border-t border-border p-2" data-testid="mobile-account">
               <AccountMenu onNavigate={close} />
             </div>
           </div>

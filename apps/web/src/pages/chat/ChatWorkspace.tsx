@@ -4,6 +4,7 @@ import { Columns2, Home, X } from 'lucide-react'
 import { ChatSlot, MAIN_SLOT, useChatStore } from '../../stores/chat-store'
 import { SESSION_DRAG_TYPE, useSessions, type ShownPane } from '../../stores/sessions-store'
 import { ChatPage, type ChatLocation } from './ChatPage'
+import { PaneBarTitle } from './PaneBarTitle'
 import { MAX_PANES, type DropZone } from './paneLayout'
 
 /**
@@ -137,18 +138,25 @@ function PaneBody({
     </div>
   )
   return (
-    <ChatPage
-      // A different session in this pane is a different page: its loader,
-      // polls and scroll position all start over. A pane naming "the main
-      // session" reloads when the main one moves (archived, or made main
-      // elsewhere) — but not when the list first arrives, which would load
-      // the same conversation twice.
-      key={pane.sessionId ?? `main-${mainEpoch}`}
-      initialModel={initialModel}
-      location={pane.id === MAIN_SLOT ? undefined : { sessionId: pane.sessionId, threadId: pane.threadId }}
-      onNavigate={pane.id === MAIN_SLOT ? undefined : onNavigate}
-      header={header}
-    />
+    <>
+      <PaneBarTitle
+        label={sessions.label(pane.sessionId)}
+        main={main}
+        show={!many || sessions.focused === pane.id}
+      />
+      <ChatPage
+        // A different session in this pane is a different page: its loader,
+        // polls and scroll position all start over. A pane naming "the main
+        // session" reloads when the main one moves (archived, or made main
+        // elsewhere) — but not when the list first arrives, which would load
+        // the same conversation twice.
+        key={pane.sessionId ?? `main-${mainEpoch}`}
+        initialModel={initialModel}
+        location={pane.id === MAIN_SLOT ? undefined : { sessionId: pane.sessionId, threadId: pane.threadId }}
+        onNavigate={pane.id === MAIN_SLOT ? undefined : onNavigate}
+        header={header}
+      />
+    </>
   )
 }
 
