@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { ChevronDown, Coins, Info, LogOut, Settings as SettingsIcon, Activity as ActivityIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { displayName, initials } from './displayName'
+import { SETTINGS_NAV } from '../../pages/settings/settingsNav'
 
 /**
  * Who is signed in, and the handful of places that answer "and now what".
@@ -36,14 +37,29 @@ const ITEMS: Item[] = [
   // "Usage" rather than "Spend": it is the question people ask, and the page
   // answers it for local turns too, where the cost is zero and the tokens
   // are not.
-  { to: '/spend', label: 'Usage', icon: Coins, minRole: 'admin' },
-  { to: '/activity', label: 'What she has done', icon: ActivityIcon, minRole: 'admin' },
+  // Named as their pages are titled (R11, 2026-10-11): "Usage" opened a
+  // page called Spend and "What she has done" one called Activity.
+  { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },
+  { to: '/activity', label: 'Activity', icon: ActivityIcon, minRole: 'admin' },
   // What this instance is: its build, whether there is anything newer, and
   // the machines and apps it is made of (pages/about).
   { to: '/about', label: 'About Nova', icon: Info, minRole: 'guest' },
 ]
 
+/** Where the menu's pages live: its own items, and every page Settings
+ *  lists in its nav (read from SETTINGS_NAV, so a page added there is
+ *  covered by itself). */
+function within(pathname: string, to: string): boolean {
+  return pathname === to || pathname.startsWith(`${to}/`)
+}
+const SETTINGS_ROOTS = ['/settings', ...SETTINGS_NAV.flatMap(g => g.items.map(i => i.to))]
+const MENU_ROOTS = [...ITEMS.map(i => i.to), ...SETTINGS_ROOTS]
+
 export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {
+  const { pathname } = useLocation()
+  // "You are here" for the pages that live under his name (R11): they have
+  // no sidebar entry, so without this nothing showed where you were.
+  const here = MENU_ROOTS.some(to => within(pathname, to))
   const { user, logout } = useAuth()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -101,11 +117,14 @@ export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {
           </p>
           {ITEMS.filter(item => hasMinRole(role, item.minRole)).map(item => {
             const Icon = item.icon
+            const current =
+              item.to === '/settings' ? SETTINGS_ROOTS.some(to => within(pathname, to)) : within(pathname, item.to)
             return (
               <Link
                 key={item.to}
                 to={item.to}
                 role="menuitem"
+                aria-current={current ? 'page' : undefined}
                 onClick={() => {
                   setOpen(false)
                   // The mobile drawer passes its own close: following a link
@@ -113,7 +132,12 @@ export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {
                   // behind a panel (2026-09-16).
                   onNavigate?.()
                 }}
-                className="flex items-center gap-2.5 px-3 py-2 text-compact text-content-secondary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast"
+                className={clsx(
+                  'flex items-center gap-2.5 px-3 py-2 text-compact transition-colors duration-fast',
+                  current
+                    ? 'bg-surface-selected text-content-primary'
+                    : 'text-content-secondary hover:text-content-primary hover:bg-surface-card',
+                )}
               >
                 <Icon size={14} className="shrink-0" />
                 {item.label}
@@ -146,10 +170,11 @@ export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {
         data-testid="account-button"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-current={here ? 'page' : undefined}
         onClick={() => setOpen(o => !o)}
         className={clsx(
           'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left transition-colors duration-fast',
-          open ? 'bg-surface-card' : 'hover:bg-surface-card',
+          open ? 'bg-surface-card' : here ? 'bg-surface-selected' : 'hover:bg-surface-card',
         )}
       >
         <span className="h-8 w-8 rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 flex items-center justify-center text-white text-caption font-medium shrink-0">

@@ -14,7 +14,7 @@ import { AuthProvider } from '../../stores/auth-store'
  * fit.
  */
 
-function mount(role = 'owner', name = 'jeremyspofford@gmail.com') {
+function mount(role = 'owner', name = 'jeremyspofford@gmail.com', path = '/chat') {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -25,7 +25,7 @@ function mount(role = 'owner', name = 'jeremyspofford@gmail.com') {
     }),
   )
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <AuthProvider>
         <AccountMenu />
       </AuthProvider>
@@ -102,3 +102,38 @@ describe('AccountMenu', () => {
     expect(screen.getByTestId('account-menu-signout')).toBeTruthy()
   })
 })
+
+describe('AccountMenu — where you are (R11, 2026-10-11)', () => {
+  it('names each item as its page is titled', async () => {
+    mount()
+    fireEvent.click(await screen.findByTestId('account-button'))
+    const labels = screen.getAllByRole('menuitem').map(i => i.textContent?.trim())
+    expect(labels).toContain('Activity')
+    expect(labels).toContain('Spend')
+    expect(labels).not.toContain('What she has done')
+    expect(labels).not.toContain('Usage')
+  })
+
+  it('marks the trigger while you are on one of its pages, or anywhere in Settings', async () => {
+    for (const path of ['/activity', '/spend', '/settings/appearance', '/agents/coder']) {
+      const { unmount } = mount('owner', 'jeremyspofford@gmail.com', path)
+      expect((await screen.findByTestId('account-button')).getAttribute('aria-current'), path).toBe('page')
+      unmount()
+    }
+  })
+
+  it('does not mark it anywhere else', async () => {
+    mount('owner', 'jeremyspofford@gmail.com', '/files')
+    expect((await screen.findByTestId('account-button')).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('marks the item for the page you are on', async () => {
+    mount('owner', 'jeremyspofford@gmail.com', '/spend')
+    fireEvent.click(await screen.findByTestId('account-button'))
+    const spend = screen.getAllByRole('menuitem').find(i => i.getAttribute('href') === '/spend')!
+    expect(spend.getAttribute('aria-current')).toBe('page')
+    const settings = screen.getAllByRole('menuitem').find(i => i.getAttribute('href') === '/settings')!
+    expect(settings.getAttribute('aria-current')).toBeNull()
+  })
+})
+

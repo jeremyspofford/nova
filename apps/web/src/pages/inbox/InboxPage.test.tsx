@@ -567,3 +567,13 @@ describe('InboxPage — what you were told, and when (S25 Q4)', () => {
     await waitFor(() => expect(api.listNoticeDigests).toHaveBeenCalled())
   })
 })
+
+describe('InboxPage — machine text in a title (R12)', () => {
+  it('reads a timestamp inside a title as a date and time, the raw value on hover', async () => {
+    const raw = '2026-10-12T16:10:05.378391+00:00'
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1', title: `openrouter is walled until ${raw} after 5 refusal(s)` })])))
+    const row = await screen.findByTestId('notice-row-n1')
+    expect(row.textContent).not.toContain('378391')
+    expect(within(row).getByTitle(raw).tagName).toBe('TIME')
+  })
+})

@@ -811,7 +811,8 @@ function RoleEditor({
             value={adding}
             onChange={e => setAdding(e.target.value)}
             items={[{ value: '', label: wantsDecisions ? 'add a decision model…' : 'add a fallback…' }, ...options]}
-            label={`add to ${role}`}
+            // Named as the card names it — `coder`, never `agent_coder` (R12).
+            label={`add to ${words.label.startsWith('Agent · ') ? words.label.slice('Agent · '.length) : role}`}
             className="w-full sm:w-80"
           />
           <Button

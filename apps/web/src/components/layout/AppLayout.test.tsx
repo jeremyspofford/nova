@@ -185,8 +185,9 @@ describe('AppLayout — which nav renders', () => {
     expect(settings.getAttribute('href')).toBe('/settings')
     // And the other two that left the nav on the same day, so a phone can
     // still reach them at all.
-    expect(within(account).getByRole('menuitem', { name: /usage/i })).toBeTruthy()
-    expect(within(account).getByRole('menuitem', { name: /what she has done/i })).toBeTruthy()
+    // Named as their pages are titled since 2026-10-11 (R11): Spend, Activity.
+    expect(within(account).getByRole('menuitem', { name: /^spend$/i })).toBeTruthy()
+    expect(within(account).getByRole('menuitem', { name: /^activity$/i })).toBeTruthy()
     // And a way back out, which the drawer lacked visually when its header
     // was drawn under the status bar.
     expect(within(drawer).getByText('Menu')).toBeTruthy()
