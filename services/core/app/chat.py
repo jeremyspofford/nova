@@ -446,6 +446,69 @@ def bare_intent_redirect_nudge(*, ran_a_tool: bool) -> str:
 BARE_INTENT_HONEST_NOTE = "[I said I'd check but did not — ask again and I'll do it]"
 
 
+# The OWN-TOOL HANDBACK guard (epic own-tool-handback, owner 2026-10-10): her
+# reply hands the owner one of HER registered tools to run ("Run
+# `device_info`", "run `machine_update` again") — something he can never run on
+# any machine. Armed on the turns that answer him (chat) and their replays
+# (eval), never on a timer's, job's or delegated agent's turn.
+OWN_TOOL_HANDBACK_KINDS = frozenset({"chat", "eval"})
+# The live notes. Neither names a device or carries a completed action.
+OWN_TOOL_HANDBACK_REDIRECT_NOTE = "Running it myself instead of handing it to you."
+OWN_TOOL_HANDBACK_REDIRECT_NOTE_NO_CALL = "Answering again, without handing you my own tool."
+
+
+def own_tool_handback_note(tool: str) -> str:
+    """The honest note APPENDED when the handback could not be redirected (no
+    budget left, out of rounds, a failed redirect, or one that handed it back
+    again). It says only what is true whatever ran: `tool` is hers, he cannot
+    run it, and asking was wrong. It claims no run and no pending state."""
+    return (
+        f"Correction: `{tool}` is one of my own tools, which only I can run — I "
+        "should not have asked you to run it. Ask me again and I will."
+    )
+
+
+def _span_outcome(span: Any) -> str:
+    """One tool span's outcome, from its structured fields only — ok, reached,
+    and a run fact's exit code — never from a result's first line."""
+    meta = getattr(span, "meta", None) or {}
+    if meta.get("ok"):
+        outcome = "ok"
+    elif meta.get("reached_executor") is False or any(
+        key.startswith("refused") and meta.get(key) for key in meta
+    ):
+        outcome = "not run (refused before it ran)"
+    else:
+        outcome = "failed"
+    for fact in meta.get("facts") or ():
+        run = fact.get("run") if isinstance(fact, dict) else None
+        if isinstance(run, dict) and isinstance(run.get("exit_code"), int):
+            outcome = f"{outcome}, exit {run['exit_code']}"
+    return outcome
+
+
+def own_tool_handback_nudge(tool: str, spans: Sequence[Any]) -> str:
+    """The redirect's nudge, DERIVED from the turn's spans: every tool call this
+    turn with its outcome, so she knows what already happened and does not
+    repeat it. It names no device or target — she picks those from her own
+    facts, as in any turn (the shelved broad guard redirected steps onto the
+    wrong machine; this one infers none)."""
+    lines = [
+        f"- {span.name}: {_span_outcome(span)}"
+        for span in spans
+        if getattr(span, "kind", None) == "tool" and getattr(span, "name", None)
+    ]
+    ran = "\n".join(lines) if lines else "- none"
+    return (
+        f"Your reply told the user to run `{tool}`. That is one of your own tools: "
+        "he cannot run your tools on any machine, so handing it to him leaves the "
+        f"work undone. Tool calls this turn so far:\n{ran}\n"
+        f"If running `{tool}` still serves what he asked, call it yourself now. Do "
+        "not repeat a call that already ran with the same arguments. Otherwise "
+        "answer him without telling him to run any of your tools."
+    )
+
+
 # The SAID-NOT-DONE pair (the owner's test, 2026-09-28: a tool written as a
 # fence, "Notepad is now open on your DELL-XPS-8950", zero calls each time —
 # guards.written_call_check, guards.device_completion_check). Fix round 3
@@ -3433,6 +3496,11 @@ async def _run_tool(
                 # notes workspace while a change was open this turn (the result
                 # states it). A mark after the fact; nothing reads it to decide.
                 span.meta["not_the_worktree"] = True
+            if any(tools.devices.OTHER_CHANGE_WORKTREE in fact for fact in facts[facts_before:]):
+                # own-tool-handback T3: THIS device call aimed inside a worktree
+                # other than the change started this turn (the result states
+                # it). A mark after the fact; nothing reads it to decide.
+                span.meta["other_change_worktree"] = True
         if not ok:
             span.meta["error"] = head
     return result, ok
@@ -3494,6 +3562,7 @@ async def _dispatch_calls(
     *,
     subset: Collection[str] | None = None,
     reached: list[str] | None = None,
+    reached_ids: set[str] | None = None,
 ) -> bool:
     """Run one round's tool calls, append their results, stream what happened.
 
@@ -3517,8 +3586,14 @@ async def _dispatch_calls(
     refused here (written as text, or naming no tool in a subset) or by
     dispatch before its executor (no such tool, bad arguments) is never in it;
     one whose executor ran and failed is (said-not-done P6).
+
+    `reached_ids`, when given, collects the tool_call ids of those same calls
+    (own-tool handback, T2): the turn's record of which of its calls ran, so a
+    redirect can tell an identical call that already ran from one refused
+    before it could. Written after the fact, synchronously; it decides nothing.
     """
     ran_ephemeral = False
+    record: list[str] = reached if reached is not None else []
     for call in calls:
         emit(_activity_frame(call.name, "start"))
         if call.from_markup:
@@ -3569,7 +3644,10 @@ async def _dispatch_calls(
         # What the turn is doing right now, for whoever asks (traces.DOING):
         # the tool's name, set synchronously so no await joins the funnel.
         traces.set_doing(turn.id, call.name)
-        result, ok = await _run_tool(turn, call_ctx, call, subset=subset, reached=reached)
+        reached_before = len(record)
+        result, ok = await _run_tool(turn, call_ctx, call, subset=subset, reached=record)
+        if reached_ids is not None and len(record) > reached_before:
+            reached_ids.add(call.id)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True
@@ -5144,6 +5222,12 @@ def _regen_rejected_by(
             ),
         ),
         ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
+        # Own-tool handback (T2): a regeneration that hands the owner one of
+        # her own tools again has not run it, whichever redirect produced it.
+        (
+            "own_tool_handback",
+            lambda: guards.own_tool_handback_check(corrected, turn.spans, persona.tool_names),
+        ),
     )
     for name, check in checks:
         try:
@@ -5152,6 +5236,42 @@ def _regen_rejected_by(
         except Exception:
             logger.exception("%s re-check raised over the redirect; not rejecting on it", name)
     return None
+
+
+def _earlier_results(messages: Sequence[dict], reached_ids: Collection[str]) -> dict:
+    """{call key (the circling check's `_call_key`: name + canonical-JSON
+    args, so key order never makes a call new): the result it got} for every
+    call in `messages` whose
+    executor was REACHED this turn (`reached_ids`, dispatch's record), read
+    from the real dispatched tool_calls and their tool messages — never from
+    span args, which are clipped. A call refused before its executor (written
+    as text, no such tool) is not in it: issued properly, it runs."""
+    if not reached_ids:
+        return {}
+    keys: dict[str, tuple[str, str]] = {}
+    out: dict[tuple[str, str], str] = {}
+    for message in messages:
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or ():
+                call_id = call.get("id")
+                function = call.get("function") or {}
+                if call_id in reached_ids and function.get("name"):
+                    keys[call_id] = _call_key(
+                        ToolCall(call_id, function["name"], function.get("arguments") or "")
+                    )
+        elif message.get("role") == "tool" and message.get("tool_call_id") in keys:
+            out.setdefault(keys[message["tool_call_id"]], str(message.get("content") or ""))
+    return out
+
+
+def _replayed_result(name: str, earlier: str) -> str:
+    """What an identical call gets in the own-tool handback redirect: the
+    stated fact that it already ran this turn, then the result it got. Not
+    an `Error:` — nothing refused it; it already happened."""
+    return (
+        f"{name} with these exact arguments already ran this turn, so it was not "
+        f"sent again. Its result then:\n{earlier}"
+    )
 
 
 @dataclass
@@ -5201,6 +5321,8 @@ async def _claim_redirect(
     emit: Callable[[str | None], None],
     persona: agents.Persona,
     subset: Collection[str] | None = None,
+    after_tools: bool = False,
+    reached_call_ids: Collection[str] = (),
 ) -> _ClaimRedirect:
     """Regenerate ONCE, with tools, after a REPLACE-class guard fired.
 
@@ -5276,6 +5398,18 @@ async def _claim_redirect(
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
 
+    `after_tools` (own-tool handback, T2 — that claim ONLY): the NOTHING RAN
+    YET precondition is lifted, because the claim is about a tool she handed
+    the owner, not about work she says happened, and the handback usually
+    follows real calls (c9ba8d70: start_change ran, the edit failed). The
+    double-run it guarded against is held mechanically instead: a redirect
+    call whose name and canonical-JSON arguments equal a call this turn that
+    REACHED an executor (`reached_call_ids`, dispatch's own record; the call
+    read from `messages`, never from clipped span args) is not dispatched
+    again — it is answered with that earlier result under a stated
+    "already ran this turn" line (`_replayed_result`), a fact like an
+    `Error:` cannot-run, never a refusal on his behalf. Every other call runs.
+
     `persona` and `subset` (S12) are the turn's own, threaded through
     unchanged: the regeneration is vetted against the toolset this turn was
     shown, and a call it dispatches is marked outside the subset exactly as
@@ -5300,7 +5434,9 @@ async def _claim_redirect(
         ran_a_tool = guards.ran_a_tool(turn.spans)
         span.meta["ran_a_tool"] = ran_a_tool
         blocked = (
-            "tools_already_ran" if ran_a_tool else ("out_of_rounds" if out_of_rounds else None)
+            "tools_already_ran"
+            if ran_a_tool and not after_tools
+            else ("out_of_rounds" if out_of_rounds else None)
         )
 
         def _stated() -> str:
@@ -5370,9 +5506,32 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
-                read_ephemeral = await _dispatch_calls(
-                    turn, tool_ctx, calls, attempt, emit, subset=subset, reached=reached
-                )
+                if after_tools:
+                    earlier = _earlier_results(messages, reached_call_ids)
+                    replayed = 0
+                    for call in calls:
+                        prior = earlier.get(_call_key(call))
+                        if prior is not None:
+                            # Synchronous and outside the dispatch funnel: the
+                            # call is answered with what it already returned.
+                            attempt.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call.id,
+                                    "content": _replayed_result(call.name, prior),
+                                }
+                            )
+                            replayed += 1
+                            continue
+                        ran = await _dispatch_calls(
+                            turn, tool_ctx, [call], attempt, emit, subset=subset, reached=reached
+                        )
+                        read_ephemeral = read_ephemeral or ran
+                    span.meta["replayed_calls"] = replayed
+                else:
+                    read_ephemeral = await _dispatch_calls(
+                        turn, tool_ctx, calls, attempt, emit, subset=subset, reached=reached
+                    )
                 span.meta["redirect_calls_reached"] = len(reached)
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
@@ -5907,6 +6066,10 @@ async def _run_turn(
         # (T5); None while no re-sent round was cut again.
         window_cut_end: str | None = None
         out_of_rounds = False
+        # The tool_call ids of every call this turn whose executor was reached
+        # (dispatch's own record, via _dispatch_calls): what the own-tool
+        # handback redirect reads to replay an identical call, never re-send it.
+        reached_call_ids: set[str] = set()
         # Why the round loop stopped the turn (a RoundProgress reason) and the
         # round it stopped at; None while nothing stopped it.
         # One detector per turn, so no other turn's calls count here.
@@ -6078,7 +6241,7 @@ async def _run_turn(
             )
             before = len(messages)
             ran_ephemeral = await _dispatch_calls(
-                turn, tool_ctx, calls, messages, emit, subset=subset
+                turn, tool_ctx, calls, messages, emit, subset=subset, reached_ids=reached_call_ids
             )
             read_ephemeral = read_ephemeral or ran_ephemeral
             # The circling stop: this round's calls and the FULL text of the
@@ -7235,6 +7398,86 @@ async def _run_turn(
             # Spent by TRYING, not by succeeding — same rule as consent/state.
             redirect_spent = True
 
+        # The OWN-TOOL HANDBACK guard (owner 2026-10-10): the reply hands the
+        # owner one of HER registered tools to run. Read over what persists
+        # now — a redirect above that stood was already vetted for it — and
+        # the live registry the turn was shown, never his message. It shares
+        # the ONE redirect budget, and its redirect runs in the after-tools
+        # mode (this claim only): tools that already ran do not block it, and
+        # an identical call is replayed from its earlier result, never re-sent.
+        # Not redirected -> the honest note is APPENDED (her prose around the
+        # handback may be honest). It never blocks a tool.
+        own_tool = None
+        if traces.purpose_of(turn) in OWN_TOOL_HANDBACK_KINDS:
+            try:
+                own_tool = guards.own_tool_handback_check(persisted, turn.spans, persona.tool_names)
+            except Exception:
+                logger.exception("own-tool handback guard raised; shipping the reply")
+                own_tool = None
+        own_tool_redirected = False
+        if own_tool is not None:
+            skipped = (
+                "mechanical_guard_fired"
+                if mechanical_guard_fired
+                else "append_only_guard_fired"
+                if append_only_guard_fired
+                else "redirect_spent"
+                if redirect_spent
+                else "out_of_rounds"
+                if out_of_rounds
+                else None
+            )
+            meta = {"detected": True, "tool": own_tool.tool, "phrase": own_tool.phrase}
+            if skipped is not None:
+                with turn.span("guard", "own_tool_handback") as span:
+                    span.meta.update(
+                        meta,
+                        ran_a_tool=guards.ran_a_tool(turn.spans),
+                        redirected=False,
+                        not_redirected_because=skipped,
+                    )
+                note = own_tool_handback_note(own_tool.tool)
+                emit(_frame({"correction": note}))
+                persisted = f"{persisted}\n\n{note}"
+            else:
+                handed = own_tool.tool
+                outcome = await _claim_redirect(
+                    app,
+                    turn,
+                    model,
+                    claim_kind="own_tool_handback",
+                    correction_text=own_tool_handback_note(handed),
+                    span_meta=meta,
+                    nudge_for=lambda _ran: own_tool_handback_nudge(handed, turn.spans),
+                    redirect_note=OWN_TOOL_HANDBACK_REDIRECT_NOTE,
+                    redirect_note_no_call=OWN_TOOL_HANDBACK_REDIRECT_NOTE_NO_CALL,
+                    out_of_rounds=out_of_rounds,
+                    messages=messages,
+                    advertised=advertised,
+                    tool_ctx=tool_ctx,
+                    device_names=device_names,
+                    agent_names=agent_names,
+                    user_message=message,
+                    emit=emit,
+                    persona=persona,
+                    subset=subset,
+                    after_tools=True,
+                    reached_call_ids=reached_call_ids,
+                )
+                own_tool_redirected = outcome.redirected
+                redirect_appended += outcome.appended
+                read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                if own_tool_redirected:
+                    persisted = outcome.text
+                    said_prose = outcome.prose
+                else:
+                    persisted = f"{persisted}\n\n{outcome.text}"
+                if outcome.markup_note:
+                    emit(_frame({"correction": outcome.markup_note}))
+                    persisted = f"{persisted}\n\n{outcome.markup_note}"
+                backend_note = backend_note or outcome.markup_note
+                redirect_spent = True
+
         # The OPT-IN responsiveness check (agents.responsiveness_check, default
         # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
         # user's question and re-answers ONCE. It runs here, on the durable text,
@@ -7396,6 +7639,7 @@ async def _run_turn(
             or listing_redirected
             or offer_redirected
             or bare_intent_redirected
+            or own_tool_redirected
         )
         plumbing_turn = (
             (consent_correction is not None and not consent_redirected)
@@ -7483,6 +7727,10 @@ async def _run_turn(
                 and deferral.kind in ("offer", "completion")
                 and not offer_redirected
             )
+            # A handback of her own tool that was not redirected is the same
+            # habit: recalled, it is how the next turn learns to hand him her
+            # tools. A redirect that stood ran it (or answered without it).
+            or (own_tool is not None and not own_tool_redirected)
         )
         # A turn that READ live data (a web fetch, a device reading — an
         # ephemeral tool or live check) produced a point-in-time snapshot, and

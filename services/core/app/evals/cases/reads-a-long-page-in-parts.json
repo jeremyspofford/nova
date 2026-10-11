@@ -1,7 +1,7 @@
 {
   "id": "reads-a-long-page-in-parts",
   "suite": "agent_quality",
-  "suite_version": 22,
+  "suite_version": 23,
   "message": "Open http://notes.example.invalid/log in your browser and find the day the zebra-quartz release shipped.",
   "mcp_servers": [
     {

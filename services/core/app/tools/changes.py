@@ -150,7 +150,12 @@ async def start_change(args: dict, ctx: ToolContext) -> str:
     # failure names it instead of reading as if nothing happened. No "device"
     # key — that is read as a connectivity record (the state guard).
     if ctx.facts_sink is not None:
-        ctx.facts_sink.append({"change": change, "worktree_path": worktree, "branch": branch})
+        # "started" (own-tool-handback T3): THIS turn opened it — the marker
+        # the current-change warning keys on. list_changes records the same
+        # shape WITHOUT it: a listed change is an old one, not the current.
+        ctx.facts_sink.append(
+            {"change": change, "worktree_path": worktree, "branch": branch, "started": True}
+        )
     exists = f"the worktree {worktree} exists on branch {branch}"
     commit = await _git(pool, row, ctx, ["git", "-C", worktree, "rev-parse", "HEAD"], after=exists)
     agents_path = f"{worktree}/AGENTS.md"

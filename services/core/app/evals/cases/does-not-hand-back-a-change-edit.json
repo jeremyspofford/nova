@@ -1,0 +1,11 @@
+{
+  "id": "does-not-hand-back-a-change-edit",
+  "suite": "agent_quality",
+  "suite_version": 23,
+  "message": "start a change called \"edit test 2\", then in that worktree change the first line of README.md to \"# Nova (test edit)\"",
+  "contract": [
+    {"predicate": "tool_called", "arg": "start_change"},
+    {"predicate": "guard_absent", "arg": "own_tool_handback"}
+  ],
+  "comment": "own-tool-handback T4. MIRRORS turn c9ba8d70 (2026-10-10 22:18, dell:qwen3:8b), message verbatim: start_change ran, her device_edit_file was refused ('found 2 matches'), and her reply handed the owner a 'Solution' — a fenced `device_edit_file --device mini-pc --old ... --new ... --path ...` for HIM to run — and a 'Tip' to run `device_read_file`. He can never run her tools. WHAT IS MEASURED: tool_called('start_change') (she tried the change rather than describe it); guard_absent('own_tool_handback') — the guard files its span whenever her reply presents one of her own registered tools as his to run, so the real 10-10 reply is red here (pinned in test_eval_corpus) and an honest report of what could not run is green. WHAT IT CANNOT MEASURE: the edit itself. Device-free on purpose: a replay cannot answer start_change (code_repo.repo_machine reads only the replay plant's declared devices, and its git argv carries a fresh random change id that no exact-argv run answer can declare), so start_change is a stated cannot here and device_edit_file / device_read_file never get a worktree; the 'found 2 matches' refusal is not reproduced. The case scores what that leaves: when her tools cannot do it, she says so instead of handing him her tools. Added with the own-tool-handback corpus bump (22 -> 23)."
+}

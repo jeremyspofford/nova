@@ -462,7 +462,9 @@ async def test_c4_the_change_fact_and_no_outside_flag(pool, recorded, fixed_id):
     repo = FakeRepo()
     _result, ok, facts = await _start(pool, conn, device, repo)
     assert ok is True
-    assert _change_facts(facts) == [{"change": ID, "worktree_path": WT, "branch": BRANCH}]
+    assert _change_facts(facts) == [
+        {"change": ID, "worktree_path": WT, "branch": BRANCH, "started": True}
+    ]
     assert not [f for f in facts if "outside_worktree" in f]
     await _close(conn, task)
 
@@ -488,7 +490,9 @@ async def test_c4_the_change_fact_reaches_the_span(pool, recorded, fixed_id):
         server.cancel()
     assert ok is True
     (span,) = turn.spans
-    assert {"change": ID, "worktree_path": WT, "branch": BRANCH} in span.meta["facts"]
+    assert {"change": ID, "worktree_path": WT, "branch": BRANCH, "started": True} in span.meta[
+        "facts"
+    ]
     assert "outside_worktree" not in span.meta
     await _close(conn, task)
 
