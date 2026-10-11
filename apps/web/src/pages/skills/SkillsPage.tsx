@@ -1,3 +1,4 @@
+import { HumanText } from '../../lib/humanText'
 import { useCallback, useEffect, useState } from 'react'
 import { BookOpen, Plus } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
@@ -146,7 +147,7 @@ export function SkillsPage({
                 <span>
                   <span className="block font-medium text-content-primary">{skill.name}</span>
                   <span className="block text-compact text-content-secondary">
-                    {skill.summary ?? 'A file under skills/ that nobody has made a row for.'}
+                    {skill.summary ? <HumanText text={skill.summary} /> : 'A file under skills/ that nobody has made a row for.'}
                   </span>
                   <span className="block text-caption text-content-tertiary">
                     {usesWords(skill.uses)}

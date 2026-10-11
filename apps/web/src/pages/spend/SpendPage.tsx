@@ -1,3 +1,4 @@
+import { groupRefusals } from '../../lib/humanText'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Coins, RefreshCw } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
@@ -295,12 +296,19 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
           {report.recent_refusals.length > 0 && (
             <section>
               <h3 className="mb-2 text-compact font-medium text-content-primary">Recent refusals</h3>
-              <ul className="space-y-1 text-caption">
-                {report.recent_refusals.map((r, i) => (
-                  <li key={i}>
-                    <span className="text-content-tertiary">{formatRelativeTime(r.at)}</span> · {r.provider}:{r.model} · {r.status} ·{' '}
-                    {purposeLabel(r.purpose)}
-                    {r.error ? <span className="text-danger"> — {r.error}</span> : null}
+              {/* Grouped by provider, cause and purpose (UI review R12): twenty
+                  identical "could not reach dell … ConnectTimeout" lines are
+                  one line saying 20. The full message is on the cause's hover. */}
+              <ul className="space-y-1 text-caption" data-testid="refusal-groups">
+                {groupRefusals(report.recent_refusals).map(g => (
+                  <li key={`${g.provider}-${g.reason}-${g.purpose}`}>
+                    <span className="text-content-tertiary">{formatRelativeTime(g.latest)}</span> · {g.provider} ·{' '}
+                    {purposeLabel(g.purpose)} ·{' '}
+                    <span className="text-danger" title={g.raw || undefined}>
+                      {g.reason}
+                    </span>
+                    {g.count > 1 && <span className="text-content-tertiary"> · {g.count} times</span>}
+                    <span className="text-content-tertiary"> · {g.models.join(', ')}</span>
                   </li>
                 ))}
               </ul>

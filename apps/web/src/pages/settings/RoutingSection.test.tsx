@@ -333,8 +333,10 @@ describe('RoutingSection', () => {
     expect(coder.textContent).toContain('writes and reviews code in a sandbox')
     expect(coder.textContent).not.toContain('no agent by this name')
     expect(within(coder).queryByRole('button', { name: 'remove role agent_coder' })).toBeNull()
-    // Its chain is editable like any other role's.
-    expect(within(coder).getByLabelText('add to agent_coder')).toBeTruthy()
+    // Its chain is editable like any other role's — and the picker is named
+    // after the agent, not its internal role key (R12, 2026-10-11).
+    expect(within(coder).getByLabelText('add to coder')).toBeTruthy()
+    expect(within(coder).queryByLabelText('add to agent_coder')).toBeNull()
   })
 
   it('marks a role no agent owns, and Remove → confirm → deletes it and re-reads the list', async () => {

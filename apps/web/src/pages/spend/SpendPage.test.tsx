@@ -168,7 +168,8 @@ describe('SpendPage', () => {
     const people = screen.getByTestId('spend-by-person').textContent ?? ''
     expect(people).toContain('jeremy')
     expect(people).toContain('(no longer exists)')
-    expect(screen.getByText(/insufficient credits/)).toBeTruthy()
+    // The refusal reads by its cause (R12); the server's words are its title.
+    expect(screen.getByText('out of credits').getAttribute('title')).toBe('insufficient credits')
   })
 
   it('an owner price is entered per million tokens and stored per token; a stored one can be removed', async () => {
@@ -186,5 +187,32 @@ describe('SpendPage', () => {
   it('a failed load states the reason', async () => {
     renderPage({ getSpend: vi.fn(async () => { throw new Error('the gateway timed out') }) })
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('the gateway timed out'))
+  })
+})
+
+describe('SpendPage — recent refusals (R12)', () => {
+  it('folds repeats into one line per provider, cause and purpose, with the count and the full message on hover', async () => {
+    const dell = (model: string, at: string) => ({
+      at, provider: 'dell', model, status: 502, purpose: 'review_commitments',
+      error: 'could not reach dell at http://100.122.40.93:11435/v1 — ConnectTimeout',
+    })
+    renderPage({
+      getSpend: vi.fn(async () => ({
+        ...REPORT,
+        recent_refusals: [
+          dell('qwen3:8b', '2026-09-07T10:00:00Z'),
+          dell('qwen3.8:27b', '2026-09-07T09:00:00Z'),
+          dell('qwen3:8b', '2026-09-07T08:00:00Z'),
+        ],
+      })),
+    })
+    const list = await screen.findByTestId('refusal-groups')
+    const items = list.querySelectorAll('li')
+    expect(items).toHaveLength(1)
+    expect(items[0].textContent).toContain('unreachable')
+    expect(items[0].textContent).toContain('3 times')
+    expect(items[0].textContent).toContain('qwen3:8b, qwen3.8:27b')
+    expect(items[0].textContent).not.toContain('100.122.40.93')
+    expect(within(items[0] as HTMLElement).getByText('unreachable').getAttribute('title')).toContain('ConnectTimeout')
   })
 })

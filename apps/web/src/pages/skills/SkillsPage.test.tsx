@@ -282,3 +282,12 @@ describe('SkillsPage — a draft from a notice (S25.2.5)', () => {
     expect(screen.getByLabelText('Procedure')).toBeTruthy()
   })
 })
+
+describe('SkillsPage — dates in a summary (R12)', () => {
+  it('reads an ISO date in the summary as a day and month, the raw date on hover', async () => {
+    show()
+    const when = await screen.findByTitle('2026-09-10')
+    expect(when.tagName).toBe('TIME')
+    expect(when.textContent).toMatch(/^10 Sep/)
+  })
+})

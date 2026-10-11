@@ -17,6 +17,7 @@ import {
 } from '../../lib/api'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { formatRelativeTime } from '../activity/activityFormat'
+import { HumanText } from '../../lib/humanText'
 import { formatAbsolute } from '../schedules/schedulesFormat'
 import {
   actedLine,
@@ -505,7 +506,9 @@ function NoticeCard({
                 provider's refusal names its billing page); `anywhere` lets
                 it wrap instead of pushing the whole page sideways on a phone
                 (2026-10-05: 327 px past the edge). */}
-            <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">{notice.title}</span>
+            <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">
+              <HumanText text={notice.title} />
+            </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
             <span className="font-mono" title="the check that found it">

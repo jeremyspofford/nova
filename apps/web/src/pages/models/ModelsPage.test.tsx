@@ -139,12 +139,14 @@ function renderPage(
 }
 
 describe('ModelsPage', () => {
-  it('shows every source with its fetch time, and a failed source in its own words', async () => {
+  it('shows every source with its fetch time, and a failed source by its cause', async () => {
+    // 2026-10-11 (R12): the failed source's own words moved to the badge's
+    // hover; the badge says the cause. The words are pinned in the R12 test.
     renderPage()
     await waitFor(() => expect(screen.getByTestId('catalog-sources')).toBeTruthy())
     const chips = screen.getByTestId('catalog-sources').textContent ?? ''
     expect(chips).toContain('hub · 2')
-    expect(chips).toContain('anthropic · 0 · the listing was refused (401): invalid x-api-key')
+    expect(chips).toContain('anthropic · 0 · key rejected')
   })
 
   it('opens on Installed, tabs carry counts, and the chat model is marked primary', async () => {
@@ -589,5 +591,16 @@ describe('ModelsPage at a desktop width', () => {
     } finally {
       restore()
     }
+  })
+})
+
+describe('ModelsPage — source badges (R12)', () => {
+  it('names a failed source by its cause, with the full refusal on hover', async () => {
+    renderPage()
+    const sources = await screen.findByTestId('catalog-sources')
+    const failed = within(sources).getByText(/anthropic/)
+    expect(failed.textContent).toContain('key rejected')
+    expect(failed.textContent).not.toContain('x-api-key')
+    expect(failed.getAttribute('title')).toBe('the listing was refused (401): invalid x-api-key')
   })
 })

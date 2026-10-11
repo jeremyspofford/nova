@@ -1,3 +1,4 @@
+import { shortReason } from '../../lib/humanText'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { BarChart3, Boxes, Check, Columns3, Download, Gauge, Info, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
@@ -791,7 +792,8 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
                 {s.key}
                 {typeof s.rows === 'number' ? ` · ${s.rows}` : ''}
                 {s.fetched_at ? ` · ${formatRelativeTime(s.fetched_at)}` : ''}
-                {s.ok === false ? ` · ${s.note ?? 'failed'}` : ''}
+                {/* The cause in a word or two (R12); the whole refusal is the title. */}
+                {s.ok === false ? ` · ${s.note ? shortReason(s.note) : 'failed'}` : ''}
               </span>
             </Badge>
           ))}
