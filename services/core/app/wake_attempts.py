@@ -1,4 +1,4 @@
-"""The wake ledger (S46a; migration 045): the one writer of wake_attempts.
+"""The wake ledger (S46a; migration 047): the one writer of wake_attempts.
 
 Each row is one attempt to wake a machine, written as the evidence arrives
 and never ahead of it:
@@ -16,7 +16,7 @@ and never ahead of it:
   * **settle** — the outcome DERIVED from the columns: serving -> ready;
     deadline passed with an answer -> answered, with neither -> no_answer;
     inside the deadline with no serving -> no outcome yet. Nobody passes an
-    outcome in, and migration 045's CHECKs refuse one the row does not show.
+    outcome in, and migration 047's CHECKs refuse one the row does not show.
 
 A decided row is never rewritten: the deadline is the measurement ("no answer
 within D s"), so a reconnect after it is not this attempt's answer.
