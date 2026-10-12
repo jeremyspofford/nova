@@ -33,16 +33,92 @@ const (
 	routeUAC    = "uac" // the owner's one UAC click
 )
 
-// ErrDeclined is the installer's answer when the owner said No to the UAC
-// prompt (ERROR_CANCELLED).
-var ErrDeclined = errors.New("the UAC prompt was declined")
-
-// uacWaitMax bounds the wait for the owner's click; readBackReserve is the
-// time kept after it for the read-back.
+// UACWait bounds the WHOLE UAC prompt on the owner's screen — the
+// ShellExecuteEx call that shows it, not only the process after a Yes —
+// and ReadBackReserve is the time kept after it for the read-back. Their
+// sum sits under client.CommandTimeout (pinned in client's tests), so the
+// agent's answer reaches core before core stops waiting.
 const (
-	uacWaitMax      = 150 * time.Second
-	readBackReserve = 40 * time.Second
+	UACWait         = 60 * time.Second
+	ReadBackReserve = 40 * time.Second
 )
+
+// ErrNoYes is the UAC route's answer when no Yes came: the prompt was
+// cancelled (a No, or Windows closing it — the agent cannot tell which)
+// or the wait ran out. Errors carrying it are *NoYesError.
+var ErrNoYes = errors.New("no Yes came on the UAC prompt")
+
+// NoYesError says how long the agent waited and whether the prompt may
+// still be on the screen (the wait ran out; a later Yes still installs).
+type NoYesError struct {
+	Wait     time.Duration
+	MayStill bool
+}
+
+func (e *NoYesError) Error() string {
+	return fmt.Sprintf("no Yes came on the UAC prompt within %d s", int(e.Wait/time.Second))
+}
+
+func (e *NoYesError) Is(t error) bool { return t == ErrNoYes }
+
+// errPromptCancelled is what a prompt func returns for ERROR_CANCELLED.
+var errPromptCancelled = errors.New("the UAC prompt was cancelled")
+
+// awaitYes runs prompt — the call that shows the UAC prompt and returns
+// once it is answered (ShellExecuteEx with SEE_MASK_NOASYNC blocks until a
+// click, or until Windows closes the prompt at about 2 min) — and waits at
+// most wait for it, never past ctx. A cancelled prompt (errPromptCancelled)
+// is a *NoYesError; the wait running out is one too, MayStill, because the
+// prompt cannot be taken down from here: the call is abandoned, and if a
+// Yes comes later its value goes to drop (nil: nothing to release).
+func awaitYes[T any](ctx context.Context, wait time.Duration, prompt func() (T, error), drop func(T)) (T, error) {
+	type answer struct {
+		v   T
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		v, err := prompt()
+		got <- answer{v, err}
+	}()
+	start := time.Now()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	var zero T
+	waited := wait
+	select {
+	case a := <-got:
+		if errors.Is(a.err, errPromptCancelled) {
+			return zero, &NoYesError{Wait: wait}
+		}
+		return a.v, a.err
+	case <-timer.C:
+	case <-ctx.Done():
+		waited = time.Since(start)
+	}
+	go func() {
+		if a := <-got; a.err == nil && drop != nil {
+			drop(a.v)
+		}
+	}()
+	return zero, &NoYesError{Wait: waited, MayStill: true}
+}
+
+// noYesWords is admin.install's answer when no Yes came: what the agent
+// knows (it waited, no Yes) and what it read right after — never a cause.
+func noYesWords(ny *NoYesError, st admin.PathState) string {
+	s := fmt.Sprintf("no Yes came on this machine's UAC prompt within %d s (it was declined, closed, or nobody answered) — ",
+		int(ny.Wait.Round(time.Second)/time.Second))
+	if st.Installed {
+		return s + "the admin path reads " + st.State + " now, so a Yes may have come as the wait ran out; device_info reads whether it did"
+	}
+	s += "nothing was installed: the admin path reads " + st.State + " now"
+	s += fmt.Sprintf("; the owner clicks Yes on the prompt within %d s when Nova asks again", int(UACWait/time.Second))
+	if ny.MayStill {
+		s += "; the prompt may still be on the screen — a Yes there now still installs it; device_info reads whether it did"
+	}
+	return s
+}
 
 // AdminHost is what admin.install / admin.uninstall read and do on this
 // machine (the seam). Nil AdminDeps.Host is the real machine.
@@ -58,7 +134,7 @@ type AdminHost struct {
 	// Read is the admin path as read now (admin.ReadPath).
 	Read func(ctx context.Context) admin.PathState
 	// Install / Uninstall run `<Bin> admin install|uninstall` by route and
-	// return its words; Install returns ErrDeclined for a declined prompt.
+	// return its words; Install returns a *NoYesError (ErrNoYes) when no Yes came.
 	Install   func(ctx context.Context, route string) (string, error)
 	Uninstall func(ctx context.Context, route string) (string, error)
 	// Whoami runs `<copy> admin whoami` through the path: its stdout.
@@ -98,12 +174,12 @@ func pickInstallRoute(r installReads) (route, cannot string) {
 }
 
 // uacWait is how long the UAC route waits for the owner's click:
-// uacWaitMax, less when ctx leaves less than that plus readBackReserve;
+// UACWait, less when ctx leaves less than that plus ReadBackReserve;
 // too little time left is a stated cannot.
 func uacWait(ctx context.Context) (time.Duration, error) {
-	w := uacWaitMax
+	w := UACWait
 	if dl, ok := ctx.Deadline(); ok {
-		if left := time.Until(dl) - readBackReserve; left < w {
+		if left := time.Until(dl) - ReadBackReserve; left < w {
 			w = left
 		}
 	}
@@ -207,9 +283,12 @@ func installAdminPath(ctx context.Context, h AdminHost, sendFacts func(context.C
 		return fail("%s", cannot)
 	}
 	words, err := h.Install(ctx, route)
+	var ny *NoYesError
 	switch {
-	case errors.Is(err, ErrDeclined):
-		return fail("the UAC prompt on this machine was declined — nothing was installed; the owner clicks Yes on it to install the admin path")
+	case errors.As(err, &ny):
+		return fail("%s", noYesWords(ny, h.Read(ctx)))
+	case errors.Is(err, ErrNoYes):
+		return fail("%s", noYesWords(&NoYesError{Wait: UACWait}, h.Read(ctx)))
 	case err != nil:
 		return fail("the admin install (%s) did not finish: %v", routeWords(route), err)
 	}

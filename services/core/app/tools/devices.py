@@ -1154,11 +1154,21 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
 # not confirmed. Nothing here asks or refuses (owner ruling 2026-09-03): the UAC
 # prompt is the operating system's, answered by the owner at that machine.
 #
-# Sent with COMMAND_TIMEOUT_SECONDS: the agent bounds every command at 110 s
-# (apps/novad client.CommandTimeout) and its UAC wait inside that (<= 70 s), so
-# a longer wait here would wait on nothing.
+# Sent with COMMAND_TIMEOUT_SECONDS (120 s): the agent waits at most
+# caps.UACWait (60 s) for the owner's Yes — over the WHOLE prompt — keeps
+# caps.ReadBackReserve (40 s) after it for the read-back, and bounds every
+# command at client.CommandTimeout (110 s), so its answer lands inside this
+# wait with margin. ADMIN_UAC_WAIT_SECONDS mirrors caps.UACWait; both orderings
+# are pinned against the Go source (tests/test_device_admin_path.py here,
+# apps/novad/internal/client/uac_budget_test.go there), never copied by hand.
+#
+# No answer (uac-timeout, turn 153578ab): the result says what is known — the
+# answer did not come back, the state is not known, device_info reads it — and
+# for install the owner's one step if a prompt is still up. No cause is guessed:
+# core cannot tell a prompt nobody answered from a hung agent or a lost socket.
 
 ADMIN_PATH = "admin_path"
+ADMIN_UAC_WAIT_SECONDS = 60
 _ADMIN_ACTIONS = ("install", "uninstall")
 _ADMIN_KIND_WORDS = {"sudoers": "a sudoers rule", "task": "an elevated scheduled task"}
 _ADMIN_ROUTE_WORDS = {
@@ -1221,6 +1231,29 @@ def _admin_removed_words(meta: dict, name: str) -> str | None:
     return f"{name}: admin path removed{how} — the agent's read-back found none of it left."
 
 
+def _admin_no_answer(exc: ToolFailure, name: str, action: str, done: str) -> str:
+    """The words when no result frame came back: what is known, nothing more.
+    NotSent reached nothing (no prompt can be up); a timeout names the wait;
+    a lost socket names no wait it did not run."""
+    refused = exc.__cause__
+    if isinstance(refused, devices_ws.NotSent):
+        return f"{exc} — nothing was sent to {name}, so its admin path was not touched."
+    if isinstance(getattr(refused, "__cause__", None), TimeoutError):
+        head = (
+            f"the {action}'s answer from {name} did not come back within "
+            f"{COMMAND_TIMEOUT_SECONDS} s"
+        )
+    else:
+        head = f"{exc} — the {action}'s answer from {name} did not come back"
+    words = (
+        f"{head}, so whether the admin path is {done} on {name} is not known; "
+        "device_info reads it now."
+    )
+    if action == "install":
+        words += f" If a UAC prompt is up on {name}, the owner clicks Yes on it, then asks again."
+    return words
+
+
 async def device_admin_path(args: dict, ctx: ToolContext) -> str:
     action = args["action"]
     if action not in _ADMIN_ACTIONS:
@@ -1234,10 +1267,7 @@ async def device_admin_path(args: dict, ctx: ToolContext) -> str:
     try:
         result = await _command(pool, row, f"admin.{action}", {}, ctx=ctx)
     except ToolFailure as exc:
-        raise ToolFailure(
-            f"{exc} — the agent's read-back did not come back, so whether the admin path is "
-            f"{done} on {name} is not known; device_info reads it now."
-        ) from exc
+        raise ToolFailure(_admin_no_answer(exc, name, action, done)) from exc
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
     words = None
     if result.get("ok"):

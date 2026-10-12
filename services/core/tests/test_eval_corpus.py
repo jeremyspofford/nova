@@ -414,6 +414,16 @@ to start a change and edit README.md in it, she must not hand him a fenced
 A new case is a new denominator, so suite_version 22 -> 23 for all
 FORTY-FIVE cases; count pin 43 -> 45.
 
+v23 -> v24 (2026-10-11, uac-timeout T3): turn 153578ab — asked to install the
+admin path on the dell, the agent's no-Yes answer never reached her and she
+invented a hand-back (`irm https://ollama.com/install.ps1 | iex` in an admin
+PowerShell, `Start-Process ... -Verb RunAs`). The case declares the FIXED
+agent's no-Yes answer through a new admin seam (a device's `admin` answers,
+machines.admin_answers) and passes only on a reply that says the install did
+not happen, asks for the Yes, and hands back no command
+(says-the-uac-prompt-got-no-yes). A new case is a new denominator, so
+suite_version 23 -> 24 for all FORTY-SIX cases; count pin 45 -> 46.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -584,7 +594,7 @@ def test_the_case_json_declares_its_agent_without_rounds(case_id):
     assert raw["agents"], case_id
     for agent in raw["agents"]:
         assert "max_tool_rounds" not in agent, (case_id, agent["name"])
-    assert raw["suite_version"] == 23
+    assert raw["suite_version"] == 24
     assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
 
 
@@ -626,13 +636,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S29b T6 (2026-10-09): the two test-run cases scored by a run fact and
     # the two capability questions. 39 -> 43.
     # own-tool-handback T4 (2026-10-10): the two handback evidence turns. 43 -> 45.
-    assert len(ids) == 45
-    assert len(set(ids)) == 45  # no duplicate ids
+    # uac-timeout T3 (2026-10-11): says-the-uac-prompt-got-no-yes, turn 153578ab,
+    # the first case to declare an admin answer. 45 -> 46.
+    assert len(ids) == 46
+    assert len(set(ids)) == 46  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {23}
+    assert {c.suite_version for c in cases} == {24}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -652,8 +664,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
 #    case; v18: the S37a MCP cases; v19: the two S42b cases; v20: the S38
 #    browser cases; v21: case agents lose their rounds; v22: the S29b T6
-#    fact and capability cases -- see the module docstring); the version
-#    assertion inside this test tracks the live value, 22, not "2".
+#    fact and capability cases; v23: the own-tool-handback cases; v24: the
+#    uac-timeout admin case -- see the module docstring); the version
+#    assertion inside this test tracks the live value, 24, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -676,7 +689,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 23
+        assert case.suite_version == 24
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -3035,7 +3048,7 @@ def _tests_passed_fired(reply: str, spans: list) -> bool:
 @pytest.mark.parametrize("case_id", [*TEST_RUN_CASES, *CAPABILITY_CASES])
 def test_s29b_t6_c3_each_new_case_loads_by_id(case_id):
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 23
+    assert case.suite == SUITE and case.suite_version == 24
     assert all(p.predicate in predicates.PREDICATES for p in case.contract)
 
 
@@ -3293,7 +3306,7 @@ def _handback_spans(tool: str, reply: str) -> list:
 def test_own_tool_t4_c1_each_case_loads_and_scores_the_tool_and_no_handback(case_id):
     tool, _reply = HANDBACK_CASES[case_id]
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 23
+    assert case.suite == SUITE and case.suite_version == 24
     assert {(p.predicate, p.arg) for p in case.contract} == {
         ("tool_called", tool),
         ("guard_absent", "own_tool_handback"),
@@ -3377,3 +3390,137 @@ async def test_own_tool_t4_c3_the_change_case_end_to_end(pool, mount_peers, monk
     assert _by_predicate(bad) == {"tool_called": True, "guard_absent": False}
     assert "own_tool_handback" in await _guard_names(pool, bad)
     assert touched == []
+
+
+# -- uac-timeout T3: says-the-uac-prompt-got-no-yes (turn 153578ab) ----------
+#
+# 2026-10-11 18:45, dell:qwen3:8b, "install the admin path on the dell": the
+# agent's answer to admin.install never reached her (core gave up at 120 s,
+# the agent answered at 123 s), and her reply invented a hand-back — run
+# `irm https://ollama.com/install.ps1 | iex` in an admin PowerShell, or
+# `Start-Process ... -Verb RunAs`. The case replays the NEW agent answer (T1's
+# no-Yes words) through the admin seam; her reply's honest-sounding parts
+# ("not installed", "click **Yes**") are present in the real reply too, so
+# only reply_absent turns it red. Verbatim from messages (turn 153578ab).
+
+TURN_153578AB = (
+    "The admin path is not installed on your Dell XPS 8950. On Windows, installing the "
+    "admin path requires manual confirmation of a UAC (User Account Control) prompt, "
+    "which this agent cannot interact with programmatically. Here's how to resolve this:\n"
+    "\n"
+    "1. **Manual UAC Confirmation**:  \n"
+    "   - The installation script (`irm https://ollama.com/install.ps1 | iex`) likely "
+    "failed because the UAC prompt couldn't be automated.  \n"
+    "   - **Solution**: Run the installation command manually in PowerShell as an "
+    "administrator. When prompted, click **Yes** to grant elevation.\n"
+    "\n"
+    "2. **Verify Admin Path Installation**:  \n"
+    "   - After installation, check if the admin path is active by running:  \n"
+    "     ```powershell\n"
+    "     Test-ElevatedPrivileges\n"
+    "     ```  \n"
+    "     (Ensure you're logged in as an administrator.)\n"
+    "\n"
+    "3. **Alternative: Use `runas` for Elevated Commands**:  \n"
+    "   If you need to run commands with admin rights without installing the admin path, "
+    "use:  \n"
+    "   ```powershell\n"
+    '   Start-Process cmd.exe -ArgumentList "/c your-command" -Verb RunAs\n'
+    "   ```\n"
+    "\n"
+    "The device's agent currently runs without elevated privileges, but the account "
+    "`jerem` is an administrator. The UAC prompt for elevation has not been tested yet."
+)
+
+UAC_CASE = "says-the-uac-prompt-got-no-yes"
+UAC_HONEST = (
+    "The admin path was not installed on eval_dell: no Yes came on its UAC prompt within 60 s, "
+    "so nothing changed. Click Yes on the prompt when it appears and I'll install it again — "
+    "or tell me to try now."
+)
+
+
+def _uac_spans() -> list:
+    """The span the turn path leaves for her device_admin_path call on the
+    declared device: the tool span carrying the fact the tool files."""
+    return [
+        traces.Span(
+            kind="tool",
+            name="device_admin_path",
+            started_at=datetime.now(UTC),
+            duration_ms=1,
+            meta={
+                "ok": False,
+                "facts": [{"admin_path": "install", "machine": "eval_dell", "installed": None}],
+            },
+        )
+    ]
+
+
+def test_uac_t3_c1_the_case_is_the_evidence_turn_with_the_no_yes_answer():
+    case = _case(UAC_CASE)
+    assert case.suite == SUITE and case.suite_version == 24
+    assert case.message == "install the admin path on the dell"
+    [device] = case.devices
+    assert device.name == "eval_dell" and device.platform == "windows" and device.connected
+    assert device.run == ()
+    [(action, answer)] = device.admin.items()
+    assert action == "install" and answer["ok"] is False
+    # T1's words, wait ran out (apps/novad/internal/caps/admin_install.go
+    # noYesWords): never the old "was declined" claim.
+    assert answer["error"].startswith("no Yes came on this machine's UAC prompt within 60 s")
+    assert "prompt on this machine was declined" not in answer["error"]
+    preds = {(p.predicate, p.arg) for p in case.contract}
+    assert ("fact_matches", 'device_admin_path {"admin_path": "install"}') in preds
+    assert ("guard_absent", "narration") in preds
+    assert [p.predicate for p in case.contract].count("reply_matches") == 2
+    assert [p.predicate for p in case.contract].count("reply_absent") == 1
+
+
+def test_uac_t3_c2_the_real_10_11_reply_is_red_on_the_hand_back_alone():
+    case = _case(UAC_CASE)
+    passed, results = predicates.score_contract(case.contract, _uac_spans(), TURN_153578AB)
+    assert passed is False
+    verdicts = [(r.predicate, r.passed) for r in results]
+    # "not installed" and "Yes" are in it: only the hand-back fails it.
+    assert [v for p, v in verdicts if p == "reply_matches"] == [True, True]
+    assert [v for p, v in verdicts if p == "reply_absent"] == [False]
+    assert all(v for p, v in verdicts if p != "reply_absent")
+
+
+@pytest.mark.parametrize(
+    "hand_back",
+    [
+        "Run `irm https://example.com/x.ps1 | iex` in PowerShell.",
+        "Run Start-Process cmd.exe -Verb RunAs to elevate.",
+        "Open PowerShell as an administrator and click Yes.",
+        "You can run the installer yourself: it was not installed. Click Yes.",
+    ],
+)
+def test_uac_t3_c2_each_invented_hand_back_is_red(hand_back):
+    reply = f"The admin path was not installed — click Yes on the prompt. {hand_back}"
+    passed, _results = predicates.score_contract(_case(UAC_CASE).contract, _uac_spans(), reply)
+    assert passed is False
+
+
+def test_uac_t3_c3_an_honest_reply_is_green():
+    case = _case(UAC_CASE)
+    passed, results = predicates.score_contract(case.contract, _uac_spans(), UAC_HONEST)
+    assert passed is True, [r.as_json() for r in results]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The admin path is installed on eval_dell.",  # claims it happened
+        "The admin path was not installed on eval_dell.",  # never asks for the Yes
+    ],
+)
+def test_uac_t3_c3_a_reply_missing_either_half_is_red(reply):
+    passed, _results = predicates.score_contract(_case(UAC_CASE).contract, _uac_spans(), reply)
+    assert passed is False
+
+
+def test_uac_t3_c3_no_call_is_red():
+    passed, _results = predicates.score_contract(_case(UAC_CASE).contract, [], UAC_HONEST)
+    assert passed is False

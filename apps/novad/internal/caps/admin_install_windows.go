@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -77,7 +78,7 @@ func realAdminHost(d Deps) (AdminHost, error) {
 			if err != nil {
 				return "", err
 			}
-			return "", runElevated(bin, "admin install", wait)
+			return "", runElevated(ctx, bin, "admin install", wait)
 		}
 		return "", fmt.Errorf("cannot: there is no %q route for admin %s on this machine", route, verb)
 	}
@@ -133,17 +134,56 @@ const (
 var procShellExecuteExW = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
 
 // runElevated starts file with params through ShellExecuteEx "runas" — the
-// one UAC prompt, on the owner's screen — and waits up to wait for it to
-// exit. A declined prompt is ErrDeclined; a nonzero exit is its code.
-func runElevated(file, params string, wait time.Duration) error {
-	verb, _ := windows.UTF16PtrFromString("runas")
-	f, err := windows.UTF16PtrFromString(file)
+// one UAC prompt, on the owner's screen. The prompt itself is bounded by
+// wait (awaitYes): no Yes within it is a *NoYesError. After a Yes it waits
+// for the installer up to ctx's deadline less ReadBackReserve (or wait
+// with no deadline); a nonzero exit is its code.
+func runElevated(ctx context.Context, file, params string, wait time.Duration) error {
+	proc, err := awaitYes(ctx, wait,
+		func() (windows.Handle, error) { return shellExecuteRunas(file, params) },
+		func(h windows.Handle) { windows.CloseHandle(h) })
 	if err != nil {
 		return err
 	}
+	defer windows.CloseHandle(proc)
+	rest := wait
+	if dl, ok := ctx.Deadline(); ok {
+		rest = time.Until(dl) - ReadBackReserve
+	}
+	if rest < 5*time.Second {
+		rest = 5 * time.Second
+	}
+	ev, err := windows.WaitForSingleObject(proc, uint32(rest/time.Millisecond))
+	switch {
+	case err != nil:
+		return fmt.Errorf("waiting for the elevated install: %w", err)
+	case ev == uint32(windows.WAIT_TIMEOUT):
+		return fmt.Errorf("the owner's Yes came, but the elevated install had not finished %s later", rest.Round(time.Second))
+	}
+	var code uint32
+	if err := windows.GetExitCodeProcess(proc, &code); err != nil {
+		return fmt.Errorf("reading the elevated install's exit: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("the elevated install exited %d", code)
+	}
+	return nil
+}
+
+// shellExecuteRunas shows the UAC prompt and returns once it is answered:
+// the elevated process's handle on a Yes, errPromptCancelled on
+// ERROR_CANCELLED (a No, or Windows closing the prompt — not told apart).
+func shellExecuteRunas(file, params string) (windows.Handle, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	verb, _ := windows.UTF16PtrFromString("runas")
+	f, err := windows.UTF16PtrFromString(file)
+	if err != nil {
+		return 0, err
+	}
 	p, err := windows.UTF16PtrFromString(params)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	info := shellExecuteInfo{
 		fMask: seeMaskNoCloseProcess | seeMaskNoAsync, lpVerb: verb, lpFile: f, lpParameters: p, nShow: windows.SW_HIDE,
@@ -152,27 +192,12 @@ func runElevated(file, params string, wait time.Duration) error {
 	r, _, callErr := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info)))
 	if r == 0 {
 		if errors.Is(callErr, windows.ERROR_CANCELLED) {
-			return ErrDeclined
+			return 0, errPromptCancelled
 		}
-		return fmt.Errorf("could not show the UAC prompt: %v", callErr)
+		return 0, fmt.Errorf("could not show the UAC prompt: %v", callErr)
 	}
 	if info.hProcess == 0 {
-		return errors.New("the elevated install started but its process could not be watched")
+		return 0, errors.New("the elevated install started but its process could not be watched")
 	}
-	defer windows.CloseHandle(info.hProcess)
-	ev, err := windows.WaitForSingleObject(info.hProcess, uint32(wait/time.Millisecond))
-	switch {
-	case err != nil:
-		return fmt.Errorf("waiting for the elevated install: %w", err)
-	case ev == uint32(windows.WAIT_TIMEOUT):
-		return fmt.Errorf("the elevated install had not finished after %s (the UAC prompt may still be waiting for the owner)", wait)
-	}
-	var code uint32
-	if err := windows.GetExitCodeProcess(info.hProcess, &code); err != nil {
-		return fmt.Errorf("reading the elevated install's exit: %w", err)
-	}
-	if code != 0 {
-		return fmt.Errorf("the elevated install exited %d", code)
-	}
-	return nil
+	return info.hProcess, nil
 }

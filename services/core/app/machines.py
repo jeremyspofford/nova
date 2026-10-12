@@ -607,6 +607,73 @@ def run_answers(raw: object) -> tuple[dict, ...]:
     return tuple(out)
 
 
+# The admin path's capabilities a declared device may answer in a replay
+# (uac-timeout T3): device_admin_path's, one answer per action. The words of a
+# real admin.* result frame — ok, the agent's error or output, and the
+# read-back meta core reads for its success words.
+FIXTURE_ADMIN_ACTIONS: tuple[str, ...] = ("install", "uninstall")
+_ADMIN_ANSWER_KEYS = frozenset({"ok", "error", "output", "meta"})
+
+
+def admin_answers(raw: object) -> dict[str, dict]:
+    """A declared device's `admin` answers (uac-timeout T3), checked and
+    normalized: a non-empty object keyed by action (install / uninstall), each
+    {"ok": bool, "error": text (required, non-blank, when ok is false; never
+    when ok is true), "output": text (default ""), "meta": object (only when
+    ok)}. Raises ValueError naming "device's admin"; cases.device_from_dict
+    restates it as a CaseError at LOAD, and FixturePlant refuses it at
+    construction."""
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(
+            "a case device's admin must be a non-empty object of install/uninstall answers, "
+            f"got {raw!r}"
+        )
+    out: dict[str, dict] = {}
+    for action, entry in raw.items():
+        if action not in FIXTURE_ADMIN_ACTIONS:
+            raise ValueError(
+                f"a case device's admin answers only {', '.join(FIXTURE_ADMIN_ACTIONS)}, "
+                f"got {action!r}"
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"a case device's admin {action} answer must be an object, got {entry!r}"
+            )
+        unknown = sorted(set(entry) - _ADMIN_ANSWER_KEYS)
+        if unknown:
+            raise ValueError(
+                f"a case device's admin answer takes only {', '.join(sorted(_ADMIN_ANSWER_KEYS))}, "
+                f"got {', '.join(map(repr, unknown))}"
+            )
+        ok = entry.get("ok")
+        if not isinstance(ok, bool):
+            raise ValueError(f"a case device's admin {action} ok must be true or false, got {ok!r}")
+        error = entry.get("error")
+        if ok and error is not None:
+            raise ValueError(f"a case device's admin {action} answer is ok, so it carries no error")
+        if not ok and (not isinstance(error, str) or not error.strip()):
+            raise ValueError(
+                f"a case device's admin {action} answer is not ok, so its error must be the "
+                f"agent's words, got {error!r}"
+            )
+        output = entry.get("output", "")
+        if not isinstance(output, str):
+            raise ValueError(f"a case device's admin {action} output must be text, got {output!r}")
+        meta = entry.get("meta")
+        if meta is not None and (not ok or not isinstance(meta, dict)):
+            raise ValueError(
+                f"a case device's admin {action} meta must be an object on an ok answer, "
+                f"got {meta!r}"
+            )
+        answer: dict = {"ok": ok, "output": output}
+        if error is not None:
+            answer["error"] = error
+        if meta is not None:
+            answer["meta"] = copy.deepcopy(meta)
+        out[action] = answer
+    return out
+
+
 @dataclasses.dataclass(frozen=True)
 class ReplayAgent:
     """A declared device's agent in a replay that declares run answers (S29b
@@ -616,7 +683,9 @@ class ReplayAgent:
     touched.
 
     Only device_run's capability is answered, and only an argv declared
-    exactly (a prefix or an extension is another command). Anything else is
+    exactly (a prefix or an extension is another command) — and, for a device
+    that declares admin answers (uac-timeout T3), admin.<action> for exactly a
+    declared action, as its declared result frame. Anything else is
     a stated cannot — never a made-up success — in words that say nothing
     about the replay: a scored turn must not be able to tell it is measured
     (S40 fix wave B3)."""
@@ -624,16 +693,24 @@ class ReplayAgent:
     name: str
     connected: bool
     answers: dict[tuple[str, ...], dict]
+    # uac-timeout T3: the declared admin.<action> answers (admin_answers).
+    admin: dict[str, dict] = dataclasses.field(default_factory=dict)
+
+    def _no_key(self) -> devices.DeviceRefused:
+        return devices.DeviceRefused(
+            f"cannot: no command can be sent to {self.name}'s agent — no pairing key of "
+            "its is on record"
+        )
 
     def answer(self, capability: str, args: dict) -> dict:
         """The result frame a real agent would send for this command, or
         devices.DeviceRefused (tools/devices._command restates it as the
         ToolFailure the model reads)."""
-        if capability != FIXTURE_RUN_CAPABILITY:
-            raise devices.DeviceRefused(
-                f"cannot: no command can be sent to {self.name}'s agent — no pairing key of "
-                "its is on record"
-            )
+        action = capability.removeprefix("admin.")
+        if capability.startswith("admin.") and action in self.admin:
+            return copy.deepcopy(self.admin[action])
+        if capability != FIXTURE_RUN_CAPABILITY or not self.answers:
+            raise self._no_key()
         argv = args.get("argv")
         found = (
             self.answers.get(tuple(argv))
@@ -675,6 +752,7 @@ class FixturePlant(GatewayPlant):
         devices: dict[str, dict] | None = None,
         updates: dict[str, str] | None = None,
         runs: dict[str, list[dict]] | None = None,
+        admins: dict[str, dict] | None = None,
     ) -> None:
         # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
         # here rather than retyped. Imported in the call: app.agents imports
@@ -721,6 +799,15 @@ class FixturePlant(GatewayPlant):
             name: {tuple(a["argv"]): a for a in run_answers(list(answers))}
             for name, answers in runs.items()
         }
+        # What device_admin_path answers on each declared device (uac-timeout
+        # T3), keyed by action — refused at construction like `runs`.
+        admins = admins or {}
+        stray_admins = sorted(name for name in admins if name not in declared_devices)
+        if stray_admins:
+            raise ValueError(
+                f"admin answers are declared for no declared device: {', '.join(stray_admins)}"
+            )
+        self._admins = {name: admin_answers(answers) for name, answers in admins.items()}
         self._specs = {name: copy.deepcopy(spec) for name, spec in fixtures.items()}
         self._views: dict[str, dict] = {}
         for name, spec in self._specs.items():
@@ -814,14 +901,21 @@ class FixturePlant(GatewayPlant):
 
     def replay_agent(self, name: str) -> ReplayAgent | None:
         """The declared device's ReplayAgent when the case declared run
-        answers for it (S29b T5); None for any other name."""
-        if name not in self._runs:
+        answers (S29b T5) or admin answers (uac-timeout T3) for it; None for
+        any other name."""
+        if not self._answers_for(name):
             return None
         return ReplayAgent(
             name=name,
             connected=bool(self._devices[name].get("connected")),
-            answers=copy.deepcopy(self._runs[name]),
+            answers=copy.deepcopy(self._runs.get(name, {})),
+            admin=copy.deepcopy(self._admins.get(name, {})),
         )
+
+    def _answers_for(self, name: str) -> bool:
+        """Whether the case declared any command answer for this device — the
+        one kind of declared device a device tool may act on in a replay."""
+        return name in self._runs or name in self._admins
 
     def _resolved(self, name: str) -> str:
         """The declared device `name` means (resolve_name over the declared
@@ -838,14 +932,15 @@ class FixturePlant(GatewayPlant):
         name was refused goes to the log, never to the tool.
 
         The one exception (S29b T5): a declared device whose case declares
-        run answers resolves to a row built from its declaration (no id — it
-        has no registry row), and tools/devices then reads its ReplayAgent
-        (replay_agent) for connectivity and the command, never the hub.
+        run answers (or admin answers, uac-timeout T3) resolves to a row built
+        from its declaration (no id — it has no registry row), and
+        tools/devices then reads its ReplayAgent (replay_agent) for
+        connectivity and the command, never the hub.
 
         The name is resolved against the declared names and hostnames by
         resolve_name first (walk-fixes T2), as a real hub resolves its rows."""
         name = self._resolved(name)
-        if name in self._runs:
+        if self._answers_for(name):
             view = self._devices[name]
             return {
                 "id": None,

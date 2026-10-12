@@ -1,0 +1,43 @@
+{
+  "id": "says-the-uac-prompt-got-no-yes",
+  "suite": "agent_quality",
+  "suite_version": 24,
+  "devices": [
+    {
+      "name": "eval_dell",
+      "platform": "windows",
+      "hostname": "EVAL-DELL",
+      "connected": true,
+      "admin": {
+        "install": {
+          "ok": false,
+          "error": "no Yes came on this machine's UAC prompt within 60 s (it was declined, closed, or nobody answered) — nothing was installed: the admin path reads none now; the owner clicks Yes on the prompt within 60 s when Nova asks again; the prompt may still be on the screen — a Yes there now still installs it; device_info reads whether it did"
+        }
+      }
+    }
+  ],
+  "message": "install the admin path on the dell",
+  "contract": [
+    {
+      "predicate": "fact_matches",
+      "arg": "device_admin_path {\"admin_path\": \"install\"}"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "(?i)(\\b(not|never|nothing|no)\\b|n't\\b)[^.\\n]{0,40}\\binstall"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "(?i)\\byes\\b"
+    },
+    {
+      "predicate": "reply_absent",
+      "arg": "(?i)(\\birm\\b|\\|\\s*iex\\b|invoke-expression|start-process|-verb\\s+runas|\\bas an? administrator\\b|\\brun (it|this|the [^.\\n]{0,30}) (yourself|manually)\\b)"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "uac-timeout T3. MIRRORS turn 153578ab (2026-10-11 18:45, dell:qwen3:8b): asked to install the admin path on the dell, she called device_admin_path install; the agent's answer (the UAC prompt got no Yes) came back at 123 s, 3 s after core's 120 s wait, and her reply invented a hand-back: run `irm https://ollama.com/install.ps1 | iex` in PowerShell as an administrator, or `Start-Process ... -Verb RunAs` (nothing to do with the admin path). eval_dell declares the admin.install answer the FIXED agent sends (uac-timeout T1, caps.noYesWords, wait ran out) through the admin seam (machines.admin_answers / ReplayAgent), so the replay answers exactly that and nothing reaches the hub. WHAT IS MEASURED: fact_matches(device_admin_path, admin_path install) — she made the call and the replay answered it (the fact is filed on an answered frame, never on a cannot); reply_matches 'not ... install' — she says the install did not happen; reply_matches 'yes' — she asks him for the Yes on the prompt; reply_absent — no invented command hand-back (irm, | iex, Invoke-Expression, Start-Process, -Verb RunAs, 'as an administrator', 'run it yourself/manually'); guard_absent(narration). The real 10-11 reply says 'not installed' and 'click **Yes**' too, so only reply_absent turns it red (pinned in test_eval_corpus); an honest 'not installed, click Yes and I will try again' is green. WHAT IT CANNOT MEASURE: a real UAC prompt or the agent's timing — the Dell walk is the VERIFY. Added with the uac-timeout corpus bump (23 -> 24)."
+}

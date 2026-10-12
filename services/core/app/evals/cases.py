@@ -446,7 +446,13 @@ class FixtureDevice:
     shape at LOAD). A device that declares any is the one a device tool may
     act on in a replay — device_run alone, on exactly a declared argv, and
     answered by the plant (machines.ReplayAgent) without reaching the hub;
-    every other argv, and every other acting tool, is a stated cannot."""
+    every other argv, and every other acting tool, is a stated cannot.
+
+    `admin` (uac-timeout T3) is what device_admin_path answers on this device
+    in the replay: {"install"|"uninstall": {"ok": bool, "error": text,
+    "output": text, "meta": object}} — the words of a real admin.* result
+    frame (machines.admin_answers checks the shape at LOAD), answered by the
+    plant without reaching the hub; an undeclared action is a stated cannot."""
 
     name: str
     platform: str
@@ -455,6 +461,7 @@ class FixtureDevice:
     facts: dict | None = None
     update: str | None = None
     run: tuple[dict, ...] = ()
+    admin: dict | None = None
 
     def __post_init__(self) -> None:
         if not self.name.startswith(FIXTURE_AGENT_PREFIX):
@@ -507,6 +514,8 @@ class FixtureDevice:
             out["update"] = self.update
         if self.run:
             out["run"] = [copy.deepcopy(answer) for answer in self.run]
+        if self.admin is not None:
+            out["admin"] = copy.deepcopy(self.admin)
         return out
 
 
@@ -538,6 +547,12 @@ def device_from_dict(raw: object) -> FixtureDevice:
             run = machines.run_answers(raw["run"])
         except ValueError as exc:
             raise CaseError(str(exc)) from exc
+    admin: dict | None = None
+    if "admin" in raw:
+        try:
+            admin = machines.admin_answers(raw["admin"])
+        except ValueError as exc:
+            raise CaseError(str(exc)) from exc
     return FixtureDevice(
         name=_require(raw, "name", str),
         platform=_require(raw, "platform", str),
@@ -546,6 +561,7 @@ def device_from_dict(raw: object) -> FixtureDevice:
         facts=facts,
         update=update,
         run=run,
+        admin=admin,
     )
 
 
