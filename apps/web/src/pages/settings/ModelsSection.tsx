@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { AlertTriangle, Cloud, Cpu, Info, RefreshCw, Server } from 'lucide-react'
-import { Button, DataList, Section, Skeleton } from '../../components/ui'
+import { Button, DataList, Section, Skeleton, Banner } from '../../components/ui'
 import {
   getBackend as apiGetBackend,
   putSetting as apiPutSetting,
@@ -275,14 +275,14 @@ export function ModelsSection({
               no invented number, just the trade-off stated plainly. The chat
               switcher carries the short form, warmer when the pick is on the
               smaller end of what is on offer. */}
-          <div
+          <Banner
             data-testid="model-accuracy-disclaimer"
             role="note"
-            className="flex items-start gap-2 rounded-sm border border-info/30 bg-info-dim px-3 py-2 text-caption text-content-secondary"
+            tone="info" size="sm" className="flex items-start gap-2"
           >
             <Info size={14} className="shrink-0 mt-0.5" />
             <span>{ACCURACY_DISCLAIMER}</span>
-          </div>
+          </Banner>
 
           <div className="border-t border-border-subtle pt-4 space-y-3">
             <p className="text-caption font-medium text-content-secondary">Engine setup chose</p>

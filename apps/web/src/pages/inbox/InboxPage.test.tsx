@@ -577,3 +577,14 @@ describe('InboxPage — machine text in a title (R12)', () => {
     expect(within(row).getByTitle(raw).tagName).toBe('TIME')
   })
 })
+
+describe('InboxPage — the shared tab bar (R10 leftover)', () => {
+  it('draws its views with the same Tabs every other page uses, the current one pressed', async () => {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1' })])))
+    const bar = await screen.findByTestId('inbox-tabs')
+    const inbox = within(bar).getByRole('button', { name: 'Inbox' })
+    expect(inbox.getAttribute('aria-pressed')).toBe('true')
+    expect(inbox.className).toContain('border-accent')
+    expect(within(bar).getByRole('button', { name: 'What you were told' }).getAttribute('aria-pressed')).toBe('false')
+  })
+})

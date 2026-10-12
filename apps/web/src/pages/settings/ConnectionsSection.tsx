@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Plug, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { Badge, Button, ConfirmDialog, Input, Section, Select, Skeleton } from '../../components/ui'
+import { Badge, Button, ConfirmDialog, Input, Section, Select, Skeleton, Banner } from '../../components/ui'
 import {
   addMcpServer as apiAddMcpServer,
   getMcpPresets as apiGetMcpPresets,
@@ -38,8 +38,6 @@ const DEFAULT_API: ConnectionsApi = {
   testMcpServer: apiTestMcpServer,
   removeMcpServer: apiRemoveMcpServer,
 }
-
-const bannerClass = 'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -87,14 +85,14 @@ export function ConnectionsSection({ api = DEFAULT_API }: { api?: ConnectionsApi
       description="Services Nova can use through MCP, like GitHub. A server is asked what it offers before it is saved, and a token is never shown again. Nova can connect servers herself; when she replaces or removes one you added, your Inbox says so."
     >
       {loadError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Could not read the connections: {loadError}
-        </div>
+        </Banner>
       )}
       {actionError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           {actionError}
-        </div>
+        </Banner>
       )}
       {servers === null && !loadError ? (
         <Skeleton lines={3} />
@@ -391,9 +389,9 @@ function AddServerForm({
         Add a header
       </Button>
       {error && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           {error}
-        </div>
+        </Banner>
       )}
       <div className="flex gap-2">
         <Button type="submit" loading={saving}>

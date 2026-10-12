@@ -28,7 +28,7 @@ export function CopyableId({
       onClick={handleCopy}
       title={id}
       className={clsx(
-        'inline-flex items-center gap-1 font-mono text-mono-sm bg-surface-elevated px-1.5 py-0.5 rounded-xs',
+        'inline-flex items-center gap-1 font-mono text-mono-sm bg-surface-selected px-1.5 py-0.5 rounded-xs',
         'text-content-secondary hover:text-content-primary transition-colors cursor-pointer',
         className,
       )}

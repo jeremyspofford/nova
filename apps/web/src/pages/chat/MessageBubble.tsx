@@ -16,7 +16,7 @@ import {
   Unplug,
   X,
 } from 'lucide-react'
-import { Badge, ProgressBar } from '../../components/ui'
+import { Badge, ProgressBar, Banner } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
 import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
@@ -736,13 +736,13 @@ export const MessageBubble = memo(function MessageBubble({
  */
 export function ErrorBubble({ row }: { row: ErrorRow }) {
   return (
-    <div
+    <Banner
       role="alert"
       data-testid="message-error"
-      className="flex items-start gap-2 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+      className="flex items-start gap-2"
     >
       <AlertTriangle size={15} className="shrink-0 mt-0.5" />
       <span className="min-w-0 break-words">{row.reason}</span>
-    </div>
+    </Banner>
   )
 }

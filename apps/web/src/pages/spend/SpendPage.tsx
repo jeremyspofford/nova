@@ -2,7 +2,7 @@ import { groupRefusals } from '../../lib/humanText'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Coins, RefreshCw } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, Input, Metric, ProgressBar, Table, Tabs, type TableColumn } from '../../components/ui'
+import { Badge, Button, Input, Metric, ProgressBar, Table, Tabs, type TableColumn, Banner, Card } from '../../components/ui'
 import { InlineSave, type SaveMessage } from '../settings/shared'
 import {
   deleteOwnerPrice as apiDeleteOwnerPrice,
@@ -108,9 +108,9 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
       />
 
       {error && (
-        <div role="alert" className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger">
+        <Banner role="alert">
           {error}
-        </div>
+        </Banner>
       )}
 
       <Tabs tabs={WINDOWS.map(w => ({ id: w.id, label: w.label }))} activeTab={window} onChange={id => setWindow(id as SpendWindow)} />
@@ -237,7 +237,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
               {cloudProviders.map(p => {
                 const pct = capPercent(p.month_usd, p.cap_usd)
                 return (
-                  <div key={p.provider} className="rounded-md border border-border px-4 py-3" data-testid={`spend-provider-${p.provider}`}>
+                  <Card key={p.provider} variant="outlined" className="px-4 py-3" data-testid={`spend-provider-${p.provider}`}>
                     <div className="flex flex-wrap items-center gap-2 text-compact">
                       <span className="font-medium">{p.provider}</span>
                       <span>{usd(p.usd, 4)} in this window</span>
@@ -257,17 +257,17 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                         await load()
                       }}
                     />
-                  </div>
+                  </Card>
                 )
               })}
               {localProviders.map(p => (
-                <div key={p.provider} className="rounded-md border border-border px-4 py-3 text-compact" data-testid={`spend-provider-${p.provider}`}>
+                <Card key={p.provider} variant="outlined" className="px-4 py-3 text-compact" data-testid={`spend-provider-${p.provider}`}>
                   <span className="font-medium">{p.provider}</span>{' '}
                   <Badge size="sm" color="neutral">local</Badge>{' '}
                   <span>{gpuMinutes(p.gpu_seconds)} of GPU time over {p.calls} calls — not money</span>
-                </div>
+                </Card>
               ))}
-              <div className="rounded-md border border-border px-4 py-3" data-testid="spend-provider-total">
+              <Card variant="outlined" className="px-4 py-3" data-testid="spend-provider-total">
                 <div className="text-compact font-medium">All cloud providers</div>
                 <CapEditor
                   provider="*"
@@ -277,7 +277,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                     await load()
                   }}
                 />
-              </div>
+              </Card>
             </div>
           </section>
 

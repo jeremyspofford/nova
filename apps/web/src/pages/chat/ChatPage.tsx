@@ -1,3 +1,4 @@
+import { Banner } from '../../components/ui'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowDown, ArrowLeft, Clock, Square, X } from 'lucide-react'
@@ -656,12 +657,11 @@ export function ChatPage({
             here and on the composer below rather than inheriting it. */}
         <div className="mx-auto px-4 md:px-6 py-6 space-y-4 max-w-none md:max-w-[1200px]">
           {loadError && (
-            <div
+            <Banner
               role="alert"
-              className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
             >
               Could not load this conversation: {loadError}
-            </div>
+            </Banner>
           )}
 
           {!loading && !loadError && state.rows.length === 0 && !responding && (
@@ -697,10 +697,10 @@ export function ChatPage({
           )}
 
           {rewindError && (
-            <div
+            <Banner
               role="alert"
               data-testid="rewind-error"
-              className="flex items-start justify-between gap-2 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+              className="flex items-start justify-between gap-2"
             >
               <span>{rewindError}</span>
               <button
@@ -711,7 +711,7 @@ export function ChatPage({
               >
                 <X size={14} />
               </button>
-            </div>
+            </Banner>
           )}
 
           {rewound && (

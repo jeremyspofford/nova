@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { BellOff, BookPlus, Inbox, MessageSquare, Radar } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
+import { Badge, Banner, Button, EmptyState, Skeleton, Tabs } from '../../components/ui'
 import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
@@ -239,28 +239,18 @@ export function InboxPage({
           invisible filter are as gone as deleted ones (S25.1.2) — and it is
           absent entirely when nothing is silenced, because a tab that can
           only ever be empty is furniture. */}
-      <div className="mb-4 flex gap-1" data-testid="inbox-tabs">
-        {[
-          { key: 'inbox' as const, label: 'Inbox' },
-          { key: 'digests' as const, label: 'What you were told' },
-          ...(mutedCount !== null && (mutedCount > 0 || view === 'muted')
-            ? [{ key: 'muted' as const, label: `Muted (${mutedCount})` }]
-            : []),
-        ].map(tab => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setView(tab.key)}
-            aria-pressed={view === tab.key}
-            className={`rounded-sm px-3 py-1.5 text-compact transition-colors ${
-              view === tab.key
-                ? 'bg-surface-elevated text-content-primary'
-                : 'text-content-secondary hover:text-content-primary'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="mb-4" data-testid="inbox-tabs">
+        <Tabs
+          tabs={[
+            { id: 'inbox', label: 'Inbox' },
+            { id: 'digests', label: 'What you were told' },
+            ...(mutedCount !== null && (mutedCount > 0 || view === 'muted')
+              ? [{ id: 'muted', label: `Muted (${mutedCount})` }]
+              : []),
+          ]}
+          activeTab={view}
+          onChange={(id: string) => setView(id as typeof view)}
+        />
       </div>
 
       {/* The server's count, over every row — not a count of what this page
@@ -287,12 +277,12 @@ export function InboxPage({
       )}
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load the inbox: {error}
-        </div>
+        </Banner>
       )}
 
       {view === 'digests' ? (

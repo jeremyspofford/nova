@@ -20,8 +20,7 @@ import {
   Input,
   Section,
   Select,
-  Skeleton,
-} from '../../components/ui'
+  Skeleton, Banner } from '../../components/ui'
 import {
   createProvider as apiCreateProvider,
   deleteProvider as apiDeleteProvider,
@@ -99,9 +98,6 @@ const CUSTOM = '__custom__'
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
-
-const bannerClass =
-  'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 // The price/context formatters moved to lib/modelFormat (shared with the
 // Models catalogue); re-exported so this section's tests and imports hold.
@@ -308,14 +304,14 @@ export function ProvidersSection({
       description="Cloud and remote model providers Nova can route to. A provider is a base URL, an auth shape and a key — its models are discovered live. Pick a preset or add any OpenAI-compatible endpoint by URL."
     >
       {loadError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Could not read the providers: {loadError}
-        </div>
+        </Banner>
       )}
       {actionError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           {actionError}
-        </div>
+        </Banner>
       )}
 
       {providers === null && !loadError ? (
@@ -484,9 +480,9 @@ export function ProvidersSection({
             </a>
           )}
           {saveError && (
-            <div role="alert" className={bannerClass}>
+            <Banner>
               Not saved — {saveError}
-            </div>
+            </Banner>
           )}
           <div className="flex items-center gap-2">
             <Button
@@ -762,9 +758,9 @@ function ProviderRow({
           data-testid={`provider-models-${provider.name}`}
         >
           {switchError && (
-            <div role="alert" className={bannerClass}>
+            <Banner>
               {switchError}
-            </div>
+            </Banner>
           )}
           {loadingModels && <Skeleton lines={2} />}
           {listingError && (

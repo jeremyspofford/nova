@@ -71,7 +71,7 @@ describe('Markdown — GitHub-flavoured structure renders as elements', () => {
     const c = md('call `foo()` then\n\n```\nbar()\n```')
     const inline = c.querySelector('p > code')
     const block = c.querySelector('pre')
-    expect(inline?.className).toMatch(/bg-surface-elevated/)
+    expect(inline?.className).toMatch(/bg-surface-selected/) // surface-selected since 2026-10-11 (light-mode pill)
     expect(block?.className).toMatch(/overflow-x-auto/)
   })
 
@@ -366,7 +366,7 @@ describe('Markdown — fenced code is syntax-highlighted', () => {
   it('inline code is never highlighted and keeps its pill', () => {
     const c = md('call `def f()` now')
     const inline = c.querySelector('p > code')
-    expect(inline?.className).toMatch(/bg-surface-elevated/)
+    expect(inline?.className).toMatch(/bg-surface-selected/)
     expect(inline?.className).toMatch(/font-mono/)
     expect(inline?.querySelector('span')).toBeNull()
   })

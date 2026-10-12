@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { ScrollText } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
+import { Badge, Button, EmptyState, Skeleton, Banner } from '../../components/ui'
 import {
   getGovernanceEvents as apiGetGovernanceEvents,
   GOVERNANCE_PAGE_SIZE,
@@ -128,12 +128,12 @@ export function GovernancePage({
       />
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load the governance ledger: {error}
-        </div>
+        </Banner>
       )}
 
       {events === null ? (

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, Gauge, Loader2, X } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, CopyableId, EmptyState, Select, Skeleton } from '../../components/ui'
+import { Badge, Button, CopyableId, EmptyState, Select, Skeleton, Banner } from '../../components/ui'
 import {
   ApiError,
   getActiveEvalRun as apiGetActiveEvalRun,
@@ -372,12 +372,12 @@ export function AIQualityPage({
       />
 
       {loadError && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load the eval suites: {loadError}
-        </div>
+        </Banner>
       )}
 
       {/* Pick a suite + a model, then Run. */}
@@ -436,12 +436,12 @@ export function AIQualityPage({
       </div>
 
       {runError && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           The run failed: {runError}
-        </div>
+        </Banner>
       )}
 
       <Results
@@ -511,13 +511,13 @@ function Results({
           )}
         </div>
         {pollError && (
-          <div
+          <Banner
             data-testid="eval-poll-error"
-            className="mb-4 rounded-sm border border-warning/30 bg-warning-dim px-4 py-3 text-compact text-warning"
+            tone="warning" className="mb-4"
           >
             Could not read the run's record — {pollError}. The run keeps going on the server;
             reading it again…
-          </div>
+          </Banner>
         )}
         {record && record.cases.length > 0 && <CaseTable cases={record.cases} />}
       </div>
@@ -553,12 +553,11 @@ function Results({
 
   if (priorError) {
     return (
-      <div
+      <Banner
         role="alert"
-        className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
       >
         Could not load prior results: {priorError}
-      </div>
+      </Banner>
     )
   }
 

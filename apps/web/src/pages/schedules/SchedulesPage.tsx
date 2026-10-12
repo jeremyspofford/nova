@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarClock, ChevronDown, ChevronRight, Pause, Play, RefreshCw, Trash2, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, ConfirmDialog, EmptyState, Skeleton } from '../../components/ui'
+import { Badge, Button, ConfirmDialog, EmptyState, Skeleton, Banner } from '../../components/ui'
 import {
   bindTimerAgent as apiBindTimerAgent,
   deleteTimer as apiDeleteTimer,
@@ -495,12 +495,12 @@ export function SchedulesPage({
       />
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load schedules: {error}
-        </div>
+        </Banner>
       )}
 
       {timers === null ? (

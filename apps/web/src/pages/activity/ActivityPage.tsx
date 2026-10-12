@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ScrollText } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Button, EmptyState, Skeleton } from '../../components/ui'
+import { Button, EmptyState, Skeleton, Banner } from '../../components/ui'
 import {
   getActivity as apiGetActivity,
   getActivityTurn as apiGetActivityTurn,
@@ -102,12 +102,12 @@ export function ActivityPage({
       />
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load activity: {error}
-        </div>
+        </Banner>
       )}
 
       {/* A link that named a turn this page has not loaded says so. Silence

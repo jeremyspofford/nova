@@ -80,3 +80,21 @@ describe('code colours on the code block', () => {
     }
   })
 })
+
+describe('the inline code pill', () => {
+  // In light themes surface-elevated is one step off the page (100 on 50) —
+  // the pill behind `code` all but vanished, worst in Daylight (2026-10-11).
+  const PILLS = import.meta.glob(
+    ['/src/components/Markdown.tsx', '/src/components/ui/Code.tsx', '/src/components/ui/CopyableId.tsx'],
+    { query: '?raw', import: 'default', eager: true },
+  ) as Record<string, string>
+
+  it('sits on surface-selected, two steps off the page in light and unchanged in dark', () => {
+    const sheet = css('/src/index.css')
+    expect(neutralStep(sheet, ':root', 'surface-selected')).not.toBe(neutralStep(sheet, ':root', 'surface-elevated'))
+    expect(neutralStep(sheet, 'html.dark', 'surface-selected')).toBe(neutralStep(sheet, 'html.dark', 'surface-elevated'))
+    for (const [path, src] of Object.entries(PILLS)) {
+      expect(src, path).toMatch(/'[^']*font-mono text-mono-sm bg-surface-selected/)
+    }
+  })
+})
