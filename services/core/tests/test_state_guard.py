@@ -542,6 +542,14 @@ _AGENTS_CALL_CONSUMERS: frozenset[tuple[str, str]] = frozenset(
         # reply and no fact from here; wake_now's own _connected read is what
         # it records.
         ("wake.py", "_providers_on"),
+        # S46a T11, a deliberate pin move (T10 added the call; T10's check set
+        # did not run this file): a route wake's inputs. `connected` picks
+        # which machines it targets (a connected agent is skipped), and T11's
+        # no-link reply says "<machine> is offline" for such a target — a
+        # backend statement built from the records, never her prose, so no
+        # guard reads it; wake_now's own _connected read before sending is
+        # what is recorded.
+        ("wake.py", "_route_inputs"),
     }
 )
 

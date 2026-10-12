@@ -49,6 +49,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -60,6 +61,7 @@ from app import (
     machines,
     model_machines,
     network,
+    peers,
     wake_attempts,
 )
 
@@ -83,6 +85,12 @@ class WakeCannot(Exception):
 
 class RelayCannot(WakeCannot):
     """No agent can send it: recorded as a relay_cannot attempt."""
+
+
+class SendUnknown(WakeCannot):
+    """Whether the packets left is not known (the relay never answered, or
+    answered without a count, or its row could not be written): never
+    stated as "not sent" (S46a T11)."""
 
 
 @dataclass(frozen=True)
@@ -210,6 +218,68 @@ async def _send(pool, relay: dict, args: dict, timeout: float) -> dict:
     )
 
 
+# The gateway's typed route fields that say a link's machine did not answer a
+# dial (S46a T8: this request could not connect; T9: walled by a connect
+# failure) — never its prose reason.
+ROUTE_LINK_FIELDS = ("unreachable", "connect_walled")
+
+
+def _route_ids(value: object) -> list[str]:
+    """One typed route field's served ids: the header's comma-joined string
+    (each id percent-quoted, so unquoted here) or the usage chunk's list."""
+    if isinstance(value, str):
+        return [unquote(part) for part in value.split(",") if part]
+    if isinstance(value, (list, tuple)):
+        return [part for part in value if isinstance(part, str) and part]
+    return []
+
+
+def route_targets(
+    route_meta: object, providers: object, agents: object, peers: object
+) -> list[dict]:
+    """The paired machines a turn's route says to wake: [{device, links}], one
+    per device, in link order (S46a T9).
+
+    A link counts when the gateway typed it `unreachable` or `connect_walled`
+    (route_meta: peers.route_fields' dict, or the chunk's route). Its provider
+    (the id's part before the first ":") is looked up in `providers` and
+    mapped to a paired device by model_machines.device_of — derived from the
+    URL, the agents' addresses and the tailnet, never a name. The device is a
+    target only when its agent is NOT connected: a connected agent means the
+    machine is awake and the problem is not sleep. The hub never is (it is
+    always on, and it is the relay). An unlisted provider, one on no paired
+    machine, or an ambiguous one names nothing. Pure: no I/O."""
+    if not isinstance(route_meta, dict):
+        return []
+    ids: list[str] = []
+    for field in ROUTE_LINK_FIELDS:
+        for served in _route_ids(route_meta.get(field)):
+            if served not in ids:
+                ids.append(served)
+    if not ids:
+        return []
+    base_urls = {
+        p.get("name"): p.get("base_url")
+        for p in (providers if isinstance(providers, (list, tuple)) else ())
+        if isinstance(p, dict)
+    }
+    agent_list = [
+        a for a in (agents if isinstance(agents, (list, tuple)) else ()) if isinstance(a, dict)
+    ]
+    by_name = {a.get("name"): a for a in agent_list}
+    targets: dict[str, list[str]] = {}
+    for served in ids:
+        provider = served.split(":", 1)[0]
+        if provider not in base_urls:
+            continue
+        device = model_machines.device_of(base_urls[provider], agent_list, peers)["device"]
+        agent = by_name.get(device)
+        if agent is None or agent.get("hub") is True or agent.get("connected") is True:
+            continue
+        targets.setdefault(device, []).append(served)
+    return [{"device": device, "links": links} for device, links in targets.items()]
+
+
 async def _providers_on(app, name: str) -> tuple[list[dict], str | None]:
     """The gateway's providers that run on paired machine `name`
     ({name, base_url}), mapped by model_machines.device_of — derived from the
@@ -270,10 +340,14 @@ async def wake_now(
     trigger: str = "tool",
     facts_sink: list[dict] | None = None,
     progress: Callable[[str], None] | None = None,
+    turn_id=None,
+    on_sent: Callable[[object], None] | None = None,
 ) -> str:
     """Send `machine`'s wake through the relay and measure the answer for up
     to wait_s (clamped to the ledger's 30..600). Returns the words; raises
-    WakeCannot when nothing can be sent or whether it was sent is unknown."""
+    WakeCannot when nothing can be sent or whether it was sent is unknown.
+    `on_sent` is called with the attempt id the moment its row is written
+    (the no-link reply waits for the send, never the answer — S46a T11)."""
     sink = facts_sink if facts_sink is not None else []
     rows = await machines.plant().live_devices(app)
     try:
@@ -309,6 +383,7 @@ async def wake_now(
             outcome="not_asleep",
             reason=f"{name}'s agent was connected when the wake was asked for",
             trigger=trigger,
+            turn_id=turn_id,
         )
         sink.append(_fact(name, attempt, "not_asleep", sent=False))
         return f"{name} is already connected — its agent is connected now, so nothing was sent."
@@ -361,6 +436,7 @@ async def wake_now(
             trigger=trigger,
             adapter=chosen["name"] if chosen else None,
             mac=chosen["mac"] if chosen else None,
+            turn_id=turn_id,
         )
         sink.append(_fact(name, attempt, "relay_cannot", sent=False))
         raise
@@ -381,10 +457,10 @@ async def wake_now(
         )
     except devices_ws.NotSent as exc:
         reason = f"cannot: {relay.name}'s agent could not be given the wake — {exc.reason}"
-        await _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trigger)
+        await _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trigger, turn_id)
         raise RelayCannot(f"{reason}; nothing was sent") from exc
     except devices.DeviceRefused as exc:
-        raise WakeCannot(
+        raise SendUnknown(
             f"cannot say whether a wake left {relay.name}: {exc.reason} — the command reached "
             "its agent and no answer came back, so whether it sent is not known; nothing was "
             "recorded"
@@ -392,12 +468,12 @@ async def wake_now(
     if not isinstance(result, dict) or not result.get("ok"):
         said = (result or {}).get("error") if isinstance(result, dict) else None
         reason = f"cannot: {relay.name}'s agent did not send it — {said or 'it gave no reason'}"
-        await _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trigger)
+        await _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trigger, turn_id)
         raise RelayCannot(reason)
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
     packets = meta.get("sent")
     if isinstance(packets, bool) or not isinstance(packets, int) or packets < 1:
-        raise WakeCannot(
+        raise SendUnknown(
             f"cannot say what left {relay.name}: its agent answered ok without saying how many "
             "packets it sent; nothing was recorded"
         )
@@ -417,11 +493,15 @@ async def wake_now(
             trigger=trigger,
             sent_at=sent_at,
             deadline_s=used,
+            turn_id=turn_id,
         )
     except wake_attempts.AttemptOpen as exc:
-        raise WakeCannot(
+        raise SendUnknown(
             f"a wake left {relay.name} at {_utc(sent_at)}, but {exc} — this one is not recorded"
         ) from exc
+
+    if on_sent is not None:
+        on_sent(attempt)
 
     deadline = sent_at + timedelta(seconds=used)
     answered_at: datetime | None = None
@@ -499,7 +579,9 @@ async def wake_now(
     return words + clamp
 
 
-async def _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trigger) -> None:
+async def _relay_cannot(
+    pool, sink, name, target_id, relay, chosen, reason, trigger, turn_id=None
+) -> None:
     attempt = await wake_attempts.record_not_sent(
         pool,
         device_id=target_id,
@@ -509,5 +591,451 @@ async def _relay_cannot(pool, sink, name, target_id, relay, chosen, reason, trig
         relay_device_id=relay.id,
         adapter=chosen["name"],
         mac=chosen["mac"],
+        turn_id=turn_id,
     )
     sink.append(_fact(name, attempt, "relay_cannot", sent=False, relay=relay.name))
+
+
+# -- the background wake from a turn's route (S46a T10) ------------------------
+#
+# The owner's "Don't wait, fall back" (2026-10-10): a turn whose route says a
+# machine's link did not answer a dial is answered from the next link at once,
+# and the machine is woken in the background for later turns. Nothing here is
+# ever awaited by a turn: chat STARTS start_route_wakes and moves on. The tasks
+# live in their own set, never chat._BACKGROUND — settle_detached and
+# drain_background would otherwise hold a scheduled turn (or shutdown) for a
+# wake's whole wait. The app's shutdown cancels them (cancel_route_wakes).
+
+ROUTE_WAKES: set[asyncio.Task] = set()
+# Machines a background wake is being sent to right now, in this process, to
+# when it was claimed: the window between deciding to send and the row
+# existing (the relay's answer can take RELAY_TIMEOUT_S) that the rows cannot
+# cover yet. Which turn claimed it is not kept: it can be this turn's own
+# earlier round, so the reason never names one.
+_SENDING: dict[str, datetime] = {}
+BACKGROUND_WAKE_SPAN = "background_wake"
+
+
+@dataclass
+class _TurnSends:
+    """What one turn's route wakes decided about SENDING (S46a T11): the
+    machines its route named, then per machine {"attempt": id} once its row
+    is written, or {"reason": words[, "unknown": True]} when nothing was (or
+    whether it was is not known). Read once by no_link_reply, then dropped."""
+
+    targets: asyncio.Future
+    sends: dict
+
+
+# Per turn, the latest route's sends — popped by no_link_reply; bounded so a
+# turn that never asks cannot grow it for ever.
+_TURN_SENDS: dict = {}
+_TURN_SENDS_MAX = 256
+
+
+def _settle_future(future: asyncio.Future | None, value) -> None:
+    if future is not None and not future.done():
+        future.set_result(value)
+
+
+def _track(coro, name: str) -> asyncio.Task:
+    task = asyncio.create_task(coro, name=name)
+    ROUTE_WAKES.add(task)
+    task.add_done_callback(ROUTE_WAKES.discard)
+    return task
+
+
+def route_link_ids(route_meta: object) -> list[str]:
+    """The typed route fields' served ids, in field then link order, once each."""
+    if not isinstance(route_meta, dict):
+        return []
+    ids: list[str] = []
+    for field in ROUTE_LINK_FIELDS:
+        for served in _route_ids(route_meta.get(field)):
+            if served not in ids:
+                ids.append(served)
+    return ids
+
+
+async def _route_inputs(app) -> tuple[list[dict], list[dict], object]:
+    """What route_targets maps with: the gateway's providers, the agents, the
+    tailnet — each read live."""
+    reader = machines.plant()
+    providers, _walls = await reader.model_providers(app)
+    agents = await reader.agents(app)
+    return providers, agents, network.tailnet_peers()
+
+
+async def _record_background(turn_id, machine: str | None, fact: dict, started: datetime) -> None:
+    """File the background wake's fact as its own span of the turn — written
+    when the task knows it, which is usually after the turn closed (a closed
+    turn's spans are already written, so the llm_call span cannot carry it)."""
+    try:
+        pool = await db.get_pool()
+        await pool.execute(
+            "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb)",
+            turn_id,
+            BACKGROUND_WAKE_SPAN,
+            machine,
+            started,
+            int((datetime.now(UTC) - started).total_seconds() * 1000),
+            {BACKGROUND_WAKE_SPAN: fact},
+        )
+    except Exception:  # noqa: BLE001 — the trace write failing is logged, never raised
+        logger.exception("background wake: its span for turn %s could not be written", turn_id)
+
+
+def start_route_wakes(app, turn_id, route_meta: object) -> asyncio.Task | None:
+    """Start, never await, the wakes a round's route asks for. None when the
+    route types no link as unreachable or connect-walled."""
+    links = route_link_ids(route_meta)
+    if not links:
+        return None
+    entry = _TurnSends(targets=asyncio.get_running_loop().create_future(), sends={})
+    _TURN_SENDS.pop(turn_id, None)
+    _TURN_SENDS[turn_id] = entry
+    while len(_TURN_SENDS) > _TURN_SENDS_MAX:
+        _TURN_SENDS.pop(next(iter(_TURN_SENDS)))
+    return _track(_route_wakes(app, turn_id, route_meta, links, entry), "route-wake")
+
+
+async def _route_wakes(
+    app, turn_id, route_meta: dict, links: list[str], entry: _TurnSends | None = None
+) -> None:
+    started = datetime.now(UTC)
+    try:
+        providers, agents, peers = await _route_inputs(app)
+        targets = route_targets(route_meta, providers, agents, peers)
+    except Exception as exc:  # noqa: BLE001 — recorded and logged, never raised
+        logger.warning("background wake: the route's machines could not be read — %s", exc)
+        reason = f"the route's machines could not be read — {type(exc).__name__}: {exc}"
+        if entry is not None:
+            _settle_future(entry.targets, [])
+        await _record_background(
+            turn_id, None, {"machine": None, "links": links, "reason": reason}, started
+        )
+        return
+    if entry is not None:
+        loop = asyncio.get_running_loop()
+        for target in targets:
+            entry.sends[target["device"]] = loop.create_future()
+        _settle_future(entry.targets, targets)
+    for target in targets:
+        machine = target["device"]
+        sent = entry.sends.get(machine) if entry is not None else None
+        if machine in _SENDING:
+            reason = (
+                f"a wake for {machine} is already pending (attempt since {_utc(_SENDING[machine])})"
+            )
+            _settle_future(sent, {"reason": reason, "unknown": True})
+            await _record_background(
+                turn_id,
+                machine,
+                {"machine": machine, "links": target["links"], "reason": reason},
+                started,
+            )
+            continue
+        # Claimed with no await between the check and the add.
+        _SENDING[machine] = _now()
+        _track(
+            _route_wake_one(app, turn_id, machine, target["links"], sent),
+            f"route-wake:{machine}",
+        )
+
+
+async def _route_wake_one(
+    app, turn_id, machine: str, links: list[str], sent: asyncio.Future | None = None
+) -> None:
+    started = datetime.now(UTC)
+    fact: dict = {"machine": machine, "links": links}
+    unknown = False
+    try:
+        rows = await machines.plant().live_devices(app)
+        row = next((r for r in rows if r["name"] == machine), None)
+        if row is None:
+            fact["reason"] = f"{machine} is not a paired machine now"
+        else:
+            pool = await db.get_pool()
+            reason = await wake_attempts.debounce_reason(pool, row["id"], machine, now=_now())
+            if reason is not None:
+                fact["reason"] = reason
+            else:
+                sink: list[dict] = []
+                try:
+                    await wake_now(
+                        app,
+                        machine=machine,
+                        trigger="route",
+                        turn_id=turn_id,
+                        facts_sink=sink,
+                        on_sent=lambda attempt: _settle_future(sent, {"attempt": attempt}),
+                    )
+                except WakeCannot as exc:
+                    fact["reason"] = str(exc)
+                    unknown = isinstance(exc, SendUnknown)
+                said = next((f for f in reversed(sink) if "machine_wake" in f), None)
+                if said is not None:
+                    # The attempt and its outcome, as the wake recorded them;
+                    # a reason beside them when nothing was sent.
+                    reason = fact.pop("reason", None)
+                    fact.update(attempt=said["attempt"], outcome=said["outcome"])
+                    if reason is not None:
+                        fact["reason"] = reason
+                    if reason is None and said["attempt"] is not None:
+                        try:
+                            await announce_landing(app, turn_id, machine, said["attempt"])
+                        except Exception as exc:  # noqa: BLE001 — logged, never raised
+                            logger.warning(
+                                "background wake of %s: its notice could not be filed — %s: %s",
+                                machine,
+                                type(exc).__name__,
+                                exc,
+                            )
+    except asyncio.CancelledError:
+        logger.info("background wake of %s cancelled (shutdown)", machine)
+        raise
+    except Exception as exc:  # noqa: BLE001 — recorded and logged, never raised into a turn
+        logger.warning("background wake of %s failed — %s: %s", machine, type(exc).__name__, exc)
+        fact["reason"] = f"the background wake failed — {type(exc).__name__}: {exc}"
+        unknown = True
+    finally:
+        _SENDING.pop(machine, None)
+        # What the no-link reply reads: the row when one was written, else why
+        # not — or, when the wake ended without either, that it is not known.
+        if fact.get("attempt") is not None:
+            _settle_future(sent, {"attempt": fact["attempt"]})
+        elif fact.get("reason"):
+            _settle_future(sent, {"reason": fact["reason"], "unknown": unknown})
+        else:
+            _settle_future(
+                sent, {"reason": "the background wake ended without a record", "unknown": True}
+            )
+    await _record_background(turn_id, machine, fact, started)
+
+
+# -- a background wake that lands (S46a T12) -----------------------------------
+
+WALL_TIMEOUT = httpx.Timeout(10.0)
+_NOT_WALLED = "is not walled"
+
+
+async def _lift_walls(app, machine: str) -> str | None:
+    """Ask the gateway to lift its walls on every provider that runs on
+    `machine` (DELETE /admin/routes/walls/{provider}: the provider's wall and
+    each of its models'), so the next turn routes to the machine that just
+    answered instead of passing it over until the wall lapses. The sentence
+    for the notice, or None when there was no wall to lift. A clear that
+    fails is logged and said — never left out."""
+    providers, error = await _providers_on(app, machine)
+    if error is not None:
+        logger.warning("background wake: %s's walls were not lifted — %s", machine, error)
+        return f"Its links' walls were not lifted — {error}."
+    lifted: list[str] = []
+    failed: list[str] = []
+    for provider in providers:
+        name = str(provider["name"])
+        path = f"/admin/routes/walls/{quote(name, safe='')}"
+        try:
+            async with peers.client(app, peers.GATEWAY, WALL_TIMEOUT) as client:
+                response = await client.delete(path)
+        except (peers.PeerUnconfigured, httpx.HTTPError) as exc:
+            why = f"the gateway could not be reached — {peers.reason(exc)}"
+        else:
+            if response.status_code == 200:
+                lifted.append(name)
+                continue
+            if response.status_code == 404 and _NOT_WALLED in response.text:
+                continue
+            why = f"the gateway answered {response.status_code}"
+        logger.warning(
+            "background wake: the gateway's wall on %s (%s) could not be lifted — %s",
+            name,
+            machine,
+            why,
+        )
+        failed.append(
+            f"The gateway's wall on {name} could not be lifted ({why}); the next turn may pass "
+            "it over until the wall lapses."
+        )
+    words = []
+    if lifted:
+        words.append(
+            f"Lifted the gateway's wall on {', '.join(lifted)}, so the next turn can route to it."
+        )
+    words.extend(failed)
+    return " ".join(words) or None
+
+
+async def announce_landing(app, turn_id, machine: str, attempt) -> None:
+    """File the one notice a background wake's attempt gets once its wait
+    ended: answered (walls lifted first, so the notice says how that went)
+    or no answer. Never a second one for the same attempt — keyed by its id,
+    and an attempt already told is left alone (no second clear either)."""
+    from app import notices
+    from app.checks import wakes as wake_checks
+
+    pool = await db.get_pool()
+    row = await wake_attempts.get(pool, attempt)
+    if row is None or wake_checks.finding_for(machine, row) is None:
+        return
+    told = await pool.fetchval(
+        "SELECT 1 FROM notices WHERE check_name = $1 AND finding_key = $2 LIMIT 1",
+        wake_checks.LANDED,
+        f"wake_landed:{row['id']}",
+    )
+    if told:
+        return
+    walls = await _lift_walls(app, machine) if row.get("answered_at") is not None else None
+    finding = wake_checks.finding_for(machine, row, walls)
+    await notices.record(
+        pool, finding, check_name=wake_checks.LANDED, turn_id=turn_id, firing_id=None
+    )
+
+
+async def cancel_route_wakes() -> None:
+    """Shutdown: cancel every background wake and wait for each to end. A
+    cancelled wake's open row is settled at its deadline by the next reader."""
+    while ROUTE_WAKES:
+        tasks = list(ROUTE_WAKES)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        ROUTE_WAKES.difference_update(tasks)
+
+
+# -- no link left (S46a T11) -----------------------------------------------------
+#
+# The owner's "Don't wait, fall back" with nothing to fall back TO (the hub last
+# resort OFF on his stack): the gateway answers 503 and its route names a
+# machine's link as not answering a dial. The turn then closes ok with a
+# statement built from the records — the machine's last-seen time, this turn's
+# wake_attempts row (when it was sent, from which relay) or why nothing was
+# sent, the gateway's other verdicts — never the model's words, never "asleep"
+# (a statement only the machine can make, T30), never "woke".
+
+# How long the reply waits for the SEND (the relay's answer), never the wake.
+NO_LINK_WAIT_S = RELAY_TIMEOUT_S + 5
+# A verdict's reason, cut to this many characters (at a word) in the reply.
+VERDICT_REASON_MAX = 80
+# The gateway's verdict list is "<id>: <reason>; <id>: <reason>…"; an item
+# starts at "; " followed by a served id (no spaces) and ": ".
+_VERDICT_SPLIT = re.compile(r"; (?=[^\s;]+: )")
+_REFUSED = "(503): "
+
+
+def _short(reason: str) -> str:
+    reason = reason.strip()
+    if len(reason) <= VERDICT_REASON_MAX:
+        return reason
+    cut = reason[:VERDICT_REASON_MAX].rsplit(" ", 1)[0].rstrip(" ,;:—-")
+    return f"{cut}…"
+
+
+def other_verdicts(detail: str, links: list[str]) -> str | None:
+    """The gateway's 503 words, short, without the machine's own links: each
+    other link as "<id>: <reason>" (reason cut to VERDICT_REASON_MAX), or the
+    gateway's sentence when it listed no verdicts. None when the list holds
+    only the machine's own links: the gateway gives every link of the chain a
+    verdict, so no other model is in it. An item that is not "<id>: <reason>"
+    is kept as written, never dropped (it is not known to be the machine's)."""
+    sentence, sep, listed = detail.strip().partition(" — ")
+    if not sep:
+        return sentence.rstrip(". ")
+    others = []
+    for item in _VERDICT_SPLIT.split(listed):
+        link, colon, reason = item.partition(": ")
+        if not colon:
+            if item.strip():
+                others.append(_short(item).rstrip(". "))
+            continue
+        if link.strip() in links:
+            continue
+        others.append(f"{link.strip()}: {_short(reason)}".rstrip(". "))
+    return "; ".join(others) if others else None
+
+
+def _why(reason: str) -> str:
+    for head in ("cannot now: ", "cannot: "):
+        if reason.startswith(head):
+            return reason[len(head) :]
+    return reason
+
+
+async def _no_link_sentence(pool, machine: str, said: dict | None, waited: float) -> str:
+    seen = await pool.fetchval("SELECT last_seen FROM devices WHERE name = $1", machine)
+    offline = (
+        f"{machine} is offline (its agent last seen at {_utc(seen)})"
+        if seen is not None
+        else f"{machine} is offline (its agent has no last-seen record)"
+    )
+    if said is None:
+        return (
+            f"{offline} — whether a wake was sent is not known yet: the send had not "
+            f"completed within {waited:g} s."
+        )
+    attempt = said.get("attempt")
+    if attempt is not None:
+        row = await wake_attempts.get(pool, attempt)
+        if row is not None and row.get("sent_at") is not None:
+            relay = (
+                await pool.fetchval(
+                    "SELECT name FROM devices WHERE id = $1", row.get("relay_device_id")
+                )
+                if row.get("relay_device_id") is not None
+                else None
+            )
+            source = relay or "a relay no longer paired"
+            return f"{offline} — I sent a wake at {_utc(row['sent_at'])} from {source}."
+        if row is not None:
+            return f"{offline} — no wake was sent: {_why(str(row.get('reason') or ''))}."
+        return f"{offline} — whether a wake was sent is not known: its record is gone."
+    reason = _why(str(said.get("reason") or "")).rstrip(". ")
+    if said.get("unknown"):
+        return f"{offline} — whether a wake was sent is not known: {reason}."
+    return f"{offline} — no wake was sent: {reason}."
+
+
+async def no_link_reply(app, turn_id, failure: str, *, timeout: float | None = None) -> str | None:
+    """The turn's reply when no link could answer and its route named a
+    machine to wake; None when this turn's route started no wake or named no
+    paired, offline machine (the turn then keeps its stated failure).
+
+    Waits up to `timeout` (NO_LINK_WAIT_S) for each wake's SEND to be decided
+    — its row written, or why not — never for the machine to answer."""
+    entry = _TURN_SENDS.pop(turn_id, None)
+    if entry is None:
+        return None
+    wait = NO_LINK_WAIT_S if timeout is None else timeout
+    loop = asyncio.get_running_loop()
+    until = loop.time() + wait
+    try:
+        targets = await asyncio.wait_for(asyncio.shield(entry.targets), wait)
+    except TimeoutError:
+        return None
+    if not targets:
+        return None
+    pool = await db.get_pool()
+    sentences, links = [], []
+    for target in targets:
+        links.extend(target["links"])
+        future = entry.sends.get(target["device"])
+        said = None
+        if future is not None:
+            try:
+                said = await asyncio.wait_for(asyncio.shield(future), max(until - loop.time(), 0))
+            except TimeoutError:
+                said = None
+        sentences.append(await _no_link_sentence(pool, target["device"], said, wait))
+    _head, sep, detail = failure.partition(_REFUSED)
+    others = other_verdicts(detail if sep else failure, links)
+    # "No other model could answer right now" is what the 503 itself says:
+    # nothing in the chain could serve. Never "no other model is in the
+    # chain" — core reads a truncated failure text, so a link past the cut is
+    # unseen and that would be a claim about the chain it did not check.
+    rest = (
+        f"Nothing else could answer: {others}."
+        if others
+        else "No other model could answer right now."
+    )
+    return " ".join(sentences) + f" {rest} Ask again once it answers."

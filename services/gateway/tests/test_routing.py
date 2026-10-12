@@ -1045,3 +1045,310 @@ async def test_a_passed_over_link_is_never_walled_and_serves_the_next_request(
     again = await _chat(client, "chat", model="hub:qwen3:8b")
     assert again.headers["x-nova-served-by"] == "hub:qwen3:8b"
     assert again.headers["x-nova-route"] == "role=chat;link=1"
+
+
+# ── S46a T8: the links this request could not connect to, typed ───────────
+#
+# Core wakes a sleeping machine from the route (S46a.2) and must never parse
+# the prose reason to find out which link could not be reached. A link counts
+# when THIS request dialled it and the dial failed in the connect phase
+# (adapters.CONNECT_PHASE_ERRORS), or when it is an engine whose latest
+# reading failed in the connect phase. Nothing else counts.
+
+
+async def test_a_cloud_link_that_could_not_connect_is_listed_unreachable_and_walled(
+    client, pool, local, mount_backend, mount_transport
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ConnectTimeout))
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    header = resp.headers["x-nova-route"]
+    assert header.startswith("role=chat;link=2;reason=")
+    assert header.endswith(";unreachable=openrouter:remote-model")
+    route = _route_chunk(resp.content)
+    assert route["unreachable"] == ["openrouter:remote-model"]
+    # The label is unchanged: a non-engine's connect failure is a refusal that
+    # walls its model on the outage ladder (the fact T12 reads).
+    assert "openrouter:remote-model refused this request" in route["reason"]
+    walls = await pool.fetch("SELECT provider, model, status FROM provider_walls")
+    assert [(w["provider"], w["model"], w["status"]) for w in walls] == [
+        ("openrouter", "remote-model", 502)
+    ]
+
+    # The next request finds it walled, never dials it, and does not list it:
+    # a wall is not a connect failure of this request.
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+    assert "walled for another" in _route_chunk(resp.content)["reason"]
+    assert "unreachable" not in resp.headers["x-nova-route"]
+    assert "unreachable" not in _route_chunk(resp.content)
+
+
+async def test_an_engine_that_could_not_connect_is_listed_by_its_served_id(
+    client, pool, local, mount_backend, mount_transport
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    mount_transport("http://ollama.test/v1", FailingTransport(httpx.ConnectError))
+
+    resp = await _chat(client, "chat", model="qwen3:8b")  # a bare pick
+
+    assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+    assert resp.headers["x-nova-route"].endswith(";unreachable=hub:qwen3:8b")
+    assert _route_chunk(resp.content)["unreachable"] == ["hub:qwen3:8b"]
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+async def test_a_link_that_took_the_request_and_went_silent_is_not_listed(
+    client, pool, local, mount_backend, mount_transport
+):
+    """A ReadTimeout means the peer accepted the call: it is up, so nothing
+    should be woken."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ReadTimeout))
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    assert _route_chunk(resp.content)["link"] == 2
+    assert "unreachable" not in resp.headers["x-nova-route"]
+    assert "unreachable" not in _route_chunk(resp.content)
+
+
+async def test_a_status_refusal_is_not_listed(client, pool, local, mount_backend):
+    cloud = await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    cloud.completions_status = 503
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    assert "unreachable" not in resp.headers["x-nova-route"]
+    assert "unreachable" not in _route_chunk(resp.content)
+
+
+async def test_a_503_lists_the_links_that_could_not_connect_on_the_route_header(
+    client, pool, local, mount_backend, mount_transport
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+    mount_transport("http://ollama.test/v1", FailingTransport(httpx.ConnectError))
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 503
+    assert resp.headers.get("x-nova-route") == "role=judge;unreachable=hub:qwen3:8b"
+    # The body is the walk's words, as before.
+    assert "hub:qwen3:8b: standby: could not reach hub" in resp.json()["error"]
+
+
+async def test_a_walk_whose_every_dial_fails_to_connect_lists_them_on_the_final_503(
+    client, pool, local, mount_backend, mount_transport
+):
+    """The walk's last 503 (every link it dialled refused, after its six
+    attempts) carries the route header too — the raise after the loop, not
+    resolve's NothingRunnable — with the links walled by an earlier connect
+    failure after them."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await routing.record_refusal(
+        pool, {"name": "openrouter"}, 502, "ConnectTimeout", model="m0", connect_failed=True
+    )
+    local.tags = ()
+    engines.clear_cache()
+    chain = [f"openrouter:m{i}" for i in range(7)]
+    await client.put("/admin/routes/chat", json={"chain": chain})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ConnectTimeout))
+
+    resp = await _chat(client, "chat")
+
+    assert resp.status_code == 503
+    assert "every link in the 'chat' chain refused this request" in resp.text
+    dialled = ",".join(chain[1:])
+    assert resp.headers.get("x-nova-route") == (
+        f"role=chat;unreachable={dialled};connect_walled=openrouter:m0"
+    )
+
+
+def test_a_served_id_reached_twice_is_listed_once():
+    """A bare pick and the same link again in the chain judge the same served
+    id twice: it is one link to wake, listed once, in its first place."""
+    verdicts = [
+        {"id": "qwen3:8b", "provider": "hub", "model": "qwen3:8b", "verdict": "unreachable"},
+        {"id": "cloud:m", "provider": "cloud", "model": "m", "verdict": "refused"},
+        {"id": "hub:qwen3:8b", "provider": "hub", "model": "qwen3:8b", "verdict": "unreachable"},
+    ]
+    assert routing.unreachable_links(verdicts, ["hub:qwen3:8b", "cloud:m"]) == (
+        "hub:qwen3:8b",
+        "cloud:m",
+    )
+    marked = [{"provider": "hub", "model": "a", "connect_failed": True}] * 2
+    assert routing.unreachable_links([dict(v) for v in marked], None) == ("hub:a",)
+
+
+async def test_a_503_with_nothing_unreachable_carries_no_route_header(client, pool, local):
+    local.tags = ()
+    engines.clear_cache()
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+
+    resp = await _chat(client, "chat")
+
+    assert resp.status_code == 503
+    assert "x-nova-route" not in resp.headers
+
+
+def test_the_header_quotes_each_id_so_a_name_cannot_split_the_list():
+    decision = routing.Decision(
+        row={"name": "p", "local": True},
+        model="m",
+        link=2,
+        reason="r",
+        role="chat",
+    )
+    decision.unreachable = ("dell:qwen3.8:27b", "odd:a,b;c")
+    assert decision.header() == (
+        "role=chat;link=2;reason=r;unreachable=dell:qwen3.8:27b,odd:a%2Cb%3Bc"
+    )
+    assert decision.as_route()["unreachable"] == ["dell:qwen3.8:27b", "odd:a,b;c"]
+
+
+def test_a_decision_with_nothing_unreachable_says_exactly_what_it_said_before():
+    decision = routing.Decision(row={"name": "p"}, model="m", link=1, reason=None, role="chat")
+    assert decision.header() == "role=chat;link=1"
+    assert "unreachable" not in decision.as_route()
+
+
+# ── S46a T9: a wall made by a connect failure, typed ──────────────────────
+#
+# The first connect failure on a non-engine link walls it for up to 30 min
+# (OUTAGE_STEPS_S), and T8's `unreachable` leaves walled links out — so a
+# turn during that wall would never tell core the machine is still not
+# answering. The wall itself records WHY in a typed column (connect_failed),
+# and a walled verdict whose wall was made by a connect failure is listed in
+# its own field, `connect_walled=` — never `unreachable` (T8's pin), never
+# read off the wall's prose reason.
+
+
+async def test_a_wall_made_by_a_connect_failure_is_listed_connect_walled_on_the_next_request(
+    client, pool, local, mount_backend, mount_transport
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ConnectTimeout))
+
+    first = await _chat(client, "chat", model="openrouter:remote-model")
+    assert "connect_walled" not in first.headers["x-nova-route"]
+    assert "connect_walled" not in _route_chunk(first.content)
+    walls = await pool.fetch("SELECT provider, model, connect_failed FROM provider_walls")
+    assert [(w["provider"], w["model"], w["connect_failed"]) for w in walls] == [
+        ("openrouter", "remote-model", True)
+    ]
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    header = resp.headers["x-nova-route"]
+    assert header.endswith(";connect_walled=openrouter:remote-model")
+    assert "unreachable" not in header
+    route = _route_chunk(resp.content)
+    assert route["connect_walled"] == ["openrouter:remote-model"]
+    assert "unreachable" not in route
+
+
+async def test_a_wall_made_by_a_status_refusal_is_not_connect_walled(
+    client, pool, local, mount_backend
+):
+    cloud = await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    cloud.completions_status = 503
+
+    await _chat(client, "chat", model="openrouter:remote-model")
+    walls = await pool.fetch("SELECT connect_failed FROM provider_walls")
+    assert [w["connect_failed"] for w in walls] == [False]
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+    assert "walled for another" in _route_chunk(resp.content)["reason"]
+    assert "connect_walled" not in resp.headers["x-nova-route"]
+    assert "connect_walled" not in _route_chunk(resp.content)
+
+
+async def test_a_wall_made_by_a_read_timeout_is_not_connect_walled(
+    client, pool, local, mount_backend, mount_transport
+):
+    """The peer took the call and went silent: it is up, nothing to wake."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ReadTimeout))
+
+    await _chat(client, "chat", model="openrouter:remote-model")
+    walls = await pool.fetch("SELECT connect_failed FROM provider_walls")
+    assert [w["connect_failed"] for w in walls] == [False]
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+    assert "connect_walled" not in resp.headers["x-nova-route"]
+
+
+async def test_a_status_refusal_after_a_connect_failure_clears_the_connect_mark(
+    client, pool, local, mount_backend, mount_transport
+):
+    """The wall's reason is the LATEST refusal's: once something answered with
+    a status, the wall no longer says the machine could not be reached."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    real = routing.record_refusal
+    row = {"name": "openrouter"}
+    await real(pool, row, 502, "ConnectTimeout", model="remote-model", connect_failed=True)
+    await real(pool, row, 503, "busy", model="remote-model")
+    walls = await pool.fetch("SELECT connect_failed, strikes FROM provider_walls")
+    assert [(w["connect_failed"], w["strikes"]) for w in walls] == [(False, 2)]
+
+
+async def test_a_503_lists_connect_walled_links_on_the_route_header(
+    client, pool, local, mount_backend
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await routing.record_refusal(
+        pool,
+        {"name": "openrouter"},
+        502,
+        "ConnectTimeout",
+        model="remote-model",
+        connect_failed=True,
+    )
+    local.tags = ()
+    engines.clear_cache()
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+
+    resp = await _chat(client, "chat")
+
+    assert resp.status_code == 503
+    assert resp.headers.get("x-nova-route") == "role=chat;connect_walled=openrouter:remote-model"
+
+
+def test_the_header_states_connect_walled_after_unreachable_each_quoted():
+    decision = routing.Decision(
+        row={"name": "p", "local": True}, model="m", link=2, reason="r", role="chat"
+    )
+    decision.unreachable = ("dell:qwen3.8:27b",)
+    decision.connect_walled = ("odd:a,b;c",)
+    assert decision.header() == (
+        "role=chat;link=2;reason=r;unreachable=dell:qwen3.8:27b;connect_walled=odd:a%2Cb%3Bc"
+    )
+    route = decision.as_route()
+    assert route["connect_walled"] == ["odd:a,b;c"]
+
+
+def test_connect_walled_links_reads_only_walled_verdicts_not_listed_unreachable():
+    verdicts = [
+        {"id": "a", "provider": "p", "model": "a", "verdict": "walled", "connect_walled": True},
+        {"id": "b", "provider": "p", "model": "b", "verdict": "walled"},
+        # Skipped in this request after its own dial walled it: its verdict is
+        # `refused`, and it is listed as unreachable already.
+        {"id": "c", "provider": "p", "model": "c", "verdict": "refused", "connect_walled": True},
+        {"id": "a", "provider": "p", "model": "a", "verdict": "walled", "connect_walled": True},
+    ]
+    assert routing.connect_walled_links(verdicts, ("p:c",)) == ("p:a",)
+    assert routing.connect_walled_links(verdicts[:1], ("p:a",)) == ()

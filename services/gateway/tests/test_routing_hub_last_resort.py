@@ -436,3 +436,39 @@ async def test_a_hub_the_standby_already_tried_is_not_judged_again(
     assert not any(v.get("last_resort") for v in on.value.verdicts)
     assert on.value.verdicts == off.value.verdicts
     assert str(on.value) == str(off.value)
+
+
+# ── S46a T8: the asleep Dell is named, typed, on the route ──────────────────
+
+DELL_UNREACHABLE = "dell:qwen3:8b,dell:qwen3.8:27b"
+
+
+async def test_off_the_503_names_the_dell_links_that_could_not_connect(client, pool, hub, de0baf27):
+    """The engine's reading (/api/tags) failed in the connect phase, so both
+    Dell links count without being dialled; OpenRouter is walled, which is
+    not a connect failure."""
+    resp = await _chat(client)
+
+    assert resp.status_code == 503
+    assert resp.headers.get("x-nova-route") == f"role=chat;unreachable={DELL_UNREACHABLE}"
+
+
+async def test_on_the_last_resort_route_names_the_dell_links_too(client, pool, hub, de0baf27):
+    resp = await _chat(client, flag="1")
+
+    assert resp.status_code == 200, resp.text
+    header = resp.headers["x-nova-route"]
+    assert header.endswith(f";last_resort=1;unreachable={DELL_UNREACHABLE}")
+    assert _route_chunk(resp.content)["unreachable"] == ["dell:qwen3:8b", "dell:qwen3.8:27b"]
+
+
+async def test_an_engine_whose_reading_timed_out_after_connecting_is_not_listed(
+    client, pool, hub, de0baf27, mount_transport
+):
+    mount_transport("http://dell.test", FailingTransport(httpx.ReadTimeout))
+    engines.clear_cache()
+
+    resp = await _chat(client)
+
+    assert resp.status_code == 503
+    assert "x-nova-route" not in resp.headers

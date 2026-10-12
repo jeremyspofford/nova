@@ -55,6 +55,7 @@ import asyncpg
 import httpx
 
 from app import adapters, compute_id, devices_vram, providers
+from app.adapters.base import CONNECT_PHASE_ERRORS
 
 BUILTIN = providers.BUILTIN
 #: D8: the bundled engine is always the compose container.
@@ -126,6 +127,12 @@ class _Reading:
 
 
 _READINGS: dict[str, _Reading] = {}
+# Each engine whose LATEST reading failed in the connect phase (adapters
+# CONNECT_PHASE_ERRORS: nothing took the request), to that reading's
+# observed_at — so connect_failed(view) answers for exactly the reading a view
+# was made from. Kept beside the view, not in it: EngineView is the
+# docs/contracts/engine_view.json payload core and the web read (S46a T8).
+_CONNECT_FAILED: dict[str, str] = {}
 
 
 def _clock() -> float:
@@ -138,6 +145,14 @@ def _nproc() -> int:
 
 def clear_cache() -> None:
     _READINGS.clear()
+    _CONNECT_FAILED.clear()
+
+
+def connect_failed(view: EngineView) -> bool:
+    """Did the reading this view was made from fail in the CONNECT phase?
+    Typed from the exception, never read off the words (S46a T8): False for a
+    reading that answered, failed on a status, or failed after connecting."""
+    return view.answered is False and _CONNECT_FAILED.get(view.name) == view.observed_at
 
 
 def forget(name: str) -> None:
@@ -423,12 +438,17 @@ async def _read(app, pool: asyncpg.Pool, row: dict) -> _Reading:
     try:
         listing = await adapters.for_row(row).list_models(app, row)
     except adapters.ProviderRefused as exc:
+        observed_at = datetime.now(UTC).isoformat()
+        if isinstance(exc.__cause__, CONNECT_PHASE_ERRORS):
+            _CONNECT_FAILED[row["name"]] = observed_at
+        else:
+            _CONNECT_FAILED.pop(row["name"], None)
         return _Reading(
             ok=False,
             detail=exc.detail,
             tags=None,
             tags_as_of=None,
-            observed_at=datetime.now(UTC).isoformat(),
+            observed_at=observed_at,
             facts=facts,
             compute=compute,
             runtime=runtime,

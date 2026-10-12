@@ -176,6 +176,12 @@ class NothingRunnable(RuntimeError):
         super().__init__(f"{said} — {why}" if why else said)
         self.role = role
         self.verdicts = verdicts
+        #: Served ids of the links this request could not connect to
+        #: (unreachable_links) — set by resolve().
+        self.unreachable: tuple[str, ...] = ()
+        #: Served ids of the walled links whose wall a connect failure made
+        #: (connect_walled_links) — set by resolve().
+        self.connect_walled: tuple[str, ...] = ()
 
 
 @dataclass
@@ -190,6 +196,15 @@ class Decision:
     #: Served by the hub last resort (hub_last_resort): the hub engine's own
     #: derived chat model after every link and the standby failed.
     last_resort: bool = False
+    #: Served ids (`provider:model`, link order) of the links that could not
+    #: be CONNECTED to (unreachable_links): typed, so core never reads the
+    #: prose reason to learn which machine to wake (S46a T8). Empty = absent.
+    unreachable: tuple[str, ...] = ()
+    #: Served ids of the WALLED links whose wall was made by a connect failure
+    #: (connect_walled_links, S46a T9): a link walled by its first connect
+    #: failure is never dialled again for up to 30 min, so `unreachable` alone
+    #: would go quiet while the machine behind it is still not answering.
+    connect_walled: tuple[str, ...] = ()
 
     def header(self) -> str:
         from urllib.parse import quote
@@ -201,10 +216,14 @@ class Decision:
             parts.append("standby=1")
         if self.last_resort:
             parts.append("last_resort=1")
+        if self.unreachable:
+            parts.append(unreachable_part(self.unreachable))
+        if self.connect_walled:
+            parts.append(connect_walled_part(self.connect_walled))
         return ";".join(parts)
 
     def as_route(self) -> dict:
-        return {
+        route = {
             "role": self.role,
             "link": self.link,
             "reason": self.reason,
@@ -217,6 +236,70 @@ class Decision:
             # does not share the GPU.
             "local": bool(self.row.get("local")),
         }
+        if self.unreachable:
+            route["unreachable"] = list(self.unreachable)
+        if self.connect_walled:
+            route["connect_walled"] = list(self.connect_walled)
+        return route
+
+
+def unreachable_part(ids: Sequence[str]) -> str:
+    """The route header's `unreachable=` field: each served id quoted (":"
+    kept) and comma-joined, so no model name can split the list."""
+    from urllib.parse import quote
+
+    return "unreachable=" + ",".join(quote(i, safe=":") for i in ids)
+
+
+def connect_walled_part(ids: Sequence[str]) -> str:
+    """The route header's `connect_walled=` field, quoted as unreachable_part."""
+    from urllib.parse import quote
+
+    return "connect_walled=" + ",".join(quote(i, safe=":") for i in ids)
+
+
+def _served_id(verdict: dict) -> str:
+    if verdict.get("provider"):
+        return f"{verdict['provider']}:{verdict['model']}"
+    return verdict["id"]
+
+
+def unreachable_links(verdicts: list[dict], unreached: Sequence[str] | None) -> tuple[str, ...]:
+    """The served ids, in link order and once each, of the links that could
+    not be CONNECTED to: a link this request dialled whose dial failed in the
+    connect phase (`unreached`, the walk's own record — an engine's verdict is
+    then `unreachable`, any other row's `refused`), or an engine judged
+    `unreachable` because its latest reading failed in the connect phase
+    (judge_link marks `connect_failed`). A wall, a cap, a status refusal or
+    a read timeout is not one: something answered, or nothing was dialled.
+    Each listed verdict is marked `connect_failed` too."""
+    dialled = set(unreached or ())
+    out: list[str] = []
+    for verdict in verdicts:
+        served = _served_id(verdict)
+        if served in dialled:
+            verdict["connect_failed"] = True
+        if verdict.get("connect_failed") and served not in out:
+            out.append(served)
+    return tuple(out)
+
+
+def connect_walled_links(verdicts: list[dict], unreachable: Sequence[str]) -> tuple[str, ...]:
+    """The served ids, in link order and once each, of the links judged
+    `walled` whose wall a connect failure made (the wall row's typed
+    connect_failed, which judge_link copies to the verdict as
+    `connect_walled`) — never one already listed `unreachable`, and never a
+    verdict this request relabelled (a link it dialled and skipped is
+    `refused`, whatever its wall says)."""
+    listed = set(unreachable)
+    out: list[str] = []
+    for verdict in verdicts:
+        if verdict.get("verdict") != "walled" or not verdict.get("connect_walled"):
+            continue
+        served = _served_id(verdict)
+        if served not in listed and served not in out:
+            out.append(served)
+    return tuple(out)
 
 
 # ── routes ─────────────────────────────────────────────────────────────────
@@ -862,8 +945,8 @@ async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
     provider walled, and is this model walled — and never confuses the two.
     """
     rows = await pool.fetch(
-        "SELECT provider, model, walled_until, reason, status, strikes FROM provider_walls "
-        "WHERE walled_until > now()"
+        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed "
+        "FROM provider_walls WHERE walled_until > now()"
     )
     return {(r["provider"], r["model"]): dict(r) for r in rows}
 
@@ -875,7 +958,13 @@ def wall_for(walled: dict[tuple[str, str], dict], provider: str, model: str) -> 
 
 
 async def record_refusal(
-    pool: asyncpg.Pool, row: dict, status: int, detail: str, *, model: str | None = None
+    pool: asyncpg.Pool,
+    row: dict,
+    status: int,
+    detail: str,
+    *,
+    model: str | None = None,
+    connect_failed: bool = False,
 ) -> dict | None:
     """Something refused before serving: wall it (escalating) — ONE transaction
     with nothing else, so a wall never half-writes. The ledger row for the
@@ -891,6 +980,9 @@ async def record_refusal(
     fallback for an hour and the owner's next question had nowhere to go.
 
     `model` is optional only so an account-level refusal need not name one.
+    `connect_failed` is whether this refusal failed in the connect phase
+    (data_plane.connect_failed, typed): stored on the wall and REPLACED by each
+    later refusal, as its reason is (S46a T9).
     """
     if status not in WALL_STATUSES and status < 500:
         return None
@@ -910,16 +1002,19 @@ async def record_refusal(
         who = row["name"] if scope == WHOLE_PROVIDER else f"{row['name']}:{scope}"
         reason = f"{who} refused ({status}): {detail[:200]}"
         await conn.execute(
-            "INSERT INTO provider_walls (provider, model, walled_until, reason, status, strikes) "
-            "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (provider, model) DO UPDATE SET "
+            "INSERT INTO provider_walls "
+            "(provider, model, walled_until, reason, status, strikes, connect_failed) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (provider, model) DO UPDATE SET "
             "walled_until = EXCLUDED.walled_until, reason = EXCLUDED.reason, "
-            "status = EXCLUDED.status, strikes = EXCLUDED.strikes, updated_at = now()",
+            "status = EXCLUDED.status, strikes = EXCLUDED.strikes, "
+            "connect_failed = EXCLUDED.connect_failed, updated_at = now()",
             row["name"],
             scope,
             until,
             reason,
             status,
             strikes,
+            connect_failed,
         )
     logger.warning("walled: %s until %s (strike %d)", who, until, strikes)
     return {
@@ -1036,12 +1131,15 @@ async def judge_link(
     wall = wall_for(walled, provider_name, model)
     if wall is not None:
         left = int((wall["walled_until"] - datetime.now(UTC)).total_seconds() // 60) + 1
-        return {
+        walled_verdict = {
             **entry,
             "verdict": "walled",
             "reason": f"{wall['reason']} — walled for another {left} min",
             "walled_until": wall["walled_until"].isoformat(),
         }
+        if wall.get("connect_failed"):
+            walled_verdict["connect_walled"] = True
+        return walled_verdict
     capped = await usage.over_cap(pool, row, timezone)
     if capped:
         return {**entry, "verdict": "over_cap", "reason": capped}
@@ -1062,6 +1160,13 @@ async def judge_link(
             reason = (view.reason if view is not None else None) or (
                 f"{provider_name} could not be asked what is installed"
             )
+            if view is not None and engines.connect_failed(view):
+                return {
+                    **entry,
+                    "verdict": "unreachable",
+                    "reason": reason,
+                    "connect_failed": True,
+                }
             return {**entry, "verdict": "unreachable", "reason": reason}
     return {**entry, "verdict": "runnable", "reason": None}
 
@@ -1161,6 +1266,28 @@ async def standby(
 
 
 async def resolve(
+    app,
+    pool: asyncpg.Pool,
+    *,
+    unreached: Sequence[str] | None = None,
+    **kw,
+) -> Decision:
+    """_resolve, with the links that could not be connected to stated on the
+    Decision (or the NothingRunnable) as `unreachable` — `unreached` is the
+    served ids this request dialled and could not connect to (walk_role's
+    record); unreachable_links says which verdicts count."""
+    try:
+        decision = await _resolve(app, pool, **kw)
+    except NothingRunnable as exc:
+        exc.unreachable = unreachable_links(exc.verdicts, unreached)
+        exc.connect_walled = connect_walled_links(exc.verdicts, exc.unreachable)
+        raise
+    decision.unreachable = unreachable_links(decision.verdicts, unreached)
+    decision.connect_walled = connect_walled_links(decision.verdicts, decision.unreachable)
+    return decision
+
+
+async def _resolve(
     app,
     pool: asyncpg.Pool,
     *,
@@ -1518,5 +1645,9 @@ __all__ = [
     "set_router",
     "speaks",
     "switched_off",
+    "connect_walled_links",
+    "connect_walled_part",
+    "unreachable_links",
+    "unreachable_part",
 ]
 _ = time  # noqa: F841 — kept for callers that time the walk
