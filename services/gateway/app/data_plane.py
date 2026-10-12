@@ -36,7 +36,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
@@ -46,7 +46,7 @@ from fastapi.responses import Response
 
 from app import adapters, compute_id, db, engines, providers, routing, usage
 from app.adapters import ListingUnavailable, ProviderRefused, ProviderUnreachable, systemone
-from app.adapters.base import refusal_words
+from app.adapters.base import CONNECT_PHASE_ERRORS, refusal_words
 
 router = APIRouter(tags=["data-plane"])
 logger = logging.getLogger("gateway")
@@ -141,6 +141,36 @@ def hub_last_resort_on(value: str | None) -> bool:
     """X-Nova-Hub-Last-Resort (or explain's `hub_last_resort`): on only when it
     says exactly "1"."""
     return value == "1"
+
+
+def connect_failed(exc: BaseException) -> bool:
+    """Did this refusal fail in the CONNECT phase — nothing took the request
+    (adapters CONNECT_PHASE_ERRORS anywhere on its cause chain)? Typed, never
+    read off the words (S46a T8)."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, CONNECT_PHASE_ERRORS):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _unreachable_headers(
+    role: str, ids: Sequence[str], walled: Sequence[str] = ()
+) -> dict[str, str] | None:
+    """A 503's route header: only the links that could not be connected to,
+    then those walled by a connect failure (S46a T9), and only when there are
+    any — otherwise no header, as before."""
+    parts = [f"role={role}"]
+    if ids:
+        parts.append(routing.unreachable_part(ids))
+    if walled:
+        parts.append(routing.connect_walled_part(walled))
+    if len(parts) == 1:
+        return None
+    return {ROUTE_HEADER: ";".join(parts)}
 
 
 def _nothing_runnable(exc: routing.NothingRunnable) -> str:
@@ -250,6 +280,11 @@ async def walk_role(
     # only that it refused). The route and the 503 state the words, never
     # the verdict's label.
     passed: dict[str, str] = {}
+    # Each link this request dialled and could not CONNECT to, in dial order
+    # (connect_failed) — the route's typed `unreachable` (S46a T8).
+    unreached: list[str] = []
+    # The latest resolve's links walled by a connect failure (S46a T9).
+    connect_walled: tuple[str, ...] = ()
     try:
         routing.validate_role(role)
     except ValueError as exc:
@@ -269,9 +304,15 @@ async def walk_role(
                 kinds=kinds,
                 passed_over=passed_over,
                 hub_last_resort=hub_last_resort,
+                unreached=unreached,
             )
         except routing.NothingRunnable as exc:
-            raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
+            raise HTTPException(
+                status_code=503,
+                detail=_nothing_runnable(exc),
+                headers=_unreachable_headers(role, exc.unreachable, exc.connect_walled),
+            ) from exc
+        connect_walled = decision.connect_walled
         link = f"{decision.row['name']}:{decision.model}"
         try:
             response = await serve(decision)
@@ -280,11 +321,21 @@ async def walk_role(
             # its own words. For an engine (D21), serve_completion already
             # made its observation be read again (ruling C11).
             passed[link] = str(exc.detail)
+            if connect_failed(exc) and link not in unreached:
+                unreached.append(link)
             continue
         except HTTPException as exc:
             if exc.status_code in routing.WALL_STATUSES or exc.status_code >= 500:
+                failed_to_connect = connect_failed(exc)
+                if failed_to_connect and link not in unreached:
+                    unreached.append(link)
                 await routing.record_refusal(
-                    pool, decision.row, exc.status_code, str(exc.detail), model=decision.model
+                    pool,
+                    decision.row,
+                    exc.status_code,
+                    str(exc.detail),
+                    model=decision.model,
+                    connect_failed=failed_to_connect,
                 )
                 skip.add(link)
                 continue
@@ -309,7 +360,11 @@ async def walk_role(
         response.headers[ROUTE_HEADER] = decision.header()
         return response
     raise HTTPException(
-        status_code=503, detail=f"every link in the {role!r} chain refused this request"
+        status_code=503,
+        detail=f"every link in the {role!r} chain refused this request",
+        headers=_unreachable_headers(
+            role, unreached, tuple(i for i in connect_walled if i not in unreached)
+        ),
     )
 
 

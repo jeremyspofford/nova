@@ -242,6 +242,51 @@ async def latest_for(pool, device_id) -> dict | None:
     )
 
 
+async def debounce_reason(pool, device_id, name: str, *, now: datetime) -> str | None:
+    """Why a background wake (S46a T10) must not send to this machine now,
+    derived from its rows; None when nothing stands in the way.
+
+    An attempt still open (after settling one whose deadline has passed), one
+    sent within its deadline whatever its outcome, or a relay that could not
+    send within the default deadline — that last so a turn that routes while
+    the hub's agent is offline does not write a row every round."""
+    opened = await open_for(pool, device_id)
+    if opened is not None and opened.get("sent_at") is not None:
+        await settle(pool, opened["id"], now=now)
+        opened = await open_for(pool, device_id)
+    if opened is not None:
+        return (
+            f"a wake for {name} is already open, sent at {_utc(opened['sent_at'])}; "
+            "nothing more was sent"
+        )
+    recent = await pool.fetchrow(
+        "SELECT sent_at, deadline_s, outcome FROM wake_attempts WHERE device_id = $1 "
+        "AND sent_at IS NOT NULL AND $2 < sent_at + deadline_s * interval '1 second' "
+        "ORDER BY sent_at DESC LIMIT 1",
+        device_id,
+        now,
+    )
+    if recent is not None:
+        return (
+            f"a wake for {name} was sent at {_utc(recent['sent_at'])} and is within its "
+            f"{recent['deadline_s']} s deadline ({recent['outcome']}); nothing more was sent"
+        )
+    refused = await pool.fetchrow(
+        "SELECT created_at, reason FROM wake_attempts WHERE device_id = $1 "
+        "AND outcome = 'relay_cannot' AND $2 < created_at + $3 * interval '1 second' "
+        "ORDER BY created_at DESC LIMIT 1",
+        device_id,
+        now,
+        DEFAULT_DEADLINE_S,
+    )
+    if refused is not None:
+        return (
+            f"the relay could not send {name}'s last wake at {_utc(refused['created_at'])} "
+            f"({refused['reason']}); not tried again within {DEFAULT_DEADLINE_S} s"
+        )
+    return None
+
+
 async def latest_by_device(pool, *, now: datetime | None = None) -> dict:
     """Each machine's most recent attempt, keyed by device id, in the shape
     machine_status states it (S46a T6): outcome, when, the deadline, and how

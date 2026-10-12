@@ -388,7 +388,17 @@ async def run_one(app, pool, name: str) -> CheckRun:
 # app.checks is what makes the registry complete — there is no separate "wire
 # it up" step to forget (the v3 lesson: a capability nobody registered is
 # invisible from the code and obvious the moment it is asked for).
-from app.checks import devices, inference, mcp, money, review, skills, stack, work  # noqa: E402
+from app.checks import (  # noqa: E402
+    devices,
+    inference,
+    mcp,
+    money,
+    review,
+    skills,
+    stack,
+    wakes,
+    work,
+)
 
 register_all(stack.CHECKS)
 register_all(work.CHECKS)
@@ -415,6 +425,9 @@ register_all(devices.CHECKS)
 # a server the owner added that she replaced or removed. Ledger rows only;
 # urgent=False: news for the Inbox and the digest, never a push.
 register_all(mcp.CHECKS)
+# S46a T12: the family that watches the wakes she sent IN THE BACKGROUND —
+# whether the machine answered. wake_attempts rows only; urgent=False.
+register_all(wakes.CHECKS)
 
 __all__ = [
     "CHECK_DEADLINE_S",

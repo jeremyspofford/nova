@@ -125,6 +125,7 @@ from app import (
     tools,
     traces,
     vision,
+    wake,
 )
 from app.identity import Person
 from app.mcp import client as mcp_client
@@ -3962,6 +3963,7 @@ async def _gateway_round(
                 ) as response:
                     _note_served(span, response.headers, requested)
                     _note_route(span, response.headers.get("x-nova-route"))
+                    _wake_from_route(app, turn, span, role)
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
                         body = (await response.aread()).decode(errors="replace")
@@ -4397,6 +4399,46 @@ def _note_route(span, header: str | None) -> None:
         # failed (epic hub-last-resort); the route frame states it with the
         # gateway's own reason, never composed here.
         span.meta["last_resort"] = True
+    # S46a T10: the links the gateway TYPED as not answering a dial
+    # (`unreachable`, T8) or walled by a connect failure (`connect_walled`,
+    # T9), each id unquoted — the evidence a background wake starts from.
+    for field in wake.ROUTE_LINK_FIELDS:
+        ids = wake.route_link_ids({field: fields.get(field)})
+        if ids:
+            span.meta[f"route_{field}"] = ids
+
+
+async def _no_link_reply(app, turn: traces.Turn, failure: str) -> str | None:
+    """S46a T11: the statement a turn closes ok on when the gateway's 503
+    route typed a machine's link unreachable or connect-walled and this
+    turn's background wake was started for it — None otherwise (the turn
+    keeps its stated failure, unchanged)."""
+    if traces.purpose_of(turn) == "eval":
+        return None
+    llm = _last_llm_span(turn.spans)
+    meta = llm.meta if llm is not None else {}
+    if meta.get("gateway_status") != 503:
+        return None
+    if not any(meta.get(f"route_{field}") for field in wake.ROUTE_LINK_FIELDS):
+        return None
+    return await wake.no_link_reply(app, turn.id, failure)
+
+
+def _wake_from_route(app, turn: traces.Turn, span, role: str | None) -> None:
+    """S46a T10, the owner's "Don't wait, fall back": a round that walked a
+    role's chain and whose route typed a link unreachable or connect-walled
+    STARTS the background wake of that link's machine — never awaited, so
+    the reply comes from the next link at once. An eval (no chain, and a
+    replay must never reach a real machine) starts none."""
+    if not role or traces.purpose_of(turn) == "eval":
+        return
+    meta = {
+        field: span.meta[f"route_{field}"]
+        for field in wake.ROUTE_LINK_FIELDS
+        if span.meta.get(f"route_{field}")
+    }
+    if meta:
+        wake.start_route_wakes(app, turn.id, meta)
 
 
 def _note_served(span, headers, requested: str | None = None) -> None:
@@ -4693,6 +4735,7 @@ async def _collect_completion(
                 ) as response:
                     _note_served(span, response.headers, requested)
                     _note_route(span, response.headers.get("x-nova-route"))
+                    _wake_from_route(app, turn, span, role)
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors="replace")
                         detail = peers.refusal_words(body)
@@ -5802,6 +5845,21 @@ async def _run_turn(
         emit(_frame({"error": statement}))
         emit(DONE_FRAME)
 
+    async def _end_no_link(statement: str) -> None:
+        """The turn's exit when no link could answer and the route named a
+        machine it woke (S46a T11, the owner's "Don't wait, fall back" with
+        nothing to fall back to). The statement is the backend's, built from
+        the records — not her prose, so no guard reads it and it is never
+        ingested — and the turn is not a failure: it closes ok, persisted
+        first, then streamed as the reply."""
+        nonlocal decided, persisted_reply
+        logger.info("chat turn %s: no link could answer; stated the wake", turn.id)
+        await _persist_assistant(pool, conversation_id, statement, turn.id)
+        persisted_reply = True
+        decided = "ok"
+        emit(_frame({"t": statement}))
+        emit(DONE_FRAME)
+
     async def _end_stopped(stated: str, where: str) -> None:
         """The turn's ONE exit for a stop the owner asked for (S15).
 
@@ -6333,6 +6391,14 @@ async def _run_turn(
             )
             return
         if failure is not None:
+            # S46a T11: no link could answer and the route named a machine
+            # to wake — the turn closes ok on a statement built from the
+            # records (wake.no_link_reply), not on a failure.
+            no_link = await _no_link_reply(app, turn, failure)
+            if no_link is not None:
+                found = tool_results_statement(turn.spans)
+                await _end_no_link(f"{found}\n\n{no_link}" if found else no_link)
+                return
             stated = failure
             failed_round = _last_llm_span(turn.spans)
             gateway_said_so = (

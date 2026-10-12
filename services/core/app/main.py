@@ -44,6 +44,7 @@ from app import (
     timers,
     timers_api,
     traces,
+    wake,
     workspace_api,
 )
 from app.browser import agent as browser_agent
@@ -124,6 +125,11 @@ async def lifespan(app: FastAPI):
     finally:
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
+        # Background wakes (S46a T10) are cancelled, never drained: each can
+        # wait up to a wake's whole deadline for a machine that may never
+        # answer. A cancelled wake's open row is settled at its deadline by
+        # the next reader.
+        await wake.cancel_route_wakes()
         # No new queued turns from here (S15). drain_background below waits for
         # every detached task and a drained turn spawns another drain, so a
         # queue still draining could hold the process past its grace period and
