@@ -70,6 +70,14 @@ KNOWN_KEYS = {
     # to fall back to the hub's own model when every chat link and the standby
     # fail. Deliberate tripwire update: one def landed, so the set moved by one.
     "routing.hub_last_resort",
+    # S32.2 T2 (spec §9.5, owner 2026-10-11): the sealed box's limits — CPUs,
+    # memory, pids per box, and how many boxes may run at once — read live by
+    # code_repos.box_limits and sent with every box.* call. Deliberate tripwire
+    # update: four defs landed, so the set moved by four.
+    "box.cpus",
+    "box.memory_gb",
+    "box.pids",
+    "box.max_running",
 }
 
 

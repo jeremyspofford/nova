@@ -301,6 +301,17 @@ jobs:
       # args and with none; the labels ./install verifies and the env /status
       # reads are read back off the images. Throwaway tags, removed on exit.
       - run: bash ../../deploy/build_identity_test.sh
+      # S32.2's box seal against real docker: builds the devbox image with
+      # install.sh's build_devbox in a throwaway checkout, brings two change
+      # boxes up through novad's own box.exec path (a Go harness behind the
+      # `docker` tag) and checks spec §4.2 row by row — no egress, no ports,
+      # ro .git, no socket/secrets, env, caps, limits, its own Postgres, the
+      # fetch step, teardown. Throwaway ids and image, removed on exit.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache-dependency-path: apps/novad/go.sum
+      - run: bash ../../deploy/devbox/seal_test.sh
 
   # The daemon is the first code that runs OUTSIDE the compose stack. Its
   # interop risk is one encoder that must be byte-identical to core's canonical

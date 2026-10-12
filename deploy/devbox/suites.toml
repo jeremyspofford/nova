@@ -1,0 +1,62 @@
+# The repo's suites (S32 spec §5.2), read from MAIN's commit — never from a
+# change's worktree — by novad's box runner (S32.2, internal/box/suites.go).
+#
+# Each [[suite]]: the commands that run the WHOLE suite from `dir`
+# (repo-relative, "." = the root) and the paths that select it on a landing.
+# A box.exec whose argv is exactly one of a suite's commands, run in that
+# suite's dir, is heavy and takes the CPU lock (deploy/state/cpu.lock, §4.5);
+# a selector, an extra flag or another dir is a targeted run and does not.
+#
+# `protected` lists the files that grade her (§5.2 step 6): a landing that
+# touches one is flagged, never stopped. Read from main, so a change cannot
+# shorten it for itself.
+
+protected = [
+  "services/*/tests/**",
+  "tests/**",
+  "services/core/app/guards.py",
+  "services/core/app/evals/cases/**",
+  "services/core/tests/test_eval_corpus.py",
+  "services/core/tests/test_no_approvals.py",
+]
+
+[[suite]]
+name = "core"
+dir = "services/core"
+commands = [["uv", "run", "pytest"]]
+paths = ["services/core/**"]
+
+[[suite]]
+name = "gateway"
+dir = "services/gateway"
+commands = [["uv", "run", "pytest"]]
+paths = ["services/gateway/**"]
+
+[[suite]]
+name = "memory"
+dir = "services/memory"
+commands = [["uv", "run", "pytest"]]
+paths = ["services/memory/**"]
+
+[[suite]]
+name = "web"
+dir = "apps/web"
+commands = [["npm", "test"], ["npx", "tsc", "--noEmit"]]
+paths = ["apps/web/**"]
+
+[[suite]]
+name = "novad"
+dir = "apps/novad"
+commands = [["go", "test", "./..."]]
+paths = ["apps/novad/**"]
+
+[[suite]]
+name = "installer"
+dir = "."
+commands = [
+  ["./deploy/install_test.sh"],
+  ["./deploy/backup_test.sh"],
+  ["./deploy/agent_version_test.sh"],
+  ["./deploy/build_identity_test.sh"],
+]
+paths = ["deploy/**", "install"]

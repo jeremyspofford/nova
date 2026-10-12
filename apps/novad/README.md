@@ -294,7 +294,9 @@ proves WHO signed it; nothing on the device second-guesses WHAT core asked
 for. There is no per-device grant, no path allow-list and no path blocklist: a
 paired device runs whatever core signs, as the user `novad` runs as, and that
 includes its own `key` and `audit.jsonl` (a rewritten audit chain is detected
-by core on the next replay, not prevented). The nine:
+by core on the next replay, not prevented). The table below is the
+everyday set; the admin path (`admin.*`), `daemon.update` and the box
+(`box.*`) have sections of their own:
 
 | capability      | does                                                        |
 |-----------------|-------------------------------------------------------------|
@@ -490,6 +492,65 @@ Every elevated call, a cannot or a failure included, is a span with
 or admin, with no prompt. **A compromise of Nova's core is root/admin on
 every machine with the path.** The Devices page states this once, naming
 those machines; removing the path from a machine is the way out.
+
+## The box (S32.2)
+
+Three capabilities run her change worktrees in a sealed container per change
+(design: `docs/plans/rebuild/s32/spec.md` §4; operator view: "Her change
+boxes" in `deploy/README.md`). Core sends them only to the repo's machine
+(`NOVA_REPO_HOST`), and only for a `cwd` inside
+`<checkout>/.worktrees/nova-<id>`.
+
+| capability   | does |
+|--------------|------|
+| `box.start`  | brings the change's box up (network, cache volume, Postgres, box — each created if missing, started if stopped; a running box is left alone); `start_change` sends it |
+| `box.exec`   | the same, then `docker exec -w <cwd> -u <uid>:<gid> nova-box-<id> argv…` — argv only, the same 64 KiB output cap and timeout words as `shell.exec`; a nonzero exit is `ok:true` with its code |
+| `box.status` | every box on this machine and its state (`running` / `stopped`), from `docker ps -a --filter label=nova.box`; `list_changes` sends it |
+
+- **The shape is Go code here, never data from the wire.** Core sends only
+  `{argv, cwd, change, checkout, branch, limits}`; `internal/box` derives
+  every name and path (worktree = `<checkout>/.worktrees/nova-<change>`,
+  `.git` = `<checkout>/.git`) and refuses at the edge — a change that is not
+  6 lowercase hex, an unclean or relative checkout, a `cwd` outside that
+  worktree, a limit out of bounds — before any docker call. No mount, flag,
+  image or env ever comes from core. The argv is pinned by
+  `internal/box/spec_test.go` and checked against real docker by
+  `deploy/devbox/seal_test.sh`.
+- **The image** is `nova-devbox:t-<git -C <checkout> rev-parse
+  <branch>:deploy/devbox>`, where `branch` is the repo's default branch (core
+  never sends the change's own). novad never builds it — `./install` does;
+  an image not in the store is ok:false "the box image … is not built —
+  ./install from the checkout builds it; nothing was run".
+- **Results.** `box.exec`'s meta is `{ran_in: "box", box, image, heavy,
+  lock_waited_s}`. A box that cannot start is ok:false "cannot start the box
+  nova-box-<id>: <docker's words> — nothing was run": there is no fallback to
+  `shell.exec`, here or in core.
+- **Dependencies.** Before the box starts (or under a running one), the
+  worktree's lockfiles are hashed (read through `os.Root`, never leaving the
+  worktree) and compared with the image's `nova.lock.<path>` labels and the
+  change's marker; any that differ are fetched by a `docker run --rm`
+  container with egress that mounts only a temp copy of the lockfiles and
+  manifests and the change's cache volume.
+- **The CPU lock.** When argv is exactly one of the suite commands in
+  `git show <branch>:deploy/devbox/suites.toml`, run from that suite's
+  directory, `box.exec` takes `flock` on `<checkout>/deploy/state/cpu.lock`
+  around the exec, waiting until the call's deadline less 10 s. The output
+  begins "waited Ns for the CPU lock" when it waited; still held -> ok:false
+  "the CPU lock <path> stayed held for Ns — nothing was run".
+- **Limits** arrive with each call from core's settings (`box.cpus`,
+  `box.memory_gb`, `box.pids`, `box.max_running`); starting a box past
+  `max_running` is ok:false naming the running boxes and their idle times.
+- **Idle stop.** The agent touches a box on every `box.start` / `box.exec` and
+  checks once a minute; a box idle 30 minutes is stopped with its Postgres. A
+  box already running when the agent started counts from the first time it is
+  seen. Removal is not here yet (S32.3).
+- **Where.** Linux (and macOS) with docker on the agent's PATH and the agent
+  running as the owner, who must be able to use docker. The isolated network
+  mode needs docker 28+. On Windows there is no box manager: each of the
+  three answers "cannot: no box manager on this agent".
+- An agent from before S32.2 answers `unknown capability "box.exec"`; core
+  turns that into "…'s agent predates the box — update it with
+  machine_update; nothing was run".
 
 ## Facts
 

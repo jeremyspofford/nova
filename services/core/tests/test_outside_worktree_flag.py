@@ -69,6 +69,10 @@ WT = f"{REPO}/.worktrees/nova-a1b2c3"
 def recorded(monkeypatch):
     monkeypatch.setenv("NOVA_CHECKOUT", REPO)
     monkeypatch.setenv("NOVA_REPO_HOST", HOST)
+    # S32.2 T9: a worktree cwd now runs as box.exec, which carries the repo's
+    # default branch; recorded here so no origin/HEAD read is sent first (the
+    # helpers answer one frame). The routing itself: test_device_run_box.py.
+    monkeypatch.setenv("NOVA_REPO_BRANCH", "main")
 
 
 async def _connect_host(pool, *, name: str, hostname: str):

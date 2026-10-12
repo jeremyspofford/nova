@@ -21,16 +21,16 @@ import posixpath
 import re
 import secrets
 
-from app import code_repo
+from app import code_repo, code_repos
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
-from app.tools.devices import _command, admit_row
+from app.tools.devices import _box_failure, _command, admit_row, box_name
 
 START_CHANGE = "start_change"
 
-REPO_BRANCH_ENV = "NOVA_REPO_BRANCH"
+REPO_BRANCH_ENV = code_repos.REPO_BRANCH_ENV
 # Same shape chat.repository_line accepts for this key: a branch name that can
 # never be read by git as an option (no leading "-") or a range ("..").
-_BRANCH_SHAPE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}")
+_BRANCH_SHAPE = code_repos.BRANCH_SHAPE
 _ORIGIN = "origin/"
 
 SLUG_MAX = 40
@@ -130,6 +130,86 @@ def _free_id(repo: str, paths: set[str], branches: set[str]) -> str:
     )
 
 
+# -- the change's box (S32.2 T10; spec docs/plans/rebuild/s32/spec.md §4.4) ----
+#
+# start_change starts the box as soon as the worktree exists, so her first
+# command in it does not pay the cold start; list_changes says each box's
+# state. A box that does not start never fails the change — the worktree is
+# real — but the result says so in the agent's words, and device_run in that
+# worktree keeps saying so (T9) until it does. Where the owner set the
+# repository's environment to host, no box is started and that is said.
+
+_HOST = "host"
+_BOX_STATES = ("running", "stopped")
+NOT_CREATED = "not created"
+
+
+def _environment_words(environment: str) -> str:
+    if environment == _HOST:
+        return f"environment {_HOST} (set by the owner)"
+    return f"environment {environment}"
+
+
+async def _start_box(pool, row, ctx: ToolContext, change: str, repo: str, base: str) -> str:
+    """The result lines naming where this change's commands run, after asking
+    the agent's box.start once (environment box). Never raises: a box that
+    did not start is said, with why."""
+    if pool is None:
+        # A replay's declared device has no box (as device_run's _box_route).
+        return ""
+    environment = await code_repos.environment(pool)
+    if environment == _HOST:
+        return (
+            f"Environment: {_HOST} (set by the owner) — commands in this worktree run on the "
+            "host, not in a box\n"
+        )
+    name = box_name(change)
+    args = {
+        "change": change,
+        "checkout": posixpath.normpath(repo),
+        # The repo's default branch — the image tag and suites.toml are read
+        # from it, never from the change's own nova/<id>-* branch (T9's rule).
+        "branch": base,
+        "limits": await code_repos.box_limits(pool),
+    }
+    try:
+        result = await _command(pool, row, "box.start", args, ctx=ctx)
+    except ToolFailure as failed:
+        why = " ".join(str(failed).split())
+    else:
+        if result.get("ok"):
+            said = str(result.get("output") or "").strip() or f"{name} started"
+            return (
+                f"Environment: {environment} — commands in this worktree run in the box {name}\n"
+                f"Box: {said}\n"
+            )
+        why = _box_failure(result, row)
+    return (
+        f"Environment: {environment}\n"
+        f"The box {name} did not start: {why} — commands in this worktree will say so until "
+        "it does\n"
+    )
+
+
+async def _box_states(pool, row, ctx: ToolContext) -> tuple[dict[str, str] | None, str]:
+    """(state by change id, "") from one box.status, or (None, why) when it
+    cannot be read — never a guess."""
+    try:
+        result = await _command(pool, row, "box.status", {}, ctx=ctx)
+    except ToolFailure as failed:
+        return None, " ".join(str(failed).split())
+    if not result.get("ok"):
+        return None, _box_failure(result, row)
+    meta = result.get("meta")
+    boxes = meta.get("boxes") if isinstance(meta, dict) else None
+    if not isinstance(boxes, dict):
+        return None, "the agent's box.status named no boxes"
+    for state in boxes.values():
+        if state not in _BOX_STATES:
+            return None, f"the agent's box.status said {state!r}"
+    return boxes, ""
+
+
 async def start_change(args: dict, ctx: ToolContext) -> str:
     row, repo = await code_repo.repo_machine(ctx.app)
     pool = await admit_row(row, ctx)
@@ -164,11 +244,13 @@ async def start_change(args: dict, ctx: ToolContext) -> str:
         error = read.get("error") or "the device reported a failure with no reason"
         raise ToolFailure(f"{row['name']}: could not read {agents_path}: {error} — {exists}")
     agents = str(read.get("output") or "")
+    box_lines = await _start_box(pool, row, ctx, change, repo, base)
     return (
         f"Started change {change} on {row['name']}.\n"
         f"Worktree: {worktree}\n"
         f"Branch: {branch}\n"
         f"Base: {_ORIGIN}{base} at {commit}\n"
+        f"{box_lines}"
         f"Work only inside it: run every command with cwd {worktree} and write files under "
         "it — never in the checkout itself.\n"
         f"The worktree's files are on {row['name']}: read them with device_read_file or "
@@ -225,13 +307,19 @@ async def list_changes(args: dict, ctx: ToolContext) -> str:
     hers = [e for e in _porcelain_entries(listing) if _is_hers(e["path"], repo)]
     if not hers:
         return NO_CHANGES
+    if pool is None:
+        boxes, why, where = None, "", ""
+    else:
+        environment = await code_repos.environment(pool)
+        boxes, why = await _box_states(pool, row, ctx)
+        where = f" — {_environment_words(environment)}"
     lines = [f"Your open changes on {row['name']} ({len(hers)}):"]
     for entry in hers:
         path = posixpath.normpath(entry["path"])
+        change = posixpath.basename(path)[len(code_repo.WORKTREE_PREFIX) :]
         # The same fact start_change records (walk-fixes T4): a change is open
         # this turn, so a later workspace write says it is not this worktree.
         if ctx.facts_sink is not None:
-            change = posixpath.basename(path)[len(code_repo.WORKTREE_PREFIX) :]
             ctx.facts_sink.append(
                 {"change": change, "worktree_path": path, "branch": entry["branch"]}
             )
@@ -245,7 +333,13 @@ async def list_changes(args: dict, ctx: ToolContext) -> str:
             state = "state unknown: " + " ".join(str(failed).split())
         else:
             state = "uncommitted changes" if status else "clean"
-        lines.append(f"- {path} — branch {branch} at {head} — {state}")
+        if pool is None:
+            box = ""
+        elif boxes is None:
+            box = f" — box state unknown: {why}"
+        else:
+            box = f" — box {boxes.get(change, NOT_CREATED)}"
+        lines.append(f"- {path} — branch {branch} at {head} — {state}{box}{where}")
     return "\n".join(lines)
 
 
@@ -255,8 +349,9 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "Start a change to your own source code: on the machine that holds your repository "
             "it fetches the default branch and makes a new git worktree of yours on a new "
-            "branch nova/<id>-<slug> off it, then returns the worktree's path, branch and base "
-            "commit and the repository's AGENTS.md (the rules for changing its code). Use it "
+            "branch nova/<id>-<slug> off it, starts the change's sealed box (where commands in "
+            "the worktree run), then returns the worktree's path, branch and base commit, the "
+            "box's state and the repository's AGENTS.md (the rules for changing its code). Use it "
             "before any code work on your repository, then pass the worktree as `cwd` to "
             "device_run and write files only under it. Several changes can be open at once."
         ),
@@ -280,7 +375,8 @@ TOOLS: tuple[Tool, ...] = (
         description=(
             "List your open changes: each git worktree of yours (made by start_change) on the "
             "machine that holds your repository, with its path, branch, short HEAD commit and "
-            "whether it has uncommitted changes. Use it to find a change to resume — then pass "
+            "whether it has uncommitted changes, and its box's state (running, stopped or not "
+            "created) and environment. Use it to find a change to resume — then pass "
             "its worktree path as `cwd` to device_run."
         ),
         parameters={"type": "object", "properties": {}, "additionalProperties": False},

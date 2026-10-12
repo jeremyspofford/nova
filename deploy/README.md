@@ -474,6 +474,75 @@ state in `v4_agent_build_cache`. Neither is backed up: `./install` rebuilds
 `v4_agent_build_cache` only makes that rebuild faster — losing it costs
 time, nothing else.
 
+## Her change boxes (S32.2)
+
+Every command she runs in one of her change worktrees
+(`<checkout>/.worktrees/nova-<id>`, on the machine `NOVA_REPO_HOST` names)
+runs in that change's **sealed box**, `nova-box-<id>`, not on the host. The
+design is `docs/plans/rebuild/s32/spec.md` §4; the recipe is `deploy/devbox/`
+(its README); the run spec is Go code in novad (`apps/novad/internal/box`),
+so a change cannot edit the shape of its own box.
+
+- **What a change gets.** `nova-box-<id>` and its own Postgres
+  (`nova-box-<id>-db`, data on a tmpfs) on their own network
+  `nova-box-<id>-net`, created `--internal` with
+  `gateway_mode_ipv4=isolated` — no route out, and no route to anything on
+  the host either (that mode needs **docker 28 or later**; an older docker
+  refuses the network and the box start says so in docker's words). No
+  published ports, no docker socket, nothing of `$HOME`, `.env` or
+  `~/.secrets`. Her worktree is mounted read-write at the same path, the
+  repo's `.git` read-only (`git log`/`status`/`diff` work, commits do not).
+  The environment is exactly `TEST_DATABASE_URL` (its own Postgres) and
+  `HOME=/tmp/home`, plus the image's own offline tool config. It runs as the
+  owner's uid:gid with `--cap-drop ALL` and `no-new-privileges`. Dependency
+  caches live in the volume `nova-box-<id>-cache` at `/deps` (read-only,
+  except `/deps/uv`, which uv needs to write its lock).
+- **The image is built by `./install`**, after the stack is verified:
+  `nova-devbox:t-<git rev-parse HEAD:deploy/devbox>`, from the committed
+  `deploy/devbox` plus the lockfiles and their manifests. A tag already in
+  the store is not rebuilt; a failed build fails `./install`. A change that
+  edits `deploy/devbox/` still runs in the image of the default branch's
+  tree. When that image is not built, every box start says so ("…is not
+  built — ./install from the checkout builds it; nothing was run").
+- **Dependencies.** The image carries caches for the lockfiles it was built
+  from (`nova.lock.<path>` labels). When a change's `uv.lock`,
+  `package-lock.json` or `go.sum` differs, novad first runs a short-lived
+  fetch container *with* egress that sees only the lockfiles and manifests
+  and fills that change's cache volume; the box itself stays offline.
+- **Starting, stopping.** `start_change` starts the box; a `device_run` in the
+  worktree starts it again if it was stopped. A box idle for 30 minutes is
+  stopped (with its Postgres) by the agent. Removing a box, its Postgres,
+  network and volume is S32.3's (`close_change` / `repo_land`) — until then
+  they persist (`docker ps -a --filter label=nova.box`, `docker network ls
+  --filter label=nova.box`).
+- **Where it ran.** Every `device_run` result, its run fact and its trace span
+  carry `ran_in` (`box` or `host`) and, for a box, its name. A box that cannot
+  start is an `Error:` naming why; nothing ever falls back to the host.
+  `list_changes` shows each change's box state (`running`, `stopped`, `not
+  created`).
+- **Limits** are settings (`PUT /api/v1/settings` with `{"key", "value"}`;
+  no page shows them yet), read on every call: `box.cpus` (2), `box.memory_gb` (3), `box.pids` (512) and
+  `box.max_running` (2 boxes at once; starting a third says which two are
+  running and how long each has been idle).
+- **The CPU lock.** A command that runs a whole suite — argv exactly one of
+  the commands in `deploy/devbox/suites.toml` (read from the default branch's
+  commit, never the change's), in that suite's directory, with no selector —
+  takes `flock` on `<checkout>/deploy/state/cpu.lock` (`deploy/state/` is
+  gitignored) for its run. Its result begins "waited Ns for the CPU lock" when
+  it waited; a lock still held at the call's deadline is an `Error:` and
+  nothing runs. A targeted run (a test file, `-k`, any extra word) takes no
+  lock. Anything else CPU-heavy on the hub should take the same lock.
+- **`host` instead of a box.** The `code_repos` row (core writes `nova` at
+  startup from `NOVA_REPO_HOST`, `NOVA_CHECKOUT` and `NOVA_REPO_BRANCH`)
+  carries `environment`: `box` (default) or `host`. Only the owner sets it,
+  with `PUT /api/v1/code-repos/nova` `{"environment": "host"}` (a session;
+  `GET /api/v1/code-repos` lists the rows). No tool writes it, and there is
+  no page for it yet (S32.4). With `host`, her worktree commands run on the
+  host and each result says the owner set it.
+- **The seal test.** `deploy/devbox/seal_test.sh` (docker, run it under the
+  CPU lock) builds a throwaway image and checks every row above against
+  real containers, then removes everything it made.
+
 ## Tailnet access
 
 One durable HTTPS origin on your tailnet — `https://<node>.<tailnet>.ts.net`

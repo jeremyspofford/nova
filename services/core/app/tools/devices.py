@@ -40,6 +40,7 @@ from contextvars import ContextVar
 
 from app import (
     code_repo,
+    code_repos,
     db,
     device_facts,
     devices,
@@ -458,6 +459,17 @@ def outside_worktree_warning(repo: str) -> str:
     )
 
 
+def _on_repo_machine(row) -> bool:
+    """True when this admitted row is the machine that holds her repository
+    (its hostname is NOVA_REPO_HOST, case-insensitive) — read live, never a
+    second device-table read."""
+    host = code_repo.repo_host()
+    if host is None:
+        return False
+    hostname = row["hostname"] if "hostname" in row.keys() else None
+    return isinstance(hostname, str) and hostname.strip().lower() == host.lower()
+
+
 def _outside_checkout(
     row, *, cwd: str | None = None, argv: list | None = None, path: str | None = None
 ) -> str | None:
@@ -466,11 +478,7 @@ def _outside_checkout(
     NOVA_CHECKOUT (app/code_repo.py) and the row's own hostname — never a
     second device-table read. Linear in the argv: code_repo scans each element
     with str.find and a one-character boundary check, no backtracking regex."""
-    host = code_repo.repo_host()
-    if host is None:
-        return None
-    hostname = row["hostname"] if "hostname" in row.keys() else None
-    if not isinstance(hostname, str) or hostname.strip().lower() != host.lower():
+    if not _on_repo_machine(row):
         return None
     repo = code_repo.repo_dir()
     if repo is None:
@@ -904,6 +912,102 @@ async def device_notify(args: dict, ctx: ToolContext) -> str:
     return f"Sent a notification to {row['name']}."
 
 
+# -- the box (S32.2 T9; spec docs/plans/rebuild/s32/spec.md §4.4) -------------
+#
+# On the machine that holds her repository, a device_run whose cwd is inside
+# one of her change worktrees (<checkout>/.worktrees/nova-<id>) is sent as the
+# agent's `box.exec`: novad runs it by docker exec in nova-box-<id>, sealed,
+# starting the box when it is stopped. Every other cwd runs on the host as
+# today. The run fact says where (`ran_in`, + `box`), and chat._run_tool lifts
+# both to the span.
+#
+# A box that cannot run it (cannot start, the CPU lock held, an agent from
+# before the box) is an Error quoting the agent — NEVER a second send to the
+# host: a fallback that quietly drops the seal is a success nobody checked.
+#
+# `branch` is the repository's DEFAULT branch (code_repos.default_branch, else
+# the base start_change resolves) and never the change's own nova/<id>-*:
+# novad reads suites.toml (which runs take the CPU lock) and the image tag
+# from it, so the change's branch would let a change shape its own seal.
+#
+# Only the owner sets `environment` host (PUT /api/v1/code-repos/{name}); then
+# the run goes to the host and says so. elevated=true is admin.exec on the
+# host, as asked. outside_worktree is untouched: the checkout itself still runs
+# on the host, flagged.
+
+RAN_IN = "ran_in"
+BOX_EXEC = "box.exec"
+_CHANGE_ID = re.compile(r"[0-9a-f]{6}")
+HOST_BY_OWNER_WORDS = "(on the host: this repo's environment is host, set by the owner)"
+_HOST_BY_OWNER = "host"
+
+
+def box_name(change: str) -> str:
+    """The box a change runs in — the same rule as novad's box.Names."""
+    return f"nova-box-{change}"
+
+
+def _change_of(cwd: str, checkout: str) -> str | None:
+    """The change id when cwd is <checkout>/.worktrees/nova-<id>[/...] with a
+    6-hex id (start_change's shape); None otherwise."""
+    if code_repo.checkout_scope(cwd, checkout) != "worktree":
+        return None
+    parts = posixpath.normpath(cwd)[len(checkout) :].strip("/").split("/")
+    change = parts[1][len(code_repo.WORKTREE_PREFIX) :]
+    return change if _CHANGE_ID.fullmatch(change) else None
+
+
+async def _box_route(pool, row, ctx: ToolContext, cwd: str | None):
+    """Where this (unelevated) run goes: None for the host as today,
+    _HOST_BY_OWNER when the owner set the repository's environment to host,
+    else (change, the box.exec args other than argv)."""
+    if cwd is None or pool is None or not _on_repo_machine(row):
+        # pool None is a replay's declared device: its plant answers only the
+        # run capability, and it is never the machine that holds the repo.
+        return None
+    repo = code_repo.repo_dir()
+    if repo is None:
+        return None
+    checkout = posixpath.normpath(repo)
+    change = _change_of(cwd, checkout)
+    if change is None:
+        return None
+    record = await pool.fetchrow(
+        "SELECT environment, default_branch FROM code_repos WHERE name = $1", code_repos.NOVA
+    )
+    environment = record["environment"] if record is not None else code_repos.DEFAULT_ENVIRONMENT
+    if environment == _HOST_BY_OWNER:
+        return _HOST_BY_OWNER
+    branch = record["default_branch"] if record is not None else None
+    if branch is None:
+        # Imported here: tools.changes imports this module.
+        from app.tools import changes
+
+        try:
+            branch = await changes._base(pool, row, ctx, checkout)
+        except ToolFailure as exc:
+            raise ToolFailure(
+                f"{exc} — so the branch the box is built from is not known; nothing was run"
+            ) from exc
+    return change, {
+        "cwd": cwd,
+        "change": change,
+        "checkout": checkout,
+        "branch": branch,
+        "limits": await code_repos.box_limits(pool),
+    }
+
+
+def _box_failure(result: dict, row) -> str:
+    error = str(result.get("error") or _NO_REASON)
+    if error.startswith(_UNKNOWN_CAPABILITY):
+        return (
+            f"{row['name']}'s agent predates the box — update it with machine_update; "
+            "nothing was run"
+        )
+    return f"{row['name']}: {error}"
+
+
 # -- the elevated run (S30b T6) ---------------------------------------------
 #
 # device_run(elevated: true) sends the agent's "admin.exec" — a NEW capability
@@ -977,7 +1081,13 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         # machine is marked on its span — an ok run, the agent's cannot, a
         # failed frame, a transport failure. No "device" key (connectivity).
         _file_fact(ctx, {ELEVATED: True, "machine": row["name"]})
-    capability = "admin.exec" if elevated else "shell.exec"
+    route = None if elevated else await _box_route(pool, row, ctx, cwd)
+    boxed = isinstance(route, tuple)
+    if boxed:
+        change, box_args = route
+        capability, exec_args = BOX_EXEC, {"argv": argv, **box_args}
+    else:
+        capability = "admin.exec" if elevated else "shell.exec"
     result = await _command(pool, row, capability, exec_args, ctx=ctx)
     # Past here the agent answered with a result frame: the command was sent
     # and ran or failed on the machine, so a flagged call is flagged either
@@ -993,7 +1103,10 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         "device": row["name"],
         "argv": list(argv),
         "cwd": cwd,
+        RAN_IN: "box" if boxed else "host",
     }
+    if boxed:
+        run_record["box"] = box_name(change)
     if elevated:
         run_record[ELEVATED] = True
     _file_fact(
@@ -1003,6 +1116,8 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     if not result.get("ok"):
         if elevated:
             failure = _elevated_failure(result, row)
+        elif boxed:
+            failure = _box_failure(result, row)
         elif cwd is not None:
             # The agent's own words for a missing directory name only the
             # program ("could not run \"git\": fork/exec ...: no such file or
@@ -1021,6 +1136,10 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     # The cwd goes AFTER the code so the preamble still matches.
     how = _elevated_words(result.get("meta")) if elevated else ""
     where = f" in {cwd}" if cwd is not None else ""
+    if boxed:
+        where += f" (in box {box_name(change)})"
+    elif route == _HOST_BY_OWNER:
+        where += f" {HOST_BY_OWNER_WORDS}"
     text = f"{row['name']} ran {argv} — exit {exit_code}{how}{where}\n{output}"
     return text if warning is None else f"{text}\n{warning}"
 

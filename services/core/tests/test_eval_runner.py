@@ -2445,7 +2445,14 @@ async def test_s29b_t5_c5_a_replays_device_run_span_carries_the_declared_run_fac
     )
     assert span is not None and span["ok"] is True, span
     runs = [f["run"] for f in span.get("facts") or [] if isinstance(f.get("run"), dict)]
+    # ran_in (S32.2 T9): the replay's run is on the host (never the repo box).
     assert runs == [
-        {"exit_code": 1, "device": "eval_laptop", "argv": ["pytest", "-q"], "cwd": None}
+        {
+            "exit_code": 1,
+            "device": "eval_laptop",
+            "argv": ["pytest", "-q"],
+            "cwd": None,
+            "ran_in": "host",
+        }
     ]
     assert touched == []

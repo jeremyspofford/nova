@@ -57,6 +57,7 @@ import pytest
 
 from app import chat, devices, devices_ws, tools, traces
 from app.tools import changes
+from app.tools.base import ToolFailure
 from tests.conftest import requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
 from tests.test_devices_ws import _clean_hub, _close, _ctx, _person  # noqa: F401
@@ -69,6 +70,8 @@ TITLE = "Add keyboard shortcuts"
 ID = "a1b2c3"
 WT = f"{REPO}/.worktrees/nova-{ID}"
 BRANCH = f"nova/{ID}-add-keyboard-shortcuts"
+BOX = f"nova-box-{ID}"
+IMAGE = "nova-devbox:t-0123456789ab"
 
 
 @pytest.fixture
@@ -97,10 +100,14 @@ class FakeRepo:
     branches: list[str] = field(default_factory=list)  # existing short names
     fail: dict = field(default_factory=dict)
     seen: list[dict] = field(default_factory=list)  # every envelope, in order
+    # T10: what the agent says to box.start (None -> the box came up).
+    box: dict | None = None
 
     def _step(self, envelope: dict) -> str:
         if envelope["capability"] == "fs.read":
             return "agents"
+        if envelope["capability"] == "box.start":
+            return "box.start"
         argv = envelope["args"].get("argv") or []
         words = argv[3:] if argv[:2] == ["git", "-C"] else argv[1:]
         if words[:1] == ["symbolic-ref"]:
@@ -128,6 +135,17 @@ class FakeRepo:
             return {"ok": True, "output": output, "exit_code": code, "error": None}
         if step == "agents":
             return {"ok": True, "output": AGENTS, "exit_code": 0, "error": None}
+        if step == "box.start":
+            if self.box is not None:
+                return dict(self.box)
+            name = f"nova-box-{envelope['args']['change']}"
+            return {
+                "ok": True,
+                "output": f"{name} running (image {IMAGE})",
+                "exit_code": 0,
+                "error": None,
+                "meta": {"box": name, "state": "running", "image": IMAGE},
+            }
         if step == "symbolic-ref":
             return {"ok": True, "output": self.origin_head + "\n", "exit_code": 0, "error": None}
         if step == "worktree-list":
@@ -200,8 +218,12 @@ async def _serve(conn: FakeWSConn, device: FakeDevice, repo: FakeRepo) -> None:
         frame = await conn.next_sent()
         if not isinstance(frame, dict) or frame.get("type") != "command":
             continue
-        answer = repo.answer(frame["envelope"])
-        conn.feed(device.result(frame["envelope"], **answer))
+        answer = dict(repo.answer(frame["envelope"]))
+        meta = answer.pop("meta", None)
+        reply = device.result(frame["envelope"], **answer)
+        if meta is not None:
+            reply["meta"] = meta
+        conn.feed(reply)
 
 
 async def _start(pool, conn, device, repo: FakeRepo, args: dict | None = None):
@@ -330,7 +352,9 @@ async def test_c2_every_command_is_argv_only_git_and_agents_md_comes_from_the_wo
     repo = FakeRepo()
     _result, ok, _facts = await _start(pool, conn, device, repo)
     assert ok is True
-    assert {e["capability"] for e in repo.seen} == {"shell.exec", "fs.read"}
+    # T10 (S32.2): box.start joins git and fs.read — the box is started once
+    # the worktree exists; it carries no argv (pinned in the T10 tests below).
+    assert {e["capability"] for e in repo.seen} == {"shell.exec", "fs.read", "box.start"}
     for argv in repo.argvs():
         assert argv[0] == "git", argv
         assert not any(word in ("sh", "bash", "-c") for word in argv), argv
@@ -630,4 +654,199 @@ async def test_walk_t4_the_result_names_the_device_tools_for_the_worktree(pool, 
     assert f"device_run with cwd {WT}" in result
     assert "workspace" in result and "not this worktree" in result
     assert result.rstrip().endswith(AGENTS.rstrip())
+    await _close(conn, task)
+
+
+# -- T10 (S32.2): start_change also starts the change's box ----------------------
+#
+# Criteria (tracker .epics/s32-2.md, ## T10):
+#   C1 one box.start {change, checkout, branch (default, never nova/), limits
+#      (live)} after the worktree exists; "Environment: box" + "Box: ..." before
+#      AGENTS.md.
+#   C2 a box that does not start never fails the change; the result says why.
+#   C3 environment host -> no box.start; the result says the owner set it.
+
+LIMITS = {"cpus": 3, "memory_gb": 5, "pids": 700, "max_running": 4}
+
+
+async def _limits(pool, limits: dict = LIMITS):
+    for name, value in limits.items():
+        await pool.execute(
+            "INSERT INTO settings (key, value) VALUES ($1, $2::jsonb) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            f"box.{name}",
+            value,
+        )
+
+
+async def _repo_row(pool, *, environment: str):
+    await pool.execute(
+        "INSERT INTO code_repos (name, machine, checkout, default_branch, environment) "
+        "VALUES ('nova', $1, $2, 'main', $3)",
+        HOST,
+        REPO,
+        environment,
+    )
+
+
+def _box_starts(repo: FakeRepo) -> list[dict]:
+    return [e for e in repo.seen if e["capability"] == "box.start"]
+
+
+@requires_db
+async def test_t10_c1_one_box_start_with_exactly_its_shape_after_the_worktree(
+    pool, recorded, fixed_id, monkeypatch
+):
+    # Non-default everything: a trunk base read from origin/HEAD, a checkout
+    # recorded with a trailing slash, limits written now.
+    monkeypatch.delenv("NOVA_REPO_BRANCH")
+    monkeypatch.setenv("NOVA_CHECKOUT", REPO + "/")
+    await _limits(pool)
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(origin_head="origin/trunk")
+    result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is True, result
+    (start,) = _box_starts(repo)
+    assert start["args"] == {"change": ID, "checkout": REPO, "branch": "trunk", "limits": LIMITS}
+    assert not start["args"]["branch"].startswith("nova/")
+    steps = repo.steps()
+    assert steps.index("box.start") > steps.index("add")
+    assert steps.index("box.start") > steps.index("rev-parse")
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c1_the_result_names_the_environment_and_the_box_before_agents_md(
+    pool, recorded, fixed_id
+):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo()
+    result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is True
+    assert "Environment: box" in result
+    assert f"Box: {BOX} running (image {IMAGE})" in result
+    assert result.index(f"Box: {BOX}") < result.index(f"{WT}/AGENTS.md:")
+    assert result.rstrip().endswith(AGENTS.rstrip())
+    assert "did not start" not in result
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c1_the_limits_sent_are_the_defaults_without_a_write(pool, recorded, fixed_id):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo()
+    _result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is True
+    (start,) = _box_starts(repo)
+    assert start["args"]["limits"] == {"cpus": 2, "memory_gb": 3, "pids": 512, "max_running": 2}
+    assert start["args"]["branch"] == "main"
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c1_a_failed_git_step_starts_no_box(pool, recorded, fixed_id):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(fail={"rev-parse": (128, "fatal: bad HEAD")})
+    _result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is False
+    assert _box_starts(repo) == []
+    await _close(conn, task)
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("answer", "why"),
+    [
+        (
+            {
+                "ok": False,
+                "output": "",
+                "exit_code": None,
+                "error": "cannot start the box "
+                "nova-box-a1b2c3: the box image nova-devbox:t-0123456789ab is not built",
+            },
+            "the box image nova-devbox:t-0123456789ab is not built",
+        ),
+        (
+            {
+                "ok": False,
+                "output": "",
+                "exit_code": None,
+                "error": 'unknown capability "box.start"',
+            },
+            "Beelink Mini S's agent predates the box — update it with machine_update",
+        ),
+    ],
+)
+async def test_t10_c2_a_box_that_does_not_start_never_fails_the_change(
+    pool, recorded, fixed_id, answer, why
+):
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(box=answer)
+    result, ok, facts = await _start(pool, conn, device, repo)
+    assert ok is True, result
+    assert not result.startswith(tools.ERROR_PREFIX)
+    assert (
+        f"The box {BOX} did not start: " in result
+        and "— commands in this worktree will say so until it does" in result
+    )
+    assert why in result
+    assert result.rstrip().endswith(AGENTS.rstrip())
+    assert _change_facts(facts) == [
+        {"change": ID, "worktree_path": WT, "branch": BRANCH, "started": True}
+    ]
+    assert len(_box_starts(repo)) == 1
+    assert {e["capability"] for e in repo.seen} == {"shell.exec", "fs.read", "box.start"}
+    assert f"Box: {BOX} running" not in result
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c2_a_transport_failure_is_said_and_the_change_stands(
+    pool, recorded, fixed_id, monkeypatch
+):
+    real = changes._command
+
+    async def flaky(pool_, row, capability, args, **kw):
+        if capability == "box.start":
+            raise ToolFailure("Beelink Mini S disconnected before answering")
+        return await real(pool_, row, capability, args, **kw)
+
+    monkeypatch.setattr(changes, "_command", flaky)
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo()
+    result, ok, facts = await _start(pool, conn, device, repo)
+    assert ok is True, result
+    assert f"The box {BOX} did not start: Beelink Mini S disconnected before answering" in result
+    assert _change_facts(facts)
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c3_environment_host_starts_no_box_and_says_the_owner_set_it(
+    pool, recorded, fixed_id
+):
+    await _repo_row(pool, environment="host")
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo()
+    result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is True
+    assert _box_starts(repo) == []
+    assert (
+        "Environment: host (set by the owner) — commands in this worktree run on the host, "
+        "not in a box"
+    ) in result
+    assert "Box:" not in result and "Environment: box" not in result
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t10_c3_a_box_row_starts_the_box(pool, recorded, fixed_id):
+    await _repo_row(pool, environment="box")
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo()
+    result, ok, _facts = await _start(pool, conn, device, repo)
+    assert ok is True
+    assert len(_box_starts(repo)) == 1
+    assert "Environment: box" in result
     await _close(conn, task)

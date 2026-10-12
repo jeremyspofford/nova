@@ -136,6 +136,9 @@ Written to the coder — Nova or anyone else changing this repository.
   outside `.worktrees/nova-*` still runs, but its result ends with a warning
   naming `start_change` and its trace span carries `outside_worktree`.
   Reading the checkout is fine.
+- **Your commands in a change's worktree run in that change's sealed box**
+  (`nova-box-<id>`: no route out, its own Postgres in `TEST_DATABASE_URL`);
+  each result's `ran_in` says where it ran (`box` or `host`).
 - **Run the repo's checks for what you touched before saying done:**
   - core: `uv run pytest` from `services/core` (gateway and memory the same,
     from their own directories); DB-backed tests skip without

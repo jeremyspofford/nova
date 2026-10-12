@@ -9,7 +9,9 @@ prose. T2-T5 read these facts; T1 only files them.
 
 Criteria:
   C1 device_run, on an ok result frame, files exactly one run fact
-     {"run": {"exit_code", "device", "argv", "cwd"}, "target": " ".join(argv)}:
+     {"run": {"exit_code", "device", "argv", "cwd", "ran_in"}, "target": " ".join(argv)}
+     (ran_in moved the pin, S32.2 T9: "host" here; "box" + "box" for a change
+     worktree's run — tests/test_device_run_box.py):
      exit_code is the frame's, device the row's name, argv as sent, cwd the
      checked (normalized) cwd or None when none was given.
   C2 the exit code is the frame's whatever it is: a nonzero exit (ok frame,
@@ -94,7 +96,7 @@ async def test_c1_device_run_files_a_run_fact_with_exit_code_device_argv(pool):
     assert ok is True, result
     assert _runs(facts) == [
         {
-            "run": {"exit_code": 0, "device": "mini", "argv": argv, "cwd": None},
+            "run": {"exit_code": 0, "device": "mini", "argv": argv, "cwd": None, "ran_in": "host"},
             "target": "python3 --version",
         }
     ]
@@ -158,7 +160,13 @@ async def test_c2_a_failed_frame_still_files_its_run_fact_and_fails(pool):
     assert "executable file not found" in result
     assert _runs(facts) == [
         {
-            "run": {"exit_code": None, "device": "mini", "argv": argv, "cwd": None},
+            "run": {
+                "exit_code": None,
+                "device": "mini",
+                "argv": argv,
+                "cwd": None,
+                "ran_in": "host",
+            },
             "target": "nosuchprogram",
         }
     ]
@@ -343,7 +351,7 @@ async def test_c4_run_tool_lifts_the_run_fact_to_the_span(pool):
     argv = ["python3", "--version"]
     assert runs == [
         {
-            "run": {"exit_code": 0, "device": "mini", "argv": argv, "cwd": None},
+            "run": {"exit_code": 0, "device": "mini", "argv": argv, "cwd": None, "ran_in": "host"},
             "target": "python3 --version",
         }
     ]

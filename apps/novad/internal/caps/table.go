@@ -25,6 +25,9 @@ var table = map[string]Handler{
 	"admin.uninstall": adminUninstall,
 	"facts.refresh":   factsRefresh,
 	"daemon.update":   daemonUpdate,
+	"box.exec":        boxExec,
+	"box.start":       boxStart,
+	"box.status":      boxStatus,
 }
 
 // factsRefresh answers core's facts.refresh: it writes a fresh facts frame
