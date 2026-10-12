@@ -1,3 +1,9 @@
+//go:build unix
+
+// Boxes exist only on non-Windows agents (caps wires a box manager there
+// alone), and these tests drive Ensure with a real temp checkout, whose
+// path is not a POSIX absolute path on Windows.
+
 package box
 
 import (
