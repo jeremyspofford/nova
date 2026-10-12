@@ -104,7 +104,8 @@ export function SetupModal({
   const filled = state.status === 'ready' ? fillCommands(state.manifest?.commands ?? null, state.code?.code) : { commands: null, reason: null }
   return (
     <Modal open={setup !== null} onClose={onClose} size="md" title={title}>
-      <div role="dialog" aria-label={title} className="space-y-4">
+      {/* Modal itself is the dialog, named by its title (since 2026-10-12). */}
+      <div className="space-y-4">
         {state.status === 'loading' && <Skeleton lines={3} />}
         {state.status === 'error' && (
           <div role="alert" className="rounded-sm border border-danger/30 bg-danger/10 px-3 py-2 text-caption text-danger">
