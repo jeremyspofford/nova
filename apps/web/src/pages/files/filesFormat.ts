@@ -32,7 +32,7 @@ export function notShownMessage(detail: {
   return `${detail.size} bytes, not shown (${reason}) — download to view`
 }
 
-export type PreviewKind = 'markdown' | 'image' | 'pdf' | 'word' | 'text'
+export type PreviewKind = 'markdown' | 'image' | 'pdf' | 'docx' | 'word' | 'text'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'])
 
@@ -51,7 +51,9 @@ export function previewKind(path: string): PreviewKind {
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (IMAGE_EXTS.has(ext)) return 'image'
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'docx' || ext === 'doc') return 'word'
+  // .docx is a zip of XML that DocxView reads; an old binary .doc is not.
+  if (ext === 'docx') return 'docx'
+  if (ext === 'doc') return 'word'
   return 'text'
 }
 

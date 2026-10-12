@@ -56,8 +56,9 @@ describe('previewKind', () => {
     expect(previewKind('report.pdf')).toBe('pdf')
   })
 
-  it('names Word documents so the page can say why they are not shown', () => {
-    expect(previewKind('letter.docx')).toBe('word')
+  it('renders a .docx, and names an old binary .doc so the page can say why it is not shown', () => {
+    expect(previewKind('letter.docx')).toBe('docx')
+    expect(previewKind('LETTER.DOCX')).toBe('docx')
     expect(previewKind('old.doc')).toBe('word')
   })
 

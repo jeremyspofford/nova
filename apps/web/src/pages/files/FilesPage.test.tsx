@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { FilesPage } from './FilesPage'
 import type { WorkspaceFileDetail, WorkspaceFileListing } from '../../lib/api'
+import { fixtureBytes } from './docxFixture.test-data'
 
 function listing(overrides: Partial<WorkspaceFileListing> = {}): WorkspaceFileListing {
   return { files: [], total: 0, truncated: false, ...overrides }
@@ -214,10 +215,20 @@ describe('FilesPage — previews', () => {
     expect(openLink.getAttribute('target')).toBe('_blank')
   })
 
-  it('says plainly that a Word document cannot be previewed', async () => {
-    open('letter.docx', { text: null, binary: true, size: 12000 })
-    expect(await screen.findByText(/word documents can.t be previewed/i)).toBeDefined()
+  it('says plainly that an old binary .doc cannot be previewed', async () => {
+    open('old.doc', { text: null, binary: true, size: 12000 })
+    expect(await screen.findByText(/can.t be previewed/i)).toBeDefined()
     expect(screen.getByTestId('download-file')).toBeDefined()
+  })
+
+  it('renders a .docx from its raw bytes', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, arrayBuffer: async () => fixtureBytes() }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+    open('plans/trip.docx', { text: null, binary: true, size: 11000 })
+    expect(await screen.findByRole('heading', { name: 'Trip plan' })).toBeDefined()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/workspace/raw?path=plans%2Ftrip.docx', expect.anything())
+    expect(screen.queryByText(/can.t be previewed/i)).toBeNull()
+    vi.unstubAllGlobals()
   })
 
   it('highlights a code file by its extension, never as markdown', async () => {

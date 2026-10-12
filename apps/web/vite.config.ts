@@ -24,6 +24,12 @@ export default defineConfig({
     // real index.css to pin that word spacing reaches the body and not code;
     // lightModeSurfaces.test.ts reads it and highlight.css for light mode.
     css: { include: [/src\/index\.css/, /components\/highlight\.css/] },
+    // mammoth's package.json maps its file reader to a browser version (the
+    // `browser` field), which reads an ArrayBuffer; Vite's app build follows
+    // that map, but the test runner resolves the Node entry, which wants a
+    // path or a Node Buffer. Point tests at the browser bundle so DocxView is
+    // tested on the code path the app actually ships.
+    alias: { mammoth: 'mammoth/mammoth.browser.js' },
     // A test's own budget must exceed the longest wait INSIDE it, or the
     // wait can never finish and the failure arrives as an opaque "Test
     // timed out" instead of the assertion that actually broke.
