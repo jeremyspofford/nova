@@ -28,6 +28,7 @@ var table = map[string]Handler{
 	"box.exec":        boxExec,
 	"box.start":       boxStart,
 	"box.status":      boxStatus,
+	"net.wake":        netWake,
 }
 
 // factsRefresh answers core's facts.refresh: it writes a fresh facts frame

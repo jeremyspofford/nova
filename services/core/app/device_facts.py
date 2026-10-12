@@ -1368,6 +1368,10 @@ def derive_roles(
     return {"hands": hands, "facts": facts_role}
 
 
+# agent_view's "the caller did not read this" — distinct from None (read: none).
+_UNREAD = object()
+
+
 def agent_view(
     *,
     name: str,
@@ -1380,6 +1384,7 @@ def agent_view(
     hub_version: str | None = None,
     last_transport: str | None = None,
     last_update: dict | None = None,
+    last_wake: object = _UNREAD,
 ) -> dict:
     """One machine's agent, as the plant, machine_status and an eval fixture
     all see it. `machine` is the agent's machine_uid (None when it said
@@ -1396,7 +1401,7 @@ def agent_view(
     listing. The build is compared on the version as reported (`build`),
     never on its shown form."""
     wsl = in_wsl(facts)
-    return {
+    view = {
         "name": name,
         "platform": platform,
         "hostname": _sanitized_line(hostname),
@@ -1425,3 +1430,10 @@ def agent_view(
         "acting": acting_lines(facts, platform),
         "addresses": addresses_of(facts),
     }
+    # S46a T6: the machine's last wake attempt (wake_attempts.latest_by_device's
+    # shape, None = never tried) — only when the caller READ the ledger. A view
+    # built without reading it carries no key, so nothing says "never tried"
+    # about a machine nobody looked up.
+    if last_wake is not _UNREAD:
+        view["last_wake"] = last_wake
+    return view

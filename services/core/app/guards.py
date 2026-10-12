@@ -84,6 +84,24 @@ _CONFIGURE_TOOLS = frozenset({"machine_configure"})
 # update claim (narration) and its recorded connectivity is a device check (the
 # state guard); test_state_guard pins it to MACHINE_UPDATE.name.
 _UPDATE_TOOLS = frozenset({"machine_update"})
+# S46a T5-T6 fix: the tools that wake a machine (machine_wake). It reads the
+# target's and each relay candidate's connection before it sends
+# (agent_updates._connected, onto its facts_sink), and a relay that cannot
+# send is a stated cannot — a FAILED span carrying those facts, which is the
+# check her "the hub is offline" reports, as the update tool's is (the state
+# guard). DERIVED (T6, VERIFY 2): each wake tool declares WAKE_KIND in
+# `Tool.backs` and _wake_tools() reads the live registry, so a second tool
+# that reaches the wake joins by its own declaration — a hand list here
+# drifted silently and corrected that tool's honest "hubhost is offline".
+WAKE_KIND = "woke_machine"
+
+
+def _wake_tools() -> frozenset[str]:
+    """The registered wake tools (`Tool.backs` ∋ WAKE_KIND), from the live
+    registry every call."""
+    return _tools_for_kind(WAKE_KIND)
+
+
 # S42b (Task 23 fix round 1, I2): the tool that changes one of her SPECIALIST
 # agents' fields (coder's round budget, its tools). "I updated coder's agent
 # settings" after it ran is about that agent, not a machine's; test_state_guard
@@ -6381,6 +6399,10 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
         tool's refusal is (Task 22 review I1). Keyed on the tool set, never on
         her words; one that read no connection ("current", an unknown name)
         backs nothing.
+      * (S46a) a span of a wake tool (_wake_tools) that recorded a
+        connection, ok or FAILED, the same way: machine_wake reads the
+        target's agent and every relay candidate's before it sends, so its
+        relay_cannot ("hubhost is offline") is a check, not a guess.
 
     A device_* span that settled nothing — an unknown device name, a schema
     refusal — backs nothing.
@@ -6401,7 +6423,7 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
         if name.startswith(_DEVICE_SPAN_PREFIX):
             if meta.get("ok") is True or _determined_connectivity(span):
                 return True
-        elif name in _UPDATE_TOOLS:
+        elif name in _UPDATE_TOOLS or name in _wake_tools():
             if _determined_connectivity(span):
                 return True
         elif meta.get("ok") is True and _determined_connectivity(span):
@@ -12879,4 +12901,276 @@ def _handback_in_prose(line: str, names: frozenset[str], lead: str) -> OwnToolHa
         if before and (before[-1] in _HANDBACK_VERBS or before[-1] in _HANDBACK_INSTRUMENT):
             phrase = line[clause_start : span.end()].strip()
             return OwnToolHandbackClaim(tool=tool, phrase=phrase[-160:])
+    return None
+
+
+# -- S46a T6: the wake claim ----------------------------------------------------
+#
+# A wake is MEASURED (app/wake.py, T5): machine_wake leaves {machine_wake,
+# outcome, sent, answered_after_s, …} on its span, and every reading of an
+# agent leaves {device, connected}. Sending is not waking — a packet that left
+# the relay says nothing about the target — so "I woke the box", "the box is
+# awake now", "the box came back online" and "the box answered the wake" are
+# claims those facts back or do not:
+#
+#   * backed by a machine_wake fact for that machine this turn that shows an
+#     answer (answered_after_s, or an outcome of ready/answered), or by any
+#     {device: M, connected: true} this turn (an agent connected now is awake —
+#     machine_wake's not_asleep leaves one, so "the box was already awake"
+#     beside it is backed by construction);
+#   * otherwise corrected, APPEND-class, with what the turn does show: the
+#     wake sent and no answer within the wait, no wake sent and why, a reading
+#     that shows the agent offline, or nothing at all.
+#
+# The subjects are DERIVED: the turn's paired names (chat._paired_device_names)
+# plus any machine a machine_wake fact names — never a list. Precision cuts,
+# each pinned by tests/test_wake_claim_guard.py: a send stated as a send, a
+# negation, a hedge or intent before it (the shared _STATE_HEDGE and
+# _DELEGATION_HEDGE, and the hopes they lack: _WAKE_CLAIM_HOPED), a future
+# time right after it (_WAKE_CLAIM_SOON), a question, reported speech, a prior
+# time or a past attempt named as past (a date, "the last attempt", "trial
+# 1"), quoted and fenced text, and another subject. Armed in STACK_CLAIM_KINDS.
+# Every read is bounded: the first-person lead is read over at most
+# _WAKE_CLAIM_LEAD characters before a name, a hedge over at most
+# _WAKE_CLAIM_BEFORE, so a reply of many names stays linear.
+
+WAKE_CLAIM_NO_RECORD = (
+    "Correction: nothing this turn shows {machine} woke or is awake — no wake attempt for "
+    "it answered, and nothing read its agent connected."
+)
+WAKE_CLAIM_NO_ANSWER = (
+    "Correction: nothing this turn shows {machine} woke — the wake was sent, and "
+    "{machine}'s agent did not reconnect within the wait. Sending is not waking."
+)
+WAKE_CLAIM_OPEN = (
+    "Correction: nothing this turn shows {machine} woke — the wake was sent, and nothing "
+    "has answered yet. Sending is not waking."
+)
+WAKE_CLAIM_NOT_SENT = (
+    "Correction: nothing this turn shows {machine} woke — no wake was sent to it this turn ({why})."
+)
+WAKE_CLAIM_OFFLINE = (
+    "Correction: nothing this turn shows {machine} woke or is awake — the reading this turn "
+    "shows {machine}'s agent offline."
+)
+_WAKE_NOT_SENT_WHY = {
+    "relay_cannot": "it could not be sent",
+    "not_asleep": "its agent was connected",
+}
+_WAKE_ANSWERED_OUTCOMES = frozenset({"ready", "answered"})
+_WAKE_CLAIM_LEAD = 48
+_WAKE_CLAIM_BEFORE = 120
+
+# "I woke (up) the <name>", read over the text right before a name.
+_WAKE_CLAIM_I_WOKE = re.compile(
+    r"(?<![\w'’])I(?:['’]ve|\s++(?:just|successfully|now|have|already))*+\s++"
+    r"(?:woke|woken)(?:\s++up)?\s++(?:(?:the|your|my)\s++)?\Z",
+    re.I,
+)
+# "<name> is (now) awake / is back up / woke (up) / came back (online) /
+# answered the wake / has woken / has come back", read right after a name.
+_WAKE_CLAIM_AFTER = re.compile(
+    r"(?:(?:['’]s|\s++is)\s++(?:(?:now|already|still|finally)\s++)?"
+    r"(?:awake|back\s++(?:up|online))"
+    r"|\s++(?:(?:just|finally|successfully|now)\s++)?"
+    r"(?:woke(?:\s++up)?|came\s++back(?:\s++(?:up|online))?"
+    r"|answered\s++(?:the|my|your|its)\s++wake(?:\s++packets?)?)"
+    r"|(?:['’]s|\s++has)\s++(?:(?:just|finally|now|successfully)\s++)?"
+    r"(?:woken(?:\s++up)?|come\s++back(?:\s++(?:up|online))?))"
+    r"(?![\w'’-])",
+    re.I,
+)
+# A past attempt named as past, or a claim placed at an explicit past time,
+# anywhere in the clause (T6, VERIFY 2: "Last Tuesday the box woke up after
+# the packet, per the ledger." is a report of Tuesday). Read beside the
+# shared _PRIOR_TIME (yesterday, last night/week, earlier, … ago); these are
+# the markers it lacks — a weekday (the recap family's _WEEKDAY), "this
+# morning/afternoon/evening", a date. Not "today": "the box is back up
+# today" is a claim about now.
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
+_WAKE_CLAIM_PAST = re.compile(
+    r"\b(?:(?:last|previous|earlier|prior|first|second|third|other)\s++"
+    r"(?:wake|attempt|try|trial|test|run)s?"
+    r"|(?:trial|attempt|test)\s++#?\d++|\d{4}-\d{2}-\d{2}|used\s++to"
+    rf"|{_WEEKDAY}s?|this\s++(?:morning|afternoon|evening)|last\s++(?:month|weekend)"
+    rf"|{_MONTH}\.?\s++\d{{1,2}}(?:st|nd|rd|th)?|\d{{1,2}}(?:st|nd|rd|th)?\s++{_MONTH}"
+    r"|on\s++the\s++\d{1,2}(?:st|nd|rd|th)|\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b",
+    re.I,
+)
+# A hope or an expectation before the claim — "Fingers crossed the box is
+# back up", "With luck the box is back online", "I'm hoping the box is awake"
+# — wishes, not reports. The shared _DELEGATION_HEDGE ("hopefully", "I hope",
+# "I expect", "probably", …) is read beside it; these are the forms it lacks.
+_WAKE_CLAIM_HOPED = re.compile(
+    r"\b(?:fingers\s++crossed|with\s++(?:(?:any|some|a\s++bit\s++of)\s++)?luck"
+    r"|(?:knock|knocking)\s++on\s++wood|touch\s++wood|hoping|expecting|wish(?:ing)?"
+    r"|praying)\b",
+    re.I,
+)
+# A future time right after the claim — "the box is back up soon", "… back
+# online in a minute", "… awake within a minute or two" — an expectation of
+# a state to come, not a report of the state now. Read with .match at the
+# claim's end over at most _WAKE_CLAIM_LEAD characters.
+_WAKE_CLAIM_SOON = re.compile(
+    r"[\s,]*+(?:again\s++)?(?:soon(?:ish)?|shortly|momentarily|before\s++long"
+    r"|any\s++(?:minute|moment|second|time)|in\s++no\s++time"
+    r"|in\s++(?:a|an|one|two|a\s++few|a\s++couple(?:\s++of)?|\d++)\s++"
+    r"(?:minutes?|moments?|seconds?|secs?|mins?|bit|while|jiffy|sec|min)"
+    r"|within\s++(?:a|an|one|two|a\s++few|the\s++next|\d++)\s)",
+    re.I,
+)
+# A negation before the claim: "nothing shows the box woke", "no sign the
+# box came back", "I didn't see the box wake".
+_WAKE_CLAIM_NEGATED = re.compile(
+    r"\b(?:nothing|no\s++(?:sign|evidence|record|reading|proof)|not|never|without"
+    r"|unclear|unknown)\b|n['’]t\b",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class WakeClaim:
+    """A claim that a machine woke or is awake, which nothing this turn backs.
+
+    `machine` is the name as the reply wrote it, `phrase` the matched text
+    (at most 80 characters), `text` the stated correction, and `evidence`
+    what the turn shows instead: the wake attempt's outcome ("no_answer",
+    "open", "relay_cannot", …), "offline" (a reading of the agent), or
+    "no_record"."""
+
+    machine: str
+    phrase: str
+    text: str
+    evidence: str
+
+
+def _wake_facts(spans: Sequence[Any]) -> tuple[dict[str, Mapping], dict[str, bool]]:
+    """(the last machine_wake fact per machine, whether any reading this turn
+    showed each agent connected) — casefolded names, from any tool span, ok
+    or failed (a relay_cannot is a failed span that still carries its
+    facts)."""
+    wakes: dict[str, Mapping] = {}
+    connected: dict[str, bool] = {}
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        facts = _span_meta(span).get("facts")
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, Mapping):
+                continue
+            woken = fact.get("machine_wake")
+            if isinstance(woken, str) and woken.strip():
+                wakes[woken.strip().casefold()] = fact
+            device, state = fact.get("device"), fact.get("connected")
+            if isinstance(device, str) and isinstance(state, bool):
+                key = device.strip().casefold()
+                connected[key] = connected.get(key, False) or state
+    return wakes, connected
+
+
+def _wake_backed(wake: Mapping | None, connected: bool | None) -> bool:
+    if connected is True:
+        return True
+    if wake is None:
+        return False
+    answered = wake.get("answered_after_s")
+    if isinstance(answered, int) and not isinstance(answered, bool):
+        return True
+    return wake.get("outcome") in _WAKE_ANSWERED_OUTCOMES
+
+
+def _wake_correction(machine: str, wake: Mapping | None, connected: bool | None):
+    if wake is not None:
+        outcome = wake.get("outcome")
+        if wake.get("sent") is True:
+            if outcome is None:
+                return WAKE_CLAIM_OPEN.format(machine=machine), "open"
+            return WAKE_CLAIM_NO_ANSWER.format(machine=machine), str(outcome)
+        why = _WAKE_NOT_SENT_WHY.get(str(outcome), f"the attempt's record says {outcome}")
+        return WAKE_CLAIM_NOT_SENT.format(machine=machine, why=why), str(outcome)
+    if connected is False:
+        return WAKE_CLAIM_OFFLINE.format(machine=machine), "offline"
+    return WAKE_CLAIM_NO_RECORD.format(machine=machine), "no_record"
+
+
+def _wake_claim_spans(clause: str, names: re.Pattern[str]):
+    """Each (name match, claim start, claim end) in `clause`: a name with a
+    wake state right after it, or a first-person "I woke" right before it."""
+    for m in names.finditer(clause):
+        after = _WAKE_CLAIM_AFTER.match(clause, m.end())
+        if after is not None:
+            yield m, m.start(), after.end()
+            continue
+        lo = max(0, m.start() - _WAKE_CLAIM_LEAD)
+        lead = _WAKE_CLAIM_I_WOKE.search(clause, lo, m.start())
+        if lead is not None:
+            yield m, lead.start(), m.end()
+
+
+def wake_claim_check(
+    reply_text: str,
+    spans: Sequence[Any],
+    device_names: Sequence[str],
+    *,
+    purpose: str | None,
+) -> WakeClaim | None:
+    """Correct a claim that a machine woke or is awake which nothing this turn
+    backs (see the section header). None otherwise — pure, precision-first,
+    fail-open at the call site."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    wakes, connected = _wake_facts(spans)
+    subjects = {
+        name.strip()
+        for name in (*device_names, *(str(f.get("machine_wake")) for f in wakes.values()))
+        if isinstance(name, str) and name.strip()
+    }
+    if not subjects:
+        return None
+    names = _machine_name_pattern(tuple(sorted(subjects)))
+    for line in _own_lines(reply_text):
+        if not line.strip():
+            continue
+        for clause, is_question, rest in _clauses_with_rest(line):
+            if is_question:
+                continue
+            clause_cut: bool | None = None
+            for m, start, end in _wake_claim_spans(clause, names):
+                key = m.group(0).casefold()
+                wake, state = wakes.get(key), connected.get(key)
+                if _wake_backed(wake, state):
+                    continue
+                if clause_cut is None:
+                    clause_cut = bool(
+                        _REPORTED.search(clause)
+                        or _PRIOR_TIME.search(clause)
+                        or _WAKE_CLAIM_PAST.search(clause)
+                    )
+                if clause_cut:
+                    break
+                before = clause[max(0, start - _WAKE_CLAIM_BEFORE) : start]
+                if (
+                    _claim_prefix_blocks(before)
+                    or _WAKE_CLAIM_NEGATED.search(before)
+                    or _DELEGATION_HEDGE.search(before)
+                    or _WAKE_CLAIM_HOPED.search(before)
+                    or _WAKE_CLAIM_SOON.match(clause, end, end + _WAKE_CLAIM_LEAD)
+                ):
+                    continue
+                if _not_her_claim(before, clause[end : end + _WAKE_CLAIM_BEFORE], rest):
+                    continue
+                text, evidence = _wake_correction(m.group(0), wake, state)
+                return WakeClaim(
+                    machine=m.group(0),
+                    phrase=clause[start:end].strip()[:80],
+                    text=text,
+                    evidence=evidence,
+                )
     return None

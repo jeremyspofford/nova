@@ -44,7 +44,16 @@ from urllib.parse import quote
 
 import httpx
 
-from app import agent_dist, agent_updates, db, device_facts, devices, devices_ws, peers
+from app import (
+    agent_dist,
+    agent_updates,
+    db,
+    device_facts,
+    devices,
+    devices_ws,
+    peers,
+    wake_attempts,
+)
 
 logger = logging.getLogger("core")
 
@@ -249,6 +258,9 @@ class GatewayPlant:
         rows = await devices.rows_with_last_update(pool, live_only=True)
         connected = devices_ws.hub.connected_ids()
         hub_version = await self.hub_version()
+        # S46a T6: each machine's last wake attempt, from the ledger (None =
+        # never tried) — read, so every view carries it.
+        wakes = await wake_attempts.latest_by_device(pool)
         return [
             device_facts.agent_view(
                 name=row["name"],
@@ -261,6 +273,7 @@ class GatewayPlant:
                 hub_version=hub_version,
                 last_transport=row["last_transport"],
                 last_update=devices._last_update(row),
+                last_wake=wakes.get(row["id"]),
             )
             for row in rows
         ]

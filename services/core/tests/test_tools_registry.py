@@ -182,6 +182,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # where something is in a tree short of reading every file; this walks a
     # directory on a paired machine through the agent's fs.search (regex or
     # literal, .gitignore honoured). reads_only; nothing waits on anyone.
+    # Deliberate snapshot update (S46a T5, 2026-10-11): machine_wake
+    # (tools/machines.py), so SIXTY-THREE -> SIXTY-FOUR. "Wake the Dell" had no
+    # tool: v4 sent no packet anywhere. It sends through the hub's agent and
+    # says only what the ledger measured — answered, serving, or no answer.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -309,6 +313,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # each proven by its read-back). SIXTY-TWO -> SIXTY-THREE. Not
         # reads_only; the one OS prompt per machine is the owner's UAC click.
         "device_admin_path",
+        # S46a T5 (2026-10-11): she wakes a sleeping machine through the hub's
+        # own agent (net.wake) and MEASURES whether it answered — the wake
+        # ledger (wake_attempts) holds the outcome. SIXTY-THREE -> SIXTY-FOUR.
+        # Not reads_only: it sends a packet. Nothing waits on anyone.
+        "machine_wake",
     }
 
 
@@ -767,6 +776,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "device_edit_file",
         # S30b T7: it installs or removes a machine's admin path.
         "device_admin_path",
+        # S46a T5: it sends a wake packet through the hub's agent.
+        "machine_wake",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 
@@ -800,6 +811,10 @@ def test_the_tools_that_back_a_claim_kind_are_pinned_by_name():
         "device_write_file": frozenset({"wrote_file"}),
         # S30a T5: a device edit, target-aware through its `edit` fact.
         "device_edit_file": frozenset({"edited_file", "wrote_file"}),
+        # S46a T6 (VERIFY 2): the wake tool's span — failed too — that read a
+        # connection backs an offline report; the state guard derives its wake
+        # set from this declaration (guards._wake_tools).
+        "machine_wake": frozenset({"woke_machine"}),
     }
 
 

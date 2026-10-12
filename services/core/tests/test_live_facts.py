@@ -93,6 +93,18 @@ def test_s30b_t7_device_admin_path_is_never_run_unasked():
     assert refusal and "changes something" in refusal
 
 
+def test_s46a_t5_machine_wake_is_never_run_unasked():
+    """S46a T5 (2026-10-11): NOT in NOT_AUTO_RUN on purpose — that table
+    classifies reads_only tools, and machine_wake is not: it sends a wake
+    packet through the hub's agent. live_facts refuses it by that fact."""
+    assert "machine_wake" in tools.REGISTRY, "machine_wake is not registered"
+    assert tools.REGISTRY["machine_wake"].reads_only is False
+    assert "machine_wake" not in live_facts.AUTO_RUN
+    assert "machine_wake" not in live_facts.NOT_AUTO_RUN
+    refusal = live_facts.runnable(_call("machine_wake", {"machine": "box"}))
+    assert refusal and "changes something" in refusal
+
+
 # -- runnable ----------------------------------------------------------------
 
 

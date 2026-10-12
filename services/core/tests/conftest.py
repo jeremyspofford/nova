@@ -54,6 +54,9 @@ _TABLES = (
     # the DROP and on the TRUNCATE is what makes the cycle a non-issue.
     # S42b: agent_updates references devices, so it drops ahead of it.
     "agent_updates",
+    # S46a: wake_attempts references devices (twice) AND turns, so it drops
+    # ahead of both; left out, the re-migration collides on its CREATE TABLE.
+    "wake_attempts",
     "agents",
     "device_audit",
     "devices",

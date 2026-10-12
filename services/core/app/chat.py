@@ -5110,7 +5110,9 @@ def _file_rewrite_span(turn: traces.Turn, name: str, claim) -> None:
             span.meta.update(rules=list(claim.rules), wrong=list(claim.tokens), truth=claim.truth)
 
 
-def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object]]:
+def _append_class_claims(
+    text: str, turn: traces.Turn, device_names: Sequence[str] = ()
+) -> list[tuple[str, object]]:
     """The APPEND-class claims — served-model and memory-outage (S40b) — over
     `text` and THIS turn's live spans, each fail-open on its own.
 
@@ -5121,12 +5123,20 @@ def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object
     just taken with it — and the REPLACE correction that persisted instead
     ("I did not check hub this turn") was then false."""
     found: list[tuple[str, object]] = []
+    purpose = traces.purpose_of(turn)
     for name, check in (
-        ("served_claim", guards.served_claim_check),
-        ("memory_claim", guards.memory_claim_check),
+        ("served_claim", lambda: guards.served_claim_check(text, turn.spans, purpose=purpose)),
+        ("memory_claim", lambda: guards.memory_claim_check(text, turn.spans, purpose=purpose)),
+        # S46a T6: "I woke the Dell" / "the Dell is awake now" with no wake
+        # attempt that answered and no reading of its agent connected this
+        # turn — over the turn's paired names, the ones the state guard reads.
+        (
+            "wake_claim",
+            lambda: guards.wake_claim_check(text, turn.spans, device_names, purpose=purpose),
+        ),
     ):
         try:
-            claim = check(text, turn.spans, purpose=traces.purpose_of(turn))
+            claim = check()
         except Exception:
             logger.exception("%s guard raised; shipping the reply uncorrected", name)
             claim = None
@@ -5146,6 +5156,8 @@ def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
                 served=list(claim.served),
                 phrase=claim.phrase,
             )
+        elif name == "wake_claim":
+            span.meta.update(machine=claim.machine, phrase=claim.phrase, evidence=claim.evidence)
         else:
             span.meta.update(
                 subject=claim.subject,
@@ -5640,7 +5652,7 @@ async def _claim_redirect(
         # It stands. An APPEND-class claim in it is corrected beside it, exactly
         # as over an original reply (A9): the reading this redirect took is not
         # thrown away over a side line, and the record carries both.
-        appended = _append_class_claims(corrected, turn)
+        appended = _append_class_claims(corrected, turn, device_names)
         span.meta["redirected"] = True
         if appended:
             span.meta["regen_appended"] = [name for name, _ in appended]
@@ -6793,9 +6805,10 @@ async def _run_turn(
         # own APPEND-class corrections (_claim_redirect), so judging the
         # discarded prose would file a span about text nobody reads — the rule
         # the state and listing claims already follow.
-        claims = [] if consent_redirected else _append_class_claims(text, turn)
+        claims = [] if consent_redirected else _append_class_claims(text, turn, device_names)
         served_claim = next((c for name, c in claims if name == "served_claim"), None)
         memory_claim = next((c for name, c in claims if name == "memory_claim"), None)
+        wake_claim = next((c for name, c in claims if name == "wake_claim"), None)
         for name, claim in claims:
             _file_claim_span(turn, name, claim)
             emit(_frame({"correction": claim.text}))
@@ -7102,13 +7115,21 @@ async def _run_turn(
                     stack_claim,
                     served_claim,
                     memory_claim,
+                    wake_claim,
                     listing_replacement,
                 )
                 if c is not None
             )
         elif appended_corrections := [
             c
-            for c in (*rewrite_claims, correction, delegation_claim, served_claim, memory_claim)
+            for c in (
+                *rewrite_claims,
+                correction,
+                delegation_claim,
+                served_claim,
+                memory_claim,
+                wake_claim,
+            )
             if c is not None
         ]:
             # The APPEND class: the S47 rewrite claims (their token is already
@@ -7211,7 +7232,10 @@ async def _run_turn(
         # bring the invented token straight back into a reply this flag let
         # them regenerate over.
         append_only_guard_fired = (
-            served_claim is not None or memory_claim is not None or bool(rewrite_claims)
+            served_claim is not None
+            or memory_claim is not None
+            or wake_claim is not None
+            or bool(rewrite_claims)
         )
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
@@ -7716,7 +7740,10 @@ async def _run_turn(
             # …and only while the prose they were about is what persists
             # (C12): a redirect that stood replaced it, and its own
             # regeneration's corrections are what count then.
-            or ((served_claim is not None or memory_claim is not None) and not prose_replaced)
+            or (
+                (served_claim is not None or memory_claim is not None or wake_claim is not None)
+                and not prose_replaced
+            )
             # And S47's REWRITE-class claims, the same way (final review,
             # deferred L133): the invented token is gone from the prose but its
             # correction follows it — "Nova has no address another device can

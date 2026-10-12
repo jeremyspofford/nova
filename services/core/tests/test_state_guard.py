@@ -365,6 +365,13 @@ _RECORDED_BY: dict[tuple[str, str], tuple[str, str]] = {
 # (kind, reason) pair. `kind` gates a light structural check below; the reason
 # is read by a human deciding whether a NEW site belongs here.
 _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
+    # S46a T5-T6 fix (2026-10-11, a deliberate pin move): ("wake.py",
+    # "_connected") left this list. It was classified read_here_recorded_up,
+    # but wake_now also read it for every RELAY candidate and stated the
+    # answer ("hubhost is offline") with no {device, connected} behind it, so
+    # the state guard corrected an honest "the hub is offline". machine_wake
+    # now reads through agent_updates._connected (a _RECORDS site, below) and
+    # passes its facts_sink: there is no connectivity read in wake.py at all.
     ("devices_ws.py", "Hub.unregister"): (
         _BOOKKEEPING,
         "compares which conn is still the registered one to decide whether to "
@@ -529,6 +536,12 @@ _AGENTS_CALL_CONSUMERS: frozenset[tuple[str, str]] = frozenset(
         # REPORTER) — it reads the plant, and records {device, connected} for
         # every agent it lists, the same record _describe_agents leaves.
         ("tools/devices.py", "device_list"),
+        # S46a T6, a deliberate pin move (T5 added the call): machine_wake maps
+        # the gateway's providers to the target machine through the agents'
+        # addresses (model_machines.device_of). Their `connected` reaches no
+        # reply and no fact from here; wake_now's own _connected read is what
+        # it records.
+        ("wake.py", "_providers_on"),
     }
 )
 
@@ -1121,6 +1134,74 @@ def test_the_update_claim_is_backed_by_the_registered_update_tool():
 
     assert guards._UPDATE_TOOLS == {machine_tools.MACHINE_UPDATE.name}
     assert machine_tools.MACHINE_UPDATE.name in tools.REGISTRY
+
+
+def test_the_wake_tool_set_is_derived_from_the_registry():
+    """S46a T6 (VERIFY 2): the tools whose failed span that recorded a
+    connection backs an offline report (_checked_a_device) are DERIVED — each
+    declares the wake kind in `Tool.backs` — never a hand list. machine_wake
+    declares it; every registered tool whose executor is the wake tool's is in
+    the set, and nothing else is."""
+    from app import tools
+
+    assert machine_tools.MACHINE_WAKE.name in tools.REGISTRY
+    assert guards.WAKE_KIND in machine_tools.MACHINE_WAKE.backs
+    assert guards._wake_tools() == {
+        name
+        for name, tool in tools.REGISTRY.items()
+        if tool.executor is machine_tools.MACHINE_WAKE.executor
+    }
+    assert not hasattr(guards, "_WAKE_TOOLS"), "a hand list of wake tools came back"
+
+
+def test_registering_a_second_wake_tool_joins_the_set_by_its_declaration(monkeypatch):
+    """A second tool that reaches the wake (same executor, same declaration)
+    joins the set by registering alone, and its failed relay_cannot span that
+    read the hub offline backs "hubhost is offline" — no list to update."""
+    import dataclasses
+
+    from app import tools
+
+    second = dataclasses.replace(machine_tools.MACHINE_WAKE, name="machine_wake_test")
+    monkeypatch.setitem(tools.REGISTRY, second.name, second)
+    assert second.name in guards._wake_tools()
+    span = Span(
+        second.name,
+        ok=False,
+        facts=[
+            {"device": "hubhost", "connected": False},
+            {"machine_wake": "box", "outcome": "relay_cannot", "sent": False},
+        ],
+    )
+    reply = "hubhost is offline, so no wake could be sent to box."
+    assert guards.state_claim_check(reply, [span], ["box", "hubhost"]) is None
+    monkeypatch.delitem(tools.REGISTRY, second.name)
+    assert guards.state_claim_check(reply, [span], ["box", "hubhost"]) is not None
+
+
+def test_a_failed_wake_span_backs_only_when_it_recorded_a_connection(monkeypatch):
+    """The relay could not send because the hub's agent is offline: that read
+    is the check her "hubhost is offline" reports. A failed wake span with no
+    connection fact backs nothing, and the backing is the set's, not any
+    failed span's."""
+    wake_fact = {"machine_wake": "box", "outcome": "relay_cannot", "sent": False}
+    read = Span(
+        "machine_wake",
+        ok=False,
+        facts=[{"device": "hubhost", "connected": False}, wake_fact],
+    )
+    reply = "hubhost is offline, so no wake could be sent to box."
+    names = ["box", "hubhost"]
+    assert guards.state_claim_check(reply, [read], names) is None
+    unread = Span("machine_wake", ok=False, facts=[wake_fact])
+    assert guards.state_claim_check(reply, [unread], names) is not None
+    import dataclasses
+
+    from app import tools
+
+    undeclared = dataclasses.replace(machine_tools.MACHINE_WAKE, backs=frozenset())
+    monkeypatch.setitem(tools.REGISTRY, undeclared.name, undeclared)
+    assert guards.state_claim_check(reply, [read], names) is not None
 
 
 def test_a_specialists_update_is_read_from_the_registered_tool():

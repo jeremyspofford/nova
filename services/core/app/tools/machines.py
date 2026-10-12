@@ -37,9 +37,18 @@ owner, and a cannot is stated with the one step there is (P12).
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from app import agent_updates, device_facts, machines, model_machines, network, schedule
+from app import (
+    agent_updates,
+    device_facts,
+    guards,
+    machines,
+    model_machines,
+    network,
+    schedule,
+    wake,
+)
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -318,6 +327,67 @@ def _last_update_words(last: dict) -> str:
     return said
 
 
+def _stamp(at: str | None) -> str:
+    if not at:
+        return "an unknown time"
+    try:
+        return datetime.fromisoformat(at).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except ValueError:
+        return at
+
+
+def _one_line(text: object) -> str:
+    return " ".join(str(text).split())
+
+
+def _last_wake_words(last: dict | None) -> str:
+    """The machine's last wake attempt in one line (S46a T6), as the ledger
+    holds it (wake_attempts.summary): what was decided, when it was sent, and
+    how long until its agent / its model answered — or that nothing did.
+    Never "woke": an answer is an answer, a send is a send. No MAC is in what
+    it reads."""
+    if last is None:
+        return "last wake: never tried"
+    outcome = last.get("outcome")
+    sent_at = last.get("sent_at")
+    if not sent_at:
+        why = _one_line(last.get("reason") or "no reason was recorded")
+        verb = "not needed" if outcome == "not_asleep" else "not sent"
+        return f"last wake: {verb} at {_stamp(last.get('at'))} — {why}"
+    sent = f"sent at {_stamp(sent_at)}"
+    answered, serving = last.get("answered_after_s"), last.get("serving_after_s")
+    deadline = last.get("deadline_s")
+    if outcome is None:
+        try:
+            decided = _stamp(
+                (datetime.fromisoformat(sent_at) + timedelta(seconds=int(deadline))).isoformat()
+            )
+        except (TypeError, ValueError):
+            decided = "its deadline"
+        heard = (
+            f"its agent answered after {answered} s"
+            if answered is not None
+            else "nothing has answered yet"
+        )
+        return f"last wake: in flight — {sent}; {heard}, decided by {decided}"
+    if outcome == "ready":
+        return (
+            f"last wake: ready — {sent}; its agent answered after {answered} s, its model "
+            f"after {serving} s"
+        )
+    if outcome == "answered":
+        return (
+            f"last wake: answered — {sent}; its agent answered after {answered} s, no model "
+            f"answered within {deadline} s"
+        )
+    if outcome == "no_answer":
+        return f"last wake: no answer — {sent}; nothing answered within {deadline} s"
+    said = f"last wake: {_one_line(outcome)} — {sent}"
+    if last.get("reason"):
+        said += f" ({_one_line(last['reason'])})"
+    return said
+
+
 def _build_words(agent: dict) -> str:
     """Its agent's build against the hub's — a hash has no order, so "behind
     the hub's build", never "older" (P2) — and unknown said as unknown."""
@@ -409,6 +479,8 @@ def _describe_agents(
         for agent in members:
             lines.append(_describe_agent(agent))
             lines.extend(f"{_ACTING_INDENT}{line}" for line in agent["acting"])
+            if "last_wake" in agent:
+                lines.append(f"{_ACTING_INDENT}{_last_wake_words(agent['last_wake'])}")
             if ctx.facts_sink is not None:
                 ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
                 last = agent["last_update"]
@@ -731,4 +803,75 @@ MACHINE_UPDATE = Tool(
     executor=machine_update,
 )
 
-TOOLS: tuple[Tool, ...] = (MACHINE_STATUS, MACHINE_CONFIGURE, MACHINE_UPDATE)
+
+async def machine_wake(args: dict, ctx: ToolContext) -> str:
+    """Her "wake <machine>" (S46a T5): app/wake.py sends the wake through the
+    hub's own agent and measures the answer. A cannot — nothing could be
+    sent, or whether it was is not known — is a stated ToolFailure; what was
+    recorded is on the span either way (wake.wake_now's facts)."""
+    name = str(args.get("machine") or "").strip()
+    if not name:
+        raise ToolFailure("cannot: machine_wake needs a machine's name — machine_status lists them")
+    adapter = args.get("adapter")
+    try:
+        return await wake.wake_now(
+            ctx.app,
+            machine=name,
+            adapter=adapter.strip() if isinstance(adapter, str) and adapter.strip() else None,
+            wait_s=args.get("wait_s", wake.wake_attempts.DEFAULT_DEADLINE_S),
+            trigger="tool",
+            facts_sink=ctx.facts_sink,
+            progress=ctx.progress,
+        )
+    except wake.WakeCannot as exc:
+        raise ToolFailure(str(exc)) from exc
+
+
+MACHINE_WAKE = Tool(
+    name="machine_wake",
+    description=(
+        "Wake a sleeping paired machine now: the hub's own agent sends Wake-on-LAN magic "
+        "packets to the machine's network adapter (its MAC is read from the machine's own "
+        "facts, never typed), then Nova waits — up to wait_s seconds, 120 by default, 30 to "
+        "600 — for the machine's agent to reconnect and, if it runs a model the gateway routes "
+        "to, for that model to answer. The result says when it was sent, from where, to which "
+        "adapter, and what answered after how many seconds — or that nothing answered within "
+        "the wait. Sending is not waking: say the machine is up only from the result's "
+        "answered line. A machine already connected is said so and nothing is sent; a machine "
+        "no connected agent shares a network with cannot be sent a wake, and the result says "
+        "why."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "machine": {
+                "type": "string",
+                "description": "The paired machine, by the name device_list or machine_status "
+                "lists.",
+            },
+            "adapter": {
+                "type": "string",
+                "description": (
+                    "One of its network adapters by name, from its facts (e.g. its Ethernet). "
+                    "Omit for the one it was last on the hub's network with."
+                ),
+            },
+            "wait_s": {
+                "type": "integer",
+                "description": "How long to wait for it to answer, in seconds (30 to 600; "
+                "default 120).",
+            },
+        },
+        "required": ["machine"],
+        "additionalProperties": False,
+    },
+    executor=machine_wake,
+    # Its span — failed too — that read an agent's connection is a check of
+    # that agent (the state guard derives its wake set from this, T6).
+    backs=frozenset({guards.WAKE_KIND}),
+    # A measurement of one moment: "the Dell answered" recalled tomorrow is
+    # the stale present `ephemeral` exists to stop. Not reads_only: it sends.
+    ephemeral=True,
+)
+
+TOOLS: tuple[Tool, ...] = (MACHINE_STATUS, MACHINE_CONFIGURE, MACHINE_UPDATE, MACHINE_WAKE)
