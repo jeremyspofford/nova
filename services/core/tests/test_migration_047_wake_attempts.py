@@ -1,4 +1,7 @@
-"""Migration 045 (S46a T4): wake_attempts, the wake ledger.
+"""Migration 047 (S46a T4): wake_attempts, the wake ledger. (Written as 045;
+renumbered 2026-10-12 because main had applied 046 first and the runner
+refuses an unrecorded migration numbered below the highest applied one —
+core failed to start on the deploy.)
 
 Each row is one attempt to wake a machine, and it can only say what its own
 columns show: the CHECKs refuse an outcome the evidence on the row does not
@@ -21,7 +24,7 @@ from tests.conftest import _TABLES, requires_db
 
 pytestmark = requires_db
 
-MIGRATION = Path(MIGRATIONS_DIR) / "045_wake_attempts.sql"
+MIGRATION = Path(MIGRATIONS_DIR) / "047_wake_attempts.sql"
 MAC = "02:00:5e:10:00:01"  # locally administered, not a real card
 BROADCAST = "192.0.2.255"  # TEST-NET-1
 
@@ -31,11 +34,11 @@ def _sql() -> str:
     return MIGRATION.read_text(encoding="utf-8")
 
 
-def test_the_runner_discovers_045_right_after_044():
+def test_the_runner_discovers_047_right_after_046():
     names = [f.name for f in discover_migrations(MIGRATIONS_DIR)]
     assert MIGRATION.name in names, f"{MIGRATION.name} not discovered"
     numbers = [_migration_number(Path(n)) for n in names]
-    assert numbers.index(45) == numbers.index(44) + 1
+    assert numbers.index(47) == numbers.index(46) + 1
 
 
 def test_conftest_drops_and_truncates_the_table_ahead_of_devices_and_turns():
@@ -44,10 +47,10 @@ def test_conftest_drops_and_truncates_the_table_ahead_of_devices_and_turns():
     assert _TABLES.index("wake_attempts") < _TABLES.index("turns")
 
 
-async def test_the_suite_database_has_045_applied(pool):
+async def test_the_suite_database_has_047_applied(pool):
     applied = {r["filename"] for r in await pool.fetch("SELECT filename FROM schema_migrations")}
     assert MIGRATION.name in applied
-    assert "044_no_round_ceiling.sql" in applied
+    assert "046_code_repos.sql" in applied
 
 
 async def test_the_columns_are_the_ledger(pool):
