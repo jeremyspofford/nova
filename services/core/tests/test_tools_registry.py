@@ -186,6 +186,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # (tools/machines.py), so SIXTY-THREE -> SIXTY-FOUR. "Wake the Dell" had no
     # tool: v4 sent no packet anywhere. It sends through the hub's agent and
     # says only what the ledger measured — answered, serving, or no answer.
+    # Deliberate snapshot update (2026-10-12): sessions, session_rename,
+    # session_archive, session_make_main and session_delete (tools/sessions.py),
+    # so the set moves by five. The owner renamed his main session and deleted
+    # six by hand, and she had no tool for any of it. Each calls the sidebar's
+    # own route handler; nothing waits on anyone (test_no_approvals green).
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -263,6 +268,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "notice_mute",
         "notice_seen",
         "notice_seen_all",
+        "sessions",
+        "session_rename",
+        "session_archive",
+        "session_make_main",
+        "session_delete",
         # S40 (2026-09-19): where models run, and the one switch per machine.
         # THIRTY-NINE -> FORTY-ONE.
         "machine_status",
@@ -684,6 +694,7 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         "model_catalog_search",
         "model_check_update",
         "route_explain",
+        "sessions",
         "spend_report",
         "web_search",
         "workspace_list_files",

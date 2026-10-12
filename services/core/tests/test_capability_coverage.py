@@ -135,6 +135,13 @@ NO_OUTSIDE_ACTION: dict[str, str] = {
     "notice_mute": "a noise preference row in Nova",
     "notice_seen": "a read receipt row in Nova",
     "notice_seen_all": "read receipts in Nova",
+    # 2026-10-12: his chat sessions — each calls the sidebar's own route
+    # handler over conversations rows in Nova; nothing leaves this system.
+    "sessions": "reads Nova's chat sessions",
+    "session_rename": "a conversation row's title in Nova",
+    "session_archive": "a conversation row's archived_at in Nova",
+    "session_make_main": "which conversation row is main, in Nova",
+    "session_delete": "deletes a conversation and its messages in Nova",
     "route_explain": "reads Nova's routing config from her gateway",
     "set_chat_model": "writes the chat pick in Nova's settings",
     "spend_report": "reads Nova's spend ledger",
