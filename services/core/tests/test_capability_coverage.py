@@ -116,6 +116,28 @@ EXCUSED: dict[str, str] = {
         "sends a wake packet through the hub's agent (net.wake) and measures the "
         "answer; 'I can't wake your computer' has no row yet"
     ),
+    # S30c T10 (2026-10-12): a job is a command that outlives the turn; the
+    # denial "I can't run commands on your computer" is device_run's row,
+    # which already corrects it (device_run is registered beside this).
+    "device_job_start": (
+        "starts a command as a job on a device through the agent's job.start; "
+        "device_run's row corrects \"I can't run commands\" on a device"
+    ),
+    # S30c T11 (2026-10-12): reading a job back and ending it go through the
+    # agent's job.status / job.log / job.stop; a denial of running things on
+    # a device is device_run's row, as for device_job_start.
+    "device_job_status": (
+        "reads a job's live record through the agent's job.status; "
+        "device_run's row corrects \"I can't run commands\" on a device"
+    ),
+    "device_job_log": (
+        "reads a job's log through the agent's job.log; "
+        "device_run's row corrects \"I can't run commands\" on a device"
+    ),
+    "device_job_stop": (
+        "ends a job through the agent's job.stop; "
+        "device_run's row corrects \"I can't run commands\" on a device"
+    ),
     "run_skill": (
         "acts only through the registered tools its steps call, each of which "
         "is classified here on its own"

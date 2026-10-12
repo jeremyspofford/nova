@@ -29,6 +29,11 @@ var table = map[string]Handler{
 	"box.start":       boxStart,
 	"box.status":      boxStatus,
 	"net.wake":        netWake,
+	"job.start":       jobStart,
+	"job.status":      jobStatus,
+	"job.log":         jobLog,
+	"job.stop":        jobStop,
+	"job.list":        jobList,
 }
 
 // factsRefresh answers core's facts.refresh: it writes a fresh facts frame

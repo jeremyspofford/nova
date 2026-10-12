@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/install"
+	"novad/internal/jobs"
 	"novad/internal/platform"
 	"novad/internal/state"
 	"novad/internal/supervise"
@@ -494,5 +496,89 @@ func TestThePairingCodeFromTheEnvironmentGoesNoFurther(t *testing.T) {
 	}
 	if _, set := os.LookupEnv(pairingCodeEnv); set {
 		t.Fatalf("%s is still in the environment after --code", pairingCodeEnv)
+	}
+}
+
+// S30c T2: `novad job-exec <jobdir>` is a subcommand; anything but exactly
+// one argument is a usage error (exit 2), and the usage names it.
+func TestJobExecSubcommand(t *testing.T) {
+	if !strings.Contains(usageText(), "novad job-exec <jobdir>") {
+		t.Fatalf("usage does not name job-exec:\n%s", usageText())
+	}
+	for _, argv := range [][]string{nil, {"a", "b"}} {
+		if got := cmdJobExec(argv); got != 2 {
+			t.Errorf("cmdJobExec(%q) = %d, want 2", argv, got)
+		}
+	}
+	// A dir that is no job: exit 1, the no-job sentence on stderr.
+	dir := filepath.Join(t.TempDir(), "jobs", "0123456789ab")
+	if got := cmdJobExec([]string{dir}); got != 1 {
+		t.Errorf("cmdJobExec(no job) = %d, want 1", got)
+	}
+}
+
+// TestNovadMainHelper is `novad` itself for TestJobExecDispatchesThroughMain:
+// re-run as a child with NOVAD_TEST_MAIN_ARGS (separated by \x1f), it sets
+// os.Args and calls main(), so the subcommand switch is what is tested.
+func TestNovadMainHelper(t *testing.T) {
+	raw, ok := os.LookupEnv("NOVAD_TEST_MAIN_ARGS")
+	if !ok {
+		return
+	}
+	args := []string{"novad"}
+	if raw != "" {
+		args = append(args, strings.Split(raw, "\x1f")...)
+	}
+	os.Args = args
+	main()
+	os.Exit(0)
+}
+
+// T2 C7: `novad job-exec <jobdir>` reaches the wrapper through main's
+// switch — the binary, not cmdJobExec called directly. A job runs to its
+// terminal record (exit 0); a wrong arg count exits 2; a dir that is no job
+// exits 1.
+func TestJobExecDispatchesThroughMain(t *testing.T) {
+	runMain := func(args ...string) (int, string) {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNovadMainHelper$")
+		cmd.Env = append(os.Environ(), "NOVAD_TEST_MAIN_ARGS="+strings.Join(args, "\x1f"))
+		out, err := cmd.CombinedOutput()
+		var ee *exec.ExitError
+		switch {
+		case err == nil:
+			return 0, string(out)
+		case errors.As(err, &ee):
+			return ee.ExitCode(), string(out)
+		}
+		t.Fatalf("running novad %q: %v", args, err)
+		return -1, ""
+	}
+
+	store := jobs.NewStore(t.TempDir())
+	const id = "0a1b2c3d4e5f"
+	// The job's child is this test binary running no tests: exit 0.
+	if err := store.Create(jobs.Spec{ID: id, Argv: []string{os.Args[0], "-test.run=^$"}, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runMain("job-exec", store.Dir(id)); code != 0 {
+		t.Fatalf("novad job-exec <jobdir> exited %d, want 0:\n%s", code, out)
+	}
+	j, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Status.State != "done" || j.Status.ExitCode == nil || *j.Status.ExitCode != 0 {
+		t.Fatalf("after novad job-exec: status %+v, want done exit 0", j.Status)
+	}
+
+	for _, args := range [][]string{{"job-exec"}, {"job-exec", "a", "b"}} {
+		if code, out := runMain(args...); code != 2 || !strings.Contains(out, "usage: novad job-exec <jobdir>") {
+			t.Errorf("novad %q exited %d (%q), want 2 with the job-exec usage", args, code, out)
+		}
+	}
+	noJob := filepath.Join(t.TempDir(), "jobs", "0123456789ab")
+	if code, out := runMain("job-exec", noJob); code != 1 || !strings.Contains(out, "no job 0123456789ab on this device") {
+		t.Errorf("novad job-exec <no job> exited %d (%q), want 1 with the no-job sentence", code, out)
 	}
 }

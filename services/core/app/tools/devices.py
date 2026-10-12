@@ -52,6 +52,7 @@ from app import (
     network,
 )
 from app.tools import machines as machine_tools
+from app.tools import schema
 from app.tools.base import (
     RESULT_KIND_LISTING,
     Tool,
@@ -64,6 +65,17 @@ from app.tools.base import (
 # the plan) because a command with no answer must become a STATED failure, not
 # a hang — "accepted by transport" is never "received".
 COMMAND_TIMEOUT_SECONDS = 120
+
+# device_run's `timeout_s` ceiling (S30c T8): the agent's own command budget
+# (apps/novad client.CommandTimeout = caps.MaxCallTimeoutS, 110 s). Core waits
+# timeout_s + DEVICE_RUN_ANSWER_MARGIN_S for the answer, which keeps the
+# default 110 + 10 = COMMAND_TIMEOUT_SECONDS.
+DEVICE_RUN_MAX_TIMEOUT_S = 110
+DEVICE_RUN_ANSWER_MARGIN_S = 10
+
+# An env name device_run passes (S30c T8): a plain variable name, the agent's
+# jobs.ValidEnvKey rule.
+ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # How long device_info waits for the agent's fresh look (facts.refresh). The
 # agent bounds a whole probe at 45 s (P29; apps/novad client.ProbeBudget),
@@ -1055,9 +1067,60 @@ def _elevated_words(meta: object) -> str:
     return " elevation not confirmed (the agent sent no elevated record)"
 
 
+def _env_arg(args: dict, *, nothing: str = "nothing was run") -> dict | None:
+    """device_run's `env` (S30c T8), checked before the wire: an object of
+    string values whose names are plain variable names. None when not given.
+    A refusal never quotes a value — nor a name that fails the rule, since a
+    token pasted where a name goes is not a name. `nothing` is what the
+    refusal says did not happen (device_job_start: "nothing was started")."""
+    if "env" not in args:
+        return None
+    env = args["env"]
+    if not isinstance(env, dict):
+        raise ToolFailure(f"'env' must be an object of NAME: value strings — {nothing}")
+    for index, (name, value) in enumerate(env.items(), start=1):
+        if not isinstance(name, str) or not ENV_NAME_RE.fullmatch(name):
+            raise ToolFailure(
+                f"env name #{index} is not a variable name (letters, digits and _, "
+                f"not starting with a digit) — {nothing}"
+            )
+        if not isinstance(value, str):
+            raise ToolFailure(
+                f"env {name} must be a string, got {schema.json_type_name(value)} — {nothing}"
+            )
+    return dict(env)
+
+
+def _timeout_arg(args: dict) -> int | None:
+    """device_run's `timeout_s` (S30c T8): whole seconds, 1..110. None when
+    not given. The schema refuses the rest first; this is the executor's own
+    line, so a direct call cannot send what the agent would refuse."""
+    if "timeout_s" not in args:
+        return None
+    value = args["timeout_s"]
+    if type(value) is not int or not 1 <= value <= DEVICE_RUN_MAX_TIMEOUT_S:
+        raise ToolFailure(
+            f"timeout_s must be a whole number of seconds from 1 to "
+            f"{DEVICE_RUN_MAX_TIMEOUT_S} — nothing was run"
+        )
+    return value
+
+
+def _predates_options(result: dict, env: dict | None, timeout_s: int | None) -> bool:
+    """Whether the agent ran it without what it was sent: an agent that knows
+    env / timeout_s echoes `env_keys` / `timeout_s` on its meta (S30c T8)."""
+    meta = result.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    return (env is not None and "env_keys" not in meta) or (
+        timeout_s is not None and "timeout_s" not in meta
+    )
+
+
 async def device_run(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, ctx=ctx)
     argv = args["argv"]
+    env = _env_arg(args)
+    timeout_s = _timeout_arg(args)
     exec_args: dict = {"argv": argv}
     cwd = None
     if "cwd" in args:
@@ -1081,6 +1144,16 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         # machine is marked on its span — an ok run, the agent's cannot, a
         # failed frame, a transport failure. No "device" key (connectivity).
         _file_fact(ctx, {ELEVATED: True, "machine": row["name"]})
+    if elevated and (env is not None or timeout_s is not None):
+        # The admin path runs neither (S30c T8): sending them would run the
+        # command WITHOUT them, so nothing is sent.
+        given = " and ".join(
+            name for name, value in (("env", env), ("timeout_s", timeout_s)) if value is not None
+        )
+        raise ToolFailure(
+            f"{row['name']}: an elevated run takes no {given} (the admin path runs neither) — "
+            "nothing was run; drop it, or run the command unelevated"
+        )
     route = None if elevated else await _box_route(pool, row, ctx, cwd)
     boxed = isinstance(route, tuple)
     if boxed:
@@ -1088,7 +1161,18 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
         capability, exec_args = BOX_EXEC, {"argv": argv, **box_args}
     else:
         capability = "admin.exec" if elevated else "shell.exec"
-    result = await _command(pool, row, capability, exec_args, ctx=ctx)
+    if env is not None:
+        exec_args["env"] = env
+    if timeout_s is not None:
+        exec_args["timeout_s"] = timeout_s
+    result = await _command(
+        pool,
+        row,
+        capability,
+        exec_args,
+        ctx=ctx,
+        timeout=None if timeout_s is None else timeout_s + DEVICE_RUN_ANSWER_MARGIN_S,
+    )
     # Past here the agent answered with a result frame: the command was sent
     # and ran or failed on the machine, so a flagged call is flagged either
     # way (a transport failure above sent nothing it could confirm, and says so).
@@ -1129,6 +1213,12 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
             failure = f"{row['name']}: {result.get('error') or _NO_REASON}"
         raise ToolFailure(failure if warning is None else f"{failure}\n{warning}")
     exit_code = result.get("exit_code")
+    if _predates_options(result, env, timeout_s):
+        failure = (
+            f"{row['name']}'s agent predates env/timeout_s — it ran WITHOUT them "
+            f"(exit {exit_code}); update it with machine_update"
+        )
+        raise ToolFailure(failure if warning is None else f"{failure}\n{warning}")
     output = result.get("output") or "(no output)"
     # The "<name> ran <argv> — exit <code>" preamble is for the model; the
     # presented-listing guard no longer arms on it (S29b) — the run fact filed
@@ -1693,7 +1783,10 @@ TOOLS: tuple[Tool, ...] = (
             "to run it elevated — as root on Linux and macOS, as the signed-in user with admin "
             "rights on Windows — through the machine's admin path: nothing asks and nothing "
             "prompts on the machine, and the result says who it ran as. A machine without the "
-            "admin path says so; device_admin_path installs it there."
+            "admin path says so; device_admin_path installs it there. Give `env` to add "
+            "environment variables (a token, a mode) and `timeout_s` to bound the run. A "
+            "command is stopped at 110 s: work that runs longer (a whole test suite, a build) "
+            "goes to device_job_start, which outlives this turn."
         ),
         parameters=_obj(
             {
@@ -1720,6 +1813,27 @@ TOOLS: tuple[Tool, ...] = (
                         "true runs the command elevated through the machine's admin path: as "
                         "root on Linux and macOS, as the signed-in user with admin rights on "
                         "Windows. Default false."
+                    ),
+                },
+                "env": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": (
+                        "Environment variables to add for this command, as NAME: value "
+                        "strings (names: letters, digits and _, not starting with a digit), "
+                        'e.g. {"GH_TOKEN": "…"}. The values reach the program only: they '
+                        "are never written to the trace or Activity. Not with `elevated`."
+                    ),
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": DEVICE_RUN_MAX_TIMEOUT_S,
+                    "description": (
+                        "How many seconds the command may take, 1 to "
+                        f"{DEVICE_RUN_MAX_TIMEOUT_S} (the default and the most is "
+                        f"{DEVICE_RUN_MAX_TIMEOUT_S}); past it the command is stopped and "
+                        "the call fails with its partial output. Not with `elevated`."
                     ),
                 },
             },

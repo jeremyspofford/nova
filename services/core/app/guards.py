@@ -7419,19 +7419,31 @@ class DeviceCompletionClaim:
 # there is backed; "I uninstalled Steam" is still backed by device_run.
 # "I removed the admin path" is a delete, a command, device_run only — a
 # known residual: telling the admin path from a file needs the object.
+#
+# A job is launched (S30c T10, 2026-10-12): an ok device_job_start backs "I
+# started the suite on minipc" / "it's running" (launch words) — and nothing
+# else. Its start is not its end, so it never backs a completed action ("I
+# deleted", "I ran"): what the job did is device_job_status's to read (T11).
+#
+# And stopped (S30c T11, 2026-10-12): "close" left the command kind — an ok
+# device_job_stop backs "I stopped the job on minipc" (close words) and
+# nothing else. A known residual, like the admin path's remove: it also
+# silences "I closed Notepad on minipc" beside that stop on the same machine
+# (telling a job from an app needs the object).
 DEVICE_ACTION_TOOLS: dict[str, tuple[str, ...]] = {
-    "launch": ("device_launch_app", "device_run"),
+    "launch": ("device_launch_app", "device_job_start", "device_run"),
     "write": ("device_write_file", "device_edit_file", "device_run"),
     "notify": ("device_notify", "device_run"),
     "run": ("device_launch_app", "device_run"),
     "install": ("machine_update", "device_admin_path", "device_run"),
     "uninstall": ("device_admin_path", "device_run"),
+    "close": ("device_job_stop", "device_run"),
     "command": ("device_run",),
 }
 
 # The ACTIONS a claim can name, by the words it writes them with. The kind of
 # tool that performs one is its own name for launch, write, notify, run,
-# install and uninstall, and a command for every other (`_kind_of`).
+# install, uninstall and close, and a command for every other (`_kind_of`).
 _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "launch": (
         "open",
@@ -7457,7 +7469,7 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "run": ("ran", "run", "executed"),
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
-_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install", "uninstall"})
+_KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install", "uninstall", "close"})
 
 
 def _kind_of(action: str) -> str:

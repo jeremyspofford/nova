@@ -106,10 +106,10 @@ def test_the_notepad_turn_fires():
     assert claim is not None
     assert claim.phrase == "Notepad is now open on your DELL-XPS-8950"
     assert claim.kind == "launch"
-    assert claim.tools == ("device_launch_app", "device_run")
+    assert claim.tools == ("device_launch_app", "device_job_start", "device_run")
     assert claim.record == guards.DeviceRecord()
     # (fix round 3, T3) what the record shows, and nothing about the machine
-    assert claim.text == "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
+    assert claim.text == NONE_ON_DELL
 
 
 def test_the_teams_turn_fires_on_its_completion_line():
@@ -364,8 +364,12 @@ def test_the_action_map_is_the_live_registrys_acting_device_tools():
     # (fix round 3) "I ran Notepad" is running a program, which a launch does;
     # closing, deleting or restarting only a command does.
     assert "device_launch_app" in guards.DEVICE_ACTION_TOOLS[guards._kind_of("run")]
-    for action in ("close", "restart", "shutdown", "delete", "move"):
+    for action in ("restart", "shutdown", "delete", "move"):
         assert guards.DEVICE_ACTION_TOOLS[guards._kind_of(action)] == ("device_run",), action
+    # (S30c T11, 2026-10-12) a close left the command kind: device_job_stop
+    # ends a job, so "I stopped the job on minipc" is a command's and that
+    # tool's — never a delete, a restart or a run.
+    assert guards.DEVICE_ACTION_TOOLS[guards._kind_of("close")] == ("device_job_stop", "device_run")
     # (Task 32, MF4) an install is a command's, and machine_update's; (S30b T7)
     # and device_admin_path's, which installs the admin path.
     install = guards.DEVICE_ACTION_TOOLS[guards._kind_of("install")]
@@ -399,7 +403,11 @@ def test_a_launch_of_the_named_app_on_the_named_device_backs_it():
     assert check(T98ECFB11, [ran]) is None
 
 
-NONE_ON_DELL = "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
+# S30c T10 (2026-10-12): device_job_start launches (guards.DEVICE_ACTION_TOOLS),
+# so the launch sentence names it — deliberate, the registry gained the tool.
+NONE_ON_DELL = (
+    "(No device_launch_app or device_job_start or device_run call ran on DELL-XPS-8950 this turn.)"
+)
 
 
 @pytest.mark.parametrize(
@@ -490,7 +498,8 @@ def test_a_word_for_a_machine_names_any_device(word):
     assert claim is not None
     assert claim.device == f"your {word}"
     assert claim.text == (
-        f"(No device_launch_app or device_run call ran on your {word} this turn.)"
+        "(No device_launch_app or device_job_start or device_run call ran "
+        f"on your {word} this turn.)"
     )
 
 
@@ -1124,7 +1133,9 @@ def test_i_ran_notepad_after_a_launch_is_silent():
         assert check(reply, [launched]) is None, reply
     claim = check("I ran Notepad on your DELL-XPS-8950.")
     assert claim is not None
-    assert claim.text == NONE_ON_DELL
+    # "ran" is the run kind, which a job's start does not perform (S30c T10,
+    # 2026-10-12): its sentence names device_launch_app and device_run only.
+    assert claim.text == "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
 
 
 # -- the sentence is the record, and nothing more (R-A, T3) ---------------------

@@ -2038,6 +2038,12 @@ def _replace_all(text: str, pairs: dict[str, str]) -> str:
     return text
 
 
+# What `_masked` writes. A value an earlier pass already masked (an `env`
+# value, `_env_masked`) is not masked again: masking the mask would record
+# its length instead of the secret's.
+_ALREADY_MASKED_RE = re.compile(r"<masked:\d+ chars>")
+
+
 def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None = None) -> object:
     """Trace-sized arguments: the same shape, long strings cut to a head, and
     credentials masked (S37a, plan decision P14).
@@ -2058,6 +2064,7 @@ def _redact(value: object, *, in_headers: bool = False, sink: _SpanScrub | None 
                 isinstance(key, str)
                 and item is not None
                 and _credential_key(key, header=in_headers)
+                and not (isinstance(item, str) and _ALREADY_MASKED_RE.fullmatch(item))
             ):
                 out[key] = _masked(item)
                 if sink is not None:
@@ -2260,7 +2267,7 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
         parsed = _off_schema_masked(parsed, tool, sink)
     else:
         parsed = _typed_text_masked(_server_names_masked(parsed, tool_name, sink), tool_name, sink)
-    parsed = _argv_masked(parsed, sink)
+    parsed = _env_masked(_argv_masked(parsed, sink), sink)
     return _bounded(_redact(_origin_only(parsed, tool_name, sink), sink=sink)), sink
 
 
@@ -2340,6 +2347,33 @@ def _argv_masked(parsed: object, sink: _SpanScrub) -> object:
             for item in parsed["argv"]
         ],
     }
+
+
+def _env_masked(parsed: object, sink: _SpanScrub) -> object:
+    """Every value of a call's `env` argument is masked (S30c T8): an env
+    carries what the command needs and the trace must not — a token, a key —
+    whatever its NAME, so by argument, never by a credential-shaped key. The
+    names stay (they say what was set); a name that is not a variable name
+    (`device_tools.ENV_NAME_RE`) is recorded as `<key N>`, since a token
+    pasted where a name goes is not a name. An `env` that is not an object is
+    masked whole. What is masked goes into `sink`, so the span's result_head,
+    error and facts hold none of it."""
+    if not isinstance(parsed, dict) or "env" not in parsed:
+        return parsed
+    env = parsed["env"]
+    if not isinstance(env, dict):
+        sink.add(env)
+        return {**parsed, "env": _masked(env)}
+    masked: dict = {}
+    for index, (name, value) in enumerate(env.items(), start=1):
+        sink.add(value)
+        if isinstance(name, str) and device_tools.ENV_NAME_RE.fullmatch(name):
+            label = name
+        else:
+            label = f"<key {index}>"
+            sink.add(name, label)
+        masked[label] = _masked(value)
+    return {**parsed, "env": masked}
 
 
 def _argv_element_masked(element: str, sink: _SpanScrub) -> str:
@@ -3525,6 +3559,21 @@ async def _run_tool(
                     span.meta["ran_in"] = run[tools.devices.RAN_IN]
                     if isinstance(run.get("box"), str):
                         span.meta["box"] = run["box"]
+            for fact in facts[facts_before:]:
+                job = fact.get(tools.device_jobs.JOB_FACT) if isinstance(fact, dict) else None
+                if (
+                    isinstance(job, dict)
+                    and isinstance(job.get("id"), str)
+                    and job.get(tools.devices.RAN_IN) in ("box", "host")
+                ):
+                    # S30c T10: the job THIS call started (or tried to), and
+                    # where it runs — read from the job fact device_job_start
+                    # filed from the route it took. A mark after the fact;
+                    # nothing reads it to decide.
+                    span.meta["job"] = job["id"]
+                    span.meta["ran_in"] = job[tools.devices.RAN_IN]
+                    if isinstance(job.get("box"), str):
+                        span.meta["box"] = job["box"]
         if not ok:
             span.meta["error"] = head
     return result, ok
@@ -5991,6 +6040,9 @@ async def _run_turn(
                 # Which chat session this turn answers in, so a reminder set
                 # here lands here and not in the main session.
                 conversation_id=conversation_id,
+                # The turn the calls run in (S30c): provenance a job row
+                # carries after the turn has ended. Never a principal.
+                turn_id=turn.id,
             )
         else:
             advertised = tools.advertised_tools(persona.tool_names)
@@ -6004,6 +6056,7 @@ async def _run_turn(
                 # rooted lower.
                 workspace_root=persona.workspace_root,
                 card=card,
+                turn_id=turn.id,
             )
         # The live checks, BEFORE the prompt is built and therefore before she
         # is asked anything (S14, owner ruling 2026-09-10). A note that names

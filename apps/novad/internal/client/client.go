@@ -38,6 +38,7 @@ import (
 	"novad/internal/caps"
 	"novad/internal/config"
 	"novad/internal/facts"
+	"novad/internal/jobs"
 	"novad/internal/platform"
 	"novad/internal/state"
 	"novad/internal/wire"
@@ -209,6 +210,19 @@ type Agent struct {
 	watchdogEvery  time.Duration
 	reapEvery      time.Duration
 
+	// The job scanner (S30c): how often it runs while connected, and how it
+	// reads a wrapper's liveness and this machine's last boot — fields so a
+	// test fakes them. jobScanMu keeps two scans (a session's first and a
+	// tick, or two sessions) from auditing one job twice; jobScanErr is the
+	// last scan error logged, so an unchanged one is not logged every tick;
+	// jobScanBad is the same per unreadable job id (guarded by jobScanMu).
+	jobScanEvery time.Duration
+	jobAlive     func(pid int) bool
+	bootTime     func() (time.Time, error)
+	jobScanMu    sync.Mutex
+	jobScanErr   string
+	jobScanBad   map[string]string
+
 	// factsSendMu serializes the whole build (frameBytes) -> write -> record
 	// sequence across every path that can send a facts frame on a
 	// connection: the post-ready send, a facts.refresh command, and
@@ -269,6 +283,9 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		backoffs:         defaultBackoffs,
 		watchdogEvery:    WatchdogEvery,
 		reapEvery:        BoxReapEvery,
+		jobScanEvery:     JobScanEvery,
+		jobAlive:         jobs.ProcessAlive,
+		bootTime:         jobs.BootTime,
 	}
 	// Set after the Agent exists, so it can read update.json through
 	// a.lastUpdate() — the last outcome daemon.update or supervise recorded.
@@ -323,6 +340,11 @@ type Options struct {
 // Call it before Run.
 func (a *Agent) Configure(o Options) {
 	a.opts = o
+	// Reap never stops a box that runs a job (S30c): the box manager reads
+	// the live box jobs from the job store under the state dir.
+	if a.deps.Box != nil && o.StateDir != "" {
+		a.deps.Box.Busy = jobs.NewStore(o.StateDir).LiveBoxes
+	}
 	self := facts.Self{Binary: o.Binary, Config: o.Config}
 	r := probeRunner
 	a.probe = func(ctx context.Context) facts.Probed { return facts.Probe(ctx, r, self) }
@@ -642,6 +664,10 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 
 	a.workers.Go(func() { a.heartbeat(serveCtx, cancel, c) })
 	a.workers.Go(func() { a.watchdog(serveCtx, cancel) })
+	// S30c: jobs that ended are audited once and reported until core acks.
+	if a.opts.StateDir != "" {
+		a.workers.Go(func() { a.jobScanner(serveCtx, c) })
+	}
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -654,6 +680,8 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 		switch t, _ := frame["type"].(string); t {
 		case wire.TypeCommand:
 			a.workers.Go(func() { a.handleCommand(serveCtx, c, frame) })
+		case wire.TypeJobAck:
+			a.handleJobAck(frame)
 		default:
 			a.logf("ignoring unexpected frame type %q", t)
 		}
@@ -806,11 +834,7 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 
 	cmdCtx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	// facts.refresh writes its frame on THIS connection, before its result.
-	deps := a.deps
-	deps.SendFacts = func(ctx context.Context) error { return a.reprobe(ctx, c, true) }
-	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
-	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
+	outcome := caps.DispatchEnvelope(cmdCtx, envelopeID, capability, args, a.commandDeps(c))
 
 	a.emit(ctx, c, resultFrame(envelopeID, outcome), envelopeID, capability, summarize(capability, outcome), outcome.OK, outcome.ExitCode)
 
@@ -828,6 +852,20 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 			(*cf)()
 		}
 	}
+}
+
+// commandDeps are the handlers' deps for one command on connection c.
+func (a *Agent) commandDeps(c *websocket.Conn) caps.Deps {
+	// facts.refresh writes its frame on THIS connection, before its result.
+	deps := a.deps
+	deps.SendFacts = func(ctx context.Context) error { return a.reprobe(ctx, c, true) }
+	deps.Update = &caps.UpdateDeps{Supervised: a.opts.Supervised, Binary: a.opts.Binary, StateDir: a.opts.StateDir, BaseURL: a.Server}
+	// job.* keep their records under the state dir; with none there is no
+	// job store and the handlers say cannot.
+	if a.opts.StateDir != "" {
+		deps.Jobs = &caps.JobDeps{Store: jobs.NewStore(a.opts.StateDir), Binary: a.opts.Binary, Mode: platform.Mode()}
+	}
+	return deps
 }
 
 // resultFrame is the result frame for one dispatched outcome. An error is

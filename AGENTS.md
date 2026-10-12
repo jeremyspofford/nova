@@ -139,6 +139,9 @@ Written to the coder — Nova or anyone else changing this repository.
 - **Your commands in a change's worktree run in that change's sealed box**
   (`nova-box-<id>`: no route out, its own Postgres in `TEST_DATABASE_URL`);
   each result's `ran_in` says where it ran (`box` or `host`).
+- **A command stops at 110 s, so a full suite runs as a job:**
+  `device_job_start` (same `cwd`, so it runs in the box too), then read it
+  back with `device_job_status` — only a `done` with exit 0 is a pass.
 - **Run the repo's checks for what you touched before saying done:**
   - core: `uv run pytest` from `services/core` (gateway and memory the same,
     from their own directories); DB-backed tests skip without

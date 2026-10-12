@@ -511,7 +511,9 @@ so a change cannot edit the shape of its own box.
   and fills that change's cache volume; the box itself stays offline.
 - **Starting, stopping.** `start_change` starts the box; a `device_run` in the
   worktree starts it again if it was stopped. A box idle for 30 minutes is
-  stopped (with its Postgres) by the agent. Removing a box, its Postgres,
+  stopped (with its Postgres) by the agent — never while a job runs in it
+  (`device_job_start` with a cwd in the worktree, S30c; a whole-suite job
+  holds the CPU lock for its whole run). Removing a box, its Postgres,
   network and volume is S32.3's (`close_change` / `repo_land`) — until then
   they persist (`docker ps -a --filter label=nova.box`, `docker network ls
   --filter label=nova.box`).

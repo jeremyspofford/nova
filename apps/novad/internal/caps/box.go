@@ -93,6 +93,14 @@ func boxExec(ctx context.Context, r Request) Outcome {
 	if err != nil {
 		return fail("%v; nothing was run", err)
 	}
+	opts, err := readCallOptions("box.exec", r.Args)
+	if err != nil {
+		return fail("%v; nothing was run", err)
+	}
+	// timeout_s bounds the whole call — bring-up, CPU lock and run — since
+	// core waits timeout_s + 10 s for the answer to all of it.
+	ctx, cancel := opts.bound(ctx)
+	defer cancel()
 	// Heavy is read from the branch's committed suites.toml (D6) before
 	// anything starts: unreadable means we cannot say whether to lock, and
 	// guessing "light" would run a full suite beside another one.
@@ -114,17 +122,19 @@ func boxExec(ctx context.Context, r Request) Outcome {
 		defer release()
 		waited = w
 	}
-	full := m.ExecArgv(req, argv)
+	// env crosses by name (-e NAME); each value sits in the docker client's
+	// environment only, never in an argv.
+	full := m.ExecArgvEnv(req, opts.keys, argv)
 	// The host side runs docker from the agent's own directory: the cwd is
 	// inside the box (-w), never the host process's.
-	out := runArgv(ctx, full, "")
+	out := runArgvEnv(ctx, full, "", opts.env)
 	// A long run counts its idle time from its end (T7).
 	m.Touch(req.Change)
 	secs := int(waited / time.Second)
 	if secs > 0 {
 		out.Output = fmt.Sprintf("waited %ds for the CPU lock\n", secs) + out.Output
 	}
-	out.Meta = map[string]any{"ran_in": "box", "box": st.Box, "image": st.Image, "heavy": heavy, "lock_waited_s": secs}
+	out.Meta = opts.echo(map[string]any{"ran_in": "box", "box": st.Box, "image": st.Image, "heavy": heavy, "lock_waited_s": secs})
 	return out
 }
 

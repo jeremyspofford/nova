@@ -3,7 +3,7 @@
 // one-use signed command envelopes it verifies on-device. The LLM never talks
 // to novad; only core does.
 //
-// Subcommands: enroll | repoint | run | status | version | install | uninstall | supervise | admin.
+// Subcommands: enroll | repoint | run | status | version | install | uninstall | supervise | admin | job-exec.
 package main
 
 import (
@@ -29,6 +29,7 @@ import (
 	"novad/internal/client"
 	"novad/internal/config"
 	"novad/internal/install"
+	"novad/internal/jobs"
 	"novad/internal/platform"
 	"novad/internal/state"
 	"novad/internal/supervise"
@@ -60,12 +61,29 @@ func main() {
 		cmdStatus(os.Args[2:])
 	case "admin":
 		cmdAdmin(os.Args[2:])
+	case "job-exec":
+		os.Exit(cmdJobExec(os.Args[2:]))
 	case "version":
 		fmt.Printf("novad %s\n", version)
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+// cmdJobExec is `novad job-exec <jobdir>` (S30c): the detached wrapper the
+// agent spawns for each job. It runs the job once and writes its terminal
+// record; it never touches the audit log.
+func cmdJobExec(argv []string) int {
+	if len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: novad job-exec <jobdir>")
+		return 2
+	}
+	if err := jobs.Exec(argv[0]); err != nil {
+		fmt.Fprintf(os.Stderr, "novad job-exec: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func usage() { fmt.Fprint(os.Stderr, usageText()) }
@@ -87,6 +105,7 @@ usage:
   novad admin exec --timeout <s> [--cwd <d>] -- argv...
   novad admin whoami
   novad admin run-queued             (Windows: the \Nova\NovaAdmin task's own action)
+  novad job-exec <jobdir>            (the agent's detached job wrapper; not run by hand)
 `, version)
 }
 

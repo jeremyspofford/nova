@@ -58,6 +58,10 @@ type Manager struct {
 	// ("docker" when empty).
 	DockerBin string
 
+	// Busy names the changes whose box runs a live job (S30c): Reap never
+	// stops one. nil means no job store — nothing is busy.
+	Busy func() (map[string]bool, error)
+
 	mu      sync.Mutex
 	lastUse map[string]time.Time
 	// fetched is each change's dependency marker as this agent knows it;
@@ -344,11 +348,22 @@ func (m *Manager) Remove(ctx context.Context, change string) error {
 // ExecArgv is the full argv that runs argv inside the change's box, as the
 // owner, in req.Cwd: <docker> exec -w <cwd> -u <uid>:<gid> nova-box-<id> argv...
 func (m *Manager) ExecArgv(req Request, argv []string) []string {
+	return m.ExecArgvEnv(req, nil, argv)
+}
+
+// ExecArgvEnv is ExecArgv with `-e NAME` for each env key before the box
+// name (S30c T8): docker reads each value from its OWN environment, so a
+// value never sits in an argv (ps, /proc/<pid>/cmdline).
+func (m *Manager) ExecArgvEnv(req Request, envKeys, argv []string) []string {
 	bin := m.DockerBin
 	if bin == "" {
 		bin = "docker"
 	}
-	out := []string{bin, "exec", "-w", req.Cwd, "-u", strconv.Itoa(m.UID) + ":" + strconv.Itoa(m.GID), Names(req.Change).Box}
+	out := []string{bin, "exec", "-w", req.Cwd, "-u", m.owner()}
+	for _, k := range envKeys {
+		out = append(out, "-e", k)
+	}
+	out = append(out, Names(req.Change).Box)
 	return append(out, argv...)
 }
 
@@ -378,7 +393,10 @@ func (m *Manager) LastUse(change string) (time.Time, bool) {
 // record (started before this agent) is recorded at first sight and never
 // stopped on that tick. A failed stop keeps its record, so the next tick
 // retries it; the other idle boxes are still stopped, and every failure comes
-// back in the error, naming the box and quoting docker.
+// back in the error, naming the box and quoting docker. A box whose change
+// runs a live job (Busy, S30c) is never stopped: it is touched instead, so
+// its idle time counts from the last tick that saw the job; when Busy cannot
+// be read, nothing is stopped.
 func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -393,10 +411,24 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 		}
 	}
 	sort.Strings(ids)
+	// A box running a job is in use however long ago anything touched it
+	// (a 40-minute suite outlives IdleStop). Unread jobs stop nothing.
+	busy := map[string]bool{}
+	if m.Busy != nil {
+		b, err := m.Busy()
+		if err != nil {
+			return nil, fmt.Errorf("reading which boxes run a job: %v; no box was stopped", err)
+		}
+		busy = b
+	}
 	now := m.Now()
 	var stopped []string
 	var errs []error
 	for _, id := range ids {
+		if busy[id] {
+			m.touchLocked(id)
+			continue
+		}
 		last, ok := m.lastUse[id]
 		if !ok {
 			m.touchLocked(id)
@@ -418,4 +450,62 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 		stopped = append(stopped, n.Box)
 	}
 	return stopped, errors.Join(errs...)
+}
+
+// JobPidfile is where a box job's in-box pid is written (the box's /tmp).
+func JobPidfile(id string) string { return "/tmp/novad-job-" + id + ".pid" }
+
+// jobShim is the sh a box job's argv runs under: it writes its own pid
+// (in the box's pid namespace) to the pidfile named by $0, then execs her
+// argv in its place, so that pid IS her command — the one job.stop kills.
+// Killing the host's docker exec client does not end a process in the box.
+const jobShim = `echo $$ >"$0"; exec "$@"`
+
+// JobArgv is what a box job's wrapper runs (S30c): <docker> exec -w <cwd>
+// -u <uid>:<gid> -e NAME... nova-box-<id> sh -c <jobShim> <pidfile> argv...
+// Env values are never on it: `-e NAME` makes the docker client pass the
+// value from its own environment, which the wrapper gives it.
+func (m *Manager) JobArgv(req Request, id string, envKeys, argv []string) []string {
+	bin := m.DockerBin
+	if bin == "" {
+		bin = "docker"
+	}
+	out := []string{bin, "exec", "-w", req.Cwd, "-u", m.owner()}
+	for _, k := range envKeys {
+		out = append(out, "-e", k)
+	}
+	out = append(out, Names(req.Change).Box, "sh", "-c", jobShim, JobPidfile(id))
+	return append(out, argv...)
+}
+
+func (m *Manager) owner() string { return strconv.Itoa(m.UID) + ":" + strconv.Itoa(m.GID) }
+
+var pidShape = regexp.MustCompile(`^[1-9][0-9]{0,9}$`)
+
+// KillJob signals a box job INSIDE its box: it reads the pid the job's shim
+// wrote, then sends TERM (KILL when hard) to that pid's process group — a
+// docker exec'd process leads its own group (measured 2026-10-12) — and to
+// the pid itself when the group is gone. The image has no kill binary, so
+// sh's builtin does it. A pidfile not written yet is an error naming why,
+// and nothing is signalled.
+func (m *Manager) KillJob(ctx context.Context, change, id string, hard bool) error {
+	if !changeShape.MatchString(change) {
+		return fmt.Errorf("change %q is not a change id (6 lowercase hex)", change)
+	}
+	n := Names(change)
+	out, err := m.docker(ctx, "reading job "+id+"'s pid in "+n.Box, "exec", "-u", m.owner(), n.Box, "cat", JobPidfile(id))
+	if err != nil {
+		return err
+	}
+	pid := strings.TrimSpace(out)
+	if !pidShape.MatchString(pid) {
+		return fmt.Errorf("job %s's pidfile in %s holds %q, not a pid", id, n.Box, pid)
+	}
+	sig := "TERM"
+	if hard {
+		sig = "KILL"
+	}
+	script := `kill -` + sig + ` -"$1" 2>/dev/null || kill -` + sig + ` "$1"`
+	_, err = m.docker(ctx, "signalling job "+id+" (pid "+pid+") in "+n.Box, "exec", "-u", m.owner(), n.Box, "sh", "-c", script, "kill", pid)
+	return err
 }

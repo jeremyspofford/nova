@@ -98,6 +98,12 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # in, so a tool that writes back into the chat (a reminder) is told which
     # one the turn answers in. It is WHERE output goes, like card; nothing
     # reads it to decide whether a call may run.
+    # 2026-10-12 (S30c T7): `turn_id` joins the set (9 -> 10). It is an
+    # identity channel for PROVENANCE: which turn a call ran in, so a job that
+    # outlives the turn can say on its device_jobs row which turn started it.
+    # Chat sets it, the one place a turn runs; it is None everywhere else. It
+    # names a turn, not a principal: nothing reads it to decide whether a call
+    # may run, and dispatch never does (test_dispatch_never_reads_turn_id).
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
@@ -108,6 +114,7 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
         "card",
         "undo_sink",
         "conversation_id",
+        "turn_id",
     }
 
 
@@ -225,6 +232,22 @@ def test_dispatch_never_reads_reads_only():
     # to know which spans make a claim true — never dispatch.
     assert "backs" not in names, (
         "dispatch reads Tool.backs — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+
+
+def test_dispatch_never_reads_turn_id():
+    """The AST twin of the ToolContext pin's `turn_id` (S30c T7, 2026-10-12).
+
+    `turn_id` says which turn a call ran in, so a job row can name the turn
+    that started it. The moment dispatch consults it to decide whether to run
+    a call — "only inside a turn", "not this turn" — it stops being provenance
+    and becomes a principal a permission binds to. Executors may read it to
+    RECORD it; dispatch may not read it at all."""
+    tree = ast.parse(TOOLS_INIT.read_text(encoding="utf-8"))
+    names = [node.attr for node in ast.walk(_dispatch_def(tree)) if isinstance(node, ast.Attribute)]
+    assert "turn_id" not in names, (
+        "dispatch reads ToolContext.turn_id — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

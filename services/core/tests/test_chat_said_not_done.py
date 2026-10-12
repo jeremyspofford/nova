@@ -69,7 +69,11 @@ F = "```"
 # The sentences the pair appends, verbatim (T2, T3).
 WROTE_LAUNCH = "(I wrote device_launch_app as text; it did not run.)"
 WROTE_INFO = "(I wrote device_info as text; it did not run.)"
-NONE_ON_DELL = "(No device_launch_app or device_run call ran on DELL-XPS-8950 this turn.)"
+# S30c T10 (2026-10-12): device_job_start launches (guards.DEVICE_ACTION_TOOLS),
+# so the launch sentence names it — deliberate, the registry gained the tool.
+NONE_ON_DELL = (
+    "(No device_launch_app or device_job_start or device_run call ran on DELL-XPS-8950 this turn.)"
+)
 FAILED_REASON = "no Start-menu app named 'notepad++' and no program by that name on PATH"
 FAILED_LAUNCH = f"(device_launch_app failed: {FAILED_REASON}.)"
 NO_ANSWER = "(device_launch_app was sent but did not answer — whether it worked is not known.)"
@@ -275,7 +279,9 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
         NONE_ON_DELL,
         FAILED_LAUNCH,
         NO_ANSWER,
-        "(No device_run call ran this turn.)",
+        # S30c T11 (2026-10-12): "I've stopped the service." is a close, and
+        # device_job_stop joined the close family, so the sentence names it.
+        "(No device_job_stop or device_run call ran this turn.)",
         "(No device_run call ran on DELL-XPS-8950 this turn.)",
         "(No device_notify or device_run call ran on DELL-XPS-8950 this turn.)",
         # S30a T5: device_edit_file joined the write family, so the sentence names it.
@@ -283,7 +289,7 @@ def test_the_sentences_say_only_what_the_record_shows_and_invite_nothing():
             "(No device_write_file or device_edit_file or device_run call ran"
             " on DELL-XPS-8950 this turn.)"
         ),
-        "(No device_launch_app or device_run call ran on your PC this turn.)",
+        "(No device_launch_app or device_job_start or device_run call ran on your PC this turn.)",
         # S30b T7: device_admin_path joined the install family, so the sentence names it.
         (
             "(No machine_update or device_admin_path or device_run call ran"

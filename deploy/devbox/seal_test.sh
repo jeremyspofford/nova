@@ -16,6 +16,11 @@
 #             and core's suite command `uv run pytest` runs one test.
 #   change B: its go.mod/go.sum add a module the image never cached: the fetch
 #             step must put it in B's cache volume, not A's.
+#   box job (S30c T5, row C13): a job.start with box args runs in A's box
+#             through the real `novad job-exec` wrapper; killing only its
+#             host docker client leaves the process in the box running (the
+#             control), and job.stop kills it INSIDE the box — pid and child
+#             gone from the box's /proc.
 #
 # Run it under the CPU lock (an image build + two boxes):
 #
@@ -142,8 +147,11 @@ git -C "$WB" diff --quiet -- apps/novad/go.sum && die "B's go.sum did not change
 
 # ---- the harness: the shipped box path against real docker ---------------
 cd "$NOVAD" || die "no $NOVAD"
+# The job wrapper (`novad job-exec`, S30c) the C13 box-job row runs, built
+# from this tree.
+go build -o "$TMP/novad" . || die "could not build novad for the box-job row"
 SEAL_CHECKOUT="$CHECKOUT" SEAL_BRANCH=main SEAL_A="$A" SEAL_B="$B" SEAL_TAG="$TAG" \
-  SEAL_CHANGE_TAG="$CHANGE_TAG" SEAL_FETCHED_MOD="$FETCHED_MOD" \
+  SEAL_CHANGE_TAG="$CHANGE_TAG" SEAL_FETCHED_MOD="$FETCHED_MOD" SEAL_NOVAD="$TMP/novad" \
   go test -tags docker -count=1 -run '^TestSeal$' -v ./internal/client
 rc=$?
 [ "$rc" -eq 0 ] && say "sealed: every check passed" || say "FAIL: the seal test failed (exit $rc)"

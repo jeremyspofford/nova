@@ -42,7 +42,8 @@ func TestBoxExecRunsTheArgvInTheBoxAsTheOwner(t *testing.T) {
 	if out.Output != want {
 		t.Fatalf("docker got\n%q\nwant\n%q", out.Output, want)
 	}
-	wantMeta := map[string]any{"ran_in": "box", "box": "nova-box-c0ffee", "image": bTag, "heavy": false, "lock_waited_s": 0}
+	// 2026-10-12 (S30c T8): box.exec echoes env_keys (none sent: []) — deliberate.
+	wantMeta := map[string]any{"ran_in": "box", "box": "nova-box-c0ffee", "image": bTag, "heavy": false, "lock_waited_s": 0, "env_keys": []string{}}
 	if !reflect.DeepEqual(out.Meta, wantMeta) {
 		t.Fatalf("meta = %v, want %v", out.Meta, wantMeta)
 	}

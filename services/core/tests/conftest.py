@@ -57,6 +57,9 @@ _TABLES = (
     # S46a: wake_attempts references devices (twice) AND turns, so it drops
     # ahead of both; left out, the re-migration collides on its CREATE TABLE.
     "wake_attempts",
+    # S30c T9: device_jobs references devices AND turns, so it drops ahead of
+    # both; left out, rows leak between tests (its CREATE is IF NOT EXISTS).
+    "device_jobs",
     "agents",
     "device_audit",
     "devices",

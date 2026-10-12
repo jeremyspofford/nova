@@ -437,6 +437,36 @@ numbers. "Read by grep range" became the search plus a line-range read.
 `ToolContext.turn_id`. S30d — `fs.stat` / `device_stat`,
 `device_probe_http`, `hands.py`, and the `installed`, `came_up` and
 `removed_app` claims.
+*Landed (S30c, 2026-10-12; tracker `.epics/s30c.md`):* jobs that outlive a
+turn. In the agent: `job.start/status/log/stop/list`; the wrapper `novad
+job-exec <jobdir>`, a separate detached process that owns the log (combined
+output, capped at 64 MiB, the cap stated in the log) and writes the terminal
+record and exit code to `<state>/jobs/<id>/` (env NAMES only — values reach
+the child through its environment, never a file, row or span); a scanner that
+judges a job whose wrapper is gone `lost`, writes ONE `job.end` audit entry
+per terminal job and re-sends the `job` frame on every connect until core
+acks it. Box jobs: a cwd inside a change worktree on the repo machine runs
+the job inside that change's box (never a host fallback); a whole-suite job's
+wrapper holds the CPU lock for its whole life (`waiting_lock`,
+`lock_waited_s`); a stop kills inside the box; the idle stop skips a box with
+a running job. In core: migration `048_device_jobs.sql` (045 to 047 were taken;
+`wake_attempts` is 047 after #166); `device_job_start/status/log/stop`; a terminal `done` status
+files a `run` fact, so `tests_passed`/`ran_command` read jobs unchanged
+(`stopped`/`lost` file only a `job` fact); `device_run`'s `env` (every value
+masked on spans) and `timeout_s` (1..110); `ToolContext.turn_id`, written on
+the job row. Per OS: Linux runs and tests every part, including the
+`systemd-run --user --scope` that lets a job survive `systemctl --user
+restart novad`; macOS is the same code (setsid; how launchd treats it is not
+measured), built and vetted here, tested on CI's macOS runners, not walked;
+Windows is compiled and vetted here only (DETACHED | NEW_PROCESS_GROUP |
+BREAKAWAY_FROM_JOB, the supervisor's job gaining BREAKAWAY_OK), tested on
+CI's Windows runners, not walked, and its box jobs say "cannot: no box
+manager on this agent". A job that could not be detached says
+`survives_agent: false` and why. Job dirs are kept (no pruning). Still S30d:
+`fs.stat` / `device_stat`, `device_probe_http`, `hands.py`, a `job_done`
+claim kind, and the `installed`, `came_up` and `removed_app` claims. The live
+walk (a `sleep 200` across a core restart, an unknown id, a boxed core
+suite, a masked env) is owed after merge.
 
 **S31 — superseded by S42b.** S42b builds the signed update path end to
 end. Nothing of S31 is left.
