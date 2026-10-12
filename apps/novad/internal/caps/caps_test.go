@@ -168,7 +168,10 @@ func TestSystemInfoReportsRealNumbers(t *testing.T) {
 func TestNamesAreDerivedFromTheTable(t *testing.T) {
 	want := []string{
 		"admin.exec", "admin.install", "admin.uninstall", "apps.launch", "apps.list", "box.exec", "box.start", "box.status", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
-		"fs.read", "fs.search", "fs.write", "net.wake", "shell.exec", "system.info", "system.notify",
+		"fs.read", "fs.search", "fs.write",
+		// S30c T4 (2026-10-12): job.* added deliberately — work that outlives a turn.
+		"job.list", "job.log", "job.start", "job.status", "job.stop",
+		"net.wake", "shell.exec", "system.info", "system.notify",
 	}
 	if got := Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Names() = %v, want %v", got, want)

@@ -67,12 +67,21 @@ type Deps struct {
 
 	// Wake is net.wake's seams; nil = the real machine.
 	Wake *WakeDeps
+
+	// Jobs is job.*'s store and wrapper (S30c); nil where this agent has no
+	// state directory (a handler then says cannot).
+	Jobs *JobDeps
 }
 
 // Request is one verified call as its handler receives it.
 type Request struct {
 	Args map[string]any
 	Deps Deps
+
+	// EnvelopeID is the verified command's envelope id ("" where there is
+	// none); job.start keys the job's spec — and so its one terminal audit
+	// entry — to it.
+	EnvelopeID string
 }
 
 // Handler performs one capability and judges the outcome (see Outcome).
@@ -84,11 +93,17 @@ type Handler func(ctx context.Context, req Request) Outcome
 // capability" are load-bearing: doing-things S30 restates them to say a
 // daemon is too old for a call, so they do not change.
 func Dispatch(ctx context.Context, capability string, args map[string]any, d Deps) Outcome {
+	return DispatchEnvelope(ctx, "", capability, args, d)
+}
+
+// DispatchEnvelope is Dispatch for a verified command: the handler's Request
+// carries the envelope's id.
+func DispatchEnvelope(ctx context.Context, envelopeID, capability string, args map[string]any, d Deps) Outcome {
 	h, ok := table[capability]
 	if !ok {
 		return fail("unknown capability %q", capability)
 	}
-	return h(ctx, Request{Args: args, Deps: d})
+	return h(ctx, Request{Args: args, Deps: d, EnvelopeID: envelopeID})
 }
 
 // Names is every capability this daemon performs, sorted — derived from the

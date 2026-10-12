@@ -26,9 +26,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"novad/internal/box"
 	"novad/internal/caps"
+	"novad/internal/jobs"
 )
 
 // probe is the one script every network check runs, in the box and in the
@@ -53,7 +55,7 @@ except Exception as e:
 `
 
 type sealEnv struct {
-	checkout, branch, a, b, tag, changeTag, fetchedMod string
+	checkout, branch, a, b, tag, changeTag, fetchedMod, novad string
 }
 
 func sealRead(t *testing.T) sealEnv {
@@ -70,6 +72,7 @@ func sealRead(t *testing.T) sealEnv {
 		a: get("SEAL_A"), b: get("SEAL_B"),
 		tag: get("SEAL_TAG"), changeTag: get("SEAL_CHANGE_TAG"),
 		fetchedMod: get("SEAL_FETCHED_MOD"),
+		novad:      get("SEAL_NOVAD"),
 	}
 }
 
@@ -544,6 +547,95 @@ else:
 		}
 		if metaA["image"] != se.tag {
 			t.Errorf("box.exec meta image %v, want %s", metaA["image"], se.tag)
+		}
+	})
+	t.Run("C13 a box job runs in the box, and job.stop kills it INSIDE the box (S30c T5)", func(t *testing.T) {
+		// The shipped path: job.start with box args as core sends them, the
+		// real `novad job-exec` wrapper (built from this tree by
+		// seal_test.sh), the agent's own box manager.
+		jdeps := caps.Deps{Box: m, Jobs: &caps.JobDeps{Store: jobs.NewStore(t.TempDir()), Binary: se.novad, Mode: "manual"}}
+		inBox := func(t *testing.T, script string) string {
+			t.Helper()
+			return dockerOut(t, "exec", nA.Box, "sh", "-c", script)
+		}
+		procs := `for p in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) && echo "${p#/proc/} $c"; done`
+		pidOf := func(t *testing.T, id string) string {
+			t.Helper()
+			for i := 0; i < 100; i++ {
+				if o, err := exec.Command("docker", "exec", nA.Box, "cat", box.JobPidfile(id)).Output(); err == nil {
+					if p := strings.TrimSpace(string(o)); p != "" {
+						return p
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			t.Fatalf("job %s wrote no pidfile in %s", id, nA.Box)
+			return ""
+		}
+		start := func(t *testing.T, id, marker string) {
+			t.Helper()
+			out := caps.DispatchEnvelope(ctx, "seal-"+id, "job.start", map[string]any{
+				"job_id": id, "change": se.a, "checkout": se.checkout, "branch": se.branch, "limits": limits,
+				"cwd":  wt[se.a],
+				"argv": []any{"sh", "-c", `echo "env:$SEAL_JOB_ENV planted:$SEAL_PLANTED_SECRET"; sleep ` + marker + ` & wait`},
+				"env":  map[string]any{"SEAL_JOB_ENV": "job-env-" + id},
+			}, jdeps)
+			if !out.OK || out.Meta["ran_in"] != "box" || out.Meta["box"] != nA.Box || out.Meta["state"] != jobs.StateRunning {
+				t.Fatalf("job.start: ok=%v meta=%v err=%q", out.OK, out.Meta, out.Error)
+			}
+		}
+		alive := func(t *testing.T, marker string) bool {
+			t.Helper()
+			return strings.Contains(inBox(t, procs), "sleep "+marker)
+		}
+
+		// Control: killing only the host's docker exec client leaves the
+		// process in the box running — the trap this row guards.
+		const ctl, ctlMark = "5ea1c0000001", "3011"
+		start(t, ctl, ctlMark)
+		ctlPid := pidOf(t, ctl)
+		j, err := jdeps.Jobs.Store.Get(ctl)
+		if err != nil || j.Status.PID <= 0 {
+			t.Fatalf("control job record: %+v %v", j.Status, err)
+		}
+		if err := syscall.Kill(-j.Status.PID, syscall.SIGKILL); err != nil {
+			t.Fatalf("killing the control's docker client: %v", err)
+		}
+		time.Sleep(1500 * time.Millisecond)
+		if !alive(t, ctlMark) {
+			t.Fatal("killing the docker client ended the process in the box: the control is vacuous")
+		}
+		inBox(t, `kill -KILL -`+ctlPid+` 2>/dev/null || kill -KILL `+ctlPid)
+
+		// The job: started in the box, stopped through job.stop.
+		const id, mark = "5ea1c0000002", "3012"
+		start(t, id, mark)
+		pid := pidOf(t, id)
+		if !alive(t, mark) || !strings.Contains(inBox(t, procs), pid+" sh -c") {
+			t.Fatalf("the job is not running in the box (pid %s): %s", pid, inBox(t, procs))
+		}
+		stop := caps.Dispatch(ctx, "job.stop", map[string]any{"job_id": id}, jdeps)
+		if !stop.OK || stop.Meta["state"] != jobs.StateStopped || strings.Contains(stop.Output, "may still run") {
+			t.Fatalf("job.stop: ok=%v meta=%v out=%q err=%q", stop.OK, stop.Meta, stop.Output, stop.Error)
+		}
+		time.Sleep(500 * time.Millisecond)
+		ps := inBox(t, procs)
+		if strings.Contains(ps, "sleep "+mark) {
+			t.Fatalf("after job.stop the job's child still runs in the box:\n%s", ps)
+		}
+		for _, line := range strings.Split(ps, "\n") {
+			if strings.HasPrefix(line, pid+" ") {
+				t.Fatalf("after job.stop pid %s still runs in the box: %q", pid, line)
+			}
+		}
+		// The env value crossed by name only; the harness's own secret did not.
+		lg := caps.Dispatch(ctx, "job.log", map[string]any{"job_id": id}, jdeps)
+		if !strings.Contains(lg.Output, "env:job-env-"+id+" planted:\n") {
+			t.Fatalf("job log %q", lg.Output)
+		}
+		raw, _ := os.ReadFile(filepath.Join(jdeps.Jobs.Store.Dir(id), jobs.SpecFile))
+		if strings.Contains(string(raw), "job-env-"+id) {
+			t.Fatalf("the env value reached spec.json: %s", raw)
 		}
 	})
 	t.Run("C12 Remove takes down box, db, network and volume", func(t *testing.T) {

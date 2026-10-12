@@ -44,6 +44,9 @@ which deploys what S32 lands.
   her worktree can reach the internet, publish ports, read `~/.secrets`, and
   drive the docker socket — which is host root. A command is killed at 110 s
   (`client.go:46`); jobs that outlive a turn are S30c, not built.
+  *Landed (S30c, 2026-10-12):* jobs exist — `device_job_start` runs work past
+  the 110 s cap, and a job whose cwd is in a change worktree runs in that
+  change's box.
 - **No sandbox exists in v4.** No `internal: true` network anywhere; the only
   `--network none` is the backup helpers.
 - **No landing exists.** No `repo_land`, `repo_status`, `repo_diff`,
@@ -66,6 +69,8 @@ which deploys what S32 lands.
   *As built (S32.2, 2026-10-11):* `046` is `046_code_repos.sql` — S32.2
   needed `code_repos` before any landing exists — so S32.3's `landings` takes
   `047` (§5.3).
+  *Note 2026-10-12:* `wake_attempts` was renumbered to `047` (#166) and
+  S30c took `048` (`048_device_jobs.sql`), so `landings` moves to `049`.
 
 ## 2. Rulings that bind this design
 
@@ -279,7 +284,11 @@ One landing at a time per repo (a lock). Steps:
    landing also runs `uv run ruff check` on the changed Python files. A path
    no rule covers runs the core suite.
 5. **Run them** under the CPU lock, as an S30c job (they outlive a turn: the
-   core suite is about 5½ minutes on CI and longer on the N150).
+   core suite is about 5½ minutes on CI and longer on the N150): one
+   `device_job_start` per suite, its cwd in the clean copy's box, so the job
+   runs there and its wrapper holds the CPU lock for the suite's whole run;
+   the result is read back with `device_job_status` (state, exit code — a
+   `done` status files the `run` fact) and `device_job_log` (the tail).
 6. **Verdict** — Q7's vocabulary:
    - `green`: every suite ran and passed, with **no skips caused by the
      environment**. A skip because `TEST_DATABASE_URL` was missing would mean
@@ -303,8 +312,9 @@ One landing at a time per repo (a lock). Steps:
 
 ### 5.3 The record
 
-- Migration `047_landings.sql` (`045` is S30c's; `046` became
-  `code_repos`, built by S32.2 — note 2026-10-11): `landings` — id, change
+- Migration `049_landings.sql` (`046` became `code_repos`, built by S32.2 —
+  note 2026-10-11; `047` is `wake_attempts`, renumbered by #166; `048` is
+  S30c's `device_jobs` — note 2026-10-12): `landings` — id, change
   id, repo, branch, base SHA, commit SHA, author, coder, turn id, verdict,
   per-suite results (`{suite, exit, passed, failed, skipped, seconds,
   tail}`), `protected`, `dirty_outside`, the stored patch, merged SHA, push
@@ -415,7 +425,7 @@ the build and its tests, not the live walk.
    docker-backed seal test were each a task; `suites.toml` came with it (the
    lock needs it), so S32.3 reads it rather than writing it.
 3. **S32.3 The landing step** (§5: `change_commit`, `repo_land` on S30c's
-   jobs, migration 047, the tools, the `landed` claim) —
+   jobs, migration 049, the tools, the `landed` claim) —
    about 7 h. **Waits on S30c.**
 4. **S32.4 The Changes page and the Inbox notice** (§7) — about 3 h.
 5. **S32.5 `AGENTS.md`** (§8) — about 1½ h.

@@ -40,6 +40,7 @@ from app.tools import (
     agents,
     browser,
     changes,
+    device_jobs,
     devices,
     inference,
     machines,
@@ -142,6 +143,10 @@ REGISTRY: dict[str, Tool] = {
         # deleted six by hand, and she had no tool for any of it. Each calls the
         # sidebar's own route handler; nothing here is an approval.
         *sessions.TOOLS,
+        # S30c T10 (2026-10-12): work on a paired machine that outlives her
+        # turn — the agent's job.start (tools/device_jobs.py), its row in
+        # device_jobs written before the send.
+        *device_jobs.TOOLS,
     )
 }
 
@@ -213,6 +218,7 @@ def context_for(
     workspace_root: Path | None = None,
     card: Callable[[dict], None] | None = None,
     conversation_id=None,
+    turn_id=None,
 ) -> ToolContext:
     """The context a turn hands its tools. The workspace root is decided
     once, here, so a single decision sets the boundary for every filesystem
@@ -230,7 +236,9 @@ def context_for(
     card channel (S47): the stream route binds it, and every other caller
     leaves it None. `undo_sink` is the undo channel (chat-rewind): the turn
     binds a list, and chat._run_tool files each call's slice on the turn's
-    action ledger.
+    action ledger. `turn_id` is the id of the turn the calls run in (S30c),
+    for provenance only; chat passes it, and every caller outside a turn
+    leaves it None.
 
     `person` must be a real identity: every route resolves one before a turn
     starts (identity.require_person) and the memory tools scope to it. A None
@@ -246,6 +254,7 @@ def context_for(
         undo_sink=undo_sink,
         card=card,
         conversation_id=conversation_id,
+        turn_id=turn_id,
     )
 
 

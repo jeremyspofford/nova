@@ -1,0 +1,10 @@
+{
+  "type": "job",
+  "job_id": "0123456789ab",
+  "state": "done",
+  "exit_code": 0,
+  "started_at": "2026-10-12T09:00:00Z",
+  "ended_at": "2026-10-12T09:03:20Z",
+  "log_bytes": 41,
+  "reason": ""
+}

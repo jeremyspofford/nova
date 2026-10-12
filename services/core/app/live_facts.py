@@ -90,6 +90,12 @@ AUTO_RUN = frozenset(
         "device_list_apps",
         "device_list_files",
         "device_read_file",
+        # S30c T11 (2026-10-12): how a job ended is answered by the agent's
+        # record, read now — never by a note saying "the suite passed". Its
+        # device is checked against the paired rows and its job id by the
+        # agent itself (an unknown one is stated: "no job <id> on this
+        # device"), so a wrong argument costs a stated failure.
+        "device_job_status",
         "get_time",
         # S22. The case `Tool.reads_only`'s own docstring names: "how much
         # VRAM" is answered by the machine, not by a note from three weeks
@@ -179,6 +185,12 @@ NOT_AUTO_RUN = {
     # S30a T7: unlike device_read_file, a search walks a whole tree on the
     # owner's machine and can run to the agent's command deadline, far past
     # CHECK_TIMEOUT (the device_info refresh trap, S42b Task 21).
+    # S30c T11: a log is the job's own output, not a fact about the world a
+    # note could be checked against, and up to 256 KiB of it would crowd the
+    # answer; device_job_status is the check.
+    "device_job_log": (
+        "a job's output is not a fact a note can be checked against; its status is the check"
+    ),
     "device_search": (
         "a tree walk on his machine can outlast the check's time limit, and the note "
         "would choose the pattern"

@@ -166,6 +166,13 @@ class ToolContext:
     # reminder — needs to be told which one. None outside a turn. Not a
     # principal: it is where output goes.
     conversation_id: Any = None
+    # The turn this call runs in (S30c T7): its traces.Turn id, the one
+    # turn_spans is keyed by. A job outlives the turn that started it, so its
+    # device_jobs row names that turn from here. Set by chat, the one place a
+    # turn runs; None outside a turn (a reminder firing, a distil beat, a
+    # rewind). PROVENANCE, never a principal: an executor may record it, and
+    # nothing reads it to decide whether a call may run — dispatch never does.
+    turn_id: Any = None
 
 
 @dataclass(frozen=True)

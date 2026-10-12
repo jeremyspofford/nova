@@ -33,7 +33,25 @@ const (
 	TypeAudit     = "audit"
 	TypeAuthError = "auth_error"
 	TypeFacts     = "facts"
+	// TypeJob is device -> core: a job's terminal record (S30c), re-sent on
+	// every connect until core answers TypeJobAck with its id.
+	TypeJob    = "job"
+	TypeJobAck = "job_ack"
 )
+
+// Job is device -> core: how one job ended. ExitCode is null when the job
+// has none (failed_to_start, lost) and 0 present; the times are RFC 3339
+// UTC, null when the record has none.
+type Job struct {
+	Type      string     `json:"type"`
+	JobID     string     `json:"job_id"`
+	State     string     `json:"state"`
+	ExitCode  *int       `json:"exit_code"`
+	StartedAt *time.Time `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	LogBytes  int64      `json:"log_bytes"`
+	Reason    string     `json:"reason"`
+}
 
 // Challenge is core -> device: a nonce to sign and core's pinned public key.
 type Challenge struct {

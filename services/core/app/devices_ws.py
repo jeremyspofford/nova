@@ -50,7 +50,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app import db, device_facts, devices, envelopes, governance, network
+from app import db, device_facts, device_jobs, devices, envelopes, governance, network
 
 logger = logging.getLogger("core")
 
@@ -80,6 +80,9 @@ NONCE_BYTES = 32
 #                know, or a restored database that forgot a device would make
 #                it wipe itself.
 #     command    {envelope, sig}                  (envelopes.build / sign)
+#     job_ack    {job_id}                         (S30c) a job frame was stored,
+#                or names no job core holds for this device; the agent marks
+#                the job acked and stops re-sending it
 #   device -> core
 #     auth       {device_id, sig: hex(sign(raw nonce)), facts?}
 #                (an older novad also sends home_dir; it is one of the unknown
@@ -92,6 +95,10 @@ NONCE_BYTES = 32
 #     facts      {net?, unreadable?, folders?, service?, elevation?, wsl_distros?,
 #                probed_at?}                      (S42a/S42b; merged into facts,
 #                a probe as one unit — device_facts.merge_frame)
+#     job        {job_id, state, exit_code, started_at, ended_at, log_bytes,
+#                reason}                          (S30c) a job's terminal record,
+#                re-sent every session until acked (device_jobs.apply_frame;
+#                shape pinned by apps/novad/internal/client/testdata/job_golden.json)
 
 # WebSocket close codes in the application-private 4000-4999 range. 4401 mirrors
 # HTTP 401 (the challenge did not authenticate); 4403 mirrors 403 (the row is
@@ -1011,10 +1018,13 @@ async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict, *, epoch:
         )
 
 
-async def _handle_frame(pool, device_id: uuid.UUID, frame: object, *, epoch: int = 0) -> None:
+async def _handle_frame(
+    pool, device_id: uuid.UUID, frame: object, *, epoch: int = 0, conn: object = None
+) -> None:
     """One frame from a socket authenticated at `epoch`: its audit lands in
     that epoch's chain, and its row writes hold only while the row is still
-    there (the note above `_record_auth_facts`)."""
+    there (the note above `_record_auth_facts`). `conn` is the socket the
+    frame came on — a `job` frame is answered on it."""
     if not isinstance(frame, dict):
         return
     kind = frame.get("type")
@@ -1034,6 +1044,14 @@ async def _handle_frame(pool, device_id: uuid.UUID, frame: object, *, epoch: int
             await ingest_audit(pool, device_id, entries, epoch=epoch)
     elif kind == "facts":
         await _record_facts_frame(pool, device_id, frame, epoch=epoch)
+    elif kind == "job":
+        # S30c: a job's terminal record. Acked when stored, and when core has
+        # no row for it (it never will — the agent would re-send it every
+        # session); never when the row moved past this socket's epoch or the
+        # frame was malformed: nothing was stored, so nothing says it was.
+        outcome = await device_jobs.apply_frame(pool, device_id, frame, epoch=epoch)
+        if outcome in (device_jobs.STORED, device_jobs.UNKNOWN) and conn is not None:
+            await conn.send({"type": "job_ack", "job_id": frame["job_id"]})
     else:
         logger.info("device %s sent an unknown frame type %r", device_id, kind)
 
@@ -1099,7 +1117,7 @@ async def serve(conn: object, pool) -> None:
             except ConnectionClosed:
                 break
             try:
-                await _handle_frame(pool, device_id, frame, epoch=epoch)
+                await _handle_frame(pool, device_id, frame, epoch=epoch, conn=conn)
             except Exception:  # noqa: BLE001 — P27: one frame never ends a session
                 kind = frame.get("type") if isinstance(frame, dict) else type(frame).__name__
                 logger.exception(

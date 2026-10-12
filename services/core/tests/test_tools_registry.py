@@ -328,6 +328,16 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # ledger (wake_attempts) holds the outcome. SIXTY-THREE -> SIXTY-FOUR.
         # Not reads_only: it sends a packet. Nothing waits on anyone.
         "machine_wake",
+        # S30c T10 (2026-10-12): she starts work on a paired machine that
+        # outlives her turn (the agent's job.start; a change worktree's cwd
+        # runs in its box). SIXTY-FOUR -> SIXTY-FIVE. Not reads_only.
+        "device_job_start",
+        # S30c T11 (2026-10-12): she reads a job back (its live record, its
+        # log) and ends it. SIXTY-FIVE -> SIXTY-EIGHT. status and log are
+        # reads_only; stop is not.
+        "device_job_status",
+        "device_job_log",
+        "device_job_stop",
     }
 
 
@@ -745,6 +755,12 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # lines — it opens files for reading only. Its twin device_edit_file is
         # deliberately NOT here: it replaces a file. 28 -> 29.
         "device_search",
+        # S30c T11 (2026-10-12): reading a job's live record and its log
+        # changes nothing on the machine (status writes core's own row from
+        # the agent's record). Their twin device_job_stop is deliberately NOT
+        # here: it ends a job. 29 -> 31.
+        "device_job_status",
+        "device_job_log",
     }
 
 
@@ -789,6 +805,10 @@ def test_every_tool_that_writes_says_it_changes_something():
         "device_admin_path",
         # S46a T5: it sends a wake packet through the hub's agent.
         "machine_wake",
+        # S30c T10: it starts a job on a device.
+        "device_job_start",
+        # S30c T11: it ends a job on a device.
+        "device_job_stop",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 

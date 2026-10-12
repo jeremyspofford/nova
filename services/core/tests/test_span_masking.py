@@ -38,7 +38,10 @@ def test_credential_keys_are_masked_at_any_depth():
         assert secret not in written
     assert recorded["token"] == "<masked:16 chars>"
     assert recorded["headers"]["X-MCP-Toolsets"] == "actions"
-    assert recorded["env"]["PATH"] == "/usr/bin"
+    # 2026-10-12 (S30c T8): a top-level `env` is masked WHOLE by value, whatever
+    # the name (chat._env_masked) — device_run's env carries tokens under any
+    # name. Was: PATH kept in the clear. Changed deliberately; names stay.
+    assert recorded["env"] == {"GH_TOKEN": "<masked:5 chars>", "PATH": "<masked:8 chars>"}
 
 
 def test_ordinary_arguments_are_left_as_they_were():

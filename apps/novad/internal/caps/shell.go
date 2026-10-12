@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -30,20 +32,38 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 		argv = append(argv, s)
 	}
 
+	opts, err := readCallOptions("shell.exec", args)
+	if err != nil {
+		return fail("%v; nothing was run", err)
+	}
+
 	cwd := d.Home
 	if c, ok := strArg(args, "cwd"); ok && c != "" {
 		cwd = c
 	}
-	return runArgv(ctx, argv, cwd)
+	ctx, cancel := opts.bound(ctx)
+	defer cancel()
+	out := runArgvEnv(ctx, argv, cwd, opts.env)
+	out.Meta = opts.echo(out.Meta)
+	return out
 }
 
 // runArgv is shell.exec's run: argv in cwd under ctx, output capped, the
 // ok/exit_code seam judged. admin.exec's unix route runs its sudo argv
 // through it too, so both are bounded and judged the same way.
 func runArgv(ctx context.Context, argv []string, cwd string) Outcome {
+	return runArgvEnv(ctx, argv, cwd, nil)
+}
+
+// runArgvEnv is runArgv with env (NAME=value pairs) added to the agent's own
+// environment for the child; a name in both takes env's value.
+func runArgvEnv(ctx context.Context, argv []string, cwd string, env []string) Outcome {
 	cw := &capWriter{limit: OutputCap}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdout = cw
 	cmd.Stderr = cw
 	prepareCommand(cmd)
@@ -166,3 +186,64 @@ func (w *capWriter) string() string {
 // killGrace bounds how long Wait may block on output pipes after the command
 // is killed, so a stuck descendant cannot hold a handler past its budget.
 const killGrace = 5 * time.Second
+
+// MaxCallTimeoutS is the most a call's timeout_s may ask for (S30c T8): the
+// agent's own command budget (client.CommandTimeout, pinned equal by
+// client's TestMaxCallTimeoutIsTheCommandTimeout). A call's budget is
+// min(timeout_s, the caller's deadline) — timeout_s never stretches it.
+const MaxCallTimeoutS = 110
+
+// callOptions reads a run's env and timeout_s (device_run, S30c T8). env is
+// NAME=value pairs for the child's environment and its sorted names (never a
+// value) for the echo; timeout_s is a whole number of seconds in
+// 1..MaxCallTimeoutS. A bad one is an error naming the field, never quoting
+// an env value.
+type callOptions struct {
+	env      []string
+	keys     []string
+	timeout  time.Duration
+	timeoutS int
+}
+
+func readCallOptions(capability string, args map[string]any) (callOptions, error) {
+	var o callOptions
+	env, keys, err := envArgFor(capability, args)
+	if err != nil {
+		return o, err
+	}
+	o.env, o.keys = env, keys
+	if o.keys == nil {
+		o.keys = []string{}
+	}
+	if v, present := args["timeout_s"]; present {
+		n, ok := numberArg(v)
+		if !ok || n != math.Trunc(n) || n < 1 || n > MaxCallTimeoutS {
+			return o, fmt.Errorf("%s 'timeout_s' must be a whole number of seconds from 1 to %d, got %v", capability, MaxCallTimeoutS, v)
+		}
+		o.timeoutS = int(n)
+		o.timeout = time.Duration(o.timeoutS) * time.Second
+	}
+	return o, nil
+}
+
+// bound is ctx under the call's own budget, when it asked for one.
+func (o callOptions) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	if o.timeout == 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, o.timeout)
+}
+
+// echo adds what the agent ran the call with to meta: env_keys always,
+// timeout_s when one was sent. Core reads its absence as an agent that
+// predates them (and so ran WITHOUT them).
+func (o callOptions) echo(meta map[string]any) map[string]any {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["env_keys"] = o.keys
+	if o.timeout != 0 {
+		meta["timeout_s"] = o.timeoutS
+	}
+	return meta
+}

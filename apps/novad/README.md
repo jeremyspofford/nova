@@ -295,8 +295,8 @@ for. There is no per-device grant, no path allow-list and no path blocklist: a
 paired device runs whatever core signs, as the user `novad` runs as, and that
 includes its own `key` and `audit.jsonl` (a rewritten audit chain is detected
 by core on the next replay, not prevented). The table below is the
-everyday set; the admin path (`admin.*`), `daemon.update` and the box
-(`box.*`) have sections of their own:
+everyday set; the admin path (`admin.*`), `daemon.update`, the box
+(`box.*`) and jobs (`job.*`) have sections of their own:
 
 | capability      | does                                                        |
 |-----------------|-------------------------------------------------------------|
@@ -544,7 +544,9 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 - **Idle stop.** The agent touches a box on every `box.start` / `box.exec` and
   checks once a minute; a box idle 30 minutes is stopped with its Postgres. A
   box already running when the agent started counts from the first time it is
-  seen. Removal is not here yet (S32.3).
+  seen. A box that runs a live job (see Jobs, below) is never stopped: its
+  idle time counts from the last check that saw the job. Removal is not here
+  yet (S32.3).
 - **Where.** Linux (and macOS) with docker on the agent's PATH and the agent
   running as the owner, who must be able to use docker. The isolated network
   mode needs docker 28+. On Windows there is no box manager: each of the
@@ -552,6 +554,67 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 - An agent from before S32.2 answers `unknown capability "box.exec"`; core
   turns that into "…'s agent predates the box — update it with
   machine_update; nothing was run".
+
+## Jobs (S30c)
+
+A command through `shell.exec` / `box.exec` is killed at 110 s. Work that runs
+longer — a whole test suite, a build, `sleep 200` — is a **job**: it outlives
+the call, the turn, and a restart of the agent. Core's tools are
+`device_job_start/status/log/stop` (design: `docs/plans/rebuild/
+doing-things.md`, S30's *Landed (S30c)* line).
+
+| capability   | does |
+|--------------|------|
+| `job.start`  | `{job_id, argv, cwd?, env?}` (+ the box args, below): writes the job's spec and spawns the detached wrapper; answers once the wrapper has written its first record — meta `{job, state, survives_agent, why?, detach, ran_in, box?}` |
+| `job.status` | the job's record: `state` (`running`, `waiting_lock`, `done`, `failed_to_start`, `stopped`, `lost`), `exit_code` once it ended, pid, times, `lock_waited_s`, `log_bytes` |
+| `job.log`    | its log by `offset`/`length` or `tail_bytes` (default: the last 256 KiB), at most 256 KiB per read; meta `{bytes_total, offset, length}` |
+| `job.stop`   | writes a `stop` file, ends the child's whole group (Unix: `SIGTERM` to the group, `SIGKILL` 5 s later; Windows: `taskkill /T /F`), waits up to 10 s for the record |
+| `job.list`   | every job on this agent, newest first (an unreadable job dir is named, never hides the rest) |
+
+- **The wrapper.** `novad job-exec <jobdir>` is a separate process: it starts
+  argv in cwd (argv only, no shell), in a session/process group of its own,
+  writes `running` with the child's pid, captures stdout and stderr together
+  into `output.log` (capped at 64 MiB; past the cap the child keeps running
+  and the log says the cap was reached), then writes the terminal record with
+  the exit code. A job dir runs once.
+- **On disk.** `<state dir>/jobs/<id>/`: `spec.json` (argv, cwd, env NAMES —
+  never values), `status.json` (written whole), `output.log`, `spawn.err`
+  (the launcher's own stderr), and the markers `stop`, `audited`, `acked`.
+  Env values reach the child only through the wrapper's process environment.
+  Job dirs are kept; nothing prunes them yet.
+- **Detached, per OS.** Linux and macOS: its own session (`setsid`), stdio on
+  `/dev/null`. Under `systemd --user` (`--mode systemd-user`) the wrapper
+  first goes into its own transient scope (`systemd-run --user --scope
+  --collect --unit novad-job-<id>`), because stopping or restarting
+  `novad.service` kills every process in the unit's cgroup; a scope that
+  cannot be made still runs the job and says `survives_agent: false` and why.
+  Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW |
+  CREATE_BREAKAWAY_FROM_JOB`, out of the supervisor's kill-on-close job (which
+  now allows breakaway); under a supervisor from before S30c the job runs
+  inside it and says `survives_agent: false` — it ends with the supervisor.
+  Windows and macOS are built and tested on CI's runners, not walked.
+- **The scanner.** On every connect (after the audit replay) and every 5 s
+  while connected: a job whose wrapper is gone with no end recorded (or whose
+  record predates the last boot) is written `lost` with why; a terminal job
+  gets ONE `job.end` audit entry (keyed to its start envelope, summary `job
+  <id> <state> exit <n>`) — the wrapper never touches `audit.jsonl`, so the
+  chain stays single-writer; and its `job` frame is sent to core until a
+  `job_ack` comes back.
+- **Box jobs.** With `{change, checkout, branch, limits}` the job runs inside
+  `nova-box-<id>` (the box section's rules: a box that cannot start is
+  ok:false, nothing runs, no host fallback). The wrapper's argv is `docker
+  exec … nova-box-<id> …` with env values passed through the docker client's
+  environment, never argv. A whole suite (the CPU lock rule above) has its
+  WRAPPER take the CPU lock with no deadline — `waiting_lock` while it waits,
+  `lock_waited_s` after — and hold it for the job's whole run; a stop while it
+  waits ends the job with nothing run. `job.stop` also kills the process
+  inside the box (by its pidfile), since killing the `docker exec` client
+  does not. Windows has no box manager: "cannot: no box manager on this
+  agent", nothing started.
+- An agent from before S30c answers `unknown capability "job.start"`; core
+  turns that into "…'s agent predates jobs — update it with machine_update;
+  nothing was started". An unknown id is ok:false `no job <id> on this
+  device`.
 
 ## Facts
 

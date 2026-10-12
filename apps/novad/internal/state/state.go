@@ -10,7 +10,9 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -116,10 +118,28 @@ func WriteJSON(path string, v any) error {
 	return err
 }
 
+// readFile is a seam for tests; readAttempts matches WriteJSON's rename loop.
+var readFile = os.ReadFile
+
+const readAttempts = 10
+
 // ReadJSON reads path into v. A missing file stays fs.ErrNotExist (errors.Is),
 // so "never written" reads differently from "unreadable".
+//
+// On Windows a read can collide with WriteJSON's rename over the same file
+// ("being used by another process"), so a read that fails for any reason but
+// a missing file is retried on the same schedule WriteJSON's rename uses
+// (CI windows-11-arm, 2026-10-13: a job's status.json read failed this way).
 func ReadJSON(path string, v any) error {
-	body, err := os.ReadFile(path)
+	var body []byte
+	var err error
+	for i := 0; ; i++ {
+		body, err = readFile(path)
+		if err == nil || errors.Is(err, fs.ErrNotExist) || i == readAttempts-1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if err != nil {
 		return err
 	}
