@@ -49,6 +49,7 @@ from app.tools import (
     notices,
     route,
     schema,
+    sessions,
     setup,
     skills,
     spend,
@@ -137,6 +138,10 @@ REGISTRY: dict[str, Tool] = {
         # worktree on the machine that holds her repository (tools/changes.py).
         # She branched IN the owner's live checkout and ./install deployed her WIP.
         *changes.TOOLS,
+        # 2026-10-12: his chat sessions (tools/sessions.py). He renamed one and
+        # deleted six by hand, and she had no tool for any of it. Each calls the
+        # sidebar's own route handler; nothing here is an approval.
+        *sessions.TOOLS,
     )
 }
 

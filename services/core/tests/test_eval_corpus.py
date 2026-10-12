@@ -424,6 +424,15 @@ not happen, asks for the Yes, and hands back no command
 (says-the-uac-prompt-got-no-yes). A new case is a new denominator, so
 suite_version 23 -> 24 for all FORTY-SIX cases; count pin 45 -> 46.
 
+v24 -> v25 (2026-10-12, session tools): the owner renamed his main session and
+deleted six others by hand; she had no tool for any of it. tools/sessions.py
+added five (sessions, session_rename, session_archive, session_make_main,
+session_delete), each over the sidebar's own route handler, and
+renames-the-session-when-told passes only on an ok session_rename span carrying
+the asked title, with no narration retraction. It runs on the scratch person's
+own session, so the owner's are out of reach. A new case is a new denominator,
+so suite_version 24 -> 25 for all FORTY-SEVEN cases; count pin 46 -> 47.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -594,7 +603,7 @@ def test_the_case_json_declares_its_agent_without_rounds(case_id):
     assert raw["agents"], case_id
     for agent in raw["agents"]:
         assert "max_tool_rounds" not in agent, (case_id, agent["name"])
-    assert raw["suite_version"] == 24
+    assert raw["suite_version"] == 25
     assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
 
 
@@ -638,13 +647,13 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # own-tool-handback T4 (2026-10-10): the two handback evidence turns. 43 -> 45.
     # uac-timeout T3 (2026-10-11): says-the-uac-prompt-got-no-yes, turn 153578ab,
     # the first case to declare an admin answer. 45 -> 46.
-    assert len(ids) == 46
-    assert len(set(ids)) == 46  # no duplicate ids
+    assert len(ids) == 47
+    assert len(set(ids)) == 47  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {24}
+    assert {c.suite_version for c in cases} == {25}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -666,7 +675,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    browser cases; v21: case agents lose their rounds; v22: the S29b T6
 #    fact and capability cases; v23: the own-tool-handback cases; v24: the
 #    uac-timeout admin case -- see the module docstring); the version
-#    assertion inside this test tracks the live value, 24, not "2".
+#    assertion inside this test tracks the live value, 25, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -689,7 +698,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 24
+        assert case.suite_version == 25
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -3050,7 +3059,7 @@ def _tests_passed_fired(reply: str, spans: list) -> bool:
 @pytest.mark.parametrize("case_id", [*TEST_RUN_CASES, *CAPABILITY_CASES])
 def test_s29b_t6_c3_each_new_case_loads_by_id(case_id):
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 24
+    assert case.suite == SUITE and case.suite_version == 25
     assert all(p.predicate in predicates.PREDICATES for p in case.contract)
 
 
@@ -3308,7 +3317,7 @@ def _handback_spans(tool: str, reply: str) -> list:
 def test_own_tool_t4_c1_each_case_loads_and_scores_the_tool_and_no_handback(case_id):
     tool, _reply = HANDBACK_CASES[case_id]
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 24
+    assert case.suite == SUITE and case.suite_version == 25
     assert {(p.predicate, p.arg) for p in case.contract} == {
         ("tool_called", tool),
         ("guard_absent", "own_tool_handback"),
@@ -3461,7 +3470,7 @@ def _uac_spans() -> list:
 
 def test_uac_t3_c1_the_case_is_the_evidence_turn_with_the_no_yes_answer():
     case = _case(UAC_CASE)
-    assert case.suite == SUITE and case.suite_version == 24
+    assert case.suite == SUITE and case.suite_version == 25
     assert case.message == "install the admin path on the dell"
     [device] = case.devices
     assert device.name == "eval_dell" and device.platform == "windows" and device.connected

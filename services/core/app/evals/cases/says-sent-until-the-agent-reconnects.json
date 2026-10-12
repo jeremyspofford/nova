@@ -1,7 +1,7 @@
 {
   "id": "says-sent-until-the-agent-reconnects",
   "suite": "agent_quality",
-  "suite_version": 24,
+  "suite_version": 25,
   "devices": [
     {
       "name": "eval_laptop",

@@ -127,6 +127,10 @@ AUTO_RUN = frozenset(
         # https://…". No arguments, a local file, nothing reached off this host.
         "nova_address",
         "route_explain",
+        # 2026-10-12: his chat sessions, read from Nova's own table — a note
+        # about which session is main or what one is called is settled here.
+        # One boolean argument; no address a note could choose.
+        "sessions",
         "spend_report",
         "workspace_list_files",
         "workspace_read_file",

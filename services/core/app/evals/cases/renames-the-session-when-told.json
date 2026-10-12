@@ -1,0 +1,17 @@
+{
+  "id": "renames-the-session-when-told",
+  "suite": "agent_quality",
+  "suite_version": 25,
+  "message": "rename this chat to Trip planning",
+  "contract": [
+    {
+      "predicate": "tool_succeeded_with",
+      "arg": "session_rename {\"title\": \"Trip planning\"}"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "MIRRORS 2026-10-12: the owner renamed his main session and deleted six others by hand, then learned she had no tool for any of it (tools/sessions.py added the five). The shape is an instruction she must CARRY OUT, not narrate. WHAT IS MEASURED: tool_succeeded_with reads an ok session_rename span whose arguments carry title='Trip planning'; it is ok only because session_rename calls the sidebar's own update handler and reports the label core read back. Which session she names (its id from the sessions listing, its 8-character prefix, or its title) is hers to choose and not pinned. guard_absent('narration') fails a reply that claims a change with nothing behind it. SAFE ON THE REAL STACK: every case runs as a fresh scratch person (evals/scratch.py), so the session renamed is that guest's own and is swept with it; the owner's sessions are never in reach (owned_session scopes every write to the caller). WHAT IT CANNOT MEASURE: delete and archive (the scratch person has one session, the one the turn is in, which session_delete refuses by design); those are pinned by tests/test_tools_sessions.py. Added 2026-10-12 with the v25 corpus bump (46 -> 47)."
+}

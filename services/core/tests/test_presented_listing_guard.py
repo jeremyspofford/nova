@@ -323,6 +323,9 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
         # she relays from it is a BACKED listing, and its name says nothing
         # about listing either.
         "machine_status",
+        # 2026-10-12 the fifth: `sessions` enumerates his chat sessions with
+        # their ids and which is main; its name says nothing about listing.
+        "sessions",
     }
 
 
