@@ -73,7 +73,12 @@ async def world(pool, monkeypatch):
     w.t = T0
     monkeypatch.setattr(wake, "_now", w.now)
     monkeypatch.setattr(wake, "_sleep", w.sleep)
-    monkeypatch.setattr(devices_ws.hub, "is_connected", w.is_connected)
+    # Patched on the CLASS: undoing an instance patch leaves the old bound
+    # method stuck on the shared hub instance, shadowing later class patches
+    # (test_devices_ws read "connected" through it — CI on #164).
+    monkeypatch.setattr(
+        devices_ws.Hub, "is_connected", lambda _self, device_id: w.is_connected(device_id)
+    )
     monkeypatch.setattr(wake, "_send", w.send)
     monkeypatch.setattr(wake, "_providers_on", w.providers_on)
     monkeypatch.setattr(wake, "_serving", w.serving)

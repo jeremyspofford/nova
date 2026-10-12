@@ -45,7 +45,9 @@ class Agent:
             "exit_code": 0,
             "output": "started: systemd-run --user unit x\n",
         }
-        monkeypatch.setattr(devices_ws.hub, "is_connected", lambda _id: self.connected)
+        # On the CLASS: an instance patch, once undone, leaves a bound method
+        # stuck on the shared hub instance that shadows later class patches.
+        monkeypatch.setattr(devices_ws.Hub, "is_connected", lambda _self, _id: self.connected)
 
         async def command(pool, **kw):
             self.sent.append(kw)
