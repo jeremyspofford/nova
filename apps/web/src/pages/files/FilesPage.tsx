@@ -11,6 +11,7 @@ import {
   type WorkspaceFileDetail,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
+import { DocxView } from './DocxView'
 import { codeLanguage, formatBytes, notShownMessage, previewKind } from './filesFormat'
 
 /**
@@ -308,10 +309,14 @@ function FilePreview({
       />
     )
   }
+  if (kind === 'docx') {
+    // Read from the raw bytes: a .docx is binary, so core never sends it as text.
+    return <DocxView url={workspaceRawUrl(detail.path)} />
+  }
   if (kind === 'word') {
     return (
       <div className="rounded-lg border border-border-subtle p-6 text-center text-compact text-content-secondary">
-        Word documents can't be previewed here — download to open it.
+        Old Word documents (.doc) can't be previewed here — download to open it.
       </div>
     )
   }
