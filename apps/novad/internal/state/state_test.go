@@ -70,3 +70,40 @@ func TestASecondHolderOfTheLockIsRefusedWithTheFirstsPID(t *testing.T) {
 	}
 	_ = again.Release()
 }
+
+// A read that collides with a rename (Windows: "being used by another
+// process") is retried; a missing file is not; a lasting error is returned.
+func TestReadJSONRetriesATransientFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	if err := WriteJSON(path, map[string]int{"n": 3}); err != nil {
+		t.Fatal(err)
+	}
+	real := readFile
+	t.Cleanup(func() { readFile = real })
+
+	calls := 0
+	readFile = func(p string) ([]byte, error) {
+		calls++
+		if calls <= 2 {
+			return nil, errors.New("The process cannot access the file because it is being used by another process.")
+		}
+		return real(p)
+	}
+	var got map[string]int
+	if err := ReadJSON(path, &got); err != nil || got["n"] != 3 || calls != 3 {
+		t.Fatalf("transient: err=%v got=%v calls=%d", err, got, calls)
+	}
+
+	calls = 0
+	readFile = func(p string) ([]byte, error) { calls++; return real(p) }
+	if err := ReadJSON(filepath.Join(t.TempDir(), "none.json"), &got); !errors.Is(err, fs.ErrNotExist) || calls != 1 {
+		t.Fatalf("missing: err=%v calls=%d", err, calls)
+	}
+
+	calls = 0
+	busy := errors.New("busy")
+	readFile = func(string) ([]byte, error) { calls++; return nil, busy }
+	if err := ReadJSON(path, &got); !errors.Is(err, busy) || calls != readAttempts {
+		t.Fatalf("lasting: err=%v calls=%d", err, calls)
+	}
+}
