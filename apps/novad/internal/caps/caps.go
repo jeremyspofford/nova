@@ -64,6 +64,9 @@ type Deps struct {
 	// Box runs a change's sealed box (S32.2 box.*); nil where this agent
 	// has none (a handler then says cannot).
 	Box *box.Manager
+
+	// Wake is net.wake's seams; nil = the real machine.
+	Wake *WakeDeps
 }
 
 // Request is one verified call as its handler receives it.

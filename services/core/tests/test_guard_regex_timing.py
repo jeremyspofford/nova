@@ -524,11 +524,31 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     span), `_HANDBACK_CLAUSE_BREAK`, `_HANDBACK_MODAL` (a second-person modal)
     and `_HANDBACK_OFFER` (her offer, not this guard's): 223 -> 227,
     304 -> 308, the difference 81 unchanged. Tool names are matched as tokens
-    against the live list with string methods, no per-tool builder."""
+    against the live list with string methods, no per-tool builder.
+
+    S46a T6 (2026-10-11, the wake claim: "I woke the Dell" / "the Dell is
+    awake now" with no answered attempt and no connected reading this turn)
+    added FOUR bare module Patterns, reached by both walks — `_WAKE_CLAIM_I_WOKE`
+    (a first-person "I woke", read over at most 48 characters before a name),
+    `_WAKE_CLAIM_AFTER` (the wake state right after a name), `_WAKE_CLAIM_PAST`
+    (a past attempt named as past) and `_WAKE_CLAIM_NEGATED` (a negation
+    before the claim): 227 -> 231, 308 -> 312, the difference 81 unchanged.
+    Names come from the existing `_machine_name_pattern` builder (already
+    swept), so no per-name builder was added.
+
+    S46a T5-T6 fix (2026-10-11, VERIFY's honesty probe: "Hopefully the Dell
+    is back up soon" beside a no_answer wake was corrected) added TWO bare
+    module Patterns, reached by both walks — `_WAKE_CLAIM_HOPED` (a hope the
+    shared `_DELEGATION_HEDGE` lacks: "fingers crossed", "with luck") and
+    `_WAKE_CLAIM_SOON` (a future time right after the claim, matched over at
+    most 48 characters): 231 -> 233, 312 -> 314, the difference 81
+    unchanged. T6 VERIFY 2 (past times: weekdays, this morning, dates) widened
+    `_WAKE_CLAIM_PAST` in place — `_MONTH` is a string, not a Pattern — so
+    the counts did not move."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 227, len(old)
-    assert len(new) == 308, len(new)
+    assert len(old) == 233, len(old)
+    assert len(new) == 314, len(new)
     assert len(new) - len(old) == 81
 
 
@@ -2436,3 +2456,83 @@ def test_the_sweep_reaches_the_own_tool_handback_patterns():
     ):
         pattern = getattr(guards, name)
         assert any(p is pattern for p in swept), name
+
+
+# -- S46a T6 (2026-10-11): the wake-claim guard reads 50 KB linearly -----------
+# Every shape is a sentence the guard must READ to its end: names it matches,
+# with no claim (sends, negations, hedges) or a claim backed by the record, so
+# nothing fires early. Padding between a first person and a name, and a name
+# followed by padding, are the shapes its before/after reads take.
+
+_WAKE_NAMES = ("box", "hubhost")
+_WAKE_BACKED = [
+    _span(
+        "tool",
+        "machine_status",
+        ok=True,
+        facts=[{"device": "box", "connected": True}, {"device": "hubhost", "connected": True}],
+    )
+]
+
+WAKE_CLAIM_FIFTY_KB = [
+    ("sends", _repeat("I sent a wake packet to the box and ")),
+    ("negations", _repeat("the box did not wake up, ")),
+    ("hedges", _repeat("if the box wakes, once hubhost is awake, ")),
+    ("backed_claims", _repeat("The box is awake now. hubhost came back online. ")),
+    ("i_then_padding", lambda n: "I" + " " * (n - 20) + "woke the box"),
+    ("name_then_padding", lambda n: "the box" + " " * (n - 20) + "is awake"),
+    ("names_no_space", _repeat("box,hubhost,")),
+    ("woke_words", _repeat("woke woken awake came back up ")),
+    # T5-T6 fix: hopes and future times, each read to its end.
+    ("hopes", _repeat("Fingers crossed the box is back up, with luck hubhost is awake, ")),
+    ("soon_tails", _repeat("the box is back up soon, hubhost is awake in a few seconds, ")),
+    ("name_then_soon_padding", lambda n: "the box is awake" + " " * (n - 30) + "soon"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", WAKE_CLAIM_FIFTY_KB, ids=[c[0] for c in WAKE_CLAIM_FIFTY_KB]
+)
+def test_the_wake_claim_guard_reads_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"wake_claim {label}",
+        lambda r: guards.wake_claim_check(r, _WAKE_BACKED, _WAKE_NAMES, purpose="chat"),
+        build,
+    )
+
+
+# T6 VERIFY 2: the past-time cut runs only on an UNBACKED claim, so these
+# shapes are read with no spans — every clause a claim the cut must scan.
+WAKE_CLAIM_PAST_FIFTY_KB = [
+    ("dated_claims", _repeat("The box woke up on Oct 3, 10/3, on the 3rd, 3 October; ")),
+    ("weekday_claims", _repeat("Tuesdays the box woke up and mondays hubhost is awake ")),
+    ("date_digits_then_claim", lambda n: "3/3 3 oct 3rd " * (n // 14) + "the box is awake"),
+    ("this_then_claim", lambda n: "this this " * (n // 10) + "the box is awake"),
+    ("undated_claims", _repeat("The box woke up after the packet and hubhost is awake ")),
+]
+
+
+@pytest.mark.parametrize(
+    "label,build", WAKE_CLAIM_PAST_FIFTY_KB, ids=[c[0] for c in WAKE_CLAIM_PAST_FIFTY_KB]
+)
+def test_the_wake_claim_past_time_cut_reads_50_kb_in_linear_time(label, build):
+    _assert_linear(
+        f"wake_claim past {label}",
+        lambda r: guards.wake_claim_check(r, [], _WAKE_NAMES, purpose="chat"),
+        build,
+    )
+
+
+def test_the_sweep_reaches_the_wake_claim_patterns():
+    """Every module Pattern the wake-claim guard reads is named _WAKE_CLAIM_*,
+    and the global padding sweep times each one (the count pin above moved
+    with them, deliberately)."""
+    names = [
+        name
+        for name in dir(guards)
+        if name.startswith("_WAKE_CLAIM") and isinstance(getattr(guards, name), re.Pattern)
+    ]
+    assert names, "the wake-claim guard has no _WAKE_CLAIM_* pattern"
+    swept = _every_pattern().values()
+    for name in names:
+        assert any(p is getattr(guards, name) for p in swept), name

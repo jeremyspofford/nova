@@ -109,6 +109,13 @@ EXCUSED: dict[str, str] = {
         "run things as root on your computer' has no row yet — device_run's "
         "elevated cannot names this tool"
     ),
+    # S46a T5 (2026-10-11): no row reads "I can't wake your computer" today;
+    # a row belongs with paired negatives in test_capability_guard.py — a
+    # stated follow-up, like device_edit_file's.
+    "machine_wake": (
+        "sends a wake packet through the hub's agent (net.wake) and measures the "
+        "answer; 'I can't wake your computer' has no row yet"
+    ),
     "run_skill": (
         "acts only through the registered tools its steps call, each of which "
         "is classified here on its own"

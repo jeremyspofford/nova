@@ -779,6 +779,8 @@ KNOWN_GUARD_NAMES_TODAY = frozenset(
         "mcp_server_denial",
         "mcp_server_claim",
         "own_tool_handback",
+        # S46a T6: chat._append_class_claims -> _file_claim_span("wake_claim")
+        "wake_claim",
         # app/beats.py (her proactive digest turns)
         "observation",
         "delivery_claim",

@@ -308,6 +308,7 @@ everyday set; the admin path (`admin.*`), `daemon.update` and the box
 | `apps.list`     | list launchable apps                                         |
 | `apps.launch`   | launch an app (needs a session; see above)                  |
 | `shell.exec`    | run **argv** (no shell), 64 KiB output cap, honors a timeout |
+| `net.wake`      | send a Wake-on-LAN magic packet `{mac, broadcast}`: 3 to the subnet-directed broadcast and 3 to 255.255.255.255, UDP 9, from the interface of this machine that owns that broadcast (a broadcast no interface owns is refused, never guessed); the result says what was sent where and when — sending is not waking, so it never says the target woke (core measures that, S46a). The MAC is never in the output |
 | `facts.refresh` | probe again (how it runs, elevation, WSL — see Facts), send a fresh `facts` frame on this connection, then answer — core has no caller yet (S46a is the first) |
 
 `shell.exec` is **argv-only** — there is no string-to-shell path anywhere. A

@@ -2090,3 +2090,108 @@ async def test_T8_C6_unreadable_agents_sit_in_the_device_slot(remote):
         "- remote dell-kev (100.122.40.93): failing; "
         f"{machines_tool.model_machines.AGENTS_UNREAD_DEVICE}. Reason: {T8_KEV_NOTE}"
     )
+
+
+# -- S46a T6: each agent's last wake attempt, in one line ------------------------
+
+SENT_AT = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+
+
+def _wake_view(last_wake):
+    view = device_facts.agent_view(
+        name="PC-ONE",
+        platform="windows",
+        hostname="PC-ONE",
+        connected=False,
+        last_seen=AT,
+        facts=WINDOWS,
+        facts_at=AT,
+        last_wake=last_wake,
+    )
+    return view
+
+
+def _last_wake(outcome, *, sent=True, answered=None, serving=None, reason=None, deadline=120):
+    return {
+        "outcome": outcome,
+        "trigger": "tool",
+        "at": SENT_AT.isoformat(),
+        "sent_at": SENT_AT.isoformat() if sent else None,
+        "deadline_s": deadline if sent else None,
+        "answered_after_s": answered,
+        "serving_after_s": serving,
+        "reason": reason,
+    }
+
+
+async def _wake_line(mount_peers, _plant, last_wake) -> tuple[str, list[str], int]:
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_wake_view(last_wake)])
+    said = await _call("machine_status", {})
+    lines = said.splitlines()
+    at = next(i for i, line in enumerate(lines) if line.startswith("  agent PC-ONE ("))
+    wake_lines = [line for line in lines[at + 1 :] if line.startswith("    last wake:")]
+    return said, wake_lines, at
+
+
+STAMP = "2026-10-11 12:00:00 UTC"
+LAST_WAKE_WORDS = [
+    (
+        "ready",
+        _last_wake("ready", answered=41, serving=58),
+        f"    last wake: ready — sent at {STAMP}; its agent answered after 41 s, its model "
+        "after 58 s",
+    ),
+    (
+        "answered",
+        _last_wake("answered", answered=41),
+        f"    last wake: answered — sent at {STAMP}; its agent answered after 41 s, "
+        "no model answered within 120 s",
+    ),
+    (
+        "no_answer",
+        _last_wake("no_answer"),
+        f"    last wake: no answer — sent at {STAMP}; nothing answered within 120 s",
+    ),
+    (
+        "open",
+        _last_wake(None),
+        f"    last wake: in flight — sent at {STAMP}; nothing has answered yet, decided by "
+        "2026-10-11 12:02:00 UTC",
+    ),
+    (
+        "relay_cannot",
+        _last_wake("relay_cannot", sent=False, reason="no connected agent shares PC-ONE's network"),
+        f"    last wake: not sent at {STAMP} — no connected agent shares PC-ONE's network",
+    ),
+    (
+        "not_asleep",
+        _last_wake("not_asleep", sent=False, reason="PC-ONE's agent was connected"),
+        f"    last wake: not needed at {STAMP} — PC-ONE's agent was connected",
+    ),
+    ("never", None, "    last wake: never tried"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,last_wake,expected", LAST_WAKE_WORDS, ids=[c[0] for c in LAST_WAKE_WORDS]
+)
+async def test_status_states_each_agents_last_wake_in_one_line(
+    label, last_wake, expected, mount_peers, _plant
+):
+    said, wake_lines, _at = await _wake_line(mount_peers, _plant, last_wake)
+    assert wake_lines == [expected], said
+    # Never "woke": an answer is an answer, a send is a send.
+    assert "woke" not in wake_lines[0]
+    # The agent's own line is still read back whole.
+    assert machines_tool.device_line_shown("PC-ONE", said, len(said))
+
+
+async def test_status_says_nothing_of_wakes_when_the_ledger_was_not_read(mount_peers, _plant):
+    """An agent view the plant built without reading the ledger (an eval's
+    declared device, a DB-free plant) carries no last_wake key: nothing is
+    said, never "never tried"."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("PC-ONE", "windows", WINDOWS)])
+    said = await _call("machine_status", {})
+    assert "last wake" not in said
