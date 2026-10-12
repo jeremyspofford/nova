@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { Radar } from 'lucide-react'
-import { Input, Section, Toggle } from '../../components/ui'
+import { Input, Section, Toggle, Banner } from '../../components/ui'
 import { putSetting as apiPutSetting } from '../../lib/api'
 import { InlineSave, storedFrom, type SaveMessage } from './shared'
 
@@ -181,13 +181,12 @@ export function ProactiveSection({
 
   const fieldError = (key: string, testid: string, lead: string) =>
     errors[key] ? (
-      <div
+      <Banner
         role="alert"
         data-testid={testid}
-        className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
       >
         {lead} {errors[key]}
-      </div>
+      </Banner>
     ) : null
 
   return (
@@ -211,13 +210,13 @@ export function ProactiveSection({
       </div>
 
       {!enabled && (
-        <div
+        <Banner
           data-testid="proactive-off"
-          className="rounded-sm border border-warning/30 bg-warning-dim px-3 py-2 text-caption text-content-primary"
+          tone="warning" size="sm"
         >
           The engine is off — she checks nothing and delivers nothing. The two settings below are
           still stored while it is off: set them the way you want them, then switch it on.
-        </div>
+        </Banner>
       )}
 
       <div className="space-y-2">

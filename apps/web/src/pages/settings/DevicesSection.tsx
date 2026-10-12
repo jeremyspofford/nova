@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Laptop, Plus, RefreshCw } from 'lucide-react'
-import { Badge, Button, EmptyState, Input, Section, Skeleton, StatusDot } from '../../components/ui'
+import { Badge, Button, EmptyState, Input, Section, Skeleton, StatusDot, Banner } from '../../components/ui'
 import {
   getAgentManifest as apiGetAgentManifest,
   getNetworkAddress as apiGetNetworkAddress,
@@ -91,9 +91,6 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-const bannerClass =
-  'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
-
 export function DevicesSection({
   api = DEFAULT_API,
   pollIntervalMs = POLL_INTERVAL_MS,
@@ -176,9 +173,9 @@ export function DevicesSection({
       description="Machines Nova can act on. Each is a key you paired, and a paired device can do everything you can — revoke it to end that."
     >
       {loadError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Could not load devices: {loadError}
-        </div>
+        </Banner>
       )}
 
       {devices === null ? (

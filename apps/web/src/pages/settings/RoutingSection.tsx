@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Star, Trash2, Waypoints, X } from 'lucide-react'
-import { Badge, Button, ConfirmDialog, Section, Select, Toggle } from '../../components/ui'
+import { Badge, Button, ConfirmDialog, Section, Select, Toggle, Banner } from '../../components/ui'
 import { InlineSave, storedFrom, type SaveMessage } from '../settings/shared'
 import {
   clearWall as apiClearWall,
@@ -417,9 +417,9 @@ export function RoutingSection({
     >
       <div className="space-y-4" data-testid="routing-section">
         {error && (
-          <div role="alert" className="rounded-sm border border-danger/30 bg-danger-dim px-3 py-2 text-caption text-danger">
+          <Banner role="alert" size="sm">
             {error}
-          </div>
+          </Banner>
         )}
         {catalogError && (
           <p role="status" className="text-caption text-content-tertiary" data-testid="routing-catalog-error">
@@ -852,7 +852,6 @@ function RoleEditor({
         <div className="mt-2 space-y-1" data-testid={`route-${role}-router`}>
           <Toggle
             id={`jev-router-${role}`}
-            size="sm"
             checked={router.on}
             disabled={routerDisabled}
             onChange={on => void flipRouter(on)}
@@ -980,7 +979,7 @@ function DecisionSwitches({
         return (
           <div key={key} className="space-y-1" data-testid={`decision-switch-${key}`}>
             <div className="flex flex-wrap items-center gap-2">
-              <Toggle id={`decision-switch-${key}`} size="sm" checked={def.value === true} disabled={busy} onChange={on => void flip(key, on)} label={label} />
+              <Toggle id={`decision-switch-${key}`} checked={def.value === true} disabled={busy} onChange={on => void flip(key, on)} label={label} />
               <span data-testid="decision-switch-stage">
                 <Badge size="sm" color={stage === 'alpha' ? 'warning' : 'info'}>
                   {stage}
@@ -1023,7 +1022,7 @@ function HubLastResortSwitch({ def, onSwitch }: { def: SettingDef; onSwitch: (on
   return (
     <div className="mt-3 space-y-1" data-testid="hub-last-resort-switch">
       <div className="flex flex-wrap items-center gap-2">
-        <Toggle id="hub-last-resort-switch" size="sm" checked={def.value === true} disabled={busy} onChange={on => void flip(on)} label={HUB_LAST_RESORT_LABEL} />
+        <Toggle id="hub-last-resort-switch" checked={def.value === true} disabled={busy} onChange={on => void flip(on)} label={HUB_LAST_RESORT_LABEL} />
       </div>
       <p className="text-caption text-content-tertiary" data-testid="hub-last-resort-notice">
         {def.description}

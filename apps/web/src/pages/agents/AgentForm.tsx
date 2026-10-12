@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
-import { Badge, Button, Checkbox, Input, Sheet, Skeleton, Textarea, Toggle } from '../../components/ui'
+import { Badge, Button, Checkbox, Input, Sheet, Skeleton, Textarea, Toggle, Banner } from '../../components/ui'
 import {
   listSkills as apiListSkills,
   listTools as apiListTools,
@@ -44,9 +44,6 @@ export const HIDDEN_TOOLS: ReadonlySet<string> = new Set(['delegate_to_agent'])
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
-
-const bannerClass =
-  'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 interface Draft {
   name: string
@@ -346,9 +343,9 @@ function AgentFormBody({
       </p>
 
       {saveError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Not saved — {saveError}
-        </div>
+        </Banner>
       )}
 
       <div className="flex items-center gap-2">

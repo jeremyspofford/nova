@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Target } from 'lucide-react'
-import { Section, Toggle } from '../../components/ui'
+import { Section, Toggle, Banner } from '../../components/ui'
 import { putSetting } from '../../lib/api'
 
 /**
@@ -67,12 +67,11 @@ export function ResponseQualitySection({
         <p className="text-caption text-content-secondary">{DISCLAIMER}</p>
       </div>
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
         >
           Could not save that setting: {error}
-        </div>
+        </Banner>
       )}
     </Section>
   )

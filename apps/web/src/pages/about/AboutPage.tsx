@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Download, ExternalLink, Laptop, MonitorSmartphone, RefreshCw, Server, Smartphone } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, Card, StatusDot } from '../../components/ui'
+import { Badge, Button, Card, StatusDot, Banner } from '../../components/ui'
 import {
   getAbout as apiGetAbout,
   reasonOf,
@@ -97,9 +97,9 @@ export function AboutPage({
       />
 
       {error && (
-        <div role="alert" className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger">
+        <Banner role="alert">
           {error}
-        </div>
+        </Banner>
       )}
 
       {about && (
@@ -246,9 +246,9 @@ function UpdatesCard({ about, onUpdate, onCheck, checking, starting, startError,
           </div>
         )}
         {startError && (
-          <div role="alert" className="rounded-sm border border-danger/30 bg-danger-dim px-3 py-2 text-compact text-danger">
+          <Banner role="alert" size="sm">
             The update did not start: {startError}
-          </div>
+          </Banner>
         )}
         {last && <LastUpdate about={about} restarting={restarting} />}
         {u.reason && <p className="text-compact text-content-secondary">{u.reason}</p>}

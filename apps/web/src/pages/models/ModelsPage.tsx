@@ -17,8 +17,7 @@ import {
   Skeleton,
   Table,
   Tabs,
-  type TableColumn,
-} from '../../components/ui'
+  type TableColumn, Banner } from '../../components/ui'
 import {
   getCatalog as apiGetCatalog,
   getHfRepo as apiGetHfRepo,
@@ -151,8 +150,6 @@ export function listsInstalled(cat: Catalog, target: string): boolean {
   const wanted = new Set([target, `${target}:latest`])
   return cat.rows.some(r => r.kind === 'local' && r.installed === true && r.provider === LOCAL_PROVIDER && wanted.has(r.model))
 }
-
-const bannerClass = 'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 const TABS: { id: CatalogTab; label: string }[] = [
   { id: 'installed', label: 'Installed' },
@@ -560,33 +557,25 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
     return (
       <div className="flex flex-wrap gap-1">
         {chips.map(chip => (
-          <span
+          <Badge
             key={`cap-${chip.key}`}
+            size="sm"
             title={`${chip.basis}${chip.note ? ` — ${chip.note}` : ''}`}
             data-basis={chip.basis}
-            className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
-              !chip.value
-                ? 'border border-border text-content-tertiary line-through'
-                : chip.basis === 'inferred'
-                  ? 'border border-dashed border-warning text-warning'
-                  : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
-            }`}
+            color={!chip.value ? 'neutral' : chip.basis === 'inferred' ? 'warning' : 'success'}
+            look={!chip.value ? 'struck' : chip.basis === 'inferred' ? 'dashed' : 'filled'}
           >
             {chip.label}
-          </span>
+          </Badge>
         ))}
         {entries.map(([key, fact]) => (
-          <span
+          <Badge
             key={`suit-${key}`}
+            size="sm"
             title={`${fact.basis} — ${fact.source}${fact.note ? ` — ${fact.note}` : ''}`}
             data-basis={fact.basis}
-            className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
-              fact.basis === 'inferred'
-                ? 'border border-dashed border-warning text-warning'
-                : fact.basis === 'measured'
-                  ? 'bg-info-dim text-blue-700 dark:text-blue-400'
-                  : 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300'
-            }`}
+            color={fact.basis === 'inferred' ? 'warning' : fact.basis === 'measured' ? 'info' : 'neutral'}
+            look={fact.basis === 'inferred' ? 'dashed' : 'filled'}
           >
             {fact.basis === 'measured' ? (
               <Link to="/quality" className="underline decoration-dotted" title="measured by the quality suite — open the runs">
@@ -595,7 +584,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
             ) : (
               tagLabel(key.split(':')[0], fact)
             )}
-          </span>
+          </Badge>
         ))}
       </div>
     )
@@ -622,7 +611,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   // The one action a row is for (Use or Pull) in words; the rest as icons
   // with their names in aria-label and title, so the column stays narrow.
   const actionsCell = (row: CatalogRow) => (
-    <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
+    <div className="flex flex-wrap items-center justify-end gap-0.5 whitespace-nowrap">
       {actionsOf(row).includes('use') && !isCurrent(row, chatModel) && (
         <Button
           size="sm"
@@ -660,7 +649,9 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           onClick={() => void probe(row)}
           aria-label={`probe ${row.id}`}
           title="Probe: run a 1-token completion and record how much VRAM the model really takes"
-        />
+        >
+          <TouchLabel>Probe</TouchLabel>
+        </Button>
       )}
       {actionsOf(row).includes('check_update') && (
         <Button
@@ -671,9 +662,13 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           onClick={() => void checkUpdate(row)}
           aria-label={`check updates ${row.id}`}
           title="Check for updates: compare the installed weights with what the source ships now — never pulls"
-        />
+        >
+          <TouchLabel>Check updates</TouchLabel>
+        </Button>
       )}
-      <Button size="sm" variant="ghost" icon={<Info size={13} />} onClick={() => setDetails(row)} aria-label={`details ${row.id}`} title="Details" />
+      <Button size="sm" variant="ghost" icon={<Info size={13} />} onClick={() => setDetails(row)} aria-label={`details ${row.id}`} title="Details">
+        <TouchLabel>Details</TouchLabel>
+      </Button>
       {actionsOf(row).includes('remove') && (
         <Button
           size="sm"
@@ -682,7 +677,9 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           onClick={() => setRemoving(row)}
           aria-label={`remove ${row.id}`}
           title="Remove: delete this model from the machine's ollama (verified against its own list)"
-        />
+        >
+          <TouchLabel>Remove</TouchLabel>
+        </Button>
       )}
     </div>
   )
@@ -766,14 +763,14 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       />
 
       {loadError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Could not read the catalogue: {loadError}
-        </div>
+        </Banner>
       )}
       {actionError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           {actionError}
-        </div>
+        </Banner>
       )}
       {actionNote && (
         <p role="status" className="text-caption text-warning" data-testid="pick-note">
@@ -888,9 +885,9 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
             </div>
             {hfLoading && <Skeleton lines={2} />}
             {hfError && (
-              <div role="alert" className={bannerClass}>
+              <Banner>
                 {hfError}
-              </div>
+              </Banner>
             )}
             {hfPage && (
               <p className="text-caption text-content-tertiary">
@@ -934,9 +931,9 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               </Button>
             </form>
             {resolveError && (
-              <div role="alert" className={bannerClass}>
+              <Banner>
                 {resolveError}
-              </div>
+              </Banner>
             )}
             {resolved && (
               <div className="text-caption" data-testid="resolved-preview">
@@ -1109,3 +1106,14 @@ function QuantMenu({ options, onPick }: { options: PullOption[] | 'loading' | st
 }
 
 export const MODELS_NAV = { to: '/models', label: 'Models', icon: Boxes }
+
+/**
+ * An icon button's name, shown only on a touch screen (`touch:` is
+ * `@media (pointer: coarse)`): there a hover tooltip never appears, so four
+ * bare icons on a phone card were four guesses (UI review R9). Under a
+ * mouse the icon stays compact and the title explains it.
+ */
+function TouchLabel({ children }: { children: string }) {
+  return <span className="hidden touch:inline">{children}</span>
+}
+

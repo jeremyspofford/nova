@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowLeft, Download, ExternalLink, FolderOpen } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { CodeView, Markdown } from '../../components/Markdown'
-import { Button, Code, EmptyState, Skeleton } from '../../components/ui'
+import { Button, Code, EmptyState, Skeleton, Banner } from '../../components/ui'
 import {
   getWorkspaceFiles as apiGetWorkspaceFiles,
   getWorkspaceFile as apiGetWorkspaceFile,
@@ -120,12 +120,11 @@ export function FilesPage({
             {back}
             {detail?.status === 'loading' && <Skeleton lines={6} />}
             {detail?.status === 'error' && (
-              <div
+              <Banner
                 role="alert"
-                className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
               >
                 Could not open {selected}: {detail.reason}
-              </div>
+              </Banner>
             )}
           </div>
         )}
@@ -138,12 +137,12 @@ export function FilesPage({
       <PageHeader title="Files" description="What Nova has written into her workspace." />
 
       {list.status === 'error' && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load files: {list.reason}
-        </div>
+        </Banner>
       )}
 
       {list.status === 'loading' && <Skeleton lines={6} />}

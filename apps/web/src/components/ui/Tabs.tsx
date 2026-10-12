@@ -30,6 +30,7 @@ export function Tabs({ tabs, activeTab, onChange, className }: TabsProps) {
             key={tab.id}
             type="button"
             onClick={() => onChange(tab.id)}
+            aria-pressed={active}
             className={clsx(
               'px-3 py-2 text-compact font-medium whitespace-nowrap transition-colors duration-fast',
               'border-b-2 -mb-px',

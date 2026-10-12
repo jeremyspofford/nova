@@ -604,3 +604,17 @@ describe('ModelsPage — source badges (R12)', () => {
     expect(failed.getAttribute('title')).toBe('the listing was refused (401): invalid x-api-key')
   })
 })
+
+describe('ModelsPage — labelled actions on touch (R9 leftover)', () => {
+  it('every icon-only action carries a visible label for touch screens, where a hover tooltip never shows', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^details / }).length).toBeGreaterThan(0))
+    for (const name of [/^details /, /^probe /, /^remove /]) {
+      const btn = screen.getAllByRole('button', { name })[0]
+      const label = btn.querySelector('span.touch\\:inline')
+      expect(label, `${name} has a touch label`).not.toBeNull()
+      expect(label!.className).toContain('hidden')
+      expect(label!.textContent!.trim().length).toBeGreaterThan(2)
+    }
+  })
+})

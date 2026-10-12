@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Skeleton } from '../../components/ui'
+import { Skeleton, Banner } from '../../components/ui'
 import { useAuth } from '../../stores/auth-store'
 import { useChatStore } from '../../stores/chat-store'
 import { getSettings, putSetting, settingValue, type SettingDef } from '../../lib/api'
@@ -157,12 +157,12 @@ export function SettingsPage() {
       <PageHeader title={current.label} description={current.blurb} />
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not read the settings: {error}
-        </div>
+        </Banner>
       )}
 
       <div className="space-y-6" data-testid="settings-panel">

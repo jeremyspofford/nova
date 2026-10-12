@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, Bot, FileText, Pencil, ScrollText, Trash2 } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, ConfirmDialog, EmptyState, Skeleton, Tabs } from '../../components/ui'
+import { Badge, Button, ConfirmDialog, EmptyState, Skeleton, Tabs, Banner } from '../../components/ui'
 import {
   ApiError,
   ACTIVITY_PAGE_SIZE,
@@ -83,8 +83,6 @@ type Load<T> = { status: 'loading' } | { status: 'error'; reason: string } | { s
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
-
-const bannerClass = 'mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 export function AgentPage({
   name,
@@ -314,14 +312,14 @@ export function AgentPage({
       </p>
 
       {error && (
-        <div role="alert" className={bannerClass}>
+        <Banner className="mb-6">
           Could not load {name}: {error}
-        </div>
+        </Banner>
       )}
       {actionError && (
-        <div role="alert" className={bannerClass}>
+        <Banner className="mb-6">
           {actionError}
-        </div>
+        </Banner>
       )}
       {saved && (
         <div role="status" data-testid="agent-saved" className="mb-6 rounded-sm border border-success/30 bg-success-dim px-4 py-3 text-compact text-success">

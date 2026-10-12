@@ -27,7 +27,7 @@ export function Code({
     return (
       <code
         className={clsx(
-          'font-mono text-mono-sm bg-surface-elevated px-1 py-0.5 rounded-xs',
+          'font-mono text-mono-sm bg-surface-selected px-1 py-0.5 rounded-xs',
           className,
         )}
       >

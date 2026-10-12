@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Server } from 'lucide-react'
-import { Badge, Button, Section, Skeleton, Toggle } from '../../components/ui'
+import { Badge, Button, Section, Skeleton, Toggle, Banner } from '../../components/ui'
 import { getMachines as apiGetMachines, setMachineServing as apiSetMachineServing, type Machine } from '../../lib/api'
 import type { SemanticColor } from '../../lib/design-tokens'
 import { formatBytes } from '../../lib/pullStream'
@@ -37,8 +37,6 @@ interface MachinesApi {
 }
 
 const DEFAULT_API: MachinesApi = { getMachines: apiGetMachines, setMachineServing: apiSetMachineServing }
-
-const bannerClass = 'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 /** The text colour of a state that is written out as a line, not a badge. */
 const STATE_TEXT: Record<SemanticColor, string> = {
@@ -109,9 +107,9 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
       description="Where Nova's models run. Chat routing passes over a machine that is switched off: the next link in the role's chain answers instead, and a role with no other link fails and says why."
     >
       {loadError && (
-        <div role="alert" className={bannerClass}>
+        <Banner>
           Could not read the machines: {loadError}
-        </div>
+        </Banner>
       )}
       {/* Refresh is there whenever there is something to look at again: a
           list, an empty list, or a failed read (C4). */}

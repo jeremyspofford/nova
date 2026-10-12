@@ -2,7 +2,7 @@ import { HumanText } from '../../lib/humanText'
 import { useCallback, useEffect, useState } from 'react'
 import { BookOpen, Plus } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, EmptyState, Skeleton, Textarea } from '../../components/ui'
+import { Badge, Button, EmptyState, Skeleton, Textarea, Banner } from '../../components/ui'
 import {
   createSkill as apiCreateSkill,
   deleteSkill as apiDeleteSkill,
@@ -98,12 +98,12 @@ export function SkillsPage({
       />
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load skills: {error}
-        </div>
+        </Banner>
       )}
 
       {creating && (

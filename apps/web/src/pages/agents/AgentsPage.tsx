@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Bot, Plus, X } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
+import { Badge, Button, EmptyState, Skeleton, Banner } from '../../components/ui'
 import {
   createAgent as apiCreateAgent,
   listAgents as apiListAgents,
@@ -191,12 +191,12 @@ export function AgentsPage({
       )}
 
       {error && (
-        <div
+        <Banner
           role="alert"
-          className="mb-6 rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+          className="mb-6"
         >
           Could not load agents: {error}
-        </div>
+        </Banner>
       )}
 
       {agents === null ? (

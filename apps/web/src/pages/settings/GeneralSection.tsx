@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Globe } from 'lucide-react'
-import { Section, Select } from '../../components/ui'
+import { Section, Select, Banner } from '../../components/ui'
 import { putSetting } from '../../lib/api'
 import {
   TIMEZONE_SETTING,
@@ -111,22 +111,21 @@ export function GeneralSection({
         </p>
 
         {timezoneIsDefault && !dirty && (
-          <div
+          <Banner
             data-testid="general-timezone-default"
-            className="rounded-sm border border-warning/30 bg-warning-dim px-3 py-2 text-caption text-content-primary"
+            tone="warning" size="sm"
           >
             Still the default. Nova treats it as unset: a reminder at a clock time is refused
             until a zone is chosen here. Relative ones (&ldquo;in 20 minutes&rdquo;) work either way.
-          </div>
+          </Banner>
         )}
 
         {refusal && (
-          <div
+          <Banner
             role="alert"
-            className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
           >
             Could not save the timezone: {refusal}
-          </div>
+          </Banner>
         )}
 
         <InlineSave dirty={dirty} saving={saving} onSave={save} onReset={reset} message={message} />

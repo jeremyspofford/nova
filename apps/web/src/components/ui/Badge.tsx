@@ -26,24 +26,41 @@ const sizeStyles = {
   md: 'h-6 px-2 text-caption',
 }
 
+// Outlined looks (2026-10-11, for the catalog's Strengths chips, which
+// were hand-rolled): `dashed` marks an inferred fact, `struck` a stated "no".
+const outlineStyles: Record<SemanticColor, string> = {
+  neutral: 'border-border text-content-tertiary',
+  accent: 'border-accent text-accent',
+  success: 'border-success text-success',
+  warning: 'border-warning text-warning',
+  danger: 'border-danger text-danger',
+  info: 'border-info text-info',
+}
+
 export function Badge({
   color = 'neutral',
   size = 'md',
+  look = 'filled',
   dot,
   className,
   children,
+  ...rest
 }: {
   color?: SemanticColor
   size?: 'sm' | 'md'
+  look?: 'filled' | 'dashed' | 'struck'
   dot?: boolean
   className?: string
   children: React.ReactNode
-}) {
+} & Omit<React.HTMLAttributes<HTMLSpanElement>, 'className' | 'color'> & { [data: `data-${string}`]: string | undefined }) {
   return (
     <span
+      {...rest}
       className={clsx(
         'inline-flex items-center gap-1 rounded-xs font-medium',
-        colorStyles[color],
+        look === 'filled'
+          ? colorStyles[color]
+          : clsx('border', look === 'dashed' && 'border-dashed', look === 'struck' && 'line-through', outlineStyles[color]),
         sizeStyles[size],
         className,
       )}

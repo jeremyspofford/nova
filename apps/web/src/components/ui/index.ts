@@ -38,6 +38,7 @@ export type { ToastVariant } from './Toast'
 export { Tooltip } from './Tooltip'
 export { Popover } from './Popover'
 export { ConfirmDialog } from './ConfirmDialog'
+export { Banner } from './Banner'
 export { EmptyState } from './EmptyState'
 export { Skeleton } from './Skeleton'
 
