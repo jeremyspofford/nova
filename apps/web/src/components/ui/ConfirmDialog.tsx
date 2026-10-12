@@ -55,6 +55,9 @@ export function ConfirmDialog({
             variant={destructive ? 'danger' : 'primary'}
             onClick={handleConfirm}
             disabled={!canConfirm}
+            // Focused on open, so a dialog raised from the keyboard (a
+            // session's Alt+Shift+Backspace) is answered with Enter or Esc.
+            autoFocus
           >
             {confirmLabel}
           </Button>

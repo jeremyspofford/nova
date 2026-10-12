@@ -57,6 +57,9 @@ export function Modal({ open, onClose, size = 'md', title, children, footer }: M
 
       {/* Content */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title || undefined}
         className={clsx(
           'relative w-full bg-surface-card rounded-xl border border-border-subtle shadow-lg glass-overlay dark:border-white/[0.12]',
           'transform transition-transform',

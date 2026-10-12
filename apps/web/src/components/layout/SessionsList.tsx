@@ -14,6 +14,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { ChatSession } from '../../lib/api'
+import { currentPlatform } from '../../lib/devicePlatform'
 import { SESSION_DRAG_TYPE, useSessions } from '../../stores/sessions-store'
 import { useToast } from '../ToastProvider'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -28,6 +29,36 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
  * never claims a rename, archive or delete that core did not confirm. A
  * failure is said in a toast with core's own reason.
  */
+/**
+ * Session hotkeys (2026-10-12): Alt+Shift (⌥⇧ on a Mac) plus a key, read
+ * from `code` so a Mac's Option-symbols (Å, ‰) do not change the key.
+ * Alt+Shift, not Ctrl+Shift: the browser keeps Ctrl+Shift+A (tab search)
+ * and Ctrl+Shift+R (reload). Every one but New chat acts on the session
+ * being viewed, and only while the chat is on screen; Delete still asks.
+ */
+export const SESSION_HOTKEYS = {
+  new: { code: 'KeyN', key: 'N' },
+  rename: { code: 'KeyR', key: 'R' },
+  archive: { code: 'KeyA', key: 'A' },
+  main: { code: 'KeyM', key: 'M' },
+  delete: { code: 'Backspace', key: '⌫' },
+} as const
+export type SessionHotkey = keyof typeof SESSION_HOTKEYS
+
+/** How a shortcut is written on this machine: ⌥⇧A on a Mac, Alt+Shift+A elsewhere. */
+export function hotkeyHint(action: SessionHotkey): string {
+  const k = SESSION_HOTKEYS[action].key
+  return currentPlatform().os === 'mac' ? `⌥⇧${k}` : `Alt+Shift+${k}`
+}
+
+function hotkeyOf(e: KeyboardEvent): SessionHotkey | null {
+  if (e.defaultPrevented || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return null
+  for (const [action, def] of Object.entries(SESSION_HOTKEYS)) {
+    if (e.code === def.code || (def.code === 'Backspace' && e.code === 'Delete')) return action as SessionHotkey
+  }
+  return null
+}
+
 /**
  * "New chat", the first row of the sidebar and the phone's drawer — as in
  * Claude's own sidebar: an action, drawn with its own filled mark so it never
@@ -46,6 +77,7 @@ function NewChatButtonBody({ onNavigate, touch = false }: { onNavigate?: () => v
     <button
       type="button"
       data-testid="new-session"
+      title={`New chat (${hotkeyHint('new')})`}
       onClick={() => {
         void sessions.newSession().then(onNavigate, (err: unknown) =>
           addToast({
@@ -84,6 +116,7 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
   const { addToast } = useToast()
   const [showArchived, setShowArchived] = useState(false)
   const [confirming, setConfirming] = useState<ChatSession | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
 
   const fail = (what: string) => (err: unknown) =>
     addToast({
@@ -101,6 +134,34 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
     : undefined
   const main = sessions.sessions.filter(s => s.main)
   const recents = sessions.sessions.filter(s => !s.main)
+  // The keyboard. Only the sidebar's list listens (the phone drawer's copy is
+  // `touch`), so one press is one action; the sidebar is always mounted,
+  // hidden below lg by CSS, so the keys work at every width.
+  const current = sessions.sessions.find(s => s.id === focusedId) ?? null
+  const keyState = useRef({ current, sessions, fail })
+  keyState.current = { current, sessions, fail }
+  useEffect(() => {
+    if (touch) return
+    const onKey = (e: KeyboardEvent) => {
+      const action = hotkeyOf(e)
+      if (!action) return
+      const { current: target, sessions: store, fail: failed } = keyState.current
+      if (action === 'new') {
+        e.preventDefault()
+        void store.newSession().catch(failed('start a session'))
+        return
+      }
+      if (!target) return
+      e.preventDefault()
+      if (action === 'rename') setRenamingId(target.id)
+      else if (action === 'archive') void store.archive(target.id).catch(failed('archive the session'))
+      else if (action === 'main' && !target.main) void store.makeMain(target.id).catch(failed('make it the main session'))
+      else if (action === 'delete') setConfirming(target)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [touch])
+
   const row = (session: ChatSession) => (
     <SessionRow
       key={session.id}
@@ -114,6 +175,8 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
         onNavigate?.()
       }}
       onDelete={() => setConfirming(session)}
+      renaming={renamingId === session.id}
+      setRenaming={on => setRenamingId(on ? session.id : null)}
       fail={fail}
     />
   )
@@ -159,7 +222,7 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
       )}
 
       {recents.length > 0 && (
-        <div data-testid="sessions-recents" className={main.length > 0 ? 'mt-4' : undefined}>
+        <div data-testid="sessions-recents" className={main.length > 0 ? 'mt-6' : undefined}>
           <div className={heading}>Recents</div>
           <ul className="space-y-0.5">{recents.map(row)}</ul>
         </div>
@@ -248,6 +311,8 @@ function SessionRow({
   touch,
   onOpen,
   onDelete,
+  renaming,
+  setRenaming,
   fail,
 }: {
   session: ChatSession
@@ -258,12 +323,18 @@ function SessionRow({
   touch: boolean
   onOpen: () => void
   onDelete: () => void
+  /** Lifted to the list so a hotkey can open it (Alt+Shift+R). */
+  renaming: boolean
+  setRenaming: (on: boolean) => void
   fail: (what: string) => (err: unknown) => void
 }) {
   const sessions = useSessions()!
   const [menu, setMenu] = useState(false)
-  const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(session.title ?? '')
+  // However renaming started (menu or hotkey), it starts from the real title.
+  useEffect(() => {
+    if (renaming) setDraft(session.title ?? '')
+  }, [renaming, session.title])
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -317,6 +388,7 @@ function SessionRow({
     onClick: () => void,
     testid: string,
     danger = false,
+    hint?: string,
   ) => (
     <button
       type="button"
@@ -331,7 +403,8 @@ function SessionRow({
       )}
     >
       {icon}
-      {label}
+      <span className="flex-1">{label}</span>
+      {hint && <kbd className="font-sans text-micro text-content-tertiary">{hint}</kbd>}
     </button>
   )
 
@@ -394,31 +467,36 @@ function SessionRow({
           <MoreHorizontal size={14} />
         </button>
         {menu && (
+          // Solid, not glass: inside the sidebar (itself a backdrop-filter)
+          // a translucent menu could not blur what was behind it, so the
+          // next rows read straight through it (2026-10-12). w-52 keeps it
+          // inside a 240px sidebar with the shortcut column.
           <div
             role="menu"
-            className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-surface-card p-1 shadow-lg glass-overlay dark:border-white/[0.10]"
+            className="absolute right-0 top-full z-50 mt-1 w-52 whitespace-nowrap rounded-lg border border-border bg-surface-elevated p-1 shadow-lg"
           >
             {sessions.canSplit &&
               !open &&
               item('Open in split view', <Columns2 size={13} />, () => sessions.openInSplit(session.id), `split-${session.id}`)}
-            {item('Rename', <Pencil size={13} />, () => {
-              setDraft(session.title ?? '')
-              setRenaming(true)
-            }, `rename-${session.id}`)}
+            {item('Rename', <Pencil size={13} />, () => setRenaming(true), `rename-${session.id}`, false, hotkeyHint('rename'))}
             {!session.main &&
               item(
                 'Make main',
                 <Home size={13} />,
                 () => void sessions.makeMain(session.id).catch(fail('make it the main session')),
                 `make-main-${session.id}`,
+                false,
+                hotkeyHint('main'),
               )}
             {item(
               'Archive',
               <Archive size={13} />,
               () => void sessions.archive(session.id).catch(fail('archive the session')),
               `archive-${session.id}`,
+              false,
+              hotkeyHint('archive'),
             )}
-            {item('Delete', <Trash2 size={13} />, onDelete, `delete-${session.id}`, true)}
+            {item('Delete', <Trash2 size={13} />, onDelete, `delete-${session.id}`, true, hotkeyHint('delete'))}
           </div>
         )}
       </div>

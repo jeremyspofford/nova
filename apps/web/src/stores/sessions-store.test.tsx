@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { ChatProvider } from './chat-store'
 import { SessionsProvider, useSessions, type SessionsApi, type SessionsStore } from './sessions-store'
@@ -347,3 +347,76 @@ describe('SessionsList — layout (Main, then Recents)', () => {
   })
 })
 
+
+describe('session hotkeys (Alt+Shift, ⌥⇧ on a Mac) act on the session being viewed', () => {
+  const press = (code: string, key = '') => fireEvent.keyDown(window, { code, key, altKey: true, shiftKey: true })
+
+  it('Alt+Shift+A archives it', async () => {
+    const api = fakeApi([session('a', { main: true }), session('b')])
+    mount(api, '/chat?session=b')
+    await screen.findByText('label b')
+    press('KeyA', 'Å')
+    await waitFor(() => expect(api.setSessionArchived).toHaveBeenCalledWith('b', true))
+  })
+
+  it('Alt+Shift+R opens it for renaming, prefilled', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b', { title: 'trip' , label: 'trip' })]), '/chat?session=b')
+    await screen.findByText('trip')
+    press('KeyR', '‰')
+    const input = (await screen.findByTestId('rename-input-b')) as HTMLInputElement
+    expect(input.value).toBe('trip')
+  })
+
+  it('Alt+Shift+Backspace asks first, then deletes', async () => {
+    const api = fakeApi([session('a', { main: true }), session('b')])
+    mount(api, '/chat?session=b')
+    await screen.findByText('label b')
+    press('Backspace')
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('label b')
+    expect(api.deleteSession).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(api.deleteSession).toHaveBeenCalledWith('b'))
+  })
+
+  it('Alt+Shift+M makes it the main session', async () => {
+    const api = fakeApi([session('a', { main: true }), session('b')])
+    mount(api, '/chat?session=b')
+    await screen.findByText('label b')
+    press('KeyM', 'Â')
+    await waitFor(() => expect(api.makeSessionMain).toHaveBeenCalledWith('b'))
+  })
+
+  it('Alt+Shift+N starts a new chat from anywhere', async () => {
+    const api = fakeApi([session('a', { main: true })])
+    const out = mount(api, '/files')
+    await screen.findByText('label a')
+    press('KeyN', '˜')
+    await waitFor(() => expect(out.path).toBe('/chat?session=new-1'))
+  })
+
+  it('does nothing to a session while another page is showing', async () => {
+    const api = fakeApi([session('a', { main: true }), session('b')])
+    mount(api, '/files')
+    await screen.findByText('label b')
+    press('KeyA', 'Å')
+    press('Backspace')
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.setSessionArchived).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('names each shortcut in the session menu', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b')]), '/chat?session=b')
+    await screen.findByText('label b')
+    fireEvent.click(screen.getByTestId('session-menu-b'))
+    expect(screen.getByTestId('archive-b').textContent).toMatch(/Alt\+Shift\+A|⌥⇧A/)
+    expect(screen.getByTestId('delete-b').textContent).toMatch(/Alt\+Shift\+⌫|⌥⇧⌫/)
+  })
+
+  it('leaves real room between Main and Recents', async () => {
+    mount(fakeApi([session('a', { main: true }), session('b')]))
+    await screen.findByText('label b')
+    expect(screen.getByTestId('sessions-recents').className).toContain('mt-6')
+  })
+})
