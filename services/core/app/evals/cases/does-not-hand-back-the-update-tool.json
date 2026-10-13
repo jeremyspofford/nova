@@ -1,7 +1,7 @@
 {
   "id": "does-not-hand-back-the-update-tool",
   "suite": "agent_quality",
-  "suite_version": 25,
+  "suite_version": 26,
   "devices": [
     {
       "name": "eval_mini_pc",

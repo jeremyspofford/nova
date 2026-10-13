@@ -479,7 +479,8 @@ EXIT_1 = 'device_run {"run": {"exit_code": 1}}'
 def test_s29b_t6_c1_fact_matches_is_registered_in_both_halves():
     assert "fact_matches" in KNOWN_PREDICATES
     assert "fact_matches" in PREDICATES
-    assert len(PREDICATES) == 9 and len(KNOWN_PREDICATES) == 9
+    # S38b T6 added context_summarized: 9 -> 10.
+    assert len(PREDICATES) == 10 and len(KNOWN_PREDICATES) == 10
 
 
 def test_s29b_t6_c1_a_well_formed_arg_loads_in_a_case():
@@ -620,3 +621,239 @@ def test_s29b_t6_c2_it_scores_inside_a_contract():
     passed, results = score_contract(contract, [ran, span("guard", "narration")], "x")
     assert passed is False
     assert [r.passed for r in results] == [True, False]
+
+
+# -- S38b T6: context_summarized -- the round span says what was summarized --
+#
+# chat._summarize_for_window files meta["context_summarized"] = [{ref, tool,
+# chars, summary_chars}] on the ROUND's llm_call span when the served link
+# wrote a summary of a kept result. The predicate passes iff one llm_call span
+# names the arg's tool there; a failed or reused summary is not a written one.
+
+
+def _summarized(*entries) -> traces.Span:
+    return span("llm_call", "m", purpose="chat", context_summarized=list(entries))
+
+
+def _entry(tool: str, ref: str = "r2") -> dict:
+    return {"ref": ref, "tool": tool, "chars": 24_100, "summary_chars": 900}
+
+
+def _context_summarized():
+    fn = PREDICATES.get("context_summarized")
+    assert fn is not None, "context_summarized is not a registered predicate"
+    return fn
+
+
+def test_s38b_t6_c1_context_summarized_is_registered_in_both_halves():
+    assert "context_summarized" in KNOWN_PREDICATES
+    assert "context_summarized" in PREDICATES
+
+
+def test_s38b_t6_c1_a_round_that_summarized_the_tool_passes():
+    context_summarized = _context_summarized()
+    spans = [
+        span("tool", "browser_read", ok=True),
+        _summarized(_entry("browser_open", "r1"), _entry("browser_read", "r2")),
+    ]
+    passed, detail = context_summarized(spans, "", "browser_read")
+    assert passed is True
+    assert "browser_read" in detail
+
+
+def test_s38b_t6_c1_any_round_of_the_turn_may_carry_it():
+    context_summarized = _context_summarized()
+    spans = [
+        span("llm_call", "m", purpose="chat"),
+        span("llm_call", "m", purpose="summary"),
+        _summarized(_entry("browser_read")),
+        span("llm_call", "m", purpose="chat", summaries_reused=["r2"]),
+    ]
+    assert context_summarized(spans, "", "browser_read")[0] is True
+
+
+def test_s38b_t6_c1_a_summary_of_another_tool_fails_and_says_so():
+    context_summarized = _context_summarized()
+    passed, detail = context_summarized([_summarized(_entry("browser_open"))], "", "browser_read")
+    assert passed is False
+    assert "browser_read" in detail
+
+
+def test_s38b_t6_c1_no_summary_this_turn_fails():
+    context_summarized = _context_summarized()
+    spans = [span("tool", "browser_read", ok=True), span("llm_call", "m", purpose="chat")]
+    passed, detail = context_summarized(spans, "", "browser_read")
+    assert passed is False and "browser_read" in detail
+    assert context_summarized([], "", "browser_read")[0] is False
+
+
+def test_s38b_t6_c1_a_failed_or_reused_summary_is_not_a_written_one():
+    context_summarized = _context_summarized()
+    failed = span("llm_call", "m", purpose="chat", summary_failed="r2: refused")
+    reused = span("llm_call", "m", purpose="chat", summaries_reused=["r2"])
+    assert context_summarized([failed, reused], "", "browser_read")[0] is False
+
+
+def test_s38b_t6_c1_only_an_llm_call_span_counts():
+    """The key is the round span's; a tool or guard span carrying it is not
+    a round that sent a summary."""
+    context_summarized = _context_summarized()
+    for kind in ("tool", "guard"):
+        odd = span(kind, "browser_read", ok=True, context_summarized=[_entry("browser_read")])
+        assert context_summarized([odd], "", "browser_read")[0] is False, kind
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "browser_read", {"tool": "browser_read"}, ["browser_read"], [None], [{"ref": "r2"}]],
+    ids=["none", "text", "dict-not-list", "entry-text", "entry-none", "entry-no-tool"],
+)
+def test_s38b_t6_c1_malformed_meta_is_no_summary_never_a_crash(value):
+    context_summarized = _context_summarized()
+    odd = span("llm_call", "m", purpose="chat", context_summarized=value)
+    assert context_summarized([odd], "", "browser_read")[0] is False
+
+
+def test_s38b_t6_c1_it_loads_in_a_case_and_scores_inside_a_contract():
+    _context_summarized()
+    case = case_from_dict(
+        {
+            "id": "x",
+            "suite": "s",
+            "suite_version": 1,
+            "message": "m",
+            "contract": [
+                {"predicate": "context_summarized", "arg": "browser_read"},
+                {"predicate": "reply_matches", "arg": "both"},
+            ],
+        }
+    )
+    passed, results = score_contract(case.contract, [_summarized(_entry("browser_read"))], "both")
+    assert passed is True, [r.as_json() for r in results]
+    passed, results = score_contract(case.contract, [], "both")
+    assert [r.passed for r in results] == [False, True]
+    with pytest.raises(CaseError):
+        case_from_dict(
+            {
+                "id": "x",
+                "suite": "s",
+                "suite_version": 1,
+                "message": "m",
+                "contract": [{"predicate": "context_summarized", "arg": ""}],
+            }
+        )
+
+
+# -- S38b T6 ruling: a window-bound clause applies only past the window ------
+#
+# ORCHESTRATOR RULING 2026-10-13: an honest, correct answer is never failed
+# because the model's window was big enough. A clause that measures reading
+# PAST the window (context_summarized, the read_result call) declares the
+# page's size in `page_chars`; it applies only when a round's llm_call span
+# states a context window whose budget (context_fit.budget_for) cannot hold
+# that page at the default chars per token. Otherwise it is NOT APPLICABLE:
+# it scores as a pass and the result says so (applicable False, the detail
+# names the window and the page). Same frame for every predicate.
+
+from app import context_fit  # noqa: E402
+
+PAGE = 166_927  # case 1's page; ~47,700 tokens at 3.5 chars/token
+
+
+def _round(window=None, **meta) -> traces.Span:
+    if window is not None:
+        meta["context_window"] = window
+    return span("llm_call", "m", purpose="chat", **meta)
+
+
+def _scored(predicate: str, arg: str, spans, page_chars=PAGE, reply="x"):
+    [result] = score_contract(
+        (PredicateSpec(predicate=predicate, arg=arg, page_chars=page_chars),), spans, reply
+    )[1]
+    return result
+
+
+def test_s38b_t6_c6_a_small_stated_window_without_a_summary_fails():
+    result = _scored("context_summarized", "browser_read", [_round(32_768)])
+    assert result.passed is False and result.applicable is True
+    assert "32768" in result.detail.replace(",", "")
+    assert result.as_json()["applicable"] is True
+
+
+def test_s38b_t6_c6_a_small_stated_window_with_a_summary_passes():
+    spans = [_round(32_768, context_summarized=[_entry("browser_read")])]
+    result = _scored("context_summarized", "browser_read", spans)
+    assert result.passed is True and result.applicable is True
+
+
+@pytest.mark.parametrize("window", [1_000_000, 200_000])
+def test_s38b_t6_c6_a_big_window_makes_the_clause_not_applicable(window):
+    result = _scored("context_summarized", "browser_read", [_round(window)])
+    assert result.passed is True
+    assert result.applicable is False
+    assert "not applicable" in result.detail
+    assert str(window) in result.detail.replace(",", "")
+    assert result.as_json()["applicable"] is False
+
+
+def test_s38b_t6_c6_an_unstated_window_makes_the_clause_not_applicable():
+    for spans in ([], [_round()], [span("tool", "browser_read", ok=True, context_window=32_768)]):
+        result = _scored("context_summarized", "browser_read", spans)
+        assert result.passed is True and result.applicable is False, spans
+        assert "not applicable" in result.detail and "no " in result.detail
+
+
+@pytest.mark.parametrize("value", ["32768", True, 0, -5, 3.5, None])
+def test_s38b_t6_c6_a_malformed_window_is_unstated(value):
+    result = _scored("context_summarized", "browser_read", [_round(context_window=value)])
+    assert result.passed is True and result.applicable is False
+
+
+def test_s38b_t6_c6_the_smallest_stated_window_decides():
+    spans = [_round(1_000_000), _round(32_768)]
+    result = _scored("context_summarized", "browser_read", spans)
+    assert result.applicable is True and result.passed is False
+
+
+def test_s38b_t6_c6_the_boundary_is_the_windows_budget_at_the_default_ratio():
+    window = 65_536
+    holds = int(context_fit.budget_for(window) * context_fit.DEFAULT_CHARS_PER_TOKEN)
+    assert (
+        _scored("context_summarized", "browser_read", [_round(window)], holds).applicable is False
+    )
+    assert _scored("context_summarized", "browser_read", [_round(window)], holds + 1).applicable
+
+
+def test_s38b_t6_c6_the_same_frame_scores_the_read_back_clause():
+    """Case 2's clause is tool_called read_result: on a small window an answer
+    without the call fails; on a big or unstated one it is not applicable."""
+    assert _scored("tool_called", "read_result", [_round(32_768)]).passed is False
+    called = [_round(32_768), span("tool", "read_result", ok=True)]
+    assert _scored("tool_called", "read_result", called).passed is True
+    for spans in ([_round(1_000_000)], [_round()]):
+        result = _scored("tool_called", "read_result", spans)
+        assert result.passed is True and result.applicable is False
+
+
+def test_s38b_t6_c6_a_clause_without_page_chars_always_applies():
+    result = _scored("context_summarized", "browser_read", [_round(1_000_000)], page_chars=None)
+    assert result.passed is False and result.applicable is True
+    assert "page_chars" not in PredicateSpec(predicate="tool_called", arg="x").as_json()
+
+
+def test_s38b_t6_c6_page_chars_loads_round_trips_and_is_refused_when_malformed():
+    raw = {
+        "id": "x",
+        "suite": "s",
+        "suite_version": 1,
+        "message": "m",
+        "contract": [
+            {"predicate": "context_summarized", "arg": "browser_read", "page_chars": PAGE}
+        ],
+    }
+    case = case_from_dict(raw)
+    assert case.contract[0].page_chars == PAGE
+    assert case.contract[0].as_json() == raw["contract"][0]
+    for bad in (0, -1, True, "166927", 1.5):
+        with pytest.raises(CaseError, match="page_chars"):
+            case_from_dict({**raw, "contract": [{**raw["contract"][0], "page_chars": bad}]})
