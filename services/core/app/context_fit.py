@@ -7,7 +7,10 @@ module is the line of code that keeps that from happening: it estimates the
 request, then trims oldest tool-result content (to a stated note), then drops
 oldest whole tool rounds (an assistant's tool_calls together with every
 role:tool answer to them), and never touches a system message or the latest
-user message. Pure: no I/O, the input is never mutated.
+user message. The tools array rides every request beside the messages and
+the model is charged for it, so its chars (tools_chars) are a fixed overhead
+the messages are fitted around; the calibration takes the same overhead, so
+the tools are counted once. Pure: no I/O, the input is never mutated.
 
 Linear in the total size of the request: one pass to measure, one to decide
 which rounds go, one to trim and build. It runs every round in core's loop.
@@ -15,6 +18,7 @@ which rounds go, one to trim and build. It runs every round in core's loop.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -44,6 +48,9 @@ class FitReport:
     tool_results_trimmed: int
     rounds_dropped: int
     chars_removed: int
+    # The fixed overhead's share (the advertised tools array), stated: est_tokens
+    # already counts it; this says how much of it the tools alone are.
+    overhead_tokens: int = 0
 
 
 def budget_for(window: int) -> int:
@@ -78,8 +85,13 @@ def _message_chars(message: dict) -> int:
     return chars
 
 
-def _tokens(chars: int, count: int, chars_per_token: float) -> int:
-    return math.ceil(chars / chars_per_token) + MESSAGE_OVERHEAD_TOKENS * count
+def _tokens(chars: int, count: int, chars_per_token: float, overhead_chars: int = 0) -> int:
+    return math.ceil((chars + overhead_chars) / chars_per_token) + MESSAGE_OVERHEAD_TOKENS * count
+
+
+def _check_overhead(overhead_chars: int) -> None:
+    if overhead_chars < 0:
+        raise ValueError(f"overhead_chars must not be negative, got {overhead_chars!r}")
 
 
 def chars_of(messages: Sequence[dict]) -> int:
@@ -88,23 +100,41 @@ def chars_of(messages: Sequence[dict]) -> int:
     return sum(_message_chars(m) for m in messages)
 
 
-def calibrated_chars_per_token(messages: Sequence[dict], prompt_tokens: int) -> float | None:
+def tools_chars(tools: Sequence[dict] | None) -> int:
+    """The chars of the tools array as sent: one JSON document. 0 when no tools
+    are sent. Pass the array exactly as advertised to the model, never the
+    registry's own schemas."""
+    if not tools:
+        return 0
+    return len(json.dumps(list(tools)))
+
+
+def calibrated_chars_per_token(
+    messages: Sequence[dict], prompt_tokens: int, overhead_chars: int = 0
+) -> float | None:
     """The chars-per-token `messages` actually cost, from the gateway's own
     prompt_tokens for them: the inverse of estimate_tokens (per-message
-    overhead taken off first). None when the count cannot say (no text, or
-    tokens no more than the overhead)."""
-    chars = chars_of(messages)
+    overhead taken off first). `overhead_chars` is the tools array the round
+    was sent with: its tokens are in prompt_tokens, so its chars go in the
+    numerator, and estimate/fit add the same overhead back. None when the
+    count cannot say (no chars, or tokens no more than the overhead)."""
+    _check_overhead(overhead_chars)
+    chars = chars_of(messages) + overhead_chars
     text_tokens = prompt_tokens - MESSAGE_OVERHEAD_TOKENS * len(messages)
     if chars <= 0 or text_tokens <= 0:
         return None
     return chars / text_tokens
 
 
-def estimate_tokens(messages: Sequence[dict], chars_per_token: float) -> int:
-    """The estimated prompt tokens of `messages` at `chars_per_token`."""
+def estimate_tokens(
+    messages: Sequence[dict], chars_per_token: float, overhead_chars: int = 0
+) -> int:
+    """The estimated prompt tokens of `messages` at `chars_per_token`, with
+    `overhead_chars` (the tools array) counted beside them."""
     if chars_per_token <= 0:
         raise ValueError(f"chars_per_token must be positive, got {chars_per_token!r}")
-    return _tokens(sum(_message_chars(m) for m in messages), len(messages), chars_per_token)
+    _check_overhead(overhead_chars)
+    return _tokens(chars_of(messages), len(messages), chars_per_token, overhead_chars)
 
 
 def _note(removed: int, window: int) -> str:
@@ -154,18 +184,24 @@ def _min_content_chars(content: object, window: int) -> int:
 
 
 def fit(
-    messages: Sequence[dict], window: int, chars_per_token: float
+    messages: Sequence[dict], window: int, chars_per_token: float, overhead_chars: int = 0
 ) -> tuple[list[dict], FitReport]:
     """`messages` fitted to `window`, and the report of what was removed.
 
+    `overhead_chars` (the tools array) is fixed for the round: it is counted
+    against the budget and never trimmed, so the messages fit what it leaves.
     Messages fit() leaves alone are returned as the same objects; one it
     trims is a new dict. The input list and its dicts are never mutated."""
+    if chars_per_token <= 0:
+        raise ValueError(f"chars_per_token must be positive, got {chars_per_token!r}")
+    _check_overhead(overhead_chars)
     budget = budget_for(window)
+    overhead_tokens = math.ceil(overhead_chars / chars_per_token)
     sizes = [_message_chars(m) for m in messages]
     chars, count = sum(sizes), len(messages)
 
     def report(fitted: list[dict], *, unfittable: bool, trimmed: int, dropped: int, removed: int):
-        est = estimate_tokens(fitted, chars_per_token)
+        est = estimate_tokens(fitted, chars_per_token, overhead_chars)
         return fitted, FitReport(
             window=window,
             budget=budget,
@@ -175,19 +211,22 @@ def fit(
             tool_results_trimmed=trimmed,
             rounds_dropped=dropped,
             chars_removed=removed,
+            overhead_tokens=overhead_tokens,
         )
 
-    if _tokens(chars, count, chars_per_token) <= budget:
+    if _tokens(chars, count, chars_per_token, overhead_chars) <= budget:
         return report(list(messages), unfittable=False, trimmed=0, dropped=0, removed=0)
 
     users = [i for i, m in enumerate(messages) if m.get("role") == "user"]
     last_user = users[-1] if users else -1
     kept_idx = [i for i, m in enumerate(messages) if m.get("role") == "system" or i == last_user]
-    if _tokens(sum(sizes[i] for i in kept_idx), len(kept_idx), chars_per_token) > budget:
+    kept_chars = sum(sizes[i] for i in kept_idx)
+    if _tokens(kept_chars, len(kept_idx), chars_per_token, overhead_chars) > budget:
         return report(list(messages), unfittable=True, trimmed=0, dropped=0, removed=0)
 
     def allowed(n: int) -> int:
-        return math.floor((budget - MESSAGE_OVERHEAD_TOKENS * n) * chars_per_token)
+        # The message chars n messages may carry beside the fixed overhead.
+        return math.floor((budget - MESSAGE_OVERHEAD_TOKENS * n) * chars_per_token) - overhead_chars
 
     rounds = _rounds(messages)
     full = [sum(sizes[s:e]) for s, e in rounds]
