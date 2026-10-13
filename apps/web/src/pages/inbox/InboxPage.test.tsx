@@ -100,10 +100,12 @@ describe('InboxPage — the record of what she noticed', () => {
     expect(within(first).getByText('the gateway is not answering')).toBeDefined()
     // T15 (verification 2-7): the check name reads as words, not its snake key.
     expect(within(first).getByText('Stack service unreachable')).toBeDefined()
-    // T16 (verification 2-7): one status line instead of three pills.
+    // T16 (verification 2-7): one status line instead of three pills; T30:
+    // urgent is the card's one Badge again, beside the title, not on the line.
     expect(within(first).getByTestId('notice-status').textContent).toBe(
-      'Urgent · still true · not told yet',
+      'Still true · not told yet',
     )
+    expect(within(first).getByTestId('notice-urgent').textContent?.trim()).toBe('Urgent')
     const facts = within(first).getByTestId('notice-facts')
     // T15: each fact reads "<Label>: <value>" through lib/factFormat.
     expect(facts.textContent).toContain('Service: gateway')
@@ -749,13 +751,17 @@ describe('InboxPage — the unread line and one status line (verification 2-7, T
   })
 
   it('C2: a card has exactly one status line and no pills', async () => {
+    // T30 re-point (VISUAL 2): urgent is the one pill a card may draw — the
+    // danger Badge beside the title (T30 C5). Live and told never are.
     const row = await card({ urgent: true })
     expect(within(row).getAllByTestId('notice-status')).toHaveLength(1)
     expect(within(row).queryByTestId('live-pill')).toBeNull()
     expect(within(row).queryByTestId('state-badge')).toBeNull()
     expect(within(row).queryByTestId('urgent-badge')).toBeNull()
-    // Badge's own shape: no pill anywhere on the card.
-    expect(row.querySelectorAll('.rounded-xs')).toHaveLength(0)
+    // Badge's own shape: the urgent Badge is the only pill on the card.
+    const pills = Array.from(row.querySelectorAll('.rounded-xs'))
+    expect(pills).toHaveLength(1)
+    expect(pills[0].getAttribute('data-testid')).toBe('notice-urgent')
   })
 
   it('C3: the line reads live first, then whether he was told, joined by " · "', async () => {
@@ -777,7 +783,8 @@ describe('InboxPage — the unread line and one status line (verification 2-7, T
     const status = async (id: string) =>
       within(await screen.findByTestId(`notice-row-${id}`)).getByTestId('notice-status').textContent
     expect(await status('a')).toBe('Still true · not told yet')
-    expect(await status('b')).toBe('Urgent · still true · not told yet')
+    // T30 re-point: urgent is the Badge beside the title, not a word here.
+    expect(await status('b')).toBe('Still true · not told yet')
     expect(await status('c')).toBe('Cleared · told you')
     expect(await status('d')).toBe('Still true · not delivered')
     expect(await status('e')).toBe('Still true · muted')
@@ -790,7 +797,10 @@ describe('InboxPage — the unread line and one status line (verification 2-7, T
       .map(el => el.getAttribute('title') ?? '')
       .join('\n')
     expect(titles).toContain('a check has not yet stopped finding these facts')
-    expect(titles).toContain('the check itself declares this urgent')
+    // T30 re-point: the urgent title moved with the word, onto the Badge.
+    expect(within(row).getByTestId('notice-urgent').getAttribute('title') ?? '').toContain(
+      'the check itself declares this urgent',
+    )
   })
 
   it('C4: a cleared notice keeps the cleared title on its line', async () => {
@@ -822,5 +832,80 @@ describe('InboxPage — the unread line and one status line (verification 2-7, T
     await waitFor(() => expect(line()).toBe('Still true · muted'))
     fireEvent.click(within(screen.getByTestId('notice-row-n1')).getByRole('button', { name: 'Unmute' }))
     await waitFor(() => expect(line()).toBe('Still true · not told yet'))
+  })
+})
+
+/**
+ * Verification 2-7, T30 (VISUAL 2, ui-review after/inbox-full-desktop-light.png):
+ * the status line followed the check name with only a gap, so it read as one
+ * phrase ("Timer failing  Still true · told you"); urgent went from a red pill
+ * beside the title to a small word on line 2; fact labels were uneven ("Turn
+ * ids", "Free gb", "Used pct" beside "Timer ID" and "URL").
+ */
+describe('InboxPage — the check, the status and urgent read apart (verification 2-7, T30)', () => {
+  async function card(overrides: Partial<Notice>) {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1', ...overrides })])))
+    return screen.findByTestId('notice-row-n1')
+  }
+
+  it('C4: fact labels keep their acronyms and units on the card face', async () => {
+    const row = await card({
+      facts: { free_gb: 38.2, used_pct: 91.4, turn_ids: ['t-1', 't-2', 't-3'], timer_id: 'b7e1c2d4' },
+    })
+    const text = within(row).getByTestId('notice-facts').textContent ?? ''
+    expect(text).toContain('Free GB: 38.2')
+    expect(text).toContain('Used %: 91.4')
+    expect(text).toContain('Turn IDs: t-1, t-2, t-3')
+    expect(text).toContain('Timer ID: b7e1c2d4')
+    expect(text).not.toMatch(/Free gb|Used pct|Turn ids/)
+  })
+
+  it('C5: the check name and the status line sit on separate rows', async () => {
+    const row = await card({ check_name: 'timer_failing', state: 'delivered' })
+    const check = within(row).getByTestId('notice-check')
+    expect(check.textContent?.trim()).toBe('Timer failing')
+    // T15 C1 still holds on the element itself: the raw name on hover.
+    expect(check.closest('[title]')?.getAttribute('title') ?? '').toContain('timer_failing')
+    const status = within(row).getByTestId('notice-status')
+    expect(check.contains(status)).toBe(false)
+    expect(status.contains(check)).toBe(false)
+    // The nearest block around the status line is its own row: it does not
+    // also hold the check name (a shared flex row read as one phrase).
+    const statusRow = status.closest('div, p')
+    expect(statusRow).not.toBeNull()
+    expect(statusRow!.contains(check)).toBe(false)
+    expect(row.contains(statusRow)).toBe(true)
+  })
+
+  it('C6: an urgent notice shows the danger Badge reading "Urgent" beside its title', async () => {
+    const row = await card({ urgent: true, title: 'the gateway is not answering' })
+    const badge = within(row).getByTestId('notice-urgent')
+    expect(badge.textContent?.trim()).toBe('Urgent')
+    // The existing Badge, danger-coloured: its own pill shape and colour.
+    expect(badge.className).toContain('rounded-xs')
+    expect(badge.className).toContain('bg-danger-dim')
+    expect(badge.className).toContain('text-danger')
+    expect(badge.getAttribute('title') ?? '').toContain('the check itself declares this urgent')
+    // In the title's row, not on the status line.
+    expect(badge.parentElement?.textContent).toContain('the gateway is not answering')
+    const status = within(row).getByTestId('notice-status')
+    expect(status.contains(badge)).toBe(false)
+    expect(status.textContent).not.toMatch(/urgent/i)
+  })
+
+  it('C6: a notice that is not urgent draws no Badge at all', async () => {
+    renderPage(
+      fakeApi(() =>
+        listing([
+          noticeFixture({ id: 'n1', urgent: false }),
+          noticeFixture({ id: 'n2', urgent: true }),
+        ]),
+      ),
+    )
+    const plain = await screen.findByTestId('notice-row-n1')
+    // Paired with an urgent row, so this cannot pass on a page with no Badge.
+    expect(within(screen.getByTestId('notice-row-n2')).getByTestId('notice-urgent')).toBeDefined()
+    expect(within(plain).queryByTestId('notice-urgent')).toBeNull()
+    expect(plain.querySelectorAll('.rounded-xs')).toHaveLength(0)
   })
 })

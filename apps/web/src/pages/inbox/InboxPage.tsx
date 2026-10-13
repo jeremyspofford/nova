@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { BellOff, BookPlus, Inbox, MessageSquare, Radar } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Banner, Button, EmptyState, Skeleton, Tabs } from '../../components/ui'
+import { Badge, Banner, Button, EmptyState, Skeleton, Tabs } from '../../components/ui'
 import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
@@ -462,7 +462,11 @@ function NoticeCard({
   onTalk: () => void
   onDraft: () => void
 }) {
-  const status = statusParts(notice)
+  // Verification 2-7, T30: urgent is the card's one Badge again, beside the
+  // title (VISUAL 2: as a word on the status line it lost its emphasis). Its
+  // word and title still come from statusParts; the line is built without it.
+  const urgent = notice.urgent ? statusParts(notice)[0] : undefined
+  const status = statusParts({ ...notice, urgent: false })
   const acted = actedLine(notice)
   const sightings = sightingsWords(notice.repeats)
   const mute = muteWords(notice)
@@ -497,14 +501,25 @@ function NoticeCard({
             <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">
               <HumanText text={notice.title} />
             </span>
+            {urgent && (
+              <Badge color="danger" size="sm" title={urgent.title} data-testid="notice-urgent">
+                {urgent.text}
+              </Badge>
+            )}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
-            <span title={`the check that found it: ${notice.check_name}`}>
+          {/* Verification 2-7, T30: the check name is its own row. Sharing a
+              flex row with the status line, the two read as one phrase
+              ("Timer failing  Still true · told you"). */}
+          <div className="mt-0.5 text-micro text-content-secondary">
+            <span data-testid="notice-check" title={`the check that found it: ${notice.check_name}`}>
               {factLabel(notice.check_name)}
             </span>
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
             {/* Verification 2-7, T16: one status line, not up to three
-                pills. Each word keeps the title its pill had; urgent and a
-                failed delivery are the words coloured for attention. */}
+                pills. Each word keeps the title its pill had; a failed
+                delivery is the word coloured for attention (urgent is the
+                Badge above, T30). */}
             <span data-testid="notice-status">
               {status.map((part, i) => (
                 <span key={i}>

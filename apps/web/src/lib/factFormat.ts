@@ -22,7 +22,18 @@ export interface FormattedFact extends FactValue {
   label: string
 }
 
-const ACRONYMS = new Set(['id', 'url', 'api'])
+// Verification 2-7, T30: a key segment on this list is written in capitals,
+// and its plural keeps a lowercase "s" ("turn_ids" -> "Turn IDs"). A segment
+// is matched whole and case-blind, never inside a longer word ("idle_since",
+// "gbit_rate" and "apiary" stay words).
+const ACRONYMS = new Set([
+  'id', 'url', 'uri', 'api', 'uuid', 'ip', 'cpu', 'gpu', 'ram', 'vram',
+  'kb', 'mb', 'gb', 'tb', 'http', 'https', 'ssh', 'dns', 'tls', 'pid',
+  'json', 'html', 'llm',
+])
+// Units that read as units, not as words: "used_pct" -> "Used %", and "ms"
+// stays lowercase even as the first word ("ms_waited" -> "ms waited").
+const UNITS: Record<string, string> = { pct: '%', ms: 'ms' }
 const LIST_CAP = 5
 const FLAT_OBJECT_CAP = 3
 
@@ -33,20 +44,36 @@ const HEX_TOKEN = /^[0-9a-f]{16,}$/i
 // a sentence).
 const WHOLE_STAMP = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/
 
-/** A key's words: lower case, except the acronyms, which are capitals. */
-function keyWords(key: string): string[] {
-  return key
-    .split('_')
-    .filter(Boolean)
-    .map(w => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.toLowerCase()))
+/** One key segment as written: a unit, an acronym (or its plural), or a
+ *  lowercase word. `fixed` marks the first two, which a label never
+ *  re-capitalises. */
+function segmentWord(segment: string): { word: string; fixed: boolean } {
+  const lower = segment.toLowerCase()
+  if (lower in UNITS) return { word: UNITS[lower], fixed: true }
+  if (ACRONYMS.has(lower)) return { word: lower.toUpperCase(), fixed: true }
+  if (lower.endsWith('s') && ACRONYMS.has(lower.slice(0, -1))) {
+    return { word: `${lower.slice(0, -1).toUpperCase()}s`, fixed: true }
+  }
+  return { word: lower, fixed: false }
 }
 
-/** "last_error" -> "Last error"; "timer_id" -> "Timer ID". */
+/** A key's words: lower case, except the acronyms (capitals) and units. */
+function keySegments(key: string): { word: string; fixed: boolean }[] {
+  return key.split('_').filter(Boolean).map(segmentWord)
+}
+
+function keyWords(key: string): string[] {
+  return keySegments(key).map(s => s.word)
+}
+
+/** "last_error" -> "Last error"; "timer_id" -> "Timer ID"; "free_gb" ->
+ *  "Free GB"; "used_pct" -> "Used %"; "ms_waited" -> "ms waited". */
 export function factLabel(key: string): string {
-  const words = keyWords(key)
-  if (words.length === 0) return key
-  const [first, ...rest] = words
-  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ')
+  const segments = keySegments(key)
+  if (segments.length === 0) return key
+  const [first, ...rest] = segments
+  const head = first.fixed ? first.word : first.word.charAt(0).toUpperCase() + first.word.slice(1)
+  return [head, ...rest.map(s => s.word)].join(' ')
 }
 
 /** The raw value as core wrote it: a string verbatim, anything else as JSON. */

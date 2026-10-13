@@ -168,3 +168,77 @@ describe('C6 nothing is lost — full carries the raw value whenever the text di
     expect(formatFact('service', 'gateway')).toEqual({ key: 'service', label: 'Service', text: 'gateway' })
   })
 })
+
+// Verification 2-7, T30 (VISUAL 2): the card face read "Turn ids", "Free gb",
+// "Used pct" next to "Timer ID" and "URL". The rule (T30 Assumptions): a key
+// segment on a fixed acronym list is written in capitals, its plural keeps a
+// lowercase "s"; "pct" reads "%"; "ms" stays a lowercase unit. A segment is
+// matched whole and case-blind, never as part of a longer word.
+describe('T30 C1 factLabel — acronyms and their plurals in capitals', () => {
+  it('writes units and machine acronyms in capitals', () => {
+    expect(factLabel('free_gb')).toBe('Free GB')
+    expect(factLabel('vram_mb')).toBe('VRAM MB')
+    expect(factLabel('cpu_load')).toBe('CPU load')
+    expect(factLabel('gpu_name')).toBe('GPU name')
+    expect(factLabel('ip_address')).toBe('IP address')
+    expect(factLabel('pid')).toBe('PID')
+    expect(factLabel('size_kb')).toBe('Size KB')
+    expect(factLabel('disk_tb')).toBe('Disk TB')
+  })
+
+  it('a plural acronym keeps a lowercase s', () => {
+    expect(factLabel('turn_ids')).toBe('Turn IDs')
+    expect(factLabel('urls')).toBe('URLs')
+    expect(factLabel('gpu_uuids')).toBe('GPU UUIDs')
+  })
+
+  it('matches a segment whole and case-blind, never part of a word', () => {
+    expect(factLabel('TURN_IDS')).toBe('Turn IDs')
+    expect(factLabel('Free_GB')).toBe('Free GB')
+    // Words that merely contain an acronym stay words.
+    expect(factLabel('idle_since')).toBe('Idle since')
+    expect(factLabel('gbit_rate')).toBe('Gbit rate')
+    expect(factLabel('apiary')).toBe('Apiary')
+  })
+})
+
+describe('T30 C2 factLabel — units read as units', () => {
+  it('"pct" reads "%"', () => {
+    expect(factLabel('used_pct')).toBe('Used %')
+    expect(factLabel('cpu_pct')).toBe('CPU %')
+  })
+
+  it('"ms" stays a lowercase unit, even first', () => {
+    expect(factLabel('duration_ms')).toBe('Duration ms')
+    expect(factLabel('ms_waited')).toBe('ms waited')
+  })
+})
+
+describe('T30 C3 factValue — an object summary names its keys by the same rule', () => {
+  it('a flat object reads its keys with the acronyms and units', () => {
+    expect(factValue({ free_gb: 38.2, used_pct: 91.4 }).text).toBe('free GB 38.2, used % 91.4')
+    expect(factValue({ turn_ids: 3 }).text).toBe('turn IDs 3')
+  })
+})
+
+describe('T30 C1/C2 (coverage) — the whole acronym list, and the units case-blind', () => {
+  it('writes every acronym on the list in capitals, a listed word ending in s whole', () => {
+    const list = [
+      'id', 'url', 'uri', 'api', 'uuid', 'ip', 'cpu', 'gpu', 'ram', 'vram',
+      'kb', 'mb', 'gb', 'tb', 'http', 'https', 'ssh', 'dns', 'tls', 'pid',
+      'json', 'html', 'llm',
+    ]
+    for (const word of list) expect(factLabel(`x_${word}`)).toBe(`X ${word.toUpperCase()}`)
+    // "https" is on the list itself: never read as the plural of "http".
+    expect(factLabel('https_port')).toBe('HTTPS port')
+    // A word that is not on the list keeps its s as a word.
+    expect(factLabel('open_items')).toBe('Open items')
+  })
+
+  it('units are matched case-blind, first or last', () => {
+    expect(factLabel('Duration_MS')).toBe('Duration ms')
+    expect(factLabel('MS_waited')).toBe('ms waited')
+    expect(factLabel('pct_used')).toBe('% used')
+    expect(factLabel('USED_PCT')).toBe('Used %')
+  })
+})
