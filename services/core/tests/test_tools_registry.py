@@ -191,6 +191,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # so the set moves by five. The owner renamed his main session and deleted
     # six by hand, and she had no tool for any of it. Each calls the sidebar's
     # own route handler; nothing waits on anyone (test_no_approvals green).
+    # Deliberate snapshot update (S38b T4, 2026-10-13): read_result
+    # (tools/results.py), so the set moves by one. A result replaced by a
+    # summary near the window is kept in full, and the marker tells her to
+    # read it back with read_result(ref, part|query); without the tool that
+    # sentence would name nothing she has. A read of this turn's own results;
+    # nothing waits on anyone (test_no_approvals green).
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -338,6 +344,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "device_job_status",
         "device_job_log",
         "device_job_stop",
+        # S38b T4 (2026-10-13): a result of this turn, read back in full after
+        # a summary replaced it in what is sent. reads_only.
+        "read_result",
     }
 
 
@@ -761,6 +770,9 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # here: it ends a job. 29 -> 31.
         "device_job_status",
         "device_job_log",
+        # S38b T4 (2026-10-13): reading back a result this turn already holds
+        # (the live map of its kept results) changes nothing. 31 -> 32.
+        "read_result",
     }
 
 
