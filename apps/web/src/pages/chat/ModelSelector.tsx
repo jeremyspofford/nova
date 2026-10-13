@@ -13,6 +13,7 @@ import {
   type RouteVerdict,
 } from '../../lib/api'
 import { ACCURACY_DISCLAIMER_SHORT } from '../../lib/modelDisclaimer'
+import { modelName } from '../../lib/modelFormat'
 import { LOCAL_PROVIDER, bareLocalModel } from '../settings/modelsFormat'
 
 /**
@@ -71,10 +72,11 @@ export function localChoices(rows: CatalogRow[]): CatalogRow[] {
 }
 
 /** The model part of an id, for the trigger's narrow space:
- * `openrouter:google/gemini-3.8-flash` reads `gemini-3.8-flash`. */
+ * `openrouter:google/gemini-3.8-flash` reads `gemini-3.8-flash`. The one
+ * shared formatter (lib/modelFormat), so the trigger and a reply's model
+ * line never name the same model two ways. */
 export function shortModelName(id: string): string {
-  const model = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
-  return model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
+  return modelName(id)
 }
 
 /** Is the pick on the smaller end of the models on offer — below the mean of

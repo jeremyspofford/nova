@@ -21,6 +21,7 @@ import { Markdown } from '../../components/Markdown'
 import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
 import { isSetupKind } from '../../lib/setupSteps'
+import { modelName } from '../../lib/modelFormat'
 import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
 
@@ -686,15 +687,22 @@ export const MessageBubble = memo(function MessageBubble({
         )}
         {/* Who answered — `provider:model` as the gateway stated it on this
             turn's trace (S10-pre). Absent, never invented, when the turn is
-            still streaming its first round or the server stated none. */}
+            still streaming its first round or the server stated none. The
+            line reads the model's name (T19, lib/modelFormat — the same one
+            the chat trigger shows); the stated id stays whole in its title.
+            Its own block line (flex, not inline-flex) so the fallback warning
+            below never runs into it; the name is one nowrap run, so it never
+            breaks mid-name — the cost wraps under it instead. */}
         {row.servedBy && (
           <p
             data-testid="served-by"
             title="the provider and model that produced this reply, as recorded on the turn's trace"
-            className="mt-1.5 inline-flex items-center gap-1.5 text-micro text-content-tertiary font-mono"
+            className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-micro text-content-tertiary font-mono"
           >
             <Cpu size={11} className="shrink-0" />
-            {row.servedBy}
+            <span data-testid="served-by-name" title={row.servedBy} className="min-w-0 truncate">
+              {modelName(row.servedBy)}
+            </span>
             {typeof row.cost === 'number' && (
               <span data-testid="turn-cost" title="this turn's cost as the gateway's ledger recorded it (S10)">
                 · ${row.cost < 0.01 ? row.cost.toFixed(4) : row.cost.toFixed(2)}
@@ -707,7 +715,7 @@ export const MessageBubble = memo(function MessageBubble({
         {row.routeReason && (
           <p
             data-testid="route-fallback"
-            className="mt-1 inline-flex items-start gap-1.5 text-micro text-warning"
+            className="mt-1.5 flex items-start gap-1.5 text-micro text-warning"
             title="why this reply came from a different model than the first choice, as the gateway stated it"
           >
             <AlertTriangle size={11} className="mt-0.5 shrink-0" />

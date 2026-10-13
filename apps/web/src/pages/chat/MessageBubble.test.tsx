@@ -312,13 +312,61 @@ describe('MessageBubble — who answered (S10-pre)', () => {
     expect(screen.queryByTestId('served-by')).toBeNull()
   })
 
-  it('shows provider:model exactly as stated', () => {
+  // Re-pointed by T19 (was: textContent exactly 'anthropic:claude-opus-5'):
+  // the stated id is kept whole, in the name's title; the line reads the name.
+  it('shows the model\'s name, with provider:model exactly as stated in its title', () => {
     render(
       <MessageBubble
         row={assistantRow({ text: 'hi', streaming: false, servedBy: 'anthropic:claude-opus-5' })}
       />,
     )
-    expect(screen.getByTestId('served-by').textContent).toBe('anthropic:claude-opus-5')
+    expect(screen.getByTestId('served-by').textContent).toBe('claude-opus-5')
+    expect(screen.getByTestId('served-by-name').getAttribute('title')).toBe('anthropic:claude-opus-5')
+  })
+})
+
+describe('MessageBubble — T19 the model line reads as a name', () => {
+  const GEMINI = 'openrouter:google/gemini-3.8-flash'
+
+  it('C3: the visible name is the model, never the provider prefix or vendor path; the full id is its title', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: GEMINI, cost: 0.03 })} />)
+    const name = screen.getByTestId('served-by-name')
+    expect(name.textContent).toBe('gemini-3.8-flash')
+    expect(name.getAttribute('title')).toBe(GEMINI)
+    const line = screen.getByTestId('served-by').textContent ?? ''
+    expect(line).not.toContain('openrouter:')
+    expect(line).not.toContain('google/')
+  })
+
+  it('C3: a local id keeps its tag in the name', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b' })} />)
+    expect(screen.getByTestId('served-by-name').textContent).toBe('qwen3:8b')
+    expect(screen.getByTestId('served-by-name').getAttribute('title')).toBe('hub:qwen3:8b')
+  })
+
+  it('C4: the name never wraps mid-name — its own nowrap element, the cost outside it', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: GEMINI, cost: 0.03 })} />)
+    const name = screen.getByTestId('served-by-name')
+    expect(name.className.split(/\s+/).some(c => c === 'whitespace-nowrap' || c === 'truncate')).toBe(true)
+    expect(name.contains(screen.getByTestId('turn-cost'))).toBe(false)
+    expect(screen.getByTestId('served-by').contains(screen.getByTestId('turn-cost'))).toBe(true)
+  })
+
+  it('C5: the model line and the fallback warning are two spaced lines, never one run touching', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', routeReason: 'fell back to link 2 — openrouter over its monthly cap' })}
+      />,
+    )
+    const servedBy = screen.getByTestId('served-by')
+    const fallback = screen.getByTestId('route-fallback')
+    for (const el of [servedBy, fallback]) {
+      const classes = el.className.split(/\s+/)
+      expect(classes, el.dataset.testid).toContain('flex')
+      expect(classes, el.dataset.testid).not.toContain('inline-flex')
+    }
+    expect(servedBy.compareDocumentPosition(fallback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(fallback.className.split(/\s+/).some(c => /^mt-(1|1\.5|2|2\.5|3)$/.test(c))).toBe(true)
   })
 })
 
