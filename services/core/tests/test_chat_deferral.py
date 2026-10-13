@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from app import chat, guards
+from app import chat, guards, traces
 from app.main import app as core_app
 from app.tools import timers as _timers_tools
 from tests import fakes
@@ -263,7 +263,9 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     owner_client, pool, mount_peers, monkeypatch
 ):
     """The detector itself is fail-OPEN: if deferral_check raises, the reply ships
-    unchanged — one gateway call, no redirect, no span, no error frame."""
+    unchanged — one gateway call, no redirect, no error frame. The trace says
+    the guard fell over (verification-2-7 T11): one deferral span marked raised,
+    never a fired one."""
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("detector blew up")
@@ -278,7 +280,10 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     assert gateway.calls == 1  # no redirect was attempted
     assert await _stored_reply(pool) == DEFER
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
-    assert await _deferral_spans(pool) == []
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    assert traces.guard_raised(spans[0]["meta"])
+    assert spans[0]["meta"]["error"] == "RuntimeError: detector blew up"
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]
 
 

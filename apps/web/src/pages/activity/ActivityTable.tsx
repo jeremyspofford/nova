@@ -14,6 +14,7 @@ import {
   isWorkspacePathTool,
   mcpCallLabel,
   spanLabel,
+  guardRaised,
   statusBadge,
   viewArgs,
   viewFacts,
@@ -392,13 +393,20 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
   // rather than silently dropping a span kind this page does not know
   // about yet. The kind reads as words (spanLabel); a guard's name is in
   // its label, so it is not repeated as its snake key beside it.
+  // T11 C6: a guard that raised (chat._file_guard_crash) reads as crashed,
+  // in danger, with its error — never as the same row as a guard that fired.
+  const crashed = span.kind === 'guard' && guardRaised(span.meta)
+  const crashError = crashed && typeof span.meta.error === 'string' ? span.meta.error : null
   return (
-    <div className="flex items-center gap-2 text-caption">
-      <Badge size="sm">{spanLabel(span.kind, span.name)}</Badge>
+    <div className="flex flex-wrap items-center gap-2 text-caption">
+      <Badge size="sm" color={crashed ? 'danger' : undefined}>
+        {spanLabel(span.kind, span.name, span.meta)}
+      </Badge>
       {span.name && span.kind !== 'guard' && (
         <span className="font-mono text-content-secondary">{span.name}</span>
       )}
       {duration && <span className="font-mono text-content-tertiary">{duration}</span>}
+      {crashError && <span className="text-danger break-words">{crashError}</span>}
     </div>
   )
 }

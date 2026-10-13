@@ -786,3 +786,73 @@ describe('ActivityPage — T20 the row and its spans read as words', () => {
     expect(monoUpTo(name, span), 'the model name is drawn mono').toBe(false)
   })
 })
+
+// T11 C6 (verification 2-7): a guard that RAISED files a guard span too
+// (chat._file_guard_crash: kind 'guard', named for the guard, meta.raised
+// === true — traces.GUARD_RAISED — and meta.error "<ExcType>: <message>").
+// The drill-in must not draw it as the same row as a guard that FIRED.
+describe('ActivityPage — T11 C6 a crashed guard reads as crashed, never as a fire', () => {
+  const at = () => new Date().toISOString()
+  const llm = { kind: 'llm_call', name: 'qwen3:8b', started_at: at(), duration_ms: 900, meta: { round: 1, model: 'qwen3:8b' } }
+
+  async function openSpans(spans: ActivityTurnDetail['spans']) {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail({ spans }) })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText(/round 1/i)
+    return panel
+  }
+
+  const crashed = (name: string, error: string, extra: Record<string, unknown> = {}) => ({
+    kind: 'guard',
+    name,
+    started_at: at(),
+    duration_ms: 1,
+    meta: { ...extra, raised: true, error },
+  })
+
+  it('C6: a raised guard span reads "Guard crashed: <name in words>" with its error text, never "Guard: <name>"', async () => {
+    const panel = await openSpans([llm, crashed('delegation_claim', 'RuntimeError: detector blew up')])
+    expect(within(panel).getByText('Guard crashed: delegation claim')).toBeDefined()
+    expect(panel.textContent).toContain('RuntimeError: detector blew up')
+    expect(within(panel).queryByText('Guard: delegation claim')).toBeNull()
+    expect(panel.textContent).not.toMatch(/delegation_claim/)
+  })
+
+  it('C6: bare-intent\'s crash (named "deferral", meta.kind "bare_intent") reads as the deferral guard crashing', async () => {
+    const panel = await openSpans([llm, crashed('deferral', 'ValueError: bad', { kind: 'bare_intent' })])
+    expect(within(panel).getByText('Guard crashed: deferral')).toBeDefined()
+    expect(panel.textContent).toContain('ValueError: bad')
+    expect(within(panel).queryByText('Guard: deferral')).toBeNull()
+  })
+
+  it('C6: a FIRED guard whose redirect failed (meta.error, no raised marker) still reads as the guard, not a crash', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'deferral', started_at: at(), duration_ms: 3, meta: { detected: true, error: 'redirect failed' } },
+    ])
+    expect(within(panel).getByText('Guard: deferral')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/crashed/i)
+  })
+
+  it('C6: a fired and a crashed guard in one turn are two different rows', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'narration', started_at: at(), duration_ms: 2, meta: { detected: true } },
+      crashed('narration', 'RuntimeError: boom'),
+    ])
+    expect(within(panel).getAllByText('Guard: narration')).toHaveLength(1)
+    expect(within(panel).getAllByText('Guard crashed: narration')).toHaveLength(1)
+    expect(panel.textContent).toContain('RuntimeError: boom')
+  })
+
+  it('C6: only raised === true marks a crash (traces.guard_raised is `is True`) — a truthy non-boolean does not', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'narration', started_at: at(), duration_ms: 2, meta: { raised: 'yes' } },
+    ])
+    expect(within(panel).getByText('Guard: narration')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/crashed/i)
+  })
+})

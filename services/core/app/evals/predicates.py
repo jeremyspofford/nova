@@ -27,7 +27,9 @@ Span facts these read, all set by chat.py's turn path:
                            records one whenever it ran (verdict may be on_topic).
                            `guard_fired` means "this guard left a span this
                            turn"; a T2 case wanting a finer distinction pairs it
-                           with a reply predicate.
+                           with a reply predicate. A guard that RAISED leaves
+                           a span too (meta.error, traces.guard_raised) — a
+                           crash, not a fire, so neither predicate counts it.
   * the ARGUMENTS of a tool call -> Span.meta["args_redacted"], as the model
                            sent them (chat._span_arguments).
 """
@@ -39,6 +41,7 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from app import traces
 from app.evals.cases import KNOWN_PREDICATES, PredicateSpec, parse_tool_with
 
 # A predicate: (spans, reply, arg) -> (passed, detail). `arg` is the spec's
@@ -94,13 +97,21 @@ def tool_not_called(spans: Sequence[Any], reply: str, name: str | None) -> tuple
     return not hits, f"{_own_spans_detail(spans, name, len(hits))} (want 0)"
 
 
+def _guard_hits(spans: Sequence[Any], name: str | None) -> list[Any]:
+    """The spans this guard left by FIRING — never the one it left by raising
+    (verification-2-7 T11): a crashed guard corrected nothing."""
+    return [
+        s for s in spans if s.kind == "guard" and s.name == name and not traces.guard_raised(s.meta)
+    ]
+
+
 def guard_fired(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
-    hits = [s for s in spans if s.kind == "guard" and s.name == name]
+    hits = _guard_hits(spans, name)
     return bool(hits), f"guard {name!r} left {len(hits)} span(s) this turn"
 
 
 def guard_absent(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
-    hits = [s for s in spans if s.kind == "guard" and s.name == name]
+    hits = _guard_hits(spans, name)
     return not hits, f"guard {name!r} left {len(hits)} span(s) this turn (want 0)"
 
 

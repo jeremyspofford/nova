@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from app import chat, guards, machines
+from app import chat, guards, machines, traces
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 
@@ -158,7 +158,9 @@ async def test_a_guard_that_raises_ships_the_reply_uncorrected(
     owner_client, pool, mount_peers, workspace, monkeypatch
 ):
     """Fail OPEN (IMPORTANT 4): a matcher bug must never turn an honest turn
-    into an error or lose its text — the reply ships unchanged, logged."""
+    into an error or lose its text — the reply ships unchanged, logged. The
+    trace says the guard fell over (verification-2-7 T11): one narration span
+    marked raised, never a fired one."""
 
     def boom(reply_text, spans, device_names=()):
         raise RuntimeError("matcher bug")
@@ -172,7 +174,10 @@ async def test_a_guard_that_raises_ships_the_reply_uncorrected(
 
     assert not [f for f in sent if isinstance(f, dict) and "correction" in f]
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]
-    assert await _spans(pool, "guard") == []
+    guard_spans = await _spans(pool, "guard")
+    assert [s["name"] for s in guard_spans] == ["narration"]
+    assert traces.guard_raised(guard_spans[0]["meta"])
+    assert guard_spans[0]["meta"]["error"] == "RuntimeError: matcher bug"
     assert await pool.fetchval("SELECT content FROM messages WHERE role='assistant'") == reply
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 

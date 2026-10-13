@@ -49,6 +49,7 @@ from pathlib import Path
 
 import asyncpg
 
+from app import traces
 from app.tools.workspace import root_from_env
 
 logger = logging.getLogger("core")
@@ -467,6 +468,10 @@ def guard_fired(meta: dict) -> bool:
     here as what it says it is, and a future guard that wants the same
     treatment self-registers by writing the same marker.
     """
+    # A guard that RAISED (verification-2-7 T11) filed its span to say so,
+    # not because it corrected anything: a crash is not a rough turn.
+    if traces.guard_raised(meta):
+        return False
     if not meta.get("checked"):
         return True
     return bool(meta.get("redirected"))

@@ -209,10 +209,20 @@ function sentenceWords(key: string): string {
  * guard's name joins its label: a guard's name is a snake key
  * (guards.py), every other span's name is already readable or a tool's own
  * identifier, shown beside the label as it is. */
-export function spanLabel(kind: string, name: string | null): string {
+export function spanLabel(kind: string, name: string | null, meta?: Record<string, unknown>): string {
   if (kind === 'guard') {
     const words = (name ?? '').replace(/_+/g, ' ').trim()
-    return words ? `Guard: ${words}` : 'Guard'
+    const head = meta && guardRaised(meta) ? 'Guard crashed' : 'Guard'
+    return words ? `${head}: ${words}` : head
   }
   return SPAN_WORDS[kind] ?? sentenceWords(kind)
+}
+
+/** T11 C6 (verification 2-7): a guard span is a CRASH only when it carries
+ * the raised marker as exactly `true` — the web twin of core's
+ * traces.guard_raised (`meta.get(GUARD_RAISED) is True`). meta.error alone
+ * is not the marker: a guard that FIRED and whose redirect then failed
+ * carries meta.error too, and it is still a fire. */
+export function guardRaised(meta: Record<string, unknown>): boolean {
+  return meta.raised === true
 }

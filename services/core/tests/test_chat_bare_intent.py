@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 
-from app import chat, markup_calls, tools
+from app import chat, markup_calls, tools, traces
 from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
@@ -291,7 +291,9 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     owner_client, pool, mount_peers, monkeypatch
 ):
     """The detector itself is fail-OPEN: if bare_intent_check raises, the
-    reply ships unchanged — one gateway call, no redirect, no span."""
+    reply ships unchanged — one gateway call, no redirect. The trace says the
+    guard fell over (verification-2-7 T11): one deferral-family span marked
+    raised, never a fired one."""
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("detector blew up")
@@ -305,7 +307,11 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     assert gateway.calls == 1  # no redirect was attempted
     assert await _stored_reply(pool) == BARE_INTENT
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
-    assert await _deferral_spans(pool) == []
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    assert traces.guard_raised(spans[0]["meta"])
+    assert spans[0]["meta"]["kind"] == "bare_intent"
+    assert spans[0]["meta"]["error"] == "RuntimeError: detector blew up"
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]
 
 

@@ -5300,6 +5300,22 @@ def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
             )
 
 
+def _file_guard_crash(turn: traces.Turn, name: str, exc: BaseException, **meta: Any) -> None:
+    """The guard span a guard that RAISED files (verification-2-7 T11).
+
+    Fail-open still holds — the reply ships uncorrected and the handler logs
+    the traceback — but the trace says the guard fell over, so a crashed guard
+    is never indistinguishable from one that looked and found nothing. Named
+    for the guard (the name its fired span uses; `meta` carries anything that
+    tells a family apart, e.g. bare-intent's kind), meta.error "<ExcType>:
+    <message>" bounded like every span's error, and traces.GUARD_RAISED so no
+    reader takes the crash for a correction."""
+    with turn.span("guard", name) as span:
+        span.meta.update(meta)
+        span.meta[traces.GUARD_RAISED] = True
+        span.meta["error"] = f"{type(exc).__name__}: {exc}"[:SPAN_RESULT_HEAD_CHARS]
+
+
 def _regen_rejected_by(
     corrected: str,
     turn: traces.Turn,
@@ -6787,8 +6803,9 @@ async def _run_turn(
             # device_names (read above): the only words an update claim's
             # machine can be — derived, never a list (S42b Task 23 fix round 1).
             correction = guards.narration_check(text, turn.spans, device_names)
-        except Exception:
+        except Exception as exc:
             logger.exception("narration guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "narration", exc)
             correction = None
         if correction is not None:
             with turn.span("guard", "narration") as span:
@@ -6818,8 +6835,9 @@ async def _run_turn(
             delegation_claim = guards.delegation_claim_check(
                 text, turn.spans, agent_names, self_name=self_name
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("delegation-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "delegation_claim", exc)
             delegation_claim = None
         if delegation_claim is not None:
             with turn.span("guard", "delegation_claim") as span:
@@ -6832,8 +6850,9 @@ async def _run_turn(
         # step, so a reply asserting one is a fabrication by construction.
         try:
             consent_correction = guards.consent_claim_check(text)
-        except Exception:
+        except Exception as exc:
             logger.exception("consent-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "consent_claim", exc)
             consent_correction = None
         # A fired consent guard gets ONE redirect (the FIX for the walk where
         # the correction was right and "try again" still did nothing). The
@@ -6908,8 +6927,9 @@ async def _run_turn(
             capability_correction = guards.capability_claim_check(
                 text, _capability_check_tools(persona.tool_names, turn.spans)
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("capability-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "capability_claim", exc)
             capability_correction = None
         if capability_correction is not None:
             with turn.span("guard", "capability_claim") as span:
@@ -6939,8 +6959,9 @@ async def _run_turn(
             stack_claim = guards.stack_claim_check(
                 text, turn.spans, purpose=traces.purpose_of(turn)
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "stack_claim", exc)
             stack_claim = None
         if stack_claim is not None:
             with turn.span("guard", "stack_claim") as span:
@@ -7001,8 +7022,9 @@ async def _run_turn(
                 state_claim = guards.state_claim_check(
                     text, turn.spans, device_names, purpose=traces.purpose_of(turn)
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "state_claim", exc)
                 state_claim = None
         if state_claim is not None:
             state_is_machine = state_claim.subject_kind == "machine"
@@ -7123,8 +7145,9 @@ async def _run_turn(
                 listing_claim = guards.presented_listing_check(
                     text, turn.spans, listing_tools, message
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("presented-listing guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "presented_listing", exc)
                 listing_claim = None
         if listing_claim is not None:
             listing_meta = {
@@ -7415,8 +7438,9 @@ async def _run_turn(
             deferral = guards.deferral_check(
                 persisted, turn.spans, persona.tool_names, user_message=message
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("deferral guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "deferral", exc)
             deferral = None
         # The SIXTH sibling: a BARE-INTENT reply ("Got it. Checking the
         # workspace…") commits to nothing deferral_check can anchor on — no
@@ -7428,8 +7452,9 @@ async def _run_turn(
         if deferral is None:
             try:
                 bare_intent = guards.bare_intent_check(persisted, turn.spans)
-            except Exception:
+            except Exception as exc:
                 logger.exception("bare-intent guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "deferral", exc, kind="bare_intent")
                 bare_intent = None
         deferral_fired = deferral is not None or bare_intent is not None
         if (
