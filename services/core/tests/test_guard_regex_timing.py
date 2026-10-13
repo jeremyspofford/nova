@@ -544,11 +544,18 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     most 48 characters): 231 -> 233, 312 -> 314, the difference 81
     unchanged. T6 VERIFY 2 (past times: weekdays, this morning, dates) widened
     `_WAKE_CLAIM_PAST` in place — `_MONTH` is a string, not a Pattern — so
-    the counts did not move."""
+    the counts did not move.
+
+    Guard follow-ups T1 (2026-10-13, the cleared offer: turn f816e1c2, "Do you
+    want me to disable Fast Startup now? That one I can actually do.") added
+    THREE bare module Patterns, reached by both walks — `_CLEARED_OFFER_LEAD`
+    (her first-person permission question), `_CLEARED_CAN_DO` (her own "I can
+    do that") and `_CLEARED_EXTRA` (an offer of extra work): 233 -> 236,
+    314 -> 317, the difference 81 unchanged."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 233, len(old)
-    assert len(new) == 314, len(new)
+    assert len(old) == 236, len(old)
+    assert len(new) == 317, len(new)
     assert len(new) - len(old) == 81
 
 

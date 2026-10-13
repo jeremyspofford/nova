@@ -12824,6 +12824,86 @@ def _handback_cli_tool(line: str, names: frozenset[str]) -> str | None:
     return None
 
 
+
+# -- the CLEARED-OFFER guard (guard follow-ups T1, 2026-10-13) ---------------
+#
+# Turn f816e1c2 (2026-10-12): asked to "set up the dell so it can be woken over
+# the network", after fourteen tool calls she ended with "Do you want me to
+# disable Fast Startup now? That one I can actually do." The deferral guard's
+# offer shape stood down twice over: the instruction maps to no action class,
+# and tools had run. The owner's rule (nova-does-not-hand-back-steps): asked to
+# do it, she does it. The broad handback guard stays shelved (09-29).
+#
+# This shape is read off HER words alone — never his message (no-phrase-
+# matchers): a first-person offer QUESTION, and in the same or an adjacent
+# sentence her own statement that she CAN do it. There is no approval step in
+# Nova (ruling 2026-09-03), so a permission question about something she has
+# just said she can do waits on nothing. Measured before building: over all 818
+# stored replies the shape hits exactly f816e1c2.
+#
+# PURE and PRECISION-first. Silent: an offer of EXTRA work ("also", "too", "as
+# well") — a942fbe7's shape; a scope choice ("…or…") or a wh-question, which
+# are hers to ask; a negated can-do ("I can't do that"); a relayed or quoted
+# offer; and an offer to HIM ("do you want to …"), which offers nothing of
+# hers. Whether the action is part of what he asked stays the MODEL's call
+# inside the redirect (verifier-loop-pattern): the nudge says do it if it is,
+# and answer without asking leave if it is not. It never blocks a tool.
+_CLEARED_OFFER_LEAD = re.compile(
+    r"\b(?:(?:do|would)\s+you\s+(?:want|like)\s+me\s+to"
+    r"|want\s+me\s+to"
+    r"|should\s+i|shall\s+i|may\s+i"
+    r"|(?:is\s+it\s+)?ok(?:ay)?\s+(?:if|for)\s+(?:i|me\s+to))\b",
+    re.I,
+)
+_CLEARED_CAN_DO = re.compile(
+    r"\bi\s+can\s+(?:actually\s+|definitely\s+|absolutely\s+|easily\s+|certainly\s+)?do\s+"
+    r"(?:that|it|this|those|that\s+one|this\s+one)\b"
+    r"|\b(?:that|this)\s+one\s+i\s+can\s+(?:actually\s+|definitely\s+)?do\b"
+    r"|\bso\s+i\s+can\s+do\s+(?:it|that)\b",
+    re.I,
+)
+_CLEARED_EXTRA = re.compile(r"\b(?:also|too|as\s+well|additionally|in\s+addition)\b", re.I)
+
+
+@dataclass(frozen=True)
+class ClearedOfferClaim:
+    """A permission question about something she says she can do. `action`
+    is the offered action as she wrote it, `phrase` the matched question."""
+
+    action: str
+    phrase: str
+
+
+def cleared_offer_check(reply_text: str) -> ClearedOfferClaim | None:
+    """Her offer question beside her own "I can do that", or None (see the
+    section header). Reads her reply only."""
+    try:
+        return _cleared_offer(reply_text or "")
+    except Exception:  # noqa: BLE001 — a detector error ships the reply
+        return None
+
+
+def _cleared_offer(text: str) -> ClearedOfferClaim | None:
+    sentences = [s for s in _sentences(text) if s.strip()]
+    for i, sentence in enumerate(sentences):
+        if not sentence.rstrip().endswith("?"):
+            continue
+        lead = _CLEARED_OFFER_LEAD.search(sentence)
+        if lead is None or _WH_LEAD.match(sentence):
+            continue
+        before = sentence[: lead.start()]
+        if _REPORTED.search(before) or _inside_quote(before):
+            continue
+        action = sentence[lead.end() :].strip().rstrip("?").strip()
+        if not action or _ALTERNATIVE.search(action) or _CLEARED_EXTRA.search(action):
+            continue
+        near = sentences[max(0, i - 1) : i + 2]
+        if not any(_CLEARED_CAN_DO.search(n) for n in near):
+            continue
+        return ClearedOfferClaim(action=action[:80], phrase=sentence.strip()[:120])
+    return None
+
+
 @dataclass(frozen=True)
 class OwnToolHandbackClaim:
     """Her own registered tool presented as the owner's action. `tool` is the
