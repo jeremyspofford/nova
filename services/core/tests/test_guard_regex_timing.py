@@ -551,12 +551,20 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     THREE bare module Patterns, reached by both walks — `_CLEARED_OFFER_LEAD`
     (her first-person permission question), `_CLEARED_CAN_DO` (her own "I can
     do that") and `_CLEARED_EXTRA` (an offer of extra work): 233 -> 236,
-    314 -> 317, the difference 81 unchanged."""
+    314 -> 317, the difference 81 unchanged.
+
+    Guard follow-ups T2-T3 (2026-10-13) added ONE bare module Pattern,
+    reached by both walks — `_ADMIN_PATH_OBJECT` (the admin path as the object
+    of a delete word: "I removed the admin path from minipc" is an uninstall)
+    — and TWO `_CAPABILITY_TOOLS` rows, reached only by the new walk
+    (device_edit_file, device_admin_path; appended last, so no id moved).
+    workspace_list_files' row was narrowed in place (its allowlisted tail is
+    strings, not Patterns): 236 -> 237, 317 -> 320, the difference 81 -> 83."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 236, len(old)
-    assert len(new) == 317, len(new)
-    assert len(new) - len(old) == 81
+    assert len(old) == 237, len(old)
+    assert len(new) == 320, len(new)
+    assert len(new) - len(old) == 83
 
 
 def test_the_sweep_reaches_the_stack_claim_patterns():

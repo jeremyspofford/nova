@@ -1616,3 +1616,130 @@ HEDGE_FIRING_CONTROLS = [
 def test_s29b_t2_fix_an_unhedged_assertion_still_fires(label, reply, tool):
     correction = guards.capability_claim_check(reply, [tool])
     assert correction is not None and tgt(correction) == [tool], label
+
+
+# -- guard follow-ups T2 (2026-10-13): workspace_list_files' allowlist tail ----
+#
+# The workspace_list_files row was bare: any "list files" after a denial lead
+# fired, so S29b VERIFY's honest LOCATION replies were corrected into "I can do
+# that" — "There's no /srv/backups folder, so I can't list files there." (the
+# folder is absent) and "I can't list files on the Mac mini; …" (one named
+# machine, device_list_files' territory). The row now ends in the same
+# allowlisted tail the device rows use: end of clause, ", so/but", a capability
+# word ("for you", "at all"), "in your/my workspace", "or <1-3 words>", or the
+# trailing-denial copula ("Listing files isn't among my tools"); never a stated
+# present state.
+
+LIST_FILES_FIRES = [
+    ("bare", "I can't list files."),
+    ("bare_directories", "I'm unable to list directories."),
+    ("for_you", "I can't list files for you."),
+    ("at_all", "I can't list files at all."),
+    ("in_workspace", "I can't list files in your workspace."),
+    ("so_clause", "I can't list files, so I can't tell you what's there."),
+    ("or_words", "I can't list files or folders."),
+    ("contents_of", "I cannot list the contents of directories."),
+    ("trailing", "Listing files isn't among my tools."),
+]
+
+LIST_FILES_HONEST = [
+    ("absent_folder_there", "There's no /srv/backups folder, so I can't list files there."),
+    ("named_machine", "I can't list files on the Mac mini; it isn't paired."),
+    ("named_machine_bare", "I can't list files on the Mac mini."),
+    ("named_folder", "I can't list files in /srv/backups because it doesn't exist."),
+    ("named_path", "I can't list files under /srv/backups."),
+    ("state", "I can't list files right now while the workspace is being restored."),
+    ("object", "I can't list files that were deleted last week."),
+    ("quoted", 'You said "I can\'t list files".'),
+]
+
+
+@pytest.mark.parametrize("label,reply", LIST_FILES_FIRES, ids=[c[0] for c in LIST_FILES_FIRES])
+def test_guardfu_t2_a_general_list_files_denial_fires(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and "workspace_list_files" in tgt(correction), label
+
+
+@pytest.mark.parametrize("label,reply", LIST_FILES_HONEST, ids=[c[0] for c in LIST_FILES_HONEST])
+def test_guardfu_t2_an_honest_location_reply_is_not_corrected(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    named = tgt(correction) if correction is not None else []
+    assert "workspace_list_files" not in named, f"{label!r}: {reply!r} corrected for {named}"
+
+
+def test_guardfu_t2_s29b_verify_replies_verbatim_are_silent():
+    """The two replies S29b VERIFY found, as she could write them."""
+    for reply in (
+        "There's no /srv/backups folder, so I can't list files there.",
+        "I can't list files on the Mac mini; it's offline, so try again once it's awake.",
+    ):
+        assert guards.capability_claim_check(reply, ALL_TOOLS) is None, reply
+
+
+def test_guardfu_t2_a_device_noun_goes_to_the_device_row_not_the_workspace_row():
+    correction = guards.capability_claim_check("I can't list files on your computer.", ALL_TOOLS)
+    assert correction is not None and tgt(correction) == ["device_list_files"]
+
+
+# -- guard follow-ups T3 (2026-10-13): device_edit_file + device_admin_path ---
+#
+# Both were EXCUSED in test_capability_coverage.py with "no row yet". Each row
+# is a _device_row: a GENERAL device noun, then the device rows' allowlisted
+# tail, so a named machine, a stated state, an object or a qualifier stays an
+# honest report. Admin is device_admin_path's ability: installing the path is
+# what lets device_run(elevated) run as root/admin, so "I can't run commands as
+# root on your laptop" disowns a tool she holds.
+
+EDIT_ADMIN_FIRES = [
+    ("edit", "I can't edit files on your computer.", "device_edit_file"),
+    ("modify", "I'm unable to modify files on your laptop.", "device_edit_file"),
+    ("change_for_you", "I can't change files on your machine for you.", "device_edit_file"),
+    ("root", "I can't run things as root on your machine.", "device_admin_path"),
+    ("admin", "I can't run commands as admin on your PC.", "device_admin_path"),
+    (
+        "administrator",
+        "I cannot run programs as an administrator on your computer.",
+        "device_admin_path",
+    ),
+    ("sudo", "I can't run commands with sudo on your laptop.", "device_admin_path"),
+    (
+        "admin_rights",
+        "I can't run anything with admin rights on your computer, so you'll have to do it.",
+        "device_admin_path",
+    ),
+]
+
+EDIT_ADMIN_HONEST = [
+    ("edit_named", "I can't edit files on the Dell; it's offline."),
+    ("edit_state", "I can't edit files on your computer right now because it's asleep."),
+    ("edit_object", "I can't edit files on your computer that are read-only."),
+    ("edit_past", "I couldn't edit files on your computer."),
+    ("edit_other_subject", "You can't edit files on your computer from here."),
+    ("admin_named", "I can't run commands as root on the mini PC until its admin path is in."),
+    ("admin_state", "I can't run commands as root on your laptop while it's offline."),
+    ("admin_object", "I can't run things as root on your machine that need a password typed."),
+    ("admin_hedged", "I might not be able to run commands as root on your laptop."),
+    ("admin_quoted", 'You said "I can\'t run things as root on your machine".'),
+]
+
+
+@pytest.mark.parametrize("label,reply,tool", EDIT_ADMIN_FIRES, ids=[c[0] for c in EDIT_ADMIN_FIRES])
+def test_guardfu_t3_a_general_edit_or_admin_denial_fires(label, reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None and tool in tgt(correction), label
+
+
+@pytest.mark.parametrize("label,reply", EDIT_ADMIN_HONEST, ids=[c[0] for c in EDIT_ADMIN_HONEST])
+def test_guardfu_t3_an_honest_edit_or_admin_reply_names_neither_tool(label, reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    named = set(tgt(correction)) if correction is not None else set()
+    assert not named & {"device_edit_file", "device_admin_path"}, f"{label!r}: {named}"
+
+
+def test_guardfu_t3_the_rows_read_the_live_tool_list():
+    """Derived, never hardcoded: unregistered, each denial is honest."""
+    others = [t for t in ALL_TOOLS if t not in ("device_edit_file", "device_admin_path")]
+    for reply, _label, _tool in [(r, label, t) for label, r, t in EDIT_ADMIN_FIRES]:
+        correction = guards.capability_claim_check(reply, others)
+        named = set(tgt(correction)) if correction is not None else set()
+        assert not named & {"device_edit_file", "device_admin_path"}, reply

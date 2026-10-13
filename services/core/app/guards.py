@@ -3417,6 +3417,28 @@ _DEVICE_TAIL_OK = (
 )
 
 
+# The workspace_list_files row's tail (guard follow-ups T2, 2026-10-13): the
+# device rows' allowlist, plus "in your/my workspace" (her own folder IS the
+# capability) and the trailing-denial copula ("Listing files isn't among my
+# tools"). Anything else after "list files" — "there", "on the Mac mini",
+# "under /srv/backups", "that were deleted" — names a place or an object, and
+# a denial about one place is a report, not a disowned ability.
+_WORKSPACE_LIST_TAIL_WORDS = (
+    r"(?:\s++(?:for\s++you|directly|myself|at\s++all"
+    r"|in\s++(?:your|my)\s++(?:own\s++)?(?:workspace|folder|files))\b)?" + _DEVICE_TAIL_END
+)
+_WORKSPACE_LIST_TAIL_OK = (
+    "(?="
+    + _WORKSPACE_LIST_TAIL_WORDS
+    + r"|\s++or\s++(?:[\w-]++\s++){0,2}?[\w-]++"
+    + _WORKSPACE_LIST_TAIL_WORDS
+    + r"|\s++(?:is|are|isn'?t|aren'?t)\b"
+    + r")(?!"
+    + _PRESENT_STATE_TAIL
+    + ")"
+)
+
+
 def _device_row(verb_phrase: str) -> re.Pattern[str]:
     """One device row: `verb_phrase` on/to a general device noun, then the
     allowlisted tail."""
@@ -3470,10 +3492,16 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "workspace_delete",
     ),
+    # Guard follow-ups T2 (2026-10-13): the bare row corrected honest LOCATION
+    # replies ("There's no /srv/backups folder, so I can't list files there.",
+    # "I can't list files on the Mac mini; …"), so it ends in an allowlisted
+    # tail like the device rows (see _WORKSPACE_LIST_TAIL_OK).
     (
         re.compile(
-            r"list(?:ing)?\s+(?:your\s+|the\s+)?files?\b"
-            r"|list(?:ing)?\s+(?:the\s+contents\s+of\s+)?director(?:y|ies)\b",
+            r"\blist(?:ing)?\s++(?:"
+            r"(?:your\s++|the\s++)?files?"
+            r"|(?:the\s++contents\s++of\s++)?director(?:y|ies)"
+            r")\b" + _WORKSPACE_LIST_TAIL_OK,
             re.I,
         ),
         "workspace_list_files",
@@ -3729,6 +3757,25 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"send(?:ing)?\s++(?:you\s++)?(?:any\s++)?(?:desktop\s++)?notifications?\s++(?:to|on)"
         ),
         "device_notify",
+    ),
+    # Guard follow-ups T3 (2026-10-13): device_edit_file and device_admin_path
+    # were EXCUSED with "no row yet". Same shape as the S29b T2 rows: a GENERAL
+    # noun and the allowlisted tail, so "I can't edit files on the Dell; it's
+    # offline" stays honest. Admin is device_admin_path's ability — the path is
+    # what lets device_run(elevated) run as root/admin. Appended last, so no
+    # existing row's id moves.
+    (
+        _device_row(r"(?:edit(?:ing)?|modif(?:y|ying)|chang(?:e|ing))\s++(?:any\s++)?files?\s++on"),
+        "device_edit_file",
+    ),
+    (
+        _device_row(
+            r"run(?:ning)?\s++(?:any\s++)?(?:commands?|things|anything|programs?|scripts?)\s++"
+            r"(?:as\s++(?:root|(?:an?\s++)?admin(?:istrator)?)"
+            r"|with\s++(?:sudo|root\s++(?:access|privileges)"
+            r"|admin(?:istrator)?\s++(?:rights|privileges)))\s++on"
+        ),
+        "device_admin_path",
     ),
 )
 
@@ -7417,8 +7464,8 @@ class DeviceCompletionClaim:
 # And uninstalled by it (S30b END): "uninstall" is its own kind, so "I
 # uninstalled the admin path on minipc" beside an ok device_admin_path call
 # there is backed; "I uninstalled Steam" is still backed by device_run.
-# "I removed the admin path" is a delete, a command, device_run only — a
-# known residual: telling the admin path from a file needs the object.
+# "I removed the admin path" is read by its object (guard follow-ups,
+# 2026-10-13, _ADMIN_PATH_OBJECT): an uninstall; any other removal a command.
 #
 # A job is launched (S30c T10, 2026-10-12): an ok device_job_start backs "I
 # started the suite on minipc" / "it's running" (launch words) — and nothing
@@ -7470,6 +7517,14 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
 _KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install", "uninstall", "close"})
+
+
+# The admin path as the WHOLE object of a delete word ("removed the admin path
+# from minipc", "removed its admin path"): read at the verb's end, anchored, so
+# "removed the admin user" or "removed the file in the admin path" are not it.
+_ADMIN_PATH_OBJECT = re.compile(
+    r"\s++(?:the\s++|its\s++|their\s++|your\s++)?admin(?:istrator)?\s++path\b", re.I
+)
 
 
 def _kind_of(action: str) -> str:
@@ -8792,6 +8847,15 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
                             build = None
         if build is not None:
             action = kind = "install"
+        elif (
+            shape in ("first", "head")
+            and _ACTION_OF_WORD.get(word) == "delete"
+            and _ADMIN_PATH_OBJECT.match(text, verb_end)
+        ):
+            # A removal of the admin path is its uninstall (guard follow-ups,
+            # 2026-10-13): device_admin_path's, or a command's. Any other
+            # object stays a delete, so the path's call never backs a file's.
+            action = kind = "uninstall"
         else:
             action = _ACTION_OF_WORD.get(word, "run")
             kind = _kind_of(action)
@@ -12822,7 +12886,6 @@ def _handback_cli_tool(line: str, names: frozenset[str]) -> str | None:
     if second == "\\" or (second.startswith("--") and len(second) > 2):
         return first
     return None
-
 
 
 # -- the CLEARED-OFFER guard (guard follow-ups T1, 2026-10-13) ---------------

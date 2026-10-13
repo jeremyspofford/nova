@@ -85,13 +85,6 @@ EXCUSED: dict[str, str] = {
         "reads the tailnet for this hub's address; a state read — 'there is "
         "no address' is a fact, not a capability denial"
     ),
-    # S30a T5 (2026-10-09): no row reads "I can't edit files on your computer"
-    # today (capability_claim_check returns None on it). A row belongs with
-    # paired negatives in test_capability_guard.py — a stated follow-up.
-    "device_edit_file": (
-        "replaces one snippet in a file on a device; 'I can't edit files on your "
-        "computer' has no row yet — device_write_file's row covers writing files"
-    ),
     # S30a T7 (2026-10-10): capability_claim_check returns None on "I can't
     # search files on your computer" / "I can't search your code" today. A row
     # belongs with paired negatives in test_capability_guard.py — follow-up.
@@ -99,15 +92,6 @@ EXCUSED: dict[str, str] = {
         "searches a directory tree on a device for a pattern; 'I can't search "
         "your code' has no row yet — device_read_file's and device_list_files' "
         "rows cover reading and listing"
-    ),
-    # S30b T7 (2026-10-11): no row reads "I can't get admin rights on your
-    # computer" / "I can't run that as root" today; device_run(elevated)'s
-    # stated cannot names this tool on a machine without the path. A row
-    # belongs with paired negatives in test_capability_guard.py — follow-up.
-    "device_admin_path": (
-        "installs or removes a machine's admin path through the agent; 'I can't "
-        "run things as root on your computer' has no row yet — device_run's "
-        "elevated cannot names this tool"
     ),
     # S46a T5 (2026-10-11): no row reads "I can't wake your computer" today;
     # a row belongs with paired negatives in test_capability_guard.py — a
@@ -296,10 +280,13 @@ def test_c4_machine_update_is_covered_and_dropping_its_row_is_red(monkeypatch):
     assert any(p.startswith("machine_update: unclassified") for p in problems), problems
 
 
-def test_s30a_t5_device_edit_file_is_registered_and_excused_with_its_reason():
+def test_guardfu_t3_device_edit_file_is_covered_by_a_row_not_excused():
+    """Guard follow-ups T3 (2026-10-13): S30a T5 excused it with "no row yet";
+    the row is in guards._CAPABILITY_TOOLS now, with paired negatives in
+    test_capability_guard.py."""
     assert "device_edit_file" in tools.REGISTRY
-    assert EXCUSED["device_edit_file"].strip()
-    assert "device_edit_file" not in _covered()
+    assert "device_edit_file" not in EXCUSED
+    assert "device_edit_file" in _covered()
     assert "device_edit_file" not in NO_OUTSIDE_ACTION
 
 
@@ -310,8 +297,11 @@ def test_s30a_t7_device_search_is_registered_and_excused_with_its_reason():
     assert "device_search" not in NO_OUTSIDE_ACTION
 
 
-def test_s30b_t7_device_admin_path_is_registered_and_excused_with_its_reason():
+def test_guardfu_t3_device_admin_path_is_covered_by_a_row_not_excused():
+    """Guard follow-ups T3 (2026-10-13): S30b T7 excused it with "no row yet";
+    the row is in guards._CAPABILITY_TOOLS now, with paired negatives in
+    test_capability_guard.py."""
     assert "device_admin_path" in tools.REGISTRY
-    assert EXCUSED["device_admin_path"].strip()
-    assert "device_admin_path" not in _covered()
+    assert "device_admin_path" not in EXCUSED
+    assert "device_admin_path" in _covered()
     assert "device_admin_path" not in NO_OUTSIDE_ACTION
