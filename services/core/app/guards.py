@@ -12939,11 +12939,9 @@ class ClearedOfferClaim:
 
 def cleared_offer_check(reply_text: str) -> ClearedOfferClaim | None:
     """Her offer question beside her own "I can do that", or None (see the
-    section header). Reads her reply only."""
-    try:
-        return _cleared_offer(reply_text or "")
-    except Exception:  # noqa: BLE001 — a detector error ships the reply
-        return None
+    section header). Reads her reply only. A detector error is not caught
+    here: it reaches the caller, whose handler logs it and ships the reply."""
+    return _cleared_offer(reply_text or "")
 
 
 def _cleared_offer(text: str) -> ClearedOfferClaim | None:
@@ -12982,12 +12980,11 @@ def own_tool_handback_check(
     available_tools: Sequence[str],
 ) -> OwnToolHandbackClaim | None:
     """The first of her registered tools the reply hands the owner to run, or
-    None. Pure, linear, fail-open; derived from `available_tools` only.
-    `spans` is unused here (T2 reads it for the redirect's nudge)."""
-    try:
-        return _own_tool_handback(reply_text or "", frozenset(available_tools or ()))
-    except Exception:  # fail open: a guard that crashes a turn is worse than a miss
-        return None
+    None. Pure, linear; derived from `available_tools` only. A detector error
+    (or a tool list that fails to read) is not caught here: it reaches the
+    caller, whose handler logs it and ships the reply. `spans` is unused here
+    (T2 reads it for the redirect's nudge)."""
+    return _own_tool_handback(reply_text or "", frozenset(available_tools or ()))
 
 
 def _own_tool_handback(text: str, names: frozenset[str]) -> OwnToolHandbackClaim | None:
