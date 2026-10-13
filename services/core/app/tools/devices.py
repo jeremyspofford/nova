@@ -870,7 +870,9 @@ async def device_read_file(args: dict, ctx: ToolContext) -> str:
     read_args: dict = {"path": path}
     for key in _RANGE_KEYS:
         if key in args:
-            read_args[key] = int(args[key])
+            # Already an int: dispatch reads 2.0/"2" as 2 and refuses 2.7 in
+            # words (schema.WHOLE_NUMBER) — nothing here may truncate one.
+            read_args[key] = args[key]
     ranged = len(read_args) > 1
     result = await _command(pool, row, "fs.read", read_args, ctx=ctx)
     if not ranged:
@@ -1658,21 +1660,25 @@ TOOLS: tuple[Tool, ...] = (
                 },
                 "start_line": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "First line to read (1-based); give end_line with it.",
                 },
                 "end_line": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "Last line to read (inclusive); give start_line with it.",
                 },
                 "offset": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 0,
                     "description": "Byte offset to start reading at; give length with it.",
                 },
                 "length": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "Number of bytes to read from offset; give offset with it.",
                 },
@@ -1722,6 +1728,7 @@ TOOLS: tuple[Tool, ...] = (
                 },
                 "max_matches": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "maximum": _SEARCH_MAX_MATCHES,
                     "description": (
