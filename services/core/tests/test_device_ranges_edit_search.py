@@ -1328,3 +1328,152 @@ def test_v27_t4_cov_the_whole_number_keyword_never_goes_on_the_wire():
     assert tools.REGISTRY["device_search"].parameters["properties"]["max_matches"][
         schema.WHOLE_NUMBER
     ]
+
+
+# == verification-2-7 T6: an agent from before wire numbers is stated ==============
+#
+# Before bae41a1d (2026-10-10) novad's fs.read and fs.search took a number only
+# as a float64, but the client decodes frames with UseNumber, so every number on
+# the wire was a json.Number and was refused: fs.read "must be a whole number,
+# got json.Number" (%T), fs.search "must be a whole number from 1 to 2000, got
+# 200" (%v of a json.Number prints its digits). Those builds cannot change, so
+# the wording is frozen; she is told the agent needs machine_update, not the
+# agent's words, which read as a fault in her own arguments.
+
+_V27_T6_OLD_READ = "fs.read '{key}' must be a whole number, got json.Number"
+_V27_T6_OLD_SEARCH = "fs.search 'max_matches' must be a whole number from 1 to 2000, got {n}"
+
+
+def _v27_t6_says_update(result: str) -> bool:
+    return (
+        result.startswith("Error:")
+        and "predates wire numbers" in result
+        and "machine_update" in result
+        and "nothing" in result
+    )
+
+
+@pytest.mark.parametrize(
+    "key,rng,meta",
+    [
+        ("start_line", {"start_line": 2, "end_line": 3}, _V27_LINE_META),
+        ("end_line", {"start_line": 2, "end_line": 3}, _V27_LINE_META),
+        ("offset", {"offset": 2, "length": 3}, _V27_BYTE_META),
+        ("length", {"offset": 2, "length": 3}, _V27_BYTE_META),
+    ],
+)
+async def test_v27_t6_c1_an_old_agents_json_number_read_refusal_is_stated_as_predating(
+    pool, key, rng, meta
+):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "dell", "path": _PATH, **rng},
+        ok=False,
+        exit_code=None,
+        error=_V27_T6_OLD_READ.format(key=key),
+    )
+    assert sent == {"path": _PATH, **rng}, "the range never reached the agent"
+    assert ok is False, result
+    assert _v27_t6_says_update(result), result
+    assert "dell" in result, result
+    assert _files(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("n", [200, 5, 2000, 1])
+async def test_v27_t6_c2_an_old_agents_max_matches_refusal_is_stated_as_predating(pool, n):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("dell", max_matches=n),
+        ok=False,
+        exit_code=None,
+        error=_V27_T6_OLD_SEARCH.format(n=n),
+    )
+    assert sent.get("max_matches") == n, "max_matches never reached the agent"
+    assert ok is False, result
+    assert _v27_t6_says_update(result), result
+    assert "dell" in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "tool,args,error",
+    [
+        (
+            "device_read_file",
+            {"device": "dell", "path": _PATH, "start_line": 2, "end_line": 3},
+            _V27_T6_OLD_READ.format(key="start_line"),
+        ),
+        (
+            "device_search",
+            _search_args("dell", max_matches=200),
+            _V27_T6_OLD_SEARCH.format(n=200),
+        ),
+    ],
+    ids=["read", "search"],
+)
+async def test_v27_t6_c3_the_stated_failure_replaces_the_agents_number_words(
+    pool, tool, args, error
+):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, _facts, sent = await _call(
+        pool, conn, device, tool, args, ok=False, exit_code=None, error=error
+    )
+    assert sent, "the call never reached the agent"
+    assert ok is False, result
+    assert "json.Number" not in result, result
+    assert "must be a whole number" not in result, result
+    assert "predates wire numbers" in result, result
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "tool,args,said",
+    [
+        (
+            "device_read_file",
+            {"device": "mini", "path": _PATH, "start_line": 2, "end_line": 3},
+            "fs.read 'start_line' must be a whole number, got string",
+        ),
+        (
+            "device_read_file",
+            {"device": "mini", "path": _PATH, "offset": 2, "length": 3},
+            "fs.read 'offset' must be a whole number >= 0, got -1",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got 0",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got 2001",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got abc",
+        ),
+    ],
+    ids=["read-string", "read-negative", "search-0", "search-2001", "search-abc"],
+)
+async def test_v27_t6_c4_a_current_agents_number_refusal_is_its_own_words(pool, tool, args, said):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool, conn, device, tool, args, ok=False, exit_code=None, error=said
+    )
+    assert sent, "the call never reached the agent"
+    assert ok is False, result
+    assert said in result, result
+    assert "predates" not in result, result
+    await _close(conn, task)
