@@ -44,7 +44,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from app import adapters, compute_id, db, engines, providers, routing, usage
+from app import adapters, compute_id, db, engines, providers, routing, usage, windows
 from app.adapters import ListingUnavailable, ProviderRefused, ProviderUnreachable, systemone
 from app.adapters.base import CONNECT_PHASE_ERRORS, refusal_words
 
@@ -58,6 +58,12 @@ SERVED_RUNTIME_HEADER = "X-Nova-Served-Runtime"
 # served with — its ollama's /api/ps `context_length`, read after the answer.
 # Omitted when not readable, never guessed and never a table of sizes.
 CONTEXT_WINDOW_HEADER = "X-Nova-Context-Window"
+# S38b T5: where that window came from — "served" (read from /api/ps) or
+# "declared" (the provider listing's context_length, for a link with no
+# /api/ps). Sent whenever the window is, never alone.
+CONTEXT_WINDOW_SOURCE_HEADER = "X-Nova-Context-Window-Source"
+WINDOW_SERVED = "served"
+WINDOW_DECLARED = "declared"
 ROUTE_HEADER = "X-Nova-Route"
 # The decision-model kinds a decision call allows, comma-separated
 # (routing.allowed_kinds): core states the owner's two switches on every call.
@@ -624,6 +630,8 @@ class Served:
     on: str | None = None
     runtime: str | None = None
     window: int | None = None
+    # How `window` is known (S38b T5): WINDOW_SERVED unless it was declared.
+    window_source: str = WINDOW_SERVED
 
     def headers(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -633,6 +641,7 @@ class Served:
             out[SERVED_RUNTIME_HEADER] = self.runtime
         if self.window:
             out[CONTEXT_WINDOW_HEADER] = str(self.window)
+            out[CONTEXT_WINDOW_SOURCE_HEADER] = self.window_source
         return out
 
 
@@ -657,7 +666,13 @@ async def served_stamp(app, pool, row: dict, model: str) -> Served:
     logged, never guessed."""
     served_by = _served_by(row, model)
     if not engines.is_engine(row):
-        return Served(window=await _origin_window(app, row, model, served_by))
+        window = await _origin_window(app, row, model, served_by)
+        if window:
+            return Served(window=window)
+        return Served(
+            window=await _declared_window(pool, row, model, served_by),
+            window_source=WINDOW_DECLARED,
+        )
     try:
         engine = await engines.get(pool, row["name"])
     except engines.UnknownEngine:
@@ -702,6 +717,23 @@ async def _origin_window(app, row: dict, model: str, served_by: str) -> int | No
         logger.info("context window: omitted for %s — %s", served_by, why)
         return None
     return _window_of(resident, model, served_by)
+
+
+async def _declared_window(pool, row: dict, model: str, served_by: str) -> int | None:
+    """S38b T5: the window the provider's last listing DECLARED for `model`
+    (windows.record_listing_windows), for a non-engine link whose origin
+    states none. Stated as declared, never as served; none listed -> None,
+    logged, as today. Never read for an engine: what an engine serves with is
+    /api/ps's, and its listing's length is the model's max."""
+    window = await windows.declared_window(pool, row["name"], model)
+    if window is None:
+        logger.info(
+            "context window: no declared one for %s either — its listing stated none",
+            served_by,
+        )
+    else:
+        logger.info("context window: %s for %s, as its listing declared", window, served_by)
+    return window
 
 
 def _resident_entry(resident: list[dict], model: str) -> dict | None:

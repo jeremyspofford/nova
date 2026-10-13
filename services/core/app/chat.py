@@ -4283,8 +4283,14 @@ def _cut_at_window(turn: traces.Turn) -> WindowCut | None:
     prompt_tokens = llm.meta.get("prompt_tokens")
     if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool):
         return None
+    # S38b T5: a DECLARED window is never evidence of a cut — a cloud
+    # provider refuses a request over its window; only ollama cuts the front.
+    if llm.meta.get("context_window_source") == WINDOW_DECLARED:
+        return None
     window = llm.meta.get("context_window")
     if not isinstance(window, int) and isinstance(link, str):
+        if _SERVED_WINDOW_DECLARED.get(link):
+            return None
         window = _SERVED_WINDOWS.get(link)
     if not isinstance(window, int) or prompt_tokens < window - 1:
         return None
@@ -4574,8 +4580,15 @@ def _note_served(span, headers, requested: str | None = None) -> None:
     window = _stated_window(headers.get(CONTEXT_WINDOW_HEADER))
     if window is not None:
         span.meta["context_window"] = window
+        # S38b T5: "served" (/api/ps) or "declared" (a cloud listing's
+        # context_length). Recorded only as the gateway stated it; a
+        # declared window fits later rounds exactly as a served one does.
+        source = (headers.get(CONTEXT_WINDOW_SOURCE_HEADER) or "").strip()
+        if source in WINDOW_SOURCES:
+            span.meta["context_window_source"] = source
         if served_by:
             _SERVED_WINDOWS[served_by] = window
+            _SERVED_WINDOW_DECLARED[served_by] = source == WINDOW_DECLARED
 
 
 # The window the gateway says the answering model is actually served with
@@ -4583,12 +4596,20 @@ def _note_served(span, headers, requested: str | None = None) -> None:
 # gateway could not read it — and then nothing is fitted: unknown is stated
 # as absent, never guessed.
 CONTEXT_WINDOW_HEADER = "x-nova-context-window"
+# S38b T5: how the gateway knows that window — read from /api/ps ("served")
+# or the provider listing's context_length for a cloud link ("declared").
+CONTEXT_WINDOW_SOURCE_HEADER = "x-nova-context-window-source"
+WINDOW_DECLARED = "declared"
+WINDOW_SOURCES = frozenset({"served", WINDOW_DECLARED})
 
 # What each served link (X-Nova-Served-By) last stated about itself, in
 # process memory: its window, and the chars-per-token its own prompt_tokens
 # measured. A later round on that link is fitted with them. Keyed by the
 # link, so a window one link stated never fits another link's request.
 _SERVED_WINDOWS: dict[str, int] = {}
+# Whether the window each link last stated was DECLARED (S38b T5) — a cut
+# is never inferred from a declared window.
+_SERVED_WINDOW_DECLARED: dict[str, bool] = {}
 _SERVED_CHARS_PER_TOKEN: dict[str, float] = {}
 # Which link last served each request (T4b), keyed by _requested_key: the
 # model a round asked for, or the role chain it walked when it named none.
