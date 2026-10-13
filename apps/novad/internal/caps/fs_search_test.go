@@ -387,7 +387,7 @@ func TestFsSearchBadCallsAreStatedRefusals(t *testing.T) {
 		{"max 0", map[string]any{"path": d.Home, "pattern": "x", "max_matches": float64(0)}, "max_matches"},
 		{"max negative", map[string]any{"path": d.Home, "pattern": "x", "max_matches": float64(-1)}, "max_matches"},
 		{"max fraction", map[string]any{"path": d.Home, "pattern": "x", "max_matches": 1.5}, "max_matches"},
-		{"max string", map[string]any{"path": d.Home, "pattern": "x", "max_matches": "10"}, "max_matches"},
+		{"max string", map[string]any{"path": d.Home, "pattern": "x", "max_matches": "ten"}, "max_matches"},
 	} {
 		out := search(c.args, d)
 		if out.OK || out.Output != "" || out.Meta != nil || !strings.Contains(out.Error, c.says) {
