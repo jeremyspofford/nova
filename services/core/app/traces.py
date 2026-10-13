@@ -276,6 +276,12 @@ class Turn:
     # and chat._run_script_step, written by close_turn beside the spans.
     actions: list[Action] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)
+    # S38b T3: the summaries written this turn, by tool_call_id (each result
+    # at most once; a later round sends the same one again), and the results
+    # whose summary failed, with why (not retried this turn). In memory only:
+    # what was sent is on the round spans, the full text in tool_results.
+    summaries: dict[str, Any] = field(default_factory=dict)
+    summary_failures: dict[str, str] = field(default_factory=dict)
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
         return SpanRecorder(self, kind, name)

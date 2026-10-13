@@ -108,6 +108,7 @@ from app import (
     attachments,
     code_repo,
     context_fit,
+    context_summary,
     conversations,
     db,
     decisions,
@@ -4044,12 +4045,17 @@ async def _gateway_round(
                 f"pass_over needs a role's chain, and this {turn.kind} round has no role"
             )
         headers[peers.HEADER_PASS_OVER] = peers.pass_over_header(pass_over)
+    requested = _requested_key(model, role)
+    # S38b: before the round's own span opens, so the summary calls' spans
+    # precede it. What comes back is what this round sends (summaries in
+    # place of the oldest results); the turn's own messages stay whole.
+    messages, summarized = await _summarize_for_window(app, turn, messages, requested)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
         span.meta["tools_advertised"] = bool(advertised)
         span.meta["purpose"] = purpose
-        requested = _requested_key(model, role)
+        span.meta.update(summarized)
         sent = _fit_to_window(turn, span, messages, requested)
         try:
             async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
@@ -4625,6 +4631,22 @@ def _last_served_link(turn: traces.Turn) -> str | None:
     return None
 
 
+def _window_for(turn: traces.Turn, requested: str | None) -> tuple[str, int, float] | None:
+    """(link, window, chars-per-token) a round of `requested` is fitted to:
+    the link that last served the request (T4b), else the link that served
+    this turn's last round, when that link stated a window; else None —
+    unknown is absent, never guessed. One reader for fitting (_fit_to_window)
+    and summarizing (_summarize_for_window), so the two can never disagree
+    about which window a round has."""
+    link = _SERVED_LINK_BY_REQUEST.get(requested) if requested else None
+    if link is None:
+        link = _last_served_link(turn)
+    window = _SERVED_WINDOWS.get(link) if link else None
+    if window is None:
+        return None
+    return link, window, _SERVED_CHARS_PER_TOKEN.get(link, context_fit.DEFAULT_CHARS_PER_TOKEN)
+
+
 def _fit_to_window(
     turn: traces.Turn, span, messages: Sequence[dict], requested: str | None = None
 ) -> Sequence[dict]:
@@ -4637,14 +4659,11 @@ def _fit_to_window(
     Fits what is SENT only: fit never mutates its input, so the conversation
     the turn keeps — and the tool results it persists — stay whole. The span
     says what was trimmed, and only when something was."""
-    link = _SERVED_LINK_BY_REQUEST.get(requested) if requested else None
-    if link is None:
-        link = _last_served_link(turn)
-    window = _SERVED_WINDOWS.get(link) if link else None
-    if window is None:
+    found = _window_for(turn, requested)
+    if found is None:
         return messages
+    _link, window, ratio = found
     span.meta["context_fitted_to"] = window
-    ratio = _SERVED_CHARS_PER_TOKEN.get(link, context_fit.DEFAULT_CHARS_PER_TOKEN)
     fitted, report = context_fit.fit(messages, window, ratio)
     if report.tool_results_trimmed or report.rounds_dropped:
         span.meta["context_trimmed"] = {
@@ -4653,6 +4672,165 @@ def _fit_to_window(
             "est_tokens": report.est_tokens,
         }
     return fitted
+
+
+SUMMARY_SYSTEM = (
+    "You summarize one tool result for an assistant whose context is nearly "
+    "full. The full text stays on record and can be read again, but the "
+    "assistant will see only your summary. Keep VERBATIM everything that bears "
+    "on the user's latest message: numbers, names, paths, error lines, quotes. "
+    "Say what the result is and what it holds. Write only the summary."
+)
+# His latest message, as the summarizer is shown it: a question, not a document.
+SUMMARY_QUESTION_CHARS = 4_000
+# Tokens kept spare beyond the estimate when a piece is sized to the window.
+_SUMMARY_PIECE_SLACK_TOKENS = 16
+
+
+def _latest_user_text(messages: Sequence[dict]) -> str:
+    """His latest message's text (content parts' text joined), capped."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "\n".join(
+                part["text"]
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+        if isinstance(content, str):
+            return content[:SUMMARY_QUESTION_CHARS]
+    return ""
+
+
+def _summary_messages(question: str, result: traces.ToolResult, piece: str, of: str) -> list[dict]:
+    return [
+        {"role": "system", "content": SUMMARY_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"The user's latest message:\n{question}\n\n"
+                f"The {result.tool} result {result.ref} ({result.chars:,} chars){of}:\n{piece}"
+            ),
+        },
+    ]
+
+
+async def _write_summary(
+    app,
+    turn: traces.Turn,
+    link: str,
+    window: int,
+    ratio: float,
+    result: traces.ToolResult,
+    question: str,
+) -> str:
+    """The summary of one kept result, written by `link` — the link serving
+    the turn — capped at context_summary.summary_max_tokens(window). A result
+    bigger than the summarizer's room goes in window-sized pieces, one call
+    each, joined into ONE summary. Raises on a failed call or an empty
+    summary: the caller never marks a result it could not summarize."""
+    max_tokens = context_summary.summary_max_tokens(window)
+    # Room for a piece: the budget less the frame around it (the frame is
+    # counted with the longest "part i of n" it can carry).
+    frame = _summary_messages(question, result, "", " (part 999 of 999)")
+    room = (
+        context_fit.budget_for(window)
+        - context_fit.estimate_tokens(frame, ratio)
+        - _SUMMARY_PIECE_SLACK_TOKENS
+    )
+    piece_chars = int(room * ratio)
+    if piece_chars <= 0:
+        raise ValueError(f"a {window}-token window leaves no room to summarize in")
+    content = result.content
+    pieces = [content[i : i + piece_chars] for i in range(0, len(content), piece_chars)] or [""]
+    if len(pieces) > 999:
+        raise ValueError(f"{result.ref} would take {len(pieces)} summary calls")
+    written: list[str] = []
+    for index, piece in enumerate(pieces, 1):
+        of = f" (part {index} of {len(pieces)})" if len(pieces) > 1 else ""
+        text = await _collect_completion(
+            app,
+            turn,
+            link,
+            _summary_messages(question, result, piece, of),
+            purpose="summary",
+            max_tokens=max(1, max_tokens // len(pieces)),
+            role=_role_of(turn),
+            timeout=GATEWAY_TIMEOUT,
+        )
+        if text.strip():
+            written.append(text.strip())
+    summary = "\n".join(written)
+    if not summary:
+        raise ValueError("the summary came back empty")
+    # The cap the selection counted it at (context_summary.candidates).
+    return summary[: int(max_tokens * ratio)]
+
+
+async def _summarize_for_window(
+    app, turn: traces.Turn, messages: Sequence[dict], requested: str | None
+) -> tuple[Sequence[dict], dict]:
+    """(what this round sends, the span keys saying what was summarized).
+
+    Under 70% of the window's budget, or with no window known, `messages`
+    as they are and no keys. Over it, the results context_summary picks are
+    summarized by the served link, oldest first, each at most once per turn
+    (cached on the Turn; a later round sends the same summary again), and
+    sent as marker + summary. A summary that fails — refused, errored, timed
+    out, empty — is stated as `summary_failed` and its result goes as it was,
+    for _fit_to_window to trim as before; it is not retried this turn.
+    Never a marker without a summary (context_summary.apply refuses one)."""
+    found = _window_for(turn, requested)
+    if found is None or not turn.tool_results:
+        return messages, {}
+    link, window, ratio = found
+    kept = {
+        kept.tool_call_id: kept
+        for kept in turn.tool_results
+        if kept.tool_call_id and kept.tool_call_id not in turn.summary_failures
+    }
+    sent_ids = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+    meta: dict = {}
+    reused = [summary.ref for call_id, summary in turn.summaries.items() if call_id in sent_ids]
+    if reused:
+        meta["summaries_reused"] = reused
+    refs = context_summary.candidates(
+        messages,
+        window,
+        ratio,
+        {call_id: kept.ref for call_id, kept in kept.items()},
+        turn.summaries,
+    )
+    if refs:
+        by_ref = {kept.ref: kept for kept in kept.values()}
+        question = _latest_user_text(messages)
+        written: list[dict] = []
+        failed: list[str] = []
+        for ref in refs:
+            result = by_ref[ref]
+            try:
+                text = await _write_summary(app, turn, link, window, ratio, result, question)
+            except Exception as exc:  # noqa: BLE001 - stated, and the round is fitted
+                reason = peers.reason(exc)[:300]
+                turn.summary_failures[result.tool_call_id] = reason
+                failed.append(f"{ref}: {reason}")
+                logger.warning("turn %s: summary of %s failed — %s", turn.id, ref, reason)
+                continue
+            turn.summaries[result.tool_call_id] = context_summary.Summary(
+                ref=ref, tool=result.tool, chars=result.chars, text=text
+            )
+            written.append(
+                {"ref": ref, "tool": result.tool, "chars": result.chars, "summary_chars": len(text)}
+            )
+        if written:
+            meta["context_summarized"] = written
+        if failed:
+            meta["summary_failed"] = "; ".join(failed)
+    if not turn.summaries:
+        return messages, meta
+    return context_summary.apply(messages, turn.summaries), meta
 
 
 def _learn_chars_per_token(span, sent: Sequence[dict]) -> None:
@@ -4775,6 +4953,10 @@ def _asked_model(turn: traces.Turn, model: str) -> str:
     return asked if isinstance(asked, str) and asked else model
 
 
+# _collect_completion's default role: the turn's own, else the judge's.
+_TURN_OR_JUDGE = object()
+
+
 async def _collect_completion(
     app,
     turn: traces.Turn,
@@ -4783,6 +4965,8 @@ async def _collect_completion(
     *,
     purpose: str,
     max_tokens: int | None = None,
+    role: str | None | object = _TURN_OR_JUDGE,
+    timeout: httpx.Timeout = JUDGE_TIMEOUT,
 ) -> str:
     """One non-tool gateway call, every content delta concatenated into a string.
 
@@ -4798,6 +4982,9 @@ async def _collect_completion(
     TURN's own when it has one (S12: an agent's redirect rounds walk its
     chain and count against its cap, exactly like its tool rounds), and the
     judge role otherwise — Nova's judge/redirect rounds are unchanged.
+    A caller that must walk another chain (S38b's summary: the turn's own
+    role, None for an eval) passes `role`; one that may wait longer than a
+    judge (a local summary) passes `timeout`.
     """
     # A redirect or judge round is a gateway round too: whoever asks what the
     # turn is doing gets the same answer as for its own rounds (traces.DOING).
@@ -4816,12 +5003,13 @@ async def _collect_completion(
         span.meta["purpose"] = purpose
         span.meta["tools_advertised"] = False
         span.meta["ok"] = False
-        role = turn.role or "judge"
+        if role is _TURN_OR_JUDGE:
+            role = turn.role or "judge"
         requested = _requested_key(model, role)
         sent = _fit_to_window(turn, span, messages, requested)
         payload["messages"] = list(sent)
         try:
-            async with peers.client(app, peers.GATEWAY, JUDGE_TIMEOUT) as client:
+            async with peers.client(app, peers.GATEWAY, timeout) as client:
                 async with client.stream(
                     "POST",
                     "/v1/chat/completions",
