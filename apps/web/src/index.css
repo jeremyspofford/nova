@@ -173,6 +173,13 @@ html.dark {
       rgb(var(--neutral-50));
     color: rgb(var(--neutral-900));
   }
+  /* Form controls do not inherit word-spacing by default, so a button or
+     input ran its words together ("Signin", "Plana weekend trip"). Kept in
+     this layer, ahead of the monospace reset below: an unlayered element
+     rule would outrank the layered .font-mono and space out a mono input. */
+  button, input, textarea, select {
+    word-spacing: inherit;
+  }
   /* Monospace has its own fixed advance; extra word spacing would misalign
      columns in code and listings. */
   code, pre, kbd, samp, .font-mono {
