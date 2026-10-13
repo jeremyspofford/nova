@@ -617,3 +617,59 @@ describe('ActivityPage — span facts (S29 T8)', () => {
     expect(within(panel).getByText('fine')).toBeDefined()
   })
 })
+
+// T18 (verification 2-7): stacked on a phone the Time line read "Time  > 5m
+// ago" — the expand chevron sat inside the Time value.
+describe('ActivityPage — T18 the chevron sits outside the Time value', () => {
+  const CHEVRON = 'svg.lucide-chevron-right, svg.lucide-chevron-down'
+  const fiveMinutesAgo = () => new Date(Date.now() - 5 * 60_000).toISOString()
+
+  it('C4: the Time cell holds only the time — no svg, text exactly the relative time', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', started_at: fiveMinutesAgo() })]])} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const time = row.querySelector<HTMLTableCellElement>('td[data-label="Time"]')
+    expect(time, 'no Time cell').not.toBeNull()
+    expect(time!.querySelector('svg'), 'an icon inside the Time value').toBeNull()
+    expect(time!.textContent?.trim()).toBe('5m ago')
+  })
+
+  it('C5: one chevron per row, in no labelled cell, flipping right -> down -> right with the row', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail() })
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+
+    const only = () => {
+      const all = row.querySelectorAll(CHEVRON)
+      expect(all.length, 'the row draws exactly one chevron').toBe(1)
+      expect(all[0].closest('td[data-label]'), 'the chevron reads as part of a labelled value').toBeNull()
+      return all[0]
+    }
+    expect(only().classList.contains('lucide-chevron-right')).toBe(true)
+
+    fireEvent.click(row)
+    await screen.findByTestId('activity-detail-t1')
+    expect(only().classList.contains('lucide-chevron-down')).toBe(true)
+
+    fireEvent.click(row)
+    expect(screen.queryByTestId('activity-detail-t1')).toBeNull()
+    expect(only().classList.contains('lucide-chevron-right')).toBe(true)
+  })
+
+  it('C6: its own cell keeps the table whole — every cell stacks, headings match cells, the detail spans them all', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail() })
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const chevron = row.querySelector(CHEVRON)
+    expect(chevron, 'no chevron').not.toBeNull()
+    expect(chevron!.closest('td[data-label]'), 'the chevron is still inside a labelled value').toBeNull()
+
+    const cells = row.querySelectorAll(':scope > td').length
+    const table = row.closest('table')!
+    expect(table.querySelectorAll('thead > tr > th').length).toBe(cells)
+
+    fireEvent.click(row)
+    const panel = await screen.findByTestId('activity-detail-t1')
+    expect(panel.querySelector('td')!.colSpan).toBe(cells)
+    expectStacked()
+  })
+})

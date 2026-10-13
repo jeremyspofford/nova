@@ -541,6 +541,13 @@ html.dark .skeleton {
   .stack-table > tbody > tr > td.hidden {
     display: none;
   }
+  /* The label is absolutely positioned, so it adds no height of its own: a
+     cell shorter than it (an empty Tools cell, a one-line micro value) would
+     let it spill onto the next line's label. At least the label's extent —
+     its top offset plus its line-height (border-box: padding counts). */
+  .stack-table > tbody > tr > td[data-label] {
+    min-height: 1.5rem;
+  }
   .stack-table > tbody > tr > td[data-label]::before {
     content: attr(data-label);
     position: absolute;

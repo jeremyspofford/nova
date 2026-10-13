@@ -114,6 +114,11 @@ export function ActivityTable({
       <table className="stack-table w-full text-compact">
         <thead>
           <tr className="bg-surface-elevated">
+            {/* The expand chevron's own column: outside every labelled value,
+                so stacked on a phone it never reads as part of Time. */}
+            <th className="md:w-0 py-3 pl-4 pr-0 sticky top-0 bg-surface-elevated">
+              <span className="sr-only">Expand</span>
+            </th>
             {HEADINGS.map(heading => (
               <th
                 key={heading}
@@ -176,11 +181,11 @@ function ActivityRow({
         onClick={onToggle}
         className="cursor-pointer hover:bg-surface-card-hover transition-colors"
       >
+        <td className="stack-actions md:w-0 py-2.5 pl-4 pr-0 text-content-tertiary">
+          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </td>
         <td data-label="Time" className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
-          <span className="inline-flex items-center gap-1">
-            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-            {formatRelativeTime(turn.started_at)}
-          </span>
+          {formatRelativeTime(turn.started_at)}
         </td>
         <td data-label="Kind" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5">
@@ -215,7 +220,7 @@ function ActivityRow({
       </tr>
       {expanded && (
         <tr data-testid={`activity-detail-${turn.id}`} className="bg-surface-elevated/40">
-          <td colSpan={6} className="px-6 py-4">
+          <td colSpan={HEADINGS.length + 1} className="px-6 py-4">
             {/* S12: which routing role the rounds walked — stated only for an
                 agent's derived role; a built-in role is the kind's own. */}
             {role && (
