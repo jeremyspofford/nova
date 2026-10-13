@@ -1,6 +1,7 @@
 # S38b: reading past the context — the spec
 
-**Status:** draft 2026-10-13, awaiting the owner's rulings in §8.
+**Status:** approved 2026-10-13. The owner took every proposal in §8 ("go
+with your proposed").
 
 The owner's idea (2026-09-30): "read what it can, then compress/summarize it
 when the context is almost full, then continue reading". He ordered it on
@@ -133,7 +134,7 @@ every summary names the result it replaced.
   failed first"). Pass: the turn closes ok, the trace shows a summary and the
   answer is right.
 
-## 8. Questions for the owner (proposals in bold)
+## 8. Questions for the owner (all ruled as proposed, 2026-10-13)
 
 1. **Who writes summaries?** **The link serving the turn.** The alternative is
    a new routing role, `summary`, with its own chain, which would let a cheap
