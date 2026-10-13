@@ -673,3 +673,116 @@ describe('ActivityPage — T18 the chevron sits outside the Time value', () => {
     expectStacked()
   })
 })
+
+
+// T20 (verification 2-7): the turn row and its spans read as product, not as
+// a debug dump — body text, a model NAME, span kinds in words.
+describe('ActivityPage — T20 the row and its spans read as words', () => {
+  const FULL = 'openrouter:google/gemini-3.8-flash'
+
+  /** The element itself or any ancestor up to (and including) `stop`
+   * carrying font-mono — i.e. is this text drawn in the mono face. */
+  function monoUpTo(el: Element, stop: Element): boolean {
+    let at: Element | null = el
+    while (at) {
+      if (at.classList.contains('font-mono')) return true
+      if (at === stop) return false
+      at = at.parentElement
+    }
+    return false
+  }
+
+  it('C1: the Kind, Model and Duration cells are body text — no font-mono on the cell or anything in it', async () => {
+    render(
+      <ActivityPage
+        api={fakeApi([[turn({ id: 't1', kind: 'chat', model: FULL, duration_ms: 482 })]])}
+      />,
+    )
+    const row = await screen.findByTestId('activity-row-t1')
+    for (const label of ['Kind', 'Model', 'Duration']) {
+      const cell = row.querySelector(`td[data-label="${label}"]`)
+      expect(cell, `no ${label} cell`).not.toBeNull()
+      expect(cell!.classList.contains('font-mono'), `${label} cell is mono`).toBe(false)
+      expect(cell!.querySelector('.font-mono'), `something in ${label} is mono`).toBeNull()
+    }
+  })
+
+  it('C2: the Model cell reads the model name (T19 modelName), the full id kept in a title', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: FULL })]])} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const cell = row.querySelector<HTMLTableCellElement>('td[data-label="Model"]')!
+    expect(cell.textContent?.trim()).toBe('gemini-3.8-flash')
+    const titled = [cell, ...Array.from(cell.querySelectorAll('[title]'))].find(el => el.getAttribute('title') === FULL)
+    expect(titled, 'the full model id is in no title').toBeDefined()
+  })
+
+  it('C2: beside a named model, a turn with no model still reads an em dash, not an empty name', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: FULL }), turn({ id: 't2', model: null })]])} />)
+    const named = (await screen.findByTestId('activity-row-t1')).querySelector('td[data-label="Model"]')!
+    const none = screen.getByTestId('activity-row-t2').querySelector('td[data-label="Model"]')!
+    expect(named.textContent?.trim()).toBe('gemini-3.8-flash')
+    expect(none.textContent?.trim()).toBe('—')
+  })
+
+  async function openSpans(spans: ActivityTurnDetail['spans']) {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail({ spans }) })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText(/round 1/i)
+    return panel
+  }
+
+  const at = () => new Date().toISOString()
+  const llm = { kind: 'llm_call', name: FULL, started_at: at(), duration_ms: 900, meta: { round: 1, model: FULL } }
+
+  it('C5: an llm_call span reads "Model call" — the raw kind is nowhere in the panel text', async () => {
+    const panel = await openSpans([llm])
+    expect(within(panel).getByText('Model call')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/llm_call/)
+  })
+
+  it('C5: a guard span reads "Guard: delegation claim" — neither the raw kind nor the snake name is shown', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'delegation_claim', started_at: at(), duration_ms: 2, meta: {} },
+    ])
+    expect(within(panel).getByText('Guard: delegation claim')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/delegation_claim/)
+    expect(panel.textContent).not.toMatch(/\bguard\b/)
+  })
+
+  it('C5: a span kind this page has never seen reads as sentence-cased words, never dropped', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'future_thing', name: null, started_at: at(), duration_ms: 5, meta: {} },
+    ])
+    expect(within(panel).getByText('Future thing')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/future_thing/)
+  })
+
+  // COVERAGE (T20 GREEN): live turn_spans carry 152 llm_call rows with an
+  // empty model, and bare ids like 'qwen3.8:27b' (orchestrator FINDING).
+  it('C6: an llm_call span with an empty model states it, never an empty name', async () => {
+    const panel = await openSpans([{ ...llm, meta: { round: 1, model: '' } }])
+    const span = within(panel).getByTestId('llm-call-span')
+    expect(within(span).getByText('model not stated')).toBeDefined()
+  })
+
+  it('C2: a bare local id reads whole in the Model cell; an empty one reads an em dash', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: 'qwen3.8:27b' }), turn({ id: 't2', model: '' })]])} />)
+    const bare = (await screen.findByTestId('activity-row-t1')).querySelector('td[data-label="Model"]')!
+    const empty = screen.getByTestId('activity-row-t2').querySelector('td[data-label="Model"]')!
+    expect(bare.textContent?.trim()).toBe('qwen3.8:27b')
+    expect(empty.textContent?.trim()).toBe('—')
+  })
+
+  it('C6: an llm_call span names its model via modelName, the full id in a title, no provider prefix shown', async () => {
+    const panel = await openSpans([llm])
+    const span = within(panel).getByTestId('llm-call-span')
+    const name = within(span).getByText('gemini-3.8-flash')
+    expect(name.getAttribute('title') ?? name.closest('[title]')?.getAttribute('title')).toBe(FULL)
+    expect(span.textContent).not.toMatch(/openrouter:/)
+    expect(monoUpTo(name, span), 'the model name is drawn mono').toBe(false)
+  })
+})

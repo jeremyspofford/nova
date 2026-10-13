@@ -13,12 +13,14 @@ import {
   formatRelativeTime,
   isWorkspacePathTool,
   mcpCallLabel,
+  spanLabel,
   statusBadge,
   viewArgs,
   viewFacts,
   workspacePathFrom,
 } from './activityFormat'
 import { agentRole } from '../agents/agentsFormat'
+import { modelName } from '../../lib/modelFormat'
 
 /**
  * The turn table with its in-place drill-in — the Activity page's rows,
@@ -187,14 +189,18 @@ function ActivityRow({
         <td data-label="Time" className="px-4 py-2.5 text-micro text-content-tertiary whitespace-nowrap">
           {formatRelativeTime(turn.started_at)}
         </td>
-        <td data-label="Kind" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+        <td data-label="Kind" className="px-4 py-2.5 text-caption text-content-secondary whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5">
             {turn.kind}
             {turn.agent && <AgentBadge name={turn.agent} role={turn.role} />}
           </span>
         </td>
-        <td data-label="Model" className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
-          {turn.model ?? <span className="text-content-tertiary">—</span>}
+        <td
+          data-label="Model"
+          title={turn.model || undefined}
+          className="px-4 py-2.5 text-caption text-content-secondary truncate max-w-[220px]"
+        >
+          {turn.model ? modelName(turn.model) : <span className="text-content-tertiary">—</span>}
         </td>
         <td data-label="Status" className="px-4 py-2.5 whitespace-nowrap">
           <Badge
@@ -205,7 +211,7 @@ function ActivityRow({
             {badge.label}
           </Badge>
         </td>
-        <td data-label="Duration" className="px-4 py-2.5 font-mono text-caption text-content-secondary whitespace-nowrap">
+        <td data-label="Duration" className="px-4 py-2.5 text-caption text-content-secondary whitespace-nowrap">
           {duration ?? <span className="text-content-tertiary">—</span>}
         </td>
         <td data-label="Tools" className="px-4 py-2.5 whitespace-nowrap">
@@ -268,11 +274,16 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
     const error = typeof span.meta.error === 'string' ? span.meta.error : null
     return (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption" data-testid="llm-call-span">
-        <Badge size="sm">llm_call</Badge>
+        <Badge size="sm">{spanLabel(span.kind, span.name)}</Badge>
         {typeof purpose === 'string' && purpose !== 'chat' && <Badge size="sm" color="neutral">{purpose}</Badge>}
         {typeof round === 'number' && <span>Round {round}</span>}
-        {typeof model === 'string' && model && (
-          <span className="font-mono text-content-secondary">{model}</span>
+        {typeof model === 'string' && (
+          <span
+            title={model || undefined}
+            className={model ? 'text-content-secondary' : 'text-content-tertiary'}
+          >
+            {modelName(model)}
+          </span>
         )}
         {typeof promptTokens === 'number' && typeof completionTokens === 'number' && (
           <span className="font-mono text-content-tertiary">
@@ -379,11 +390,14 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
 
   // memory_recall / memory_ingest / anything future — a generic fallback
   // rather than silently dropping a span kind this page does not know
-  // about yet.
+  // about yet. The kind reads as words (spanLabel); a guard's name is in
+  // its label, so it is not repeated as its snake key beside it.
   return (
     <div className="flex items-center gap-2 text-caption">
-      <Badge size="sm">{span.kind}</Badge>
-      {span.name && <span className="font-mono text-content-secondary">{span.name}</span>}
+      <Badge size="sm">{spanLabel(span.kind, span.name)}</Badge>
+      {span.name && span.kind !== 'guard' && (
+        <span className="font-mono text-content-secondary">{span.name}</span>
+      )}
       {duration && <span className="font-mono text-content-tertiary">{duration}</span>}
     </div>
   )

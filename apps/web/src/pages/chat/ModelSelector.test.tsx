@@ -257,7 +257,9 @@ describe('the switcher helpers', () => {
   it('shortModelName keeps the model part of an id', () => {
     expect(shortModelName(GEMINI)).toBe('gemini-3.8-flash')
     expect(shortModelName(DELL)).toBe('qwen3:8b')
-    expect(shortModelName('qwen3:8b')).toBe('8b')
+    // T20 (verification 2-7, orchestrator FINDING): a BARE local id's one
+    // colon is its ollama tag, not a provider — it reads whole, never '8b'.
+    expect(shortModelName('qwen3:8b')).toBe('qwen3:8b')
   })
 
   it('pickIsSmaller needs two stated sizes and a sized pick', () => {
