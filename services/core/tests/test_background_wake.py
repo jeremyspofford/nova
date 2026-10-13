@@ -41,7 +41,16 @@ from tests.test_machine_wake import HUB_FACTS, TARGET_FACTS, WIFI_MAC, _device
 
 pytestmark = requires_db
 
-T0 = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
+# The current hour, not a fixed date: the hourly machine_wakes check reads
+# attempts sent within a day of the database's real now(), so a fixed T0 (it
+# was 2026-10-12 09:00) turned two tests red a day later, on every machine.
+T0 = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+
+
+def _utc(t: datetime) -> str:
+    return t.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 LINK = "boxllm:qwen3:8b"
 ROUTE = f"role=chat;link=2;unreachable={LINK}"
 PROVIDERS = [
@@ -359,7 +368,7 @@ async def test_an_open_attempt_means_no_send_and_the_span_says_why(pool, world):
     (span,) = await _bg_spans(pool, turn.id)
     fact = span["meta"]["background_wake"]
     assert fact["machine"] == "box" and fact["links"] == [LINK] and "attempt" not in fact
-    assert "already" in fact["reason"] and "2026-10-12 08:59:40 UTC" in fact["reason"]
+    assert "already" in fact["reason"] and _utc(T0 - timedelta(seconds=20)) in fact["reason"]
 
 
 async def test_a_decided_attempt_still_inside_its_deadline_means_no_send(pool, world):
@@ -415,7 +424,7 @@ async def test_two_turns_while_the_first_wake_is_still_sending_send_once(pool, w
     # What is known: a wake is pending, and since when — never which turn
     # started it (it can be this turn's own earlier round).
     assert span["meta"]["background_wake"]["reason"] == (
-        "a wake for box is already pending (attempt since 2026-10-12 09:00:00 UTC)"
+        f"a wake for box is already pending (attempt since {_utc(T0)})"
     )
     (row,) = await _rows(pool)
     assert row["turn_id"] == first.id
@@ -579,9 +588,7 @@ async def test_a_background_wake_with_no_answer_files_the_outcome_and_lifts_noth
     assert walls.cleared == []
     (notice,) = await _notices(pool)
     assert notice["urgent"] is False
-    assert notice["title"] == (
-        "box: a wake was sent at 2026-10-12 09:00:00 UTC; no answer in 120 s."
-    )
+    assert notice["title"] == (f"box: a wake was sent at {_utc(T0)}; no answer in 120 s.")
     assert notice["facts"]["answered_after_s"] is None
 
 

@@ -362,12 +362,12 @@ func TestSeal(t *testing.T) {
 			t.Errorf("the box runs as %s", o)
 		}
 	})
-	t.Run("C6 env is TEST_DATABASE_URL and HOME plus the image's own", func(t *testing.T) {
+	t.Run("C6 env is TEST_DATABASE_URL, HOME, USER and LOGNAME plus the image's own", func(t *testing.T) {
 		var img []struct{ Config struct{ Env []string } }
 		if err := json.Unmarshal([]byte(dockerOut(t, "image", "inspect", se.tag)), &img); err != nil || len(img) != 1 {
 			t.Fatalf("image inspect: %v", err)
 		}
-		allowed := map[string]bool{"TEST_DATABASE_URL": true, "HOME": true, "HOSTNAME": true}
+		allowed := map[string]bool{"TEST_DATABASE_URL": true, "HOME": true, "USER": true, "LOGNAME": true, "HOSTNAME": true}
 		for _, e := range img[0].Config.Env {
 			k, _, _ := strings.Cut(e, "=")
 			allowed[k] = true
@@ -387,6 +387,11 @@ func TestSeal(t *testing.T) {
 		}
 		if got["TEST_DATABASE_URL"] != box.TestDatabaseURL || got["HOME"] != box.BoxHome {
 			t.Errorf("TEST_DATABASE_URL=%q HOME=%q", got["TEST_DATABASE_URL"], got["HOME"])
+		}
+		// The box's uid has no passwd entry; getpass must still answer
+		// (core's agent-dist tests call getpass.getuser()).
+		if o, code, _ := run(t, se.a, "", "python3", "-c", "import getpass; print(getpass.getuser())"); code != 0 || strings.TrimSpace(o) != box.BoxUser {
+			t.Errorf("getpass.getuser() in the box = %q (exit %d), want %q", strings.TrimSpace(o), code, box.BoxUser)
 		}
 	})
 	t.Run("C7 no capabilities, no new privileges, default seccomp and AppArmor", func(t *testing.T) {

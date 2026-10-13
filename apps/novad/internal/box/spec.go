@@ -32,7 +32,14 @@ const Label = "nova.box"
 const (
 	TestDatabaseURL = "postgresql://postgres@db:5432/postgres"
 	BoxHome         = "/tmp/home"
-	DepsMount       = "/deps"
+	// BoxUser names the box's user for tools that ask for one. The box runs
+	// as the owner's uid, which the image has no passwd entry for, so
+	// getpwuid fails and Python's getpass.getuser() raised KeyError — 12 core
+	// tests failed in the box and passed on the host (S30c walk, 2026-10-13).
+	// getpass and most tools read USER/LOGNAME first. A fixed name, never
+	// the host's user.
+	BoxUser   = "nova"
+	DepsMount = "/deps"
 )
 
 // The db's own caps: it holds disposable test data only.
@@ -193,6 +200,8 @@ func BoxArgs(req Request, image string, uid, gid int) []string {
 		"--tmpfs", "/tmp:exec",
 		"-e", "TEST_DATABASE_URL=" + TestDatabaseURL,
 		"-e", "HOME=" + BoxHome,
+		"-e", "USER=" + BoxUser,
+		"-e", "LOGNAME=" + BoxUser,
 		"-v", wt + ":" + wt + ":rw",
 		"-v", gitDir + ":" + gitDir + ":ro",
 		"-v", n.Cache + ":" + DepsMount + ":ro",
