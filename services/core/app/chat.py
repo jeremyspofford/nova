@@ -2771,10 +2771,21 @@ class RoundProgress:
     earlier this turn by any call (whitespace-normalised). The "Error:"
     prefix decides nothing: a new error text (a different missing binary)
     is a finding, and the same text again, error or not, is not.
+
+    A live reading (tools.live_reading_tool_names(): registered ephemeral AND
+    reads_only, read off the registry each round, no list of polling tools)
+    whose result differs from the one its own key returned last time restarts
+    that key's count at 1: the world it reads moved, which is progress — a
+    running job's device_job_status is not "the same call repeated"
+    (verification-2-7 T13). An unchanged reading counts as before, and every
+    other tool keeps the rule that a third identical ask is a loop even when
+    its output drifts. A reading flipping between texts it already returned
+    brings no news, so the stale stop still ends it.
     Pure: no I/O, inputs untouched, state per instance."""
 
     def __init__(self) -> None:
         self._dispatches: dict[tuple[str, str], int] = {}
+        self._last: dict[tuple[str, str], str] = {}
         self._seen: set[str] = set()
         self._stale_run = 0
 
@@ -2786,15 +2797,21 @@ class RoundProgress:
             )
         if not calls:
             return None
+        live = set(tools.live_reading_tool_names())
         repeated = False
         news = False
         for call, result in zip(calls, results, strict=True):
             key = _call_key(call)
-            count = self._dispatches.get(key, 0) + 1
+            text = " ".join(result.split())
+            last = self._last.get(key)
+            if call.name in live and last is not None and last != text:
+                count = 1
+            else:
+                count = self._dispatches.get(key, 0) + 1
             self._dispatches[key] = count
+            self._last[key] = text
             if count >= SAME_CALL_LIMIT:
                 repeated = True
-            text = " ".join(result.split())
             if text not in self._seen:
                 self._seen.add(text)
                 news = True

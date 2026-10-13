@@ -278,7 +278,11 @@ one of the stops below, and each one says why.
   then does not run. Her reply ends with a note that says why:
   `[stopped after N tool rounds: the same call was repeated]` or
   `[stopped after N tool rounds: the last rounds brought nothing new]`, where N is the
-  rounds it used. The trace records why in a `round_stop` step.
+  rounds it used. The trace records why in a `round_stop` step. A live reading (a tool
+  declared both ephemeral and read-only, such as `device_job_status` on a running job)
+  whose answer changed since that same call last ran is not a repeat: its count starts
+  over, because what it reads moved. The same answer again still counts, and a reading
+  that only flips back to answers it already gave brings nothing new.
 - **What a stopped reply shows when she does not answer.** When that last answer has no
   words of its own, fails, or asks for a tool, the reply lists what the tools returned,
   under "What this turn's tools returned, as far as its trace recorded each result:",

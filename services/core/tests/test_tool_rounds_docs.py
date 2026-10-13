@@ -200,3 +200,14 @@ def test_the_section_says_what_bounds_a_runaway_and_that_firings_are_uncut():
         "no wall-clock cut",
     ):
         assert _says(section, fact), f"the section does not say `{fact}`"
+
+
+def test_v27_t13_the_section_says_a_changed_reading_is_not_a_repeat():
+    """verification-2-7 T13: the circling stop no longer counts a live reading
+    whose answer changed (a running job's device_job_status) as the same call
+    repeated. An operator who sees a job poll NOT stopped learns why here."""
+    section = _section()
+    assert "device_job_status" in section, "the section does not name device_job_status"
+    assert _says(section, "changed"), "the section does not say a changed reading is no repeat"
+    problem = _numbers_problem(section)
+    assert problem is None, problem
