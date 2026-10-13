@@ -510,6 +510,48 @@ def own_tool_handback_nudge(tool: str, spans: Sequence[Any]) -> str:
     )
 
 
+# The CLEARED-OFFER guard (guard follow-ups T1, 2026-10-13; turn f816e1c2):
+# her reply asks his leave for something she says, beside the question, that
+# she can do ("Do you want me to disable Fast Startup now? That one I can
+# actually do."). Same arming and redirect as the own-tool handback: chat and
+# eval turns, the after-tools redirect, the one redirect budget. Whether the
+# action is part of what he asked stays HER call inside the nudge.
+CLEARED_OFFER_KINDS = OWN_TOOL_HANDBACK_KINDS
+CLEARED_OFFER_REDIRECT_NOTE = "Doing it instead of asking — there is no approval step."
+CLEARED_OFFER_REDIRECT_NOTE_NO_CALL = "Answering again, without asking leave I don't need."
+
+
+def cleared_offer_note(action: str) -> str:
+    """The honest note APPENDED when the cleared offer could not be redirected.
+    True whatever ran: she asked leave, and Nova has no approval step. It
+    claims no run and no pending state."""
+    return (
+        f"Correction: I asked whether to {action}, though I can do it and there is no "
+        "approval step to wait on. If that is part of what you asked, say so and I will."
+    )
+
+
+def cleared_offer_nudge(action: str, spans: Sequence[Any]) -> str:
+    """The redirect's nudge, DERIVED from the turn's spans like the own-tool
+    one: every tool call so far with its outcome, so nothing is repeated. It
+    names no device and no target, and leaves scope to her."""
+    lines = [
+        f"- {span.name}: {_span_outcome(span)}"
+        for span in spans
+        if getattr(span, "kind", None) == "tool" and getattr(span, "name", None)
+    ]
+    ran = "\n".join(lines) if lines else "- none"
+    return (
+        f"Your reply asked the user whether to {action}, and said you can do it. "
+        "There is no approval step in Nova, so that question waits on nothing. "
+        f"Tool calls this turn so far:\n{ran}\n"
+        f"If doing that is part of what he asked, do it now with your tools — do not "
+        "repeat a call that already ran with the same arguments — and report what "
+        "happened. If it goes beyond what he asked, answer without asking his "
+        "permission for it."
+    )
+
+
 # The SAID-NOT-DONE pair (the owner's test, 2026-09-28: a tool written as a
 # fence, "Notepad is now open on your DELL-XPS-8950", zero calls each time —
 # guards.written_call_check, guards.device_completion_check). Fix round 3
@@ -5377,6 +5419,9 @@ def _regen_rejected_by(
             "own_tool_handback",
             lambda: guards.own_tool_handback_check(corrected, turn.spans, persona.tool_names),
         ),
+        # Cleared offer (guard follow-ups T1): a regeneration that asks leave
+        # again for what it says it can do has not done it.
+        ("cleared_offer", lambda: guards.cleared_offer_check(corrected)),
     )
     for name, check in checks:
         try:
@@ -7656,6 +7701,82 @@ async def _run_turn(
                 redirect_appended += outcome.appended
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 if own_tool_redirected:
+                    persisted = outcome.text
+                    said_prose = outcome.prose
+                else:
+                    persisted = f"{persisted}\n\n{outcome.text}"
+                if outcome.markup_note:
+                    emit(_frame({"correction": outcome.markup_note}))
+                    persisted = f"{persisted}\n\n{outcome.markup_note}"
+                backend_note = backend_note or outcome.markup_note
+                redirect_spent = True
+
+        # The CLEARED-OFFER guard (guard follow-ups T1, turn f816e1c2): she asks
+        # his leave for something she says she can do. Read over what persists
+        # now, her words only — never his message — and armed exactly like the
+        # own-tool handback above: chat/eval turns, the ONE redirect budget,
+        # the after-tools redirect (tools that already ran do not block it; an
+        # identical call is replayed, never re-sent). Not redirected -> the
+        # honest note is APPENDED. It never blocks a tool.
+        cleared = None
+        if traces.purpose_of(turn) in CLEARED_OFFER_KINDS and not own_tool_redirected:
+            try:
+                cleared = guards.cleared_offer_check(persisted)
+            except Exception:
+                logger.exception("cleared-offer guard raised; shipping the reply")
+                cleared = None
+        if cleared is not None:
+            skipped = (
+                "mechanical_guard_fired"
+                if mechanical_guard_fired
+                else "append_only_guard_fired"
+                if append_only_guard_fired
+                else "redirect_spent"
+                if redirect_spent
+                else "out_of_rounds"
+                if out_of_rounds
+                else None
+            )
+            meta = {"detected": True, "action": cleared.action, "phrase": cleared.phrase}
+            if skipped is not None:
+                with turn.span("guard", "cleared_offer") as span:
+                    span.meta.update(
+                        meta,
+                        ran_a_tool=guards.ran_a_tool(turn.spans),
+                        redirected=False,
+                        not_redirected_because=skipped,
+                    )
+                note = cleared_offer_note(cleared.action)
+                emit(_frame({"correction": note}))
+                persisted = f"{persisted}\n\n{note}"
+            else:
+                offered = cleared.action
+                outcome = await _claim_redirect(
+                    app,
+                    turn,
+                    model,
+                    claim_kind="cleared_offer",
+                    correction_text=cleared_offer_note(offered),
+                    span_meta=meta,
+                    nudge_for=lambda _ran: cleared_offer_nudge(offered, turn.spans),
+                    redirect_note=CLEARED_OFFER_REDIRECT_NOTE,
+                    redirect_note_no_call=CLEARED_OFFER_REDIRECT_NOTE_NO_CALL,
+                    out_of_rounds=out_of_rounds,
+                    messages=messages,
+                    advertised=advertised,
+                    tool_ctx=tool_ctx,
+                    device_names=device_names,
+                    agent_names=agent_names,
+                    user_message=message,
+                    emit=emit,
+                    persona=persona,
+                    subset=subset,
+                    after_tools=True,
+                    reached_call_ids=reached_call_ids,
+                )
+                redirect_appended += outcome.appended
+                read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                if outcome.redirected:
                     persisted = outcome.text
                     said_prose = outcome.prose
                 else:

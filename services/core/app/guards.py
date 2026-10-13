@@ -3417,6 +3417,28 @@ _DEVICE_TAIL_OK = (
 )
 
 
+# The workspace_list_files row's tail (guard follow-ups T2, 2026-10-13): the
+# device rows' allowlist, plus "in your/my workspace" (her own folder IS the
+# capability) and the trailing-denial copula ("Listing files isn't among my
+# tools"). Anything else after "list files" — "there", "on the Mac mini",
+# "under /srv/backups", "that were deleted" — names a place or an object, and
+# a denial about one place is a report, not a disowned ability.
+_WORKSPACE_LIST_TAIL_WORDS = (
+    r"(?:\s++(?:for\s++you|directly|myself|at\s++all"
+    r"|in\s++(?:your|my)\s++(?:own\s++)?(?:workspace|folder|files))\b)?" + _DEVICE_TAIL_END
+)
+_WORKSPACE_LIST_TAIL_OK = (
+    "(?="
+    + _WORKSPACE_LIST_TAIL_WORDS
+    + r"|\s++or\s++(?:[\w-]++\s++){0,2}?[\w-]++"
+    + _WORKSPACE_LIST_TAIL_WORDS
+    + r"|\s++(?:is|are|isn'?t|aren'?t)\b"
+    + r")(?!"
+    + _PRESENT_STATE_TAIL
+    + ")"
+)
+
+
 def _device_row(verb_phrase: str) -> re.Pattern[str]:
     """One device row: `verb_phrase` on/to a general device noun, then the
     allowlisted tail."""
@@ -3470,10 +3492,16 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "workspace_delete",
     ),
+    # Guard follow-ups T2 (2026-10-13): the bare row corrected honest LOCATION
+    # replies ("There's no /srv/backups folder, so I can't list files there.",
+    # "I can't list files on the Mac mini; …"), so it ends in an allowlisted
+    # tail like the device rows (see _WORKSPACE_LIST_TAIL_OK).
     (
         re.compile(
-            r"list(?:ing)?\s+(?:your\s+|the\s+)?files?\b"
-            r"|list(?:ing)?\s+(?:the\s+contents\s+of\s+)?director(?:y|ies)\b",
+            r"\blist(?:ing)?\s++(?:"
+            r"(?:your\s++|the\s++)?files?"
+            r"|(?:the\s++contents\s++of\s++)?director(?:y|ies)"
+            r")\b" + _WORKSPACE_LIST_TAIL_OK,
             re.I,
         ),
         "workspace_list_files",
@@ -3729,6 +3757,25 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"send(?:ing)?\s++(?:you\s++)?(?:any\s++)?(?:desktop\s++)?notifications?\s++(?:to|on)"
         ),
         "device_notify",
+    ),
+    # Guard follow-ups T3 (2026-10-13): device_edit_file and device_admin_path
+    # were EXCUSED with "no row yet". Same shape as the S29b T2 rows: a GENERAL
+    # noun and the allowlisted tail, so "I can't edit files on the Dell; it's
+    # offline" stays honest. Admin is device_admin_path's ability — the path is
+    # what lets device_run(elevated) run as root/admin. Appended last, so no
+    # existing row's id moves.
+    (
+        _device_row(r"(?:edit(?:ing)?|modif(?:y|ying)|chang(?:e|ing))\s++(?:any\s++)?files?\s++on"),
+        "device_edit_file",
+    ),
+    (
+        _device_row(
+            r"run(?:ning)?\s++(?:any\s++)?(?:commands?|things|anything|programs?|scripts?)\s++"
+            r"(?:as\s++(?:root|(?:an?\s++)?admin(?:istrator)?)"
+            r"|with\s++(?:sudo|root\s++(?:access|privileges)"
+            r"|admin(?:istrator)?\s++(?:rights|privileges)))\s++on"
+        ),
+        "device_admin_path",
     ),
 )
 
@@ -7417,8 +7464,8 @@ class DeviceCompletionClaim:
 # And uninstalled by it (S30b END): "uninstall" is its own kind, so "I
 # uninstalled the admin path on minipc" beside an ok device_admin_path call
 # there is backed; "I uninstalled Steam" is still backed by device_run.
-# "I removed the admin path" is a delete, a command, device_run only — a
-# known residual: telling the admin path from a file needs the object.
+# "I removed the admin path" is read by its object (guard follow-ups,
+# 2026-10-13, _ADMIN_PATH_OBJECT): an uninstall; any other removal a command.
 #
 # A job is launched (S30c T10, 2026-10-12): an ok device_job_start backs "I
 # started the suite on minipc" / "it's running" (launch words) — and nothing
@@ -7470,6 +7517,14 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
 }
 _ACTION_OF_WORD = {word: action for action, words in _ACTION_WORDS.items() for word in words}
 _KINDED_ACTIONS = frozenset({"launch", "write", "notify", "run", "install", "uninstall", "close"})
+
+
+# The admin path as the WHOLE object of a delete word ("removed the admin path
+# from minipc", "removed its admin path"): read at the verb's end, anchored, so
+# "removed the admin user" or "removed the file in the admin path" are not it.
+_ADMIN_PATH_OBJECT = re.compile(
+    r"\s++(?:the\s++|its\s++|their\s++|your\s++)?admin(?:istrator)?\s++path\b", re.I
+)
 
 
 def _kind_of(action: str) -> str:
@@ -8792,6 +8847,15 @@ def _device_action_in(clause: str, reading: _Reading) -> DeviceCompletionClaim |
                             build = None
         if build is not None:
             action = kind = "install"
+        elif (
+            shape in ("first", "head")
+            and _ACTION_OF_WORD.get(word) == "delete"
+            and _ADMIN_PATH_OBJECT.match(text, verb_end)
+        ):
+            # A removal of the admin path is its uninstall (guard follow-ups,
+            # 2026-10-13): device_admin_path's, or a command's. Any other
+            # object stays a delete, so the path's call never backs a file's.
+            action = kind = "uninstall"
         else:
             action = _ACTION_OF_WORD.get(word, "run")
             kind = _kind_of(action)
@@ -12821,6 +12885,85 @@ def _handback_cli_tool(line: str, names: frozenset[str]) -> str | None:
     second = parts[1]
     if second == "\\" or (second.startswith("--") and len(second) > 2):
         return first
+    return None
+
+
+# -- the CLEARED-OFFER guard (guard follow-ups T1, 2026-10-13) ---------------
+#
+# Turn f816e1c2 (2026-10-12): asked to "set up the dell so it can be woken over
+# the network", after fourteen tool calls she ended with "Do you want me to
+# disable Fast Startup now? That one I can actually do." The deferral guard's
+# offer shape stood down twice over: the instruction maps to no action class,
+# and tools had run. The owner's rule (nova-does-not-hand-back-steps): asked to
+# do it, she does it. The broad handback guard stays shelved (09-29).
+#
+# This shape is read off HER words alone — never his message (no-phrase-
+# matchers): a first-person offer QUESTION, and in the same or an adjacent
+# sentence her own statement that she CAN do it. There is no approval step in
+# Nova (ruling 2026-09-03), so a permission question about something she has
+# just said she can do waits on nothing. Measured before building: over all 818
+# stored replies the shape hits exactly f816e1c2.
+#
+# PURE and PRECISION-first. Silent: an offer of EXTRA work ("also", "too", "as
+# well") — a942fbe7's shape; a scope choice ("…or…") or a wh-question, which
+# are hers to ask; a negated can-do ("I can't do that"); a relayed or quoted
+# offer; and an offer to HIM ("do you want to …"), which offers nothing of
+# hers. Whether the action is part of what he asked stays the MODEL's call
+# inside the redirect (verifier-loop-pattern): the nudge says do it if it is,
+# and answer without asking leave if it is not. It never blocks a tool.
+_CLEARED_OFFER_LEAD = re.compile(
+    r"\b(?:(?:do|would)\s+you\s+(?:want|like)\s+me\s+to"
+    r"|want\s+me\s+to"
+    r"|should\s+i|shall\s+i|may\s+i"
+    r"|(?:is\s+it\s+)?ok(?:ay)?\s+(?:if|for)\s+(?:i|me\s+to))\b",
+    re.I,
+)
+_CLEARED_CAN_DO = re.compile(
+    r"\bi\s+can\s+(?:actually\s+|definitely\s+|absolutely\s+|easily\s+|certainly\s+)?do\s+"
+    r"(?:that|it|this|those|that\s+one|this\s+one)\b"
+    r"|\b(?:that|this)\s+one\s+i\s+can\s+(?:actually\s+|definitely\s+)?do\b"
+    r"|\bso\s+i\s+can\s+do\s+(?:it|that)\b",
+    re.I,
+)
+_CLEARED_EXTRA = re.compile(r"\b(?:also|too|as\s+well|additionally|in\s+addition)\b", re.I)
+
+
+@dataclass(frozen=True)
+class ClearedOfferClaim:
+    """A permission question about something she says she can do. `action`
+    is the offered action as she wrote it, `phrase` the matched question."""
+
+    action: str
+    phrase: str
+
+
+def cleared_offer_check(reply_text: str) -> ClearedOfferClaim | None:
+    """Her offer question beside her own "I can do that", or None (see the
+    section header). Reads her reply only."""
+    try:
+        return _cleared_offer(reply_text or "")
+    except Exception:  # noqa: BLE001 — a detector error ships the reply
+        return None
+
+
+def _cleared_offer(text: str) -> ClearedOfferClaim | None:
+    sentences = [s for s in _sentences(text) if s.strip()]
+    for i, sentence in enumerate(sentences):
+        if not sentence.rstrip().endswith("?"):
+            continue
+        lead = _CLEARED_OFFER_LEAD.search(sentence)
+        if lead is None or _WH_LEAD.match(sentence):
+            continue
+        before = sentence[: lead.start()]
+        if _REPORTED.search(before) or _inside_quote(before):
+            continue
+        action = sentence[lead.end() :].strip().rstrip("?").strip()
+        if not action or _ALTERNATIVE.search(action) or _CLEARED_EXTRA.search(action):
+            continue
+        near = sentences[max(0, i - 1) : i + 2]
+        if not any(_CLEARED_CAN_DO.search(n) for n in near):
+            continue
+        return ClearedOfferClaim(action=action[:80], phrase=sentence.strip()[:120])
     return None
 
 

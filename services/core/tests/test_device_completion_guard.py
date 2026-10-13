@@ -2131,7 +2131,7 @@ def test_an_admin_path_install_on_another_machine_backs_nothing_about_this_one()
 # "uninstall" was a command (device_run only), so the honest "I uninstalled the
 # admin path on minipc." beside an ok device_admin_path(uninstall) there drew
 # "(No device_run call ran on minipc this turn.)". It is now its own kind.
-# Known residual: "I removed the admin path" is a delete — still a command.
+# "I removed the admin path" is read by its object since 2026-10-13 (below).
 
 ADMIN_UNINSTALLED = "I uninstalled the admin path on minipc."
 NO_UNINSTALL_ON_MINIPC = "(No device_admin_path or device_run call ran on minipc this turn.)"
@@ -2180,6 +2180,55 @@ def test_an_uninstall_by_a_command_there_is_still_backed(grouping):
         machines=grouping,
     )
     assert claim is None, claim.text
+
+
+# -- guard follow-ups (2026-10-13): a removal of the admin path is an uninstall
+#
+# The S30b END residual: "I removed the admin path from minipc." beside an ok
+# device_admin_path(uninstall) there drew "(No device_run call ran on minipc
+# this turn.)" — "removed" is a delete, and a delete is a command. A delete
+# word whose OBJECT is the admin path is the uninstall kind now; any other
+# object ("the file", "Steam") stays a command, so the admin path's call never
+# backs a file's deletion.
+
+ADMIN_REMOVED = (
+    "I removed the admin path from minipc.",
+    "I removed the admin path on minipc.",
+    "I removed its admin path on minipc.",
+)
+
+
+@pytest.mark.parametrize("reply", ADMIN_REMOVED)
+@pytest.mark.parametrize("grouping", [None, TWO_MACHINES], ids=["no-grouping", "grouped"])
+def test_guardfu_a_removal_of_the_admin_path_beside_its_uninstall_is_backed(reply, grouping):
+    claim = guards.device_completion_check(
+        reply, [_admin_path_uninstall()], NAMES, PAIRED, machines=grouping
+    )
+    assert claim is None, claim.text
+
+
+@pytest.mark.parametrize("reply", ADMIN_REMOVED)
+def test_guardfu_a_removal_of_the_admin_path_with_no_call_names_the_uninstall_tools(reply):
+    claim = guards.device_completion_check(reply, [], NAMES, PAIRED, machines=TWO_MACHINES)
+    assert claim is not None
+    assert (claim.kind, claim.device) == ("uninstall", MINIPC)
+    assert claim.text == NO_UNINSTALL_ON_MINIPC
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I removed the file on minipc.",
+        "I deleted Steam on minipc.",
+        "I removed the admin user on minipc.",
+    ],
+)
+def test_guardfu_another_objects_removal_is_not_backed_by_the_admin_path(reply):
+    claim = guards.device_completion_check(
+        reply, [_admin_path_uninstall()], NAMES, PAIRED, machines=TWO_MACHINES
+    )
+    assert claim is not None
+    assert claim.text == "(No device_run call ran on minipc this turn.)"
 
 
 # -- Task 32 Phase B round 3: a send of the hub's build is an install ----------
@@ -2354,7 +2403,6 @@ def test_a_send_beside_a_failed_update_states_the_failure():
         "machine_update",
     )
     assert claim.text == "(machine_update failed: minipc is offline.)"
-
 
 
 # -- a call names its machine by hostname (live 2026-10-11) -------------------
