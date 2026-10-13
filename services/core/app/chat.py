@@ -3556,7 +3556,14 @@ async def _run_tool(
         span.meta["reached_executor"] = len(record) > reached_before
         span.meta["ok"] = ok
         _record_action(turn, ctx, call.name, ok, len(record) > reached_before, undo_before)
-        head = scrub(result)[:SPAN_RESULT_HEAD_CHARS]
+        scrubbed = scrub(result)
+        # S38b: the WHOLE result, kept on the turn (r1, r2, ... in call
+        # order) for read_result and close_turn's tool_results rows — the
+        # span below keeps only its head. The same scrub as the span: what
+        # the arguments masked never reaches the rows. Synchronous, like
+        # _record_action: no await joins the funnel.
+        traces.keep_result(turn, call.id, call.name, scrubbed)
+        head = scrubbed[:SPAN_RESULT_HEAD_CHARS]
         span.meta["result_head"] = head
         if facts is not None and len(facts) > facts_before:
             # Exactly what THIS call settled — the sink is append-only for the
@@ -6014,6 +6021,9 @@ async def _run_turn(
             )
         )
         traces.set_doing(turn.id, "starting")
+        # S38b: this turn's kept tool results, readable by turn id while it
+        # runs (read_result); popped in the finally beside clear_doing.
+        traces.track_results(turn)
 
         if persona.agent is not None:
             # The cap, BEFORE any recall or round: read from the same ledger
@@ -8144,6 +8154,9 @@ async def _run_turn(
             # And no longer doing anything (traces.DOING): the one writer that
             # pops, on every exit path, beside the INFLIGHT discard.
             traces.clear_doing(turn.id)
+            # Nor holding its kept results in memory (traces.RESULTS, S38b):
+            # the rows close_turn wrote are the record from here on.
+            traces.clear_results(turn.id)
             # Nor stoppable (traces.STOPPING, S15): popped here so a turn id
             # can never carry a stale ask, and after clear_doing because the
             # stop note above reads DOING.

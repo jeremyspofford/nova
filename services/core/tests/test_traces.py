@@ -75,6 +75,32 @@ async def test_a_failed_close_writes_nothing_at_all(pool):
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) is None
 
 
+async def test_spans_actions_and_kept_results_land_in_the_same_close(pool):
+    """S38b T1: the full tool results are part of the ONE transaction — a
+    trace whose spans landed always has its results, and the reverse."""
+    turn = await _turn(pool)
+    with turn.span("tool", "browser_read") as span:
+        span.meta["result_head"] = "p" * traces.SPAN_RESULT_HEAD_CHARS
+    full = "p" * (traces.SPAN_RESULT_HEAD_CHARS * 10)
+    kept = traces.keep_result(turn, "call-1", "browser_read", full)
+    assert kept.ref == "r1" and turn.tool_results == [kept]
+
+    await traces.close_turn(pool, turn, "ok")
+
+    assert await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn.id) == 1
+    row = await pool.fetchrow(
+        "SELECT ref, tool_call_id, tool, content, chars FROM tool_results WHERE turn_id = $1",
+        turn.id,
+    )
+    assert dict(row) == {
+        "ref": "r1",
+        "tool_call_id": "call-1",
+        "tool": "browser_read",
+        "content": full,
+        "chars": len(full),
+    }
+
+
 async def test_an_invented_status_is_refused(pool):
     turn = await _turn(pool)
     with pytest.raises(ValueError):
