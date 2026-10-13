@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { SpendPage } from './SpendPage'
-import { usd } from './spendFormat'
+import { MODEL_PALETTE, usd } from './spendFormat'
 import type { SpendCap, SpendPrice, SpendReport } from '../../lib/api'
 
 const REPORT: SpendReport = {
@@ -363,4 +363,37 @@ describe('SpendPage — T21: dollars at two decimals, calls in words', () => {
     expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').getAttribute('title')).toContain('1 call')
     expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').getAttribute('title')).not.toMatch(/\b1 calls\b/)
   })
+})
+
+describe('SpendPage — T22: the chart paints with the fixed model palette', () => {
+  // A theme-following colour class: the accent and the status tiers (which
+  // all read teal-ish under Nova) and stock teal.
+  const THEMED = /(^|\s)bg-(accent|info|success|warning|danger|teal-\d+)(\/\d+)?(?=\s|$)/
+  const classes = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/)
+
+  it.each(['Dollars', 'Calls'])(
+    'C4 (%s): each model\'s key swatch and bar segments carry MODEL_PALETTE[i] in key order; nothing in the chart is a theme colour',
+    async measure => {
+      renderPage()
+      await waitFor(() => expect(screen.getByTestId('spend-key')).toBeTruthy())
+      if (measure === 'Calls') fireEvent.click(screen.getByRole('button', { name: 'Calls' }))
+      const items = Array.from(screen.getByTestId('spend-key').querySelectorAll('li[data-testid^="spend-key-"]'))
+      expect(items.length).toBe(3)
+      items.forEach((li, i) => {
+        const model = li.getAttribute('data-testid')!.slice('spend-key-'.length)
+        const swatch = li.querySelector('span[aria-hidden]')!
+        expect(classes(swatch), `${model} swatch`).toContain(MODEL_PALETTE[i])
+        const segments = Array.from(document.querySelectorAll('[data-model]')).filter(el => el.getAttribute('data-model') === model)
+        // in Dollars a local model draws no segment (it cost nothing)
+        if (measure === 'Calls' || model !== 'hub:qwen3:8b') expect(segments.length, `${model} segments`).toBeGreaterThan(0)
+        for (const seg of segments) expect(classes(seg), `${model} segment`).toContain(MODEL_PALETTE[i])
+      })
+      const painted = [
+        ...Array.from(screen.getByTestId('spend-days').querySelectorAll('*')),
+        ...Array.from(screen.getByTestId('spend-key').querySelectorAll('*')),
+      ]
+      const themed = painted.map(el => el.getAttribute('class') ?? '').filter(c => THEMED.test(c))
+      expect(themed).toEqual([])
+    },
+  )
 })

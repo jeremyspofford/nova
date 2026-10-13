@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd } from './spendFormat'
+import { MODEL_PALETTE, capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd } from './spendFormat'
 import type { SpendReport } from '../../lib/api'
 
 describe('spendFormat', () => {
@@ -42,8 +42,8 @@ describe('spendFormat', () => {
     expect(bars[2].models).toEqual([{ key: 'hub:q', local: true, usd: 0, calls: 4, gpu_seconds: 120 }])
     // The key orders models by the measure and hands out colours in that order.
     expect(modelKey(bars, 'usd').map(k => [k.key, k.total, k.colour])).toEqual([
-      ['openrouter:x', 1, 'bg-accent'],
-      ['hub:q', 0, 'bg-info'],
+      ['openrouter:x', 1, MODEL_PALETTE[0]],
+      ['hub:q', 0, MODEL_PALETTE[1]],
     ])
     expect(modelKey(bars, 'calls').map(k => [k.key, k.total])).toEqual([
       ['hub:q', 4],

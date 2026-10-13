@@ -95,6 +95,19 @@ export default {
           DEFAULT: 'rgb(var(--status-info, 96 165 250) / <alpha-value>)',
           dim: 'rgba(96, 165, 250, 0.12)',
         },
+        // Chart series: eight fixed hues, one custom property each, light
+        // and dark values in index.css (--chart-1..8). Never a theme token:
+        // a series colour must not move with the accent (T22).
+        chart: {
+          1: 'rgb(var(--chart-1) / <alpha-value>)',
+          2: 'rgb(var(--chart-2) / <alpha-value>)',
+          3: 'rgb(var(--chart-3) / <alpha-value>)',
+          4: 'rgb(var(--chart-4) / <alpha-value>)',
+          5: 'rgb(var(--chart-5) / <alpha-value>)',
+          6: 'rgb(var(--chart-6) / <alpha-value>)',
+          7: 'rgb(var(--chart-7) / <alpha-value>)',
+          8: 'rgb(var(--chart-8) / <alpha-value>)',
+        },
         // Backward compat
         card: 'rgb(var(--surface-card) / <alpha-value>)',
       },

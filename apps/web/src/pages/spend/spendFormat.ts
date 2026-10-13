@@ -82,17 +82,19 @@ export function dayBars(report: SpendReport): DayBar[] {
 
 /** One colour per model for the whole window, assigned by how much the
  * model was used (most first) so the key reads top-down like the bars.
- * The palette is the app's own semantic classes; past eight models the
+ * The palette is eight fixed chart hues (index.css --chart-1..8, a light and
+ * a dark step each) that no theme rewrites — never the accent or a status
+ * colour, which follow the theme and read alike. Past eight models the
  * colours repeat and the key says so. */
 export const MODEL_PALETTE = [
-  'bg-accent',
-  'bg-info',
-  'bg-success',
-  'bg-warning',
-  'bg-violet-500',
-  'bg-pink-500',
-  'bg-teal-500',
-  'bg-orange-500',
+  'bg-chart-1',
+  'bg-chart-2',
+  'bg-chart-3',
+  'bg-chart-4',
+  'bg-chart-5',
+  'bg-chart-6',
+  'bg-chart-7',
+  'bg-chart-8',
 ]
 
 export type ChartMeasure = 'usd' | 'calls'
