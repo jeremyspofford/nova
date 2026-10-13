@@ -1,7 +1,6 @@
 import type { SemanticColor } from '../../lib/design-tokens'
 import type { Notice, NoticeState } from '../../lib/api'
 import { deliveryLines, type DeliveryLine } from '../schedules/schedulesFormat'
-import { formatRelativeTime } from '../activity/activityFormat'
 
 /**
  * Pure presentation logic for the Inbox — kept apart from the page, as
@@ -68,6 +67,40 @@ export function livePill(notice: Pick<Notice, 'cleared_at'>): {
     color: 'success',
     title: 'a check that ran stopped finding these facts',
   }
+}
+
+/**
+ * A notice's status as ONE line (verification 2-7, T16): "[Urgent · ]<live> ·
+ * <told>", e.g. "Urgent · still true · not told yet". It replaces up to three
+ * pills that each said one of these words. The words are livePill's and
+ * stateBadge's own — no new vocabulary — and nothing a pill said on hover is
+ * dropped: each part carries the title its pill had (urgent and live did;
+ * the state badge never had one). Only the first word is capitalised, so the
+ * line reads as a sentence; the separator is " · ".
+ *
+ * `danger` marks a part the page may colour: an urgent notice and a delivery
+ * that failed are the two facts on this line that want his attention.
+ */
+export function statusParts(
+  // `state` widened as stateBadge's is: a state this file has not met still
+  // renders, verbatim.
+  notice: Pick<Notice, 'urgent' | 'cleared_at'> & { state: NoticeState | string },
+): { text: string; title?: string; danger: boolean }[] {
+  const live = livePill(notice)
+  const state = stateBadge(notice.state)
+  const parts: { text: string; title?: string; danger: boolean }[] = []
+  if (notice.urgent) {
+    parts.push({
+      text: 'urgent',
+      title: 'the check itself declares this urgent — nothing she wrote can promote a finding',
+      danger: true,
+    })
+  }
+  parts.push({ text: live.label, title: live.title, danger: false })
+  parts.push({ text: state.label, danger: state.color === 'danger' })
+  const [first] = parts
+  parts[0] = { ...first, text: first.text.charAt(0).toUpperCase() + first.text.slice(1) }
+  return parts
 }
 
 /**
@@ -299,55 +332,4 @@ export function draftWords(notice: Pick<Notice, 'facts'>): { can: boolean; title
     can: true,
     title: `write these ${(steps as string[]).length} steps down as a skill you can run again`,
   }
-}
-
-/** A full ISO-8601 instant, which is the only fact shape this file is willing
- * to re-word. A plain `2026-09-11` (the spend check's `day`) and a
- * `2026-09` (its `month`) are deliberately NOT matched: they are already the
- * answer to "which day", and "3 days ago" would be a worse version of it. */
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
-
-/**
- * The derived facts the fingerprint was computed from, as display lines. This
- * is the evidence behind the title, so it is rendered in the order and the
- * words core returned: a value that is not a string is shown as its JSON
- * rather than being coerced into prose that could read as something it is
- * not. An empty facts object yields no lines.
- *
- * ONE exception, and it is the other half of S25.2.1. A card's SENTENCE is
- * composed once, when the check first found the condition, and never
- * rewritten — so it can only carry a time that stays true ("since Friday 11
- * September 2026"; see services/core/app/checks/prose.py). The moving
- * version of the same fact — "3d ago" — belongs here, where it is computed
- * at render time against the clock in front of him and is therefore right
- * every time he looks. The exact instant stays on the line as its `title`,
- * because a relative time with no absolute behind it cannot be checked.
- */
-export function factLines(
-  facts: Record<string, unknown>,
-  now: Date = new Date(),
-): { key: string; value: string; title?: string; href?: string }[] {
-  return Object.entries(facts ?? {}).map(([key, value]) => {
-    // A subject the owner can go and look at (S25.2.2). The VALUE is still
-    // rendered as core wrote it — a link changes where a click goes, never
-    // what the evidence says.
-    const href = subjectLink(key, value) ?? undefined
-    if (href !== undefined) return { key, value: String(value), href }
-    if (typeof value === 'string' && ISO_INSTANT.test(value)) {
-      const when = new Date(value)
-      // An unparseable string that merely LOOKS like a timestamp is shown
-      // verbatim: a fact this page cannot read is still core's fact, and
-      // "Invalid Date" would be this page inventing one.
-      if (!Number.isNaN(when.getTime())) {
-        return { key, value: formatRelativeTime(value, now), title: value }
-      }
-    }
-    return {
-      key,
-      // String() around the stringify because JSON.stringify(undefined) is not
-      // a string, and a fact that came back as nothing should read as
-      // "undefined" rather than crash the row it belongs to.
-      value: typeof value === 'string' ? value : String(JSON.stringify(value)),
-    }
-  })
 }

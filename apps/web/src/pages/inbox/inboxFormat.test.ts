@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   actedLine,
   deliveryVerdicts,
-  factLines,
   draftWords,
   subjectLink,
   silenceWords,
@@ -14,6 +13,7 @@ import {
   readWords,
   sightingsWords,
   stateBadge,
+  statusParts,
 } from './inboxFormat'
 
 describe('stateBadge — whether he was told, in plain words', () => {
@@ -151,50 +151,20 @@ describe('muteWords and readWords — a noise preference and a read receipt, and
   })
 })
 
-describe('factLines — the evidence the fingerprint was computed from', () => {
-  it('keeps core\'s order and shows non-strings as their JSON', () => {
-    expect(factLines({ service: 'gateway', reachable: false, tries: 3 })).toEqual([
-      { key: 'service', value: 'gateway' },
-      { key: 'reachable', value: 'false' },
-      { key: 'tries', value: '3' },
+describe('statusParts — a notice\'s status as one line (verification 2-7, T16)', () => {
+  const text = (n: Parameters<typeof statusParts>[0]) => statusParts(n).map(p => p.text).join(' · ')
+
+  it('renders a state it has not met verbatim rather than relabelling it', () => {
+    expect(text({ urgent: false, cleared_at: null, state: 'snoozed' })).toBe('Still true · snoozed')
+  })
+
+  it('flags only urgent and a failed delivery for attention', () => {
+    expect(statusParts({ urgent: true, cleared_at: null, state: 'failed' }).map(p => p.danger)).toEqual([
+      true,
+      false,
+      true,
     ])
-  })
-
-  it('an empty facts object yields no lines', () => {
-    expect(factLines({})).toEqual([])
-  })
-})
-
-describe('factLines — the moving half of a card (S25.2.1)', () => {
-  const NOW = new Date('2026-09-14T12:00:00Z')
-
-  it('renders an instant relative to now, keeping the exact time behind it', () => {
-    const [line] = factLines({ paused_at: '2026-09-11T14:35:29+00:00' }, NOW)
-    // The card's SENTENCE cannot say this — it is composed once and frozen —
-    // so the version that keeps up with the calendar lives here.
-    expect(line).toEqual({ key: 'paused_at', value: '3d ago', title: '2026-09-11T14:35:29+00:00' })
-  })
-
-  it('leaves a plain day and a month alone', () => {
-    // Already the answer to "which day". "3 days ago" would be a worse
-    // version of a fact that is not moving.
-    expect(factLines({ day: '2026-09-11', month: '2026-09' }, NOW)).toEqual([
-      { key: 'day', value: '2026-09-11' },
-      { key: 'month', value: '2026-09' },
-    ])
-  })
-
-  it('shows a timestamp it cannot parse verbatim rather than inventing one', () => {
-    expect(factLines({ at: '2026-09-31T99:99:99Z' }, NOW)).toEqual([
-      { key: 'at', value: '2026-09-31T99:99:99Z' },
-    ])
-  })
-
-  it('still renders non-strings as their JSON', () => {
-    expect(factLines({ failures: 3, ok: false }, NOW)).toEqual([
-      { key: 'failures', value: '3' },
-      { key: 'ok', value: 'false' },
-    ])
+    expect(statusParts({ urgent: false, cleared_at: null, state: 'raised' }).some(p => p.danger)).toBe(false)
   })
 })
 

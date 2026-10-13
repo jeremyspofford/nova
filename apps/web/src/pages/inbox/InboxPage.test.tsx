@@ -100,9 +100,10 @@ describe('InboxPage — the record of what she noticed', () => {
     expect(within(first).getByText('the gateway is not answering')).toBeDefined()
     // T15 (verification 2-7): the check name reads as words, not its snake key.
     expect(within(first).getByText('Stack service unreachable')).toBeDefined()
-    expect(within(first).getByTestId('urgent-badge').textContent).toBe('urgent')
-    expect(within(first).getByTestId('live-pill').textContent).toBe('still true')
-    expect(within(first).getByTestId('state-badge').textContent).toBe('not told yet')
+    // T16 (verification 2-7): one status line instead of three pills.
+    expect(within(first).getByTestId('notice-status').textContent).toBe(
+      'Urgent · still true · not told yet',
+    )
     const facts = within(first).getByTestId('notice-facts')
     // T15: each fact reads "<Label>: <value>" through lib/factFormat.
     expect(facts.textContent).toContain('Service: gateway')
@@ -114,11 +115,10 @@ describe('InboxPage — the record of what she noticed', () => {
     expect(within(first).getByTestId('no-delivery-yet')).toBeDefined()
 
     const second = within(list).getByTestId('notice-row-n2')
-    expect(within(second).getByTestId('live-pill').textContent).toBe('cleared')
+    expect(within(second).getByTestId('notice-status').textContent).toBe('Cleared · told you')
     expect(within(second).getByTestId('cleared-at')).toBeDefined()
-    expect(within(second).getByTestId('state-badge').textContent).toBe('told you')
     expect(within(second).getByTestId('delivery-lines').textContent).toContain('chat: delivered')
-    expect(within(second).queryByTestId('urgent-badge')).toBeNull()
+    expect(within(second).getByTestId('notice-status').textContent).not.toMatch(/urgent/i)
 
     // The order the server gave, never re-sorted here.
     expect(within(list).getAllByTestId(/^notice-row-/).map(r => r.getAttribute('data-testid')))
@@ -181,7 +181,7 @@ describe('InboxPage — the record of what she noticed', () => {
       ),
     )
     const row = await screen.findByTestId('notice-row-n1')
-    expect(within(row).getByTestId('state-badge').textContent).toBe('not delivered')
+    expect(within(row).getByTestId('notice-status').textContent).toBe('Still true · not delivered')
     expect(within(row).getByTestId('delivery-lines').textContent).toContain(
       'the chat row was not there when it was read back',
     )
@@ -295,8 +295,8 @@ describe('InboxPage — the two controls, and only those two', () => {
 
     await waitFor(() => expect(api.muteNotice).toHaveBeenCalledWith('n1', true))
     await waitFor(() =>
-      expect(within(screen.getByTestId('notice-row-n1')).getByTestId('state-badge').textContent).toBe(
-        'muted',
+      expect(within(screen.getByTestId('notice-row-n1')).getByTestId('notice-status').textContent).toBe(
+        'Still true · muted',
       ),
     )
     expect(api.listNotices).toHaveBeenCalledTimes(2)
@@ -304,8 +304,8 @@ describe('InboxPage — the two controls, and only those two', () => {
     fireEvent.click(within(screen.getByTestId('notice-row-n1')).getByRole('button', { name: 'Unmute' }))
     await waitFor(() => expect(api.muteNotice).toHaveBeenCalledWith('n1', false))
     await waitFor(() =>
-      expect(within(screen.getByTestId('notice-row-n1')).getByTestId('state-badge').textContent).toBe(
-        'not told yet',
+      expect(within(screen.getByTestId('notice-row-n1')).getByTestId('notice-status').textContent).toBe(
+        'Still true · not told yet',
       ),
     )
     expect(api.listNotices).toHaveBeenCalledTimes(3)
@@ -326,8 +326,8 @@ describe('InboxPage — the two controls, and only those two', () => {
     )
     // A refusal is not a re-read: the list is exactly as it was.
     expect(api.listNotices).toHaveBeenCalledTimes(1)
-    expect(within(screen.getByTestId('notice-row-n1')).getByTestId('state-badge').textContent).toBe(
-      'not told yet',
+    expect(within(screen.getByTestId('notice-row-n1')).getByTestId('notice-status').textContent).toBe(
+      'Still true · not told yet',
     )
   })
 
@@ -716,5 +716,111 @@ describe('InboxPage — a notice card reads as product (verification 2-7, T15)',
     for (const item of items) expect(inMono(item, row)).toBe(false)
     expect(items[0].className).toContain('text-success')
     expect(items[1].className).toContain('text-danger')
+  })
+})
+
+/**
+ * Verification 2-7, T16: the header and a notice's status read as product.
+ * The unread line explained its own provenance ("— counted by the server, not
+ * by this page.") and a card stacked up to three pills (urgent, still true,
+ * not told yet); the count is now just the count, and the status one line.
+ */
+describe('InboxPage — the unread line and one status line (verification 2-7, T16)', () => {
+  async function card(overrides: Partial<Notice>) {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1', ...overrides })])))
+    return screen.findByTestId('notice-row-n1')
+  }
+
+  it('C1: the unread line reads "<n> unread" with the server\'s count and nothing after it', async () => {
+    renderPage(
+      fakeApi(() => listing([noticeFixture({ id: 'n1' }), noticeFixture({ id: 'n2' })], 9)),
+    )
+    const count = await screen.findByTestId('unseen-count')
+    expect(count.textContent?.trim()).toBe('9 unread')
+    expect(document.body.textContent).not.toMatch(/counted by the server/i)
+  })
+
+  it('C1: with nothing unread it still says so in words', async () => {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1' })], 0)))
+    // Paired with the count above so this cannot pass on a page with no line.
+    expect((await screen.findByTestId('unseen-count')).textContent?.trim()).toBe(
+      'Nothing here is unread.',
+    )
+  })
+
+  it('C2: a card has exactly one status line and no pills', async () => {
+    const row = await card({ urgent: true })
+    expect(within(row).getAllByTestId('notice-status')).toHaveLength(1)
+    expect(within(row).queryByTestId('live-pill')).toBeNull()
+    expect(within(row).queryByTestId('state-badge')).toBeNull()
+    expect(within(row).queryByTestId('urgent-badge')).toBeNull()
+    // Badge's own shape: no pill anywhere on the card.
+    expect(row.querySelectorAll('.rounded-xs')).toHaveLength(0)
+  })
+
+  it('C3: the line reads live first, then whether he was told, joined by " · "', async () => {
+    renderPage(
+      fakeApi(() =>
+        listing([
+          noticeFixture({ id: 'a' }),
+          noticeFixture({ id: 'b', urgent: true }),
+          noticeFixture({
+            id: 'c',
+            state: 'delivered',
+            cleared_at: new Date(Date.now() - 30_000).toISOString(),
+          }),
+          noticeFixture({ id: 'd', state: 'failed', failed_reason: 'push refused' }),
+          noticeFixture({ id: 'e', state: 'muted', silenced: true }),
+        ]),
+      ),
+    )
+    const status = async (id: string) =>
+      within(await screen.findByTestId(`notice-row-${id}`)).getByTestId('notice-status').textContent
+    expect(await status('a')).toBe('Still true · not told yet')
+    expect(await status('b')).toBe('Urgent · still true · not told yet')
+    expect(await status('c')).toBe('Cleared · told you')
+    expect(await status('d')).toBe('Still true · not delivered')
+    expect(await status('e')).toBe('Still true · muted')
+  })
+
+  it('C4: the line keeps what the pills said on hover', async () => {
+    const row = await card({ urgent: true })
+    const line = within(row).getByTestId('notice-status')
+    const titles = [line, ...Array.from(line.querySelectorAll('[title]'))]
+      .map(el => el.getAttribute('title') ?? '')
+      .join('\n')
+    expect(titles).toContain('a check has not yet stopped finding these facts')
+    expect(titles).toContain('the check itself declares this urgent')
+  })
+
+  it('C4: a cleared notice keeps the cleared title on its line', async () => {
+    const row = await card({ cleared_at: new Date(Date.now() - 30_000).toISOString() })
+    const line = within(row).getByTestId('notice-status')
+    const titles = [line, ...Array.from(line.querySelectorAll('[title]'))]
+      .map(el => el.getAttribute('title') ?? '')
+      .join('\n')
+    expect(titles).toContain('a check that ran stopped finding these facts')
+    expect(titles).not.toContain('declares this urgent')
+  })
+
+  it('C5: the line follows the server through mute and unmute', async () => {
+    let muted = false
+    const api = fakeApi(() =>
+      listing([
+        noticeFixture({ id: 'n1', state: muted ? 'muted' : 'raised', silenced: muted }),
+      ]),
+    )
+    api.muteNotice = vi.fn(async (_id: string, next: boolean) => {
+      muted = next
+    })
+    renderPage(api)
+    const line = () =>
+      within(screen.getByTestId('notice-row-n1')).getByTestId('notice-status').textContent
+    await screen.findByTestId('notice-row-n1')
+    expect(line()).toBe('Still true · not told yet')
+    fireEvent.click(within(screen.getByTestId('notice-row-n1')).getByRole('button', { name: 'Mute' }))
+    await waitFor(() => expect(line()).toBe('Still true · muted'))
+    fireEvent.click(within(screen.getByTestId('notice-row-n1')).getByRole('button', { name: 'Unmute' }))
+    await waitFor(() => expect(line()).toBe('Still true · not told yet'))
   })
 })

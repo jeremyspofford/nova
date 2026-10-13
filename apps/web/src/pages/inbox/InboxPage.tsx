@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { BellOff, BookPlus, Inbox, MessageSquare, Radar } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
-import { Badge, Banner, Button, EmptyState, Skeleton, Tabs } from '../../components/ui'
+import { Banner, Button, EmptyState, Skeleton, Tabs } from '../../components/ui'
 import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
@@ -22,13 +22,12 @@ import { formatAbsolute } from '../schedules/schedulesFormat'
 import {
   actedLine,
   deliveryVerdicts,
-  livePill,
   muteWords,
   draftWords,
   readWords,
   sightingsWords,
   silenceWords,
-  stateBadge,
+  statusParts,
   subjectLink,
   talkWords,
 } from './inboxFormat'
@@ -255,14 +254,14 @@ export function InboxPage({
       </div>
 
       {/* The server's count, over every row — not a count of what this page
-          happens to be holding. Left off entirely when there is nothing to
-          list, where the empty state already says it. */}
+          happens to be holding. It says only the count (verification 2-7,
+          T16): where it came from is this comment's business, not his. Left
+          off entirely when there is nothing to list, where the empty state
+          already says it. */}
       {unseenCount !== null && notices !== null && notices.length > 0 && (
         <div className="mb-6 flex flex-wrap items-center gap-3">
           <p className="text-compact text-content-secondary" data-testid="unseen-count">
-            {unseenCount === 0
-              ? 'Nothing here is unread.'
-              : `${unseenCount} unread — counted by the server, not by this page.`}
+            {unseenCount === 0 ? 'Nothing here is unread.' : `${unseenCount} unread`}
           </p>
           {unseenCount > 0 && (
             <Button size="sm" variant="secondary" disabled={clearing} onClick={() => void readAll()}>
@@ -463,8 +462,7 @@ function NoticeCard({
   onTalk: () => void
   onDraft: () => void
 }) {
-  const state = stateBadge(notice.state)
-  const live = livePill(notice)
+  const status = statusParts(notice)
   const acted = actedLine(notice)
   const sightings = sightingsWords(notice.repeats)
   const mute = muteWords(notice)
@@ -492,13 +490,6 @@ function NoticeCard({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <div className="min-w-0 sm:flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            {notice.urgent && (
-              <span data-testid="urgent-badge" title="the check itself declares this urgent — nothing she wrote can promote a finding">
-                <Badge size="sm" color="danger">
-                  urgent
-                </Badge>
-              </span>
-            )}
             {/* A title can carry a URL or a key with no space in it (a
                 provider's refusal names its billing page); `anywhere` lets
                 it wrap instead of pushing the whole page sideways on a phone
@@ -511,15 +502,21 @@ function NoticeCard({
             <span title={`the check that found it: ${notice.check_name}`}>
               {factLabel(notice.check_name)}
             </span>
-            <span data-testid="live-pill" title={live.title}>
-              <Badge size="sm" color={live.color}>
-                {live.label}
-              </Badge>
-            </span>
-            <span data-testid="state-badge">
-              <Badge size="sm" color={state.color}>
-                {state.label}
-              </Badge>
+            {/* Verification 2-7, T16: one status line, not up to three
+                pills. Each word keeps the title its pill had; urgent and a
+                failed delivery are the words coloured for attention. */}
+            <span data-testid="notice-status">
+              {status.map((part, i) => (
+                <span key={i}>
+                  {i > 0 && ' · '}
+                  <span
+                    title={part.title}
+                    className={part.danger ? 'text-danger font-medium' : undefined}
+                  >
+                    {part.text}
+                  </span>
+                </span>
+              ))}
             </span>
             {sightings && (
               <span data-testid="sightings" title="how many times a check returned these exact facts">
