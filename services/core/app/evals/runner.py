@@ -377,10 +377,18 @@ async def _cleanup_scratch_person(
         logger.warning(message)
         warnings.append(message)
 
+    # A DELETE that raised leaves the scratch person behind: say so on the
+    # case's own result (with the error), not only in the log — a teardown
+    # that failed must never read as a clean one.
     try:
         await pool.execute("DELETE FROM people WHERE id = $1", person.id)
-    except Exception:
-        logger.exception("eval scratch cleanup: could not delete scratch person %s", person.id)
+    except Exception as exc:
+        message = (
+            f"eval scratch cleanup: could not delete scratch person {person.id}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        logger.exception(message)
+        warnings.append(message)
 
     return warnings
 
