@@ -4,6 +4,7 @@ import { Tooltip } from './Tooltip'
 export function Metric({
   label,
   value,
+  valueTitle,
   icon,
   change,
   tooltip,
@@ -11,6 +12,8 @@ export function Metric({
 }: {
   label: string
   value: string | number
+  /** hover text for the value, e.g. the exact figure behind a rounded one */
+  valueTitle?: string
   icon?: React.ReactNode
   change?: { value: string; direction: 'up' | 'down' }
   tooltip?: string
@@ -26,7 +29,7 @@ export function Metric({
   return (
     <div className={clsx('flex flex-col gap-1', className)}>
       {tooltip ? <Tooltip content={tooltip} side="bottom">{labelContent}</Tooltip> : labelContent}
-      <span className="text-display font-mono text-content-primary dark:drop-shadow-[0_0_8px_rgb(var(--accent-500)/0.15)]">{value}</span>
+      <span title={valueTitle} className="text-display font-mono text-content-primary dark:drop-shadow-[0_0_8px_rgb(var(--accent-500)/0.15)]">{value}</span>
       {change && (
         <span
           className={clsx(

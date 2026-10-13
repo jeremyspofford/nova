@@ -6,7 +6,7 @@ describe('spendFormat', () => {
   it('never invents a number: null is "not stated", tiny dollars keep their digits', () => {
     expect(usd(null)).toBe('not stated')
     expect(usd(0)).toBe('$0.00')
-    expect(usd(0.0004)).toBe('$0.0004')
+    expect(usd(0.0004)).toBe('< $0.01') // T21: sub-cent reads "< $0.01"; the exact figure is usd(v, 4), for hover
     expect(usd(12.5)).toBe('$12.50')
     expect(gpuMinutes(null)).toBe('not stated')
     expect(gpuMinutes(90)).toBe('1.5 min')
@@ -55,5 +55,31 @@ describe('spendFormat', () => {
     expect(purposeLabel('judge')).toBe('Quality judging')
     expect(purposeLabel(null)).toBe('Unattributed')
     expect(purposeLabel('coding')).toBe('coding')
+  })
+})
+
+describe('usd — T21: two decimals for display, four only for hover', () => {
+  it('C1: shows two decimals for $0 and every amount of a cent or more', () => {
+    expect(usd(0)).toBe('$0.00')
+    expect(usd(12.5)).toBe('$12.50')
+    expect(usd(1.23456)).toBe('$1.23')
+    expect(usd(0.01)).toBe('$0.01')
+    expect(usd(null)).toBe('not stated')
+    expect(usd(undefined)).toBe('not stated')
+  })
+
+  it('C1: a positive sub-cent amount reads "< $0.01", never four decimals', () => {
+    for (const v of [0.0004, 0.005, 0.0099, 0.00001]) {
+      expect(usd(v)).toBe('< $0.01')
+    }
+  })
+
+  it('C2: usd(v, 4) is the hover form and keeps four decimals for any value', () => {
+    expect(usd(0.0004, 4)).toBe('$0.0004')
+    expect(usd(0.0042, 4)).toBe('$0.0042')
+    expect(usd(1.23456, 4)).toBe('$1.2346')
+    expect(usd(0, 4)).toBe('$0.0000')
+    // the display form and the hover form differ on a sub-cent amount
+    expect(usd(0.0042)).not.toBe(usd(0.0042, 4))
   })
 })

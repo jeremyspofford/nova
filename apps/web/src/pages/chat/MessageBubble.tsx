@@ -22,6 +22,7 @@ import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
 import { isSetupKind } from '../../lib/setupSteps'
 import { modelName } from '../../lib/modelFormat'
+import { usd } from '../spend/spendFormat'
 import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
 
@@ -704,8 +705,8 @@ export const MessageBubble = memo(function MessageBubble({
               {modelName(row.servedBy)}
             </span>
             {typeof row.cost === 'number' && (
-              <span data-testid="turn-cost" title="this turn's cost as the gateway's ledger recorded it (S10)">
-                · ${row.cost < 0.01 ? row.cost.toFixed(4) : row.cost.toFixed(2)}
+              <span data-testid="turn-cost" title={`${usd(row.cost, 4)} — this turn's cost as the gateway's ledger recorded it (S10)`}>
+                · {usd(row.cost)}
               </span>
             )}
           </p>

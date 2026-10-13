@@ -18,7 +18,8 @@ import {
   type SpendWindow,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { BASIS_WORDS, capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd, type ChartMeasure } from './spendFormat'
+import { plural } from '../about/aboutFormat'
+import { BASIS_WORDS, calls, callsWere, capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd, type ChartMeasure } from './spendFormat'
 
 /**
  * Where the money goes, from the gateway's ledger: one row per model call,
@@ -121,6 +122,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
             <Metric
               label={`Spent (${windowLabel})`}
               value={usd(totals.usd)}
+              valueTitle={usd(totals.usd, 4)}
               icon={<Coins size={16} />}
               tooltip={
                 Object.keys(totals.usd_by_basis).length
@@ -133,10 +135,11 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
             <Metric
               label="This month vs cap"
               value={totalCap?.monthly_usd != null ? `${usd(totals.month_usd)} / ${usd(totalCap.monthly_usd)}` : usd(totals.month_usd)}
+              valueTitle={`${usd(totals.month_usd, 4)} this month`}
               tooltip={totalCap?.monthly_usd != null ? 'the total cap across every cloud provider' : 'no total cap set'}
             />
             <Metric label="Local GPU time" value={gpuMinutes(totals.gpu_seconds)} tooltip="wall time of local calls, model load included — not money" />
-            <Metric label="Calls" value={totals.calls} tooltip={`${totals.probes} probes and ${totals.refusals} refusals besides`} />
+            <Metric label="Calls" value={totals.calls} tooltip={`${totals.probes} ${plural(totals.probes, 'probe')} and ${totals.refusals} ${plural(totals.refusals, 'refusal')} besides`} />
           </div>
 
           {(totals.unmetered > 0 || totals.refusals > 0 || totals.ledger_write_failures > 0 || report.unpriced.length > 0) && (
@@ -146,7 +149,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
               </div>
               <ul className="mt-1 list-disc pl-5 text-caption text-content-secondary">
                 {totals.unmetered > 0 && (
-                  <li>{totals.unmetered} call(s) were unmetered — the provider stated no token counts, so they carry no dollars. The totals are a floor.</li>
+                  <li>{callsWere(totals.unmetered)} unmetered — the provider stated no token counts, so they carry no dollars. The totals are a floor.</li>
                 )}
                 {report.unpriced.length > 0 && (
                   <li>
@@ -154,9 +157,9 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                     {report.unpriced.map(u => `${u.provider}:${u.model} (${u.calls})`).join(', ')}. Enter a price below.
                   </li>
                 )}
-                {totals.refusals > 0 && <li>{totals.refusals} call(s) were refused by a provider — recorded, no cost.</li>}
+                {totals.refusals > 0 && <li>{callsWere(totals.refusals)} refused by a provider — recorded, no cost.</li>}
                 {totals.ledger_write_failures > 0 && (
-                  <li>{totals.ledger_write_failures} call(s) since the gateway started could not be recorded at all.</li>
+                  <li>{calls(totals.ledger_write_failures)} since the gateway started could not be recorded at all.</li>
                 )}
               </ul>
             </div>
@@ -187,7 +190,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                   <div
                     key={b.day}
                     className="flex h-full flex-1 flex-col items-center justify-end"
-                    title={`${b.day}: ${usd(b.usd, 4)}, ${b.calls} calls, ${gpuMinutes(b.gpu_seconds)} local`}
+                    title={`${b.day}: ${usd(b.usd, 4)}, ${calls(b.calls)}, ${gpuMinutes(b.gpu_seconds)} local`}
                   >
                     <div data-testid={`spend-day-${b.day}`} className="flex w-full max-w-[2rem] flex-col-reverse overflow-hidden rounded-t-sm" style={{ height: `${height}%` }}>
                       {b.models
@@ -200,7 +203,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                             data-model={m.key}
                             className={`w-full ${colourOf(m.key)}`}
                             style={{ height: `${total > 0 ? (m.share / total) * 100 : 0}%` }}
-                            title={`${m.key}: ${measure === 'usd' ? usd(m.usd, 4) : `${m.calls} calls`}${m.local ? ` (local, ${gpuMinutes(m.gpu_seconds)})` : ''}`}
+                            title={`${m.key}: ${measure === 'usd' ? usd(m.usd, 4) : calls(m.calls)}${m.local ? ` (local, ${gpuMinutes(m.gpu_seconds)})` : ''}`}
                           />
                         ))}
                     </div>
@@ -221,8 +224,8 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                   <li key={k.key} className="inline-flex items-center gap-1.5" data-testid={`spend-key-${k.key}`}>
                     <span className={`inline-block h-2.5 w-2.5 rounded-sm ${k.colour}`} aria-hidden />
                     <span className="font-mono">{k.key}</span>
-                    <span className="text-content-tertiary">
-                      {measure === 'usd' ? (k.local ? 'local, no dollars' : usd(k.total, 4)) : `${k.total} calls`}
+                    <span className="text-content-tertiary" title={measure === 'usd' && !k.local ? usd(k.total, 4) : undefined}>
+                      {measure === 'usd' ? (k.local ? 'local, no dollars' : usd(k.total)) : calls(k.total)}
                     </span>
                   </li>
                 ))}
@@ -240,11 +243,11 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                   <Card key={p.provider} variant="outlined" className="px-4 py-3" data-testid={`spend-provider-${p.provider}`}>
                     <div className="flex flex-wrap items-center gap-2 text-compact">
                       <span className="font-medium">{p.provider}</span>
-                      <span>{usd(p.usd, 4)} in this window</span>
+                      <span title={usd(p.usd, 4)}>{usd(p.usd)} in this window</span>
                       <span className="text-content-tertiary">
-                        · {p.calls} calls{p.unmetered ? `, ${p.unmetered} unmetered` : ''}{p.refusals ? `, ${p.refusals} refused` : ''}
+                        · {calls(p.calls)}{p.unmetered ? `, ${p.unmetered} unmetered` : ''}{p.refusals ? `, ${p.refusals} refused` : ''}
                       </span>
-                      <span className="ml-auto text-caption text-content-tertiary">
+                      <span className="ml-auto text-caption text-content-tertiary" title={`${usd(p.month_usd, 4)} this month`}>
                         {p.cap_usd != null ? `${usd(p.month_usd)} of ${usd(p.cap_usd)} this month` : `${usd(p.month_usd)} this month, no cap`}
                       </span>
                     </div>
@@ -264,7 +267,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                 <Card key={p.provider} variant="outlined" className="px-4 py-3 text-compact" data-testid={`spend-provider-${p.provider}`}>
                   <span className="font-medium">{p.provider}</span>{' '}
                   <Badge size="sm" color="neutral">local</Badge>{' '}
-                  <span>{gpuMinutes(p.gpu_seconds)} of GPU time over {p.calls} calls — not money</span>
+                  <span>{gpuMinutes(p.gpu_seconds)} of GPU time over {calls(p.calls)} — not money</span>
                 </Card>
               ))}
               <Card variant="outlined" className="px-4 py-3" data-testid="spend-provider-total">
@@ -339,7 +342,7 @@ function RollupTable({ title, rows, label, testid }: { title: string; rows: Spen
     {
       key: 'usd',
       header: 'Cost',
-      render: r => (r.local ? <span className="text-content-tertiary">{gpuMinutes(r.gpu_seconds)} local</span> : usd(r.usd, 4)),
+      render: r => (r.local ? <span className="text-content-tertiary">{gpuMinutes(r.gpu_seconds)} local</span> : <span title={usd(r.usd, 4)}>{usd(r.usd)}</span>),
     },
     { key: 'calls', header: 'Calls', render: r => `${r.calls}${r.unmetered ? ` (${r.unmetered} unmetered)` : ''}` },
     { key: 'tokens', header: 'Tokens in / out', render: r => `${tokens(r.prompt_tokens)} / ${tokens(r.completion_tokens)}` },

@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from './MessageBubble'
 import type { LiveDelegation, MessageRow } from './chatReducer'
 import { attachmentFixture } from './attachmentFixture'
+import { usd } from '../spend/spendFormat'
 
 function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
@@ -137,7 +138,9 @@ describe('MessageBubble — the live tool-call line', () => {
 
   it('shows the turn\'s cost beside who answered, and nothing when no round was priced', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
-    expect(screen.getByTestId('turn-cost').textContent).toContain('$0.0013')
+    // T21: sub-cent reads "< $0.01" for display; the exact figure stays on hover.
+    expect(screen.getByTestId('turn-cost').textContent).toContain('< $0.01')
+    expect(screen.getByTestId('turn-cost').getAttribute('title')).toContain('$0.0013')
     render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', cost: null })} />)
     expect(screen.getAllByTestId('served-by')).toHaveLength(2)
     expect(screen.getAllByTestId('turn-cost')).toHaveLength(1)
@@ -953,5 +956,30 @@ describe('MessageBubble — a rewind marker is a divider, not his bubble (chat r
     expect(chatLine).toContain('4')
     expect(executionsLine).toContain('4')
     expect(chatLine).not.toBe(executionsLine)
+  })
+})
+
+describe('MessageBubble — T21: the turn cost reads like Spend', () => {
+  it('C5: the turn cost is "· " + usd(cost) — sub-cent "< $0.01", zero "$0.00", grouped like Spend', () => {
+    const cases: [number, string][] = [
+      [0.0013, usd(0.0013)],
+      [0, usd(0)],
+      [0.03, usd(0.03)],
+      [1234.5, usd(1234.5)],
+    ]
+    expect(cases[0][1]).toBe('< $0.01')
+    expect(cases[1][1]).toBe('$0.00')
+    cases.forEach(([cost, shown], i) => {
+      render(<MessageBubble row={assistantRow({ id: `t21-${i}`, text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost })} />)
+      const el = screen.getAllByTestId('turn-cost')[i]
+      expect(el.textContent?.replace(/\s+/g, ' ').trim()).toBe(`· ${shown}`)
+    })
+  })
+
+  it('C5: the turn cost keeps its exact four-decimal figure on hover', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
+    const el = screen.getByTestId('turn-cost')
+    expect(el.textContent).not.toContain('0.0013')
+    expect(el.getAttribute('title')).toContain(usd(0.0013, 4))
   })
 })

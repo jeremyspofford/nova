@@ -1,4 +1,5 @@
 import type { SpendReport } from '../../lib/api'
+import { plural } from '../about/aboutFormat'
 
 /**
  * Pure formatting for the Spend page. Every dollar figure on the page came
@@ -12,10 +13,23 @@ export const BASIS_WORDS: Record<string, string> = {
   'owner-price': 'the price you entered',
 }
 
+/** A dollar figure. The display form (digits=2) reads two decimals, and a
+ *  positive amount under a cent reads "< $0.01" — the exact figure is the
+ *  hover form, usd(v, 4), which keeps four decimals for any value. */
 export function usd(value: number | null | undefined, digits = 2): string {
   if (typeof value !== 'number') return 'not stated'
-  if (value > 0 && value < 0.01 && digits === 2) return `$${value.toFixed(4)}`
+  if (digits === 2 && value > 0 && value < 0.01) return '< $0.01'
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
+}
+
+/** "1 call" / "2 calls" — never "call(s)". */
+export function calls(n: number): string {
+  return `${n} ${plural(n, 'call')}`
+}
+
+/** "1 call was" / "2 calls were", for a sentence about a count of calls. */
+export function callsWere(n: number): string {
+  return `${calls(n)} ${n === 1 ? 'was' : 'were'}`
 }
 
 export function gpuMinutes(seconds: number | null | undefined): string {

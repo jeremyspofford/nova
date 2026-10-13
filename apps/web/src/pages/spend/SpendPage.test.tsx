@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { SpendPage } from './SpendPage'
+import { usd } from './spendFormat'
 import type { SpendCap, SpendPrice, SpendReport } from '../../lib/api'
 
 const REPORT: SpendReport = {
@@ -98,9 +99,9 @@ describe('SpendPage', () => {
     expect(tiles).toContain('$3.50 / $25.00')
     expect(tiles).toContain('12.5 min')
     const gaps = screen.getByTestId('spend-gaps').textContent ?? ''
-    expect(gaps).toContain('2 call(s) were unmetered')
+    expect(gaps).toContain('2 calls were unmetered') // T21: words, not call(s)
     expect(gaps).toContain('openrouter:gpt-free (1)')
-    expect(gaps).toContain('1 call(s) were refused')
+    expect(gaps).toContain('1 call was refused')
     expect(screen.getByText(/calls in flight are not yet counted/)).toBeTruthy()
   })
 
@@ -161,7 +162,8 @@ describe('SpendPage', () => {
     await waitFor(() => expect(screen.getByTestId('spend-by-model')).toBeTruthy())
     const models = screen.getByTestId('spend-by-model').textContent ?? ''
     expect(models).toContain('openrouter:openai/gpt-x')
-    expect(models).toContain('$3.0000')
+    expect(models).toContain('$3.00') // T21: two decimals for display
+    expect(models).not.toContain('$3.0000')
     expect(models).toContain('12.5 min local')
     expect(models).toContain('4 (2 unmetered)')
     expect(screen.getByTestId('spend-by-purpose').textContent).toContain('Quality judging')
@@ -214,5 +216,151 @@ describe('SpendPage — recent refusals (R12)', () => {
     expect(items[0].textContent).toContain('qwen3:8b, qwen3.8:27b')
     expect(items[0].textContent).not.toContain('100.122.40.93')
     expect(within(items[0] as HTMLElement).getByText('unreachable').getAttribute('title')).toContain('ConnectTimeout')
+  })
+})
+
+describe('SpendPage — T21: dollars at two decimals, calls in words', () => {
+  // A dollar figure with three or more decimals ("$3.0000", "$0.0042").
+  const LONG_DOLLARS = /\$[\d,]+\.\d{3,}/
+  // Each element's OWN text (its direct text nodes joined), one string per
+  // element. Never a container's textContent: that glues adjacent cells with
+  // no separator, so a "$3.00" Cost cell beside a "4" Calls cell reads
+  // "$3.004". Joining an element's own nodes still catches a "$" literal and
+  // its figure split into two nodes inside one element.
+  const ownTexts = (root: Element): string[] =>
+    [root, ...Array.from(root.querySelectorAll('*'))]
+      .map(el =>
+        Array.from(el.childNodes)
+          .filter(n => n.nodeType === Node.TEXT_NODE)
+          .map(n => n.textContent ?? '')
+          .join(''),
+      )
+      .filter(t => t.includes('$'))
+
+  it('C2: no visible dollar figure has more than two decimals; the day-bar titles keep four', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('spend-by-model')).toBeTruthy())
+    const shown = ownTexts(document.body)
+    expect(shown.length).toBeGreaterThan(0)
+    expect(shown.filter(t => LONG_DOLLARS.test(t))).toEqual([])
+    // hover text keeps the precision
+    const bar = screen.getByTestId('spend-day-2026-09-02').parentElement!
+    expect(bar.getAttribute('title')).toContain('$2.0000')
+  })
+
+  it('C3: the key total, each provider\'s window spend and the rollup Cost read usd(v)', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('spend-by-model')).toBeTruthy())
+    const keyText = screen.getByTestId('spend-key-openrouter:openai/gpt-x').textContent ?? ''
+    expect(keyText).toContain('$3.00')
+    expect(keyText).not.toContain('$3.0000')
+    const openrouter = screen.getByTestId('spend-provider-openrouter').textContent ?? ''
+    expect(openrouter).toContain('$3.00 in this window')
+    expect(openrouter).not.toContain('$3.0000')
+    expect(screen.getByTestId('spend-provider-anthropic').textContent).toContain('$0.50 in this window')
+    const byModel = screen.getByTestId('spend-by-model')
+    expect(byModel.textContent ?? '').toContain(usd(3.0))
+    const cells = ownTexts(byModel)
+    expect(cells).toContain(usd(3.0))
+    expect(cells.filter(t => LONG_DOLLARS.test(t))).toEqual([])
+  })
+
+  it('C3/C4: a sub-cent provider reads "< $0.01 in this window" with its exact figure on hover', async () => {
+    const report = {
+      ...REPORT,
+      by_provider: REPORT.by_provider.map(p => (p.provider === 'anthropic' ? { ...p, usd: 0.0042 } : p)),
+    }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-provider-anthropic')).toBeTruthy())
+    const card = screen.getByTestId('spend-provider-anthropic')
+    expect(card.textContent).toContain('< $0.01 in this window')
+    expect(card.textContent).not.toContain('$0.0042')
+    const shown = within(card).getByText(/< \$0\.01/)
+    let el: HTMLElement | null = shown
+    let title: string | null = null
+    while (el && card.contains(el) && title === null) {
+      if (el.getAttribute('title')?.includes('$0.0042')) title = el.getAttribute('title')
+      el = el.parentElement
+    }
+    expect(title).toContain(usd(0.0042, 4))
+  })
+
+  it('C4 (coverage): every "< $0.01" in a provider card, the model key and the rollup keeps its exact figure on hover', async () => {
+    const report = {
+      ...REPORT,
+      by_provider: REPORT.by_provider.map(p => (p.provider === 'anthropic' ? { ...p, usd: 0.0042, month_usd: 0.0042 } : p)),
+      by_model: REPORT.by_model.map(m => (m.local ? m : { ...m, usd: 0.0042 })),
+      by_day: REPORT.by_day.map(d => ({ ...d, models: d.models.map(m => (m.local ? m : { ...m, usd: 0.0021 })) })),
+    }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-by-model')).toBeTruthy())
+    const roots = [
+      screen.getByTestId('spend-provider-anthropic'),
+      screen.getByTestId('spend-key-openrouter:openai/gpt-x'),
+      screen.getByTestId('spend-by-model'),
+    ]
+    let seen = 0
+    const bare: string[] = []
+    for (const root of roots) {
+      for (const el of [root, ...Array.from(root.querySelectorAll('*'))]) {
+        const own = Array.from(el.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent ?? '').join('')
+        if (!own.includes('< $0.01')) continue
+        seen += 1
+        let at: Element | null = el
+        let title: string | null = null
+        while (at && root.contains(at) && title === null) {
+          if (at.getAttribute('title')?.includes(usd(0.0042, 4))) title = at.getAttribute('title')
+          at = at.parentElement
+        }
+        if (title === null) bare.push(own)
+      }
+    }
+    // every "< $0.01" found an ancestor title with the exact figure
+    expect(bare).toEqual([])
+    // the card's window figure and month figure, the key total, the rollup Cost
+    expect(seen).toBeGreaterThanOrEqual(4)
+  })
+
+  it('C4 (coverage): a sub-cent Spent or This-month tile keeps its exact figure on hover', async () => {
+    const report = { ...REPORT, totals: { ...REPORT.totals, usd: 0.0042, month_usd: 0.0031 } }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-tiles')).toBeTruthy())
+    const tiles = screen.getByTestId('spend-tiles')
+    const shown = Array.from(tiles.querySelectorAll('*')).filter(el =>
+      Array.from(el.childNodes).some(n => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').includes('< $0.01')),
+    )
+    // both money tiles round to "< $0.01" ...
+    expect(shown).toHaveLength(2)
+    // ... and each carries its own exact figure in a title
+    const titles = shown.map(el => el.closest('[title]')?.getAttribute('title') ?? '')
+    expect(titles[0]).toContain(usd(0.0042, 4))
+    expect(titles[1]).toContain(usd(0.0031, 4))
+  })
+
+  it('C6: the gaps read in words — "N calls were", "1 call was", never call(s)', async () => {
+    const report = { ...REPORT, totals: { ...REPORT.totals, ledger_write_failures: 1 } }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-gaps')).toBeTruthy())
+    const gaps = screen.getByTestId('spend-gaps').textContent ?? ''
+    expect(gaps).toContain('2 calls were unmetered')
+    expect(gaps).toContain('1 call was refused')
+    expect(gaps).toContain('1 call since the gateway started could not be recorded at all')
+    expect(gaps).not.toContain('call(s)')
+  })
+
+  it('C6: a single call is "1 call" in every text and title on the page', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('spend-provider-anthropic')).toBeTruthy())
+    expect(screen.getByTestId('spend-provider-anthropic').textContent).toContain('· 1 call')
+    const page = document.body
+    const titles = Array.from(page.querySelectorAll('[title]')).map(e => e.getAttribute('title') ?? '')
+    for (const text of [page.textContent ?? '', ...titles]) {
+      expect(text).not.toContain('call(s)')
+      expect(text).not.toMatch(/\b1 calls\b/)
+    }
+    // the per-model segment titles name one call in the singular
+    fireEvent.click(screen.getByRole('button', { name: 'Calls' }))
+    expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').getAttribute('title')).toContain('1 call')
+    expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').getAttribute('title')).not.toMatch(/\b1 calls\b/)
   })
 })
