@@ -98,13 +98,15 @@ describe('InboxPage — the record of what she noticed', () => {
 
     const first = within(list).getByTestId('notice-row-n1')
     expect(within(first).getByText('the gateway is not answering')).toBeDefined()
-    expect(within(first).getByText('stack_service_unreachable')).toBeDefined()
+    // T15 (verification 2-7): the check name reads as words, not its snake key.
+    expect(within(first).getByText('Stack service unreachable')).toBeDefined()
     expect(within(first).getByTestId('urgent-badge').textContent).toBe('urgent')
     expect(within(first).getByTestId('live-pill').textContent).toBe('still true')
     expect(within(first).getByTestId('state-badge').textContent).toBe('not told yet')
     const facts = within(first).getByTestId('notice-facts')
-    expect(facts.textContent).toContain('service: gateway')
-    expect(facts.textContent).toContain('tries: 3')
+    // T15: each fact reads "<Label>: <value>" through lib/factFormat.
+    expect(facts.textContent).toContain('Service: gateway')
+    expect(facts.textContent).toContain('Tries: 3')
     expect(within(first).getByText(/first seen 3m ago/)).toBeDefined()
     expect(within(first).getByText(/last seen 1m ago/)).toBeDefined()
     // Nothing has been attempted, so the row says that rather than showing
@@ -586,5 +588,133 @@ describe('InboxPage — the shared tab bar (R10 leftover)', () => {
     expect(inbox.getAttribute('aria-pressed')).toBe('true')
     expect(inbox.className).toContain('border-accent')
     expect(within(bar).getByRole('button', { name: 'What you were told' }).getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+/**
+ * Verification 2-7, T15: a notice card reads as product, not debug output.
+ * The check name and the facts went to the screen as mono snake_keys with
+ * whole UUIDs and JSON arrays; they now read through lib/factFormat (T14),
+ * and the raw key/values sit behind a "Details" disclosure so nothing core
+ * wrote is lost.
+ */
+describe('InboxPage — a notice card reads as product (verification 2-7, T15)', () => {
+  const JOB = '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c'
+  const TIMER = '0b39fae3-1c2d-4e5f-8a9b-c0d1e2f3a4b5'
+
+  /** True when `el` or any ancestor up to (and including) `stop` is mono. */
+  function inMono(el: Element, stop: Element): boolean {
+    for (let at: Element | null = el; at; at = at.parentElement) {
+      if (at.classList.contains('font-mono')) return true
+      if (at === stop) break
+    }
+    return false
+  }
+
+  async function card(overrides: Partial<Notice>) {
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1', ...overrides })])))
+    return screen.findByTestId('notice-row-n1')
+  }
+
+  it('C1: shows the check name as words, not in mono, with the raw name on hover', async () => {
+    const row = await card({ check_name: 'stack_service_unreachable' })
+    const name = within(row).getByText('Stack service unreachable')
+    expect(inMono(name, row)).toBe(false)
+    expect(name.closest('[title]')?.getAttribute('title') ?? '').toContain('stack_service_unreachable')
+  })
+
+  it('C2: reads each fact as "<Label>: <value>" in body text — no snake keys, brackets or quotes on the face', async () => {
+    const row = await card({
+      facts: { job_id: JOB, services: ['core', 'gateway'], healthy: false, tries: 3 },
+    })
+    const facts = within(row).getByTestId('notice-facts')
+    const text = facts.textContent ?? ''
+    expect(text).toContain('Job ID: 3f2a9c1e…')
+    expect(text).toContain('Services: core, gateway')
+    expect(text).toContain('Healthy: no')
+    expect(text).toContain('Tries: 3')
+    expect(text).not.toContain('job_id')
+    expect(text).not.toContain(JOB)
+    expect(text).not.toMatch(/[[\]"]/)
+    expect(inMono(facts, row)).toBe(false)
+    for (const item of Array.from(facts.querySelectorAll('li'))) {
+      expect(inMono(item, row)).toBe(false)
+    }
+  })
+
+  it('C3: a value the card shortened or reworded keeps its raw value on hover', async () => {
+    const row = await card({ facts: { job_id: JOB, services: ['core', 'gateway'] } })
+    const facts = within(row).getByTestId('notice-facts')
+    const titles = Array.from(facts.querySelectorAll('[title]')).map(el => el.getAttribute('title'))
+    expect(titles).toContain(JOB)
+    expect(titles).toContain('["core","gateway"]')
+  })
+
+  it('C3: a linked fact the card shortened keeps its whole id on hover too', async () => {
+    // COVERAGE: without this, a link dropping its title survived (only the
+    // plain-text value was held to C3).
+    const row = await card({ facts: { timer_id: TIMER } })
+    const link = within(row).getByRole('link', { name: '0b39fae3…' })
+    expect(link.closest('[data-testid="notice-facts"] [title]')?.getAttribute('title')).toBe(TIMER)
+  })
+
+  it('C4: a linked fact shows the readable value as its link text and still goes to the whole id', async () => {
+    const row = await card({ facts: { timer_id: TIMER } })
+    const link = within(row).getByRole('link', { name: '0b39fae3…' })
+    expect(link.getAttribute('href')).toBe(`/schedules?timer=${TIMER}`)
+    expect(within(row).getByTestId('notice-facts').textContent).toContain('Timer ID: 0b39fae3…')
+  })
+
+  it('C5: keeps every raw key and value behind a closed "Details" disclosure, and only there', async () => {
+    const row = await card({
+      facts: { job_id: JOB, services: ['core', 'gateway'], healthy: false },
+    })
+    const details = within(row).getByTestId('notice-details')
+    expect(details.tagName).toBe('DETAILS')
+    expect((details as HTMLDetailsElement).open).toBe(false)
+    expect(details.querySelector('summary')?.textContent?.trim()).toBe('Details')
+    const raw = details.textContent ?? ''
+    expect(raw).toContain(`job_id: ${JOB}`)
+    expect(raw).toContain('services: ["core","gateway"]')
+    expect(raw).toContain('healthy: false')
+
+    // Outside the disclosure the card never shows a raw key or a whole id.
+    const face = row.cloneNode(true) as HTMLElement
+    face.querySelector('[data-testid="notice-details"]')?.remove()
+    expect(face.textContent).not.toContain('job_id')
+    expect(face.textContent).not.toContain(JOB)
+    expect(face.textContent).not.toContain('["core"')
+  })
+
+  it('C5: a notice with no facts has no Details disclosure', async () => {
+    // Paired with a row that has facts, so this cannot pass on a page that
+    // never draws the disclosure at all.
+    renderPage(
+      fakeApi(() =>
+        listing([
+          noticeFixture({ id: 'n1', facts: {} }),
+          noticeFixture({ id: 'n2', facts: { service: 'gateway' } }),
+        ]),
+      ),
+    )
+    const bare = await screen.findByTestId('notice-row-n1')
+    expect(within(screen.getByTestId('notice-row-n2')).getByTestId('notice-details')).toBeDefined()
+    expect(within(bare).queryByTestId('notice-details')).toBeNull()
+  })
+
+  it('C6: delivery lines read in body text, not mono, and keep their verdict colours', async () => {
+    const row = await card({
+      state: 'failed',
+      delivery: {
+        chat: { ok: true },
+        devices: [{ name: 'dell', ok: false, reason: 'offline' }],
+      } as Notice['delivery'],
+    })
+    const lines = within(row).getByTestId('delivery-lines')
+    const items = Array.from(lines.querySelectorAll('li'))
+    expect(items.length).toBe(2)
+    for (const item of items) expect(inMono(item, row)).toBe(false)
+    expect(items[0].className).toContain('text-success')
+    expect(items[1].className).toContain('text-danger')
   })
 })

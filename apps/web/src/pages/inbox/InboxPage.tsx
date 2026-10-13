@@ -22,7 +22,6 @@ import { formatAbsolute } from '../schedules/schedulesFormat'
 import {
   actedLine,
   deliveryVerdicts,
-  factLines,
   livePill,
   muteWords,
   draftWords,
@@ -30,8 +29,10 @@ import {
   sightingsWords,
   silenceWords,
   stateBadge,
+  subjectLink,
   talkWords,
 } from './inboxFormat'
+import { factLabel, formatFact } from '../../lib/factFormat'
 
 /**
  * The Inbox (S11): everything she noticed while nobody was watching.
@@ -472,7 +473,13 @@ function NoticeCard({
   const talk = talkWords(notice)
   const draft = draftWords(notice)
   const lines = deliveryVerdicts(notice)
-  const facts = factLines(notice.facts)
+  // Verification 2-7, T15: each fact reads through lib/factFormat (label in
+  // words, value shortened or reworded, raw kept in `full`); a subject he can
+  // go and look at still links by its whole value (S25.2.2).
+  const facts = Object.entries(notice.facts ?? {}).map(([key, value]) => ({
+    ...formatFact(key, value),
+    href: subjectLink(key, value) ?? undefined,
+  }))
 
   return (
     <div
@@ -501,8 +508,8 @@ function NoticeCard({
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
-            <span className="font-mono" title="the check that found it">
-              {notice.check_name}
+            <span title={`the check that found it: ${notice.check_name}`}>
+              {factLabel(notice.check_name)}
             </span>
             <span data-testid="live-pill" title={live.title}>
               <Badge size="sm" color={live.color}>
@@ -603,23 +610,42 @@ function NoticeCard({
       )}
 
       {facts.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-micro text-content-tertiary" data-testid="notice-facts">
+        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-micro text-content-tertiary" data-testid="notice-facts">
           {facts.map(fact => (
-            <li key={fact.key} title={fact.title} className="min-w-0 [overflow-wrap:anywhere]">
-              {fact.key}:{' '}
+            <li key={fact.key} className="min-w-0 [overflow-wrap:anywhere]">
+              {fact.label}:{' '}
               {fact.href === undefined ? (
-                <span className="text-content-secondary">{fact.value}</span>
+                <span className="text-content-secondary" title={fact.full}>
+                  {fact.text}
+                </span>
               ) : (
                 <Link
                   to={fact.href}
+                  title={fact.full}
                   className="text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
                 >
-                  {fact.value}
+                  {fact.text}
                 </Link>
               )}
             </li>
           ))}
         </ul>
+      )}
+
+      {/* The raw evidence, exactly as core wrote it (the fingerprint was
+          computed from these): closed by default, so the card face reads as
+          product while nothing is lost. */}
+      {facts.length > 0 && (
+        <details className="mt-1 text-micro text-content-tertiary" data-testid="notice-details">
+          <summary className="cursor-pointer select-none hover:text-content-secondary">Details</summary>
+          <ul className="mt-1 space-y-0.5 font-mono">
+            {facts.map(fact => (
+              <li key={fact.key} className="min-w-0 [overflow-wrap:anywhere]">
+                {fact.key}: {fact.full ?? fact.text}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <div className="mt-2 flex flex-wrap gap-x-3 text-micro text-content-tertiary">
@@ -645,7 +671,7 @@ function NoticeCard({
                 // A delivery's own words can hold a long unbroken token (a
                 // device's error output); it wraps rather than pushing the
                 // page sideways on a phone.
-                'font-mono text-micro [overflow-wrap:anywhere]',
+                'text-micro [overflow-wrap:anywhere]',
                 line.verdict === 'ok' && 'text-success',
                 line.verdict === 'failed' && 'text-danger',
                 line.verdict === 'stated' && 'text-content-tertiary',
