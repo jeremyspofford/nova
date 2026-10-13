@@ -521,14 +521,20 @@ export function SchedulesPage({
             <table className="stack-table w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
+                  {/* One line each: NEXT FIRE / LAST OUTCOME never wrap. */}
                   {COLUMNS.map((heading, i) => (
                     <th
                       key={i}
-                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider sticky top-0 bg-surface-elevated"
+                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider whitespace-nowrap sticky top-0 bg-surface-elevated"
                     >
                       {heading}
                     </th>
                   ))}
+                  {/* The controls' column: named for a screen reader, no
+                      visible title over the buttons. */}
+                  <th className="px-4 py-3 whitespace-nowrap sticky top-0 bg-surface-elevated">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
@@ -579,10 +585,14 @@ export function SchedulesPage({
   )
 }
 
-/** The table's columns. The row's controls live in the Schedule cell, not a
- * trailing column: a nowrap actions column was the one pushed past the
- * scroll edge at 1440px (T17). The note and detail rows span all of them. */
+/** The table's labelled columns. The row's controls follow in their own
+ * last cell (T29): in the Schedule cell (T17) they squeezed into a phone
+ * card's value column. At 1440 that cell fits because Delete is icon-only
+ * from md up and the times read once (T17 C3). */
 const COLUMNS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome'] as const
+/** The header's cells — the labelled columns plus the sr-only Actions one —
+ *  which a note or detail row spans. */
+const COLUMN_COUNT = COLUMNS.length + 1
 
 function ScheduleRow({
   timer,
@@ -643,68 +653,6 @@ function ScheduleRow({
           {/* core's describe() words, verbatim — never recomputed here. */}
           <div className="text-caption text-content-tertiary" data-testid="schedule-words">
             {timer.schedule_words}
-          </div>
-          {/* The row's controls, under its words: one wrapping group, so a
-              narrow table wraps them instead of clipping them. They never
-              toggle the row. */}
-          <div
-            className="mt-2 flex flex-wrap items-center gap-1.5"
-            data-testid={`row-actions-${timer.id}`}
-            onClick={e => e.stopPropagation()}
-          >
-            {state.state === 'paused' ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<Play size={12} />}
-                loading={busy === 'resume'}
-                disabled={busy !== undefined}
-                onClick={onResume}
-              >
-                Resume
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<Pause size={12} />}
-                loading={busy === 'pause'}
-                disabled={busy !== undefined || state.state === 'finished'}
-                onClick={onPause}
-              >
-                Pause
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<Zap size={12} />}
-              loading={busy === 'fire'}
-              // A paused row cannot be run: the claim never picks a paused row
-              // up, so core refuses fire_now outright (409). Stating that up
-              // front mirrors the server's fact — it is not a gate.
-              disabled={busy !== undefined || state.state === 'paused'}
-              onClick={onFire}
-              title={
-                state.state === 'paused'
-                  ? 'Paused — resume it to run it'
-                  : 'Set the next fire to now and run one scheduler tick — the firing goes through the same claim and history as a scheduled one'
-              }
-            >
-              Run now
-            </Button>
-            {timer.kind !== 'job' && (
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<Trash2 size={12} />}
-                loading={busy === 'delete'}
-                disabled={busy !== undefined}
-                onClick={onDelete}
-              >
-                Delete
-              </Button>
-            )}
           </div>
         </td>
         {/* Runs as (S12). The select never toggles the row. */}
@@ -774,10 +722,79 @@ function ScheduleRow({
             </span>
           )}
         </td>
+        {/* The row's controls: their own last cell — a full-width line on a
+            stacked card, right-aligned in the table. A click anywhere in it
+            (a button or its padding) never toggles the row. */}
+        <td className="stack-actions px-4 py-2.5 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
+          {/* One line: never wrapped (the stacked td is white-space:
+              normal, so the nowrap sits on the group itself). */}
+          <div
+            className="inline-flex flex-nowrap items-center gap-1.5 whitespace-nowrap"
+            data-testid={`row-actions-${timer.id}`}
+          >
+            {state.state === 'paused' ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Play size={12} />}
+                loading={busy === 'resume'}
+                disabled={busy !== undefined}
+                onClick={onResume}
+              >
+                Resume
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Pause size={12} />}
+                loading={busy === 'pause'}
+                disabled={busy !== undefined || state.state === 'finished'}
+                onClick={onPause}
+              >
+                Pause
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Zap size={12} />}
+              loading={busy === 'fire'}
+              // A paused row cannot be run: the claim never picks a paused row
+              // up, so core refuses fire_now outright (409). Stating that up
+              // front mirrors the server's fact — it is not a gate.
+              disabled={busy !== undefined || state.state === 'paused'}
+              onClick={onFire}
+              title={
+                state.state === 'paused'
+                  ? 'Paused — resume it to run it'
+                  : 'Set the next fire to now and run one scheduler tick — the firing goes through the same claim and history as a scheduled one'
+              }
+            >
+              Run now
+            </Button>
+            {timer.kind !== 'job' && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Trash2 size={12} />}
+                loading={busy === 'delete'}
+                disabled={busy !== undefined}
+                onClick={onDelete}
+                // Icon-only from md up: the name stays "Delete" for a screen
+                // reader and on hover; the word shows on a phone's full line.
+                aria-label="Delete"
+                title="Delete this schedule"
+              >
+                <span className="md:sr-only">Delete</span>
+              </Button>
+            )}
+          </div>
+        </td>
       </tr>
       {(rowError || ranNow) && (
         <tr className="bg-surface-elevated/40" data-testid={`schedules-note-${timer.id}`}>
-          <td colSpan={COLUMNS.length} className="px-6 py-2 text-caption">
+          <td colSpan={COLUMN_COUNT} className="px-6 py-2 text-caption">
             {rowError && <p className="text-danger">{rowError}</p>}
             {ranNow && <RanNowLine firing={ranNow} />}
           </td>
@@ -785,7 +802,7 @@ function ScheduleRow({
       )}
       {expanded && (
         <tr data-testid={`schedules-detail-${timer.id}`} className="bg-surface-elevated/40">
-          <td colSpan={COLUMNS.length} className="px-6 py-4">
+          <td colSpan={COLUMN_COUNT} className="px-6 py-4">
             <div className="space-y-4">
               <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-caption">
                 <dt className="text-content-tertiary">Schedule</dt>
