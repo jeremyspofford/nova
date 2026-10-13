@@ -180,6 +180,8 @@ func TestBoxArgsAreExactlyTheSpec(t *testing.T) {
 		"--tmpfs", "/tmp:exec",
 		"-e", "TEST_DATABASE_URL=postgresql://postgres@db:5432/postgres",
 		"-e", "HOME=/tmp/home",
+		"-e", "USER=nova",
+		"-e", "LOGNAME=nova",
 		"-v", tWorktree + ":" + tWorktree + ":rw",
 		"-v", tCheckout + "/.git:" + tCheckout + "/.git:ro",
 		"-v", "nova-box-a1b2c3-cache:/deps:ro",
@@ -290,8 +292,10 @@ func TestNoArgvOpensTheSeal(t *testing.T) {
 		for _, e := range flagValues(box, "-e", "--env") {
 			envKeys = append(envKeys, strings.SplitN(e, "=", 2)[0])
 		}
-		if !reflect.DeepEqual(envKeys, []string{"TEST_DATABASE_URL", "HOME"}) {
-			t.Errorf("box env keys = %q, want exactly TEST_DATABASE_URL and HOME", envKeys)
+		// USER/LOGNAME added 2026-10-13: the box's uid has no passwd entry
+		// (getpass.getuser() raised in the box); a fixed name, not the host's.
+		if !reflect.DeepEqual(envKeys, []string{"TEST_DATABASE_URL", "HOME", "USER", "LOGNAME"}) {
+			t.Errorf("box env keys = %q, want exactly TEST_DATABASE_URL, HOME, USER and LOGNAME", envKeys)
 		}
 		if ef := flagValues(box, "--env-file"); len(ef) != 0 {
 			t.Errorf("box carries --env-file %q", ef)
