@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { SchedulesPage } from './SchedulesPage'
 import type { Agent, Timer, TimerFiring } from '../../lib/api'
 import { agentFixture } from '../agents/agentFixture'
+import { formatAbsolute } from './schedulesFormat'
 
 const inMinutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString()
 
@@ -693,5 +694,142 @@ describe('SchedulesPage — arriving from a link (S25.2.2)', () => {
 
     await waitFor(() => expect(api.listTimers).toHaveBeenCalled())
     expect(api.listTimerFirings).not.toHaveBeenCalled()
+  })
+})
+
+describe('SchedulesPage — T17: actions inside the row, one time, a visible paused reason', () => {
+  const HEADINGS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome']
+
+  /** The cell under a column, by its stacked-table label. */
+  function cell(row: HTMLElement, label: string): HTMLTableCellElement {
+    const td = row.querySelector<HTMLTableCellElement>(`td[data-label="${label}"]`)
+    expect(td, `no "${label}" cell in the row`).not.toBeNull()
+    return td!
+  }
+
+  /** Every td from `el` up that carries whitespace-nowrap. */
+  function nowrapCells(el: HTMLElement): HTMLElement[] {
+    const out: HTMLElement[] = []
+    for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+      if (n.tagName === 'TD' && n.classList.contains('whitespace-nowrap')) out.push(n)
+    }
+    return out
+  }
+
+  it('C1: the table has no actions column — six headings, none empty, six cells a row', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const headings = screen.getAllByRole('columnheader').map(th => (th.textContent ?? '').trim())
+    expect(headings).toEqual(HEADINGS)
+    expect(row.querySelectorAll(':scope > td').length).toBe(HEADINGS.length)
+  })
+
+  it('C1: the note and detail rows span exactly the six columns', async () => {
+    const api = fakeApi([[timer({ id: 't1' })]])
+    api.pauseTimer = vi.fn(async () => {
+      throw new Error('timer not found (404)')
+    })
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    fireEvent.click(within(row).getByRole('button', { name: /^pause$/i }))
+    const note = await screen.findByTestId('schedules-note-t1')
+    expect(note.querySelector('td')!.colSpan).toBe(HEADINGS.length)
+    fireEvent.click(row)
+    const detail = await screen.findByTestId('schedules-detail-t1')
+    expect(detail.querySelector('td')!.colSpan).toBe(HEADINGS.length)
+  })
+
+  it('C2: the controls are one wrapping group inside the Schedule cell, under the title and words', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', title: 'stretch' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const group = within(row).getByTestId('row-actions-t1')
+    expect(group.closest('td')).toBe(cell(row, 'Schedule'))
+    for (const name of [/^pause$/i, /run now/i, /delete/i]) {
+      expect(within(group).getByRole('button', { name })).toBeDefined()
+    }
+    // Every control of the row is in the group — none left in another cell.
+    expect(within(row).getAllByRole('button').every(b => group.contains(b))).toBe(true)
+    // Under the title and the words, not before them.
+    const words = within(row).getByTestId('schedule-words')
+    expect(words.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // It wraps, and nothing around it forces one line.
+    expect(group.className).toMatch(/\bflex-wrap\b/)
+    expect(nowrapCells(group)).toEqual([])
+  })
+
+  it('C2: a paused row\'s Resume sits in the same group, and a control there never toggles the row', async () => {
+    const api = fakeApi([
+      [timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: 'paused from the Schedules page' })],
+    ])
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const group = within(row).getByTestId('row-actions-t1')
+    fireEvent.click(within(group).getByRole('button', { name: /resume/i }))
+    await waitFor(() => expect(api.resumeTimer).toHaveBeenCalledWith('t1'))
+    expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
+  })
+
+  it('C3: the next fire reads once, as the relative, with the instant on hover only', async () => {
+    const at = inMinutes(2)
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', next_fire_at: at })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const next = cell(row, 'Next fire')
+    expect((next.textContent ?? '').trim()).toBe('in 2m')
+    const absolute = formatAbsolute(at)
+    expect(next.textContent).not.toContain(absolute)
+    expect(next.querySelector(`[title="${absolute}"]`)).not.toBeNull()
+  })
+
+  it('C3: a fire a week or more out (relative is the instant) appears once, not twice', async () => {
+    const at = new Date(Date.now() + 10 * 24 * 3600_000).toISOString()
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', next_fire_at: at })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect((cell(row, 'Next fire').textContent ?? '').trim()).toBe(formatAbsolute(at))
+  })
+
+  it('C4: a paused row shows core\'s reason as text under the Status badge, without opening it', async () => {
+    const reason = 'paused after 5 consecutive failures: no such device'
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [
+            timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: reason }),
+            timer({ id: 't2' }),
+          ],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    const shown = within(row).getByTestId('row-paused-reason')
+    expect(shown.textContent).toContain(reason)
+    expect(shown.closest('td')).toBe(cell(row, 'Status'))
+    expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
+    // An active row states no reason.
+    expect(within(screen.getByTestId('schedules-row-t2')).queryByTestId('row-paused-reason')).toBeNull()
+  })
+
+  it('C4: a paused row with no recorded reason says so in the row', async () => {
+    render(
+      <SchedulesPage
+        api={fakeApi([[timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: null })]])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect(within(row).getByTestId('row-paused-reason').textContent).toContain('no reason recorded')
+  })
+
+  it('C5: the reason wraps — no cell around it is whitespace-nowrap', async () => {
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: 'a long reason '.repeat(12) })],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect(nowrapCells(within(row).getByTestId('row-paused-reason'))).toEqual([])
   })
 })

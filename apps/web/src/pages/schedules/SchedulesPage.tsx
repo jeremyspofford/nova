@@ -521,7 +521,7 @@ export function SchedulesPage({
             <table className="stack-table w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
-                  {['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', ''].map((heading, i) => (
+                  {COLUMNS.map((heading, i) => (
                     <th
                       key={i}
                       className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider sticky top-0 bg-surface-elevated"
@@ -578,6 +578,11 @@ export function SchedulesPage({
     </div>
   )
 }
+
+/** The table's columns. The row's controls live in the Schedule cell, not a
+ * trailing column: a nowrap actions column was the one pushed past the
+ * scroll edge at 1440px (T17). The note and detail rows span all of them. */
+const COLUMNS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome'] as const
 
 function ScheduleRow({
   timer,
@@ -639,68 +644,14 @@ function ScheduleRow({
           <div className="text-caption text-content-tertiary" data-testid="schedule-words">
             {timer.schedule_words}
           </div>
-        </td>
-        {/* Runs as (S12). The select never toggles the row. */}
-        <td data-label="Runs as" className="px-4 py-2.5 whitespace-nowrap" onClick={e => e.stopPropagation()} data-testid="runs-as">
-          {timer.kind === 'scheduled' ? (
-            <RunsAsSelect
-              timer={timer}
-              agents={agents}
-              agentsError={agentsError}
-              busy={busy !== undefined}
-              onRebind={onRebind}
-            />
-          ) : (
-            <span className="text-content-tertiary" title="only a scheduled turn runs as an agent">
-              —
-            </span>
-          )}
-        </td>
-        <td data-label="Next fire" className="px-4 py-2.5 whitespace-nowrap">
-          {state.state === 'paused' ? (
-            <span className="text-content-tertiary" title={timer.paused_reason ?? undefined}>
-              paused
-            </span>
-          ) : next === null ? (
-            <span className="text-content-tertiary">—</span>
-          ) : (
-            <span title={next.absolute}>
-              <span className="text-content-primary">{next.relative}</span>
-              <span className="block text-micro text-content-tertiary">{next.absolute}</span>
-            </span>
-          )}
-        </td>
-        <td data-label="Status" className="px-4 py-2.5 whitespace-nowrap">
-          <Badge size="sm" color={state.color}>
-            {state.label}
-          </Badge>
-          {timer.consecutive_failures > 0 && (
-            <span className="ml-2 text-micro text-danger" data-testid="consecutive-failures">
-              {timer.consecutive_failures} failure{timer.consecutive_failures === 1 ? '' : 's'} in a row
-            </span>
-          )}
-        </td>
-        <td data-label="Last outcome" className="px-4 py-2.5 whitespace-nowrap">
-          {outcome === null ? (
-            <span className="text-content-tertiary" title="never fired">
-              —
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-2" title={outcome.detail ?? undefined}>
-              <Badge size="sm" color={outcome.color} className={outcome.pulse ? 'animate-pulse' : undefined}>
-                {outcome.label}
-              </Badge>
-              {timer.last_firing?.ended_at && (
-                <span className="text-micro text-content-tertiary">
-                  {formatRelativeTime(timer.last_firing.ended_at)}
-                </span>
-              )}
-            </span>
-          )}
-        </td>
-        {/* Actions never toggle the row. */}
-        <td className="stack-actions px-4 py-2.5 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
-          <span className="inline-flex items-center gap-1.5">
+          {/* The row's controls, under its words: one wrapping group, so a
+              narrow table wraps them instead of clipping them. They never
+              toggle the row. */}
+          <div
+            className="mt-2 flex flex-wrap items-center gap-1.5"
+            data-testid={`row-actions-${timer.id}`}
+            onClick={e => e.stopPropagation()}
+          >
             {state.state === 'paused' ? (
               <Button
                 size="sm"
@@ -754,12 +705,79 @@ function ScheduleRow({
                 Delete
               </Button>
             )}
+          </div>
+        </td>
+        {/* Runs as (S12). The select never toggles the row. */}
+        <td data-label="Runs as" className="px-4 py-2.5 whitespace-nowrap" onClick={e => e.stopPropagation()} data-testid="runs-as">
+          {timer.kind === 'scheduled' ? (
+            <RunsAsSelect
+              timer={timer}
+              agents={agents}
+              agentsError={agentsError}
+              busy={busy !== undefined}
+              onRebind={onRebind}
+            />
+          ) : (
+            <span className="text-content-tertiary" title="only a scheduled turn runs as an agent">
+              —
+            </span>
+          )}
+        </td>
+        <td data-label="Next fire" className="px-4 py-2.5 whitespace-nowrap">
+          {state.state === 'paused' ? (
+            <span className="text-content-tertiary" title={timer.paused_reason ?? undefined}>
+              paused
+            </span>
+          ) : next === null ? (
+            <span className="text-content-tertiary">—</span>
+          ) : (
+            // One time, one format: the relative, the instant on hover.
+            <span className="text-content-primary" title={next.absolute}>
+              {next.relative}
+            </span>
+          )}
+        </td>
+        {/* Not nowrap: a paused row's reason wraps under the badge. */}
+        <td data-label="Status" className="px-4 py-2.5 min-w-[160px]">
+          <span className="whitespace-nowrap">
+            <Badge size="sm" color={state.color}>
+              {state.label}
+            </Badge>
+            {timer.consecutive_failures > 0 && (
+              <span className="ml-2 text-micro text-danger" data-testid="consecutive-failures">
+                {timer.consecutive_failures} failure{timer.consecutive_failures === 1 ? '' : 's'} in a row
+              </span>
+            )}
           </span>
+          {state.state === 'paused' && (
+            // core's paused_reason, verbatim, as text — not only a hover.
+            <div className="mt-1 text-caption text-content-tertiary break-words" data-testid="row-paused-reason">
+              {timer.paused_reason ?? 'no reason recorded'}
+            </div>
+          )}
+        </td>
+        <td data-label="Last outcome" className="px-4 py-2.5 whitespace-nowrap">
+          {outcome === null ? (
+            <span className="text-content-tertiary" title="never fired">
+              —
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-2" title={outcome.detail ?? undefined}>
+              <Badge size="sm" color={outcome.color} className={outcome.pulse ? 'animate-pulse' : undefined}>
+                {outcome.label}
+              </Badge>
+              {timer.last_firing?.ended_at && (
+                <span className="text-micro text-content-tertiary">
+                  {formatRelativeTime(timer.last_firing.ended_at)}
+                </span>
+              )}
+            </span>
+          )}
         </td>
       </tr>
       {(rowError || ranNow) && (
         <tr className="bg-surface-elevated/40" data-testid={`schedules-note-${timer.id}`}>
-          <td colSpan={7} className="px-6 py-2 text-caption">
+          <td colSpan={COLUMNS.length} className="px-6 py-2 text-caption">
             {rowError && <p className="text-danger">{rowError}</p>}
             {ranNow && <RanNowLine firing={ranNow} />}
           </td>
@@ -767,7 +785,7 @@ function ScheduleRow({
       )}
       {expanded && (
         <tr data-testid={`schedules-detail-${timer.id}`} className="bg-surface-elevated/40">
-          <td colSpan={7} className="px-6 py-4">
+          <td colSpan={COLUMNS.length} className="px-6 py-4">
             <div className="space-y-4">
               <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-caption">
                 <dt className="text-content-tertiary">Schedule</dt>
