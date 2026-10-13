@@ -59,6 +59,9 @@ SERVED_RUNTIME_HEADER = "X-Nova-Served-Runtime"
 # Omitted when not readable, never guessed and never a table of sizes.
 CONTEXT_WINDOW_HEADER = "X-Nova-Context-Window"
 ROUTE_HEADER = "X-Nova-Route"
+# How many links walk_role dials for one request before it stops — a liveness
+# bound on one call, stated in the 503 when links were left untried.
+WALK_ATTEMPTS = 6
 # The decision-model kinds a decision call allows, comma-separated
 # (routing.allowed_kinds): core states the owner's two switches on every call.
 KINDS_HEADER = "X-Nova-Decision-Kinds"
@@ -289,7 +292,12 @@ async def walk_role(
         routing.validate_role(role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    for _attempt in range(6):
+    # The last link chosen: its resolve says which chain links it never judged
+    # (Decision.unjudged), the ones a walk stopped by the bound never tried.
+    last: routing.Decision | None = None
+    # Each link this request dialled, in dial order — the 503 names them.
+    dialled: list[str] = []
+    for _attempt in range(WALK_ATTEMPTS):
         try:
             decision = await routing.resolve(
                 request.app,
@@ -313,7 +321,9 @@ async def walk_role(
                 headers=_unreachable_headers(role, exc.unreachable, exc.connect_walled),
             ) from exc
         connect_walled = decision.connect_walled
+        last = decision
         link = f"{decision.row['name']}:{decision.model}"
+        dialled.append(link)
         try:
             response = await serve(decision)
         except PassedOver as exc:
@@ -361,10 +371,26 @@ async def walk_role(
         return response
     raise HTTPException(
         status_code=503,
-        detail=f"every link in the {role!r} chain refused this request",
+        detail=_walk_stopped(role, last, dialled),
         headers=_unreachable_headers(
             role, unreached, tuple(i for i in connect_walled if i not in unreached)
         ),
+    )
+
+
+def _walk_stopped(role: str, last: routing.Decision | None, dialled: list[str]) -> str:
+    """The 503's words when walk_role's attempts run out. Every link refused
+    is said only when it is true: a chain longer than the bound still has
+    links the walk never dialled, and those are named, in chain order, as
+    not tried — never folded into "refused" (verification 2-7 T7)."""
+    untried = list(last.unjudged) if last is not None else []
+    if not untried:
+        return f"every link in the {role!r} chain refused this request"
+    tried = ", ".join(dialled)
+    left = "1 link was" if len(untried) == 1 else f"{len(untried)} links were"
+    return (
+        f"the {role!r} chain walk stopped after {WALK_ATTEMPTS} attempts, none of which "
+        f"could serve this request ({tried}); {left} not tried: {', '.join(untried)}"
     )
 
 
