@@ -199,6 +199,39 @@ map "$gate_enabled$gate_token_ok" $gate_login_ok {
     "11" 1;
 }
 
+# THE SITE CONTENT-SECURITY-POLICY (T3, 2026-10-13), written once here and
+# sent by each location below that serves nginx's own files. Three rules
+# shape where it goes:
+#
+# - An `add_header` inside a location REPLACES every add_header the server
+#   block would have passed down, and most of these locations set their own
+#   Cache-Control. A server-level policy would silently vanish from
+#   index.html, so each location names it itself, with `always` so the 401
+#   gate page and a 404 keep it too.
+# - Never on a location proxied to core, and never at server or http level
+#   where those would inherit it. Core states each response's own policy (a
+#   download is `sandbox`, an image or PDF inline), and two policies
+#   intersect — nginx would quietly narrow what core decided.
+# - It allows what the BUILT app loads, and nothing external:
+#   script  'self' + the sha256 of index.html's one inline first-frame
+#           script (the theme paint before React). Editing that script
+#           changes its hash: recompute it here, or the browser blocks it
+#           (src/lib/nginxCsp.test.ts recomputes it from index.html and
+#           fails first). No 'unsafe-inline', no 'unsafe-eval'.
+#   style   'unsafe-inline': theme-store writes a runtime <style> whose text
+#           changes with the theme, and gate-page.html has an inline one.
+#   img     data: (app-icon favicons, the Select chevron, .docx images) and
+#           blob:.  font  data: (vite inlines small woff2 subsets).
+#   connect 'self' (every fetch and chat stream is same-origin /api; the
+#           browser opens no WebSocket — /api/v1/devices/ws is novad's).
+#   frame   'self' (the Files page previews a PDF in a same-origin iframe).
+# No upgrade-insecure-requests: this origin is also plain http on
+# 127.0.0.1 and the LAN. Not NOVA_-prefixed: NGINX_ENVSUBST_FILTER=^NOVA_
+# would substitute it at container start.
+map $host $site_csp {
+    default "default-src 'self'; script-src 'self' 'sha256-13UCwOU4IOjZDA/qKP7sbZcTYKxu3ETMRfSX64DWy88='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+}
+
 server {
     listen 80;
     server_name _;
@@ -262,6 +295,7 @@ server {
     location = /healthz {
         access_log off;
         add_header Content-Type text/plain;
+        add_header Content-Security-Policy $site_csp always;
         return 200 "ok\n";
     }
 
@@ -275,12 +309,14 @@ server {
     location = /gate-page.html {
         internal;
         access_log off;
+        add_header Content-Security-Policy $site_csp always;
     }
 
     # GET /gate?token=<T> — the only way to mint the cookie. Never logged:
     # the token rides in the URL, and this is the one place nginx sees it.
     location = /gate {
         access_log off;
+        add_header Content-Security-Policy $site_csp always;
         if ($gate_login_ok) {
             add_header Set-Cookie "nova_gate=${NOVA_PUBLIC_GATE_TOKEN}; Path=/; HttpOnly$gate_cookie_secure; SameSite=Lax; Max-Age=2592000" always;
             return 302 /;
@@ -305,6 +341,7 @@ server {
     location = /health/live {
         include /etc/nginx/gate/gate_check.conf;
         default_type application/json;
+        add_header Content-Security-Policy $site_csp always;
         return 200 '{"status":"live"}';
     }
 
@@ -586,6 +623,7 @@ server {
         include /etc/nginx/gate/gate_check.conf;
         expires 1y;
         add_header Cache-Control "public, immutable";
+        add_header Content-Security-Policy $site_csp always;
         try_files $uri =404;
     }
 
@@ -599,6 +637,7 @@ server {
         include /etc/nginx/gate/gate_check.conf;
         default_type application/manifest+json;
         add_header Cache-Control "no-cache";
+        add_header Content-Security-Policy $site_csp always;
         try_files $uri =404;
     }
 
@@ -613,6 +652,7 @@ server {
         include /etc/nginx/gate/gate_check.conf;
         default_type application/json;
         add_header Cache-Control "no-cache";
+        add_header Content-Security-Policy $site_csp always;
         try_files $uri =404;
     }
 
@@ -621,6 +661,7 @@ server {
     location / {
         include /etc/nginx/gate/gate_check.conf;
         add_header Cache-Control "no-cache";
+        add_header Content-Security-Policy $site_csp always;
         try_files $uri $uri/ /index.html;
     }
 }
