@@ -34,8 +34,8 @@ def _rewrite_and_file(reply: str, user: str) -> tuple[list, traces.Turn]:
     real chat._file_rewrite_span onto a real traces.Turn — what persists is
     the last claim's `rewritten`, and the turn's spans are what turn_spans
     would hold."""
-    found = chat._rewrite_class_claims(reply, user)
     turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    found = chat._rewrite_class_claims(reply, user, turn)
     for name, claim in found:
         chat._file_rewrite_span(turn, name, claim)
     return found, turn
@@ -707,13 +707,14 @@ def test_an_owner_typed_code_after_add_never_reaches_span_meta(monkeypatch):
         "address",
         lambda *_a, **_k: network.Address(origin=ORIGIN, reason=None, read_at=datetime.now(UTC)),
     )
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
     found = chat._rewrite_class_claims(
         "Open https://nova-old.fake-tailnet.ts.net/add/K7PQ-9XYZ on the laptop.",
         "my code is K7PQ-9XYZ, where do I use it?",
+        turn,
     )
     assert [name for name, _ in found] == ["address_claim"]
     assert found[-1][1].rewritten == f"Open {ORIGIN}/add on the laptop."
-    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
     for name, claim in found:
         chat._file_rewrite_span(turn, name, claim)
     [span] = turn.spans

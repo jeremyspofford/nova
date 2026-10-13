@@ -5057,8 +5057,9 @@ async def _deferral_redirect(
                     )
                     is not None
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("deferral re-check raised; treating the redirect as complete")
+                _file_guard_crash(turn, "deferral", exc, recheck=True)
                 still_defers = False
         if not corrected or still_defers:
             span.meta["redirected"] = False
@@ -5121,8 +5122,9 @@ def _state_claim_stands(
         claim = guards.state_claim_check(
             text, turn.spans, device_names, purpose=traces.purpose_of(turn)
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("state-claim re-check raised; keeping the correction")
+        _file_guard_crash(turn, "state_claim", exc, recheck=True)
         return True
     return claim is not None and claim.device == subject
 
@@ -5139,8 +5141,9 @@ def _listing_claim_stands(
     as still unbacked, so the note never claims a listing nobody confirmed."""
     try:
         claim = guards.presented_listing_check(text, turn.spans, listing_tools, message)
-    except Exception:
+    except Exception as exc:
         logger.exception("presented-listing re-check raised; reading the claim as unbacked")
+        _file_guard_crash(turn, "presented_listing", exc, recheck=True)
         return True
     return claim is not None
 
@@ -5209,10 +5212,13 @@ def _safe_address() -> tuple[str | None, str | None]:
     return got.origin, got.reason
 
 
-def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, object]]:
+def _rewrite_class_claims(
+    text: str, user_message: str, turn: traces.Turn
+) -> list[tuple[str, object]]:
     """S47's REWRITE-class claims over `text`, in order, each seeing the one
     before it's rewrite: an invented pairing code, then a wrong address. Each is
-    fail-open on its own — a guard that raises is logged and rewrites nothing."""
+    fail-open on its own — a guard that raises is logged, filed as a raised
+    guard span on `turn`, and rewrites nothing."""
     found: list[tuple[str, object]] = []
     current = text
     origin, reason = _safe_address()
@@ -5225,8 +5231,9 @@ def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, objec
     ):
         try:
             claim = check(current)
-        except Exception:
+        except Exception as exc:
             logger.exception("%s guard raised; shipping the reply unrewritten", name)
+            _file_guard_crash(turn, name, exc)
             claim = None
         if claim is not None:
             found.append((name, claim))
@@ -5271,8 +5278,9 @@ def _append_class_claims(
     ):
         try:
             claim = check()
-        except Exception:
+        except Exception as exc:
             logger.exception("%s guard raised; shipping the reply uncorrected", name)
+            _file_guard_crash(turn, name, exc)
             claim = None
         if claim is not None:
             found.append((name, claim))
@@ -5443,8 +5451,9 @@ def _regen_rejected_by(
         try:
             if check() is not None:
                 return name
-        except Exception:
+        except Exception as exc:
             logger.exception("%s re-check raised over the redirect; not rejecting on it", name)
+            _file_guard_crash(turn, name, exc, recheck=True)
     return None
 
 
@@ -5819,8 +5828,9 @@ async def _claim_redirect(
         if did_the_work and claim_backed is not None:
             try:
                 did_the_work = bool(claim_backed())
-            except Exception:
+            except Exception as exc:
                 logger.exception("%s re-check raised; showing the no-call note", claim_kind)
+                _file_guard_crash(turn, claim_kind, exc, recheck=True)
                 did_the_work = False
             span.meta["claim_backed"] = did_the_work
         note = redirect_note if did_the_work else redirect_note_no_call
@@ -6783,7 +6793,7 @@ async def _run_turn(
         # and a correction follows (guards.py, "the REWRITE class"). Every guard
         # below therefore judges the rewritten reply, and no composition — replace
         # or append — can persist the invented token.
-        rewrites = _rewrite_class_claims(text, message)
+        rewrites = _rewrite_class_claims(text, message, turn)
         for name, claim in rewrites:
             _file_rewrite_span(turn, name, claim)
             emit(_frame({"correction": claim.text}))
@@ -7669,8 +7679,9 @@ async def _run_turn(
         if traces.purpose_of(turn) in OWN_TOOL_HANDBACK_KINDS:
             try:
                 own_tool = guards.own_tool_handback_check(persisted, turn.spans, persona.tool_names)
-            except Exception:
+            except Exception as exc:
                 logger.exception("own-tool handback guard raised; shipping the reply")
+                _file_guard_crash(turn, "own_tool_handback", exc)
                 own_tool = None
         own_tool_redirected = False
         if own_tool is not None:
@@ -7747,8 +7758,9 @@ async def _run_turn(
         if traces.purpose_of(turn) in CLEARED_OFFER_KINDS and not own_tool_redirected:
             try:
                 cleared = guards.cleared_offer_check(persisted)
-            except Exception:
+            except Exception as exc:
                 logger.exception("cleared-offer guard raised; shipping the reply")
+                _file_guard_crash(turn, "cleared_offer", exc)
                 cleared = None
         if cleared is not None:
             skipped = (
@@ -7934,8 +7946,9 @@ async def _run_turn(
             ):
                 try:
                     claim = check()
-                except Exception:
+                except Exception as exc:
                     logger.exception("%s guard raised; shipping the reply uncorrected", name)
+                    _file_guard_crash(turn, name, exc)
                     claim = None
                 if claim is not None:
                     said_claims.append((name, claim))
