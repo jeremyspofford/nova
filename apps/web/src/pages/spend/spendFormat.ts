@@ -1,5 +1,6 @@
 import type { SpendReport } from '../../lib/api'
 import { plural } from '../about/aboutFormat'
+import { distinctModelNames } from '../../lib/modelFormat'
 
 /**
  * Pure formatting for the Spend page. Every dollar figure on the page came
@@ -99,7 +100,14 @@ export const MODEL_PALETTE = [
 
 export type ChartMeasure = 'usd' | 'calls'
 
-export function modelKey(bars: DayBar[], measure: ChartMeasure): { key: string; local: boolean; total: number; colour: string }[] {
+/** The chart's key: one entry per model, largest first, each with its palette
+ * colour and a `label` — the model's NAME (lib/modelFormat), with its provider
+ * only when two models in the key share a name (T31, verification-2-7). The
+ * full id stays `key`, for the caller's title. */
+export function modelKey(
+  bars: DayBar[],
+  measure: ChartMeasure,
+): { key: string; label: string; local: boolean; total: number; colour: string }[] {
   const totals = new Map<string, { local: boolean; total: number }>()
   for (const bar of bars) {
     for (const m of bar.models) {
@@ -108,7 +116,8 @@ export function modelKey(bars: DayBar[], measure: ChartMeasure): { key: string; 
       totals.set(m.key, entry)
     }
   }
-  return Array.from(totals, ([key, v]) => ({ key, local: v.local, total: v.total }))
+  const labels = distinctModelNames(Array.from(totals.keys()))
+  return Array.from(totals, ([key, v]) => ({ key, label: labels.get(key) ?? key, local: v.local, total: v.total }))
     .sort((a, b) => b.total - a.total || a.key.localeCompare(b.key))
     .map((entry, i) => ({ ...entry, colour: MODEL_PALETTE[i % MODEL_PALETTE.length] }))
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MODEL_NOT_STATED, modelName } from './modelFormat'
+import { MODEL_NOT_STATED, distinctModelNames, modelName, modelProvider } from './modelFormat'
 import { shortModelName } from '../pages/chat/ModelSelector'
 
 describe('T19 — modelName: a provider:model id read as the model', () => {
@@ -73,5 +73,35 @@ describe('T20 — modelName over the real ids in turn_spans', () => {
   it('a head no provider could be named (a dot, a path) is a bare id: its tag stays', () => {
     expect(modelName('qwen3.8:instruct')).toBe('qwen3.8:instruct')
     expect(modelName('hf.co/bartowski/model-gguf:Q4_K_M')).toBe('model-gguf:Q4_K_M')
+  })
+})
+
+// T31 COVERAGE (verification-2-7): the Spend key's labels come from
+// distinctModelNames. SpendPage's C4 checks the colliding pair and that all
+// labels differ, but not that a BARE id reads its name alone (a provider taken
+// as "the id before its first colon" makes bare qwen3:8b read
+// "qwen3:8b (qwen3)" and still passes C4), nor the last resort when a name
+// and its provider both collide.
+describe('T31 coverage — distinctModelNames: key labels that read apart', () => {
+  it('C4: a bare id has no provider and reads its name alone, even when its name is shared', () => {
+    expect(modelProvider('qwen3:8b')).toBeNull()
+    expect(modelProvider('qwen3.8:27b')).toBeNull()
+    expect(modelProvider('dell:qwen3:8b')).toBe('dell')
+    expect(modelProvider('openrouter:google/gemini-3.8-flash')).toBe('openrouter')
+    const labels = distinctModelNames(['dell:qwen3:8b', 'qwen3:8b', 'anthropic:claude-opus-5'])
+    expect(Object.fromEntries(labels)).toEqual({
+      'dell:qwen3:8b': 'qwen3:8b (dell)',
+      'qwen3:8b': 'qwen3:8b',
+      'anthropic:claude-opus-5': 'claude-opus-5',
+    })
+  })
+
+  it('C4: labels a provider cannot tell apart fall back to their full ids', () => {
+    const ids = ['openrouter:google/gemma-x', 'openrouter:other/gemma-x', 'gemini:gemma-x']
+    const labels = distinctModelNames(ids)
+    expect(labels.get('gemini:gemma-x')).toBe('gemma-x (gemini)')
+    expect(labels.get('openrouter:google/gemma-x')).toBe('openrouter:google/gemma-x')
+    expect(labels.get('openrouter:other/gemma-x')).toBe('openrouter:other/gemma-x')
+    expect(new Set(labels.values()).size).toBe(ids.length)
   })
 })

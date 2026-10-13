@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import { SpendPage } from './SpendPage'
 import { MODEL_PALETTE, usd } from './spendFormat'
 import type { SpendCap, SpendPrice, SpendReport } from '../../lib/api'
+import { modelName } from '../../lib/modelFormat'
 
 const REPORT: SpendReport = {
   window: 'month',
@@ -396,4 +397,67 @@ describe('SpendPage — T22: the chart paints with the fixed model palette', () 
       expect(themed).toEqual([])
     },
   )
+})
+
+// T31 (verification-2-7, VISUAL 4): the Spend model key showed raw mono ids
+// ("openrouter:anthropic/claude-sonnet-4.5"). It names each model through
+// lib/modelFormat in body text, with the full id as the name's title; two
+// models whose names collide still read apart.
+describe('SpendPage — T31: the model key reads model names', () => {
+  const keyNames = () =>
+    Array.from(screen.getByTestId('spend-key').querySelectorAll('li[data-testid^="spend-key-"]')).map(li => ({
+      id: li.getAttribute('data-testid')!.slice('spend-key-'.length),
+      li,
+      name: li.querySelector('[data-testid="spend-key-name"]'),
+    }))
+
+  it('C3: each key entry shows modelName(id) with the full id as its title, no mono, no provider prefix', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('spend-key')).toBeTruthy())
+    const entries = keyNames()
+    expect(entries.map(e => e.id)).toEqual(['openrouter:openai/gpt-x', 'anthropic:claude-opus-5', 'hub:qwen3:8b'])
+    for (const { id, li, name } of entries) {
+      expect(name, `${id} has a spend-key-name`).not.toBeNull()
+      expect(name!.textContent, id).toBe(modelName(id))
+      expect(name!.getAttribute('title'), id).toBe(id)
+      const mono = [li, ...Array.from(li.querySelectorAll('*'))].filter(el => (el.getAttribute('class') ?? '').split(/\s+/).includes('font-mono'))
+      expect(mono.length, `${id} mono elements`).toBe(0)
+    }
+    const text = screen.getByTestId('spend-key').textContent ?? ''
+    for (const raw of ['openrouter:', 'openai/', 'anthropic:', 'hub:']) expect(text).not.toContain(raw)
+  })
+
+  it('C4: two models whose names collide each name their provider, so no two key labels read the same', async () => {
+    const day = (models: { key: string; usd: number; calls: number; local?: boolean }[]) => ({
+      day: '2026-09-02',
+      usd: models.reduce((n, m) => n + m.usd, 0),
+      calls: models.reduce((n, m) => n + m.calls, 0),
+      gpu_seconds: 0,
+      models: models.map(m => ({ key: m.key, local: m.local ?? false, usd: m.usd, calls: m.calls, gpu_seconds: 0 })),
+    })
+    const report = {
+      ...REPORT,
+      by_day: [
+        day([
+          { key: 'openrouter:google/gemini-3.8-flash', usd: 3, calls: 3 },
+          { key: 'gemini:gemini-3.8-flash', usd: 2, calls: 2 },
+          { key: 'anthropic:claude-opus-5', usd: 1, calls: 1 },
+          { key: 'dell:qwen3:8b', usd: 0, calls: 5, local: true },
+          { key: 'qwen3:8b', usd: 0, calls: 4, local: true },
+        ]),
+      ],
+    }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-key')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Calls' }))
+    const labels = Object.fromEntries(keyNames().map(e => [e.id, e.name?.textContent ?? null]))
+    expect(labels['openrouter:google/gemini-3.8-flash']).toBe('gemini-3.8-flash (openrouter)')
+    expect(labels['gemini:gemini-3.8-flash']).toBe('gemini-3.8-flash (gemini)')
+    // a name unique in the key carries no provider
+    expect(labels['anthropic:claude-opus-5']).toBe('claude-opus-5')
+    // a bare id and a machine's copy of it still read apart
+    expect(labels['dell:qwen3:8b']).toBe('qwen3:8b (dell)')
+    const shown = Object.values(labels)
+    expect(new Set(shown).size).toBe(shown.length)
+  })
 })

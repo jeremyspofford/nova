@@ -118,12 +118,15 @@ input[type="number"] {
      every model read as the same teal. Light uses the Tailwind 700 steps (at
      least 3:1 on every built-in card and ground), dark the 400 steps; every
      pair stays at least a CIEDE2000 of 10 apart in each mode
-     (src/pages/spend/modelPalette.test.ts measures both). */
+     (src/pages/spend/modelPalette.test.ts measures both). No series is red:
+     slot 5 was the danger colour exactly, so a model's swatch read as an
+     error — every slot stays a CIEDE2000 of at least 15 from every danger
+     colour the app paints (T31, verification-2-7). */
   --chart-1: 29 78 216;   /* blue */
   --chart-2: 180 83 9;    /* amber */
   --chart-3: 21 128 61;   /* green */
   --chart-4: 109 40 217;  /* violet */
-  --chart-5: 185 28 28;   /* red */
+  --chart-5: 77 124 15;   /* lime */
   --chart-6: 14 116 144;  /* cyan */
   --chart-7: 190 24 93;   /* pink */
   --chart-8: 162 28 175;  /* fuchsia */
@@ -165,7 +168,7 @@ html.dark {
   --chart-2: 251 191 36;
   --chart-3: 74 222 128;
   --chart-4: 167 139 250;
-  --chart-5: 248 113 113;
+  --chart-5: 163 230 53;
   --chart-6: 34 211 238;
   --chart-7: 244 114 182;
   --chart-8: 232 121 249;

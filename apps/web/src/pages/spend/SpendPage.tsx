@@ -223,7 +223,7 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                 {key.map(k => (
                   <li key={k.key} className="inline-flex items-center gap-1.5" data-testid={`spend-key-${k.key}`}>
                     <span className={`inline-block h-2.5 w-2.5 rounded-sm ${k.colour}`} aria-hidden />
-                    <span className="font-mono">{k.key}</span>
+                    <span data-testid="spend-key-name" title={k.key}>{k.label}</span>
                     <span className="text-content-tertiary" title={measure === 'usd' && !k.local ? usd(k.total, 4) : undefined}>
                       {measure === 'usd' ? (k.local ? 'local, no dollars' : usd(k.total)) : calls(k.total)}
                     </span>

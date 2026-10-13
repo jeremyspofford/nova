@@ -63,13 +63,46 @@ const LOCAL_TAG = /^(\d|latest$)/
  * keep (a title), never thrown away. */
 export function modelName(id: string): string {
   if (!id.trim()) return MODEL_NOT_STATED
+  const { model } = splitId(id)
+  return model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
+}
+
+/** The provider (or machine link) of a `provider:model` id — the part
+ * modelName cuts off — or null for a bare id, read by the same rule:
+ * `dell:qwen3:8b` is `dell`, `openrouter:google/gemini-3.8-flash` is
+ * `openrouter`, bare `qwen3:8b` and `qwen3.8:27b` have none. */
+export function modelProvider(id: string): string | null {
+  return splitId(id).provider
+}
+
+/** Two model names that read the same apart: a name shared by more than one
+ * id in `ids` reads "<name> (<provider>)", a bare id its name alone, and a
+ * name unique in the list no provider. If that still leaves two labels the
+ * same (two bare ids whose vendor paths differ), those read their full ids.
+ * Returns a label per id, in a Map keyed by the id. */
+export function distinctModelNames(ids: string[]): Map<string, string> {
+  const count = (labels: string[]) => {
+    const n = new Map<string, number>()
+    for (const l of labels) n.set(l, (n.get(l) ?? 0) + 1)
+    return n
+  }
+  const names = ids.map(modelName)
+  const shared = count(names)
+  const labels = ids.map((id, i) => {
+    const provider = modelProvider(id)
+    return (shared.get(names[i]) ?? 0) > 1 && provider ? `${names[i]} (${provider})` : names[i]
+  })
+  const still = count(labels)
+  return new Map(ids.map((id, i) => [id, (still.get(labels[i]) ?? 0) > 1 ? id : labels[i]]))
+}
+
+function splitId(id: string): { provider: string | null; model: string } {
   const colon = id.indexOf(':')
-  let model = id
   if (colon > 0) {
     const head = id.slice(0, colon)
     const tail = id.slice(colon + 1)
     const bare = !PROVIDER_NAME.test(head) || LOCAL_TAG.test(tail)
-    if (!bare) model = tail
+    if (!bare) return { provider: head, model: tail }
   }
-  return model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
+  return { provider: null, model: id }
 }

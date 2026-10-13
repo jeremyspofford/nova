@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ModelSelector, cloudGroups, localChoices, pickIsSmaller, shortModelName } from './ModelSelector'
+import { modelName } from '../../lib/modelFormat'
 import type { CatalogRow, RouteExplain, SettingDef } from '../../lib/api'
 
 /**
@@ -180,7 +181,9 @@ describe('ModelSelector', () => {
     })
     await renderSelector({ currentModel: DELL, onModelChanged: vi.fn(), api })
 
-    expect(screen.getByTestId('chat-model').textContent).toBe(DELL)
+    // T31 C1 (re-pointed): the trigger reads a name, the full id on hover
+    expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:8b')
+    expect(screen.getByTestId('chat-model').getAttribute('title')).toBe(DELL)
     expect(screen.getByTestId('chat-model-answering').textContent).toBe('gemini-3.8-flash')
     expect(screen.getByTestId('chat-model-trigger').getAttribute('title')).toContain('dell could not be reached')
 
@@ -267,5 +270,60 @@ describe('the switcher helpers', () => {
     expect(pickIsSmaller(ROWS, 'qwen3:8b')).toBe(true)
     expect(pickIsSmaller(ROWS, GEMINI)).toBe(false)
     expect(pickIsSmaller([ROWS[0]], 'hub:qwen3:8b')).toBe(false)
+  })
+})
+
+// T31 (verification-2-7, VISUAL 3): the composer's model chip read
+// "ollama:qwen3:8b" in mono while the reply under it read "qwen3:8b". The
+// trigger names the model through lib/modelFormat like every other model
+// line, in body text, with the full stated id kept as a title.
+describe('ModelSelector — T31: the trigger reads a model name, not an id', () => {
+  const monoIn = (root: Element) =>
+    [root, ...Array.from(root.querySelectorAll('*'))].filter(el => (el.getAttribute('class') ?? '').split(/\s+/).includes('font-mono'))
+
+  it.each([
+    'ollama:qwen3:8b',
+    'dell:qwen3:8b',
+    GEMINI,
+    'openrouter:~z-ai/glm-flash-latest',
+    'qwen3.8:27b',
+  ])('C1: the pick %s reads modelName(id) with the full id as its title', async id => {
+    await renderSelector({ currentModel: id, onModelChanged: vi.fn(), api: fakeApi() })
+    const chip = screen.getByTestId('chat-model')
+    expect(chip.textContent).toBe(modelName(id))
+    expect(chip.getAttribute('title')).toBe(id)
+  })
+
+  it('C1: the provider prefix and vendor path never show on the trigger', async () => {
+    await renderSelector({ currentModel: 'ollama:qwen3:8b', onModelChanged: vi.fn(), api: fakeApi() })
+    expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:8b')
+    expect(screen.getByTestId('chat-model-trigger').textContent).not.toContain('ollama:')
+  })
+
+  it('C2: the pick and the answering fallback are body text, the fallback with its full id as a title', async () => {
+    const api = fakeApi({
+      explained: walk(GEMINI, 2, [
+        { id: DELL, verdict: 'unreachable', reason: 'dell could not be reached' },
+        { id: GEMINI, verdict: 'runnable' },
+      ]),
+    })
+    await renderSelector({ currentModel: DELL, onModelChanged: vi.fn(), api })
+    const answering = screen.getByTestId('chat-model-answering')
+    expect(answering.textContent).toBe('gemini-3.8-flash')
+    const titled = [answering, ...Array.from(answering.querySelectorAll('*'))].map(el => el.getAttribute('title'))
+    expect(titled).toContain(GEMINI)
+    expect(monoIn(screen.getByTestId('chat-model-trigger')).map(el => el.getAttribute('data-testid') ?? el.textContent)).toEqual([])
+  })
+})
+
+// T31 COVERAGE: C1's "no pick" half had no test — a trigger that always ran
+// modelName would read "model not stated" (and a title of "") with nothing
+// picked yet.
+describe('ModelSelector — T31 coverage: no pick yet', () => {
+  it('C1: with no pick the trigger still reads "Select a model", with no id title', async () => {
+    await renderSelector({ currentModel: '', onModelChanged: vi.fn(), api: fakeApi() })
+    const chip = screen.getByTestId('chat-model')
+    expect(chip.textContent).toBe('Select a model')
+    expect(chip.hasAttribute('title')).toBe(false)
   })
 })

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import config from '../../../tailwind.config.js'
 import { MODEL_PALETTE } from './spendFormat'
 import { themePresets, resolvePalette } from '../../lib/color-palettes'
-import { themeVariables } from '../../stores/theme-store'
+import { STATUS_BASE, themeVariables } from '../../stores/theme-store'
 
 // T22 (verification-2-7): the Spend chart's model colours are a FIXED palette
 // of eight hues that stay apart from each other and readable on the card, in
@@ -233,5 +233,44 @@ describe('T22 coverage: Tailwind emits every palette class from the source it sh
       if (!rule || !rule[1].includes(`var(${prop})`)) missing.push(cls)
     }
     expect(missing).toEqual([])
+  })
+})
+
+// T31 (verification-2-7, VISUAL 4): slot 5 was red — the theme's danger
+// colour exactly — so "ollama:qwen3:8b  local, no dollars" carried an
+// error-looking swatch. No series may read as danger: every palette colour
+// stays a CIEDE2000 of at least 15 from every danger colour the app can paint
+// in that mode (the stylesheet fallback, the store's base, and each built-in
+// theme's proven --tier-danger). T22's C1-C3 above keep holding unchanged.
+const MIN_DANGER_DELTA_E = 15
+
+/** Every danger colour a mode can paint, named for where it comes from. */
+function dangerColours(mode: Mode): [string, RGB][] {
+  const out: [string, RGB][] = []
+  const fallback = cssValue('--status-danger', mode)?.match(/(\d{1,3} \d{1,3} \d{1,3})\s*\)\s*$/)?.[1]
+  if (!fallback) throw new Error(`--status-danger has no literal fallback in index.css (${mode})`)
+  out.push(['index.css --status-danger fallback', triplet(fallback)])
+  out.push(['STATUS_BASE danger', triplet(STATUS_BASE[mode].danger)])
+  for (const preset of Object.keys(themePresets)) {
+    const tier = themeVariables(mode, preset, 'teal', 1).match(/--tier-danger:\s*(\d{1,3} \d{1,3} \d{1,3})/)?.[1]
+    if (!tier) throw new Error(`${preset} ${mode}: themeVariables sets no --tier-danger`)
+    out.push([`${preset} --tier-danger`, triplet(tier)])
+  }
+  return out
+}
+
+describe('T31: no chart series reads as the danger colour', () => {
+  it.each(MODES)('C5: in %s mode every palette colour is at least a CIEDE2000 of 15 from every danger colour', mode => {
+    const dangers = dangerColours(mode)
+    expect(dangers.length).toBeGreaterThan(2)
+    const close: string[] = []
+    for (const cls of MODEL_PALETTE) {
+      const colour = resolve(cls, mode)
+      for (const [name, danger] of dangers) {
+        const d = deltaE2000(lab(colour), lab(danger))
+        if (d < MIN_DANGER_DELTA_E) close.push(`${cls} vs ${name}: ${d.toFixed(1)}`)
+      }
+    }
+    expect(close).toEqual([])
   })
 })

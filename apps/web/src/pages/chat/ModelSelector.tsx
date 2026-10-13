@@ -294,15 +294,18 @@ export function ModelSelector({
       >
         <Cpu size={13} className="shrink-0" />
         {/* The pick alone lives in this span — the icon, the fallback and the
-            chevron are siblings — so its textContent is exactly the model id,
-            which the e2e change-model spec asserts with toHaveText. */}
-        <span data-testid="chat-model" className="font-mono truncate max-w-[10rem]">
-          {currentModel ? bareLocalModel(currentModel) : 'Select a model'}
+            chevron are siblings — so its textContent is exactly the model's
+            NAME (lib/modelFormat, like the reply under it: "ollama:qwen3:8b"
+            reads "qwen3:8b"), in body text, with the full id as its title.
+            The e2e change-model specs assert a hub slug with toHaveText, and
+            modelName('hub:<slug>') is that slug. T31, verification-2-7. */}
+        <span data-testid="chat-model" className="truncate max-w-[10rem]" title={currentModel || undefined}>
+          {currentModel ? modelName(currentModel) : 'Select a model'}
         </span>
         {fellBack && serving && (
-          <span data-testid="chat-model-answering" className="flex min-w-0 items-center gap-0.5 text-warning">
+          <span data-testid="chat-model-answering" className="flex min-w-0 items-center gap-0.5 text-warning" title={serving.served_by}>
             <ArrowRight size={11} className="shrink-0" />
-            <span className="font-mono truncate max-w-[8rem]">{shortModelName(serving.served_by)}</span>
+            <span className="truncate max-w-[8rem]">{shortModelName(serving.served_by)}</span>
           </span>
         )}
         <ChevronDown size={13} className={clsx('shrink-0 transition-transform duration-fast', open && 'rotate-180')} />
