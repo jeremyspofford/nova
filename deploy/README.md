@@ -259,6 +259,44 @@ name or URL. Each line carries the gateway's last verdict, read live from
   the switch did not exist. Adding a hub model to the order in Routing does the same
   for one role at a fixed place in the list; the switch picks the hub's chat model at
   the time and only after everything else has failed.
+- **A provider out of credit is re-checked, and lifts itself.** A provider that
+  refuses a call for credit (402), a key (401, 403) or a rate limit (429) is walled:
+  chat passes over it for an hour, then 6 hours, then 24 while it keeps refusing. The
+  reason a chat turn gives for passing a walled provider over says when that refusal
+  happened, so a wall set yesterday never reads as a fresh one: `openrouter refused
+  (402): Insufficient credits — refused at 10-13 17:59 UTC; not retried since — walled
+  for another 42 min`. The list of walls in Settings → Routing shows the same refusal
+  time, and so does Nova when she describes a walled machine (her `machine_status`
+  answer and the machines in her About text). The Inbox's money finding and the About
+  page's machine card do not show it. While a credit wall stands, the
+  gateway checks the provider itself. Every 5 minutes (300 s) it looks for credit walls
+  with no refusal and no check in the last hour, and gives each one a single 1-token
+  call ("hi", at most one token back) on the model that provider last refused. That
+  call is priced and put on the spend ledger like any other, with purpose
+  `wall_probe`, so it is never hidden. What happens next depends on the answer:
+  - **It answers** (a 200 with a real completion in it, not just a status): the wall is
+    lifted at once and the gateway logs "wall lifted by probe". Chat uses the provider
+    again from the next turn.
+  - **It refuses for credit again (402):** that counts as a new refusal. The wall moves
+    to its next step (6 hours, then 24) and its refusal time becomes the check's time.
+    It is still a credit wall, so it is checked again an hour after that.
+  - **It refuses for a key (401, 403) or a rate limit (429):** that also counts as a new
+    refusal, of that kind: a strike, the wall's next step, and the check's time as its
+    refusal time. The wall is no longer a credit wall, so it is not checked again; it
+    waits out its time.
+  - **It fails some other way** (unreachable, a 5xx, a 200 that is not a completion):
+    the wall stands as it was and only the check's time is recorded, so its reason says
+    it was tried: `… — refused at 10-13 17:59 UTC; last probed at 10-14 09:12 UTC, not
+    served — walled for another 42 min`.
+
+  Only credit walls are checked, chosen by the status stored on the wall, never by the
+  provider's name; a key or rate-limit wall waits out its time. A provider with no
+  refused model on record is not checked. "Try it again" in Settings → Routing still
+  clears any wall at once. **The limit:** a 1-token check proves the provider serves,
+  not that it can afford a whole reply. With only a little credit, the check can pass
+  and the next real turn be refused for credit again, which walls the provider again
+  from the first step (an hour). Top up enough for real turns, or clear the wall by
+  hand after topping up.
 - **The model list.** The Models page is the one list of models (install, compare,
   probe, remove). The catalogue remembers a provider that could not be reached at all
   for 60 seconds, so a machine that is off does not hold every page that reads the list;

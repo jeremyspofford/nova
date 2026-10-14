@@ -8,9 +8,14 @@ an empty chain uses the chat chain. Each link is judged LIVE, before any
 call is made (rail 9 — refuse before the act):
 
   * the provider must exist;
-  * it must not be WALLED (a refusal — 401/402/403/429/5xx before the
-    stream — walls the provider for 1h, then 6h, then 24h; a clean
-    completion clears it; the owner can clear it from the page);
+  * it must not be WALLED. A refusal before the stream walls by what it is
+    about: a 401/402/403/429 is about the account, so it walls the whole
+    provider for 1 h, then 6 h, then 24 h (WALL_STEPS_S); a 5xx is one
+    model not serving, so it walls only that model for 60 s, then 5 min,
+    then 30 min (OUTAGE_STEPS_S). A clean completion lifts the provider's
+    wall and that model's, and so does a credit-wall probe the provider
+    served (wall_probe), but a completion never lifts an engine's wall: it
+    lapses on its ladder. The owner can clear any wall from the page;
   * a cloud provider must be under its monthly cap and the total cap
     (usage.over_cap — recorded spend only; a local provider is never
     capped in USD);
