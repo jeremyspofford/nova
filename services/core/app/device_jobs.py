@@ -27,6 +27,8 @@ from datetime import datetime
 
 import asyncpg
 
+from app import credential_mask
+
 logger = logging.getLogger("core")
 
 TERMINAL_STATES = ("done", "failed_to_start", "stopped", "lost")
@@ -102,7 +104,9 @@ async def insert(
         job_id,
         _as_uuid(device_id),
         _as_uuid(turn_id) if turn_id is not None else None,
-        argv,
+        # mask-bearer T2: the row records the command with its credentials
+        # masked; the agent is sent the argv as given.
+        credential_mask.mask_tree(argv),
         cwd,
         names,
         ran_in,
@@ -163,8 +167,9 @@ def _parse(frame: dict) -> dict:
         "started_at": _time(frame, "started_at"),
         "ended_at": _time(frame, "ended_at"),
         "log_bytes": log_bytes,
-        # postgres text refuses NUL; the rest of the reason is still worth keeping
-        "reason": reason.replace("\x00", "�"),
+        # postgres text refuses NUL; the rest of the reason is still worth
+        # keeping — with any credential it quotes masked (mask-bearer T2)
+        "reason": credential_mask.mask(reason).replace("\x00", "�"),
     }
 
 
@@ -235,7 +240,8 @@ STARTED_STATES = ("running", "waiting_lock")
 
 def _text(reason: str) -> str:
     # postgres text refuses NUL; the rest of the reason is still worth keeping
-    return reason.replace("\x00", "\ufffd")
+    # — with any credential it quotes masked (mask-bearer T2)
+    return credential_mask.mask(reason).replace("\x00", "\ufffd")
 
 
 async def mark_started(pool, job_id: str, state: str) -> bool:

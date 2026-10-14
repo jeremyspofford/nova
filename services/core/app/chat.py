@@ -110,6 +110,7 @@ from app import (
     context_fit,
     context_summary,
     conversations,
+    credential_mask,
     db,
     decisions,
     guards,
@@ -2380,18 +2381,15 @@ def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub
     return out
 
 
-_ARGV_WORD_RE = re.compile(r"(\s+)")
-
-
 def _argv_masked(parsed: object, sink: _SpanScrub) -> object:
     """A credential typed into a command's argv (S29 T6): `_redact` masks by
     argument KEY, so a token that is a WORD of `argv` passed it untouched.
-    Each element is split on whitespace (no shell parsing — `sh -c "…"` is one
-    element of words). A `KEY=value` word whose KEY is `_credential_key` keeps
-    its KEY and has its value masked; any known token (`_ARGV_TOKEN_RE`) is
-    masked wherever it sits. What is masked goes into `sink`, so the span's
-    result_head, error and facts (the run fact's argv and target) hold none of
-    it. Runs before `_redact`, so before anything is clipped."""
+    Each element goes through the one mask (`credential_mask.mask`, mask-bearer
+    T2): a credential header (`-H "Authorization: Bearer x"`), a bare Bearer,
+    `KEY=value`, `--token x` and any known token keep their marker and lose
+    their value. What is masked goes into `sink`, so the span's result_head,
+    error and facts (the run fact's argv and target) hold none of it. Runs
+    before `_redact`, so before anything is clipped."""
     if not isinstance(parsed, dict) or not isinstance(parsed.get("argv"), list):
         return parsed
     return {
@@ -2431,18 +2429,7 @@ def _env_masked(parsed: object, sink: _SpanScrub) -> object:
 
 
 def _argv_element_masked(element: str, sink: _SpanScrub) -> str:
-    words = _ARGV_WORD_RE.split(element)
-    for index, word in enumerate(words):
-        key, sep, value = word.partition("=")
-        if sep and key and value and _credential_key(key, header=False):
-            sink.add(value)
-            words[index] = f"{key}={_masked(value)}"
-
-    def token(match: re.Match[str]) -> str:
-        sink.add(match.group(0))
-        return _masked(match.group(0))
-
-    return _ARGV_TOKEN_RE.sub(token, "".join(words))
+    return credential_mask.mask(element, on_secret=sink.add)
 
 
 def _span_arguments(raw: object, tool_name: str | None = None) -> object:
@@ -3359,17 +3346,21 @@ async def _ingest(
         async with peers.client(app, peers.MEMORY, INGEST_TIMEOUT) as client:
             response = await client.post(
                 "/ingest",
-                json={
-                    "person_id": str(person.id),
-                    "conversation_id": str(conversation_id),
-                    "exchange": exchange,
-                    # S24: present only for a room. Memory writes a room's
-                    # exchanges to their own document under this title, so
-                    # the topic is searchable by every mechanism that
-                    # already exists — the indexer tokenises title and body,
-                    # so recall carries it with no new concept.
-                    **({"thread": thread} if thread else {}),
-                },
+                # mask-bearer T2: what memory journals carries no credential
+                # (the exchange and a room's title, by the one mask).
+                json=credential_mask.mask_tree(
+                    {
+                        "person_id": str(person.id),
+                        "conversation_id": str(conversation_id),
+                        "exchange": exchange,
+                        # S24: present only for a room. Memory writes a room's
+                        # exchanges to their own document under this title, so
+                        # the topic is searchable by every mechanism that
+                        # already exists — the indexer tokenises title and
+                        # body, so recall carries it with no new concept.
+                        **({"thread": thread} if thread else {}),
+                    }
+                ),
             )
             response.raise_for_status()
     except Exception as exc:
@@ -3639,8 +3630,11 @@ async def _persist_assistant(
     reply is dropped here, mechanically — it is the backend's label on an
     older row, carrying that row's time, and the next turn stamps this row
     itself if it earns one. Every guard reads a reply the same way
-    (guards.without_leading_stamp), so none honoured the label either."""
-    text = guards.without_leading_stamp(without_markup(text))
+    (guards.without_leading_stamp), so none honoured the label either.
+
+    mask-bearer T2: a credential she repeats is saved masked (the one mask,
+    `credential_mask.mask`) — what was streamed to him is not rewritten."""
+    text = credential_mask.mask(guards.without_leading_stamp(without_markup(text)))
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, turn_id) "
         "VALUES ($1, 'assistant', $2, $3)",
@@ -8908,11 +8902,14 @@ async def _open_turn(
     either, so the lock is held for milliseconds: 019_timers.sql's rule is that a
     model turn must never hold a row lock, and the pool has ten connections.
     """
+    # mask-bearer T2: the row is saved with every credential masked; this
+    # turn runs on `message` as he typed it (its own row is never in its
+    # history), so only what is SAVED changes.
     message_id = await conn.fetchval(
         "INSERT INTO messages (conversation_id, role, content) "
         "VALUES ($1, 'user', $2) RETURNING id",
         conversation_id,
-        message,
+        credential_mask.mask(message),
     )
     # S28: the uploads he sent with it, bound HERE — on the caller's
     # connection, inside the transaction that holds the conversation's lock

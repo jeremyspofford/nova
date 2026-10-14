@@ -37,6 +37,8 @@ from typing import Any
 
 import asyncpg
 
+from app import credential_mask
+
 logger = logging.getLogger("core")
 
 # How much of a tool call's result lands in its span (result_head, error). The
@@ -429,10 +431,14 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 span.name,
                 span.started_at,
                 span.duration_ms,
-                _without_nul(span.meta),
+                # mask-bearer T2: the one credential mask, at the persist
+                # boundary — every writer of span meta is covered.
+                _without_nul(credential_mask.mask_tree(span.meta)),
             )
         for kept in turn.tool_results:
-            content = kept.content.replace(_NUL, _NUL_STANDIN)
+            # Masked here, not on the Turn: the running turn's read_result
+            # still reads what she was sent; `chars` is the stored length.
+            content = credential_mask.mask(kept.content).replace(_NUL, _NUL_STANDIN)
             await conn.execute(
                 "INSERT INTO tool_results (turn_id, ref, tool_call_id, tool, content, chars) "
                 "VALUES ($1, $2, $3, $4, $5, $6)",

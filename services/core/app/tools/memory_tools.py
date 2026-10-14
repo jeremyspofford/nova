@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import httpx
 
-from app import peers
+from app import credential_mask, peers
 from app.tools import schema
 from app.tools.base import Tool, ToolContext, ToolFailure
 
@@ -125,6 +125,8 @@ async def _call_memory(
     # path rather than a habit of its callers.
     if payload.get("live_source") is not None:
         payload = {**payload, "live_source": validate_live_source(payload["live_source"])}
+    # mask-bearer T2: nothing reaches memory's files with a credential in it.
+    payload = credential_mask.mask_tree(payload)
     try:
         async with peers.client(ctx.app, peers.MEMORY, MEMORY_TIMEOUT) as client:
             response = await client.post(path, json=payload)

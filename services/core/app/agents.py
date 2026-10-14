@@ -47,7 +47,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import governance, identity, peers, spend_api, tools, traces
+from app import credential_mask, governance, identity, peers, spend_api, tools, traces
 from app import skills as skills_store
 from app.identity import Person
 from app.tools.base import ToolFailure
@@ -1681,9 +1681,12 @@ async def delegate(ctx, args: dict) -> str:
     if undo_sink is not None:
         undo_sink.append({"agent_turn_id": str(turn.id)})
     # The brief is a user row in the agent's log conversation (the eval-runner
-    # idiom), so the agent's page reads task → report pairs.
+    # idiom), so the agent's page reads task → report pairs. Saved masked
+    # (mask-bearer T2); the agent's turn below runs on the brief as composed.
     await pool.execute(
-        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)", log, brief
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+        log,
+        credential_mask.mask(brief),
     )
     progress = getattr(ctx, "progress", None)
     error_statement: str | None = None
