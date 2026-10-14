@@ -404,6 +404,30 @@ def test_other_verdicts_is_none_when_only_the_machines_links_are_listed():
     assert wake.other_verdicts("no model can serve — a garbled list", [LINK]) == "a garbled list"
 
 
+def test_other_verdicts_keeps_a_walled_item_that_states_its_refusal_time_whole():
+    """wall-probe T2 (a pin: passes before the gateway change too): the
+    gateway's walled reason now carries "— refused at MM-DD HH:MM UTC; not
+    retried since —" before the suffix. Its "; " and " — " must not split the
+    item: it stays ONE "<id>: <reason>" (cut as any long reason is), and the
+    machine's own links still leave."""
+    reason = (
+        "openrouter refused (402): Insufficient credits — refused at "
+        "10-13 17:59 UTC; not retried since — walled for another 5 min"
+    )
+    detail = (
+        f"no model in the 'chat' chain can serve right now — {OWN_LINKS}; openrouter:q: {reason}"
+    )
+    got = wake.other_verdicts(detail, [LINK, "boxllm:big"])
+    assert got == f"openrouter:q: {wake._short(reason)}".rstrip(". ")
+    assert got.startswith(
+        "openrouter:q: openrouter refused (402): Insufficient credits — refused at"
+    )
+    # Two such items stay two, each whole up to its cut.
+    detail = f"{detail}; cloud:m: {reason.replace('openrouter', 'cloud')}"
+    got = wake.other_verdicts(detail, [LINK, "boxllm:big"])
+    assert got.count("openrouter:q: ") == 1 and got.count("; cloud:m: cloud refused (402)") == 1
+
+
 async def test_a_503_without_a_verdict_list_states_the_gateways_sentence(
     owner_client, mount_peers, pool, world
 ):

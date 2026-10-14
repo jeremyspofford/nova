@@ -961,6 +961,24 @@ async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
     return {(r["provider"], r["model"]): dict(r) for r in rows}
 
 
+def walled_words(wall: dict, *, now: datetime | None = None) -> str:
+    """A walled verdict's reason: the wall's reason, WHEN that refusal
+    happened, and how long the wall has left.
+
+    "<reason> — refused at MM-DD HH:MM UTC; not retried since — walled for
+    another N min". The time is the stored refused_at (walls()), always in
+    UTC and truncated to the minute, so a wall set yesterday never reads as a
+    fresh refusal. The "walled for another N min" suffix stays LAST: core
+    parses it.
+    """
+    now = now or datetime.now(UTC)
+    at = wall["refused_at"].astimezone(UTC).strftime("%m-%d %H:%M")
+    left = int((wall["walled_until"] - now).total_seconds() // 60) + 1
+    return (
+        f"{wall['reason']} — refused at {at} UTC; not retried since — walled for another {left} min"
+    )
+
+
 def wall_for(walled: dict[tuple[str, str], dict], provider: str, model: str) -> dict | None:
     """The wall that stops this link, if one does. The provider-wide wall wins:
     it is the broader fact and its reason is the one worth reading."""
@@ -1148,11 +1166,10 @@ async def judge_link(
         return {**entry, "verdict": "switched_off", "reason": off}
     wall = wall_for(walled, provider_name, model)
     if wall is not None:
-        left = int((wall["walled_until"] - datetime.now(UTC)).total_seconds() // 60) + 1
         walled_verdict = {
             **entry,
             "verdict": "walled",
-            "reason": f"{wall['reason']} — walled for another {left} min",
+            "reason": walled_words(wall),
             "walled_until": wall["walled_until"].isoformat(),
         }
         if wall.get("connect_failed"):
@@ -1581,7 +1598,7 @@ async def _last_resort(
         reason = f"last resort: passed over: {passed_over[hub_id]}"
         verdicts.append({**entry, "verdict": "passed_over", "reason": reason})
     elif wall is not None:
-        reason = f"last resort: {wall['reason']}"
+        reason = f"last resort: {walled_words(wall)}"
         verdicts.append({**entry, "verdict": "walled", "reason": reason})
     else:
         skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)
