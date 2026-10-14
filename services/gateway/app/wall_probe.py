@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import asyncpg
 
-from app import adapters, providers, routing, usage
+from app import adapters, engines, providers, routing, usage
 from app.adapters.base import refusal_words
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,12 @@ async def due_walls(pool: asyncpg.Pool) -> list[dict]:
     Due = still standing, STORED status in CREDIT_STATUSES, and the later of
     its latest refusal (updated_at) and its last probe (probed_at; NULL when
     never probed, which greatest() skips) at least WALL_PROBE_EVERY_S old.
+
+    An engine's wall is never due, whatever its status: a completion never
+    lifts an engine's wall (data_plane's note_success rule — it lapses on
+    its own ladder), and a served probe's outcome IS note_success. Which
+    provider is an engine is engines.is_engine(row) on its providers row —
+    the rule routing uses — never a list of names.
     """
     rows = await pool.fetch(
         "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
@@ -137,7 +143,10 @@ async def due_walls(pool: asyncpg.Pool) -> list[dict]:
         sorted(CREDIT_STATUSES),
         float(WALL_PROBE_EVERY_S),
     )
-    return [dict(r) for r in rows]
+    if not rows:
+        return []
+    by_name = {row["name"]: row for row in await providers.list_rows(pool)}
+    return [dict(r) for r in rows if not engines.is_engine(by_name[r["provider"]])]
 
 
 async def tick(app, pool: asyncpg.Pool) -> None:

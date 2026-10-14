@@ -939,3 +939,100 @@ async def test_a_refused_probe_walls_with_the_providers_own_refusal_sentence(
         "openrouter refused (402): This request requires more credits, or fewer max_tokens. "
         "You requested up to 1 tokens, but can only afford 0."
     ), reason
+
+
+# ══ T9: an engine's wall is never probed ═══════════════════════════════════
+#
+# Same rule as data_plane's note_success: a completion never lifts an
+# engine's wall (it lapses on its own ladder), so the probe — whose served
+# outcome IS note_success — never probes one. Which rows are engines is
+# engines.is_engine(row), read off the row; the engine below is a second
+# machine (not builtin, not named "hub"), so no name decides it.
+
+ENGINE = "dell"
+ENGINE_BASE = "http://dell.test"
+ENGINE_MODEL = "qwen3:8b"
+
+
+async def _engine_row(pool, name=ENGINE):
+    """Another machine's engine: an ollama-adapter provider row (a linked
+    engine carries its link token, providers_engine_link_has_token)."""
+    await pool.execute(
+        "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key) "
+        "VALUES ($1, 'ollama', $2, 'static-bearer', 'link-1') ON CONFLICT (name) DO NOTHING",
+        name,
+        ENGINE_BASE,
+    )
+    row = await providers.get_row(pool, name)
+    assert engines.is_engine(row) and not row["builtin"]
+    return row
+
+
+async def _engine_walled_for_credits(pool, mount_backend) -> FakeOllama:
+    """The engine walled by a real stored 402 refused 2 h ago, with that 402
+    on the ledger — by status, age and ledger alone the wall would be due and
+    probe_wall would call it (FakeOllama serves a 1-token completion)."""
+    fake = FakeOllama(tags=(ENGINE_MODEL,))
+    mount_backend(ENGINE_BASE, fake.app)
+    row = await _engine_row(pool)
+    await routing.record_refusal(pool, row, 402, CREDITS, model=ENGINE_MODEL)
+    await _ledger(pool, ENGINE, ENGINE_MODEL, ago_s=2 * 3600)
+    await pool.execute(
+        "UPDATE provider_walls SET updated_at = now() - make_interval(secs => 7200) "
+        "WHERE provider = $1",
+        ENGINE,
+    )
+    fake.seen.clear()
+    return fake
+
+
+# ── c1: an engine's credit wall is never due; a cloud one still is ────────
+
+
+async def test_an_engines_credit_wall_is_never_due_and_a_cloud_ones_still_is(pool):
+    await _engine_row(pool)
+    await _stored_wall(pool, ENGINE, 402, refused_ago_s=2 * 3600)
+    await _stored_wall(pool, "openrouter", 402, refused_ago_s=2 * 3600)
+
+    assert await _due(pool) == {("openrouter", routing.WHOLE_PROVIDER)}
+
+
+# ── c2: a tick makes no call and no ledger row for an engine's wall ───────
+
+
+async def test_a_tick_never_calls_an_engine_and_leaves_its_wall_as_it_stands(
+    client, pool, mount_backend
+):
+    engine = await _engine_walled_for_credits(pool, mount_backend)
+    cloud = await _walled_openrouter(client, pool, mount_backend)
+    before = await _wall_row(pool, provider=ENGINE)
+
+    await wall_probe.tick(app, pool)
+
+    assert _completion_posts(engine) == []
+    assert engine.seen == []
+    # The cloud's credit wall is still probed, in the same tick.
+    assert len(_completion_posts(cloud)) == 1
+    assert [r["provider"] for r in await _probe_rows(pool)] == ["openrouter"]
+    # The engine's wall stands untouched: not lifted, not stamped.
+    assert await _wall_row(pool, provider=ENGINE) == before
+    assert before["probed_at"] is None
+    assert (ENGINE, routing.WHOLE_PROVIDER) in await routing.walls(pool)
+
+
+# ── c3: the rule is engines.is_engine(row), read at call time ─────────────
+
+
+async def test_which_wall_is_an_engines_is_decided_by_engines_is_engine(pool, monkeypatch):
+    await _engine_row(pool)
+    await _stored_wall(pool, ENGINE, 402, refused_ago_s=2 * 3600)
+    await _stored_wall(pool, "openrouter", 402, refused_ago_s=2 * 3600)
+
+    monkeypatch.setattr(engines, "is_engine", lambda row: False)
+    assert await _due(pool) == {
+        (ENGINE, routing.WHOLE_PROVIDER),
+        ("openrouter", routing.WHOLE_PROVIDER),
+    }
+
+    monkeypatch.setattr(engines, "is_engine", lambda row: row["name"] == "openrouter")
+    assert await _due(pool) == {(ENGINE, routing.WHOLE_PROVIDER)}
