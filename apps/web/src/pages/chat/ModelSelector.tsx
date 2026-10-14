@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowRight, Check, ChevronDown, Cpu, Info } from 'lucide-react'
 import clsx from 'clsx'
 import { Link, useInRouterContext } from 'react-router-dom'
@@ -129,6 +130,8 @@ export function ModelSelector({
   const [error, setError] = useState<string | null>(null)
   const [pickNote, setPickNote] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos] = useState<{ bottom: number; right: number } | null>(null)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -179,10 +182,30 @@ export function ModelSelector({
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // The menu is portalled to <body> and placed over the trigger: the input
+  // card it sits in clips its overflow (rounded-3xl overflow-hidden), and an
+  // absolute menu inside it was cut off at the card's top edge (2026-10-14).
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const rect = rootRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setMenuPos({ bottom: window.innerHeight - rect.top + 4, right: Math.max(8, window.innerWidth - rect.right) })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
   }, [open])
 
   const toggle = () => {
@@ -311,12 +334,14 @@ export function ModelSelector({
         <ChevronDown size={13} className={clsx('shrink-0 transition-transform duration-fast', open && 'rotate-180')} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
+          ref={menuRef}
           data-testid="chat-model-menu"
-          // Anchored to the RIGHT edge: the trigger ends the control row, and a
-          // left-anchored menu ran off a phone's screen.
-          className="absolute bottom-full right-0 z-50 mb-1 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface-card shadow-lg glass-overlay dark:border-white/[0.10]"
+          // Anchored to the trigger's RIGHT edge: the trigger ends the control
+          // row, and a left-anchored menu ran off a phone's screen.
+          style={menuPos ? { position: 'fixed', bottom: menuPos.bottom, right: menuPos.right } : { position: 'fixed', visibility: 'hidden' }}
+          className="z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface-card shadow-lg glass-overlay dark:border-white/[0.10]"
         >
           {serving && (
             <p data-testid="chat-model-serving" className="border-b border-border-subtle px-3 py-1.5 text-micro text-content-tertiary">
@@ -392,7 +417,8 @@ export function ModelSelector({
               .
             </p>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {error && (
