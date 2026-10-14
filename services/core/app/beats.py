@@ -1107,6 +1107,23 @@ async def _record_check(
         # actually stored.
         live.append(notice.fingerprint)
         new += 1 if is_new else 0
+        if is_new:
+            # S37c T6: a NEW notice of a monitored family becomes a `monitor`
+            # event she looks into. events.file_monitor decides (registry,
+            # loop guard, one per fingerprint) and never raises; the beat
+            # turn's span says which event, or why none.
+            from app import events
+
+            filed = await events.file_monitor(app, pool, notice)
+            with turn.span("event", events.MONITOR) as span:
+                span.meta.update(
+                    {
+                        "notice": str(notice.id),
+                        "check": notice.check_name,
+                        "event_id": str(filed.event_id) if filed.event_id else None,
+                        "why": filed.why,
+                    }
+                )
         if wants_push(notice):
             pushes.append(await _push_urgent(app, pool, turn, person, notice))
     cleared = await notices.reconcile(pool, check_name=run.check, live_fingerprints=set(live))

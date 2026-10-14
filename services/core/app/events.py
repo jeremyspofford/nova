@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import re
 import secrets
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 
@@ -647,6 +648,9 @@ async def _tell(app, pool: asyncpg.Pool, ids: list[uuid.UUID], owner, turn_id=No
             # Still owed, from the store's own state set: a fold onto a notice
             # already delivered (the hourly run got there first and the beat
             # pushed nothing) pushes; one he muted does not.
+            # T6: a monitor event that was looked into names its turn on the
+            # notice it was about.
+            await _link_monitor_notices(pool, finding)
             if not urgent or notice.state not in notices.DELIVERABLE_STATES:
                 continue
             try:
@@ -671,3 +675,183 @@ async def _tell(app, pool: asyncpg.Pool, ids: list[uuid.UUID], owner, turn_id=No
                 logger.warning("event notice %s: %s", notice.id, noted)
     except Exception:  # noqa: BLE001 - logged; the hourly check files it from the rows
         logger.exception("the notice for events %s could not be filed", [str(i) for i in ids])
+
+
+# -- T6: her own monitoring is a sender --------------------------------------------
+
+# The built-in sender a monitored notice is filed under (BUILTINS).
+MONITOR = "monitor"
+# A notice whose fingerprint was the subject of a monitor event received this
+# recently (or one still queued/running) files no second one: a condition that
+# flaps hourly is one investigation, not one per hour. Measured from the
+# newest monitor event of that fingerprint.
+MONITOR_REFILE_WINDOW = timedelta(hours=6)
+_MONITOR_LOCK = "events-monitor:"
+
+
+@dataclass(frozen=True)
+class Filed:
+    """What became of one notice at the monitor: the event filed, or why none."""
+
+    event_id: uuid.UUID | None
+    why: str
+
+
+def _uuids(value, found: set[uuid.UUID]) -> None:
+    """Every uuid in a notice's facts, at any depth (keys and values)."""
+    if isinstance(value, uuid.UUID):
+        found.add(value)
+    elif isinstance(value, str):
+        try:
+            found.add(uuid.UUID(value))
+        except ValueError:
+            pass
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _uuids(key, found)
+            _uuids(item, found)
+    elif isinstance(value, list | tuple | set):
+        for item in value:
+            _uuids(item, found)
+
+
+async def about_an_event_turn(pool: asyncpg.Pool, notice) -> str | None:
+    """THE LOOP GUARD (spec §2.6): why this notice is about an event turn, or
+    None. A notice of the event_outcomes family is one by definition; any
+    other is one when its own turn, or any uuid anywhere in its facts, names a
+    turn of kind `event` (or with an event_<sender> role) — its failure, its
+    spend. Read from the turns table, never from words."""
+    from app.checks import events as event_checks
+
+    if notice.check_name == event_checks.OUTCOMES:
+        return f"it is an {event_checks.OUTCOMES} notice, about an event turn"
+    found: set[uuid.UUID] = set()
+    _uuids(notice.facts, found)
+    if notice.turn_id is not None:
+        found.add(notice.turn_id)
+    if not found:
+        return None
+    turn = await pool.fetchval(
+        "SELECT id FROM turns WHERE id = ANY($1::uuid[]) AND (kind = $2 OR role LIKE $3) LIMIT 1",
+        list(found),
+        EVENT_KIND,
+        ROLE_PREFIX.replace("_", "\\_") + "%",
+    )
+    return None if turn is None else f"it names event turn {turn}"
+
+
+def _monitor_payload(notice) -> str:
+    """The event's payload, written by code: the notice's facts verbatim and
+    what they are about."""
+    return json.dumps(
+        {
+            "check": notice.check_name,
+            "notice": str(notice.id),
+            "title": notice.title,
+            "facts": notice.facts,
+            "urgent": notice.urgent,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+async def _insert_monitor_event(pool: asyncpg.Pool, notice) -> tuple[uuid.UUID | None, str]:
+    """File the monitor event for this notice unless its fingerprint is held
+    (ONE PER FINGERPRINT): a monitor event with it still queued/running, or
+    received within MONITOR_REFILE_WINDOW. Under a per-fingerprint lock, so
+    two beats racing on one notice file one event."""
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))", _MONITOR_LOCK + notice.fingerprint
+        )
+        enabled = await conn.fetchval(
+            "SELECT enabled FROM event_senders WHERE name = $1 AND kind = 'monitor'", MONITOR
+        )
+        if enabled is None:
+            return None, "the monitor sender does not exist"
+        if not enabled:
+            return None, "the monitor sender is off"
+        held = await conn.fetchval(
+            "SELECT id FROM events WHERE sender = $1 AND fingerprint = $2 "
+            "AND (state IN ('queued', 'running') OR received_at > now() - $3::interval) "
+            "ORDER BY received_at DESC LIMIT 1",
+            MONITOR,
+            notice.fingerprint,
+            MONITOR_REFILE_WINDOW,
+        )
+        if held is not None:
+            return None, f"monitor event {held} already holds this fingerprint"
+        event_id = await conn.fetchval(
+            "INSERT INTO events (sender, payload, content_type, fingerprint, urgent) "
+            "VALUES ($1, $2, 'application/json', $3, $4) RETURNING id",
+            MONITOR,
+            _monitor_payload(notice),
+            notice.fingerprint,
+            bool(notice.urgent),
+        )
+        await conn.execute("UPDATE event_senders SET last_sent_at = now() WHERE name = $1", MONITOR)
+    return event_id, "filed"
+
+
+async def file_monitor(app, pool: asyncpg.Pool, notice) -> Filed:
+    """A NEW notice at the monitor: file a `monitor` event for it when its
+    family is monitored (checks.monitored_names, derived from the registry),
+    it is not muted, it is not about an event turn (the loop guard) and its
+    fingerprint is not held; then start the monitor's event turn at once.
+
+    Never raises: the check that found it has done its job, and a filing that
+    broke is logged and stated in the result."""
+    from app import checks, notices
+
+    try:
+        if notice.check_name not in checks.monitored_names():
+            return Filed(None, f"{notice.check_name} is not a monitored family")
+        if notice.state == notices.MUTED:
+            return Filed(None, "he muted this condition")
+        why = await about_an_event_turn(pool, notice)
+        if why is not None:
+            logger.info("notice %s files no monitor event: %s", notice.id, why)
+            return Filed(None, why)
+        event_id, why = await _insert_monitor_event(pool, notice)
+    except Exception as exc:  # noqa: BLE001 - stated in the result, never into the beat
+        logger.exception("notice %s: the monitor event could not be filed", notice.id)
+        return Filed(None, f"the monitor event could not be filed — {exc}"[:300])
+    if event_id is None:
+        logger.info("notice %s files no monitor event: %s", notice.id, why)
+        return Filed(None, why)
+    logger.info("notice %s filed monitor event %s", notice.id, event_id)
+    try:
+        await start_event_turn(app, pool, MONITOR)
+    except Exception:  # noqa: BLE001 - queued; the scheduler tick starts it
+        logger.exception("monitor event %s: the turn could not start now", event_id)
+    return Filed(event_id, why)
+
+
+async def _link_monitor_notices(pool: asyncpg.Pool, finding) -> None:
+    """A monitor event turn that ended DONE names itself on the notice the
+    event was about (acted, acted_turn_id, a code note with her conclusion). A
+    failed turn marks nothing acted: its own outcome notice states the
+    failure. The notice id is read from the payload this module wrote."""
+    from app import notices
+
+    facts = finding.facts
+    if facts.get("sender") != MONITOR or facts.get("outcome") != "done" or not facts.get("turn"):
+        return
+    turn_id = uuid.UUID(facts["turn"])
+    rows = await pool.fetch(
+        "SELECT id, payload FROM events WHERE id = ANY($1::uuid[]) AND sender = $2",
+        [uuid.UUID(i) for i in facts.get("events") or []],
+        MONITOR,
+    )
+    for row in rows:
+        try:
+            notice_id = uuid.UUID(json.loads(row["payload"] or "{}")["notice"])
+            await notices.mark_acted(
+                pool,
+                notice_id,
+                turn_id=turn_id,
+                note=f"looked into in event turn — {finding.title}",
+            )
+        except Exception:  # noqa: BLE001 - the outcome notice still names the turn
+            logger.exception("monitor event %s: its notice could not name the turn", row["id"])

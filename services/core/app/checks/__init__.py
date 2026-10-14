@@ -137,6 +137,10 @@ class Check:
     # is the honest shape: the deadline should describe the probe, not the
     # cheapest probe in the registry.
     deadline_s: float = CHECK_DEADLINE_S
+    # S37c T6: a NEW notice of this family files a `monitor` event, so she
+    # looks into it herself (spec §2.6). Urgent families are monitored by
+    # derivation (monitored_names); a family that is not urgent says so here.
+    monitor: bool = False
 
 
 REGISTRY: dict[str, Check] = {}
@@ -166,6 +170,13 @@ def urgent_names() -> list[str]:
     """The checks that may interrupt the digest, DERIVED from the registry —
     never a list someone maintains beside it."""
     return sorted(name for name, check in REGISTRY.items() if check.urgent)
+
+
+def monitored_names() -> list[str]:
+    """The checks whose NEW notices become `monitor` events (S37c T6), DERIVED
+    from the registry: every urgent family, plus every family that declares
+    monitor=True on its own Check. Never a list kept beside the registry."""
+    return sorted(name for name, check in REGISTRY.items() if check.urgent or check.monitor)
 
 
 def quiet(runs: Sequence[CheckRun]) -> tuple[bool, str | None]:
@@ -444,6 +455,7 @@ __all__ = [
     "Finding",
     "check_names",
     "fingerprint",
+    "monitored_names",
     "money",
     "quiet",
     "register",
