@@ -948,9 +948,14 @@ async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
     `model` is WHOLE_PROVIDER for an account-level refusal and the model's own
     id for an outage, so a caller asks two questions of this map — is the
     provider walled, and is this model walled — and never confuses the two.
+
+    `refused_at` is when the wall's latest refusal happened: the stored
+    `updated_at` that record_refusal stamps on every refusal, never the time
+    of reading — so a wall set yesterday says yesterday, not "just now".
     """
     rows = await pool.fetch(
-        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed "
+        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
+        "updated_at AS refused_at "
         "FROM provider_walls WHERE walled_until > now()"
     )
     return {(r["provider"], r["model"]): dict(r) for r in rows}

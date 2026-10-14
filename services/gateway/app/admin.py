@@ -1080,7 +1080,14 @@ async def get_routes(request: Request) -> dict:
             }
             for role in (*routing.BUILTIN_ROLES, *derived)
         ],
-        "walls": [{**w, "walled_until": w["walled_until"].isoformat()} for w in walled.values()],
+        "walls": [
+            {
+                **w,
+                "walled_until": w["walled_until"].isoformat(),
+                "refused_at": w["refused_at"].isoformat(),
+            }
+            for w in walled.values()
+        ],
     }
 
 
