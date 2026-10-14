@@ -15,6 +15,7 @@ import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
 import { AddToNovaSection } from './AddToNovaSection'
 import { ConnectionsSection } from './ConnectionsSection'
+import { EventsSection, CI_REPOS_KEY } from './EventsSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection, decisionSwitchDefs, hubLastResortDef } from './RoutingSection'
@@ -115,6 +116,9 @@ export function SettingsPage() {
   const decisionSwitches = settings ? decisionSwitchDefs(settings) : null
   // The hub last-resort switch (epic hub-last-resort), off the same fetch.
   const hubLastResort = settings ? hubLastResortDef(settings) : null
+  // S37c: the repos GitHub CI reads, off the same fetch; no field when core
+  // does not list the key.
+  const ciRepos = defOf(CI_REPOS_KEY) ?? null
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -248,6 +252,9 @@ export function SettingsPage() {
               </>
             )}
             {tab === 'connections' && <ConnectionsSection />}
+            {tab === 'events' && (
+              <EventsSection ciRepos={ciRepos} onSettingChanged={updateSettingValue} />
+            )}
           </>
         )}
         {/* Signing out is not one of the five errands above, and hunting for

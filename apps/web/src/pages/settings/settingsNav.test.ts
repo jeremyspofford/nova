@@ -27,6 +27,19 @@ describe('SETTINGS_NAV', () => {
     }
   })
 
+  // S37c: Settings > Events is reached by clicking, beside Connections in the
+  // Nova group — the programs that can start her look sit next to the
+  // services she can use. Search alone would not do (discoverable by navigation).
+  it('lists Events under Nova, right after Connections, for everyone signed in', () => {
+    const nova = SETTINGS_NAV.find(g => g.label === 'Nova')!
+    const tos = nova.items.map(i => i.to)
+    expect(tos.indexOf('/settings/events')).toBe(tos.indexOf('/settings/connections') + 1)
+    const events = nova.items.find(i => i.to === '/settings/events')!
+    expect(events.label).toBe('Events')
+    expect(events.minRole).toBe('guest')
+    expect(settingsLocation('/settings/events')).toMatchObject({ top: true, entry: { label: 'Events' } })
+  })
+
   it('lists nothing twice, and has no empty group', () => {
     const tos = items.map(i => i.to)
     expect(new Set(tos).size).toBe(tos.length)

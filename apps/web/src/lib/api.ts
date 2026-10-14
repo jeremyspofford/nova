@@ -2457,6 +2457,57 @@ export async function removeMcpServer(name: string): Promise<void> {
   await apiSend(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, 'DELETE')
 }
 
+// ── Event senders (S37c): Settings → Events ─────────────────────────────
+
+/** A program that may start her look (spec §2.1), as core lists it: never a
+ * token. `kind` is core's: `token` senders call the intake with their own
+ * key; `monitor` and `poll` are the two built-ins (her own monitoring, and
+ * GitHub CI read every 5 minutes) and take no calls. */
+export interface EventSender {
+  name: string
+  kind: 'token' | 'monitor' | 'poll' | string
+  role: string
+  enabled: boolean
+  last_sent_at: string | null
+  added_by: string | null
+  created_at: string
+  /** A key Nova made for him is waiting to be shown once on this page. */
+  token_waiting: boolean
+}
+
+export interface EventSenderAdded extends EventSender {
+  /** The only copy: core keeps a hash. */
+  token: string
+  route: { registered: boolean; detail: string }
+}
+
+export interface EventSenderDeleted {
+  deleted: string
+  failed_events: number
+  route: { registered: boolean; detail: string }
+}
+
+export async function listEventSenders(): Promise<EventSender[]> {
+  return apiGet<EventSender[]>('/api/v1/event-senders')
+}
+
+export async function addEventSender(name: string): Promise<EventSenderAdded> {
+  return apiSend<EventSenderAdded>('/api/v1/event-senders', 'POST', { name })
+}
+
+/** A key Nova made, shown once; core answers 404 after that. */
+export async function revealEventSenderToken(name: string): Promise<{ name: string; token: string }> {
+  return apiSend(`/api/v1/event-senders/${encodeURIComponent(name)}/token`, 'POST')
+}
+
+export async function setEventSenderEnabled(name: string, enabled: boolean): Promise<EventSender> {
+  return apiSend<EventSender>(`/api/v1/event-senders/${encodeURIComponent(name)}`, 'PATCH', { enabled })
+}
+
+export async function deleteEventSender(name: string): Promise<EventSenderDeleted> {
+  return apiSend<EventSenderDeleted>(`/api/v1/event-senders/${encodeURIComponent(name)}`, 'DELETE')
+}
+
 
 // -- About (app/about.py) ------------------------------------------------
 

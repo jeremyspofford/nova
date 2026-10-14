@@ -10,6 +10,7 @@ import {
   ScrollText,
   SlidersHorizontal,
   Sparkles,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react'
 import type { Role } from '../../lib/roles'
@@ -78,6 +79,8 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       { to: '/skills', label: 'Skills', icon: BookOpen, minRole: 'admin' },
       tab('behaviour', Sparkles),
       tab('connections', Plug),
+      // S37c: what can start her look, beside what she can use.
+      tab('events', Webhook),
     ],
   },
   {

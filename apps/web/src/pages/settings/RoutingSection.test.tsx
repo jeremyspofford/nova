@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { RoutingSection } from './RoutingSection'
-import type { AgentSummary, CatalogRow, RouteExplain, Routes, SettingDef } from '../../lib/api'
+import type { AgentSummary, CatalogRow, EventSender, RouteExplain, Routes, SettingDef } from '../../lib/api'
 
 function row(id: string, kind: 'local' | 'cloud', installed?: boolean): CatalogRow {
   const [provider, ...rest] = id.split(':')
@@ -41,6 +41,21 @@ const ROUTES_WITH_AGENTS: Routes = {
   ],
 }
 const AGENTS: AgentSummary[] = [{ name: 'coder', purpose: 'writes and reviews code in a sandbox', role: 'agent_coder' }]
+// S37c: one role per event sender, event_<sender>; `gone` has no sender any more.
+const ROUTES_WITH_EVENTS: Routes = {
+  ...ROUTES,
+  roles: [
+    ...ROUTES.roles,
+    { role: 'event_backups', chain: [], reserved: false, builtin: false },
+    { role: 'event_github_ci', chain: [], reserved: false, builtin: false },
+    { role: 'event_monitor', chain: ['cerebras:llama'], reserved: false, builtin: false },
+    { role: 'event_gone', chain: [], reserved: false, builtin: false },
+  ],
+}
+function eventSender(name: string, kind: string): EventSender {
+  return { name, kind, role: `event_${name}`, enabled: true, last_sent_at: null, added_by: null, created_at: '2026-10-13T09:00:00+00:00', token_waiting: false }
+}
+const SENDERS: EventSender[] = [eventSender('backups', 'token'), eventSender('github_ci', 'poll'), eventSender('monitor', 'monitor')]
 const EXPLAIN_CHAT: RouteExplain = {
   role: 'chat',
   chain: [
@@ -51,7 +66,7 @@ const EXPLAIN_CHAT: RouteExplain = {
   reason: 'fell back to link 2 (hub:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)',
 }
 
-type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents' | 'putSetting' | 'setChatPrimary'
+type ApiName = 'getRoutes' | 'putRoute' | 'putJevRouter' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents' | 'listEventSenders' | 'putSetting' | 'setChatPrimary'
 
 function renderSection(
   over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> = {},
@@ -75,6 +90,7 @@ function renderSection(
     })),
     deleteRoute: vi.fn(async () => undefined),
     listAgents: vi.fn(async () => AGENTS),
+    listEventSenders: vi.fn(async () => SENDERS),
     // PUT /api/v1/settings answers with what core stored.
     putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
     // The one pick write: what core stored — the pick, and chat's fallbacks.
@@ -374,6 +390,66 @@ describe('RoutingSection', () => {
     // The built-ins are untouched by the agents failure.
     expect(screen.getByTestId('route-chat').textContent).toContain('Chat')
     expect(api.deleteRoute).not.toHaveBeenCalled()
+  })
+
+  it('names an event sender\'s role in plain words, keeps it editable, and offers no Remove (S37c)', async () => {
+    renderSection({ getRoutes: vi.fn(async () => ROUTES_WITH_EVENTS) })
+    await waitFor(() => expect(screen.getByTestId('route-event_backups')).toBeTruthy())
+    const backups = screen.getByTestId('route-event_backups')
+    expect(within(backups).getByText('Events from backups')).toBeTruthy()
+    expect(backups.textContent).toContain('turns started by what backups sends; empty = the chat chain')
+    expect(within(screen.getByTestId('route-event_monitor')).getByText('Events from Monitoring')).toBeTruthy()
+    expect(within(screen.getByTestId('route-event_github_ci')).getByText('Events from GitHub CI')).toBeTruthy()
+    for (const role of ['event_backups', 'event_monitor', 'event_github_ci']) {
+      const el = screen.getByTestId(`route-${role}`)
+      // Never the routing key, and never mistaken for an agent's role.
+      expect(el.textContent).not.toContain(role)
+      expect(el.textContent).not.toContain('agent')
+      expect(within(el).queryByRole('button', { name: `remove role ${role}` })).toBeNull()
+    }
+    // Its chain is editable, and the picker is named as the card names it.
+    expect(within(backups).getByLabelText('add to Events from backups')).toBeTruthy()
+    expect(within(screen.getByTestId('route-event_monitor')).getByTestId('route-event_monitor-link-1').textContent).toContain('cerebras:llama')
+  })
+
+  it('marks an event role whose sender is gone, and Remove → confirm → deletes it', async () => {
+    const api = renderSection({ getRoutes: vi.fn(async () => ROUTES_WITH_EVENTS) })
+    await waitFor(() => expect(screen.getByTestId('route-event_gone')).toBeTruthy())
+    const gone = screen.getByTestId('route-event_gone')
+    expect(gone.textContent).toContain('Events from gone')
+    expect(gone.textContent).toContain('no event sender by this name')
+    expect(within(gone).queryByLabelText('add to Events from gone')).toBeNull()
+    fireEvent.click(within(gone).getByRole('button', { name: 'remove role event_gone' }))
+    expect(screen.getByText('Remove the chain for Events from gone? No event sender has this name.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.deleteRoute).toHaveBeenCalledWith('event_gone'))
+  })
+
+  it('offers no Remove on an event role while the senders cannot be read, and says why', async () => {
+    const api = renderSection({
+      getRoutes: vi.fn(async () => ROUTES_WITH_EVENTS),
+      listEventSenders: vi.fn(async () => { throw new Error('core refused (500)') }),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-event_gone')).toBeTruthy())
+    for (const role of ['event_backups', 'event_gone']) {
+      const el = screen.getByTestId(`route-${role}`)
+      expect(el.textContent).toContain('could not read the event senders — core refused (500)')
+      expect(el.textContent).not.toContain('no event sender by this name')
+      expect(within(el).queryByRole('button', { name: `remove role ${role}` })).toBeNull()
+    }
+    expect(screen.getByTestId('route-chat').textContent).toContain('Chat')
+    expect(api.deleteRoute).not.toHaveBeenCalled()
+  })
+
+  it('reads event roles from the senders, not the agents list', async () => {
+    renderSection({
+      getRoutes: vi.fn(async () => ROUTES_WITH_EVENTS),
+      listAgents: vi.fn(async () => { throw new Error('agents API not found (404)') }),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-event_backups')).toBeTruthy())
+    const backups = screen.getByTestId('route-event_backups')
+    expect(backups.textContent).toContain('Events from backups')
+    expect(backups.textContent).not.toContain('could not read the agents list')
   })
 
   it('shows the server\'s reason inline when a Remove fails', async () => {

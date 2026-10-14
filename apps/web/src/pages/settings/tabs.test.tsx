@@ -36,6 +36,7 @@ vi.mock('../../lib/api', async () => {
     getMachines: vi.fn(async () => ({ machines: [] })),
     listMcpServers: vi.fn(async () => []),
     getMcpPresets: vi.fn(async () => []),
+    listEventSenders: vi.fn(async () => []),
   }
 })
 
@@ -57,6 +58,8 @@ const SECTIONS_BY_TAB: Record<string, string[]> = {
   behaviour: ['Response quality'],
   devices: ['Add to Nova', 'Devices', 'Machines'],
   connections: ['Connections'],
+  // S37c: the programs that can start her look, beside the services she uses.
+  events: ['Events'],
 }
 
 /** Inside the Settings shell, as App.tsx mounts it, on a screen wide enough

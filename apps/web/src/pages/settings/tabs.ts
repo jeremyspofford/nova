@@ -58,6 +58,13 @@ export const SETTINGS_TABS: SettingsTab[] = [
     label: 'Connections',
     blurb: 'Services she can use through MCP, like GitHub.',
   },
+  {
+    // S37c: the programs that can start her look — a sender of his with its
+    // own key, her own monitoring, GitHub CI.
+    slug: 'events',
+    label: 'Events',
+    blurb: 'Programs that can start her look, and what each one last sent.',
+  },
 ]
 
 export const DEFAULT_TAB = SETTINGS_TABS[0].slug
