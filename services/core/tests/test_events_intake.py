@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app import events, identity
+from app import chat, events, identity
 from tests.conftest import SERVICE_TOKEN, requires_db
 
 INTAKE = "/api/v1/events/{}"
@@ -153,11 +153,18 @@ async def _rows(pool):
 async def test_the_right_token_queues_the_event_whole_and_answers_202(pool, client):
     token = await _add(pool)
     body = '{"alert": "disk 91%", "host": "hub"}'
-    resp = await client.post(
-        INTAKE.format("test"),
-        content=body,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    )
+    # Since T3 the intake also starts the turn, which moves the row on; with
+    # core shutting down none starts, so this reads the row exactly as the
+    # intake wrote it (test_events_turn.py pins the turn the intake starts).
+    chat.begin_shutdown()
+    try:
+        resp = await client.post(
+            INTAKE.format("test"),
+            content=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+    finally:
+        chat.accept_queued_turns_again()
     assert resp.status_code == 202, resp.text
     event_id = uuid.UUID(resp.json()["id"])
     rows = await _rows(pool)

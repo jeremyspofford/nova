@@ -927,10 +927,12 @@ _LIVE_READING_MARKER = (
 
 def _record_kinds() -> frozenset[str]:
     """The turn kinds whose reply is a RECORD of the moment it fired — the
-    scheduler's own set (C9), never a second list here."""
-    from app import scheduler
+    scheduler's own set (C9), never a second list here — and an event's turn
+    (S37c), written about what a program reported then, while nobody was
+    talking to her."""
+    from app import events, scheduler
 
-    return frozenset(scheduler.MODEL_TURN_KINDS)
+    return frozenset(scheduler.MODEL_TURN_KINDS) | {events.EVENT_KIND}
 
 
 def _past_turn_marker(row) -> str | None:
@@ -4910,6 +4912,18 @@ _ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled", "beat": "beat"}
 CHAT_MODEL_ROLES: tuple[str, ...] = tuple(dict.fromkeys(_ROLE_BY_KIND.values()))
 
 
+def sends_chat_model(role: str | None) -> bool:
+    """Do this role's turns send chat.model as link 1? Nova's own kinds'
+    roles (CHAT_MODEL_ROLES) and every event sender's role (S37c: an event
+    turn opens with chat's pick, like a beat). Event roles are one per
+    sender, so they are matched by their prefix, never listed."""
+    from app import events
+
+    if not isinstance(role, str) or not role:
+        return False
+    return role in CHAT_MODEL_ROLES or role.startswith(events.ROLE_PREFIX)
+
+
 def _role_of(turn: traces.Turn) -> str | None:
     """The turn's own role when it was opened with one (S12: an agent's
     `agent_<name>`, whatever kind the turn is), else the kind's. An eval turn
@@ -4954,7 +4968,7 @@ async def _round_model(turn: traces.Turn, model: str, messages: Sequence[dict]) 
     A pick that cannot be read keeps it too: the call still runs, on what the
     turn was already asking for.
     """
-    if _role_of(turn) not in CHAT_MODEL_ROLES or model != (turn.model or ""):
+    if not sends_chat_model(_role_of(turn)) or model != (turn.model or ""):
         return model
     if _carries_pictures(messages):
         return model

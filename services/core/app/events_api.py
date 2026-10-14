@@ -59,4 +59,7 @@ async def intake(sender: str, request: Request):
         await events.refuse(pool, sender, events.NOT_TEXT)
         return JSONResponse({"error": f"refused: {events.NOT_TEXT}"}, status_code=400)
     event_id = await events.accept(pool, sender, payload, request.headers.get("content-type"))
+    # The turn is spawned, never awaited here: the caller gets its 202 at once
+    # and the turn runs to completion whoever is still connected (spec §2.2).
+    await events.start_event_turn(request.app, pool, sender)
     return {"id": str(event_id)}
