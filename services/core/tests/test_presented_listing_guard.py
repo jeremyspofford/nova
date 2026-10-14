@@ -326,6 +326,13 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
         # 2026-10-12 the fifth: `sessions` enumerates his chat sessions with
         # their ids and which is main; its name says nothing about listing.
         "sessions",
+        # S32.3 T13 (2026-10-13) the sixth to eighth: `landing_status` with no
+        # id enumerates her latest landings, `repo_diff` a change's files with
+        # their ranges, `stack_status` the stack's services — each declared a
+        # listing in T11/T12 and registered now; no name says "list".
+        "landing_status",
+        "repo_diff",
+        "stack_status",
     }
 
 

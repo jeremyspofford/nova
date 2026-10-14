@@ -674,3 +674,75 @@ async def test_t10_c5_a_transport_failure_is_unknown_on_every_line(pool, recorde
         assert "box state unknown: Beelink Mini S disconnected before answering" in line
         assert "box running" not in line
     await _close(conn, task)
+
+
+# -- S32.3 T11: each change's last landing ---------------------------------------
+#
+# Criteria (tracker .epics/s32-3.md, ## T11):
+#   C8 each line names its change's NEWEST landing — its full id (what
+#      landing_status takes) and verdict, a merged one its merged SHA (short)
+#      — or "never landed"; it sits before the box/environment suffix; a
+#      landing of a change not listed is never shown; one read for all.
+
+SHA_MERGED = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+async def _landing(pool, change: str, *, verdict: str = "running", minutes_ago: int = 0):
+    from app import landings
+
+    lid = await landings.insert(
+        pool, change_id=change, repo="nova", branch=f"nova/{change}-x", turn_id=None
+    )
+    if verdict == "green":
+        await landings.finish(pool, lid, "green")
+        await landings.record_publish(
+            pool, lid, merged_sha=SHA_MERGED, pr_url=None, push_result="pushed"
+        )
+    elif verdict != "running":
+        await landings.finish(pool, lid, verdict)
+    await pool.execute(
+        "UPDATE landings SET created_at = now() - make_interval(mins => $2) WHERE id = $1",
+        lid,
+        minutes_ago,
+    )
+    return lid
+
+
+@requires_db
+async def test_t11_c8_each_line_names_its_last_landing_or_never_landed(pool, recorded):
+    old = await _landing(pool, "a1b2c3", verdict="red", minutes_ago=30)
+    newest = await _landing(pool, "a1b2c3", verdict="could_not_measure", minutes_ago=5)
+    merged = await _landing(pool, "d4e5f6", verdict="green", minutes_ago=1)
+    elsewhere = await _landing(pool, "999999", verdict="red")
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(
+        listing=THREE, box=_status({"a1b2c3": "running", "d4e5f6": "stopped", "0f9e8d": "running"})
+    )
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True, result
+    line_a = _line_naming(result, WT_A)
+    assert f"last landing {newest} could_not_measure" in line_a
+    assert str(old) not in result
+    line_b = _line_naming(result, WT_B)
+    assert f"last landing {merged} green" in line_b and f"merged {SHA_MERGED[:7]}" in line_b
+    line_c = _line_naming(result, WT_C)
+    assert "never landed" in line_c and "last landing" not in line_c
+    assert str(elsewhere) not in result
+    # The box and environment still end each line.
+    assert line_a.endswith("— box running — environment box")
+    assert line_c.endswith("— box running — environment box")
+    # After the git state, before the box.
+    assert line_a.index("clean") < line_a.index("last landing") < line_a.index("box running")
+    await _close(conn, task)
+
+
+@requires_db
+async def test_t11_c8_a_running_landing_is_said_running(pool, recorded):
+    lid = await _landing(pool, "a1b2c3")
+    device, conn, task = await _connect(pool)
+    repo = FakeRepo(listing=MAIN_ENTRY + _entry(WT_A, SHA_A, BRANCH_A))
+    result, ok, _facts = await _list(pool, conn, device, repo)
+    assert ok is True, result
+    line = _line_naming(result, WT_A)
+    assert f"last landing {lid} running" in line and "merged" not in line
+    await _close(conn, task)

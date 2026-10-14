@@ -26,6 +26,7 @@ var table = map[string]Handler{
 	"facts.refresh":   factsRefresh,
 	"daemon.update":   daemonUpdate,
 	"box.exec":        boxExec,
+	"box.remove":      boxRemove,
 	"box.start":       boxStart,
 	"box.status":      boxStatus,
 	"net.wake":        netWake,

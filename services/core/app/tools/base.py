@@ -173,6 +173,16 @@ class ToolContext:
     # rewind). PROVENANCE, never a principal: an executor may record it, and
     # nothing reads it to decide whether a call may run — dispatch never does.
     turn_id: Any = None
+    # Which coder is writing (S32.3 T2): "nova-loop <provider:model>" for her
+    # own loop, "nova-agent <agent id> <provider:model>" for an agent's — the
+    # model that served the round which made this call, read off the turn's
+    # own llm_call span (chat._coder_of), bound per call by chat. change_commit
+    # writes it as the Nova-Coder trailer (nova-codes decision 6: the record
+    # names which coder wrote each change). None outside a turn, or when no
+    # model is known; the trailer then says so. PROVENANCE, never a principal:
+    # nothing reads it to decide whether a call may run, and dispatch never
+    # does (test_no_approvals.test_dispatch_never_reads_coder).
+    coder: str | None = None
 
 
 @dataclass(frozen=True)

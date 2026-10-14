@@ -29,6 +29,8 @@ from app import (
     devices_ws,
     evals_api,
     governance_api,
+    landing_run,
+    landings,
     machines_api,
     mcp_api,
     models_catalog,
@@ -95,6 +97,10 @@ async def lifespan(app: FastAPI):
     # through — closed 'interrupted' here, before the page can read it as
     # live (runner.sweep_orphaned_suite_runs says why).
     await eval_runner.sweep_orphaned_suite_runs(pool)
+    # And for landings (S32.3): a landing's task never survives the process
+    # that ran it, so every row still 'running' is could_not_measure, stated
+    # (landings.INTERRUPTED) — never left running, never green.
+    await landings.mark_interrupted(pool)
     # And for timer firings: a 'running' firing row belongs to the process that
     # died mid-firing — closed 'interrupted' with the reason before the first
     # tick could read it as live (scheduler.sweep_orphaned_firings). Then the
@@ -130,6 +136,9 @@ async def lifespan(app: FastAPI):
         # answer. A cancelled wake's open row is settled at its deadline by
         # the next reader.
         await wake.cancel_route_wakes()
+        # Landings (S32.3) too: one can run for an hour; its row is closed as
+        # interrupted by the next startup's mark_interrupted.
+        await landing_run.cancel_landings()
         # No new queued turns from here (S15). drain_background below waits for
         # every detached task and a drained turn spawns another drain, so a
         # queue still draining could hold the process past its grace period and

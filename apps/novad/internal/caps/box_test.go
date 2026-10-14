@@ -32,7 +32,10 @@ type scripted struct {
 	// (T6); "" answers testSuites, noSuites answers an empty file.
 	suites string
 	failOn string
-	calls  [][]string
+	// objs is what `network ls` / `volume ls` answer (T7: box.remove looks
+	// each one up before removing it); "" says none exists.
+	objs  string
+	calls [][]string
 }
 
 func (s *scripted) Run(_ context.Context, argv []string) (string, int, error) {
@@ -55,6 +58,8 @@ func (s *scripted) Run(_ context.Context, argv []string) (string, int, error) {
 		return s.image, 0, nil
 	case strings.HasPrefix(j, "ps "):
 		return s.ps, 0, nil
+	case strings.HasPrefix(j, "network ls") || strings.HasPrefix(j, "volume ls"):
+		return s.objs, 0, nil
 	}
 	return "", 0, nil
 }
@@ -95,7 +100,7 @@ func boxArgs(t *testing.T, extra string) map[string]any {
 }
 
 func TestBoxCapsWithoutAManagerSayCannot(t *testing.T) {
-	for _, name := range []string{"box.exec", "box.start", "box.status"} {
+	for _, name := range []string{"box.exec", "box.start", "box.status", "box.remove"} {
 		out := Dispatch(context.Background(), name, boxArgs(t, `, "argv": ["true"], "cwd": "`+bWorktree+`"`), Deps{})
 		if out.OK || out.Error != "cannot: no box manager on this agent" || out.Meta != nil {
 			t.Errorf("%s: ok=%v err=%q meta=%v", name, out.OK, out.Error, out.Meta)
@@ -229,5 +234,101 @@ func TestBoxStatusReadsEveryBox(t *testing.T) {
 	bad := Dispatch(context.Background(), "box.status", map[string]any{}, boxDeps(&scripted{failOn: "ps "}, ""))
 	if bad.OK || !strings.HasPrefix(bad.Error, "cannot read the boxes: ") || !strings.Contains(bad.Error, "boom at ps") || bad.Meta != nil {
 		t.Fatalf("a docker failure: ok=%v err=%q meta=%v", bad.OK, bad.Error, bad.Meta)
+	}
+}
+
+// -- box.remove (S32.3 T7) ----------------------------------------------------
+//
+// A landing's close and close_change take a change's box down. Only the change
+// id crosses the wire; Manager.Remove derives every name from it.
+
+// C1
+func TestBoxRemoveTakesDownEverythingTheChangeOwns(t *testing.T) {
+	s := &scripted{
+		ps: "nova-box-c0ffee\trunning\t" + bTag + "\nnova-box-c0ffee-db\trunning\tpg\n" +
+			"nova-box-abc123\trunning\t" + bTag + "\nnova-box-abc123-db\trunning\tpg\n",
+		objs: "f00d\n",
+	}
+	out := Dispatch(context.Background(), "box.remove", wireArgs(t, `{"change": "c0ffee"}`), boxDeps(s, "/nonexistent/docker"))
+	if !out.OK {
+		t.Fatalf("box.remove: %q", out.Error)
+	}
+	want := [][]string{
+		{"ps", "-a", "--filter", "label=" + box.Label, "--format", "{{.Names}}\t{{.State}}\t{{.Image}}"},
+		{"rm", "-f", "nova-box-c0ffee", "nova-box-c0ffee-db"},
+		{"network", "ls", "-q", "--filter", "name=^nova-box-c0ffee-net$"},
+		{"network", "rm", "nova-box-c0ffee-net"},
+		{"volume", "ls", "-q", "--filter", "name=^nova-box-c0ffee-cache$"},
+		{"volume", "rm", "nova-box-c0ffee-cache"},
+	}
+	if !reflect.DeepEqual(s.calls, want) {
+		t.Fatalf("docker argv\n got %q\nwant %q", s.calls, want)
+	}
+	for _, c := range s.calls {
+		if strings.Contains(strings.Join(c, " "), "abc123") {
+			t.Fatalf("touched another change's box: %q", c)
+		}
+	}
+	if !reflect.DeepEqual(out.Meta, map[string]any{"box": "nova-box-c0ffee", "removed": true}) {
+		t.Fatalf("meta = %#v", out.Meta)
+	}
+	for _, w := range []string{"nova-box-c0ffee removed", "database", "network", "cache"} {
+		if !strings.Contains(out.Output, w) {
+			t.Errorf("output %q does not name %q", out.Output, w)
+		}
+	}
+	if out.ExitCode == nil || *out.ExitCode != 0 {
+		t.Errorf("exit = %v, want 0", out.ExitCode)
+	}
+}
+
+// C2
+func TestBoxRemoveRefusesABadChangeBeforeDocker(t *testing.T) {
+	for _, c := range []struct{ raw, want string }{
+		{`{}`, "'change'"},
+		{`{"change": 7}`, "'change'"},
+		{`{"change": null}`, "'change'"},
+		{`{"change": "C0FFEE"}`, `"C0FFEE"`},
+		{`{"change": "c0ffee1"}`, `"c0ffee1"`},
+		{`{"change": "../x"}`, `"../x"`},
+		{`{"change": ""}`, `""`},
+	} {
+		s := warm()
+		out := Dispatch(context.Background(), "box.remove", wireArgs(t, c.raw), boxDeps(s, "/nonexistent/docker"))
+		if out.OK || !strings.HasPrefix(out.Error, "box.remove") || !strings.Contains(out.Error, c.want) {
+			t.Errorf("%s: ok=%v err=%q, want a refusal naming %s", c.raw, out.OK, out.Error, c.want)
+		}
+		if len(s.calls) != 0 || out.Meta != nil {
+			t.Errorf("%s: a refused call reached docker: %q (meta %v)", c.raw, s.calls, out.Meta)
+		}
+	}
+}
+
+// C3
+func TestBoxRemoveStatesADockerFailure(t *testing.T) {
+	for _, failOn := range []string{"ps ", "rm -f", "network rm", "volume ls"} {
+		s := &scripted{ps: "nova-box-c0ffee\texited\t" + bTag + "\n", objs: "f00d\n", failOn: failOn}
+		out := Dispatch(context.Background(), "box.remove", wireArgs(t, `{"change": "c0ffee"}`), boxDeps(s, ""))
+		if out.OK || !strings.HasPrefix(out.Error, "cannot remove the box nova-box-c0ffee: ") ||
+			!strings.Contains(out.Error, "boom at "+strings.TrimSpace(failOn)) {
+			t.Errorf("fail on %q: ok=%v err=%q", failOn, out.OK, out.Error)
+		}
+		if out.Meta != nil {
+			t.Errorf("fail on %q: meta %v on a box that was not removed", failOn, out.Meta)
+		}
+	}
+}
+
+// C3
+func TestBoxRemoveOfABoxAlreadyGoneIsFine(t *testing.T) {
+	s := &scripted{ps: "nova-box-abc123\trunning\t" + bTag + "\n"}
+	out := Dispatch(context.Background(), "box.remove", wireArgs(t, `{"change": "c0ffee"}`), boxDeps(s, ""))
+	if !out.OK || !reflect.DeepEqual(out.Meta, map[string]any{"box": "nova-box-c0ffee", "removed": true}) {
+		t.Fatalf("ok=%v err=%q meta=%v", out.OK, out.Error, out.Meta)
+	}
+	for _, c := range s.calls {
+		if c[0] == "rm" || (len(c) > 1 && c[1] == "rm") {
+			t.Fatalf("removed something that was not there: %q", c)
+		}
 	}
 }

@@ -90,6 +90,10 @@ var (
 	branchShape = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$`)
 )
 
+// ValidChange is whether change has a change id's shape (6 lowercase hex) —
+// the one rule Validate and Remove hold, for a caller that sends only an id.
+func ValidChange(change string) bool { return changeShape.MatchString(change) }
+
 type bound struct {
 	name   string
 	val    int

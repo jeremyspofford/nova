@@ -43,6 +43,7 @@ from app.tools import (
     device_jobs,
     devices,
     inference,
+    landing,
     machines,
     mcp,
     memory_tools,
@@ -151,6 +152,13 @@ REGISTRY: dict[str, Tool] = {
         # S38b T4 (2026-10-13): a tool result of this turn, read back in full
         # (tools/results.py) — what a summary marker tells her to call.
         *results.TOOLS,
+        # S32.3 T13 (2026-10-13): her landing step (tools/landing.py) —
+        # repo_land judges a committed change in a fresh box and, only on
+        # green, opens a PR and puts the judged commit on main; landing_status
+        # reads one back; repo_diff, close_change and stack_status complete
+        # the set. change_commit came in with changes.TOOLS above. Nothing
+        # here waits on anyone (test_no_approvals).
+        *landing.TOOLS,
     )
 }
 

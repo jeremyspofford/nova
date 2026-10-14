@@ -347,6 +347,21 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # S38b T4 (2026-10-13): a result of this turn, read back in full after
         # a summary replaced it in what is sent. reads_only.
         "read_result",
+        # S32.3 T13 (2026-10-13): her landing step — change_commit (a commit on
+        # the host, Nova as author, Nova-Turn/Nova-Coder trailers), repo_land
+        # (a landing judged in a fresh box, merged only on green),
+        # landing_status, repo_diff, close_change and stack_status
+        # (tools/changes.py, tools/landing.py). SEVENTY-THREE -> SEVENTY-NINE
+        # as built; T15 (2026-10-13) rebased onto S38b's read_result (74), so
+        # recomputed from the merged tree: SEVENTY-FOUR -> EIGHTY.
+        # landing_status, repo_diff and stack_status are reads_only; the other
+        # three are not. Nothing waits on anyone (test_no_approvals green).
+        "change_commit",
+        "repo_land",
+        "landing_status",
+        "repo_diff",
+        "close_change",
+        "stack_status",
     }
 
 
@@ -771,8 +786,17 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         "device_job_status",
         "device_job_log",
         # S38b T4 (2026-10-13): reading back a result this turn already holds
-        # (the live map of its kept results) changes nothing. 31 -> 32.
+        # (the live map of its kept results) changes nothing. 32 -> 33.
         "read_result",
+        # S32.3 T13 (2026-10-13): a landing read back from Nova's own table, a
+        # change's committed diff (git diff on the repo machine) and the
+        # running stack's build labels (docker ps) change nothing. Their
+        # twins change_commit, repo_land and close_change are deliberately
+        # NOT here. 32 -> 35 as built; T15 (2026-10-13) rebased onto S38b's
+        # read_result, recomputed from the merged tree: 33 -> 36.
+        "landing_status",
+        "repo_diff",
+        "stack_status",
     }
 
 
@@ -821,6 +845,11 @@ def test_every_tool_that_writes_says_it_changes_something():
         "device_job_start",
         # S30c T11: it ends a job on a device.
         "device_job_stop",
+        # S32.3 T13: a commit on the host, a landing that may merge to main,
+        # and a change's box and worktree removed.
+        "change_commit",
+        "repo_land",
+        "close_change",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 
