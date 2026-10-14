@@ -293,17 +293,27 @@ async def price_for(pool: asyncpg.Pool, provider: str, model: str) -> Price | No
 
 def cost_from_price(price: Price, captured: Captured) -> Decimal | None:
     """The bill for what the provider said it did, at the stated price.
-    Needs both token counts — an unmetered call has no bill."""
+    Needs both token counts — an unmetered call has no bill.
+
+    `prompt_tokens` is the WHOLE input on every adapter (S38c T7); the cache
+    reads and writes are PARTS of it. So the uncached remainder (prompt −
+    read − write) is billed at the prompt price and each part at its own
+    multiplier — a cached token is billed once, never at full price and
+    again at the cache rate. Parts larger than the whole are counts that
+    disagree: no bill (None) rather than a wrong one."""
     if not captured.metered:
         return None
+    read = captured.cache_read_tokens or 0
+    write = captured.cache_write_tokens or 0
+    uncached = captured.prompt_tokens - read - write
+    if uncached < 0:
+        return None
     total = (
-        Decimal(captured.prompt_tokens) * price.prompt
+        Decimal(uncached) * price.prompt
         + Decimal(captured.completion_tokens) * price.completion
+        + Decimal(read) * price.prompt * price.cache_read
+        + Decimal(write) * price.prompt * price.cache_write
     )
-    if captured.cache_read_tokens:
-        total += Decimal(captured.cache_read_tokens) * price.prompt * price.cache_read
-    if captured.cache_write_tokens:
-        total += Decimal(captured.cache_write_tokens) * price.prompt * price.cache_write
     return total.quantize(Decimal("0.000001"))
 
 
@@ -321,6 +331,17 @@ async def price_call(
         return None, None
     cost = cost_from_price(price, captured)
     if cost is None:
+        if captured.metered:
+            # Metered yet unbillable: the cache parts exceed the whole.
+            logger.warning(
+                "not priced: %s %s stated cache reads %s + writes %s over a prompt of %s "
+                "tokens — counts that disagree get no bill rather than a wrong one",
+                row["name"],
+                model,
+                captured.cache_read_tokens,
+                captured.cache_write_tokens,
+                captured.prompt_tokens,
+            )
         return None, None
     return cost, BASIS_LABEL[price.basis]
 

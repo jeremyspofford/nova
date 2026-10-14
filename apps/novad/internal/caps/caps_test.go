@@ -170,7 +170,10 @@ func TestNamesAreDerivedFromTheTable(t *testing.T) {
 		"admin.exec", "admin.install", "admin.uninstall", "apps.launch", "apps.list", "box.exec",
 		// S32.3 T7 (2026-10-13): box.remove added deliberately — a landing's close
 		// and close_change take a change's box down.
-		"box.remove", "box.start", "box.status", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
+		"box.remove", "box.start", "box.status",
+		// S38c T4 (2026-10-14): box.stop added deliberately — a landing's judge
+		// stops the change's own idle box to take its slot.
+		"box.stop", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
 		"fs.read", "fs.search", "fs.write",
 		// S30c T4 (2026-10-12): job.* added deliberately — work that outlives a turn.
 		"job.list", "job.log", "job.start", "job.status", "job.stop",

@@ -142,12 +142,138 @@ def test_cost_from_price_bills_prompt_completion_and_cache_at_their_rates():
         cache_write=Decimal("1.25"),
         basis="curated",
     )
+    # Pin moved 2026-10-14 (S38c T7): prompt_tokens is the WHOLE input, the
+    # cache reads and writes are parts of it — 1000 uncached + 2000 read +
+    # 500 written is a prompt of 3500. The dollars are unchanged.
     captured = usage.Captured(
-        prompt_tokens=1000, completion_tokens=100, cache_read_tokens=2000, cache_write_tokens=500
+        prompt_tokens=3500, completion_tokens=100, cache_read_tokens=2000, cache_write_tokens=500
     )
     # 1000*3e-6 + 100*15e-6 + 2000*3e-6*0.1 + 500*3e-6*1.25 = 0.003+0.0015+0.0006+0.001875
     assert usage.cost_from_price(price, captured) == Decimal("0.006975")
     assert usage.cost_from_price(price, usage.Captured(prompt_tokens=10)) is None
+
+
+# ── S38c T7: one meaning for prompt_tokens, and no cached token billed twice ─
+
+HAIKU = usage.Price(
+    prompt=Decimal("0.000001"),
+    completion=Decimal("0.000005"),
+    cache_read=Decimal("0.1"),
+    cache_write=Decimal("1.25"),
+    basis="curated",
+)
+
+
+def test_s38c_t7_c2_an_openai_shaped_prompt_count_is_read_as_the_whole():
+    p = usage.SseUsageParser()
+    p.feed(
+        _sse(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 100},
+                },
+            }
+        )
+    )
+    c = p.captured
+    assert (c.prompt_tokens, c.cache_read_tokens, c.cache_write_tokens) == (1000, 800, 100)
+
+
+def test_s38c_t7_c3_a_cache_read_is_billed_once_as_a_part_of_the_prompt():
+    price = usage.Price(
+        prompt=Decimal("0.000001"),
+        completion=Decimal("0.000002"),
+        cache_read=Decimal("0.1"),
+        cache_write=Decimal("1.25"),
+        basis="listing",
+    )
+    captured = usage.Captured(prompt_tokens=1000, completion_tokens=0, cache_read_tokens=800)
+    # 200 uncached at p + 800 read at 0.1p = 200p + 80p — not 1000p + 80p.
+    assert usage.cost_from_price(price, captured) == Decimal("0.000280")
+    both = usage.Captured(
+        prompt_tokens=1000, completion_tokens=10, cache_read_tokens=600, cache_write_tokens=200
+    )
+    # 200p + 600*0.1p + 200*1.25p + 10*2p = 200 + 60 + 250 + 20 (x 1e-6)
+    assert usage.cost_from_price(price, both) == Decimal("0.000530")
+    # No cache counts: the whole prompt at the prompt price, as always.
+    plain = usage.Captured(prompt_tokens=1000, completion_tokens=10)
+    assert usage.cost_from_price(price, plain) == Decimal("0.001020")
+
+
+def _priced_through_the_adapter(
+    start_usage: dict, output_tokens: int
+) -> tuple[int | None, Decimal | None]:
+    """The Anthropic adapter's own usage chunk, read by the ledger's parser,
+    priced at claude-haiku-4-5's curated price — the live path, end to end."""
+    from app.adapters import anthropic_messages
+
+    translator = anthropic_messages.StreamTranslator("claude-haiku-4-5")
+    parser = usage.SseUsageParser()
+    for event in (
+        {"type": "message_start", "message": {"id": "m", "usage": start_usage}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": output_tokens},
+        },
+        {"type": "message_stop"},
+    ):
+        for chunk in translator.feed(event):
+            parser.feed(chunk)
+    return parser.captured.prompt_tokens, usage.cost_from_price(HAIKU, parser.captured)
+
+
+def test_s38c_t7_c4_the_anthropic_bills_keep_their_dollars():
+    # The four live ledger rows (gateway usage_events 17-20, 2026-09-08,
+    # claude-haiku-4-5, curated $1/M in, $5/M out), re-billed from the
+    # adapter's new whole-input counts: the same dollars they were billed.
+    read_row = {"input_tokens": 3686, "output_tokens": 1, "cache_read_input_tokens": 4863}
+    read_row["cache_creation_input_tokens"] = 0
+    write_row = {"input_tokens": 3677, "output_tokens": 1, "cache_read_input_tokens": 0}
+    write_row["cache_creation_input_tokens"] = 4863
+    assert _priced_through_the_adapter(read_row, 10) == (3686 + 4863, Decimal("0.004222"))
+    assert _priced_through_the_adapter(write_row, 10) == (3677 + 4863, Decimal("0.009806"))
+    assert _priced_through_the_adapter({"input_tokens": 65}, 6) == (65, Decimal("0.000095"))
+    assert _priced_through_the_adapter({"input_tokens": 62}, 6) == (62, Decimal("0.000092"))
+
+
+def test_s38c_t7_c5_parts_larger_than_the_whole_are_no_bill():
+    over = usage.Captured(
+        prompt_tokens=1000, completion_tokens=5, cache_read_tokens=900, cache_write_tokens=200
+    )
+    assert usage.cost_from_price(HAIKU, over) is None
+    read_only = usage.Captured(prompt_tokens=100, completion_tokens=5, cache_read_tokens=101)
+    assert usage.cost_from_price(HAIKU, read_only) is None
+    # Exactly the whole is consistent: every input token was a cache read.
+    exact = usage.Captured(prompt_tokens=100, completion_tokens=0, cache_read_tokens=100)
+    assert usage.cost_from_price(HAIKU, exact) == Decimal("0.000010")
+
+
+async def test_s38c_t7_c5_a_call_whose_counts_disagree_is_unpriced_and_says_so(pool, caplog):
+    import logging
+
+    await pool.execute(
+        "INSERT INTO provider_prices (provider, model, basis, prompt_usd_per_token, "
+        "completion_usd_per_token, verified_at, source) "
+        "VALUES ('kind', 'gpt-x', 'owner', 0.000001, 0.000002, now(), 'test')"
+    )
+    over = usage.Captured(prompt_tokens=100, completion_tokens=5, cache_read_tokens=150)
+    caplog.set_level(logging.WARNING, logger="gateway")
+    assert await usage.price_call(pool, {"name": "kind", "local": False}, "gpt-x", over) == (
+        None,
+        None,
+    )
+    said = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("kind" in m and "gpt-x" in m and "150" in m and "100" in m for m in said), said
+    # A consistent call on the same price is billed as usual.
+    fine = usage.Captured(prompt_tokens=100, completion_tokens=5, cache_read_tokens=50)
+    assert await usage.price_call(pool, {"name": "kind", "local": False}, "gpt-x", fine) == (
+        Decimal("0.000065"),
+        "owner-price",
+    )
 
 
 def test_month_start_is_the_first_of_the_month_in_the_owners_zone():
@@ -488,7 +614,9 @@ async def test_anthropic_cache_counts_are_read_and_priced_from_the_curated_list(
     )
     assert resp.status_code == 200
     (row,) = await _rows(pool, kind="completion")
-    assert row["prompt_tokens"] == 100 and row["cache_read_tokens"] == 2000
+    # Pin moved 2026-10-14 (S38c T7): the row's prompt_tokens is the whole
+    # input (100 uncached + 2000 read); the bill is the same dollars.
+    assert row["prompt_tokens"] == 2100 and row["cache_read_tokens"] == 2000
     # 100*5e-6 + 50*2.5e-5 + 2000*5e-6*0.1 = 0.0005 + 0.00125 + 0.001
     assert row["cost_usd"] == Decimal("0.002750") and row["cost_basis"] == "curated-price"
 

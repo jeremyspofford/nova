@@ -236,6 +236,29 @@ async def remove_box(pool, row, ctx: ToolContext, change: str) -> str:
     return f"{row['name']}: {error}"
 
 
+async def stop_box(pool, row, ctx: ToolContext, change: str) -> tuple[bool, str]:
+    """Stop the change's box through the agent's box.stop (S38c T5): (True,
+    '') when its record says it stopped, (False, '') when it says the box
+    was not running, else (False, the stated reason) — never raises. Stopped
+    is read from the agent's record {box, stopped}, never from ok alone."""
+    if not isinstance(change, str) or not _CHANGE_ID.fullmatch(change):
+        return False, f"cannot stop a box: {change!r} is not a change id (6 lowercase hex)"
+    try:
+        result = await _command(pool, row, "box.stop", {"change": change}, ctx=ctx)
+    except ToolFailure as failed:
+        return False, " ".join(str(failed).split())
+    if not result.get("ok"):
+        error = str(result.get("error") or _NO_REASON)
+        if error.startswith(_UNKNOWN_CAPABILITY):
+            return False, "the agent predates box.stop — update it with machine_update"
+        return False, f"{row['name']}: {error}"
+    meta = result.get("meta")
+    stopped = meta.get("stopped") if isinstance(meta, dict) else None
+    if not isinstance(stopped, bool) or meta.get("box") != box_name(change):
+        return False, f"{row['name']} answered box.stop with no record of stopping it"
+    return stopped, ""
+
+
 async def start_change(args: dict, ctx: ToolContext) -> str:
     row, repo = await code_repo.repo_machine(ctx.app)
     pool = await admit_row(row, ctx)

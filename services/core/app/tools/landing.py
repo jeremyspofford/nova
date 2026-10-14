@@ -12,13 +12,16 @@ decides whether she may land: a landing that cannot run says why.
 
 from __future__ import annotations
 
+import asyncio
 import posixpath
 import re
+import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from app import code_repo, code_repos, db, landing_git, landing_run, landings
-from app.tools import changes
+from app import code_repo, code_repos, db, landing_git, landing_run, landings, traces
+from app.tools import changes, schema
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 from app.tools.devices import admit_row, box_name
 
@@ -150,6 +153,19 @@ CLOSE_CHANGE = "close_change"
 RECENT = 10
 NO_LANDINGS = "No landing of yours yet."
 _SHORT = 7
+# landing_status(id, wait_s) (S38c T6): the longest wait one call may ask for.
+WAIT_MAX_S = 90
+# How often a wait re-reads the row.
+POLL_S = 2
+# The wait's seams, looked up as module attributes at each call so a test can
+# drive them: the sleep between polls, the monotonic clock the wait is measured
+# on, and the wall clock the landing's age is read against.
+_sleep = asyncio.sleep
+_clock = time.monotonic
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 def landing_fact(row: dict) -> dict:
@@ -275,9 +291,77 @@ def _listing_line(row: dict) -> str:
     )
 
 
+def _stage(row: dict) -> str:
+    return row.get("stage") or "queued"
+
+
+def _age_words(row: dict) -> str:
+    """The landing's age for the deadline line — ", M min S s since it
+    started", from the row's created_at to the wall clock, to the second, so
+    two readings a second apart never read the same — or "" when the row
+    carries no start."""
+    started = row.get("created_at")
+    if started is None:
+        return ""
+    seconds = max(0, int((_now() - started).total_seconds()))
+    return f", {seconds // 60} min {seconds % 60} s since it started"
+
+
+async def _wait(pool, ctx: ToolContext, row: dict, wait_s: int) -> tuple[dict, str | None]:
+    """Re-read a running landing every POLL_S s for up to wait_s s.
+
+    Returns (the last row read, the line that says why the wait ended), or
+    (row, None) when the landing was not running when asked — a plain read.
+    It ends at the first reading whose verdict left `running` or whose stage
+    changed, at the deadline (a line naming the stage, the seconds waited and
+    the landing's age, so a reading at the same stage is still new — the
+    live-reading rule in chat.RoundProgress counts it as progress, S38c T6),
+    or when the turn is asked to stop: through ctx.progress, which raises
+    TurnStopped in a chat turn, else stated from traces.stop_requested."""
+    if row["verdict"] != "running":
+        return row, None
+    landing_id = row["id"]
+    first_stage = _stage(row)
+    start = _clock()
+    deadline = start + wait_s
+
+    def waited() -> int:
+        return round(_clock() - start)
+
+    while True:
+        if ctx.progress is not None:
+            ctx.progress(
+                f"waiting on landing {landing_id}: {_stage(row)}, {waited()} s of {wait_s} s"
+            )
+        if traces.stop_requested(ctx.turn_id):
+            return row, f"Stopped waiting after {waited()} s: this turn is stopping."
+        remaining = deadline - _clock()
+        if remaining <= 0:
+            return row, (
+                f"Still running at stage {_stage(row)}, waited {waited()} s{_age_words(row)}."
+            )
+        await _sleep(min(POLL_S, remaining))
+        fresh = await landings.get(pool, landing_id)
+        if fresh is None:
+            raise ToolFailure(f"landing {landing_id} is gone from the record while waiting on it")
+        row = fresh
+        if row["verdict"] != "running":
+            return row, f"The verdict came in after waiting {waited()} s."
+        if _stage(row) != first_stage:
+            return row, (
+                f"The stage moved from {first_stage} to {_stage(row)} after waiting {waited()} s."
+            )
+
+
 async def landing_status(args: dict, ctx: ToolContext) -> str:
     pool = await db.get_pool()
     wanted = args.get("id")
+    wait_s = args.get("wait_s")
+    if wait_s is not None and wanted is None:
+        raise ToolFailure(
+            "wait_s waits on one landing — pass its id (repo_land returned it); with no id "
+            "landing_status lists your latest landings"
+        )
     if wanted is None:
         total = await pool.fetchval("SELECT count(*) FROM landings")
         rows = [
@@ -311,8 +395,12 @@ async def landing_status(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(
             f"no landing {landing_id} — landing_status with no id lists your latest landings"
         )
+    line = None
+    if wait_s is not None:
+        row, line = await _wait(pool, ctx, row, wait_s)
     _file(ctx, row)
-    return _status_text(row)
+    text = _status_text(row)
+    return text if line is None else f"{line}\n{text}"
 
 
 LANDING_STATUS_TOOL = Tool(
@@ -322,7 +410,10 @@ LANDING_STATUS_TOOL = Tool(
         "could_not_measure or conflict), where a running one is, each suite's command, exit "
         "and counts (the tail of one that did not pass), the merged SHA and PR of a green one, "
         "the protected files it touched and the checkout's own uncommitted files. Pass the id "
-        "repo_land returned; with no id it lists your latest landings."
+        "repo_land returned; with no id it lists your latest landings. To wait for a running "
+        "landing's verdict, pass wait_s (up to 90 seconds): it returns as soon as the verdict "
+        "or the stage changes, else at the deadline saying how long it waited — call it "
+        "again to keep waiting."
     ),
     parameters={
         "type": "object",
@@ -330,7 +421,17 @@ LANDING_STATUS_TOOL = Tool(
             "id": {
                 "type": "string",
                 "description": "The landing's id, as repo_land returned it. Omit to list.",
-            }
+            },
+            "wait_s": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": WAIT_MAX_S,
+                schema.WHOLE_NUMBER: True,
+                "description": (
+                    f"Seconds to wait (1-{WAIT_MAX_S}) for a running landing's verdict or "
+                    "next stage before answering. Needs id."
+                ),
+            },
         },
         "additionalProperties": False,
     },

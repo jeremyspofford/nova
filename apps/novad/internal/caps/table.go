@@ -29,6 +29,7 @@ var table = map[string]Handler{
 	"box.remove":      boxRemove,
 	"box.start":       boxStart,
 	"box.status":      boxStatus,
+	"box.stop":        boxStop,
 	"net.wake":        netWake,
 	"job.start":       jobStart,
 	"job.status":      jobStatus,

@@ -345,6 +345,50 @@ func (m *Manager) Remove(ctx context.Context, change string) error {
 	return nil
 }
 
+// ErrBusy is Stop's refusal for a box whose change runs a live job (S30c):
+// callers test it with errors.Is to name the job.
+var ErrBusy = errors.New("it runs a live job")
+
+// Stop stops a change's running box and its db, if that runs (S38c T4): a
+// landing's judge takes the slot its own change's idle box holds. It reports
+// whether the box was running; a box not running (exited, created, absent) is
+// left as it is, a lone db under it too (Reap's rule — Ensure starts both
+// again on her next command). A box whose change runs a live job is refused
+// with ErrBusy, and when Busy cannot be read nothing is stopped.
+func (m *Manager) Stop(ctx context.Context, change string) (bool, error) {
+	if !changeShape.MatchString(change) {
+		return false, fmt.Errorf("change %q is not a change id (6 lowercase hex)", change)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := Names(change)
+	ctrs, err := m.containers(ctx)
+	if err != nil {
+		return false, err
+	}
+	if c, ok := ctrs[n.Box]; !ok || c.state != "running" {
+		return false, nil
+	}
+	if m.Busy != nil {
+		busy, err := m.Busy()
+		if err != nil {
+			return false, fmt.Errorf("reading which boxes run a job: %v; nothing was stopped", err)
+		}
+		if busy[change] {
+			return false, fmt.Errorf("%s %w; nothing was stopped", n.Box, ErrBusy)
+		}
+	}
+	argv := []string{"stop", n.Box}
+	if db, ok := ctrs[n.DB]; ok && db.state == "running" {
+		argv = append(argv, n.DB)
+	}
+	if _, err := m.docker(ctx, "stopping the box "+n.Box, argv...); err != nil {
+		return false, err
+	}
+	delete(m.lastUse, change)
+	return true, nil
+}
+
 // ExecArgv is the full argv that runs argv inside the change's box, as the
 // owner, in req.Cwd: <docker> exec -w <cwd> -u <uid>:<gid> nova-box-<id> argv...
 func (m *Manager) ExecArgv(req Request, argv []string) []string {

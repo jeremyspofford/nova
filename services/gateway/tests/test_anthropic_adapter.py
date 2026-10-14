@@ -46,7 +46,14 @@ def test_system_messages_fold_into_the_top_level_system_field():
         {"type": "text", "text": "You are Nova.", "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": "Be brief."},
     ]
-    assert out["messages"] == [{"role": "user", "content": "hi"}]
+    # Moved 2026-10-14 (S38c T8): the last message's last block carries the
+    # moving cache breakpoint, so its string content is one marked text block.
+    assert out["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
     assert out["model"] == "claude-opus-5"
     assert out["stream"] is True
     # max_tokens is REQUIRED by the API; a caller naming none gets a real
@@ -97,7 +104,8 @@ def test_a_tool_round_trip_becomes_tool_use_and_one_tool_result_user_message():
         "content": [
             {"type": "tool_result", "tool_use_id": "toolu_a", "content": "A!"},
             {"type": "tool_result", "tool_use_id": "toolu_b", "content": '{"text": "B!"}'},
-            {"type": "text", "text": "thanks"},
+            # Moved 2026-10-14 (S38c T8): the moving breakpoint, on the last block.
+            {"type": "text", "text": "thanks", "cache_control": {"type": "ephemeral"}},
         ],
     }
     assert len(out["messages"]) == 3
@@ -145,7 +153,13 @@ def test_an_empty_assistant_turn_is_dropped_with_a_note():
     translation = adapter.to_messages_request(
         {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": ""}]}, "m"
     )
-    assert translation.body["messages"] == [{"role": "user", "content": "a"}]
+    # Moved 2026-10-14 (S38c T8): the last message carries the moving breakpoint.
+    assert translation.body["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
     assert "dropped an empty assistant message" in translation.notes
 
 
@@ -208,7 +222,8 @@ def test_an_orphan_tool_result_is_carried_as_text_not_sent_as_a_pairing_claim():
     assert [m["role"] for m in msgs] == ["user"]
     assert msgs[0]["content"] == [
         {"type": "text", "text": "[result of an earlier tool call]\n42"},
-        {"type": "text", "text": "go on"},
+        # Moved 2026-10-14 (S38c T8): the moving breakpoint, on the last block.
+        {"type": "text", "text": "go on", "cache_control": {"type": "ephemeral"}},
     ]
     assert not any(b.get("type") == "tool_result" for b in msgs[0]["content"])
 
@@ -845,3 +860,113 @@ async def test_the_full_live_row_shape_maps_context_output_cap_and_capabilities(
             },
         }
     ]
+
+
+# ── S38c T7: one meaning for prompt_tokens (the whole input) ─────────────
+#
+# Anthropic states `input_tokens` as the UNCACHED remainder and the cache
+# reads and writes beside it. Every OpenAI-shaped provider states
+# `prompt_tokens` as the whole input with the cached part inside it. The
+# adapter now states the whole, so one budget and one gauge read the same
+# thing on every link; the cache counts stay their own fields (parts of it).
+
+
+def _stream_usage(start_usage: dict, delta_usage: dict | None = None) -> dict | None:
+    chunks = _feed_all(
+        [
+            {
+                "type": "message_start",
+                "message": {"id": "msg_u", "model": "claude-haiku-4-5", "usage": start_usage},
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": delta_usage or {},
+            },
+            {"type": "message_stop"},
+        ]
+    )
+    stated = [c["usage"] for c in chunks if c != "[DONE]" and c.get("usage")]
+    return stated[0] if stated else None
+
+
+def _whole_usage(usage: dict) -> dict:
+    return adapter.to_chat_completion(
+        {
+            "id": "msg_w",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": usage,
+        },
+        "claude-haiku-4-5",
+    )["usage"]
+
+
+def test_s38c_t7_c1_a_streamed_prompt_count_is_the_whole_input():
+    stated = _stream_usage(
+        {
+            "input_tokens": 3686,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 4863,
+            "cache_creation_input_tokens": 120,
+        },
+        {"output_tokens": 10},
+    )
+    assert stated == {
+        "prompt_tokens": 3686 + 4863 + 120,
+        "completion_tokens": 10,
+        "total_tokens": 3686 + 4863 + 120 + 10,
+        "cache_read_tokens": 4863,
+        "cache_write_tokens": 120,
+    }
+
+
+def test_s38c_t7_c1_a_whole_messages_prompt_count_is_the_whole_input():
+    assert _whole_usage(
+        {
+            "input_tokens": 3677,
+            "output_tokens": 10,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 4863,
+        }
+    ) == {
+        "prompt_tokens": 3677 + 4863,
+        "completion_tokens": 10,
+        "total_tokens": 3677 + 4863 + 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 4863,
+    }
+
+
+def test_s38c_t7_c1_an_absent_cache_count_adds_nothing():
+    # Only a read stated (no write field at all): the write counts 0.
+    assert _whole_usage(
+        {"input_tokens": 50, "output_tokens": 4, "cache_read_input_tokens": 700}
+    ) == {
+        "prompt_tokens": 750,
+        "completion_tokens": 4,
+        "total_tokens": 754,
+        "cache_read_tokens": 700,
+    }
+    # Only a write stated, streamed.
+    assert _stream_usage(
+        {"input_tokens": 9, "output_tokens": 1, "cache_creation_input_tokens": 300},
+        {"output_tokens": 2},
+    ) == {
+        "prompt_tokens": 309,
+        "completion_tokens": 2,
+        "total_tokens": 311,
+        "cache_write_tokens": 300,
+    }
+
+
+def test_s38c_t7_c1_no_input_count_is_no_prompt_count_never_a_cache_only_one():
+    # Anthropic stated cache counts but no input_tokens: the whole is not
+    # known, so prompt_tokens is not stated (the call reads unmetered),
+    # never the cache counts alone passed off as the input.
+    stated = _whole_usage({"output_tokens": 4, "cache_read_input_tokens": 700})
+    assert "prompt_tokens" not in stated and "total_tokens" not in stated
+    assert stated == {"completion_tokens": 4, "cache_read_tokens": 700}
+    streamed = _stream_usage({"cache_read_input_tokens": 700}, {"output_tokens": 4})
+    assert streamed == {"completion_tokens": 4, "cache_read_tokens": 700}
