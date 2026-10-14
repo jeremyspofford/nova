@@ -1,6 +1,7 @@
 # S37c: she reacts — the spec
 
-**Status:** draft 2026-10-13, awaiting the owner's rulings in §9.
+**Status:** approved 2026-10-13. The owner took every proposal in §9 ("go
+with your proposed").
 
 The owner ordered it on 2026-10-13: "do s38b, then s37c."
 
@@ -159,7 +160,7 @@ and a corpus pin move.
 The event turn becomes "open or resume the goal for this source". The intake,
 the senders, the frame and the record stay as they are.
 
-## 9. Questions for the owner (proposals in bold)
+## 9. Questions for the owner (all ruled as proposed, 2026-10-13)
 
 1. **GitHub CI: poll, or a public webhook?** **Poll every 5 minutes through
    the GitHub token already registered.** Nothing becomes public. The
