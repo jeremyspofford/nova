@@ -122,6 +122,14 @@ class VerifyResult:
     models: list[dict] | None = None
 
 
+@dataclass(frozen=True)
+class Balance:
+    """What a provider says is left on the key — read live, never kept."""
+
+    remaining: float | None
+    words: str
+
+
 class Adapter(Protocol):
     name: str
 
@@ -136,6 +144,8 @@ class Adapter(Protocol):
     async def verify(self, app, row: dict) -> VerifyResult: ...
 
     async def list_models(self, app, row: dict) -> Listing: ...
+
+    async def balance(self, app, row: dict) -> Balance | None: ...
 
     async def completions(
         self, request: Request, row: dict, model: str, body: dict

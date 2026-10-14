@@ -47,6 +47,7 @@ from app.adapters import base
 from app.adapters.base import (
     COMPLETIONS_TIMEOUT,
     MODELS_TIMEOUT,
+    Balance,
     Listing,
     ListingUnavailable,
     ProviderRefused,
@@ -602,6 +603,10 @@ class AnthropicMessages:
         headers = base.bearer_or_header(row, header_name="x-api-key")
         headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
+
+    async def balance(self, app, row: dict) -> Balance | None:
+        """This protocol's providers state no balance the gateway can read."""
+        return None
 
     async def list_models(self, app, row: dict) -> Listing:
         url = base_url_of(row)

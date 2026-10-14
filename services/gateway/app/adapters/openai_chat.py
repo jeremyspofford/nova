@@ -28,6 +28,7 @@ from app.adapters.base import (
     DECISIONS,
     MODELS_TIMEOUT,
     VERIFY_TIMEOUT,
+    Balance,
     Listing,
     ListingUnavailable,
     ProviderRefused,
@@ -336,6 +337,34 @@ def _affordable_tokens(status: int, content: bytes, body: dict) -> int | None:
     return affords
 
 
+def _finite(value: object) -> float | None:
+    """`value` as a float when it is a real finite number, else None. bool is
+    an int subclass, so a provider's `true` must not read as 1."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+async def _read_data(app, url: str, path: str, headers: dict) -> tuple[dict | None, str]:
+    """GET {url}{path}'s `data` object, or (None, why in words)."""
+    client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers)
+    try:
+        async with client as c:
+            resp = await c.get(path)
+    except httpx.HTTPError as exc:
+        return None, f"could not reach {url}{path} — {reason(exc)}"
+    if resp.status_code != 200:
+        return None, f"{url}{path} answered {resp.status_code} ({refusal_detail(resp)})"
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        return None, f"{url}{path} returned non-JSON: {exc}"
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, dict):
+        return None, f"{url}{path} states no data object"
+    return data, ""
+
+
 def _refuses_usage_fields(content: bytes) -> bool:
     text = content.decode(errors="replace").lower()
     return any(field in text for field in _USAGE_FIELDS)
@@ -362,6 +391,51 @@ class OpenAIChat:
     def headers(self, row: dict) -> dict[str, str]:
         # `api-key-header` on this protocol is Azure's header name.
         return base.bearer_or_header(row, header_name="api-key")
+
+    async def balance(self, app, row: dict) -> Balance | None:
+        """What is left on this row's key, read live from the provider — or
+        None when this provider states no balance (only OpenRouter does, by
+        base_url host, the same derivation inject_usage uses).
+
+        OpenRouter: GET {base}/key states `limit_remaining` for a key with a
+        limit; a key with no limit (`limit: null`) is bounded by the
+        account, GET {base}/credits `total_credits - total_usage`. Any read
+        that does not yield a finite number is Balance(None, why) — never a
+        number, so a failed read can never pass for money."""
+        url = base_url_of(row)
+        if not url or (httpx.URL(url).host or "").lower() not in OPENROUTER_HOSTS:
+            return None
+        headers = self.headers(row)
+        data, why = await _read_data(app, url, "/key", headers)
+        if data is None:
+            return Balance(None, why)
+        if "limit" not in data:
+            return Balance(None, f"{url}/key states no limit field")
+        limit = data["limit"]
+        if limit is not None:
+            if _finite(limit) is None:
+                return Balance(None, f"{url}/key states a limit that is not a number: {limit!r}")
+            remaining = _finite(data.get("limit_remaining"))
+            if remaining is None:
+                return Balance(
+                    None,
+                    f"{url}/key states no numeric limit_remaining "
+                    f"({data.get('limit_remaining')!r})",
+                )
+            return Balance(remaining, f"{url}/key limit_remaining {remaining:g} of {limit:g}")
+        data, why = await _read_data(app, url, "/credits", headers)
+        if data is None:
+            return Balance(None, f"the key has no limit, and {why}")
+        credits = _finite(data.get("total_credits"))
+        usage = _finite(data.get("total_usage"))
+        if credits is None or usage is None:
+            missing = "total_credits" if credits is None else "total_usage"
+            return Balance(None, f"{url}/credits states no numeric {missing}")
+        remaining = credits - usage
+        return Balance(
+            remaining,
+            f"{url}/credits total_credits {credits:g} - total_usage {usage:g} = {remaining:g}",
+        )
 
     async def list_models(self, app, row: dict) -> Listing:
         url = base_url_of(row)
