@@ -13,6 +13,7 @@ import hmac
 import logging
 import re
 import secrets
+import uuid
 from dataclasses import dataclass
 
 import asyncpg
@@ -40,6 +41,11 @@ WRONG_TOKEN = "wrong token"
 UNKNOWN_SENDER = "unknown sender"
 SENDER_OFF = "sender is off"
 BUILTIN_SENDER = "built-in sender takes no calls"
+TOO_BIG = "body over 256 KB"
+NOT_TEXT = "body is not UTF-8 text"
+
+# The intake keeps a payload whole, up to this (spec §2.2).
+MAX_PAYLOAD_BYTES = 256 * 1024
 
 # Compared against when there is no stored hash, so an unknown sender costs
 # the same work as a known one with a wrong token.
@@ -170,3 +176,50 @@ async def ensure_builtins(pool: asyncpg.Pool) -> list[str]:
             seeded.append(added)
             logger.info("seeded built-in event sender %r (%s)", name, kind)
     return seeded
+
+
+# -- T2: the intake's record ------------------------------------------------------
+
+# A refused call's sender is whatever name it used; kept short in the row and
+# the log, so a junk path cannot fill either.
+_NAME_KEPT = 64
+
+
+async def refuse(pool: asyncpg.Pool, name: str, reason: str) -> uuid.UUID:
+    """Keep a refused call: the name it used and why, never its body.
+
+    Logged with the sender name only — the presented token and the body never
+    reach a log line."""
+    kept = (name or "")[:_NAME_KEPT]
+    logger.warning("event intake refused for sender %r: %s", kept, reason)
+    return await pool.fetchval(
+        "INSERT INTO events (sender, state, reason) VALUES ($1, 'refused', $2) RETURNING id",
+        kept,
+        reason,
+    )
+
+
+async def accept(
+    pool: asyncpg.Pool, name: str, payload: str, content_type: str | None
+) -> uuid.UUID:
+    """Queue an accepted event whole and stamp the sender's last_sent_at."""
+    async with pool.acquire() as conn, conn.transaction():
+        event_id = await conn.fetchval(
+            "INSERT INTO events (sender, payload, content_type) VALUES ($1, $2, $3) RETURNING id",
+            name,
+            payload,
+            content_type,
+        )
+        await conn.execute("UPDATE event_senders SET last_sent_at = now() WHERE name = $1", name)
+    logger.info("event %s queued from sender %r (%d bytes)", event_id, name, len(payload))
+    return event_id
+
+
+def decode_payload(body: bytes) -> str | None:
+    """The body as text, or None when it is not UTF-8 or holds a NUL (which a
+    postgres text column cannot keep)."""
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return None if "\x00" in text else text

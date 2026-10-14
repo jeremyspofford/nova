@@ -68,6 +68,17 @@ PUBLIC_PATHS = frozenset(
     }
 )
 
+# S37c: the event intake, POST /api/v1/events/<sender>, is the one public
+# PATTERN. A program holding a sender's token has no session; the route checks
+# that token itself (events.verify) and refuses everything else, CORE_TOKEN and
+# cookies included. Only POST, only a valid sender name, whole path: GET/PUT on
+# it and the sender admin routes (/api/v1/event-senders) stay behind identity.
+# The name part is events.NAME_RE's (not imported: events imports this module).
+# It is kept apart from PUBLIC_PATHS, which tests/test_agent_dist.py pins as an
+# exact set. Reach is still tailnet + localhost only: nginx carves nothing out
+# for it (tests/test_events_intake.py reads the template).
+EVENT_INTAKE_RE = re.compile(r"/api/v1/events/[a-z][a-z_]{0,25}")
+
 logger = logging.getLogger("core")
 
 
@@ -285,7 +296,10 @@ def is_public(scope: Scope) -> bool:
     public manifest while the router matched — and found no route for — the
     whole path. Matching the router's own path, through its own function,
     means a request is public exactly when the route it reaches is."""
-    return get_route_path(scope) in PUBLIC_PATHS
+    path = get_route_path(scope)
+    if path in PUBLIC_PATHS:
+        return True
+    return scope.get("method") == "POST" and EVENT_INTAKE_RE.fullmatch(path) is not None
 
 
 async def identity_middleware(request: Request, call_next):

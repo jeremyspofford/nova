@@ -29,6 +29,7 @@ from app import (
     devices_ws,
     evals_api,
     events,
+    events_api,
     governance_api,
     machines_api,
     mcp_api,
@@ -174,6 +175,7 @@ app.include_router(agent_dist_api.router)
 app.include_router(mcp_api.router)
 app.include_router(about_api.router)
 app.include_router(code_repos.router)
+app.include_router(events_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)
