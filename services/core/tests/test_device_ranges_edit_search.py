@@ -775,6 +775,7 @@ def test_t7_c1_the_tool_takes_a_tree_and_a_pattern_and_only_reads():
         "literal",
         "ignore_case",
         "max_matches",
+        "glob",  # S38c T3 (2026-10-14): the agent's file filter
     }
     assert props["path"]["type"] == "string"
     assert props["pattern"]["type"] == "string"
@@ -803,7 +804,8 @@ async def test_t7_c1_a_search_sends_fs_search_with_the_path_and_pattern_alone(po
     )
     assert ok is True, result
     assert [e["capability"] for e in envelopes] == ["fs.search"]
-    assert sent == {"path": _TREE, "pattern": "_SpanScrub"}
+    # S38c T3 (2026-10-14): an omitted max_matches is sent as the default 50.
+    assert sent == {"path": _TREE, "pattern": "_SpanScrub", "max_matches": 50}
     await _close(conn, task)
 
 
@@ -910,7 +912,9 @@ async def test_t7_c2_a_capped_search_says_more_matches_exist(pool):
     assert _searches(facts) == [
         {"search": {"device": "mini", "matches": 2, "capped": True}, "target": _TREE}
     ]
-    assert "more matches exist" in result.splitlines()[0], result
+    # S38c T3 (2026-10-14): an agent that sent no total says more exist with no
+    # number, and points at path/glob, not at raising max_matches.
+    assert "more exist — narrow it with path or glob" in result.splitlines()[0], result
     await _close(conn, task)
 
 
@@ -1033,7 +1037,8 @@ def test_t7_c4_the_description_states_the_hit_form_the_caps_and_the_next_read():
     lower = text.lower()
     assert "relpath:line: text" in text or "path:line: text" in text, text
     assert ".gitignore" in text, text
-    assert "200" in text and "2000" in text, text
+    # S38c T3 (2026-10-14): the default moved 200 -> 50.
+    assert "default 50" in text and "2000" in text, text
     assert "literal" in lower, text
     assert "device_read_file" in text and "start_line" in text, text
 
@@ -1306,6 +1311,9 @@ def test_v27_t4_cov_the_whole_number_keyword_never_goes_on_the_wire():
         ("device_read_file", "offset"),
         ("device_read_file", "length"),
         ("device_search", "max_matches"),
+        # Moved 2026-10-14 (S38c T6): landing_status's wait_s is a whole number
+        # of seconds (1-90), marked like the T4 properties.
+        ("landing_status", "wait_s"),
     }
     for entry in tools.advertised_tools():
         function = entry["function"]
@@ -1477,3 +1485,322 @@ async def test_v27_t6_c4_a_current_agents_number_refusal_is_its_own_words(pool, 
     assert said in result, result
     assert "predates" not in result, result
     await _close(conn, task)
+
+
+# == S38c T3: device_search default 50, glob, the capped head line ====================
+#
+# Owner 2026-10-14 (docs/plans/rebuild/s38c/spec.md §5.7 item 1, §12 Q7): six
+# broad searches took 54% of a turn's budget at 200 hits each.
+#
+# Criteria:
+#   C1 a search with no max_matches sends max_matches 50 on the frame (so an
+#      agent whose own default is still 200 returns 50 too); a given one is
+#      forwarded unchanged. An agent that predates wire numbers refusing that
+#      50 is stated as predating them, naming machine_update — never its raw
+#      words.
+#   C2 the schema offers an optional string `glob`; the frame carries it
+#      exactly when given and never when not.
+#   C3 a capped result's first line says how many were shown of how many:
+#      "<m> of <t> matches shown; narrow it with path or glob" when the agent
+#      counted them all (meta.total_matches, total_complete true), "<m> of at
+#      least <t> matches shown; ..." when its count was cut, and "more exist —
+#      narrow it with path or glob" (no number) when the agent sent no usable
+#      total. An uncapped result says none of these. The total is the agent's,
+#      never read from its closing note.
+#   C4 a glob sent but not echoed back in meta.glob (an agent that predates
+#      the filter answers ok having searched unfiltered) fails, stating "this
+#      agent predates the glob filter — nothing is presented; update it with
+#      machine_update, then search again"; none of its hits are in the result
+#      and no search fact is filed.
+#   C5 the search fact is unchanged plus "glob" when one was given (absent
+#      otherwise), and the head line names the glob.
+#   C6 the description and the max_matches schema text say the default is 50
+#      and the description names glob with an example.
+#
+# Design calls (Assumptions):
+#   - Core always sends max_matches (default 50) AND novad's own default is 50
+#     (T2), so an old-but-wire-number agent returns 50 too. A pre-wire-number
+#     agent (before bae41a1d) now refuses every search instead of answering
+#     200 hits; it is stated as predating wire numbers with machine_update —
+#     honest, and that build is already told to update for range reads.
+#   - Glob support is proven by the agent's echo (meta.glob == the glob sent),
+#     never by ok: novad caps ignore unknown args silently.
+#   - The glob echo is checked before the search record, so an old agent's ok
+#     frame names the glob filter, the specific missing piece.
+#   - A total is used only when it is an int (not bool) >= matches and
+#     total_complete is a bool; anything else reads as no total (the no-number
+#     line), since a capped search's hits are still the agent's confirmed
+#     record.
+#   - Tool registry name set unchanged: glob is a parameter, not a tool.
+
+_S38C_GLOB = "services/**/*.py"
+_S38C_ECHO = (
+    "this agent predates the glob filter — nothing is presented; update it with "
+    "machine_update, then search again"
+)
+
+
+def _s38c_capped_meta(**extra) -> dict:
+    return {"matches": 50, "files_scanned": 900, "capped": True, **extra}
+
+
+async def test_s38c_t3_c1_an_omitted_max_matches_sends_50(pool):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini"),
+        output=_HITS,
+        meta=_SEARCH_META,
+    )
+    assert ok is True, result
+    assert sent.get("max_matches") == 50, sent
+    assert type(sent.get("max_matches")) is int, sent
+    await _close(conn, task)
+
+
+async def test_s38c_t3_c1_a_pre_wire_number_agent_refusing_the_default_is_stated(pool):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("dell"),
+        ok=False,
+        exit_code=None,
+        error=_V27_T6_OLD_SEARCH.format(n=50),
+    )
+    assert sent.get("max_matches") == 50, sent
+    assert ok is False, result
+    assert "predates wire numbers" in result and "machine_update" in result, result
+    assert "must be a whole number" not in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+def test_s38c_t3_c2_the_schema_offers_an_optional_string_glob():
+    params = _search_tool().parameters
+    assert params["properties"]["glob"]["type"] == "string"
+    assert "glob" not in params["required"]
+
+
+@pytest.mark.parametrize("given", [True, False], ids=["with-glob", "without-glob"])
+async def test_s38c_t3_c2_the_frame_carries_glob_exactly_when_given(pool, given):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    extra = {"glob": _S38C_GLOB} if given else {}
+    meta = {**_SEARCH_META, "glob": _S38C_GLOB} if given else _SEARCH_META
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", **extra),
+        output=_HITS,
+        meta=meta,
+    )
+    assert ok is True, result
+    expected = {"path": _TREE, "pattern": "_SpanScrub", "max_matches": 50, **extra}
+    assert sent == expected, sent
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "extra,line",
+    [
+        (
+            {"total_matches": 412, "total_complete": True},
+            "50 of 412 matches shown; narrow it with path or glob",
+        ),
+        (
+            {"total_matches": 3000, "total_complete": False},
+            "50 of at least 3000 matches shown; narrow it with path or glob",
+        ),
+        ({}, "more exist — narrow it with path or glob"),
+        # COVERAGE: an unusable total is no total, never a number she reads.
+        (
+            {"total_matches": True, "total_complete": True},
+            "more exist — narrow it with path or glob",
+        ),
+        (
+            {"total_matches": "412", "total_complete": True},
+            "more exist — narrow it with path or glob",
+        ),
+        (
+            {"total_matches": 412},
+            "more exist — narrow it with path or glob",
+        ),
+        (
+            {"total_matches": 412, "total_complete": "yes"},
+            "more exist — narrow it with path or glob",
+        ),
+        (
+            {"total_matches": 7, "total_complete": True},
+            "more exist — narrow it with path or glob",
+        ),
+    ],
+    ids=[
+        "complete",
+        "at-least",
+        "no-total",
+        "bool-total",
+        "string-total",
+        "no-complete",
+        "string-complete",
+        "total-below-shown",
+    ],
+)
+async def test_s38c_t3_c3_a_capped_head_line_says_how_many_were_shown(pool, extra, line):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    # The closing note carries a DIFFERENT number: the head line must read
+    # the meta, never the note.
+    output = _HITS + "[stopped at max_matches 50; 999 matches in all]\n"
+    result, ok, facts, _sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini"),
+        output=output,
+        meta=_s38c_capped_meta(**extra),
+    )
+    assert ok is True, result
+    first = result.splitlines()[0]
+    assert first.endswith("; " + line), first
+    assert "999" not in first, first
+    assert "raise max_matches" not in first, first
+    assert _searches(facts) == [
+        {"search": {"device": "mini", "matches": 50, "capped": True}, "target": _TREE}
+    ]
+    await _close(conn, task)
+
+
+async def test_s38c_t3_c3_a_bool_total_is_no_total_even_at_one_match(pool):
+    """COVERAGE (S38c T3): True == 1 in Python, so a bool total passes `>=`
+    at max_matches 1; only the type check keeps "1 of True" off her line."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, _sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", max_matches=1),
+        output="app/guards.py:812: class _SpanScrub:\n",
+        meta={
+            "matches": 1,
+            "files_scanned": 9,
+            "capped": True,
+            "total_matches": True,
+            "total_complete": True,
+        },
+    )
+    assert ok is True, result
+    first = result.splitlines()[0]
+    assert first.endswith("; more exist — narrow it with path or glob"), first
+    await _close(conn, task)
+
+
+async def test_s38c_t3_c3_an_uncapped_head_line_says_no_cap(pool):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, _sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini"),
+        output=_HITS,
+        meta={**_SEARCH_META, "total_matches": 2, "total_complete": True},
+    )
+    assert ok is True, result
+    first = result.splitlines()[0]
+    assert "shown" not in first and "more exist" not in first, first
+    assert "narrow it" not in first, first
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        _SEARCH_META,  # no echo at all: the agent ignored the unknown arg
+        {**_SEARCH_META, "glob": "*.py"},  # an echo of something else
+        {**_SEARCH_META, "glob": None},
+        None,  # no meta at all
+    ],
+    ids=["no-echo", "other-glob", "null-echo", "no-meta"],
+)
+async def test_s38c_t3_c4_a_glob_the_agent_did_not_echo_is_an_old_agent(pool, meta):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("dell", glob=_S38C_GLOB),
+        output=_HITS,
+        meta=meta,
+    )
+    assert sent.get("glob") == _S38C_GLOB, "the glob never reached the agent"
+    assert ok is False, result
+    assert _S38C_ECHO in result, result
+    assert "dell" in result, result
+    assert "_SpanScrub" not in result and "guards.py" not in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+async def test_s38c_t3_c5_the_fact_and_head_line_carry_the_glob(pool):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, _sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", glob=_S38C_GLOB),
+        output=_HITS,
+        meta={**_SEARCH_META, "glob": _S38C_GLOB},
+    )
+    assert ok is True, result
+    assert _searches(facts) == [
+        {
+            "search": {"device": "mini", "matches": 2, "capped": False, "glob": _S38C_GLOB},
+            "target": _TREE,
+        }
+    ]
+    first = result.splitlines()[0]
+    assert f"glob {_S38C_GLOB!r}" in first, first
+    assert _HITS.strip() in result
+    await _close(conn, task)
+
+
+async def test_s38c_t3_c5_no_glob_no_glob_in_the_fact(pool):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, _sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini"),
+        output=_HITS,
+        # an echo with no glob sent is not a glob the search used
+        meta={**_SEARCH_META, "glob": "*.go"},
+    )
+    assert ok is True, result
+    assert _searches(facts) == [
+        {"search": {"device": "mini", "matches": 2, "capped": False}, "target": _TREE}
+    ]
+    assert "glob" not in result.splitlines()[0], result
+    await _close(conn, task)
+
+
+def test_s38c_t3_c6_the_description_says_default_50_and_glob():
+    tool = _search_tool()
+    text = tool.description
+    assert "default 50" in text, text
+    assert "default 200" not in text, text
+    assert "glob" in text and "services/**/*.py" in text, text
+    mm = tool.parameters["properties"]["max_matches"]["description"]
+    assert "default 50" in mm, mm
+    g = tool.parameters["properties"]["glob"]["description"]
+    assert "**" in g, g

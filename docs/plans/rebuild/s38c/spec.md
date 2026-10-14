@@ -610,6 +610,94 @@ hold machine identifiers stay outside the repo.
 | M-5 | Per link, what comes back as reasoning: raw, summary, encrypted, or nothing. | Fills §5.2's table with readings instead of docs. | T5 |
 | M-6 | Per adapter, `prompt_tokens` with and without cached tokens; and the bill `cost_from_price` writes for a cached round on a priced, non-reporting provider. | Confirms or clears §4.2's double count. | T3 |
 
+### Measurements (T1)
+
+Taken 2026-10-14 for steps 0–4, read-only: `turn_spans` read by turn id
+(core database), `usage_events` and `provider_prices` (gateway database),
+and the Ollama image pin in `deploy/docker-compose.yml`. No chat turn, no
+paid call, no write to the stack. These are readings of turns that already
+ran, so each is one sample, not the N = 3 replay §9 asks for.
+
+**M-1, OpenRouter Gemini (turn `2ca39a7e`, the "before" baseline).** 27
+`llm_call` spans: rounds 1–26, plus the closing call after the stop
+(`round` 0).
+
+- `prompt_tokens` grew from 14,228 (round 1) to 63,958 (round 26).
+  `cache_read_tokens` went from 0 to 61,625.
+- Over all 27 calls: 1,072,248 prompt tokens, of which 880,595 were cache
+  reads (82.1%). Leaving out the closing call: 1,020,526 and 86.3%, the
+  figure §1 cites. Reported cost: $0.216445.
+- Gemini's implicit cache missed whole rounds twice: round 1 read 0 (the
+  first call) and round 3 read 0 after round 2 read 9,958.
+- The closing call read 0 of its 51,722 prompt tokens. It is sent with no
+  tools (`chat.py`'s stop path, `round_number=0`), so its prefix differs
+  from every round before it.
+
+**M-1, local (turn `cbe9db58`, the GPU machine's link, `qwen3.8:27b` at a
+32k window).** 26 `llm_call` spans: rounds 1–24, one S38b summary call, and
+the closing call.
+
+- That machine's Ollama reports cached tokens. `cache_read_tokens` rose with
+  the turn, 18,054 at round 2 to 28,130 at round 19, and prefill sat near
+  1 s a round (764–1,680 ms) from round 4 to round 19.
+- Rounds 20–24 each carry `context_trimmed` (fitting to the 32k window).
+  Cache reads fell back to 18,054 and prefill rose to 11.2–11.4 s a round.
+  This is §4.3's last point, measured once: a trim changes the bytes and
+  every cache misses from there.
+- Over all 26 calls: 628,813 prompt tokens, 523,907 cache reads (83.3%).
+- The closing call read 0 of 15,061, the same no-tools prefix as above.
+- In the gateway ledger the same link reports a cache count on 145 of 250
+  local rows (109 of them above 0).
+
+**M-1, the hub (the stack's own Ollama container).** `usage_events` holds
+420 hub rows and 1,460 earlier `ollama` rows. None carries a cache count.
+Nothing in either database records the installed version (searched: columns
+named for versions, engines or runtimes, and the gateway's JSON columns).
+The gateway calls `/api/version` only to verify the provider and stores
+nothing; the engine facts hold the CPU and accelerators. The compose file pins `ollama/ollama:0.33.1`,
+pinned 2026-08-28, before #17943 merged on 2026-09-02. So the hub's Ollama
+almost certainly predates the cached-token report. *Could-not-measure,
+directly:* the version string inside the running container, which would
+need a call into the stack.
+
+**M-1, Anthropic direct and Anthropic through OpenRouter.**
+*Could-not-measure:* both need paid live calls, and the 10-round replay
+needs the eval-fixture repository (§9, §12 Q10), which does not exist yet.
+The ledger holds 4 Anthropic rows (2026-09-08, `claude-haiku-4-5`): one
+cache write of 4,863 tokens and one read of 4,863, both of the system/tools
+prefix. Steps 3–4 do not depend on this reading; §12 Q5 ruled the markers.
+
+**M-6, per adapter.**
+
+- **Anthropic: `prompt_tokens` is the uncached remainder.** On the cache-read
+  row, `prompt_tokens` is 3,686 and `cache_read_tokens` is 4,863. A part
+  cannot exceed its whole, so the read is not inside the prompt count. Its
+  bill, $0.004222, equals 3,686 × $1/M + 10 × $5/M + 4,863 × $1/M × 0.1.
+  The write row's $0.009806 likewise uses 1.25 × on 4,863. So today's
+  Anthropic bills are right, and step 3 must keep these dollars.
+- **OpenAI-shaped (OpenRouter, the GPU machine's link): `prompt_tokens` is the
+  whole input.** Across 506 OpenRouter rows and 191 GPU-machine rows with a
+  cache read above 0, the read never exceeds `prompt_tokens`.
+- **The double count, confirmed.** We priced `2ca39a7e`'s 27 calls at
+  OpenRouter's listing for `google/gemini-3.8-flash` ($0.75/M prompt,
+  $3.75/M completion, default cache-read multiplier 0.1). Treating the cache
+  read as a part reproduces OpenRouter's own reported cost on all 27 calls,
+  within $0.000001: $0.216446 against $0.216445. `cost_from_price` as written
+  would bill $0.876890, 4.05 × the real cost. Round 25 alone: $0.052706
+  against $0.006474.
+- **No stored bill is wrong yet.** No OpenRouter row was priced from the
+  listing with a cache read: all 1,641 rows with a cost are
+  provider-reported, and the 23 without one read 0. The only other
+  OpenAI-shaped cloud provider (`cerebras`) has no price and 0 rows. The
+  double count fires the first time OpenRouter omits its cost on a cached
+  round.
+
+**Not taken in step 0:** M-2 through M-5. They gate the ledger steps (5–13),
+not steps 1–4. One unreplicated reading bears on M-2. In `cbe9db58`, the
+round after the S38b summary call (round 3) read 18,054 cached tokens, the
+same as round 2. Its prefill was 21.4 s, against 4.3 s for round 2. One
+sample is not a measurement; M-2 is still owed.
+
 ---
 
 ## 8. Not in this spec
@@ -724,6 +812,109 @@ it.
 - the settings snapshot: `turns.segment_tokens`, `turns.segment_ratio`,
   `turns.segment_prefill_s`, `turns.segment_usd`;
 - `test_no_approvals` stays **unchanged and green**.
+
+### As built (steps 0–4), 2026-10-14
+
+Built on `slice/s38c-fixes`. What shipped is in `deploy/README.md`
+("Searching a machine", "Her landing step", "Token counts and prompt
+caching") and `apps/novad/README.md`. Where the build differs from the text
+above, the build is right, and this is why.
+
+**What was measured (step 0).** The readings are in §7, "Measurements
+(T1)". M-6 was confirmed twice: by the code, and by repricing one turn's
+calls by hand (the double count would have billed it about four times
+over). No stored bill was wrong: every affected row carried the provider's
+own cost. M-1 was read from two turns that already ran.
+
+**What could not be measured.**
+
+- Anthropic's per-round cache miss, direct and through OpenRouter. It needs
+  paid calls, and the §9 fixture repository is not built. The markers were
+  built without it (§12, Q5 ruled them).
+- Which Ollama version the bundled engine runs. No database records it. The
+  compose pin predates the Ollama change that reports cached tokens
+  (#17943), which would explain why it reports no cache reads. That is a
+  reading of the pin, not of the engine.
+- Whether OpenRouter honours a marker on a tool-result message. Its guide
+  says nothing either way, and checking it costs a paid call.
+- M-2 to M-5. They gate the ledger (steps 5–13), not these steps.
+
+**Design calls that differ from the spec text.**
+
+1. **`device_search` (step 1).**
+   - novad's own default dropped to 50 as well, and core sends 50 whenever
+     she gives no number. So an older agent also returns 50.
+   - `glob` is matched by novad's own code (no new Go dependency). With no
+     `/`, it matches the file name at any depth. With `/`, it matches the
+     path from the directory searched.
+   - Core never assumes an agent applied the glob. novad ignores an argument
+     it does not know, and still answers ok. Only the glob echoed back in the
+     result proves the filter ran; without it, nothing is shown.
+   - The total comes from novad counting past the cap. That count has its
+     own 5 s budget. When the budget or the deadline cuts it, the total is a
+     lower bound and the head line says "of at least N". An agent that sends
+     no total gets "more exist — narrow it with path or glob", with no
+     number.
+2. **The judge's box (step 2).**
+   - It is stopped by a new novad capability, `box.stop`. The spec named no
+     mechanism. `box.remove` would have thrown away her box's database and
+     dependency cache.
+   - `box.stop` refuses a box that runs a live job. The landing then says why
+     her box was not stopped, and judges as before.
+   - It stops her box only when the running boxes, not counting the judge's,
+     fill every slot and hers is one of them. The limit is read live.
+   - A note on the landing row now survives the verdict. Before, writing the
+     verdict replaced the row's reason, so a note written earlier was lost.
+3. **The bounded wait (step 2).** The deadline line is "Still running at
+   stage X, waited N s, M min S s since it started." It counts the age to
+   the second, not in whole minutes as the spec wrote. In whole minutes, two
+   readings less than a minute apart could match and trip the repeated-call
+   stop. It reads the landing every 2 s, and the owner's stop ends the wait.
+4. **One meaning for token counts (step 3).**
+   - The plan was to leave the old Anthropic usage rows as they were and say
+     so. Instead, gateway migration 016 moves them into the new meaning. It
+     adds their cache reads and writes to their prompt count. Their cost and
+     cache columns are untouched, and each still prices to what it was
+     billed.
+   - Core's past `llm_call` spans are not rewritten. An Anthropic span from
+     before this step still carries the uncached remainder.
+   - When reads and writes add up to more than the prompt, the call gets no
+     cost rather than a wrong one, and the gateway logs a warning.
+5. **Cache markers (step 4).**
+   - Anthropic: an explicit marker on the last block of the last message, not
+     the top-level automatic field. With the system and tools markers, when
+     the request has a system prompt and tools, that is at most 3 of
+     Anthropic's 4. A caller's own markers are never passed on.
+   - OpenRouter: `session_id` is the turn id, not the task id. Tasks do not
+     exist until step 6. It is sent for every model, but only to
+     `openrouter.ai` and only on a call made for a turn (core's checks and
+     beat passes send no turn id, so they carry none); a caller's own is
+     kept.
+   - OpenRouter, `anthropic/` models only: up to 2 markers, on the first
+     system message (when there is one) and the latest message with content. The vendor is read from the
+     model id as sent, never from a list. Any other model gets no marker.
+   - A limit, not fixed: Anthropic looks back 20 blocks for an earlier cache
+     entry. A round that adds more than 20 (about 10 parallel tool calls)
+     misses it once and writes the cache again. Nothing fails.
+6. **Not built here:** §5.7 item 4, the note on a repeated search. It needs a
+   task to belong to, so it waits for the ledger.
+7. **Estimate.** The build took about 9.5 h against 8.5 h: the glob matcher
+   and `box.stop` were not counted. The measurements took about 0.5 h
+   against 3 h, because the paid readings were not taken.
+
+**What the owner needs to do after the merge.**
+
+- **Update every machine's agent.** novad changed (`fs.search`'s glob and
+  totals, the new `box.stop`). Ask her to run `machine_update` on each one.
+- **Until then, an old agent says so.** A search with a glob fails with "this
+  agent predates the glob filter", and shows nothing. A search without one
+  still returns 50 hits, with no total. A landing notes "the agent predates
+  box.stop — update it with machine_update" and judges as it did before.
+- **The gateway migrates on start.** Migration 016 runs once. Anthropic
+  usage rows show larger prompt counts afterwards. Their dollars do not
+  change.
+- **Anthropic turns count more against the token budget.** Their prompt
+  tokens now include cache reads, as every other link's already did.
 
 ---
 

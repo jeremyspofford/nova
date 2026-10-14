@@ -395,7 +395,10 @@ one of the stops below, and each one says why.
   budget, the tokens used (prompt and completion) and how many rounds were estimated.
   A round she answers without asking for a tool is her reply whatever it used, and the
   count starts again with each turn. It is a budget of tokens, not a count of rounds,
-  and it asks nothing: raise the setting to give turns more.
+  and it asks nothing: raise the setting to give turns more. A round's prompt tokens are
+  its whole input, cache reads included, on every provider (see "Token counts and prompt
+  caching" below); since the token-count change that holds for Anthropic links too, so an
+  Anthropic turn now reaches the budget as soon as the same turn on any other link would.
 - **What bounds a runaway.** The time budget; the token budget; the circling stop; the owner's stop
   (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
   tool reports progress); the gateway's monthly spending caps on cloud providers; a
@@ -506,6 +509,46 @@ still decides, and every guard still judges what she writes.
   and switching Jev Router on asks you to pick a chat model or give chat a chain first.
   The model it picked is on the round's `llm_call` span as `upstream_model`.
 
+## Token counts and prompt caching (S38c)
+
+The design is `docs/plans/rebuild/s38c/spec.md` §4.2 and §5.6.
+
+- **`prompt_tokens` is the whole input, on every provider.** Cache reads
+  (`cache_read_tokens`) and cache writes (`cache_write_tokens`) are parts of
+  it, never added on top. OpenRouter and Ollama already said so. Anthropic
+  did not: until S38c its `prompt_tokens` was the uncached remainder. The
+  gateway now adds its cache reads and writes in, so the Spend page, the
+  token budget and the chat's context gauge read the same thing on every
+  link.
+- **Old rows.** Gateway migration 016 moves the usage rows written through
+  the Anthropic adapter into the new meaning when the gateway starts: their
+  prompt count gains their cache reads and writes. Their cost and cache
+  columns are not touched, and each still prices to the dollars it was
+  billed. Core's past `llm_call` spans are not rewritten: an Anthropic span
+  from before S38c still carries the uncached remainder.
+- **Prices from the list bill a cached token once.** When a provider states
+  no cost of its own, the gateway bills the uncached part (prompt minus
+  reads minus writes) at the input price, the reads and writes at their own
+  multipliers, and the completion at the output price. A call whose reads
+  and writes add up to more than its prompt gets no cost (`cost_usd` empty)
+  rather than a wrong one, and the gateway logs a warning naming the
+  provider, the model and the counts.
+- **Anthropic, direct.** A request carries up to three cache breakpoints:
+  the stable system prompt and the last tool, when the request has a system
+  prompt and tools, and always the last block of the last message. A
+  request sent with no tools (a stopped turn's closing narration round) carries at most
+  two; one with neither carries only the last. The last one moves forward
+  each round, so a round reads the earlier rounds from the cache. A
+  caller's own `cache_control` is never passed on.
+- **OpenRouter.** A request to `openrouter.ai` made for a turn carries
+  `session_id` = that turn's id, so a turn's rounds stay with one upstream
+  and its cache. A call made outside a turn (core's checks and beat passes)
+  carries none, and a caller's own `session_id` is kept. When the model id
+  is in Anthropic's namespace (`anthropic/…`), the gateway also marks up to
+  two breakpoints: the first system message, when there is one, and the
+  latest message with content. Any other model is sent with no markers
+  added. Another host gets neither.
+
 ## The hub machine's own agent
 
 `./install` ends by installing novad on the hub machine itself (S42b), so
@@ -574,6 +617,29 @@ state in `v4_agent_build_cache`. Neither is backed up: `./install` rebuilds
 `v4_agent_build_cache` only makes that rebuild faster — losing it costs
 time, nothing else.
 
+## Searching a machine (`device_search`)
+
+`device_search` asks a machine's agent (`fs.search`) for every line under a
+directory that matches a pattern. Since S38c:
+
+- **At most 50 hits by default** (was 200); `max_matches` asks for up to
+  2000. Core sends 50 whenever she gives no number, so an older agent
+  returns 50 too.
+- **`glob`** limits the search to the files it matches, before any is
+  opened: with no `/` it matches the file name at any depth (`*.py`); with
+  `/` it matches the path from the directory searched (`services/**/*.py`).
+  `**` spans directories; `*` and `?` stay within one. A bad glob is a
+  stated refusal and nothing is searched.
+- **A capped search says how much it left out.** The agent keeps counting
+  past the cap (for up to 5 s), and the first line ends "50 of 412 matches
+  shown; narrow it with path or glob", or "50 of at least 412 …" when the
+  count was cut short. An agent that sent no count gets "more exist —
+  narrow it with path or glob", with no number.
+- **An agent older than `glob`** ignores it and would search everything.
+  Core shows none of those hits: the tool fails with "this agent predates
+  the glob filter — nothing is presented; update it with machine_update,
+  then search again."
+
 ## Her change boxes (S32.2)
 
 Every command she runs in one of her change worktrees
@@ -615,7 +681,9 @@ so a change cannot edit the shape of its own box.
   (`device_job_start` with a cwd in the worktree, S30c; a whole-suite job
   holds the CPU lock for its whole run). A box, its Postgres, network and
   volume are removed by `close_change`, or by a landing that merged (below),
-  through novad's `box.remove`. An agent older than that answers "unknown
+  through novad's `box.remove`. A landing may stop her change's own box while
+  it judges (`box.stop`, below); her next command in the worktree starts it
+  again. An agent older than that answers "unknown
   capability" and the tool says to update it with `machine_update`; until
   then boxes persist (`docker ps -a --filter label=nova.box`, `docker
   network ls --filter label=nova.box`).
@@ -665,16 +733,36 @@ She commits and lands her own changes. The design is
   the PR merged), and this checkout follows with `merge --ff-only`. Then her
   box and worktree are removed; her branch is kept.
 - **`landing_status(id)`** reads a landing; with no id it lists the newest
-  ten. **`repo_diff(change, path?)`** shows her commits against `main`, by
+  ten. **`landing_status(id, wait_s)`** waits on a running landing for up to
+  `wait_s` seconds (a whole number, 1 to 90), reading it every 2 s. It
+  returns as soon as the verdict comes in or the stage changes, saying so
+  first ("The verdict came in after waiting N s.", "The stage moved from X
+  to Y after waiting N s."). At the deadline it says "Still running at stage
+  X, waited N s, M min S s since it started." The landing's age, to the
+  second, makes every reading new, so she can wait again in the same turn
+  without the repeated-call stop; the turn's time budget still bounds it.
+  When you stop the turn, the wait ends there. `wait_s` without an id is
+  refused (a listing has nothing to wait on). **`repo_diff(change, path?)`** shows her commits against `main`, by
   file. **`close_change(change)`** drops a change without landing it.
   **`stack_status`** says, per service, whether the running containers are
   built from `main`'s source. `list_changes` names each change's last
   landing.
 - **Needs on the repo machine:** `gh` installed and signed in (without it,
   the branch is pushed and the landing is green but not merged), and a push
-  credential for the repo. The judge box counts toward `box.max_running`:
-  with two change boxes running, a landing cannot start its box and says
-  so.
+  credential for the repo. The judge box counts toward `box.max_running`.
+- **The judge takes her own box's slot.** When every slot is taken and one
+  of the running boxes is the landed change's own, the landing stops that
+  box first (novad's `box.stop`; her work is already committed) and the row
+  says "stopped this change's box to judge it; it starts again on your next
+  command". Other changes' boxes are never stopped: when they hold every
+  slot, the landing cannot start its box and says so, naming them. When her
+  box is not stopped, the row says "this change's box nova-box-<id> was not
+  stopped to judge it: <why>" and the landing judges as it did before: a box
+  running a live job gives the agent's words, and an agent older than
+  `box.stop` gives "the agent predates box.stop — update it with
+  machine_update". Box slots that cannot be read are said the same way ("the
+  box slots could not be read before judging: <why>"). A note stays on the
+  row whatever the verdict.
 - **Restarts.** A landing still running when core restarts is marked
   `could_not_measure` at startup; land it again.
 

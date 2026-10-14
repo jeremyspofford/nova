@@ -1504,9 +1504,13 @@ async def device_edit_file(args: dict, ctx: ToolContext) -> str:
 # The optional fs.search arguments device_search forwards (S30a T7), each only
 # when given; the agent (apps/novad caps/fs_search.go) checks their types and
 # states a bad one. max_matches's bounds are the agent's (SearchMaxMatches).
-_SEARCH_OPTIONAL_KEYS = ("literal", "ignore_case", "max_matches")
-_SEARCH_DEFAULT_MATCHES = 200
+# S38c T3 (2026-10-14): the default is 50 (six broad searches at 200 hits took
+# 54% of a turn's budget, spec §5.7) and core SENDS it whenever the caller
+# gives none, so an agent whose own default is still 200 returns 50 too.
+_SEARCH_OPTIONAL_KEYS = ("literal", "ignore_case", "max_matches", "glob")
+_SEARCH_DEFAULT_MATCHES = 50
 _SEARCH_MAX_MATCHES = 2000
+_SEARCH_NARROW = "narrow it with path or glob"
 
 # The frozen max_matches refusal of an agent from before wire numbers
 # (fs_search.go before bae41a1d, %v): a json.Number prints its digits, so the
@@ -1525,6 +1529,18 @@ def _old_agent_refused_max_matches(error: str, search_args: dict) -> bool:
     return found is not None and type(sent) is int and int(found.group(1)) == sent
 
 
+def _search_cap_line(meta: dict, matches: int) -> str:
+    """What a capped search's head line says about the rest: the agent's own
+    count past the cap (fs_search.go meta.total_matches, a lower bound when
+    meta.total_complete is false), never read from its closing note. An agent
+    that sent no usable total (one from before S38c T2) gets no number."""
+    total, complete = meta.get("total_matches"), meta.get("total_complete")
+    if type(total) is int and total >= matches and type(complete) is bool:
+        bound = "" if complete else "at least "
+        return f"{matches} of {bound}{total} matches shown; {_SEARCH_NARROW}"
+    return f"more exist — {_SEARCH_NARROW}"
+
+
 async def device_search(args: dict, ctx: ToolContext) -> str:
     """Search a directory tree on a device for a regex or literal (S30a T7).
     A read: no outside-worktree flag. The counts in the fact and the head line
@@ -1538,6 +1554,7 @@ async def device_search(args: dict, ctx: ToolContext) -> str:
     for key in _SEARCH_OPTIONAL_KEYS:
         if key in args:
             search_args[key] = args[key]
+    search_args.setdefault("max_matches", _SEARCH_DEFAULT_MATCHES)
     result = await _command(pool, row, "fs.search", search_args, ctx=ctx)
     if not result.get("ok"):
         if str(result.get("error") or "").startswith(_UNKNOWN_CAPABILITY):
@@ -1550,6 +1567,15 @@ async def device_search(args: dict, ctx: ToolContext) -> str:
         _require_ok(result, row)
     meta = result.get("meta")
     meta = meta if isinstance(meta, dict) else {}
+    glob = search_args.get("glob")
+    if "glob" in search_args and meta.get("glob") != glob:
+        # novad caps ignore an unknown argument: an agent from before the glob
+        # filter (S38c T2) searched the whole tree and answered ok. Only its
+        # echo proves the filter ran, so its unfiltered hits are not shown.
+        raise ToolFailure(
+            f"{row['name']}: this agent predates the glob filter — nothing is presented; "
+            "update it with machine_update, then search again."
+        )
     matches, scanned, capped = (meta.get(k) for k in ("matches", "files_scanned", "capped"))
     if not (type(matches) is int and type(scanned) is int and type(capped) is bool):
         # An ok frame without the agent's search record: what it found is not
@@ -1558,16 +1584,17 @@ async def device_search(args: dict, ctx: ToolContext) -> str:
             f"{row['name']}: the agent answered ok but sent no search record, so what a "
             f"search of {path} found is not confirmed — search again."
         )
-    _file_fact(
-        ctx,
-        {"search": {"device": row["name"], "matches": matches, "capped": capped}, "target": path},
-    )
+    record = {"device": row["name"], "matches": matches, "capped": capped}
+    if "glob" in search_args:
+        record["glob"] = glob
+    _file_fact(ctx, {"search": record, "target": path})
+    where = f" (glob {glob!r})" if "glob" in search_args else ""
     head = (
-        f"{row['name']}: searched {path} for {pattern!r}: {matches} matches in {scanned} files "
-        f"(paths relative to {path})"
+        f"{row['name']}: searched {path} for {pattern!r}{where}: {matches} matches in "
+        f"{scanned} files (paths relative to {path})"
     )
     if capped:
-        head += "; more matches exist — narrow the pattern or raise max_matches"
+        head += "; " + _search_cap_line(meta, matches)
     return f"{head}\n{result.get('output') or ''}".rstrip("\n")
 
 
@@ -1741,9 +1768,11 @@ TOOLS: tuple[Tool, ...] = (
             "regular expression, or exact text with literal true; ignore_case for either). "
             "Each hit is one line, relpath:line: text — the path relative to the directory "
             "searched, the 1-based line number, the line itself. Files .gitignore excludes, "
-            ".git, binary files and symlinks are skipped. At most max_matches hits come back "
-            f"(default {_SEARCH_DEFAULT_MATCHES}, up to {_SEARCH_MAX_MATCHES}); the result says "
-            "when more exist. To read around a hit, use device_read_file with start_line and "
+            ".git, binary files and symlinks are skipped. glob limits the search to the files "
+            "it matches (services/**/*.py, *.go). At most max_matches hits come back "
+            f"(default {_SEARCH_DEFAULT_MATCHES}, up to {_SEARCH_MAX_MATCHES}); when more "
+            "matched, the first line says how many — narrow it with path or glob. To read "
+            "around a hit, use device_read_file with start_line and "
             "end_line. Give an absolute directory path in the device's own OS. "
             f"{_FOLDERS_SENTENCE}"
         ),
@@ -1778,6 +1807,15 @@ TOOLS: tuple[Tool, ...] = (
                     "description": (
                         f"Most hits to return (default {_SEARCH_DEFAULT_MATCHES}, "
                         f"up to {_SEARCH_MAX_MATCHES})."
+                    ),
+                },
+                "glob": {
+                    "type": "string",
+                    "description": (
+                        "Search only the files whose path matches: with no /, the file name "
+                        "at any depth (*.py); with /, the path relative to the directory "
+                        "searched (services/**/*.py). ** spans directories; * and ? stay "
+                        "within one."
                     ),
                 },
             },

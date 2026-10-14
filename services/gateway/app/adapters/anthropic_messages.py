@@ -240,6 +240,28 @@ def normalize_messages(messages: list[dict], notes: list[str]) -> list[dict]:
     return fixed
 
 
+def _with_moving_breakpoint(messages: list[dict]) -> list[dict]:
+    """The third cache breakpoint: the last content block of the LAST message.
+
+    A turn re-sends its whole growing conversation every round. With a
+    marker only on the system prompt and the tools, each round pays full
+    price for every earlier round; with this one, the next round reads the
+    previous round's prefix from cache. It moves forward with the
+    conversation: earlier messages carry none, so their bytes are the same
+    from round to round (a cache_control key is a placement, not content).
+
+    The last message is rebuilt, never edited in place. A string content
+    becomes the one text block it is shorthand for, so it can carry the key.
+    With the system and tools markers this makes three of Anthropic's four.
+    """
+    # normalize_messages refuses an empty conversation, and every message it
+    # returns has at least one block (a user string, or a non-empty list).
+    last = messages[-1]
+    blocks = _blocks(last["content"])
+    blocks[-1] = {**blocks[-1], "cache_control": CACHE_CONTROL}
+    return [*messages[:-1], {**last, "content": blocks}]
+
+
 def to_messages_request(body: dict, model: str, *, output_cap: int | None = None) -> Translation:
     """The Messages API request for an OpenAI chat-completions `body`."""
     notes: list[str] = []
@@ -304,7 +326,7 @@ def to_messages_request(body: dict, model: str, *, output_cap: int | None = None
         messages.append({"role": "user", "content": _text_of(content) or " "})
     flush_results()
 
-    messages = normalize_messages(messages, notes)
+    messages = _with_moving_breakpoint(normalize_messages(messages, notes))
     max_tokens = int(
         body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_TOKENS
     )
@@ -385,16 +407,23 @@ def _usage(
     cache_read: int | None = None,
     cache_write: int | None = None,
 ) -> dict:
-    """OpenAI-shaped usage. `input_tokens` is Anthropic's UNCACHED remainder
-    and stays `prompt_tokens` (what is billed at full price); the cache
-    reads and writes are their own fields, priced at their own rates."""
+    """OpenAI-shaped usage, in the OpenAI meaning (S38c T7): `prompt_tokens`
+    is the WHOLE input. Anthropic states `input_tokens` as the uncached
+    remainder with the cache reads and writes beside it, so the whole is
+    their sum (an absent count is no part). The cache counts stay their own
+    fields — parts of prompt_tokens, priced at their own rates — exactly as
+    an OpenAI-shaped provider's `prompt_tokens_details` are. With no
+    `input_tokens` the whole is not known and prompt_tokens is not stated:
+    the cache counts alone are never passed off as the input."""
     usage: dict = {}
+    prompt = None
     if input_tokens is not None:
-        usage["prompt_tokens"] = input_tokens
+        prompt = input_tokens + (cache_read or 0) + (cache_write or 0)
+        usage["prompt_tokens"] = prompt
     if output_tokens is not None:
         usage["completion_tokens"] = output_tokens
-    if input_tokens is not None and output_tokens is not None:
-        usage["total_tokens"] = input_tokens + output_tokens
+    if prompt is not None and output_tokens is not None:
+        usage["total_tokens"] = prompt + output_tokens
     if cache_read is not None:
         usage["cache_read_tokens"] = cache_read
     if cache_write is not None:

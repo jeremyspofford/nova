@@ -2,6 +2,7 @@ package caps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -219,4 +220,66 @@ func boxRemove(ctx context.Context, r Request) Outcome {
 	out := ok0(name + " removed: its box, database, network and dependency cache (any already gone were skipped)")
 	out.Meta = map[string]any{"box": name, "removed": true}
 	return out
+}
+
+// boxStop stops a change's running box and its Postgres (S38c T4): a
+// landing's judge takes the slot its own change's idle box holds. Only the
+// change id crosses the wire, as for box.remove. A box not running is ok with
+// stopped false; a box running a live job is refused naming the job, and
+// nothing claims stopped. The next box command starts it again (Ensure).
+func boxStop(ctx context.Context, r Request) Outcome {
+	m := r.Deps.Box
+	if m == nil {
+		return fail(noBoxManager)
+	}
+	change, ok := r.Args["change"].(string)
+	if !ok {
+		return fail("box.stop needs a string 'change', got %T; nothing was stopped", r.Args["change"])
+	}
+	if !box.ValidChange(change) {
+		return fail("box.stop: change %q is not a change id (6 lowercase hex); nothing was stopped", change)
+	}
+	name := box.Names(change).Box
+	stopped, err := m.Stop(ctx, change)
+	if errors.Is(err, box.ErrBusy) {
+		return fail("cannot stop the box %s: %s — stop it with job.stop or wait for it; nothing was stopped", name, liveJobWords(r, change))
+	}
+	if err != nil {
+		return fail("cannot stop the box %s: %v", name, err)
+	}
+	text := name + " was not running; nothing was stopped"
+	if stopped {
+		text = name + " stopped; it starts again on the next box command"
+	}
+	out := ok0(text)
+	out.Meta = map[string]any{"box": name, "stopped": stopped}
+	return out
+}
+
+// liveJobWords names the change's live box jobs from the job store ("it runs
+// live job <id>"); with no store, or one that cannot be read, the refusal
+// still stands as "it runs a live job". The ids come in the store's order
+// (newest first, as job.list).
+func liveJobWords(r Request, change string) string {
+	jd, ok := jobsOf(r)
+	if !ok {
+		return box.ErrBusy.Error()
+	}
+	all, err := jd.Store.List()
+	if err != nil {
+		return box.ErrBusy.Error()
+	}
+	var ids []string
+	for _, j := range all {
+		if j.Spec.Box != nil && j.Spec.Box.Change == change && !j.Status.Terminal() {
+			ids = append(ids, j.Spec.ID)
+		}
+	}
+	switch len(ids) {
+	case 0:
+		return box.ErrBusy.Error()
+	case 1:
+		return "it runs live job " + ids[0]
+	}
+	return "it runs live jobs " + strings.Join(ids, ", ")
 }

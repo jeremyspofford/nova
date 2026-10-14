@@ -9,18 +9,24 @@ import (
 	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 // fs.search (S30a T6) walks a directory tree and reports every line matching
 // a regex (RE2) or a literal, honouring .gitignore, as `relpath:line: text`.
+// S38c T2: an optional `glob` picks the files searched before any is opened,
+// and past a cap the walk keeps counting (no output) so meta.total_matches
+// says how many matching lines the answer left out.
 const (
-	// SearchDefaultMatches is max_matches when the call gives none.
-	SearchDefaultMatches = 200
+	// SearchDefaultMatches is max_matches when the call gives none (S38c
+	// §12 Q7: 50, was 200).
+	SearchDefaultMatches = 50
 	// SearchMaxMatches is the ceiling on max_matches; a larger ask is a
 	// stated refusal, never silently lowered.
 	SearchMaxMatches = 2000
@@ -44,26 +50,35 @@ const searchBuf = 64 << 10
 // output with its notes never passes OutputCap.
 const searchNoteRoom = 256
 
+// searchCountBudget (S38c T2) bounds the count walk past the cap: a broad
+// search on a huge tree answers within it with a lower-bound total
+// (total_complete false), not at the command's deadline. A var so tests can
+// cut it.
+var searchCountBudget = 5 * time.Second
+
 // gitignoreCap bounds how much of one .gitignore is read.
 const gitignoreCap = 1 << 20
 
 // errSearchStopped is a walk cut by the context (the command's deadline).
 var errSearchStopped = errors.New("stopped")
 
-// errSearchFull ends the walk once a cap is reached.
-var errSearchFull = errors.New("full")
-
 type searcher struct {
 	ctx     context.Context
 	re      *regexp.Regexp
 	max     int
 	rules   *ignoreRules
+	glob    []string // the glob's "/" segments; nil when none was given
 	out     strings.Builder
-	matches int
+	matches int // matching lines output
+	total   int // matching lines found, output or only counted
 	scanned int
 	skipped int
-	// stopNote is the closing "[stopped ...]" line once a cap is reached.
-	stopNote string
+	// capNote names the cap that stopped the output ("" while none has);
+	// from then on the walk only counts, until countUntil.
+	capNote    string
+	countUntil time.Time
+	// countCut is a count walk the time ran out on: total is a lower bound.
+	countCut bool
 	br       *bufio.Reader
 }
 
@@ -92,6 +107,17 @@ func fsSearch(ctx context.Context, args map[string]any, d Deps) Outcome {
 		}
 		max = int(f)
 	}
+	globText, globSegs := "", []string(nil)
+	if v, present := args["glob"]; present {
+		g, isStr := v.(string)
+		if !isStr {
+			return fail("fs.search 'glob' must be a string, got %T", v)
+		}
+		if globSegs, err = parseGlob(g); err != nil {
+			return fail("fs.search 'glob' %v", err)
+		}
+		globText = g
+	}
 	expr := pattern
 	if literal {
 		expr = regexp.QuoteMeta(pattern)
@@ -119,7 +145,7 @@ func fsSearch(ctx context.Context, args map[string]any, d Deps) Outcome {
 		root = abs
 	}
 
-	s := &searcher{ctx: ctx, re: re, max: max, rules: newIgnoreRules(),
+	s := &searcher{ctx: ctx, re: re, max: max, rules: newIgnoreRules(), glob: globSegs,
 		br: bufio.NewReaderSize(nil, searchBuf)}
 	baseRel := s.loadRepoRules(root)
 	if _, err := os.ReadDir(root); err != nil {
@@ -127,7 +153,12 @@ func fsSearch(ctx context.Context, args map[string]any, d Deps) Outcome {
 	}
 	err = s.walk(root, "", baseRel)
 	if errors.Is(err, errSearchStopped) {
-		return fail("fs.search stopped before it finished (%v); nothing is reported from a partial walk", ctx.Err())
+		if s.capNote == "" {
+			return fail("fs.search stopped before it finished (%v); nothing is reported from a partial walk", ctx.Err())
+		}
+		// The answer's lines were all found before the cap; only the count
+		// of the rest was cut, and it is stated as a lower bound.
+		s.countCut = true
 	}
 
 	if s.matches == 0 {
@@ -136,16 +167,68 @@ func fsSearch(ctx context.Context, args map[string]any, d Deps) Outcome {
 	if s.skipped > 0 {
 		fmt.Fprintf(&s.out, "[skipped %d unreadable files or directories]\n", s.skipped)
 	}
-	if s.stopNote != "" {
-		s.out.WriteString(s.stopNote + "\n")
+	if s.capNote != "" {
+		if s.countCut {
+			fmt.Fprintf(&s.out, "[stopped at %s; at least %d matches in all — the count ran out of time]\n", s.capNote, s.total)
+		} else {
+			fmt.Fprintf(&s.out, "[stopped at %s; %d matches in all]\n", s.capNote, s.total)
+		}
 	}
 	out := ok0(s.out.String())
 	out.Meta = map[string]any{
-		"matches":       s.matches,
-		"files_scanned": s.scanned,
-		"capped":        s.stopNote != "",
+		"matches":        s.matches,
+		"files_scanned":  s.scanned,
+		"capped":         s.capNote != "",
+		"total_matches":  s.total,
+		"total_complete": !s.countCut,
+	}
+	if globSegs != nil {
+		out.Meta["glob"] = globText
 	}
 	return out
+}
+
+// parseGlob splits a glob on "/" and checks every segment: none empty (a
+// leading, trailing or doubled "/" is refused, not guessed at), each a valid
+// path.Match pattern ("**" is its own segment, spanning directories).
+func parseGlob(g string) ([]string, error) {
+	if g == "" {
+		return nil, errors.New("must not be empty")
+	}
+	segs := strings.Split(g, "/")
+	for _, seg := range segs {
+		if seg == "" {
+			return nil, fmt.Errorf("%q has an empty path segment (a leading, trailing or doubled '/')", g)
+		}
+		if _, err := path.Match(seg, ""); err != nil {
+			return nil, fmt.Errorf("%q is not a valid glob: %v", g, err)
+		}
+	}
+	return segs, nil
+}
+
+// wantFile is whether the glob (if any) selects rel, the file's slash path
+// relative to the search root: a glob without "/" matches the base name at
+// any depth, one with "/" the whole relpath.
+func (s *searcher) wantFile(rel string) bool {
+	switch {
+	case s.glob == nil:
+		return true
+	case len(s.glob) == 1:
+		ok, _ := path.Match(s.glob[0], rel[strings.LastIndexByte(rel, '/')+1:])
+		return ok
+	default:
+		return matchSegs(s.glob, strings.Split(rel, "/"))
+	}
+}
+
+// stopped is whether the walk must end here: the command's deadline, or,
+// once only counting, the count's own budget.
+func (s *searcher) stopped() bool {
+	if s.ctx.Err() != nil {
+		return true
+	}
+	return s.capNote != "" && !time.Now().Before(s.countUntil)
 }
 
 func boolArg(args map[string]any, key string) (bool, error) {
@@ -241,7 +324,7 @@ func (s *searcher) walk(dir, rel, baseRel string) error {
 		return nil
 	}
 	for _, e := range entries {
-		if s.ctx.Err() != nil {
+		if s.stopped() {
 			return errSearchStopped
 		}
 		name := e.Name()
@@ -260,11 +343,11 @@ func (s *searcher) walk(dir, rel, baseRel string) error {
 		if s.rules.matchSelf(eBase, isDir) {
 			continue
 		}
-		path := filepath.Join(dir, name)
+		full := filepath.Join(dir, name)
 		if isDir {
-			err = s.walk(path, eRel, eBase)
-		} else {
-			err = s.file(path, eRel)
+			err = s.walk(full, eRel, eBase)
+		} else if s.wantFile(eRel) {
+			err = s.file(full, eRel)
 		}
 		if err != nil {
 			return err
@@ -293,7 +376,7 @@ func (s *searcher) file(path, rel string) error {
 	}
 	s.scanned++
 	for n := 1; ; n++ {
-		if n%4096 == 0 && s.ctx.Err() != nil {
+		if n%4096 == 0 && s.stopped() {
 			return errSearchStopped
 		}
 		line, err := br.ReadSlice('\n')
@@ -306,7 +389,7 @@ func (s *searcher) file(path, rel string) error {
 		case err == nil || err == io.EOF:
 			body := trimEOL(line)
 			matched = s.re.Match(body)
-			if matched {
+			if matched && s.capNote == "" {
 				text = cutLine(body)
 			}
 		case errors.Is(err, bufio.ErrBufferFull):
@@ -325,9 +408,7 @@ func (s *searcher) file(path, rel string) error {
 			return nil
 		}
 		if matched {
-			if done := s.emit(rel, n, text); done {
-				return errSearchFull
-			}
+			s.emit(rel, n, text)
 		}
 		if err == io.EOF {
 			return nil
@@ -335,22 +416,32 @@ func (s *searcher) file(path, rel string) error {
 	}
 }
 
-// emit records one matching line, or the cap it reached. It reports true when
-// the walk must stop.
-func (s *searcher) emit(rel string, n int, text string) bool {
+// emit records one matching line: output while no cap is reached, then only
+// counted. The first match past a cap starts the count walk.
+func (s *searcher) emit(rel string, n int, text string) {
+	s.total++
+	if s.capNote != "" {
+		return
+	}
 	if s.matches == s.max {
 		// A match past max_matches exists: only now is the search capped.
-		s.stopNote = fmt.Sprintf("[stopped at max_matches %d; more matches exist]", s.max)
-		return true
+		s.startCounting(fmt.Sprintf("max_matches %d", s.max))
+		return
 	}
 	line := rel + ":" + strconv.Itoa(n) + ": " + text + "\n"
 	if s.out.Len()+len(line) > OutputCap-searchNoteRoom {
-		s.stopNote = fmt.Sprintf("[stopped at the %d KiB output cap after %d matches; more matches exist]", OutputCap/1024, s.matches)
-		return true
+		s.startCounting(fmt.Sprintf("the %d KiB output cap after %d matches", OutputCap/1024, s.matches))
+		return
 	}
 	s.out.WriteString(line)
 	s.matches++
-	return false
+}
+
+// startCounting ends the output at a cap; the walk goes on counting matches
+// for at most searchCountBudget.
+func (s *searcher) startCounting(note string) {
+	s.capNote = note
+	s.countUntil = time.Now().Add(searchCountBudget)
 }
 
 // trimEOL drops a line's "\n" and then "\r".

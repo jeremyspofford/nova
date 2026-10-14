@@ -434,11 +434,20 @@ async def _note(pool, landing_id, text: str) -> None:
         logger.exception("landing %s: could not record %r", landing_id, text)
 
 
-async def _cannot(pool, landing_id, words: str) -> None:
-    """could_not_measure with `words`; a landing already finished keeps its
-    verdict and gets the words added to its reason."""
+def _with_notes(reason: str, notes: list[str]) -> str:
+    """A verdict's reason followed by the run's kept notes: a finish writes
+    the reason whole, so a note said before it is carried, never lost."""
+    return "; ".join(part for part in (reason, *notes) if part)
+
+
+async def _cannot(pool, landing_id, words: str, notes: list[str] | tuple = ()) -> None:
+    """could_not_measure with `words` (and the run's kept `notes`); a landing
+    already finished keeps its verdict and gets the words added to its
+    reason."""
     try:
-        await landings.finish(pool, landing_id, "could_not_measure", reason=words)
+        await landings.finish(
+            pool, landing_id, "could_not_measure", reason=_with_notes(words, list(notes))
+        )
     except ValueError:
         await _note(pool, landing_id, words)
     except Exception:
@@ -449,6 +458,8 @@ async def _cannot(pool, landing_id, words: str) -> None:
 class _Close:
     copy: landing_git.Copy | None = None
     merged: bool = False
+    # Notes said on the row before the verdict, carried into its reason.
+    notes: list[str] = dataclasses.field(default_factory=list)
 
 
 async def land(
@@ -493,6 +504,7 @@ async def land(
                     run,
                     close,
                     landing_id=landing_id,
+                    change=change,
                     checkout=checkout,
                     worktree=worktree,
                     main=main,
@@ -502,7 +514,7 @@ async def land(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await _cannot(pool, landing_id, _words(exc))
+                await _cannot(pool, landing_id, _words(exc), close.notes)
             await _close(pool, row, ctx, run, close, landing_id, change, checkout, worktree)
         finally:
             if _HOLDERS.get(key) == landing_id:
@@ -517,6 +529,7 @@ async def _judge(
     close: _Close,
     *,
     landing_id,
+    change: str,
     checkout: str,
     worktree: str,
     main: str,
@@ -568,6 +581,7 @@ async def _judge(
     close.copy = await landing_git.make_copy(run, checkout=checkout, sha=prepared.commit_sha)
     await landings.update(pool, landing_id, judge_id=close.copy.judge)
 
+    await _make_room(pool, row, ctx, close, landing_id=landing_id, change=change)
     results = await run_suites(
         pool,
         row,
@@ -582,7 +596,11 @@ async def _judge(
     outcome = landing_plan.verdict(plan, results)
     if outcome.verdict != "green":
         await landings.finish(
-            pool, landing_id, outcome.verdict, reason=outcome.reason, suites=results
+            pool,
+            landing_id,
+            outcome.verdict,
+            reason=_with_notes(outcome.reason, close.notes),
+            suites=results,
         )
         return
 
@@ -610,6 +628,53 @@ async def _judge(
     if not recorded:
         await _note(pool, landing_id, f"its publish was not recorded: {published.push_result}")
     close.merged = recorded and published.merged_sha is not None
+
+
+# -- the judge's box slot (S38c T5; spec §5.7 (2), §12 Q8) -----------------------
+#
+# The judge box is one more box under box.max_running. When every slot is
+# taken and the landed change's own box holds one, that box is idle by
+# construction — her work is committed (repo_land's commit check refused
+# otherwise) and the landing is hers — so it is stopped for the judge and
+# starts again on her next command. Other changes' boxes are never touched:
+# when they alone hold every slot, novad's start refusal names them and the
+# landing reads could_not_measure, as before. A stop that does not happen,
+# or boxes that cannot be read, is said on the row and the landing is judged
+# as before — never a guess about which boxes run.
+
+STOPPED_TO_JUDGE = "stopped this change's box to judge it; it starts again on your next command"
+
+
+async def _keep(pool, landing_id, close: _Close, text: str) -> None:
+    close.notes.append(text)
+    await _note(pool, landing_id, text)
+
+
+async def _make_room(pool, row, ctx, close: _Close, *, landing_id, change: str) -> None:
+    boxes, why = await changes._box_states(pool, row, ctx)
+    if boxes is None:
+        await _keep(
+            pool, landing_id, close, f"the box slots could not be read before judging: {why}"
+        )
+        return
+    judge = close.copy.judge if close.copy is not None else None
+    running = [c for c, state in boxes.items() if state == "running" and c != judge]
+    limit = (await code_repos.box_limits(pool))["max_running"]
+    # Hers only when it holds one of exactly max_running slots: below, a slot
+    # is free; above (the limit lowered), the others alone fill every slot and
+    # stopping hers frees none — novad's start refusal names them.
+    if change not in running or len(running) != limit:
+        return
+    stopped, why = await changes.stop_box(pool, row, ctx, change)
+    if why:
+        await _keep(
+            pool,
+            landing_id,
+            close,
+            f"this change's box {box_name(change)} was not stopped to judge it: {why}",
+        )
+    elif stopped:
+        await _keep(pool, landing_id, close, STOPPED_TO_JUDGE)
 
 
 async def _close(

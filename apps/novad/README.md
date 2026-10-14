@@ -305,6 +305,7 @@ everyday set; the admin path (`admin.*`), `daemon.update`, the box
 | `fs.list`       | list a directory                                            |
 | `fs.read`       | read a file, **256 KiB cap** — a larger file is refused, never truncated |
 | `fs.write`      | create/overwrite a file, **256 KiB cap** — larger content is refused, never partially written |
+| `fs.search`     | every line under a directory matching a regex (RE2) or a literal, honouring `.gitignore`, as `relpath:line: text`; `max_matches` 1–2000, **default 50** (S38c, was 200); optional `glob` picks the files before any is opened (no `/`: the file name at any depth; with `/`: the path from the search root; `**` spans directories), echoed in meta as `glob`, a bad glob a stated refusal; past the cap it keeps counting for up to 5 s, and meta carries `total_matches` with `total_complete` (false: a lower bound) |
 | `apps.list`     | list launchable apps                                         |
 | `apps.launch`   | launch an app (needs a session; see above)                  |
 | `shell.exec`    | run **argv** (no shell), 64 KiB output cap, honors a timeout |
@@ -496,7 +497,7 @@ those machines; removing the path from a machine is the way out.
 
 ## The box (S32.2)
 
-Three capabilities run her change worktrees in a sealed container per change
+Five capabilities run her change worktrees in a sealed container per change
 (design: `docs/plans/rebuild/s32/spec.md` §4; operator view: "Her change
 boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 (`NOVA_REPO_HOST`), and only for a `cwd` inside
@@ -507,6 +508,7 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 | `box.start`  | brings the change's box up (network, cache volume, Postgres, box — each created if missing, started if stopped; a running box is left alone); `start_change` sends it |
 | `box.exec`   | the same, then `docker exec -w <cwd> -u <uid>:<gid> nova-box-<id> argv…` — argv only, the same 64 KiB output cap and timeout words as `shell.exec`; a nonzero exit is `ok:true` with its code |
 | `box.status` | every box on this machine and its state (`running` / `stopped`), from `docker ps -a --filter label=nova.box`; `list_changes` sends it |
+| `box.stop`   | takes `{change}` only and `docker stop`s that change's running box and its Postgres (S38c); a landing's judge sends it to take the slot her own idle box holds. Meta is `{box, stopped}`; a box not running is ok with `stopped: false`; a box running a live job is ok:false "cannot stop the box nova-box-<id>: it runs live job <id> …", nothing stopped. The next `box.start` / `box.exec` starts it again |
 | `box.remove` | takes `{change}` only and removes that change's box, its Postgres, network and dependency cache (`rm -f`, `network rm`, `volume rm`; anything already gone is skipped); a landing's close and `close_change` send it. A docker refusal is ok:false "cannot remove the box nova-box-<id>: <docker's words>" |
 
 - **The shape is Go code here, never data from the wire.** Core sends only
@@ -552,12 +554,17 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 - **Where.** Linux (and macOS) with docker on the agent's PATH and the agent
   running as the owner, who must be able to use docker. The isolated network
   mode needs docker 28+. On Windows there is no box manager: each of the
-  four answers "cannot: no box manager on this agent".
+  five answers "cannot: no box manager on this agent".
 - An agent from before S32.2 answers `unknown capability "box.exec"`; core
   turns that into "…'s agent predates the box — update it with
   machine_update; nothing was run". One from before S32.3 answers `unknown
   capability "box.remove"`; core turns that into "…'s agent predates box
-  removal — update it with machine_update".
+  removal — update it with machine_update". One from before S38c answers
+  `unknown capability "box.stop"`; the landing notes "the agent predates
+  box.stop — update it with machine_update" and judges without stopping
+  it. The same agent ignores `fs.search`'s `glob` (it searches everything);
+  core sees no `glob` echoed and presents nothing, saying the agent predates
+  the glob filter.
 
 ## Jobs (S30c)
 

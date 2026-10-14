@@ -573,7 +573,9 @@ def test_c7_landing_status_is_a_read():
     assert tool.ephemeral is True
     assert tool.result_kind == RESULT_KIND_LISTING
     assert tool.parameters["type"] == "object"
-    assert set(tool.parameters["properties"]) == {"id"}
+    # Pin moved 2026-10-14 (S38c T6): +wait_s, the bounded wait for a verdict
+    # (tests/test_landing_wait.py holds its own criteria).
+    assert set(tool.parameters["properties"]) == {"id", "wait_s"}
     assert tool.parameters["properties"]["id"]["type"] == "string"
     assert tool.parameters.get("required", []) == []
     assert tool.parameters["additionalProperties"] is False

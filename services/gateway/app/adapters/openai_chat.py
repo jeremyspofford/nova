@@ -41,6 +41,7 @@ from app.adapters.base import (
     refusal_words,
 )
 from app.providers import base_url_of
+from app.usage import Attribution
 
 logger = logging.getLogger("gateway")
 
@@ -312,6 +313,103 @@ def inject_usage(body: dict, base_url: str) -> tuple[dict, bool]:
 
 def strip_usage(body: dict) -> dict:
     return {k: v for k, v in body.items() if k not in _USAGE_FIELDS}
+
+
+# OpenRouter's prompt-caching guide (read 2026-10-14,
+# openrouter.ai/docs/guides/best-practices/prompt-caching): "Include
+# `session_id` as a top-level field in your request body" (at most 256
+# characters) — with it, sticky routing to one provider starts on any
+# successful request, so a turn's rounds stay on the provider holding their
+# cache. Anthropic upstreams cache only what `cache_control` marks: explicit
+# `{"type": "ephemeral"}` on content blocks, "a limit of four explicit
+# breakpoints".
+_CACHE_CONTROL = {"type": "ephemeral"}
+_SESSION_ID_MAX = 256
+
+
+def _vendor(model: object) -> str:
+    """The vendor namespace of an OpenRouter model id as sent —
+    `anthropic/claude-…`, or `~anthropic/claude-…-latest` (its alias form)."""
+    if not isinstance(model, str) or "/" not in model:
+        return ""
+    return model.lstrip("~").split("/", 1)[0].strip().lower()
+
+
+def _unmarked(value: dict) -> dict:
+    return {k: v for k, v in value.items() if k != "cache_control"}
+
+
+def _without_markers(message: object) -> object:
+    if not isinstance(message, dict):
+        return message
+    out = _unmarked(message)
+    content = out.get("content")
+    if isinstance(content, list):
+        out["content"] = [_unmarked(p) if isinstance(p, dict) else p for p in content]
+    return out
+
+
+def _markable(message: object) -> bool:
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content)
+    return isinstance(content, list) and bool(content) and isinstance(content[-1], dict)
+
+
+def _marked(message: dict) -> dict:
+    """The message with its last content part marked (a string content
+    becomes the one text part it is shorthand for)."""
+    content = message["content"]
+    if isinstance(content, str):
+        parts = [{"type": "text", "text": content}]
+    else:
+        parts = list(content)
+    parts[-1] = dict(parts[-1], cache_control=dict(_CACHE_CONTROL))
+    return dict(message, content=parts)
+
+
+def _turn_id(request) -> str | None:
+    """The turn core named on this call (X-Nova-Turn-Id), read the way the
+    ledger reads it — a UUID, or nothing."""
+    headers = getattr(request, "headers", None)
+    return Attribution.from_headers(headers).turn_id if headers is not None else None
+
+
+def cache_hints(body: dict, base_url: str, turn_id: str | None) -> dict:
+    """What OpenRouter needs to keep a turn's rounds cached (S38c T9).
+
+    Any other host: the body as given. On OpenRouter: `session_id` = the
+    turn id (a caller's own kept), and when the model's vendor namespace is
+    `anthropic`, two breakpoints — the first system message's last part (the
+    stable prompt) and the last part of the latest message with content (it
+    moves forward each round, so the previous rounds are read from cache).
+    The gateway owns the markers on that path: a caller's own never pass, so
+    the request holds 2 of Anthropic's 4. Never writes to `body`."""
+    host = (httpx.URL(base_url).host or "").lower()
+    if host not in OPENROUTER_HOSTS:
+        return body
+    out = dict(body)
+    if turn_id and not isinstance(out.get("session_id"), str):
+        out["session_id"] = turn_id[:_SESSION_ID_MAX]
+    messages = out.get("messages")
+    if _vendor(out.get("model")) != "anthropic" or not isinstance(messages, list):
+        return out
+    out.pop("cache_control", None)
+    if isinstance(out.get("tools"), list):
+        out["tools"] = [_unmarked(t) if isinstance(t, dict) else t for t in out["tools"]]
+    messages = [_without_markers(m) for m in messages]
+    system = next(
+        (i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system"),
+        None,
+    )
+    latest = next((i for i in range(len(messages) - 1, -1, -1) if _markable(messages[i])), None)
+    for i in {system, latest} - {None}:
+        if _markable(messages[i]):
+            messages[i] = _marked(messages[i])
+    out["messages"] = messages
+    return out
 
 
 # OpenRouter's credit refusal names the reply it CAN pay for: "You requested up
@@ -618,7 +716,15 @@ class OpenAIChat:
     ) -> Response:
         """`engine` is True when an ENGINE's chat rides this adapter (the ollama
         adapter's /v1): a connect-phase failure is then ProviderUnreachable —
-        never a wall (D21) — instead of a refusal."""
+        never a wall (D21) — instead of a refusal.
+
+        The cache hints go on here, once, before the call: both retries in
+        `_completions` (usage fields refused, credit too low) re-send this
+        body, so they keep the session and the markers."""
+        url = base_url_of(row)
+        if url:
+            body = dict(body, model=model) if model else body
+            body = cache_hints(body, url, _turn_id(request))
         return await self._completions(request.app, row, model, body, engine=engine)
 
     async def _completions(

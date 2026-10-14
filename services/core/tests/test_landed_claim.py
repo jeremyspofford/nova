@@ -31,7 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import guards, live_facts, tools
-from app.tools import changes, landing
+from app.tools import changes, landing, schema
 
 LANDING_ID = "5b0c7a43-1f0e-4c39-9a51-7a4f8f0d2c11"
 OTHER_ID = "0e9d1c2b-3a4f-4b5c-8d6e-7f8091a2b3c4"
@@ -120,7 +120,10 @@ def test_c1_each_tool_is_registered_as_its_modules_own_object(name):
 @pytest.mark.parametrize("name", sorted(SIX))
 def test_c1_each_tool_is_advertised_with_its_own_schema(name):
     advertised = {t["function"]["name"]: t["function"] for t in tools.advertised_tools()}
-    assert advertised[name]["parameters"] is SIX[name].parameters
+    # Pin moved 2026-10-14 (S38c T6): landing_status's wait_s carries core's
+    # WHOLE_NUMBER keyword, which advertised() strips into a copy — so "its own
+    # schema" is the wire form of the tool's own parameters, not the same object.
+    assert advertised[name]["parameters"] == schema.advertised(SIX[name].parameters)
     assert advertised[name]["description"] == SIX[name].description
 
 
