@@ -9,7 +9,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 # Names that only resolve on a home network, a tailnet or a container network.
@@ -214,7 +214,9 @@ def state_of(provider: object, walls: object, now: object) -> dict:
     From its public gateway row (`listing`, `listing_note`) and the live walls
     (/admin/routes `walls`). A live wall beats the listing; a listing with no
     verdict, or a row that cannot be read, is "unknown" and never answering.
-    No I/O; never raises."""
+    A walled state also carries that wall's `refused_at` and `probed_at`
+    (tz-aware datetimes from the gateway's ISO fields; None when absent, null
+    or unreadable — an older gateway sends neither). No I/O; never raises."""
     unknown = {"state": "unknown", "reason": NO_VERDICT, "walled_for_s": None, "answering": None}
     if not isinstance(provider, dict):
         return unknown
@@ -228,6 +230,8 @@ def state_of(provider: object, walls: object, now: object) -> dict:
             "reason": reason if isinstance(reason, str) and reason else WALL_NO_REASON,
             "walled_for_s": math.floor((until - now_at).total_seconds()),
             "answering": False,
+            "refused_at": _instant(wall.get("refused_at")),
+            "probed_at": _instant(wall.get("probed_at")),
         }
     listing = provider.get("listing")
     note = provider.get("listing_note")
@@ -330,6 +334,27 @@ def fact_of(remote: dict, device: str | None, at: str) -> dict:
     }
 
 
+def _utc_minute(at: datetime) -> str:
+    """MM-DD HH:MM UTC, truncated to the minute — the gateway's walled_words form."""
+    return at.astimezone(UTC).strftime("%m-%d %H:%M UTC")
+
+
+def wall_times(entry: dict) -> str | None:
+    """A wall's times: 'refused at <t>; not retried since' or 'refused at <t>;
+    last probed at <t>, not served', from the entry's refused_at/probed_at (datetimes or ISO,
+    read with .get); a probe at or before the refusal is not one since it.
+    None when there is no readable refusal time: no time is ever invented."""
+    refused = _instant(entry.get("refused_at"))
+    if refused is None:
+        return None
+    probed = _instant(entry.get("probed_at"))
+    if probed is not None and probed > refused:
+        since = f"last probed at {_utc_minute(probed)}, not served"
+    else:
+        since = "not retried since"
+    return f"refused at {_utc_minute(refused)}; {since}"
+
+
 def remote_words(entry: dict, device_said: str) -> str:
     """One remote model machine as words: everything after "<name> (<host>): ".
 
@@ -339,9 +364,11 @@ def remote_words(entry: dict, device_said: str) -> str:
     reason is foreign text that may carry its own punctuation. Answering's
     reason is its listing note, joined by ", " (the model count is said once,
     from the note). A wall with no reason of its own (WALL_NO_REASON) says
-    "walled" once and no reason. Takes any dict carrying state/walled_for_s/
-    reason — state_of's own, or About's flattened entry. Never "answering"
-    unless the state is "answering"."""
+    "walled" once and no reason. A wall with a readable refusal time says it
+    after the time left, in parentheses (wall_times). Takes any dict carrying
+    state/walled_for_s/reason (refused_at/probed_at optional) — state_of's
+    own, or About's flattened entry. Never "answering" unless the state is
+    "answering"."""
     kind = entry["state"]
     reason = entry["reason"]
     if kind == "answering":
@@ -355,6 +382,9 @@ def remote_words(entry: dict, device_said: str) -> str:
             head = "walled for less than a minute more"
         else:
             head = f"walled for another {minutes} min"
+        times = wall_times(entry)
+        if times is not None:
+            head = f"{head} ({times})"
         if reason == WALL_NO_REASON:
             return f"{head}; {device_said}"
     elif kind == "failing":

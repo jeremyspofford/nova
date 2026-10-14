@@ -943,3 +943,178 @@ def test_T8_C2_C5_live_shaped_rows_through_state_of():
     assert _remote_words(dell) == f"answering, 16 models listed; {_D}"
     assert _remote_words(kev) == f"failing; {_D}. Reason: {_KEV_NOTE}"
     assert _remote_words(walled) == f"walled for another 28 min; {_D}"
+
+
+# ------------------------------- wall-probe T8: her machine text says when the wall was set
+# The gateway's walls[] now carries refused_at (T1, ISO) and probed_at (T6,
+# ISO or null). state_of carries them on a walled state; remote_words says
+# them after the time left, in the gateway's own words (routing.walled_words):
+# "refused at MM-DD HH:MM UTC; not retried since" or "...; last probed at
+# MM-DD HH:MM UTC, not served". An older gateway omits them: no time is said.
+
+REFUSED = datetime(2026, 10, 13, 17, 59, 54, tzinfo=UTC)  # truncates to 17:59, never rounds
+PROBED = datetime(2026, 10, 14, 11, 2, 31, tzinfo=UTC)
+WALL_NOW = datetime(2026, 10, 14, 11, 30, 0, tzinfo=UTC)
+CREDIT_REASON = "openrouter refused (402): Insufficient credits"
+
+
+def _timed_wall(until, refused_at=REFUSED, **kw):
+    """A gateway walls[] entry as T1 sends it: refused_at as ISO."""
+    wall = _wall(until, **kw)
+    wall["refused_at"] = refused_at.isoformat()
+    return wall
+
+
+def _walled_words(walls, now=WALL_NOW):
+    state = model_machines.state_of(_row(listing="available", note="16 models listed"), walls, now)
+    assert state["state"] == "walled"
+    return state, _remote_words(state)
+
+
+# C1 — state_of carries the latest-ending wall's refusal and probe times
+def test_T8w_C1_a_walled_state_carries_its_walls_refusal_and_probe_times():
+    walls = [
+        _timed_wall(
+            WALL_NOW + timedelta(minutes=5),
+            model="a",
+            reason="short",
+            refused_at=WALL_NOW - timedelta(hours=9),
+        ),
+        _timed_wall(WALL_NOW + timedelta(hours=6), model="", reason=CREDIT_REASON),
+    ]
+    walls[1]["probed_at"] = PROBED.isoformat()
+    state = model_machines.state_of(_row(), walls, WALL_NOW)
+    assert state["reason"] == CREDIT_REASON
+    assert state.get("refused_at") == REFUSED
+    assert state.get("probed_at") == PROBED
+    assert state["refused_at"].tzinfo is not None
+
+
+def test_T8w_C1_a_never_probed_wall_has_no_probe_time():
+    wall = _timed_wall(WALL_NOW + timedelta(hours=6), reason=CREDIT_REASON)
+    wall["probed_at"] = None  # the gateway's JSON null
+    state = model_machines.state_of(_row(), [wall], WALL_NOW)
+    assert "refused_at" in state and state["refused_at"] == REFUSED
+    assert "probed_at" in state and state["probed_at"] is None
+
+
+# C2 — the refusal time is said after the time left, UTC, truncated; "not retried since"
+def test_T8w_C2_a_wall_says_when_it_was_refused_and_that_it_was_not_retried():
+    _, words = _walled_words(
+        [_timed_wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)]
+    )
+    assert words == (
+        "walled for another 28 min (refused at 10-13 17:59 UTC; not retried since); "
+        f"{_D}. Reason: {CREDIT_REASON}"
+    )
+
+
+def test_T8w_C2_a_reasonless_wall_still_says_when_it_was_refused():
+    _, words = _walled_words(
+        [_timed_wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=None)]
+    )
+    assert (
+        words == f"walled for another 28 min (refused at 10-13 17:59 UTC; not retried since); {_D}"
+    )
+
+
+# C3 — a probe after the refusal replaces "not retried since"; one before it does not
+def test_T8w_C3_a_probe_after_the_refusal_is_said_and_never_not_retried():
+    wall = _timed_wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)
+    wall["probed_at"] = PROBED.isoformat()
+    _, words = _walled_words([wall])
+    assert words == (
+        "walled for another 28 min (refused at 10-13 17:59 UTC; "
+        "last probed at 10-14 11:02 UTC, not served); "
+        f"{_D}. Reason: {CREDIT_REASON}"
+    )
+    assert "not retried" not in words
+
+
+@pytest.mark.parametrize(
+    "probed_at",
+    [REFUSED, REFUSED - timedelta(hours=1)],
+    ids=["probed-at-the-refusal", "probed-before-the-refusal"],
+)
+def test_T8w_C3_a_probe_not_after_the_refusal_still_reads_not_retried_since(probed_at):
+    wall = _timed_wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)
+    wall["probed_at"] = probed_at.isoformat()
+    _, words = _walled_words([wall])
+    assert "(refused at 10-13 17:59 UTC; not retried since)" in words
+    assert "probed" not in words
+
+
+# C4 — always UTC, whatever offset the time was handed in
+def test_T8w_C4_the_times_are_said_in_utc_whatever_offset_they_arrive_in():
+    from datetime import timezone
+
+    ny = timedelta(hours=-4)
+    wall = _timed_wall(
+        WALL_NOW + timedelta(minutes=28, seconds=59),
+        reason=CREDIT_REASON,
+        refused_at=REFUSED.astimezone(timezone(ny)),  # 13:59 in New York
+    )
+    wall["probed_at"] = PROBED.astimezone(timezone(ny)).isoformat()  # 07:02 in New York
+    _, words = _walled_words([wall])
+    assert "refused at 10-13 17:59 UTC" in words
+    assert "last probed at 10-14 11:02 UTC" in words
+    assert "13:59" not in words and "07:02" not in words
+
+
+# C5 — an older gateway (no refused_at / probed_at) or an unreadable time: no time is said
+@pytest.mark.parametrize(
+    "refused_at",
+    [None, "not a time", REFUSED.replace(tzinfo=None).isoformat(), 7],
+    ids=["absent", "garbage", "naive", "int"],
+)
+def test_T8w_C5_without_a_readable_refusal_time_no_time_is_invented(refused_at):
+    wall = _wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)
+    if refused_at is not None:
+        wall["refused_at"] = refused_at
+    state, words = _walled_words([wall])
+    assert state.get("refused_at") is None
+    assert words == f"walled for another 28 min; {_D}. Reason: {CREDIT_REASON}"
+    for invented in ("refused at", "not retried", "probed", "UTC"):
+        assert invented not in words
+
+
+def test_T8w_C5_a_probe_time_without_a_refusal_time_invents_no_refusal():
+    wall = _wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)
+    wall["probed_at"] = PROBED.isoformat()
+    _, words = _walled_words([wall])
+    assert "refused at" not in words
+    assert "not retried" not in words
+    assert words.startswith("walled for another 28 min")
+
+
+def test_T8w_C5_entries_without_the_time_keys_read_as_before():
+    """About's flattened entry and T4's hand-built states carry no time keys."""
+    assert _remote_words(_st("walled", "429", 28 * 60 + 59)) == (
+        f"walled for another 28 min; {_D}. Reason: 429"
+    )
+
+
+# C6 — machine_status and About say the same timed words (About flattens the state)
+def test_T8w_C6_about_carries_the_wall_times_so_its_line_matches_machine_status(monkeypatch):
+    from app import about, network
+
+    monkeypatch.setattr(network, "tailnet_peers", lambda *a, **k: Peers((), NO_PEERS_FILE))
+    wall = _timed_wall(WALL_NOW + timedelta(minutes=28, seconds=59), reason=CREDIT_REASON)
+    wall["probed_at"] = PROBED.isoformat()
+    remotes = model_machines.remotes_of(
+        [_row(listing="available", note="16 models listed")], [wall], WALL_NOW
+    )
+    (shown,) = about._place_remotes(remotes, [], None)
+    about_words = model_machines.remote_words(shown, shown["device_said"])
+    status_words = model_machines.remote_words(remotes[0]["state"], shown["device_said"])
+    assert about_words == status_words
+    assert "(refused at 10-13 17:59 UTC; last probed at 10-14 11:02 UTC, not served)" in about_words
+
+
+# COVERAGE — a wall in its last minute still says when it was refused
+def test_T8w_cov_a_wall_in_its_last_minute_still_says_when_it_was_refused():
+    _, words = _walled_words([_timed_wall(WALL_NOW + timedelta(seconds=40), reason=CREDIT_REASON)])
+    assert words == (
+        "walled for less than a minute more (refused at 10-13 17:59 UTC; not retried since); "
+        f"{_D}. Reason: {CREDIT_REASON}"
+    )

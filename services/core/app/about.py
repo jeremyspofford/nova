@@ -427,19 +427,24 @@ def _place_remotes(remotes: list[dict], rows, facts_sink: list[dict] | None) -> 
     for remote in remotes:
         placed = model_machines.place(remote["base_url"], agents, None, tailnet)
         state = remote["state"]
-        shown.append(
-            {
-                "name": remote["name"],
-                "host": remote["host"],
-                "state": state["state"],
-                "reason": state["reason"],
-                "walled_for_s": state["walled_for_s"],
-                "answering": state["answering"],
-                "models": remote["models"],
-                "device": placed["device"],
-                "device_said": placed["said"],
-            }
-        )
+        entry = {
+            "name": remote["name"],
+            "host": remote["host"],
+            "state": state["state"],
+            "reason": state["reason"],
+            "walled_for_s": state["walled_for_s"],
+            "answering": state["answering"],
+            "models": remote["models"],
+            "device": placed["device"],
+            "device_said": placed["said"],
+        }
+        # A walled state's times, as ISO (the page payload stays JSON), so
+        # remote_words says About's line exactly as machine_status's.
+        for key in ("refused_at", "probed_at"):
+            if key in state:
+                at = state[key]
+                entry[key] = at.isoformat() if isinstance(at, datetime) else None
+        shown.append(entry)
         if facts_sink is not None:
             facts_sink.append(model_machines.fact_of(remote, placed["device"], at))
     return shown
