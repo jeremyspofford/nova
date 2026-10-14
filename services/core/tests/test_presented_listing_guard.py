@@ -333,6 +333,9 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
         "landing_status",
         "repo_diff",
         "stack_status",
+        # S37c T10 (2026-10-14) the ninth: `events_recent` enumerates the
+        # latest events with their state, turn and notice; no name says "list".
+        "events_recent",
     }
 
 
