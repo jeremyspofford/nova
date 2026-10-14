@@ -390,6 +390,7 @@ async def run_one(app, pool, name: str) -> CheckRun:
 # invisible from the code and obvious the moment it is asked for).
 from app.checks import (  # noqa: E402
     devices,
+    events,
     inference,
     mcp,
     money,
@@ -428,6 +429,11 @@ register_all(mcp.CHECKS)
 # S46a T12: the family that watches the wakes she sent IN THE BACKGROUND —
 # whether the machine answered. wake_attempts rows only; urgent=False.
 register_all(wakes.CHECKS)
+# S37c T4: the family that says what she found when another program's event
+# started a turn of hers. events.py files it the moment the turn settles; the
+# hourly run derives the same finding from the event rows. urgent=False — an
+# urgent event is pushed by events.py itself through delivery.deliver.
+register_all(events.CHECKS)
 
 __all__ = [
     "CHECK_DEADLINE_S",

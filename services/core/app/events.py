@@ -385,6 +385,7 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
     owner = await identity.owner(pool)
     if owner is None:
         await _settle(pool, ids, "failed", "no owner account exists, so no turn could run")
+        await _tell(app, pool, ids, None)
         return None
     model = await settings_store.read_value(pool, "chat.model")
     if not isinstance(model, str) or not model.strip():
@@ -394,6 +395,7 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
             "failed",
             "no chat model is set (Settings → Models), so the event could not be looked into",
         )
+        await _tell(app, pool, ids, owner)
         return None
     try:
         conversation_id = await _sender_conversation(pool, owner.id, sender)
@@ -408,6 +410,7 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
         )
     except Exception as exc:  # noqa: BLE001 - stated on the rows, never dropped
         await _settle(pool, ids, "failed", f"the turn could not be opened — {exc}"[:500])
+        await _tell(app, pool, ids, owner)
         return None
     # Linked the moment the turn exists, so an event cut off mid-run still
     # names the trace of what got done.
@@ -448,9 +451,70 @@ async def _run_event_turn(app, pool, turn, owner, ids, text: str, model: str) ->
 
             await traces.close_turn(pool, turn, "error")
         await _settle(pool, ids, "failed", reason, turn.id)
+        await _tell(app, pool, ids, owner, turn.id)
         return
     if status == "ok":
         await _settle(pool, ids, "done", None, turn.id)
-        return
-    reason = scheduler._error_frame(frames) or f"the turn closed with status {status!r}"
-    await _settle(pool, ids, "failed", reason[:500], turn.id)
+    else:
+        reason = scheduler._error_frame(frames) or f"the turn closed with status {status!r}"
+        await _settle(pool, ids, "failed", reason[:500], turn.id)
+    await _tell(app, pool, ids, owner, turn.id)
+
+
+# -- T4: what reaches him ------------------------------------------------------------
+
+
+async def _tell(app, pool: asyncpg.Pool, ids: list[uuid.UUID], owner, turn_id=None) -> None:
+    """File the code-written notice for settled events (spec §2.4): the sender,
+    the event, her one-line conclusion from her stored reply, or that it failed
+    and why — under the event_outcomes family, linked to the turn, so it shows
+    in the Inbox. A turn that failed files it too (§4).
+
+    An URGENT event's notice also goes out now, through delivery.deliver with
+    urgent set, and the receipt is written onto the notice (delivered, or
+    failed with why) — the beats' urgent bypass. Nothing else is pushed: a
+    non-urgent notice waits for the digest. The event turn is already closed
+    (its spans were written at close), so the push is made with no turn; the
+    notice's receipt is its record.
+
+    Never raises: a notice that could not be filed is logged, and the
+    event_outcomes check files it on its next hourly run from the same rows."""
+    from app import beats, delivery, notices
+    from app.checks import events as event_checks
+
+    try:
+        for finding, urgent in await event_checks.outcomes(pool, ids=ids):
+            notice, _is_new = await notices.record(
+                pool,
+                finding,
+                check_name=event_checks.OUTCOMES,
+                turn_id=turn_id,
+                firing_id=None,
+            )
+            # Still owed, from the store's own state set: a fold onto a notice
+            # already delivered (the hourly run got there first and the beat
+            # pushed nothing) pushes; one he muted does not.
+            if not urgent or notice.state not in notices.DELIVERABLE_STATES:
+                continue
+            try:
+                result = await delivery.deliver(
+                    app, pool, text=beats.urgent_line(notice), urgent=True, person=owner
+                )
+            except Exception as exc:  # noqa: BLE001 - the reason is the record
+                logger.exception("the urgent push for notice %s could not be made", notice.id)
+                await notices.mark_failed(
+                    pool, notice.id, f"the urgent push could not be made — {exc}"[:300]
+                )
+                continue
+            noted = await beats._record_push(
+                pool,
+                notice.id,
+                reached=result.reached,
+                receipt=result.receipt,
+                reason=result.reason,
+                message_id=result.message_id,
+            )
+            if noted is not None:
+                logger.warning("event notice %s: %s", notice.id, noted)
+    except Exception:  # noqa: BLE001 - logged; the hourly check files it from the rows
+        logger.exception("the notice for events %s could not be filed", [str(i) for i in ids])
