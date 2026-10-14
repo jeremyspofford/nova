@@ -341,17 +341,36 @@ one of the stops below, and each one says why.
   A round she answers without asking for a tool is her reply however long the turn
   took. It is a budget of time, not a count of rounds, and it asks nothing: raise the
   setting to give turns longer.
-- **What bounds a runaway.** The time budget; the circling stop; the owner's stop
+- **A turn past its token budget stops.** Every turn also has a token budget, the
+  setting `turns.token_budget`, set in Settings → Behaviour → Turn token limit. The
+  prompt and completion tokens each round of the turn reported are summed; a round
+  that was served but did not report its prompt or completion tokens has the missing
+  count estimated from what it sent and wrote, never counted as nothing (a round the gateway refused ran no model and counts
+  nothing). The budget is read when the turn starts and checked between rounds, at the
+  same point as the time budget, so every result of the round that crossed it is kept.
+  Past it, no further tool runs: she answers once more, with no tools offered, and her
+  reply ends with
+  `[stopped after N tool rounds: the turn used S tokens against its token budget of B (turns.token_budget)]`,
+  where S is the tokens the turn used and B the budget; when any round's tokens were
+  estimated, the note adds how many rounds did not report all their usage and that
+  their unreported tokens are estimated. The trace records a `round_stop` step with the reason `token_budget`, the
+  budget, the tokens used (prompt and completion) and how many rounds were estimated.
+  A round she answers without asking for a tool is her reply whatever it used, and the
+  count starts again with each turn. It is a budget of tokens, not a count of rounds,
+  and it asks nothing: raise the setting to give turns more.
+- **What bounds a runaway.** The time budget; the token budget; the circling stop; the owner's stop
   (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
   tool reports progress); the gateway's monthly spending caps on cloud providers; a
   gateway read that stays silent for 300 seconds, and each tool's own budget; and any
   round that fails.
   A local model costs nothing, so no spending cap stops it: a local turn that keeps
   making new, different calls with new results runs until it answers, circles, runs
-  past its time budget, or the owner stops it. A live reading whose answer changes
-  every time it is read (an uptime) never circles, so the time budget is what ends it.
+  past its time or token budget, or the owner stops it. A live reading whose answer
+  changes every time it is read (an uptime) never circles, so the time and token
+  budgets are what end it.
 - **Scheduled tasks and beats have no wall-clock cut from outside.** Nothing cuts a
-  firing mid-round: its turn ends the way a chat turn does, the time budget included.
+  firing mid-round: its turn ends the way a chat turn does, the time and token budgets
+  included.
   Timers fire one after another, so a long scheduled turn delays the timers behind it
   until it answers or reaches its budget.
 

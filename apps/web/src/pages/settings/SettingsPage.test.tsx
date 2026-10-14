@@ -472,3 +472,116 @@ describe('SettingsPage — the turn time budget', () => {
     expect(screen.queryByTestId('turn-budget-now')).toBeNull()
   })
 })
+
+/**
+ * The turn token budget (epic verification-2-7, T26), T25's shape: core's
+ * turns.token_budget is drawn on Behaviour as "Turn token limit" off the one
+ * settings fetch — reachable by navigation, never only through PUT
+ * /api/v1/settings. The field reads and writes tokens (a typed "250,000" is
+ * 250000); the range is core's (10000..100000000, settings_store._int_range),
+ * and a value outside it is refused in core's own sentence, shown on the page.
+ * A core that does not list the key draws no field.
+ */
+describe('SettingsPage — the turn token budget', () => {
+  const TOKEN_DESCRIPTION =
+    'The prompt and completion tokens one turn may use, summed over its rounds (10000 to 100000000). ' +
+    'It is checked between rounds; a round that reports no usage is estimated.'
+  const WITH_TOKEN_BUDGET = [
+    { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+    {
+      key: 'turns.token_budget',
+      type: 'int',
+      default: 1000000,
+      description: TOKEN_DESCRIPTION,
+      value: 1000000,
+    },
+  ] as const
+
+  /** A fake core holding the real bounds and refusing in its own words. */
+  function coreRefusesOutOfRange() {
+    vi.mocked(putSetting).mockImplementation(async (key: string, value: boolean | string | number) => {
+      if (typeof value === 'number' && value < 10000) {
+        throw new Error(`setting ${key}: ${value} is below the minimum 10000 (tokens per turn)`)
+      }
+      if (typeof value === 'number' && value > 100000000) {
+        throw new Error(`setting ${key}: ${value} is above the maximum 100000000 (tokens per turn)`)
+      }
+      return { key, value }
+    })
+  }
+
+  afterEach(() => {
+    vi.mocked(putSetting).mockImplementation(async (key: string, value: boolean | string | number) => ({
+      key,
+      value,
+    }))
+  })
+
+  const field = () => screen.findByLabelText('Most tokens one turn may use') as Promise<HTMLInputElement>
+
+  it('draws it on Behaviour from the def core listed, in tokens, with core’s description', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...WITH_TOKEN_BUDGET])
+    renderApp('behaviour')
+
+    const input = await field()
+    expect(input.value).toBe('1000000')
+    expect(screen.getByTestId('turn-token-budget-now').textContent).toBe('Now: 1,000,000 tokens.')
+    expect(screen.getByTestId('turn-token-budget-description').textContent).toBe(TOKEN_DESCRIPTION)
+    expect(screen.getByRole('heading', { level: 2, name: 'Turn token limit' })).toBeDefined()
+  })
+
+  it.each([
+    ['250000', 250000],
+    ['250,000', 250000],
+  ])('saves "%s" as %i tokens through the settings API and shows what core stored', async (typed, sent) => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...WITH_TOKEN_BUDGET])
+    coreRefusesOutOfRange()
+    renderApp('behaviour')
+
+    const input = await field()
+    fireEvent.change(input, { target: { value: typed } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(putSetting).toHaveBeenCalledWith('turns.token_budget', sent))
+    await waitFor(() =>
+      expect(screen.getByTestId('turn-token-budget-now').textContent).toBe('Now: 250,000 tokens.'),
+    )
+    expect(screen.getByText('Saved — stored as 250,000 tokens')).toBeDefined()
+    expect(input.value).toBe('250000')
+  })
+
+  it.each([
+    ['9999', 9999, 'setting turns.token_budget: 9999 is below the minimum 10000 (tokens per turn)'],
+    [
+      '100000001',
+      100000001,
+      'setting turns.token_budget: 100000001 is above the maximum 100000000 (tokens per turn)',
+    ],
+  ])('a value outside 10000..100000000 (%s) is refused with core’s stated reason', async (typed, sent, reason) => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...WITH_TOKEN_BUDGET])
+    coreRefusesOutOfRange()
+    renderApp('behaviour')
+
+    const input = await field()
+    fireEvent.change(input, { target: { value: typed } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(putSetting).toHaveBeenCalledWith('turns.token_budget', sent))
+    const alert = await screen.findByTestId('turn-token-budget-error')
+    expect(alert.textContent).toBe(`Could not save the token limit: ${reason}`)
+    // Refused: the stored budget stands, and the field keeps what was typed.
+    expect(screen.getByTestId('turn-token-budget-now').textContent).toBe('Now: 1,000,000 tokens.')
+    expect(input.value).toBe(typed)
+  })
+
+  it('draws no field on a core that does not list the key', async () => {
+    renderApp('behaviour')
+
+    await screen.findByRole('heading', { level: 2, name: 'Response quality' })
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    expect(screen.queryByLabelText('Most tokens one turn may use')).toBeNull()
+    expect(screen.queryByTestId('turn-token-budget-now')).toBeNull()
+  })
+})

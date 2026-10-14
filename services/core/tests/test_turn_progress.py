@@ -1233,13 +1233,16 @@ def test_every_round_stop_reason_is_pinned():
     chat._file_round_stop, the one place a round_stop is filed, refuses any
     reason not pinned here. Moved again by verification-2-7 T25: `time_budget`,
     a turn past its wall-clock budget (turns.time_budget_s) — not a circling
-    reason, and not a count of rounds."""
+    reason, and not a count of rounds. Moved again by verification-2-7 T26:
+    `token_budget`, a turn past its token budget (turns.token_budget) — the
+    tokens its rounds reported, summed; not circling, not a count of rounds."""
     assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
     assert chat.ROUND_STOP_REASONS == {
         chat.STOP_REPEATED_CALL,
         chat.STOP_NO_NEW_RESULTS,
         chat.STOP_UNFITTABLE,
         chat.STOP_TIME_BUDGET,
+        chat.STOP_TOKEN_BUDGET,
     }
     turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
     with pytest.raises(ValueError, match="not a round_stop reason"):
@@ -1253,7 +1256,18 @@ async def test_sixty_productive_rounds_run_to_the_models_answer(
 ):
     """C1: 60 rounds of distinct calls, each bringing a new result, all run;
     the turn ends on the model's own answer, status ok, stored and streamed
-    alike, with no round_stop, no "[stopped after" note, no narration round."""
+    alike, with no round_stop, no "[stopped after" note, no narration round.
+
+    PIN MOVED (verification-2-7 T26, 2026-10-13): these rounds report no usage,
+    so each now counts core's estimate (~17-19k tokens, mostly the tools array)
+    toward turns.token_budget, and ~53 of them cross the 1,000,000 default. The
+    token budget is a separate bound with its own tests (test_turn_token_budget);
+    this pins that no COUNT of rounds stops a turn, so the budget is set to its
+    maximum, which 60 such rounds stay far below."""
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "turns.token_budget", "value": 100_000_000}
+    )
+    assert resp.status_code == 200, resp.text
     ran = _arm_probe(monkeypatch, lambda q, n: f"{q} found thing #{n}")
     qs = [f"q{i}" for i in range(SIXTY)]
 

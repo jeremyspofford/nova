@@ -246,3 +246,36 @@ def test_v27_t25_the_section_points_to_the_settings_field_the_web_draws():
     assert _says(section, "Settings → Behaviour → Turn time limit"), (
         "the section does not say where the time budget is set"
     )
+
+
+def test_v27_t26_the_section_names_the_turn_token_budget():
+    """verification-2-7 T26: a turn past its token budget ends between rounds
+    on a stated note. An operator who sees that note learns here which setting
+    it is, that it is checked between rounds, and that a round reporting no
+    usage is estimated, never counted as nothing; no number nothing pins."""
+    assert "turns.token_budget" in settings_store.DEFS_BY_KEY
+    section = _section()
+    assert "turns.token_budget" in section, "the section does not name turns.token_budget"
+    assert _says(section, "token_budget"), "the section does not name the round_stop reason"
+    assert _says(section, "between rounds"), "the section does not say when the budget is read"
+    assert _says(section, "estimated"), "the section does not say an unreported round is estimated"
+    problem = _numbers_problem(section)
+    assert problem is None, problem
+
+
+def test_v27_t26_the_section_points_to_the_settings_field_the_web_draws():
+    """verification-2-7 T26 (T25's shape): the section says where the token
+    budget is set, and that place exists — Settings → Behaviour draws a "Turn
+    token limit" section for turns.token_budget (TurnTokenBudgetSection.tsx,
+    mounted by SettingsPage)."""
+    page = SETTINGS_PAGES / "TurnTokenBudgetSection.tsx"
+    assert page.exists(), "no Settings section draws turns.token_budget"
+    source = page.read_text(encoding="utf-8")
+    assert "export const TURN_TOKEN_BUDGET_KEY = 'turns.token_budget'" in source
+    assert 'title="Turn token limit"' in source
+    settings_page = (SETTINGS_PAGES / "SettingsPage.tsx").read_text(encoding="utf-8")
+    assert "TurnTokenBudgetSection" in settings_page
+    section = _section()
+    assert _says(section, "Settings → Behaviour → Turn token limit"), (
+        "the section does not say where the token budget is set"
+    )

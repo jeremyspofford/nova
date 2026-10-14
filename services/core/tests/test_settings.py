@@ -83,6 +83,12 @@ KNOWN_KEYS = {
     # note (round_stop time_budget). Not a round count (migration 044 stays).
     # Deliberate tripwire update: one def landed, so the set moved by one.
     "turns.time_budget_s",
+    # verification-2-7 T26 (2026-10-13, report item 2): a turn's token budget —
+    # the prompt + completion tokens its rounds reported (a round with none is
+    # estimated), summed; past it, the turn ends between rounds on a stated
+    # note (round_stop token_budget). Not a round count (migration 044 stays).
+    # Deliberate tripwire update: one def landed, so the set moved by one.
+    "turns.token_budget",
 }
 
 

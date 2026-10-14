@@ -644,6 +644,17 @@ TIME_BUDGET_NUDGE = (
     "with what the tool results above already give you, and say plainly what is still "
     "unknown."
 )
+# And at the token-budget stop (T26): the turn's rounds used turns.token_budget,
+# which is neither circling nor the clock, so each says only that.
+TOKEN_BUDGET_REFUSAL = (
+    f"{tools.ERROR_PREFIX}this turn has used its token budget and no further tool "
+    "will run — answer with what you have"
+)
+TOKEN_BUDGET_NUDGE = (
+    "No further tool will run this turn: it has used its token budget. Answer now "
+    "with what the tool results above already give you, and say plainly what is still "
+    "unknown."
+)
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -2589,6 +2600,73 @@ def turn_usage(spans: Sequence[traces.Span]) -> dict | None:
     }
 
 
+# Core's own estimate of the tokens a SERVED round did not report
+# (verification-2-7 T26 C6), on its llm_call span beside — never in place of —
+# the gateway's prompt_tokens / completion_tokens: a reported figure is a
+# measurement, an estimate is not, and turn_usage reads only the former.
+EST_PROMPT_TOKENS = "est_prompt_tokens"
+EST_COMPLETION_TOKENS = "est_completion_tokens"
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _note_estimate(span, sent: Sequence[dict], tools_chars: int, written_chars: int) -> None:
+    """A served round's token counts the gateway did not state (no usage
+    chunk, or nulls), estimated at the chars-per-token
+    _SERVED_CHARS_PER_TOKEN holds for the link that served it
+    (DEFAULT_CHARS_PER_TOKEN when it has none): the prompt from exactly what
+    was sent — messages and tools array — and the completion from the chars
+    the model wrote (text and tool-call arguments). A count that was stated is
+    left alone; only the missing one is estimated."""
+    link = span.meta.get("served_by")
+    ratio = (
+        _SERVED_CHARS_PER_TOKEN.get(link, context_fit.DEFAULT_CHARS_PER_TOKEN)
+        if link
+        else context_fit.DEFAULT_CHARS_PER_TOKEN
+    )
+    if not _is_count(span.meta.get("prompt_tokens")):
+        span.meta[EST_PROMPT_TOKENS] = context_fit.estimate_tokens(sent, ratio, tools_chars)
+    if not _is_count(span.meta.get("completion_tokens")):
+        span.meta[EST_COMPLETION_TOKENS] = math.ceil(written_chars / ratio)
+
+
+def turn_tokens(spans: Sequence[traces.Span]) -> dict[str, int]:
+    """The tokens this turn's rounds used so far, for its token budget (T26):
+    the prompt and completion tokens of every llm_call span, as the gateway
+    reported them, or core's estimate where a served round reported none
+    (_note_estimate). A round refused before it was served carries neither
+    and counts 0 — no model ran. `estimated_rounds` counts the rounds any
+    estimate went into, so a stop can say its figure is partly estimated."""
+    prompt = completion = estimated = 0
+    for span in spans:
+        if span.kind != "llm_call":
+            continue
+        guessed = False
+        for reported, guess in (
+            ("prompt_tokens", EST_PROMPT_TOKENS),
+            ("completion_tokens", EST_COMPLETION_TOKENS),
+        ):
+            value = span.meta.get(reported)
+            if not _is_count(value):
+                value = span.meta.get(guess)
+                if not _is_count(value):
+                    continue
+                guessed = True
+            if reported == "prompt_tokens":
+                prompt += value
+            else:
+                completion += value
+        estimated += guessed
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "spent_tokens": prompt + completion,
+        "estimated_rounds": estimated,
+    }
+
+
 async def _owner_timezone(pool) -> str:
     try:
         return str(await settings_store.read_value(pool, "nova.timezone") or "UTC")
@@ -2794,8 +2872,24 @@ STOP_UNFITTABLE = "unfittable"
 # then a note). A budget of seconds, never a count of rounds; not a circling
 # reason, so it has its own note (_time_budget_words).
 STOP_TIME_BUDGET = "time_budget"
+# A turn whose rounds used its token budget, settings_store.TURN_TOKEN_BUDGET
+# (verification-2-7 T26): the prompt + completion tokens of every round so far,
+# summed (turn_tokens), checked right after the time budget and ended the same
+# way. A budget of tokens, never a count of rounds.
+STOP_TOKEN_BUDGET = "token_budget"
 # Every reason a `round_stop` span may carry; _file_round_stop refuses any other.
-ROUND_STOP_REASONS = frozenset({*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET})
+ROUND_STOP_REASONS = frozenset(
+    {*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET, STOP_TOKEN_BUDGET}
+)
+# The stops that end a turn with one toolless narration round: how the log
+# names each, the nudge its narration round is sent, and the refusal a call
+# that round asks for anyway gets. Each says only its own reason; any other
+# narrated stop is a circling one (_NARRATED_STOP_CIRCLING).
+_NARRATED_STOPS: dict[str, tuple[str, str, str]] = {
+    STOP_TIME_BUDGET: ("the time-budget stop", TIME_BUDGET_NUDGE, TIME_BUDGET_REFUSAL),
+    STOP_TOKEN_BUDGET: ("the token-budget stop", TOKEN_BUDGET_NUDGE, TOKEN_BUDGET_REFUSAL),
+}
+_NARRATED_STOP_CIRCLING = ("the circling stop", CIRCLING_NUDGE, OUT_OF_ROUNDS_REFUSAL)
 
 # Where a turn reads the time: monotonic seconds, looked up as a module
 # attribute at each call (never bound at import), so the budget is measured on
@@ -2811,6 +2905,51 @@ def _time_budget_words(budget_s: int, elapsed_s: int) -> str:
         f"the turn ran past its time budget of {budget_s} seconds, "
         f"{elapsed_s} seconds in ({settings_store.TURN_TIME_BUDGET})"
     )
+
+
+async def _turn_budget(pool, key: str, turn_id: object) -> int:
+    """A per-turn budget setting (turns.time_budget_s, turns.token_budget) as
+    it stands at the turn's start. Fails toward the def's default bound, never
+    toward none: a settings read that raises must not leave a turn unbounded."""
+    try:
+        return int(await settings_store.read_value(pool, key))
+    except Exception:
+        default = settings_store.DEFS_BY_KEY[key].default
+        logger.exception(
+            "chat turn %s: the %s setting could not be read; using its default %s",
+            turn_id,
+            key,
+            default,
+        )
+        return default
+
+
+def _token_budget_words(facts: Mapping[str, int]) -> str:
+    """What the token-budget stop's note says after "[stopped after N tool
+    rounds: ": the tokens the turn used, the budget and the setting's key, and
+    how many rounds were estimated when any left a count unreported (none, or
+    only one of prompt and completion) — each read from the stop's own facts.
+    States; asks nothing."""
+    words = (
+        f"the turn used {facts['spent_tokens']:,} tokens against its token budget of "
+        f"{facts['budget_tokens']:,} ({settings_store.TURN_TOKEN_BUDGET})"
+    )
+    estimated = facts["estimated_rounds"]
+    if estimated:
+        rounds, theirs = ("1 round", "its") if estimated == 1 else (f"{estimated} rounds", "their")
+        words += (
+            f"; {rounds} did not report all {theirs} usage, so {theirs} unreported tokens "
+            "are estimated"
+        )
+    return words
+
+
+def _budget_note_words(reason: str, facts: Mapping[str, int]) -> str:
+    """The words after "[stopped after N tool rounds: " for a budget stop
+    (time or tokens), read off that stop's own facts."""
+    if reason == STOP_TIME_BUDGET:
+        return _time_budget_words(facts["budget_s"], facts["elapsed_s"])
+    return _token_budget_words(facts)
 
 
 def _file_round_stop(turn: traces.Turn, reason: str, rounds: int, **facts: object) -> None:
@@ -4143,6 +4282,9 @@ async def _gateway_round(
     tools_chars = context_fit.tools_chars(advertised)
     fitted_meta: dict = {}
     sent = _fit_to_window(turn, fitted_meta, messages, requested, tools_chars)
+    # Whether the gateway answered 200: a refused round ran no model, so it
+    # counts no tokens; a served one that reports none is estimated (T26).
+    served = False
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
@@ -4167,6 +4309,7 @@ async def _gateway_round(
                         raise GatewayFailure(
                             f"the gateway refused the request ({response.status_code}): {detail}"
                         )
+                    served = True
                     async for line in response.aiter_lines():
                         line = line.strip()
                         if not line or line.startswith(":"):
@@ -4247,6 +4390,13 @@ async def _gateway_round(
         _note_throughput(span, t0, t_first_any, t_first_delta, elapsed_s, reasoning_chars)
         _learn_chars_per_token(span, sent, tools_chars)
         calls = buffer.finished()
+        if served:
+            _note_estimate(
+                span,
+                sent,
+                tools_chars,
+                sum(map(len, collected)) + sum(len(call.arguments) for call in calls),
+            )
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
         # redirect's — gets the same treatment from the same code. A model that
@@ -4985,6 +5135,7 @@ async def _collect_completion(
             span.meta["error"] = peers.reason(exc)[:400]
             raise
         _learn_chars_per_token(span, sent)
+        _note_estimate(span, sent, 0, sum(map(len, collected)))
         span.meta["ok"] = True
     return "".join(collected)
 
@@ -6142,22 +6293,13 @@ async def _run_turn(
     # recorded only when this kind arms the stack-claim guard that reads it.
     # Set here, the one place a turn runs, so no caller keeps a list of kinds.
     stated_purpose = device_tools.TURN_PURPOSE.set(traces.purpose_of(turn))
-    # The turn's wall-clock budget (verification-2-7 T25): its start on
-    # turn_clock and the setting as it stands now, read ONCE here so a write
-    # mid-turn moves the next turn, never this one's bound. Every turn kind
-    # runs through here, so one read bounds them all.
+    # The turn's wall-clock budget (verification-2-7 T25) and token budget
+    # (T26): its start on turn_clock and each setting as it stands now, read
+    # ONCE here so a write mid-turn moves the next turn, never this one's
+    # bound. Every turn kind runs through here, so one read bounds them all.
     turn_started_s = turn_clock()
-    try:
-        time_budget_s = int(await settings_store.read_value(pool, settings_store.TURN_TIME_BUDGET))
-    except Exception:
-        # Fail toward the default bound, never toward none: a settings read
-        # that raises must not leave a turn unbounded.
-        time_budget_s = settings_store.DEFS_BY_KEY[settings_store.TURN_TIME_BUDGET].default
-        logger.exception(
-            "chat turn %s: the time budget setting could not be read; using the default %s s",
-            turn.id,
-            time_budget_s,
-        )
+    time_budget_s = await _turn_budget(pool, settings_store.TURN_TIME_BUDGET, turn.id)
+    token_budget = await _turn_budget(pool, settings_store.TURN_TOKEN_BUDGET, turn.id)
     try:
         # Inside the try, so a persona that cannot be built still reaches
         # the finally that closes the turn.
@@ -6448,7 +6590,8 @@ async def _run_turn(
         # of rounds ever stops a turn (owner, 2026-10-08: "not have a limit at
         # all"): the loop runs until the model answers, a round fails, the
         # owner stops it, the circling stop (RoundProgress) ends it, or the
-        # turn has run past its wall-clock budget (T25, turns.time_budget_s).
+        # turn has run past its wall-clock budget (T25, turns.time_budget_s) or
+        # used its token budget (T26, turns.token_budget).
         failure: str | None = None
         # The stated reason a thinking-only round ran out of links (no-ceiling
         # T3); None while every round found a link that answered.
@@ -6471,7 +6614,8 @@ async def _run_turn(
         stop_reason: str | None = None
         stop_rounds = 0
         # The facts a stop states beside its reason (the time-budget stop's
-        # budget_s and elapsed_s), filed on its round_stop span as they are.
+        # budget_s and elapsed_s; the token-budget stop's budget and turn_tokens),
+        # filed on its round_stop span as they are.
         stop_facts: dict[str, int] = {}
 
         def _stream_delta(delta: str) -> None:
@@ -6665,6 +6809,14 @@ async def _run_turn(
                 if elapsed_s >= time_budget_s:
                     reason = STOP_TIME_BUDGET
                     stop_facts = {"budget_s": time_budget_s, "elapsed_s": elapsed_s}
+            if reason is None:
+                # The token budget (T26), at the same point and for the same
+                # reasons: every round of this turn so far, this one's included,
+                # as reported or (served, unreported) estimated.
+                spent = turn_tokens(turn.spans)
+                if spent["spent_tokens"] >= token_budget:
+                    reason = STOP_TOKEN_BUDGET
+                    stop_facts = {"budget_tokens": token_budget, **spent}
             if reason is not None:
                 out_of_rounds = True
                 stop_reason = reason
@@ -6792,9 +6944,11 @@ async def _run_turn(
             # The trace says why the turn stopped and after how many tool rounds:
             # one span per stopped turn, filed before the narration round.
             _file_round_stop(turn, stop_reason, stop_rounds, **stop_facts)
-            timed_out = stop_reason == STOP_TIME_BUDGET
-            # The log names the stop that happened: a time-budget stop did not circle.
-            stop_name = "the time-budget stop" if timed_out else "the circling stop"
+            # The log, the nudge and the refusal name the stop that happened: a
+            # budget stop did not circle.
+            stop_name, stop_nudge, stop_refusal = _NARRATED_STOPS.get(
+                stop_reason, _NARRATED_STOP_CIRCLING
+            )
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
             # already earned must not be swallowed by the circling stop (see
@@ -6810,7 +6964,7 @@ async def _run_turn(
                         *messages,
                         {
                             "role": "system",
-                            "content": TIME_BUDGET_NUDGE if timed_out else CIRCLING_NUDGE,
+                            "content": stop_nudge,
                         },
                     ],
                     (),
@@ -6847,18 +7001,16 @@ async def _run_turn(
                 )
                 for call in final_calls:
                     emit(_activity_frame(call.name, "start"))
-                    result = _refuse_out_of_rounds(
-                        turn, call, TIME_BUDGET_REFUSAL if timed_out else OUT_OF_ROUNDS_REFUSAL
-                    )
+                    result = _refuse_out_of_rounds(turn, call, stop_refusal)
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            if timed_out:
-                words = _time_budget_words(stop_facts["budget_s"], stop_facts["elapsed_s"])
-                backend_note = f"[stopped after {stop_rounds} tool rounds: {words}]"
-            else:
+            if stop_reason in CIRCLING_NOTE_WORDS:
                 backend_note = (
                     f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
                 )
+            else:
+                words = _budget_note_words(stop_reason, stop_facts)
+                backend_note = f"[stopped after {stop_rounds} tool rounds: {words}]"
             note = f"\n\n{backend_note}" if parts else backend_note
             # Did the narration round ANSWER? Read off its own outcome, never
             # off `parts` (earlier rounds' text and its raw markup) and never

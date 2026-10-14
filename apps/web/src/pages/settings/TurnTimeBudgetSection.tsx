@@ -1,8 +1,7 @@
-import { useState } from 'react'
 import { Timer } from 'lucide-react'
-import { Input, Section, Banner } from '../../components/ui'
-import { putSetting as apiPutSetting, type SettingDef } from '../../lib/api'
-import { InlineSave, storedFrom, type SaveMessage } from './shared'
+import { Section } from '../../components/ui'
+import type { SettingDef } from '../../lib/api'
+import { TurnBudgetField, type TurnBudgetApi, type TurnBudgetUnit } from './TurnBudgetField'
 
 /**
  * Settings → Behaviour → Turn time limit (epic verification-2-7, T25): core's
@@ -15,21 +14,11 @@ import { InlineSave, storedFrom, type SaveMessage } from './shared'
  * a turn's length; core stores whole seconds, so a write is the minutes times
  * 60, rounded to the second, and the line under the field says both.
  *
- * The ProactiveSection rules hold here too:
- *
- * 1. Core is the only validator. The range (60..86400 s) lives in
- *    settings_store's `_int_range` and is stated in core's own description,
- *    shown verbatim below the field; nothing here keeps a second copy of the
- *    bounds. A value outside them is refused by core and its sentence is shown.
- * 2. A write is shown as done only when the answer says what was STORED, and
- *    the field and the "Now:" line re-render from that value, never from what
- *    was typed.
+ * The save, the readback and the refusal are TurnBudgetField's, shared with
+ * the turn token limit: core is the only validator (60..86400 s, stated in
+ * its own description) and a write shows only what core stored.
  */
-export interface TurnTimeBudgetApi {
-  putSetting: typeof apiPutSetting
-}
-
-const DEFAULT_API: TurnTimeBudgetApi = { putSetting: apiPutSetting }
+export type TurnTimeBudgetApi = TurnBudgetApi
 
 export const TURN_TIME_BUDGET_KEY = 'turns.time_budget_s'
 
@@ -50,14 +39,21 @@ export function budgetWords(seconds: number): string {
   return `${minutes} ${minutes === '1' ? 'minute' : 'minutes'} (${seconds} seconds)`
 }
 
-function reasonOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+/** Minutes in the field, whole seconds stored: a number is sent as its
+ * minutes times 60, rounded to the second; anything else as the text. */
+const MINUTES: TurnBudgetUnit = {
+  draftOf: minutesOf,
+  payloadOf: typed => {
+    const asMinutes = Number(typed)
+    return typed !== '' && Number.isFinite(asMinutes) ? Math.round(asMinutes * 60) : typed
+  },
+  words: budgetWords,
 }
 
 export function TurnTimeBudgetSection({
   def,
   onChanged,
-  api = DEFAULT_API,
+  api,
 }: {
   /** turns.time_budget_s as core listed it. */
   def: SettingDef
@@ -65,84 +61,24 @@ export function TurnTimeBudgetSection({
   onChanged: (key: string, value: unknown) => void
   api?: TurnTimeBudgetApi
 }) {
-  // Where the stored value is not the type the def declares, the def's OWN
-  // default is shown, never a number made up in the browser.
-  const seconds = typeof def.value === 'number' ? def.value : Number(def.default)
-  // Seeded once: SettingsPage mounts sections after its one settings read.
-  const [draft, setDraft] = useState(minutesOf(seconds))
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<SaveMessage | null>(null)
-
-  const clear = () => {
-    setError(null)
-    setMessage(null)
-  }
-
-  const dirty = draft !== minutesOf(seconds)
-  const save = async () => {
-    // Sent as seconds when it is a number, as the text when it is not — core
-    // then says "expects int, got str" in its own words.
-    const typed = draft.trim()
-    const asMinutes = Number(typed)
-    const payload = typed !== '' && Number.isFinite(asMinutes) ? Math.round(asMinutes * 60) : typed
-    setSaving(true)
-    clear()
-    try {
-      const written = await api.putSetting(TURN_TIME_BUDGET_KEY, payload)
-      const { value: stored } = storedFrom(written, TURN_TIME_BUDGET_KEY, 'number')
-      onChanged(TURN_TIME_BUDGET_KEY, stored)
-      setDraft(minutesOf(stored as number))
-      setMessage({ kind: 'ok', text: `Saved — stored as ${budgetWords(stored as number)}` })
-    } catch (err) {
-      // Refused: the field keeps what was typed, the stored budget stands.
-      setError(reasonOf(err))
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
     <Section
       icon={Timer}
       title="Turn time limit"
       description="How long one turn may run before she stops and answers from what she has."
     >
-      <div className="space-y-2">
-        <Input
-          label="Longest one turn may run (minutes)"
-          className="w-28"
-          type="number"
-          value={draft}
-          disabled={saving}
-          error={error ? 'Not saved — the stored limit stands.' : undefined}
-          onChange={e => {
-            setDraft(e.target.value)
-            clear()
-          }}
-        />
-        <p data-testid="turn-budget-now" className="text-caption text-content-secondary">
-          Now: {budgetWords(seconds)}.
-        </p>
-        <p data-testid="turn-budget-description" className="text-caption text-content-secondary">
-          {def.description}
-        </p>
-        {error && (
-          <Banner role="alert" data-testid="turn-budget-error">
-            Could not save the time limit: {error}
-          </Banner>
-        )}
-        <InlineSave
-          dirty={dirty}
-          saving={saving}
-          onSave={save}
-          onReset={() => {
-            setDraft(minutesOf(seconds))
-            clear()
-          }}
-          message={message}
-        />
-      </div>
+      <TurnBudgetField
+        settingKey={TURN_TIME_BUDGET_KEY}
+        def={def}
+        onChanged={onChanged}
+        unit={MINUTES}
+        label="Longest one turn may run (minutes)"
+        inputClassName="w-28"
+        inputMode="number"
+        testIdPrefix="turn-budget"
+        what="the time limit"
+        api={api}
+      />
     </Section>
   )
 }
