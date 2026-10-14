@@ -952,10 +952,12 @@ async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
     `refused_at` is when the wall's latest refusal happened: the stored
     `updated_at` that record_refusal stamps on every refusal, never the time
     of reading — so a wall set yesterday says yesterday, not "just now".
+    `probed_at` is when the gateway's credit-wall probe (wall_probe) last
+    probed it, None when never.
     """
     rows = await pool.fetch(
         "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
-        "updated_at AS refused_at "
+        "updated_at AS refused_at, probed_at "
         "FROM provider_walls WHERE walled_until > now()"
     )
     return {(r["provider"], r["model"]): dict(r) for r in rows}
@@ -968,15 +970,22 @@ def walled_words(wall: dict, *, now: datetime | None = None) -> str:
     "<reason> — refused at MM-DD HH:MM UTC; not retried since — walled for
     another N min". The time is the stored refused_at (walls()), always in
     UTC and truncated to the minute, so a wall set yesterday never reads as a
-    fresh refusal. The "walled for another N min" suffix stays LAST: core
-    parses it.
+    fresh refusal. When the credit-wall probe tried it AFTER that refusal
+    and was not served (wall["probed_at"] later than refused_at), "not
+    retried since" becomes "last probed at MM-DD HH:MM UTC, not served". The
+    "walled for another N min" suffix stays LAST: core parses it.
     """
     now = now or datetime.now(UTC)
-    at = wall["refused_at"].astimezone(UTC).strftime("%m-%d %H:%M")
+    refused_at = wall["refused_at"]
+    at = refused_at.astimezone(UTC).strftime("%m-%d %H:%M")
+    probed_at = wall.get("probed_at")
+    if probed_at is not None and probed_at > refused_at:
+        probed = probed_at.astimezone(UTC).strftime("%m-%d %H:%M")
+        since = f"last probed at {probed} UTC, not served"
+    else:
+        since = "not retried since"
     left = int((wall["walled_until"] - now).total_seconds() // 60) + 1
-    return (
-        f"{wall['reason']} — refused at {at} UTC; not retried since — walled for another {left} min"
-    )
+    return f"{wall['reason']} — refused at {at} UTC; {since} — walled for another {left} min"
 
 
 def wall_for(walled: dict[tuple[str, str], dict], provider: str, model: str) -> dict | None:

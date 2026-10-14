@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -723,3 +724,218 @@ async def test_lifespan_runs_the_probe_loop_on_its_pool_and_cancels_it_before_cl
 
     # Shutdown cancelled the loop and waited for it, before the pool closed.
     assert seen.get("pool_closing_at_cancel") is False
+
+
+# ══ T6: what a probe's outcome does to the wall ═══════════════════════════
+
+KEY = ("openrouter", routing.WHOLE_PROVIDER)
+
+
+async def _walled_openrouter(client, pool, mount_backend, *, refused_ago_s=2 * 3600):
+    """OpenRouter still out of credit, walled by a 402 refused
+    `refused_ago_s` ago (strike 1), so the wall is due a probe."""
+    fake = await _cloud(
+        client,
+        mount_backend,
+        "openrouter",
+        BASE,
+        FakeOpenAICompat(accepts_key="sk-1", affords_tokens=0),
+    )
+    await _walled_for_credits(pool, "openrouter", refused_ago_s=refused_ago_s)
+    return fake
+
+
+async def _wall_row(pool, provider="openrouter", model=routing.WHOLE_PROVIDER):
+    return await pool.fetchrow(
+        "SELECT status, strikes, reason, walled_until, updated_at, probed_at "
+        "FROM provider_walls WHERE provider = $1 AND model = $2",
+        provider,
+        model,
+    )
+
+
+async def _wall_keys(pool) -> set[tuple[str, str]]:
+    return {
+        (r["provider"], r["model"])
+        for r in await pool.fetch("SELECT provider, model FROM provider_walls")
+    }
+
+
+# ── c1: served -> the wall lifts (note_success), and the log says so ──────
+
+
+async def test_a_probe_the_provider_served_lifts_the_wall_and_says_so(
+    client, pool, mount_backend, caplog
+):
+    fake = await _walled_openrouter(client, pool, mount_backend)
+    # Outage walls on the probed model and on a sibling: a served probe is
+    # evidence about the provider and the model it served, not the sibling.
+    await _stored_wall(pool, "openrouter", 502, refused_ago_s=60, model="remote-model")
+    await _stored_wall(pool, "openrouter", 502, refused_ago_s=60, model="sibling-model")
+    fake.affords_tokens = 1  # topped up: one token is served
+    caplog.set_level(logging.INFO)
+
+    await wall_probe.tick(app, pool)
+
+    assert len(_completion_posts(fake)) == 1
+    assert await _wall_keys(pool) == {("openrouter", "sibling-model")}
+    assert KEY not in await routing.walls(pool)
+    lifted = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO
+        and "wall lifted by probe" in r.getMessage()
+        and "openrouter" in r.getMessage()
+    ]
+    assert lifted, [(r.levelname, r.getMessage()) for r in caplog.records]
+
+
+# ── c2: refused with a wall status -> a refusal: strike, longer wall, new time
+
+
+async def test_a_probe_refused_for_credits_records_a_refusal_on_the_wall(
+    client, pool, mount_backend
+):
+    await _walled_openrouter(client, pool, mount_backend)
+    old = await _wall_row(pool)
+    assert old["strikes"] == 1
+    before = await pool.fetchval("SELECT now()")
+
+    await wall_probe.tick(app, pool)
+
+    after = await pool.fetchval("SELECT now()")
+    new = await _wall_row(pool)
+    assert new["status"] == 402
+    assert new["strikes"] == 2
+    assert new["reason"].startswith("openrouter refused (402): "), new["reason"]
+    # The refusal time is the probe's: the wall no longer reads 2 h old.
+    assert before <= new["updated_at"] <= after, (before, new["updated_at"], after)
+    # Strike 2 of the ladder (6 h), counted from the probe's refusal.
+    assert abs((new["walled_until"] - new["updated_at"]).total_seconds() - 6 * 3600) < 5
+    words = routing.walled_words((await routing.walls(pool))[KEY])
+    at = new["updated_at"].astimezone(UTC).strftime("%m-%d %H:%M")
+    assert f"refused at {at} UTC; not retried since — walled for another " in words, words
+    assert "last probed" not in words, words
+
+
+# ── c3: any other failure -> the wall stands untouched, probed_at says when
+
+
+def _connect_fails(mount_backend, mount_transport, fake):
+    mount_transport(BASE, FailingTransport(httpx.ConnectError))
+
+
+def _answers_500(mount_backend, mount_transport, fake):
+    fake.completions_status = 500
+
+
+def _answers_200_not_a_completion(mount_backend, mount_transport, fake):
+    mount_backend(BASE, _answers_200({"choices": []}, []))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [_connect_fails, _answers_500, _answers_200_not_a_completion],
+    ids=["connect-failure", "5xx", "200-not-a-completion"],
+)
+async def test_a_probe_that_failed_otherwise_leaves_the_wall_and_says_when_it_probed(
+    client, pool, mount_backend, mount_transport, failure
+):
+    fake = await _walled_openrouter(client, pool, mount_backend)
+    old = await _wall_row(pool)
+    failure(mount_backend, mount_transport, fake)
+
+    await wall_probe.tick(app, pool)
+
+    new = await _wall_row(pool)
+    for field in ("status", "strikes", "reason", "walled_until", "updated_at"):
+        assert new[field] == old[field], (field, old[field], new[field])
+    assert await _wall_keys(pool) == {KEY}  # no outage wall was added either
+    assert new["probed_at"] is not None
+    words = routing.walled_words((await routing.walls(pool))[KEY])
+    refused = old["updated_at"].astimezone(UTC).strftime("%m-%d %H:%M")
+    probed = new["probed_at"].astimezone(UTC).strftime("%m-%d %H:%M")
+    assert (
+        f"refused at {refused} UTC; last probed at {probed} UTC, not served — walled for another "
+        in words
+    ), words
+    assert "not retried since" not in words, words
+
+
+# ── c4: walls() carries probed_at; the words say "last probed" only when the
+#        probe came after the latest refusal ─────────────────────────────────
+
+
+async def test_walls_carry_each_walls_last_probe_time(pool):
+    await _stored_wall(pool, "openrouter", 402, refused_ago_s=3 * 3600, probed_ago_s=600)
+    await _stored_wall(pool, "never", 402, refused_ago_s=3 * 3600)
+    stored = await pool.fetchval(
+        "SELECT probed_at FROM provider_walls WHERE provider = 'openrouter'"
+    )
+
+    got = await routing.walls(pool)
+
+    assert "probed_at" in got[KEY], sorted(got[KEY])
+    assert got[KEY]["probed_at"] == stored
+    assert got[("never", routing.WHOLE_PROVIDER)]["probed_at"] is None
+
+
+def test_the_walled_words_say_when_it_was_last_probed_after_the_refusal():
+    now = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
+    wall = {
+        "reason": "openrouter refused (402): Insufficient credits",
+        "refused_at": datetime(2026, 10, 13, 17, 59, 24, tzinfo=UTC),
+        "probed_at": datetime(2026, 10, 14, 9, 12, 59, tzinfo=UTC),
+        "walled_until": datetime(2026, 10, 14, 17, 59, 24, tzinfo=UTC),
+    }
+
+    assert routing.walled_words(wall, now=now) == (
+        "openrouter refused (402): Insufficient credits — refused at 10-13 17:59 UTC; "
+        "last probed at 10-14 09:12 UTC, not served — walled for another 510 min"
+    )
+    # A probe BEFORE the latest refusal (a real turn refused since) is not
+    # the latest word: the refusal is, and nothing has retried since.
+    earlier = {**wall, "probed_at": datetime(2026, 10, 13, 16, 0, tzinfo=UTC)}
+    assert "; not retried since — " in routing.walled_words(earlier, now=now)
+    never = {**wall, "probed_at": None}
+    assert "; not retried since — " in routing.walled_words(never, now=now)
+
+
+# ── c5: a probe that made no call never stamps probed_at ──────────────────
+
+
+async def test_a_probe_that_made_no_call_leaves_the_wall_never_probed(client, pool, mount_backend):
+    fake = await _cloud(
+        client, mount_backend, "openrouter", BASE, FakeOpenAICompat(accepts_key="sk-1")
+    )
+    row = await providers.get_row(pool, "openrouter")
+    await routing.record_refusal(pool, row, 402, CREDITS)  # no refusal on the ledger
+    await pool.execute(
+        "UPDATE provider_walls SET updated_at = now() - make_interval(secs => 7200.0)"
+    )
+
+    await wall_probe.tick(app, pool)
+
+    assert _completion_posts(fake) == []
+    assert (await _wall_row(pool))["probed_at"] is None
+    words = routing.walled_words((await routing.walls(pool))[KEY])
+    assert "; not retried since — " in words, words
+
+
+# ── c2 (COVERAGE): the refusal's wall reason quotes the probe's own sentence
+
+
+async def test_a_refused_probe_walls_with_the_providers_own_refusal_sentence(
+    client, pool, mount_backend
+):
+    await _walled_openrouter(client, pool, mount_backend)
+
+    await wall_probe.tick(app, pool)
+
+    reason = (await _wall_row(pool))["reason"]
+    # The body's error message, as a turn's refusal is quoted — not empty,
+    # not the raw "HTTP 402: {...}" JSON head.
+    assert reason.startswith(
+        "openrouter refused (402): This request requires more credits, or fewer max_tokens. "
+        "You requested up to 1 tokens, but can only afford 0."
+    ), reason

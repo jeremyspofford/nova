@@ -19,7 +19,8 @@ from types import SimpleNamespace
 
 import asyncpg
 
-from app import adapters, providers, usage
+from app import adapters, providers, routing, usage
+from app.adapters.base import refusal_words
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +45,15 @@ class ProbeResult:
     provider verifiably served a completion; otherwise `reason` states why
     not (a refusal, an answer that was not a completion, or no call at all).
     `model` is the model probed and `status` the HTTP status it answered,
-    both None when no call was made."""
+    both None when no call was made. `detail` is the refusal body's own
+    sentence (adapters.base.refusal_words), what a refusal's wall reason
+    quotes, as a turn's refusal is quoted."""
 
     served: bool
     reason: str | None = None
     model: str | None = None
     status: int | None = None
+    detail: str | None = None
 
 
 async def refused_model(pool: asyncpg.Pool, provider: str) -> str | None:
@@ -107,7 +111,11 @@ async def probe_wall(app, pool: asyncpg.Pool, wall: dict) -> ProbeResult:
     )
     if error is not None:
         return ProbeResult(
-            served=False, reason=f"{provider} probe: {error}", model=model, status=call.status
+            served=False,
+            reason=f"{provider} probe: {error}",
+            model=model,
+            status=call.status,
+            detail=refusal_words(call.content) or error,
         )
     return ProbeResult(served=True, model=model, status=call.status)
 
@@ -134,7 +142,22 @@ async def due_walls(pool: asyncpg.Pool) -> list[dict]:
 
 async def tick(app, pool: asyncpg.Pool) -> None:
     """Probe every due credit wall once (through probe_wall, so each probe is
-    one call and one ledger row) and stamp its probed_at.
+    one call and one ledger row) and move the wall by what the probe found,
+    through routing's own wall functions — never a second copy of the rules:
+
+    - served: routing.note_success lifts the provider's wall and the probed
+      model's (a sibling model's outage wall stands), logged "wall lifted by
+      probe".
+    - refused with a routing.WALL_STATUSES status (402: still out of credit):
+      routing.record_refusal — a strike, a longer wall, and the refusal time
+      is the probe's. probed_at is set to that same refusal time, so the
+      words say "not retried since", never "last probed" after it.
+    - any other failure (no connection, a 5xx, a 200 that is not a
+      completion): the wall is left as it stands — no outage wall is added
+      for a probe — and only probed_at is stamped, so the words say when it
+      was last probed.
+    - no call made (no refused model on record): nothing is stamped, so the
+      words never claim a probe that did not happen.
 
     A probe that raises is logged with its traceback and the tick moves on to
     the next wall, so one broken provider never starves the others; that
@@ -147,15 +170,27 @@ async def tick(app, pool: asyncpg.Pool) -> None:
         except Exception:
             logger.exception("wall probe of %s raised; the next tick tries again", provider)
             continue
+        if result.served:
+            await routing.note_success(pool, provider, result.model)
+            logger.info("wall lifted by probe: %s served %s", provider, result.model)
+            continue
+        if result.model is None:
+            logger.info("wall probe: %s not probed: %s", provider, result.reason)
+            continue
+        refused = result.status in routing.WALL_STATUSES
+        if refused:
+            row = await providers.get_row(pool, provider)
+            await routing.record_refusal(
+                pool, row, result.status, result.detail or "", model=result.model
+            )
         await pool.execute(
-            "UPDATE provider_walls SET probed_at = now() WHERE provider = $1 AND model = $2",
+            "UPDATE provider_walls SET probed_at = "
+            + ("updated_at" if refused else "now()")
+            + " WHERE provider = $1 AND model = $2",
             provider,
             model,
         )
-        if result.served:
-            logger.info("wall probe: %s served %s", provider, result.model)
-        else:
-            logger.info("wall probe: %s not served: %s", provider, result.reason)
+        logger.info("wall probe: %s not served: %s", provider, result.reason)
 
 
 async def loop(app, pool: asyncpg.Pool, *, every: float | None = None, sleep=None) -> None:
