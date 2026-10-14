@@ -279,12 +279,31 @@ SERVICE_TIMEOUT = httpx.Timeout(3.0)
 CLIENT_WINDOW_DAYS = 30
 
 
-async def _service(app, name: str, link: peers.Link) -> dict:
+SERVICE_HEALTH_PATH = "/health/live"
+
+
+def _record_memory_probe(link: peers.Link, facts_sink: list[dict] | None, reached: bool) -> None:
+    """A probe of MEMORY is a request sent to memory: recorded on the turn's
+    facts with the fact memory_tools' door files for every request it sends
+    ({memory_call: path, reached}), so the trace says she checked memory
+    whichever tool did it (S37c T11). reached = an answer came back, a refusal
+    included. Guards read that fact only on memory_* tools, so this changes
+    no guard. Imported inside: app.tools imports modules that import this."""
+    if facts_sink is None or link != peers.MEMORY:
+        return
+    from app.tools import memory_tools
+
+    facts_sink.append({memory_tools.MEMORY_CALL_FACT: SERVICE_HEALTH_PATH, "reached": reached})
+
+
+async def _service(app, name: str, link: peers.Link, facts_sink: list[dict] | None = None) -> dict:
     try:
         async with peers.client(app, link, SERVICE_TIMEOUT) as client:
-            response = await client.get("/health/live")
+            response = await client.get(SERVICE_HEALTH_PATH)
     except Exception as exc:
+        _record_memory_probe(link, facts_sink, reached=False)
         return {"name": name, "state": "unreachable", "reason": peers.reason(exc)}
+    _record_memory_probe(link, facts_sink, reached=True)
     if response.status_code != 200:
         return {"name": name, "state": "unhealthy", "reason": f"answered {response.status_code}"}
     return {"name": name, "state": "up", "reason": None}
@@ -470,7 +489,7 @@ async def topology(app, facts_sink: list[dict] | None = None) -> dict:
         engine_machines(),
         remote_machines(),
         _service(app, "gateway", peers.GATEWAY),
-        _service(app, "memory", peers.MEMORY),
+        _service(app, "memory", peers.MEMORY, facts_sink),
     )
     # The hub's own agent is the one whose socket came through the host's own
     # door (S42b P15) — the same fact devices.device_spec calls `hub`.

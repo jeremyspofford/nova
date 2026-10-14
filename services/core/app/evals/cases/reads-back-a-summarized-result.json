@@ -1,7 +1,7 @@
 {
   "id": "reads-back-a-summarized-result",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "message": "Read the whole deploy log at http://notes.example.invalid/deploys in your browser, from its first part to its last. Its final note names the commit that broke production: tell me the number of the entry that deployed that commit.",
   "mcp_servers": [
     {

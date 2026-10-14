@@ -178,7 +178,7 @@ def _cases_of(rows: list[dict], suite_cases: list[cases_mod.Case]) -> list[dict]
     """The run's rows as API cases, in the suite's case order (rows land in that
     order anyway — the job is sequential — so an unknown case sorts last, in
     landed order)."""
-    messages = {c.id: c.message for c in suite_cases}
+    messages = {c.id: c.shown_message for c in suite_cases}
     order = {c.id: i for i, c in enumerate(suite_cases)}
     return sorted(
         (_row_result(row, messages.get(row["case_id"])) for row in rows),

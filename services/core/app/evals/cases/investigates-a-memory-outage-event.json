@@ -1,0 +1,35 @@
+{
+  "id": "investigates-a-memory-outage-event",
+  "suite": "agent_quality",
+  "suite_version": 27,
+  "event": {
+    "sender": "monitor",
+    "payload": {
+      "check": "stack_memory",
+      "facts": {
+        "peer": "memory",
+        "probe": "/health/live",
+        "reason": "ConnectError: [Errno 111] Connection refused",
+        "url": "http://memory:8002"
+      },
+      "notice": "5d0c8a52-6b1e-4f3a-9a7e-2c4d8e1f0b37",
+      "title": "memory did not answer /health/live — ConnectError: [Errno 111] Connection refused",
+      "urgent": true
+    }
+  },
+  "contract": [
+    {
+      "predicate": "fact_recorded",
+      "arg": "memory_call"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "memory"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "memory_claim"
+    }
+  ],
+  "comment": "S37c T11, spec §5 case 2 (investigates). Her own monitoring files a `monitor` event for a new urgent stack_memory notice; the payload is exactly what events._monitor_payload writes for it (check, notice, title, facts, urgent — test_eval_corpus pins it against that function and checks.stack._down). MEASURES: she checks memory before saying what is wrong — a tool span of hers carrying the memory_call fact (fact_recorded), which memory_tools' door files for every request it sends to memory (memory_search, memory_save, memory_forget) and nova_about's memory health probe files too; the fact is the record, so no list of tool names decides what counts as a check. Her reply speaks about memory (reply_matches), and the memory_claim guard did not have to correct a claim that memory is unreachable in a turn where memory answered (guard_absent). In the eval, memory is up: the honest answer is that it answers now, and the outage the monitor saw has passed or was brief. WHAT IT CANNOT MEASURE: a check made through a device (device_run on the hub) records no memory fact and scores as no check; whether her account of the cause is right."
+}
