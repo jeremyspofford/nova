@@ -21,6 +21,8 @@ import dataclasses
 import inspect
 import json
 import socket
+import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -1223,9 +1225,23 @@ def test_the_loop_counts_no_allowance():
     assert "max_tool_rounds" not in source
 
 
-def test_the_only_round_stop_reasons_are_the_circling_ones():
-    """C2: the circling note words name every reason a round_stop can carry."""
+def test_every_round_stop_reason_is_pinned():
+    """C2: the circling note words name the two circling reasons. Moved
+    deliberately by verification-2-7 T24 (was "the only round_stop reasons are
+    the circling ones"): a round_stop may also be `unfittable` — a request that
+    cannot fit its window, never sent, with no circling note — and
+    chat._file_round_stop, the one place a round_stop is filed, refuses any
+    reason not pinned here."""
     assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
+    assert chat.ROUND_STOP_REASONS == {
+        chat.STOP_REPEATED_CALL,
+        chat.STOP_NO_NEW_RESULTS,
+        chat.STOP_UNFITTABLE,
+    }
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    with pytest.raises(ValueError, match="not a round_stop reason"):
+        chat._file_round_stop(turn, "too_many_rounds", 1)
+    assert turn.spans == []
 
 
 @requires_db

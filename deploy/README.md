@@ -314,7 +314,15 @@ one of the stops below, and each one says why.
   what is sent is fitted; the conversation and the trace keep every result whole. The
   trace records `context_window` and, when it trimmed, `context_trimmed` on the round.
   The window is remembered per serving link, so the first round of the next turn is
-  fitted too; a link whose window was never stated is sent as is.
+  fitted too; a link whose window was never stated is sent as is. The tools offered to
+  her are sent with every round and count against the window too; they are never
+  trimmed. When her instructions, your message and the tools do not fit even with every
+  earlier tool result trimmed, the round is not sent at all: the turn ends with
+  `Stopped: the next request to <model> was not sent, because it cannot fit its W-token context window …`,
+  naming the window, the request's estimated prompt tokens and the tools' share of
+  them, after what the tools that already ran returned. The trace records it as a
+  `round_stop` step with the reason `unfittable` and those sizes. No answer round
+  follows that stop.
 - **A round the window still cut is re-sent once.** When the gateway counts a prompt
   that reached the window (`prompt_tokens` at the window minus one), the round is marked
   `context_truncated`; its text is not kept and its tool calls do not run. It is
