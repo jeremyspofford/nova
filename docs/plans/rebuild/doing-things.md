@@ -364,9 +364,146 @@ owner's message (ruling 2026-09-27).
 - **Credentials never reach the trace:** masking of `env` / header / token
   maps and credential-shaped values in `chat._span_arguments`, BEFORE
   `_bounded`, pinned by a test that no token bytes reach `turn_spans`.
+  Since the mask-bearer fix (2026-10-14) every place a turn's text is saved
+  goes through one mask, not only span arguments. See "The credential mask"
+  below.
 - **A deploy is `serving` only after a read-back** — container healthy AND
   `/status` reporting the expected content hash. "Requested" and
   "confirmed" are different columns.
+
+### The credential mask
+
+Found in the S37c live walk (turn `3b7781fa`). He pasted a key into chat
+and asked her to run `curl ... -H "Authorization: Bearer <key>"` through
+`device_run`. The key was stored in plain text in span meta, kept tool
+results, her reply and the memory journal. The fix is one function,
+`services/core/app/credential_mask.py`, called at every place core saves
+turn text. It is mechanical and derived. It never reads what she says as a
+control.
+
+**What it masks.** It replaces the VALUE after a credential marker and
+keeps the marker. Five shapes:
+
+- **A credential header**, in any quoting: `Authorization: Bearer x`,
+  `-H 'X-Api-Key: x'`, `{"Authorization": "Bearer x"}`, and the
+  json-escaped `\"Authorization: Bearer x\"`. The name must be a header in
+  its own right: Authorization, Proxy-Authorization, Cookie, Set-Cookie,
+  X-Api-Key, Api-Key, X-Auth-Token, X-Access-Token, X-Csrf-Token, or any
+  hyphenated `X-...-Token` / `X-...-Key`. Case does not matter. A prose
+  label that only contains a word (`Primary key:`, `Author:`, `Secret:`) is
+  not a header. A scheme word (Bearer, Basic, Token, Digest, ApiKey) is
+  kept.
+- **A bare `Bearer x`**, anywhere.
+- **A token by its own shape:** `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+  `github_pat_` or `sk-`, followed by 16 or more token characters.
+- **`KEY=value`** whose key is a credential key: env `GH_TOKEN=x`, a
+  query's `access_token=x`, `--api-key=x`. The keys are
+  `_CREDENTIAL_KEYS` and `_CREDENTIAL_SUFFIXES`, moved here from `chat.py`
+  (chat imports the same objects back).
+- **A flag** `--token x` or `--password x` whose key is a credential key.
+
+**Floors.** One value floor, `_looks_like_secret`: 16 or more characters,
+or 8 or more with a digit. It applies to header values (except cookies),
+bare Bearer and flags. So `Bearer authentication`, `--token documentation`,
+`Authorization: required-here` and `token: 5 left` stay as written. A
+Cookie or Set-Cookie value is masked only when it holds `=`, so
+`Cookie: chocolate chip` stays. A ghp_/sk- token has its 16-character floor
+in the pattern. `KEY=value` has no floor: `access_token=abc123` is masked.
+
+**The replacement.** `<masked:N chars>`, N being the value's length. A
+header or bare-Bearer value that ends a sentence keeps its trailing `.` or
+`:` outside the mask (`Bearer abc…1234.` -> `Bearer <masked:20 chars>.`); a
+ghp_/sk- token's pattern stops before them, so they stay outside too. A
+`KEY=value` or `--flag value` masks the punctuation with the value, and N
+counts it: `GH_TOKEN=abc12345.` -> `GH_TOKEN=<masked:9 chars>`.
+The mask is idempotent: `<` is never a value character, so a placeholder is
+never masked twice.
+
+**Where it runs.** Only where text is saved:
+
+- span meta at `traces.close_turn` (arguments, facts, result head, error);
+- kept tool results at `close_turn` (`chars` is the stored, masked length);
+- her reply row (`chat._persist_assistant`, which also covers delivery,
+  beats and the scheduler);
+- the user row in `chat._open_turn`;
+- the delegate brief's user row (`agents.delegate`);
+- the memory ingest payload, exchange and thread title (`chat._ingest`);
+- her own memory writes, at the one door (`memory_tools._call_memory`);
+- `device_jobs.argv` at insert, and a job's failure reasons (the frame
+  reason and `_text`);
+- `queued_messages.body` at claim, in the same UPDATE that records the
+  turn;
+- a `device_run` argv element, through `chat._argv_element_masked`. What
+  it masks also goes into the span's scrub, so the result head, error and
+  `run` fact lose the device's echo of it.
+
+`tests/test_mask_boundaries.py` drains one real turn and checks every
+boundary above for key bytes. Each pattern is in the timing sweep
+(`tests/test_guard_regex_timing.py`), at 200 and 1500 characters of padding,
+because the mask runs in core's event loop.
+
+**The running turn is not masked.** The model gets the real message and the
+real tool output. Her `read_result` reads what she was sent (an argv value
+was already shown as `[masked]` there, by the older span scrub). Only the
+row is masked. The current user row is never in its own turn's history, so
+masking it at insert changes nothing she sees.
+
+**A value masked once is masked wherever it repeats, that turn.** Every
+value a mask call replaced joins the turn's `Turn.secrets`. For a
+`name=value` value, the part after `=` joins too. A value under 8
+characters is never collected. Every boundary of that turn then also
+replaces those exact strings where they stand bare: her reply saying "the
+key is abc...", a later `cat` printing it, a memory write repeating it. The
+set lives on the Turn and is reached by turn id through a weak map
+(`traces.secrets_of`). It goes with the Turn. Another turn never uses it.
+Nothing fills it by hand.
+
+**What it deliberately does not touch, and why:**
+
+- prose words (token, key, bearer, secret) with no value shape, shas,
+  uuids, job ids — honest text must come out byte-identical;
+- ordinary URLs and their non-credential query params — `addresses.scrub`
+  is not run on free text, because it drops every query and would rewrite
+  her honest links;
+- `turn_actions.undo` — a revert must restore exact bytes, and a file may
+  legitimately hold a token;
+- `device_audit.summary` — it is a device-signed hash chain, and
+  re-verification would break;
+- `events.payload` — external sender input, not turn text;
+- `queued_messages.body` before claim — it is the input of a turn still to
+  run;
+- settings, `mcp_servers.token`, `event_senders` — credentials stored on
+  purpose;
+- anything the model sees during the turn.
+
+**Known survivors:**
+
+- `Cookie: a=1; b=2` masks the first pair only. The value stops at `;`, so
+  a second cookie stays in plain text.
+- `KEY=value` keeps no floor, so `token=placeholder` is masked, and since
+  the value joins the turn's set, every bare `placeholder` in her reply and
+  later results that turn is masked too. The set applies only the 8-char
+  floor, not `_looks_like_secret`.
+- Header names outside the set (GitLab's `Private-Token:`, `Api-Token:`)
+  are not masked as headers. Their value is caught only by another shape.
+- The user row is saved first. A value only a later tool masks stays bare
+  in that row.
+- A delegated agent's own turn does not inherit the caller's set. The brief
+  row is masked with it; the child's spans and reply are masked only by
+  what the child's own masks find.
+- Env values (`_env_masked`) and other span-scrub entries do not join the
+  turn's set. A bare env value echoed in a later result is saved.
+- `queued_messages.body` at claim and job reasons use the plain mask; there
+  is no live turn there.
+- Bare replacement is by substring: a collected value inside a longer word
+  is masked there too.
+- Timer titles and payloads, agent instructions and skill titles are
+  configured inputs, not turn text, and are saved unmasked.
+- Skills replay `args_redacted` from `turn_spans` (`skills.py`). A skill
+  learnt from a turn with a bearer replays the placeholder. That is
+  intended.
+- Rows written before this fix still hold their old values. The fix does
+  not rewrite history.
 
 ## The slices
 
@@ -1044,6 +1181,11 @@ Status as of `e9c871f3`.
 - **Fixed (S29a):** a credential-shaped argv value (`KEY=value` with a
   credential key, or a `ghp_`/`github_pat_`/`sk-` token) is masked in the
   span's arguments and scrubbed from its result, error and facts.
+- **Fixed (mask-bearer, 2026-10-14):** a bearer key in a `device_run`
+  argv (`-H "Authorization: Bearer x"`) reached span meta, kept tool
+  results, her reply and the memory journal in plain text. One mask now
+  runs at every place a turn's text is saved, and a value masked once is
+  masked wherever it repeats that turn. See "The credential mask".
 - **Fixed (S29a):** Activity renders span facts (run, file, key: value).
 - **Fixed (S29a):** the span result head length is one constant in
   `traces.py`, read by both chat and live_facts.

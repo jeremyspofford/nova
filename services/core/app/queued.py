@@ -27,6 +27,8 @@ import uuid
 
 import asyncpg
 
+from app import credential_mask
+
 logger = logging.getLogger("core")
 
 # The columns every caller reads a queued row back through, so the API shape and
@@ -170,11 +172,17 @@ async def claim_next(conn: asyncpg.Connection, conversation_id: uuid.UUID) -> as
 
 
 async def mark_claimed(conn: asyncpg.Connection, queued_id: uuid.UUID, turn_id: uuid.UUID) -> None:
-    """Record which turn ran this message. Same transaction as the turn's row."""
+    """Record which turn ran this message. Same transaction as the turn's row.
+
+    mask-bearer T2: the body is masked HERE, at the claim — before it, it is
+    the input of a turn still to run and must stay as he typed it; after it,
+    the turn holds the body in memory and the row is only a record."""
+    body = await conn.fetchval("SELECT body FROM queued_messages WHERE id = $1", queued_id)
     await conn.execute(
-        "UPDATE queued_messages SET claimed_at = now(), turn_id = $2 WHERE id = $1",
+        "UPDATE queued_messages SET claimed_at = now(), turn_id = $2, body = $3 WHERE id = $1",
         queued_id,
         turn_id,
+        credential_mask.mask(body) if isinstance(body, str) else body,
     )
 
 
