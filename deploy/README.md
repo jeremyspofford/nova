@@ -513,10 +513,12 @@ so a change cannot edit the shape of its own box.
   worktree starts it again if it was stopped. A box idle for 30 minutes is
   stopped (with its Postgres) by the agent — never while a job runs in it
   (`device_job_start` with a cwd in the worktree, S30c; a whole-suite job
-  holds the CPU lock for its whole run). Removing a box, its Postgres,
-  network and volume is S32.3's (`close_change` / `repo_land`) — until then
-  they persist (`docker ps -a --filter label=nova.box`, `docker network ls
-  --filter label=nova.box`).
+  holds the CPU lock for its whole run). A box, its Postgres, network and
+  volume are removed by `close_change`, or by a landing that merged (below),
+  through novad's `box.remove`. An agent older than that answers "unknown
+  capability" and the tool says to update it with `machine_update`; until
+  then boxes persist (`docker ps -a --filter label=nova.box`, `docker
+  network ls --filter label=nova.box`).
 - **Where it ran.** Every `device_run` result, its run fact and its trace span
   carry `ran_in` (`box` or `host`) and, for a box, its name. A box that cannot
   start is an `Error:` naming why; nothing ever falls back to the host.
@@ -544,6 +546,37 @@ so a change cannot edit the shape of its own box.
 - **The seal test.** `deploy/devbox/seal_test.sh` (docker, run it under the
   CPU lock) builds a throwaway image and checks every row above against
   real containers, then removes everything it made.
+
+## Her landing step (S32.3)
+
+She commits and lands her own changes. The design is
+`docs/plans/rebuild/s32/spec.md` §5; what was built is §5.5.
+
+- **`change_commit(change, message)`** commits everything in her worktree,
+  on the host. The author is Nova, and the commit carries `Nova-Turn` and
+  `Nova-Coder` trailers.
+- **`repo_land(change)`** returns a landing id at once and judges in the
+  background, one landing at a time: rebase onto `main`, copy the commit
+  with `git archive` into a fresh judge box, run the suites `suites.toml` on
+  `main` picks (each one an S30c job under the CPU lock), and record the
+  verdict: `green`, `red`, `could_not_measure` or `conflict`. Only `green`
+  publishes: the judged SHA is pushed to her branch, a PR is opened with the
+  verdict, the same SHA is pushed to `main` as a fast-forward (GitHub marks
+  the PR merged), and this checkout follows with `merge --ff-only`. Then her
+  box and worktree are removed; her branch is kept.
+- **`landing_status(id)`** reads a landing; with no id it lists the newest
+  ten. **`repo_diff(change, path?)`** shows her commits against `main`, by
+  file. **`close_change(change)`** drops a change without landing it.
+  **`stack_status`** says, per service, whether the running containers are
+  built from `main`'s source. `list_changes` names each change's last
+  landing.
+- **Needs on the repo machine:** `gh` installed and signed in (without it,
+  the branch is pushed and the landing is green but not merged), and a push
+  credential for the repo. The judge box counts toward `box.max_running`:
+  with two change boxes running, a landing cannot start its box and says
+  so.
+- **Restarts.** A landing still running when core restarts is marked
+  `could_not_measure` at startup; land it again.
 
 ## Tailnet access
 

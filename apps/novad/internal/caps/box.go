@@ -194,3 +194,29 @@ func boxStatus(ctx context.Context, r Request) Outcome {
 	out.Meta = map[string]any{"boxes": boxes}
 	return out
 }
+
+// boxRemove takes a change's box down — box, its Postgres, network and
+// dependency cache — for a landing's close and close_change (S32.3 T7). Only
+// the change id crosses the wire: Manager.Remove derives every name from it,
+// so no path or name she sends can reach docker. What is already gone is
+// skipped; a docker refusal is stated and nothing claims removed.
+func boxRemove(ctx context.Context, r Request) Outcome {
+	m := r.Deps.Box
+	if m == nil {
+		return fail(noBoxManager)
+	}
+	change, ok := r.Args["change"].(string)
+	if !ok {
+		return fail("box.remove needs a string 'change', got %T; nothing was removed", r.Args["change"])
+	}
+	if !box.ValidChange(change) {
+		return fail("box.remove: change %q is not a change id (6 lowercase hex); nothing was removed", change)
+	}
+	name := box.Names(change).Box
+	if err := m.Remove(ctx, change); err != nil {
+		return fail("cannot remove the box %s: %v", name, err)
+	}
+	out := ok0(name + " removed: its box, database, network and dependency cache (any already gone were skipped)")
+	out.Meta = map[string]any{"box": name, "removed": true}
+	return out
+}

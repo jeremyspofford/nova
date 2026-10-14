@@ -122,6 +122,29 @@ EXCUSED: dict[str, str] = {
         "ends a job through the agent's job.stop; "
         "device_run's row corrects \"I can't run commands\" on a device"
     ),
+    # S32.3 T13 (2026-10-13): her landing step acts on the machine holding her
+    # repository through devices._command (git, gh, docker, box.remove), like
+    # start_change; no denial shape ("I can't land my own code") has a row yet.
+    "change_commit": (
+        "runs git add + commit in her worktree on the repository machine through "
+        "devices._command; 'I can't commit my code' has no row yet"
+    ),
+    "repo_land": (
+        "rebases, judges in a box and on green pushes, opens a PR and moves main on the "
+        "repository machine through devices._command; 'I can't land my code' has no row yet"
+    ),
+    "repo_diff": (
+        "reads a change's git diff on the repository machine through devices._command; "
+        "an inventory read like list_changes, no denial shape of its own"
+    ),
+    "close_change": (
+        "removes a change's box and worktree on the repository machine through "
+        "devices._command; no denial shape of its own"
+    ),
+    "stack_status": (
+        "reads the running containers' build labels (docker ps) and main's tree hashes on "
+        "the repository machine through devices._command; a state read, no denial shape"
+    ),
     "run_skill": (
         "acts only through the registered tools its steps call, each of which "
         "is classified here on its own"
@@ -154,6 +177,8 @@ NO_OUTSIDE_ACTION: dict[str, str] = {
     "set_chat_model": "writes the chat pick in Nova's settings",
     "spend_report": "reads Nova's spend ledger",
     "update_agent": "edits an agent row in Nova",
+    # S32.3 T13 (2026-10-13): a landing read back from Nova's landings table.
+    "landing_status": "reads Nova's landings table",
 }
 
 
@@ -307,3 +332,20 @@ def test_guardfu_t3_device_admin_path_is_covered_by_a_row_not_excused():
     assert "device_admin_path" not in EXCUSED
     assert "device_admin_path" in _covered()
     assert "device_admin_path" not in NO_OUTSIDE_ACTION
+
+
+@pytest.mark.parametrize(
+    "name", ["change_commit", "repo_land", "repo_diff", "close_change", "stack_status"]
+)
+def test_s32_3_t13_the_repo_machine_landing_tools_are_excused(name):
+    assert name in tools.REGISTRY
+    assert EXCUSED[name].strip()
+    assert name not in _covered()
+    assert name not in NO_OUTSIDE_ACTION
+
+
+def test_s32_3_t13_landing_status_acts_only_inside_nova():
+    assert "landing_status" in tools.REGISTRY
+    assert NO_OUTSIDE_ACTION["landing_status"].strip()
+    assert "landing_status" not in _covered()
+    assert "landing_status" not in EXCUSED

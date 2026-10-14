@@ -559,11 +559,23 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     — and TWO `_CAPABILITY_TOOLS` rows, reached only by the new walk
     (device_edit_file, device_admin_path; appended last, so no id moved).
     workspace_list_files' row was narrowed in place (its allowlisted tail is
-    strings, not Patterns): 236 -> 237, 317 -> 320, the difference 81 -> 83."""
+    strings, not Patterns): 236 -> 237, 317 -> 320, the difference 81 -> 83.
+
+    S32.3 T13 (2026-10-13, the `landed` claim kind: "it's merged", "the change
+    landed", "it's on main" with no green merged landing read this turn) added
+    ONE bare module Pattern, `_LANDED_CLAIM`, reached by both walks: 233 -> 234,
+    314 -> 315, the difference 81 unchanged. Its pieces (`_LANDED_SUBJECT`,
+    `_LANDED_OBJECT`, ...) are strings, not Patterns; its cuts reuse
+    `_TESTS_PASSED_CUT` and `_TESTS_PASSED_PRESENT_CUT`, and what backs it is
+    read from landing facts with dict lookups, no regex.
+
+    S32.3 T15 (2026-10-13) rebased this branch onto the guard follow-ups
+    above; recomputed from the merged tree, both moves hold together:
+    237 -> 238, 320 -> 321, the difference 83 unchanged."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 237, len(old)
-    assert len(new) == 320, len(new)
+    assert len(old) == 238, len(old)
+    assert len(new) == 321, len(new)
     assert len(new) - len(old) == 83
 
 
@@ -2551,3 +2563,66 @@ def test_the_sweep_reaches_the_wake_claim_patterns():
     swept = _every_pattern().values()
     for name in names:
         assert any(p is getattr(guards, name) for p in swept), name
+
+
+# -- S32.3 T13 (2026-10-13): the `landed` claim's regexes are swept -------------
+# Every module Pattern the landed claim reads is named _LANDED_*, so the global
+# padding sweep times each one (the count pin above moved with them,
+# deliberately); and narration reads 50 KB of claims, cuts, near-misses and
+# landing-backed shapes in linear time.
+
+
+def test_the_sweep_reaches_the_landed_claim_patterns():
+    names = [
+        name
+        for name in dir(guards)
+        if name.startswith("_LANDED") and isinstance(getattr(guards, name), re.Pattern)
+    ]
+    assert names, "the landed claim has no _LANDED_* pattern"
+    swept = _every_pattern().values()
+    for name in names:
+        assert any(p is getattr(guards, name) for p in swept), name
+
+
+LANDED_FIFTY_KB = [
+    ("claims", _repeat("It's merged and the change landed; ")),
+    ("first person", _repeat("I merged it, I've landed the change 3f2a1b, ")),
+    ("on main", _repeat("the fix is now on main, pushed to main, ")),
+    ("near misses", _repeat("the the the change change merged merged main.py ")),
+    ("subjects without a verb", _repeat("it the my change our branch this fix ")),
+    ("cuts", _repeat("it isn't merged, once it's on main, yesterday it landed, ")),
+    ("hex runs", _repeat("change " + "a" * 40 + " landed ")),
+    ("long words", _repeat("the " + "x" * 29 + " " + "y" * 29 + " change is merged ")),
+]
+
+
+@pytest.mark.parametrize("label,build", LANDED_FIFTY_KB, ids=[c[0] for c in LANDED_FIFTY_KB])
+@pytest.mark.parametrize("backed", [False, True], ids=["no landing", "green landing"])
+def test_narration_reads_landed_claims_in_50_kb_in_linear_time(label, build, backed):
+    spans = []
+    if backed:
+        spans = [
+            _span(
+                "tool",
+                "landing_status",
+                ok=True,
+                facts=[
+                    {
+                        "landing": {
+                            "id": "5b0c7a43-1f0e-4c39-9a51-7a4f8f0d2c11",
+                            "change": "3f2a1b",
+                            "verdict": "green",
+                            "merged_sha": "4f1c2a9e8b7d6c5b4a3928170f6e5d4c3b2a1908",
+                            "suites": [],
+                        }
+                    }
+                ],
+            )
+        ]
+    _assert_linear(f"landed {label}", lambda r: guards.narration_check(r, spans), build)
+
+
+def test_narration_finds_landed_claims_in_a_long_reply():
+    correction = guards.narration_check(LANDED_FIFTY_KB[0][1](12_500), [])
+    assert correction is not None
+    assert "landed" in [claim.kind for claim in correction.claims]

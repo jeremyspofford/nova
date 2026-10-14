@@ -3755,6 +3755,10 @@ async def _dispatch_calls(
         call_ctx = dataclasses.replace(
             tool_ctx,
             progress=lambda detail, _name=call.name: _report_progress(turn, _name, emit, detail),
+            # Which coder made this call (S32.3 T2): read off the round that
+            # produced it, per call, because a fallback can move the model
+            # between rounds. Synchronous; provenance a commit records.
+            coder=_coder_of(turn),
             # A scripted skill's steps (S18) run through here, so each one
             # files its OWN span under the real tool's name. The seam exists
             # because dispatch does not write spans and _run_tool does: an
@@ -4641,6 +4645,27 @@ def _stated_window(header: str | None) -> int | None:
         logger.warning("ignored a context window the gateway stated as %r", header[:40])
         return None
     return window if window > 0 else None
+
+
+def _coder_of(turn: traces.Turn) -> str | None:
+    """Which coder is writing, for ToolContext.coder (S32.3 T2; nova-codes
+    decision 6): "nova-loop <model>" for her own turn, "nova-agent <agent id>
+    <model>" for an agent's. The model is the one that served the turn's
+    latest ROUND — the round whose reply made the call being dispatched — as
+    the gateway stated it (served_by), else what that round asked for, else
+    the model the turn opened with. A judge or redirect call (no "round") is
+    never the coder. None when no model is known: the commit then says so.
+    Provenance only; nothing reads it to decide."""
+    model = ""
+    for span in reversed(turn.spans):
+        if span.kind == "llm_call" and "round" in span.meta:
+            model = span.meta.get("served_by") or span.meta.get("model") or ""
+            break
+    model = model or turn.model or ""
+    if not isinstance(model, str) or not model:
+        return None
+    who = "nova-loop" if turn.agent_id is None else f"nova-agent {turn.agent_id}"
+    return f"{who} {model}"
 
 
 def _last_served_link(turn: traces.Turn) -> str | None:

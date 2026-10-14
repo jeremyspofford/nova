@@ -243,6 +243,90 @@ TESTS_FAILED_RUN_TEXT = (
     "show the tests passing."
 )
 _TESTS_COMMAND_CHARS = 80
+# S32.3 T13: a landing is a test result too. When the deciding record is a red
+# landing (landing_status / repo_land filed its `landing` fact), the correction
+# names the landing and its first suite that did not pass.
+TESTS_LANDING_TEXT = (
+    "Correction: the last test result this turn, landing {id}, reads {verdict}{suite} — the "
+    "record does not show the tests passing."
+)
+_LANDING_SUITE_CHARS = 40
+
+# S32.3 T13 (spec §5.3): her completed claim that a change LANDED — "I merged
+# it", "the change landed", "it's merged", "it's on main", "pushed to main".
+# Backed ONLY by a `landing` fact this turn (tools/landing.landing_fact, filed
+# by landing_status and repo_land) whose verdict is green AND which carries a
+# merged SHA (_landed_backed): a running, red, could_not_measure or conflict
+# landing, or a green one whose publish did not reach main, is not "on main".
+#
+# Precision first. The subject must be hers: "it", or the/this/that/my/our [one
+# word] change/branch/PR/fix/commit/patch/landing/feature, or "change <6 hex>"
+# — never "your …" (the owner's own work). "merged"/"landed" after "I"/"we"
+# needs such an object ("I merged the two notes" is not a landing). "main" is
+# never followed by ".py", "-x" or "/x". A hedge, negation, condition or
+# someone else's report before it cuts it (_TESTS_PASSED_CUT, and the present
+# cut for "once/when/…"); a prior time or another's agent anywhere in the
+# clause makes it no claim (_externally_attributed, shared by every kind).
+# Every word gap is bounded and each repetition starts at a word's front, so an
+# attempt is a fixed length from its start: linear over a whole reply.
+LANDED_KIND = "landed"
+_LANDED_NOUN = r"(?:change|branch|pr|pull\s++request|fix|commit|patch|landing|feature)s?\b"
+_LANDED_CHANGE_ID = r"change\s++(?:nova-)?[0-9a-f]{6}\b"
+_LANDED_SUBJECT = (
+    r"\b(?:it|(?:the|this|that|my|our)\s++(?:[\w-]{1,30}\s++)?"
+    + _LANDED_NOUN
+    + r"|(?:the\s++)?"
+    + _LANDED_CHANGE_ID
+    + r")"
+)
+_LANDED_OBJECT = (
+    r"(?:it|them|(?:(?:the|this|that|my|our)\s++)?(?:[\w-]{1,30}\s++)?"
+    + _LANDED_NOUN
+    + r"|"
+    + _LANDED_CHANGE_ID
+    + r")"
+)
+_LANDED_ADVERB = r"(?:(?:been|now|already|successfully|just|finally|also|all|live|safely)\s++){0,2}"
+_LANDED_MAIN = r"main\b(?![.\-/]\w)"
+_LANDED_CLAIM = re.compile(
+    # <subject> ['s|is|was|got|has been] merged|landed
+    _LANDED_SUBJECT
+    + r"(?:['’]s\s++|\s++(?:(?:is|was|are|were|got|has|have)\s++)?)"
+    + _LANDED_ADVERB
+    + r"(?:merged|landed)\b"
+    # <subject> 's|is|was|has been on|in main
+    + r"|"
+    + _LANDED_SUBJECT
+    + r"(?:['’]s\s++|\s++(?:is|was|are|were|has\s++been|have\s++been)\s++)"
+    + _LANDED_ADVERB
+    + r"(?:on|in)\s++"
+    + _LANDED_MAIN
+    # I|we [have] merged|landed <object>
+    + r"|\b(?:I|we)(?:\s++have|['’]ve)?\s++"
+    + _LANDED_ADVERB
+    + r"(?:landed|merged)\s++"
+    + _LANDED_OBJECT
+    # [the clause's front | I/we | <subject> [aux]] merged|landed|pushed [obj] (in)to main
+    + r"|(?:\A\s*+|\b(?:I|we)(?:\s++have|['’]ve)?\s++|"
+    + _LANDED_SUBJECT
+    + r"\s++(?:(?:is|was|are|were|got|has\s++been|have\s++been)\s++)?)"
+    + _LANDED_ADVERB
+    + r"(?:merged|landed|pushed)\s++(?:"
+    + _LANDED_OBJECT
+    + r"\s++)?(?:into|onto|to|on)\s++"
+    + _LANDED_MAIN,
+    re.I,
+)
+# The correction says what THIS TURN's record shows — true whatever an earlier
+# turn's landing did.
+LANDED_NO_LANDING_TEXT = (
+    "Correction: no landing was read this turn — nothing this turn shows the change merged on main."
+)
+LANDED_NOT_MERGED_TEXT = (
+    "Correction: the last landing read this turn, {id}, reads {state} — the record does not "
+    "show it merged on main."
+)
+_LANDING_ID_CHARS = 40
 
 # The programs that run a test suite, by their first word (after any wrapper:
 # env assignments, `uv run`, `npx`, a shell's `-c`). A program whose suite is
@@ -308,18 +392,45 @@ def _is_test_runner(argv: Sequence[str], depth: int = 0) -> bool:
     return False
 
 
-def _deciding_test_run(spans: Sequence[Any]) -> tuple[list[str], Any] | None:
-    """The LAST test-runner `run` fact this turn, as (argv, exit_code), or None
-    when no test runner ran. Every tool span's facts are read, ok or not: a
-    failed frame still files its run fact (T1), and a later failing run must
-    outrank an earlier pass. A run that is not a test runner changes nothing."""
-    last: tuple[list[str], Any] | None = None
+def _tool_facts(spans: Sequence[Any]):
+    """(span, its facts) for every tool span this turn, ok or not: a failed
+    frame still files what it determined."""
     for span in spans:
         if getattr(span, "kind", None) != "tool":
             continue
         meta = getattr(span, "meta", None) or {}
-        for fact in meta.get("facts") or ():
-            run = fact.get("run") if isinstance(fact, dict) else None
+        facts = [fact for fact in meta.get("facts") or () if isinstance(fact, dict)]
+        yield span, facts
+
+
+def _landing_of(fact: dict) -> dict | None:
+    landing = fact.get("landing")
+    return landing if isinstance(landing, dict) else None
+
+
+def _deciding_test_record(spans: Sequence[Any]) -> tuple | None:
+    """The LAST test result this turn, or None when there is none: a test-runner
+    `run` fact as ("run", argv, exit_code), or a span's `landing` facts as
+    ("landing", landing) — S32.3 T13: a green landing ran every suite main's
+    suites.toml chose and passed them, a red one failed one. A span listing
+    several landings counts as green if any is green, else as its first red;
+    a running, could_not_measure or conflict landing ran no verdict on the
+    tests and decides nothing. Every tool span's facts are read, ok or not: a
+    failed frame still files its run fact (T1), and a later failing run must
+    outrank an earlier pass. A run that is not a test runner changes nothing."""
+    last: tuple | None = None
+    for _span, facts in _tool_facts(spans):
+        greens: list[dict] = []
+        reds: list[dict] = []
+        for fact in facts:
+            landing = _landing_of(fact)
+            if landing is not None:
+                if landing.get("verdict") == "green":
+                    greens.append(landing)
+                elif landing.get("verdict") == "red":
+                    reds.append(landing)
+                continue
+            run = fact.get("run")
             if not isinstance(run, dict):
                 continue
             argv = run.get("argv")
@@ -327,28 +438,61 @@ def _deciding_test_run(spans: Sequence[Any]) -> tuple[list[str], Any] | None:
                 target = fact.get("target")
                 argv = target.split() if isinstance(target, str) else []
             if _is_test_runner(argv):
-                last = ([w for w in argv if isinstance(w, str)], run.get("exit_code"))
+                last = ("run", [w for w in argv if isinstance(w, str)], run.get("exit_code"))
+        if greens:
+            last = ("landing", greens[0])
+        elif reds:
+            last = ("landing", reds[0])
     return last
 
 
 def _tests_passed_backed(spans: Sequence[Any]) -> bool:
-    """Whether the deciding test run (_deciding_test_run) exited 0."""
-    last = _deciding_test_run(spans)
+    """Whether the deciding test result (_deciding_test_record) passed: a run
+    that exited 0, or a green landing."""
+    last = _deciding_test_record(spans)
     if last is None:
         return False
-    code = last[1]
+    if last[0] == "landing":
+        return last[1].get("verdict") == "green"
+    code = last[2]
     return code == 0 and not isinstance(code, bool)
+
+
+def _landing_id(landing: dict) -> str:
+    """A landing's id as the correction prints it: bounded, no backticks."""
+    return str(landing.get("id") or "with no id on record")[:_LANDING_ID_CHARS].replace("`", "'")
+
+
+def _failing_suite_text(landing: dict) -> str:
+    """': `<suite>` exited <n>' for the landing's first suite not passed, or ''."""
+    for suite in landing.get("suites") or ():
+        if not isinstance(suite, dict) or suite.get("outcome") == "passed":
+            continue
+        name = str(suite.get("suite") or "a suite")[:_LANDING_SUITE_CHARS].replace("`", "'")
+        code = suite.get("exit")
+        if isinstance(code, int) and not isinstance(code, bool):
+            return f": `{name}` exited {code}"
+        return f": `{name}` has no exit code on record"
+    return ""
 
 
 def _tests_correction_text(spans: Sequence[Any]) -> str:
     """The tests_passed correction, built from the facts the guard decided on:
-    the deciding run's command and exit code, or that no test runner ran. The
-    command drops KEY=value words (a credential in an env prefix never reaches
-    her reply) and is bounded."""
-    last = _deciding_test_run(spans)
+    the deciding run's command and exit code, the deciding landing and its
+    first suite not passed, or that no test runner ran. The command drops
+    KEY=value words (a credential in an env prefix never reaches her reply)
+    and is bounded."""
+    last = _deciding_test_record(spans)
     if last is None:
         return TESTS_NO_RUNNER_TEXT
-    argv, code = last
+    if last[0] == "landing":
+        landing = last[1]
+        return TESTS_LANDING_TEXT.format(
+            id=_landing_id(landing),
+            verdict=str(landing.get("verdict")),
+            suite=_failing_suite_text(landing),
+        )
+    _kind, argv, code = last
     command = " ".join(w for w in argv if "=" not in w).replace("`", "'")
     if len(command) > _TESTS_COMMAND_CHARS:
         command = command[: _TESTS_COMMAND_CHARS - 1] + "…"
@@ -357,6 +501,51 @@ def _tests_correction_text(spans: Sequence[Any]) -> str:
     else:
         outcome = "has no exit code on record"
     return TESTS_FAILED_RUN_TEXT.format(command=command, outcome=outcome)
+
+
+def _landings_read(spans: Sequence[Any]) -> list[dict]:
+    """Every `landing` fact this turn, in the order filed."""
+    return [
+        landing
+        for _span, facts in _tool_facts(spans)
+        for landing in map(_landing_of, facts)
+        if landing is not None
+    ]
+
+
+def _landed_backed(spans: Sequence[Any]) -> bool:
+    """S32.3 T13: whether a landing read this turn is green AND carries a merged
+    SHA — the only record that puts her change on main."""
+    for landing in _landings_read(spans):
+        merged = landing.get("merged_sha")
+        if landing.get("verdict") == "green" and isinstance(merged, str) and merged.strip():
+            return True
+    return False
+
+
+def _landed_correction_text(spans: Sequence[Any]) -> str:
+    """The landed correction, true in every case: no landing was read this
+    turn, or the last one read, by id, and what it reads."""
+    read = _landings_read(spans)
+    if not read:
+        return LANDED_NO_LANDING_TEXT
+    last = read[-1]
+    verdict = str(last.get("verdict") or "no verdict")
+    state = "green, with no merged SHA" if verdict == "green" else verdict
+    return LANDED_NOT_MERGED_TEXT.format(id=_landing_id(last), state=state)
+
+
+def _landed_claims(clause: str) -> list[tuple[str, str | None, str]]:
+    """The landed claim in one clause, at most one: the first match, unless a
+    cut sits before it in the clause (_TESTS_PASSED_CUT; the present cut, as
+    every landed form is a state or a report under a condition)."""
+    lm = _LANDED_CLAIM.search(clause)
+    if lm is None:
+        return []
+    before = clause[: lm.start()]
+    if _TESTS_PASSED_CUT.search(before) or _TESTS_PASSED_PRESENT_CUT.search(before):
+        return []
+    return [(LANDED_KIND, None, lm.group(0))]
 
 
 def _acknowledges_failure(reply: str) -> bool:
@@ -438,6 +627,9 @@ RAN_OTHER_TEXT = (
 _RAN_LISTED = 5  # commands named in the correction, the rest counted
 # The claim kinds a run fact alone decides, each with its own true correction.
 _RUN_FACT_KINDS = frozenset({"tests_passed", "ran_command"})
+# The kinds whose correction states what its own record shows (S32.3 T13: the
+# landed claim's landing read joins the run facts' two).
+_RECORD_KINDS = _RUN_FACT_KINDS | {LANDED_KIND}
 
 
 def _claimed_program(command: str) -> str | None:
@@ -591,6 +783,18 @@ def _edited_file_backed(
         written = _target_of(span)
         if isinstance(written, str) and _path_backs(target, written):
             return True
+    # S32.3 T13: a change_commit's `commit` fact — each committed file, joined
+    # to the worktree it was committed in (the fact's target).
+    for _span, facts in _tool_facts(spans):
+        for fact in facts:
+            commit = fact.get("commit")
+            if not isinstance(commit, dict):
+                continue
+            root = fact.get("target")
+            root = root.rstrip("/") if isinstance(root, str) else ""
+            for name in commit.get("files") or ():
+                if isinstance(name, str) and name and _path_backs(target, f"{root}/{name}"):
+                    return True
     return any(_path_backs(target, word) for words, _target in _run_facts(spans) for word in words)
 
 
@@ -2146,6 +2350,9 @@ def _claims_in(
     # the tests passed (S29a T3): no target; a passing test-runner run backs it.
     claims += _tests_passed_claims(clause)
 
+    # a change landed on main (S32.3 T13): no target; a green merged landing backs it.
+    claims += _landed_claims(clause)
+
     return claims
 
 
@@ -2722,10 +2929,15 @@ def narration_check(
             # contradicts. With no runner on record the correction is main's,
             # unchanged. Read once per reply (_acknowledges_failure).
             if acknowledged is None:
-                acknowledged = _deciding_test_run(spans) is not None and _acknowledges_failure(
+                acknowledged = _deciding_test_record(spans) is not None and _acknowledges_failure(
                     reply_text
                 )
             if acknowledged:
+                continue
+        elif kind == LANDED_KIND:
+            # Read from the landing facts, never prose: only a green landing
+            # with a merged SHA read this turn puts the change on main.
+            if _landed_backed(spans):
                 continue
         elif kind == "ran_command":
             # Read from the run facts' words, any exit code: running is not
@@ -2765,13 +2977,15 @@ def narration_check(
         ran = [claim.target for claim in rest if claim.kind == "ran_command"]
         if spend:
             base = SPEND_CORRECTION_TEXT
-        elif all(claim.kind in _RUN_FACT_KINDS for claim in rest):
-            # Each run-fact kind says what its record shows, both true at once.
+        elif all(claim.kind in _RECORD_KINDS for claim in rest):
+            # Each record kind says what its record shows, all true at once.
             parts = []
             if any(claim.kind == "tests_passed" for claim in rest):
                 parts.append(_tests_correction_text(spans))
             if ran:
                 parts.append(_ran_correction_text(ran, spans))
+            if any(claim.kind == LANDED_KIND for claim in rest):
+                parts.append(_landed_correction_text(spans))
             base = " ".join([parts[0], *(part.removeprefix("Correction: ") for part in parts[1:])])
         else:
             base = CORRECTION_TEXT
