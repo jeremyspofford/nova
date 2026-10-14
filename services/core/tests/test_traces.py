@@ -126,6 +126,38 @@ async def test_a_nul_anywhere_in_span_meta_is_replaced_not_fatal(pool):
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
 
 
+async def test_an_undo_payload_holding_a_nul_is_dropped_not_fatal(pool, caplog):
+    """jsonb refuses \\u0000 in turn_actions.undo too. An undo payload is what a
+    revert puts back, so a NUL is never swapped for U+FFFD there (that would
+    restore something else and call it undone): the payload is dropped, the
+    action row still lands with undo NULL — which rewind already reads as
+    "recorded nothing to put back" — and the turn closes with its spans."""
+    turn = await _turn(pool)
+    with turn.span("tool", "workspace_write_file") as span:
+        span.meta["ok"] = True
+    turn.actions.append(traces.Action(tool="workspace_write_file", ok=True, undo={"path": "a.md"}))
+    turn.actions.append(
+        traces.Action(tool="workspace_write_file", ok=True, undo=[{"p": ["x", {"k": "a\x00"}]}])
+    )
+    turn.actions.append(traces.Action(tool="workspace_write_file", ok=True, undo={"k\x00": 1}))
+
+    with caplog.at_level(logging.WARNING, logger="core"):
+        await traces.close_turn(pool, turn, "ok")
+
+    rows = await pool.fetch(
+        "SELECT seq, ok, undo FROM turn_actions WHERE turn_id = $1 ORDER BY seq", turn.id
+    )
+    assert [(r["seq"], r["ok"], r["undo"]) for r in rows] == [
+        (0, True, {"path": "a.md"}),
+        (1, True, None),
+        (2, True, None),
+    ]
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
+    assert await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn.id) == 1
+    dropped = [r for r in caplog.records if "undo" in r.getMessage()]
+    assert len(dropped) == 2
+
+
 async def test_an_invented_status_is_refused(pool):
     turn = await _turn(pool)
     with pytest.raises(ValueError):
