@@ -20,7 +20,7 @@ import httpx
 import pytest
 from starlette.responses import JSONResponse, Response
 
-from app import backends, data_plane
+from app import backends, data_plane, windows
 from tests.conftest import requires_db
 from tests.fakes import FakeOllama, FakeOpenAICompat, StreamingASGITransport
 
@@ -391,3 +391,225 @@ async def test_a_raising_hub_ps_read_costs_the_window_never_the_reply(
 
 def test_the_header_is_named_once():
     assert data_plane.CONTEXT_WINDOW_HEADER == "X-Nova-Context-Window"
+
+
+# ── S38b T5: a cloud model's DECLARED window (its listing's context_length) ─
+
+SOURCE = "x-nova-context-window-source"
+
+
+async def _cloudy(client, mount_backend, models: list[dict], **kw) -> FakeOpenAICompat:
+    """A cloud openai-chat provider saved through the admin route — the save
+    fetches its listing, as the owner's own save does."""
+    cloud = FakeOpenAICompat(models_body={"object": "list", "data": models}, **kw)
+    mount_backend("http://cloud.test", cloud.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "cloudy",
+            "adapter": "openai-chat",
+            "base_url": "http://cloud.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return cloud
+
+
+async def _windows(pool) -> dict[tuple[str, str], int]:
+    rows = await pool.fetch("SELECT provider, model, context_length FROM provider_windows")
+    return {(r["provider"], r["model"]): r["context_length"] for r in rows}
+
+
+async def test_a_listed_cloud_model_states_its_declared_window(client, pool, hub, mount_backend):
+    """C2: the origin has no /api/ps; the listing declared 200,000 — the
+    answer states it and says it is declared, not served."""
+    await _cloudy(client, mount_backend, [{"id": "remote-model", "context_length": 200000}])
+
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "cloudy:remote-model"})
+
+    assert resp.status_code == 200
+    assert resp.headers[WINDOW] == "200000"
+    assert resp.headers[SOURCE] == "declared"
+
+
+async def test_the_declared_window_follows_the_listing_not_a_table(
+    client, pool, hub, mount_backend
+):
+    """Derived, never hardcoded: re-listing with another length moves the
+    stated window."""
+    cloud = await _cloudy(client, mount_backend, [{"id": "remote-model", "context_length": 8000}])
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "cloudy:remote-model"})
+    assert resp.headers[WINDOW] == "8000"
+
+    cloud.models_body = {
+        "object": "list",
+        "data": [{"id": "remote-model", "context_length": 64000}],
+    }
+    assert (await client.get("/admin/providers/cloudy/models")).status_code == 200
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "cloudy:remote-model"})
+    assert resp.headers[WINDOW] == "64000"
+    assert resp.headers[SOURCE] == "declared"
+
+
+async def test_a_model_never_listed_with_a_length_states_no_window(
+    client, pool, hub, mount_backend
+):
+    """C2 (negative): listed without a length, or not listed at all — no
+    window, no source, as today."""
+    await _cloudy(
+        client,
+        mount_backend,
+        [{"id": "remote-model"}, {"id": "sized", "context_length": 32000}],
+    )
+
+    for model in ("cloudy:remote-model", "cloudy:never-listed"):
+        resp = await client.post("/v1/chat/completions", json={**CHAT, "model": model})
+        assert resp.status_code == 200
+        assert WINDOW not in resp.headers
+        assert SOURCE not in resp.headers
+
+
+async def test_every_listing_fetch_stores_the_declared_lengths_and_replaces_the_last(
+    client, pool, hub, mount_backend
+):
+    """C1: the save's listing stores each declared length; the next fetch
+    replaces the provider's set (a model dropped, or no longer stating a
+    length, is gone); a failed fetch changes nothing."""
+    cloud = await _cloudy(
+        client,
+        mount_backend,
+        [
+            {"id": "a", "context_length": 1000},
+            {"id": "b", "context_length": 2000},
+            {"id": "c"},
+            {"id": "d", "context_length": 0},
+        ],
+    )
+    assert await _windows(pool) == {("cloudy", "a"): 1000, ("cloudy", "b"): 2000}
+
+    cloud.models_body = {
+        "object": "list",
+        "data": [
+            {"id": "a"},
+            {"id": "b", "context_length": 4000},
+            {"id": "e", "context_length": 5},
+        ],
+    }
+    assert (await client.get("/admin/providers/cloudy/models")).status_code == 200
+    assert await _windows(pool) == {("cloudy", "b"): 4000, ("cloudy", "e"): 5}
+
+    cloud.models_status = 500
+    assert (await client.get("/admin/providers/cloudy/models")).status_code != 200
+    assert await _windows(pool) == {("cloudy", "b"): 4000, ("cloudy", "e"): 5}
+
+
+async def test_the_catalogue_listing_stores_declared_lengths_too(client, pool, hub, mount_backend):
+    """C1: the catalogue reads listings through the same one path."""
+    cloud = await _cloudy(client, mount_backend, [{"id": "a", "context_length": 1000}])
+    cloud.models_body = {"object": "list", "data": [{"id": "a", "context_length": 3000}]}
+
+    assert (await client.get("/admin/catalog?fresh=1")).status_code == 200
+
+    assert (await _windows(pool))[("cloudy", "a")] == 3000
+
+
+async def test_deleting_the_provider_deletes_its_declared_lengths(client, pool, hub, mount_backend):
+    await _cloudy(client, mount_backend, [{"id": "a", "context_length": 1000}])
+    assert (await client.delete("/admin/providers/cloudy")).status_code == 200
+    assert await _windows(pool) == {}
+
+
+async def test_a_ps_window_wins_over_a_declared_one_and_says_served(
+    client, pool, hub, mount_backend
+):
+    """C3: the origin's /api/ps states the window it serves with; a stored
+    declared length never overrides it."""
+    dell = FakeOllama(ps_models=_resident(context_length=32768))
+    mount_backend("http://dell.test", dell.app)
+    await _dell_row(pool)
+    await pool.execute(
+        "INSERT INTO provider_windows (provider, model, context_length) "
+        "VALUES ('dell', 'qwen3:8b', 131072)"
+    )
+
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "dell:qwen3:8b"})
+
+    assert resp.status_code == 200
+    assert resp.headers[WINDOW] == "32768"
+    assert resp.headers[SOURCE] == "served"
+
+
+async def test_an_openai_chat_origin_with_no_ps_window_falls_back_to_its_declared_one(
+    client, pool, hub, mount_backend
+):
+    dell = FakeOllama(ps_models=[], ps_status=500)
+    mount_backend("http://dell.test", dell.app)
+    await _dell_row(pool)
+    await pool.execute(
+        "INSERT INTO provider_windows (provider, model, context_length) "
+        "VALUES ('dell', 'qwen3:8b', 40960)"
+    )
+
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "dell:qwen3:8b"})
+
+    assert resp.headers[WINDOW] == "40960"
+    assert resp.headers[SOURCE] == "declared"
+
+
+async def test_a_hub_window_says_served(client, pool, hub):
+    resp = await client.post("/v1/chat/completions", json=CHAT)
+    assert resp.headers[WINDOW] == "32768"
+    assert resp.headers[SOURCE] == "served"
+
+
+async def test_an_engine_never_states_a_declared_window(client, pool, hub):
+    """C3: an engine's window is what /api/ps serves; a listed length is the
+    model's max, not what it runs with."""
+    hub.ps_models = []
+    await pool.execute(
+        "INSERT INTO provider_windows (provider, model, context_length) "
+        "VALUES ('hub', 'qwen3:8b', 40960)"
+    )
+
+    resp = await client.post("/v1/chat/completions", json=CHAT)
+
+    assert resp.status_code == 200
+    assert WINDOW not in resp.headers
+    assert SOURCE not in resp.headers
+
+
+async def test_a_cloud_refusal_states_no_declared_window(client, pool, hub, mount_backend):
+    """C4: a refusal ran nowhere — no window, no source."""
+    cloud = await _cloudy(client, mount_backend, [{"id": "remote-model", "context_length": 9000}])
+    cloud.completions_status = 500
+
+    resp = await client.post("/v1/chat/completions", json={**CHAT, "model": "cloudy:remote-model"})
+
+    assert resp.status_code != 200
+    assert WINDOW not in resp.headers
+    assert SOURCE not in resp.headers
+
+
+def test_the_source_header_is_named_once():
+    assert data_plane.CONTEXT_WINDOW_SOURCE_HEADER == "X-Nova-Context-Window-Source"
+
+
+@pytest.mark.parametrize(
+    "length, kept",
+    [
+        (32000, True),
+        (1, True),
+        (0, False),
+        (-5, False),
+        (True, False),
+        ("32000", False),
+        (None, False),
+    ],
+)
+def test_only_a_positive_whole_length_is_a_declared_window(length, kept):
+    """C1: anything but a positive whole number states no window (absent,
+    never 0) — whatever an adapter passed through."""
+    models = [{"id": "m", "context_length": length}, {"context_length": 9}, "not-a-row"]
+    assert windows.declared_lengths(models) == ({"m": length} if kept else {})

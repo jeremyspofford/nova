@@ -75,6 +75,57 @@ async def test_a_failed_close_writes_nothing_at_all(pool):
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) is None
 
 
+async def test_spans_actions_and_kept_results_land_in_the_same_close(pool):
+    """S38b T1: the full tool results are part of the ONE transaction — a
+    trace whose spans landed always has its results, and the reverse."""
+    turn = await _turn(pool)
+    with turn.span("tool", "browser_read") as span:
+        span.meta["result_head"] = "p" * traces.SPAN_RESULT_HEAD_CHARS
+    full = "p" * (traces.SPAN_RESULT_HEAD_CHARS * 10)
+    kept = traces.keep_result(turn, "call-1", "browser_read", full)
+    assert kept.ref == "r1" and turn.tool_results == [kept]
+
+    await traces.close_turn(pool, turn, "ok")
+
+    assert await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn.id) == 1
+    row = await pool.fetchrow(
+        "SELECT ref, tool_call_id, tool, content, chars FROM tool_results WHERE turn_id = $1",
+        turn.id,
+    )
+    assert dict(row) == {
+        "ref": "r1",
+        "tool_call_id": "call-1",
+        "tool": "browser_read",
+        "content": full,
+        "chars": len(full),
+    }
+
+
+async def test_a_nul_anywhere_in_span_meta_is_replaced_not_fatal(pool):
+    """Postgres refuses \\u0000 in jsonb, so one NUL in any span's meta used to
+    fail the whole close. Every string is scrubbed at the persist boundary —
+    keys, values, nested — and nothing else about the meta changes."""
+    turn = await _turn(pool)
+    with turn.span("tool", "device_run") as span:
+        span.meta.update(
+            result_head="out\x00put",
+            ok=True,
+            n=3,
+            facts={"argv": ["cat", "f\x00"], "k\x00ey": None},
+        )
+
+    await traces.close_turn(pool, turn, "ok")
+
+    meta = await pool.fetchval("SELECT meta FROM turn_spans WHERE turn_id = $1", turn.id)
+    assert meta == {
+        "result_head": "out\ufffdput",
+        "ok": True,
+        "n": 3,
+        "facts": {"argv": ["cat", "f\ufffd"], "k\ufffdey": None},
+    }
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
+
+
 async def test_an_invented_status_is_refused(pool):
     turn = await _turn(pool)
     with pytest.raises(ValueError):

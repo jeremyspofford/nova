@@ -172,6 +172,72 @@ class Action:
     undo: Any = None
 
 
+@dataclass
+class ToolResult:
+    """One tool result she was sent, in full (S38b). `ref` is the turn's own
+    handle for it — r1, r2, ... in call order — the one a summary marker names
+    and read_result takes. close_turn files it into tool_results."""
+
+    ref: str
+    tool_call_id: str | None
+    tool: str
+    content: str
+
+    @property
+    def chars(self) -> int:
+        return len(self.content)
+
+
+# The full results of each turn chat._run_turn is running right now (S38b):
+# turn id -> that Turn's OWN tool_results list, so a result is readable here
+# the instant _run_tool keeps it — before any row exists, since close_turn
+# writes the rows only when the turn ends. Registered by _run_turn
+# (track_results, beside set_doing 'starting') and popped in its finally
+# beside clear_doing, on every exit path. A turn _run_turn never ran (the
+# scheduler's and delivery's direct _run_tool calls) keeps its results on the
+# Turn and in the rows, but never enters this map — nothing would pop it.
+# Process-local for DOING's reason: one core process.
+RESULTS: dict[uuid.UUID, list[ToolResult]] = {}
+
+
+def keep_result(turn: Turn, tool_call_id: str | None, tool: str, content: str) -> ToolResult:
+    """Keep one result on the turn, numbered next in call order. Synchronous on
+    purpose: it is called inside chat._run_tool, where no await may join the
+    funnel (test_no_approvals pins the awaits); the database sees it only in
+    close_turn's one transaction, like turn.actions."""
+    kept = ToolResult(
+        ref=f"r{len(turn.tool_results) + 1}",
+        tool_call_id=tool_call_id,
+        tool=tool,
+        content=content,
+    )
+    turn.tool_results.append(kept)
+    return kept
+
+
+def track_results(turn: Turn) -> None:
+    """Make this turn's results readable by turn id while it runs."""
+    RESULTS[turn.id] = turn.tool_results
+
+
+def results_of(turn_id: uuid.UUID) -> list[ToolResult] | None:
+    """The running turn's kept results, or None when this process is not
+    running it through chat (never a guess from the database)."""
+    return RESULTS.get(turn_id)
+
+
+def clear_results(turn_id: uuid.UUID) -> None:
+    """Forget the turn's live results; a no-op for an id never tracked."""
+    RESULTS.pop(turn_id, None)
+
+
+# postgres `text` refuses a NUL byte, and one result carrying it (a binary
+# file read as text) must not fail the whole close — that would lose the
+# turn's spans and status with it. Replaced one-for-one, so `chars` holds.
+_NUL = "\x00"
+_NUL_STANDIN = "\ufffd"
+
+
 class SpanRecorder:
     """Times a block and files the span on the turn, exception or not."""
 
@@ -224,6 +290,13 @@ class Turn:
     # chat-rewind: the action ledger, appended synchronously by chat._run_tool
     # and chat._run_script_step, written by close_turn beside the spans.
     actions: list[Action] = field(default_factory=list)
+    tool_results: list[ToolResult] = field(default_factory=list)
+    # S38b T3: the summaries written this turn, by tool_call_id (each result
+    # at most once; a later round sends the same one again), and the results
+    # whose summary failed, with why (not retried this turn). In memory only:
+    # what was sent is on the round spans, the full text in tool_results.
+    summaries: dict[str, Any] = field(default_factory=dict)
+    summary_failures: dict[str, str] = field(default_factory=dict)
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
         return SpanRecorder(self, kind, name)
@@ -287,9 +360,25 @@ async def open_turn(
     )
 
 
+def _without_nul(value: Any) -> Any:
+    """`value` with every NUL in every string (keys too, at any depth) swapped
+    for U+FFFD. Postgres refuses \\u0000 in jsonb, so one NUL a tool printed
+    into a span's result_head used to fail close_turn's whole transaction —
+    no spans and no status, for a turn that ran fine. Scrubbed here, at the
+    persist boundary, rather than in each writer of span meta: a writer added
+    tomorrow is covered without remembering to be."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, dict):
+        return {_without_nul(k): _without_nul(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_nul(v) for v in value]
+    return value
+
+
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
-    """All the spans, the action ledger and the final status, in one
-    transaction or not at all — a turn that never closed has neither spans
+    """All the spans, the kept tool results (S38b), the action ledger and the
+    final status, in one transaction or not at all — a turn that never closed has neither spans
     nor turn_actions rows, so a rewind can name it as unrecorded rather than
     trust a half-written ledger.
 
@@ -312,7 +401,19 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 span.name,
                 span.started_at,
                 span.duration_ms,
-                span.meta,
+                _without_nul(span.meta),
+            )
+        for kept in turn.tool_results:
+            content = kept.content.replace(_NUL, _NUL_STANDIN)
+            await conn.execute(
+                "INSERT INTO tool_results (turn_id, ref, tool_call_id, tool, content, chars) "
+                "VALUES ($1, $2, $3, $4, $5, $6)",
+                turn.id,
+                kept.ref,
+                kept.tool_call_id,
+                kept.tool,
+                content,
+                len(content),
             )
         for seq, action in enumerate(turn.actions):
             await conn.execute(

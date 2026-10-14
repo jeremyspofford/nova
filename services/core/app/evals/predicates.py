@@ -32,6 +32,9 @@ Span facts these read, all set by chat.py's turn path:
                            crash, not a fire, so neither predicate counts it.
   * the ARGUMENTS of a tool call -> Span.meta["args_redacted"], as the model
                            sent them (chat._span_arguments).
+  * a summary sent      -> the round's Span(kind="llm_call", meta=
+                           {"context_summarized": [{ref, tool, chars,
+                           summary_chars}], ...}) (S38b T6).
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from app import traces
+from app import context_fit, traces
 from app.evals.cases import KNOWN_PREDICATES, PredicateSpec, parse_tool_with
 
 # A predicate: (spans, reply, arg) -> (passed, detail). `arg` is the spec's
@@ -186,6 +189,27 @@ def fact_matches(spans: Sequence[Any], reply: str, arg: str | None) -> tuple[boo
     )
 
 
+def context_summarized(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
+    """A round of this turn SENT a summary of a kept result of the tool (S38b
+    T6). chat._summarize_for_window files meta["context_summarized"] = [{ref,
+    tool, chars, summary_chars}] on the round's own llm_call span when the
+    served link wrote one; a failed (summary_failed) or reused
+    (summaries_reused) summary is not a written one. Anything else in that key
+    reads as no summary: a predicate scores a trace, it does not validate one."""
+    rounds = [s for s in spans if s.kind == "llm_call"]
+    refs = [
+        entry.get("ref")
+        for s in rounds
+        if isinstance(s.meta.get("context_summarized"), list)
+        for entry in s.meta["context_summarized"]
+        if isinstance(entry, dict) and entry.get("tool") == name
+    ]
+    return bool(refs), (
+        f"{len(refs)} result(s) of {name!r} summarized across {len(rounds)} llm_call span(s)"
+        + (f" ({', '.join(str(r) for r in refs)})" if refs else "")
+    )
+
+
 # The registry. Its keys MUST equal cases.KNOWN_PREDICATES — a test pins that, so
 # a predicate added to one and forgotten in the other is a loud failure, not a
 # case that loads and then never scores.
@@ -199,6 +223,7 @@ PREDICATES: dict[str, Predicate] = {
     "reply_absent": reply_absent,
     "tool_succeeded_with": tool_succeeded_with,
     "fact_matches": fact_matches,
+    "context_summarized": context_summarized,
 }
 
 assert set(PREDICATES) == set(KNOWN_PREDICATES), (
@@ -211,13 +236,24 @@ class PredicateResult:
     """One predicate's verdict, with the detail string it produced — the
     per-case evidence the page (T3) renders and the eval_runs detail stores."""
 
-    __slots__ = ("predicate", "arg", "passed", "detail")
+    __slots__ = ("predicate", "arg", "passed", "detail", "applicable")
 
-    def __init__(self, predicate: str, arg: str | None, passed: bool, detail: str) -> None:
+    def __init__(
+        self,
+        predicate: str,
+        arg: str | None,
+        passed: bool,
+        detail: str,
+        applicable: bool = True,
+    ) -> None:
         self.predicate = predicate
         self.arg = arg
         self.passed = passed
         self.detail = detail
+        # False only for a window-bound clause (PredicateSpec.page_chars) on
+        # a turn whose stated window holds the page, or states none: scored
+        # as a pass, and SAID to be one that was not measured.
+        self.applicable = applicable
 
     def as_json(self) -> dict:
         return {
@@ -225,10 +261,54 @@ class PredicateResult:
             "arg": self.arg,
             "passed": self.passed,
             "detail": self.detail,
+            "applicable": self.applicable,
         }
 
 
+def _stated_window(spans: Sequence[Any]) -> int | None:
+    """The smallest context window a round's llm_call span states this turn
+    (chat._note_served files meta["context_window"] only when the gateway
+    said it). Anything but a positive int reads as unstated."""
+    windows = [
+        w
+        for s in spans
+        if s.kind == "llm_call"
+        for w in (s.meta.get("context_window"),)
+        if type(w) is int and w > 0
+    ]
+    return min(windows) if windows else None
+
+
+def _window_holds(spec: PredicateSpec, spans: Sequence[Any]) -> tuple[bool, str]:
+    """(holds, why) for a window-bound clause (S38b T6, orchestrator ruling
+    2026-10-13): does the turn's stated window hold the declared page? Derived
+    from the span's own window against the page's size at the default chars
+    per token, the same arithmetic context_fit fits a request with — never a
+    list of models. No stated window = nothing to read past: holds."""
+    window = _stated_window(spans)
+    page_tokens = spec.page_chars / context_fit.DEFAULT_CHARS_PER_TOKEN
+    if window is None:
+        return True, (
+            f"no llm_call span states a context window; the page is {spec.page_chars:,} chars"
+        )
+    budget = context_fit.budget_for(window)
+    holds = page_tokens <= budget
+    return holds, (
+        f"the stated window {window:,} tokens (budget {budget:,}) "
+        f"{'holds' if holds else 'cannot hold'} the {spec.page_chars:,}-char page "
+        f"(~{page_tokens:,.0f} tokens)"
+    )
+
+
 def evaluate(spec: PredicateSpec, spans: Sequence[Any], reply: str) -> PredicateResult:
+    if spec.page_chars is not None:
+        holds, why = _window_holds(spec, spans)
+        if holds:
+            return PredicateResult(
+                spec.predicate, spec.arg, True, f"not applicable: {why}", applicable=False
+            )
+        passed, detail = PREDICATES[spec.predicate](spans, reply, spec.arg)
+        return PredicateResult(spec.predicate, spec.arg, passed, f"{detail} — applies: {why}")
     passed, detail = PREDICATES[spec.predicate](spans, reply, spec.arg)
     return PredicateResult(spec.predicate, spec.arg, passed, detail)
 

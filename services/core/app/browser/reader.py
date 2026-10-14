@@ -160,6 +160,16 @@ def read(snapshot: str, part_chars: int = DEFAULT_PART_CHARS) -> Page:
     return Page(lines=lines, parts=tuple(parts), starts=tuple(starts))
 
 
+def read_text(text: str, part_chars: int = DEFAULT_PART_CHARS) -> Page:
+    """Plain text — a kept tool result (S38b read_result) — as a Page: one
+    Line per line of it, cut into parts and searchable exactly as a page
+    is, by this module's own _paginate and search."""
+    part_chars = max(MIN_PART_CHARS, min(part_chars, MAX_PART_CHARS))
+    lines = tuple(Line(line) for line in (text or "").split("\n"))
+    parts, starts = _paginate(lines, part_chars)
+    return Page(lines=lines, parts=tuple(parts), starts=tuple(starts))
+
+
 def render(snapshot: str) -> list[Line]:
     out: list[Line] = []
     for node in _tree(snapshot or ""):

@@ -48,6 +48,7 @@ from app.tools import (
     memory_tools,
     models,
     notices,
+    results,
     route,
     schema,
     sessions,
@@ -147,6 +148,9 @@ REGISTRY: dict[str, Tool] = {
         # turn — the agent's job.start (tools/device_jobs.py), its row in
         # device_jobs written before the send.
         *device_jobs.TOOLS,
+        # S38b T4 (2026-10-13): a tool result of this turn, read back in full
+        # (tools/results.py) — what a summary marker tells her to call.
+        *results.TOOLS,
     )
 }
 

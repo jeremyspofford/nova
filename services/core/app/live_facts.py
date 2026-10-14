@@ -158,6 +158,9 @@ UNASKED_READERS: dict[str, Callable[[dict, ToolContext], Awaitable[str]]] = {
 # reads_only, and deliberately NOT auto-run — each with the reason, because an
 # exclusion nobody can explain gets deleted by the next person who reads it.
 NOT_AUTO_RUN = {
+    # S38b T4: a kept result belongs to the turn that made it; a note from
+    # another turn can never name one that exists in this turn.
+    "read_result": "it reads a result of the running turn, which no note can name",
     # The About page (2026-10-07): a note about her version is better answered
     # by her asking, and the update check reaches GitHub — nothing calls out of
     # this network unasked.
