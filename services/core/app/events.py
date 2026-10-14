@@ -334,15 +334,116 @@ async def _sender_conversation(pool: asyncpg.Pool, owner_id: uuid.UUID, sender: 
     return conversation_id
 
 
+# T5 (spec §2.5): at most one event turn runs per sender. The DATABASE holds
+# that, not this process: a claim takes this per-sender transaction lock, then
+# claims nothing while any of the sender's rows is still `running` — a row
+# another process (or one that died) left running blocks it the same way. One
+# turn owns many rows, so no unique index can say "one turn"; the lock plus
+# the read in the same transaction does.
+_RUN_LOCK = "events-run:"
+
+
 async def _claim(pool: asyncpg.Pool, sender: str) -> list[asyncpg.Record]:
-    """Every queued event of this sender, now running, oldest first."""
-    return await pool.fetch(
-        "UPDATE events SET state = 'running' WHERE id IN ("
-        " SELECT id FROM events WHERE sender = $1 AND state = 'queued'"
-        " ORDER BY received_at, id FOR UPDATE SKIP LOCKED"
-        ") RETURNING id, received_at, payload",
-        sender,
+    """Every queued event of this sender, now running, oldest first — or none
+    while a turn of this sender still runs (its events then wait, and the end
+    of that turn starts the next one, which reads them all)."""
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", _RUN_LOCK + sender)
+        # Read after the lock is held: READ COMMITTED gives this statement a
+        # snapshot that already sees a claim the lock's last holder committed.
+        if await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM events WHERE sender = $1 AND state = 'running')",
+            sender,
+        ):
+            return []
+        # RETURNING keeps no order of its own: the frame's order is the outer
+        # ORDER BY, by when each event was received.
+        return await conn.fetch(
+            "WITH claimed AS (UPDATE events SET state = 'running' WHERE id IN ("
+            " SELECT id FROM events WHERE sender = $1 AND state = 'queued'"
+            " ORDER BY received_at, id FOR UPDATE"
+            ") RETURNING id, received_at, payload) "
+            "SELECT * FROM claimed ORDER BY received_at, id",
+            sender,
+        )
+
+
+async def requeue_interrupted(app, pool: asyncpg.Pool) -> int:
+    """At startup: the events the dead process left `running` (spec §4: picked
+    up at startup, never dropped). Called by main.lifespan after
+    traces.sweep_orphaned_turns, while this process runs no turn.
+
+    A row whose turn CLOSED (ok, error, ...) was read already: the process died
+    between the close and the settle. It is settled from that turn — done, or
+    failed with the turn's status — keeps naming it, and gets its notice; it is
+    never re-run (her tools already ran) and never called interrupted. Only a
+    row whose turn never closed (swept as 'interrupted') or never opened goes
+    back to queued, with the reason naming why; the first scheduler tick then
+    starts it (start_queued). Returns how many were requeued."""
+    from app import identity
+
+    settled = await pool.fetch(
+        "UPDATE events e SET "
+        "state = CASE WHEN t.status = 'ok' THEN 'done' ELSE 'failed' END, "
+        "reason = CASE WHEN t.status = 'ok' THEN NULL ELSE 'the turn closed with status ' "
+        "|| quote_literal(t.status) || ' and core stopped before the event was settled' END "
+        "FROM turns t WHERE e.turn_id = t.id AND e.state = 'running' "
+        "AND t.status IS NOT NULL AND t.status <> 'interrupted' "
+        "RETURNING e.id, e.sender, e.turn_id, e.state"
     )
+    by_turn: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for row in settled:
+        logger.warning(
+            "event %s from %r settled %s at startup from its closed turn %s",
+            row["id"],
+            row["sender"],
+            row["state"],
+            row["turn_id"],
+        )
+        by_turn.setdefault(row["turn_id"], []).append(row["id"])
+    if by_turn:
+        owner = await identity.owner(pool)
+        for turn_id, ids in by_turn.items():
+            await _tell(app, pool, ids, owner, turn_id)
+    rows = await pool.fetch(
+        "UPDATE events SET state = 'queued', reason = CASE WHEN turn_id IS NULL "
+        "THEN 'requeued at startup: it was claimed but no turn had opened' "
+        "ELSE 'requeued at startup: turn ' || turn_id || ' was interrupted' END "
+        "WHERE state = 'running' RETURNING id, sender"
+    )
+    for row in rows:
+        logger.warning("event %s from %r requeued at startup", row["id"], row["sender"])
+    return len(rows)
+
+
+async def start_queued(app, pool: asyncpg.Pool) -> list[str]:
+    """Start a turn for every sender with queued events and none running; the
+    senders started. The scheduler's tick calls it, so events requeued at
+    startup, or left queued by a start that never came, are picked up. The
+    claim itself refuses a sender already running (_claim), and
+    start_event_turn starts nothing once core is shutting down."""
+    senders = await pool.fetch(
+        "SELECT DISTINCT q.sender FROM events q WHERE q.state = 'queued' AND NOT EXISTS "
+        "(SELECT 1 FROM events r WHERE r.sender = q.sender AND r.state = 'running') "
+        "ORDER BY q.sender"
+    )
+    started: list[str] = []
+    for row in senders:
+        try:
+            if await start_event_turn(app, pool, row["sender"]) is not None:
+                started.append(row["sender"])
+        except Exception:  # noqa: BLE001 - one sender never holds up the rest
+            logger.exception("event sender %r: the queued events could not start", row["sender"])
+    return started
+
+
+async def _start_next(app, pool: asyncpg.Pool, sender: str) -> None:
+    """The end of a sender's turn starts the next one for the events that
+    waited. A start that raises is logged; the tick picks them up."""
+    try:
+        await start_event_turn(app, pool, sender)
+    except Exception:  # noqa: BLE001 - the tick retries from the rows
+        logger.exception("event sender %r: the next turn could not start", sender)
 
 
 async def _settle(
@@ -373,7 +474,7 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
     are picked up again (spec §4). A precondition that fails — no owner, no
     chat model — fails the claimed events with the reason; never a silent
     drop."""
-    from app import chat, identity, scheduler, settings_store, traces
+    from app import chat, traces
 
     if chat._SHUTTING_DOWN:
         logger.info("event sender %r: core is shutting down, its events stay queued", sender)
@@ -382,6 +483,50 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
     if not claimed:
         return None
     ids = [row["id"] for row in claimed]
+    opened: list = []
+    try:
+        return await _start_claimed(app, pool, sender, claimed, ids, opened)
+    except Exception as exc:  # noqa: BLE001 - claimed rows never stay running
+        # Anything that raises once the rows are claimed would leave them
+        # `running` with no turn, and a running row blocks the sender (_claim)
+        # until a restart. They are failed with the reason and told instead;
+        # a turn that had opened is closed as error and keeps the link.
+        logger.exception("event sender %r: the turn could not start", sender)
+        turn = opened[0] if opened else None
+        if turn is not None and (
+            await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) is None
+        ):
+            await traces.close_turn(pool, turn, "error")
+        await _settle(
+            pool,
+            ids,
+            "failed",
+            f"the turn could not start — {exc}"[:500],
+            turn.id if turn is not None else None,
+        )
+        # Told to the real owner, looked up as the normal path does: an urgent
+        # event is still pushed to him, and the notice's receipt states the
+        # real failure — None only when that lookup itself fails.
+        owner = await _owner_or_none(pool)
+        await _tell(app, pool, ids, owner, turn.id if turn is not None else None)
+        return None
+
+
+async def _owner_or_none(pool: asyncpg.Pool):
+    """identity.owner for a failure path that must not raise again; None (and
+    logged) when the lookup itself fails, so the delivery says no person."""
+    from app import identity
+
+    try:
+        return await identity.owner(pool)
+    except Exception:  # noqa: BLE001 - the notice is still filed, without a person
+        logger.exception("the owner could not be looked up to tell him of failed events")
+        return None
+
+
+async def _start_claimed(app, pool, sender: str, claimed, ids, opened: list):
+    from app import chat, identity, scheduler, settings_store, traces
+
     owner = await identity.owner(pool)
     if owner is None:
         await _settle(pool, ids, "failed", "no owner account exists, so no turn could run")
@@ -412,16 +557,24 @@ async def start_event_turn(app, pool: asyncpg.Pool, sender: str) -> asyncio.Task
         await _settle(pool, ids, "failed", f"the turn could not be opened — {exc}"[:500])
         await _tell(app, pool, ids, owner)
         return None
+    opened.append(turn)
     # Linked the moment the turn exists, so an event cut off mid-run still
     # names the trace of what got done.
     await pool.execute("UPDATE events SET turn_id = $2 WHERE id = ANY($1::uuid[])", ids, turn.id)
     with turn.span("event", sender) as span:
         span.meta.update({"sender": sender, "event_ids": [str(i) for i in ids]})
     text = message(sender, [(row["received_at"], row["payload"] or "") for row in claimed])
-    return chat._spawn(_run_event_turn(app, pool, turn, owner, ids, text, model))
+    return chat._spawn(_run_event_turn(app, pool, sender, turn, owner, ids, text, model))
 
 
-async def _run_event_turn(app, pool, turn, owner, ids, text: str, model: str) -> None:
+async def _run_event_turn(app, pool, sender: str, turn, owner, ids, text: str, model: str) -> None:
+    """Run the turn, settle its events and file the notice, then start the
+    next turn for whatever arrived meanwhile (T5)."""
+    await _read_events(app, pool, turn, owner, ids, text, model)
+    await _start_next(app, pool, sender)
+
+
+async def _read_events(app, pool, turn, owner, ids, text: str, model: str) -> None:
     from app import chat, scheduler
 
     frames: list = []

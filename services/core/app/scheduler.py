@@ -54,6 +54,7 @@ from app import (
     beats,
     chat,
     devices_ws,
+    events,
     identity,
     peers,
     schedule,
@@ -135,6 +136,13 @@ async def tick_once(app, pool: asyncpg.Pool, *, now: datetime | None = None) -> 
     name starts with the scratch prefix, the same SQL the runner's orphan
     sweep deletes by — read from there, never restated. A leaf module, so
     the scheduler does not load the eval harness to read it."""
+    # S37c T5: events left queued (requeued at startup, or a start that never
+    # came) get their sender's turn here. Spawned, not awaited, and in its own
+    # try: an event start that fails never stops the timers below.
+    try:
+        await events.start_queued(app, pool)
+    except Exception:
+        logger.exception("queued events could not be started; the next tick tries again")
     claimed: list[tuple[asyncpg.Record, uuid.UUID, datetime]] = []
     async with pool.acquire() as conn, conn.transaction():
         if now is None:

@@ -88,6 +88,9 @@ async def lifespan(app: FastAPI):
     # the process that died — closed as 'interrupted' here, before any request
     # can read it as pending (traces.sweep_orphaned_turns says why).
     await traces.sweep_orphaned_turns(pool)
+    # And the events those turns were reading (S37c T5): put back to queued
+    # with the reason, never dropped; the first scheduler tick starts them.
+    await events.requeue_interrupted(app, pool)
     # And the messages the dead process had ACCEPTED but not yet sent (S15). A
     # fresh process runs no turns, so nothing will ever END to trigger their
     # drain: each one is cancelled with a stated reason the owner can read,
