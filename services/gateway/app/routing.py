@@ -8,9 +8,14 @@ an empty chain uses the chat chain. Each link is judged LIVE, before any
 call is made (rail 9 — refuse before the act):
 
   * the provider must exist;
-  * it must not be WALLED (a refusal — 401/402/403/429/5xx before the
-    stream — walls the provider for 1h, then 6h, then 24h; a clean
-    completion clears it; the owner can clear it from the page);
+  * it must not be WALLED. A refusal before the stream walls by what it is
+    about: a 401/402/403/429 is about the account, so it walls the whole
+    provider for 1 h, then 6 h, then 24 h (WALL_STEPS_S); a 5xx is one
+    model not serving, so it walls only that model for 60 s, then 5 min,
+    then 30 min (OUTAGE_STEPS_S). A clean completion lifts the provider's
+    wall and that model's, and so does a credit-wall probe the provider
+    served (wall_probe), but a completion never lifts an engine's wall: it
+    lapses on its ladder. The owner can clear any wall from the page;
   * a cloud provider must be under its monthly cap and the total cap
     (usage.over_cap — recorded spend only; a local provider is never
     capped in USD);
@@ -948,12 +953,44 @@ async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
     `model` is WHOLE_PROVIDER for an account-level refusal and the model's own
     id for an outage, so a caller asks two questions of this map — is the
     provider walled, and is this model walled — and never confuses the two.
+
+    `refused_at` is when the wall's latest refusal happened: the stored
+    `updated_at` that record_refusal stamps on every refusal, never the time
+    of reading — so a wall set yesterday says yesterday, not "just now".
+    `probed_at` is when the gateway's credit-wall probe (wall_probe) last
+    probed it, None when never.
     """
     rows = await pool.fetch(
-        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed "
+        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
+        "updated_at AS refused_at, probed_at "
         "FROM provider_walls WHERE walled_until > now()"
     )
     return {(r["provider"], r["model"]): dict(r) for r in rows}
+
+
+def walled_words(wall: dict, *, now: datetime | None = None) -> str:
+    """A walled verdict's reason: the wall's reason, WHEN that refusal
+    happened, and how long the wall has left.
+
+    "<reason> — refused at MM-DD HH:MM UTC; not retried since — walled for
+    another N min". The time is the stored refused_at (walls()), always in
+    UTC and truncated to the minute, so a wall set yesterday never reads as a
+    fresh refusal. When the credit-wall probe tried it AFTER that refusal
+    and was not served (wall["probed_at"] later than refused_at), "not
+    retried since" becomes "last probed at MM-DD HH:MM UTC, not served". The
+    "walled for another N min" suffix stays LAST: core parses it.
+    """
+    now = now or datetime.now(UTC)
+    refused_at = wall["refused_at"]
+    at = refused_at.astimezone(UTC).strftime("%m-%d %H:%M")
+    probed_at = wall.get("probed_at")
+    if probed_at is not None and probed_at > refused_at:
+        probed = probed_at.astimezone(UTC).strftime("%m-%d %H:%M")
+        since = f"last probed at {probed} UTC, not served"
+    else:
+        since = "not retried since"
+    left = int((wall["walled_until"] - now).total_seconds() // 60) + 1
+    return f"{wall['reason']} — refused at {at} UTC; {since} — walled for another {left} min"
 
 
 def wall_for(walled: dict[tuple[str, str], dict], provider: str, model: str) -> dict | None:
@@ -1215,11 +1252,10 @@ async def judge_link(
         return {**entry, "verdict": "switched_off", "reason": off}
     wall = wall_for(walled, provider_name, model)
     if wall is not None:
-        left = int((wall["walled_until"] - datetime.now(UTC)).total_seconds() // 60) + 1
         walled_verdict = {
             **entry,
             "verdict": "walled",
-            "reason": f"{wall['reason']} — walled for another {left} min",
+            "reason": walled_words(wall),
             "walled_until": wall["walled_until"].isoformat(),
         }
         if wall.get("connect_failed"):
@@ -1651,7 +1687,7 @@ async def _last_resort(
         reason = f"last resort: passed over: {passed_over[hub_id]}"
         verdicts.append({**entry, "verdict": "passed_over", "reason": reason})
     elif wall is not None:
-        reason = f"last resort: {wall['reason']}"
+        reason = f"last resort: {walled_words(wall)}"
         verdicts.append({**entry, "verdict": "walled", "reason": reason})
     else:
         skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -34,6 +33,7 @@ from app import (
     providers,
     routing,
     usage,
+    wall_probe,
     windows,
 )
 from app import curated as curated_mod
@@ -528,77 +528,42 @@ async def probe(request: Request) -> dict:
     path = "internal" if bundled else None
     compute: str | None = None
 
-    ok = True
-    error: str | None = None
-    latency_ms: int | None = None
     vram_mb: int | None = None
-    started = time.monotonic()
 
     # The probe rides the SAME adapter a chat turn would — an Anthropic
     # default is probed through the Messages API, an ollama default through
     # its /v1 — so "the probe passed" means the chat path works, not that
-    # some other URL answered.
-    probe_body = {
-        "model": target_model,
-        "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 1,
-        "stream": False,
-    }
-    probe_content = b""
-    probe_status: int | None = None
-    try:
-        response = await adapters.for_row(row).completions(request, row, target_model, probe_body)
-        status = response.status_code
-        content = b""
-        iterator = getattr(response, "body_iterator", None)
-        if iterator is not None:
-            async for chunk in iterator:
-                content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
-        else:
-            content = response.body
-        probe_content, probe_status = content, status
-        latency_ms = int((time.monotonic() - started) * 1000)
-        if status != 200:
-            ok = False
-            error = f"HTTP {status}: {content.decode(errors='replace')[:400]}"
-        elif content.lstrip().startswith(b"data:") and b'"error"' in content:
-            # A stream that carried an OpenAI-shaped error chunk answered,
-            # but not with a completion.
-            ok = False
-            error = content.decode(errors="replace")[:400]
-        elif on_engine:
-            # Only meaningful for an engine — a remote/cloud backend consumes
-            # no VRAM on any machine here. Read AFTER the request answers, so
-            # the model is certainly resident, from THIS engine's /api/ps —
-            # never the default provider's address.
-            footprint = await _footprint(request.app, row, target_model)
-            if footprint is not None:
-                vram_mb = footprint["vram_mb"]
-                if bundled:
-                    # The hub's devices, read now (the one live reader,
-                    # engines.bundled_devices, ruling C1); another machine's
-                    # devices are its agent's to state (S44).
-                    accelerators, cpu = await engines.bundled_devices()
-                    compute = compute_id.served_on(
-                        footprint["size"], footprint["size_vram"], accelerators, cpu
-                    )
-    except adapters.ProviderRefused as exc:
-        ok = False
-        error = exc.detail
-        latency_ms = int((time.monotonic() - started) * 1000)
-    except httpx.HTTPError as exc:
-        ok = False
-        error = backends.reason(exc)
-        latency_ms = int((time.monotonic() - started) * 1000)
+    # some other URL answered (adapters.probe_call, shared with the gateway's
+    # own credit-wall probe).
+    call = await adapters.probe_call(request, row, target_model)
+    ok = call.error is None
+    error = call.error
+    latency_ms = call.latency_ms
+    if ok and on_engine:
+        # Only meaningful for an engine — a remote/cloud backend consumes
+        # no VRAM on any machine here. Read AFTER the request answers, so
+        # the model is certainly resident, from THIS engine's /api/ps —
+        # never the default provider's address.
+        footprint = await _footprint(request.app, row, target_model)
+        if footprint is not None:
+            vram_mb = footprint["vram_mb"]
+            if bundled:
+                # The hub's devices, read now (the one live reader,
+                # engines.bundled_devices, ruling C1); another machine's
+                # devices are its agent's to state (S44).
+                accelerators, cpu = await engines.bundled_devices()
+                compute = compute_id.served_on(
+                    footprint["size"], footprint["size_vram"], accelerators, cpu
+                )
 
     # The probe is a call the provider served (or refused): a ledger row too.
     await usage.record_probe(
         pool,
         row=row,
         model=target_model,
-        status=probe_status if probe_status is not None else 502,
-        body=probe_content,
-        started=started,
+        status=call.ledger_status,
+        body=call.content,
+        started=call.started,
         purpose="probe",
         error=error,
         served_on=compute,
@@ -1084,7 +1049,17 @@ async def get_routes(request: Request) -> dict:
             }
             for role in (*routing.BUILTIN_ROLES, *derived)
         ],
-        "walls": [{**w, "walled_until": w["walled_until"].isoformat()} for w in walled.values()],
+        "walls": [
+            {
+                **w,
+                "walled_until": w["walled_until"].isoformat(),
+                "refused_at": w["refused_at"].isoformat(),
+                # Whether the credit-wall probe checks it: the probe loop's
+                # own rule, so the page never keeps a copy of it.
+                "probed": wall_probe.is_probed(w, by_name.get(w["provider"])),
+            }
+            for w in walled.values()
+        ],
     }
 
 

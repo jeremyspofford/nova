@@ -4,6 +4,7 @@ import {
   viewArgs,
   formatMs,
   formatRelativeTime,
+  formatTimeUntil,
   workspacePathFrom,
   isWorkspacePathTool,
   mcpCallLabel,
@@ -103,6 +104,30 @@ describe('formatRelativeTime', () => {
 
   it('falls back to a calendar date once it is more than a week old', () => {
     expect(formatRelativeTime('2026-08-01T12:00:00Z', now)).not.toMatch(/ago$/)
+  })
+
+  it('a stamp ahead of the browser clock still reads "just now": its callers show past events, and skew is not the future (epic wall-probe T10)', () => {
+    expect(formatRelativeTime('2026-08-28T12:00:10Z', now)).toBe('just now')
+    expect(formatRelativeTime('2026-08-28T12:01:00Z', now)).toBe('just now')
+    expect(formatRelativeTime('2026-08-28T16:00:00Z', now)).toBe('just now')
+    expect(formatRelativeTime('2026-09-20T12:00:00Z', now)).toBe('just now')
+  })
+})
+
+describe('formatTimeUntil', () => {
+  const now = new Date('2026-08-28T12:00:00Z')
+
+  it('counts how far ahead a future time is: seconds, then minutes, then hours, then days', () => {
+    expect(formatTimeUntil('2026-08-28T12:00:30Z', now)).toBe('in 30s')
+    expect(formatTimeUntil('2026-08-28T12:05:00Z', now)).toBe('in 5m')
+    expect(formatTimeUntil('2026-08-28T16:00:00Z', now)).toBe('in 4h')
+    expect(formatTimeUntil('2026-08-30T12:00:00Z', now)).toBe('in 2d')
+  })
+
+  it('says "now" for a time under 5 seconds ahead or already past, never "ago"', () => {
+    expect(formatTimeUntil('2026-08-28T12:00:03Z', now)).toBe('now')
+    expect(formatTimeUntil('2026-08-28T12:00:00Z', now)).toBe('now')
+    expect(formatTimeUntil('2026-08-28T11:00:00Z', now)).toBe('now')
   })
 })
 

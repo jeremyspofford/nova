@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import admin, backends, data_plane, db, engines_api, usage
+from app import admin, backends, data_plane, db, engines_api, usage, wall_probe
 from app.auth import bearer_auth_middleware
 from app.build_identity import build_identity
 from app.logging_conf import configure_logging
@@ -39,9 +40,15 @@ async def lifespan(app: FastAPI):
     pool = await db.init_pool()
     await backends.ensure_default_row(pool)
     await usage.ensure_seed(pool)
+    # The credit-wall probe: re-checks walled providers on its own clock.
+    probing = asyncio.create_task(wall_probe.loop(app, pool), name="wall_probe")
     try:
         yield
     finally:
+        # Cancel AND await it, so no probe is mid-query when the pool closes.
+        probing.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await probing
         await db.close_pool()
 
 

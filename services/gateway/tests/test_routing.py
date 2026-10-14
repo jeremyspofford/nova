@@ -14,6 +14,8 @@ cap is a 402 and no fallback (rail 20)."""
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -332,6 +334,222 @@ async def test_a_clean_completion_clears_this_model_and_not_its_siblings(pool, l
     assert await routing.clear_wall(pool, "hub") is True
     assert await routing.walls(pool) == {}
     assert await routing.clear_wall(pool, "hub") is False
+
+
+# ── wall-probe T1: a wall says when the refusal happened ──────────────────
+# 2026-10-13 17:59 UTC OpenRouter refused (402); every turn on 10-14 quoted
+# that saved reason as if it were fresh. The refusal time is already stored
+# (provider_walls.updated_at, stamped by record_refusal); walls() must carry it.
+
+
+async def _backdate_wall(pool, provider: str, hours: float) -> None:
+    """Move a wall's stored refusal time into the past, leaving walled_until."""
+    await pool.execute(
+        "UPDATE provider_walls SET updated_at = now() - make_interval(secs => $2) "
+        "WHERE provider = $1",
+        provider,
+        hours * 3600,
+    )
+
+
+async def test_walls_carry_the_refusal_time_of_each_wall(pool, local):
+    row = {"name": "hub"}
+    account = await routing.record_refusal(pool, row, 402, "out of credit")
+    outage = await routing.record_refusal(pool, row, 503, "loading", model="qwen3:8b")
+
+    live = await routing.walls(pool)
+    for wall, key in ((account, ("hub", routing.WHOLE_PROVIDER)), (outage, ("hub", "qwen3:8b"))):
+        got = live[key]
+        assert "refused_at" in got, f"walls() does not say when {key} refused: {sorted(got)}"
+        assert got["refused_at"].tzinfo is not None
+        assert abs((got["refused_at"] - wall["recorded_at"]).total_seconds()) < 5
+
+
+async def test_a_walls_refusal_time_is_the_stored_one_not_now(pool, local):
+    """A wall refused hours ago must say hours ago — the stored stamp, never
+    the moment it is read. walled_until keeps its meaning: untouched."""
+    await routing.record_refusal(pool, {"name": "hub"}, 402, "out of credit")
+    before = (await routing.walls(pool))[("hub", routing.WHOLE_PROVIDER)]
+    await _backdate_wall(pool, "hub", 6)
+
+    wall = (await routing.walls(pool))[("hub", routing.WHOLE_PROVIDER)]
+    stored = await pool.fetchval(
+        "SELECT updated_at FROM provider_walls WHERE provider = 'hub' AND model = $1",
+        routing.WHOLE_PROVIDER,
+    )
+    assert wall.get("refused_at") == stored, (wall.get("refused_at"), stored)
+    age = (datetime.now(UTC) - wall["refused_at"]).total_seconds()
+    assert abs(age - 6 * 3600) < 60, f"refused {age:.0f}s ago, not six hours"
+    assert wall["walled_until"] == before["walled_until"]
+
+
+async def test_a_second_refusal_moves_the_refusal_time(pool, local):
+    row = {"name": "hub"}
+    await routing.record_refusal(pool, row, 402, "out of credit")
+    await _backdate_wall(pool, "hub", 2)
+    old = (await routing.walls(pool))[("hub", routing.WHOLE_PROVIDER)].get("refused_at")
+    assert old is not None, "walls() carries no refused_at"
+
+    again = await routing.record_refusal(pool, row, 402, "still out of credit")
+    new = (await routing.walls(pool))[("hub", routing.WHOLE_PROVIDER)]["refused_at"]
+
+    assert new > old
+    assert abs((new - again["recorded_at"]).total_seconds()) < 5
+    # walled_until still means "refusal time + this strike's step" (strike 2: 6h).
+    assert abs((again["walled_until"] - new).total_seconds() - 6 * 3600) < 5
+
+
+async def test_the_routes_page_lists_each_walls_refusal_time_as_iso(client, pool, local):
+    await routing.record_refusal(pool, {"name": "hub"}, 402, "out of credit")
+    await _backdate_wall(pool, "hub", 3)
+    stored = await pool.fetchval("SELECT updated_at FROM provider_walls WHERE provider = 'hub'")
+
+    walls = (await client.get("/admin/routes")).json()["walls"]
+
+    assert len(walls) == 1
+    assert "refused_at" in walls[0], f"the routes page has no refused_at: {sorted(walls[0])}"
+    assert datetime.fromisoformat(walls[0]["refused_at"]) == stored
+    # walled_until is still an ISO string and still in the future.
+    assert datetime.fromisoformat(walls[0]["walled_until"]) > datetime.now(UTC)
+
+
+# ── wall-probe T2: a walled verdict says when the refusal happened ────────
+# Every turn on 10-14 quoted the 10-13 17:59 402 as "walled for another N min",
+# which reads as a fresh refusal. The verdict now states the stored refusal time
+# (walls()' refused_at), in UTC, BEFORE the suffix core parses.
+
+# 23:59:54 on purpose: rounding (-> 10-14 00:00) or a local zone (New York
+# -> 19:59) both say a different time than truncated UTC.
+REFUSED = datetime(2026, 10, 13, 23, 59, 54, tzinfo=UTC)
+REFUSED_WORDS = "refused at 10-13 23:59 UTC; not retried since"
+WALLED_RE = (
+    r"(?P<head>.+) — refused at (?P<at>\d\d-\d\d \d\d:\d\d) UTC; not retried since"
+    r" — walled for another (?P<left>\d+) min$"
+)
+
+
+async def _stamp_wall(pool, provider: str, at: datetime = REFUSED) -> None:
+    """Pin a wall's stored refusal time to `at`, leaving walled_until."""
+    await pool.execute(
+        "UPDATE provider_walls SET updated_at = $2 WHERE provider = $1", provider, at
+    )
+
+
+def _verdict_items(words: str) -> dict[str, str]:
+    """A route reason / 503 detail's "<id>: <reason>; …" list, by id."""
+    listed = words.split(" — ", 1)[1] if " — " in words else words
+    out = {}
+    for item in re.split(r"; (?=[^\s;]+: )", listed):
+        link, _, reason = item.partition(": ")
+        out[link] = reason
+    return out
+
+
+def test_the_walled_words_state_the_refusal_time_before_the_suffix_core_parses():
+    now = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
+    wall = {
+        "reason": "openrouter refused (402): Insufficient credits",
+        "refused_at": REFUSED,
+        "walled_until": now + timedelta(minutes=30, seconds=10),
+    }
+    assert routing.walled_words(wall, now=now) == (
+        f"openrouter refused (402): Insufficient credits — {REFUSED_WORDS}"
+        " — walled for another 31 min"
+    )
+
+
+def test_the_walled_words_say_the_refusal_time_in_utc_whatever_zone_it_was_read_in():
+    """asyncpg may hand back a timestamptz in any zone; the words are UTC."""
+    from zoneinfo import ZoneInfo
+
+    now = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
+    wall = {
+        "reason": "openrouter refused (402): Insufficient credits",
+        "refused_at": REFUSED.astimezone(ZoneInfo("America/New_York")),
+        "walled_until": now + timedelta(hours=2),
+    }
+    words = routing.walled_words(wall, now=now)
+    assert REFUSED_WORDS in words, words
+    assert words.endswith(" — walled for another 121 min")
+
+
+async def test_a_walled_link_states_its_stored_refusal_time_in_the_route_reason(
+    client, pool, local, mount_backend
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    await routing.record_refusal(pool, {"name": "openrouter"}, 402, "out of credit")
+    await _stamp_wall(pool, "openrouter")
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.status_code == 200
+    reason = _verdict_items(_route_chunk(resp.content)["reason"])["openrouter:remote-model"]
+    got = re.match(WALLED_RE, reason)
+    assert got, reason
+    assert got["head"] == "openrouter refused (402): out of credit"
+    assert got["at"] == "10-13 23:59"
+    # walled_until is untouched by the stamp: a fresh strike-1 wall, ~60 min left.
+    assert 58 <= int(got["left"]) <= 61, reason
+
+
+async def test_the_refusal_time_is_utc_whatever_the_callers_timezone(
+    client, pool, local, mount_backend
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    await routing.record_refusal(pool, {"name": "openrouter"}, 402, "out of credit")
+    await _stamp_wall(pool, "openrouter")
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model", tz="America/New_York")
+
+    reason = _verdict_items(_route_chunk(resp.content)["reason"])["openrouter:remote-model"]
+    assert REFUSED_WORDS in reason, reason
+    assert "19:59" not in reason
+
+
+async def test_a_walled_last_resort_states_its_refusal_time_too(client, pool, local):
+    from app import admin
+    from app.main import app
+
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    await routing.record_refusal(pool, {"name": "hub"}, 402, "out of credit")
+    await _stamp_wall(pool, "hub")
+
+    with pytest.raises(routing.NothingRunnable) as caught:
+        await routing.resolve(
+            app,
+            pool,
+            role="chat",
+            requested=None,
+            timezone="UTC",
+            fit_context=admin._fit_context,
+            latest_probes=admin._latest_probes,
+            hub_last_resort=True,
+        )
+    last = caught.value.verdicts[-1]
+    assert (last["verdict"], last.get("last_resort")) == ("walled", True), last
+    assert last["reason"].startswith("last resort: "), last
+    got = re.match(WALLED_RE, last["reason"][len("last resort: ") :])
+    assert got, last["reason"]
+    assert got["head"] == "hub refused (402): out of credit"
+    assert got["at"] == "10-13 23:59"
+
+
+async def test_the_503_detail_states_each_walled_links_refusal_time(client, pool, local):
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    await routing.record_refusal(pool, {"name": "hub"}, 402, "out of credit")
+    await _stamp_wall(pool, "hub")
+
+    resp = await _chat(client, "chat")
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["error"]
+    assert detail.startswith("no model in the 'chat' chain can serve right now — "), detail
+    reason = _verdict_items(detail)["hub:qwen3:8b"]
+    got = re.match(WALLED_RE, reason)
+    assert got, reason
+    assert got["at"] == "10-13 23:59"
 
 
 async def test_an_empty_role_chain_uses_the_chat_chain_and_an_uninstalled_local_is_skipped(
