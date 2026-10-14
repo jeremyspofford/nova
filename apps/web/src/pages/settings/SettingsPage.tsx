@@ -19,6 +19,7 @@ import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection, decisionSwitchDefs, hubLastResortDef } from './RoutingSection'
 import { ProactiveSection } from './ProactiveSection'
+import { TurnTimeBudgetSection, turnTimeBudgetDef } from './TurnTimeBudgetSection'
 import { SETTINGS_TABS, resolveTab } from './tabs'
 
 /**
@@ -115,6 +116,10 @@ export function SettingsPage() {
   const decisionSwitches = settings ? decisionSwitchDefs(settings) : null
   // The hub last-resort switch (epic hub-last-resort), off the same fetch.
   const hubLastResort = settings ? hubLastResortDef(settings) : null
+  // The turn time budget (turns.time_budget_s), off the same fetch: drawn
+  // only when core lists the key, so it is reachable by navigation and not
+  // only through PUT /api/v1/settings.
+  const turnTimeBudget = settings ? turnTimeBudgetDef(settings) : null
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -233,6 +238,12 @@ export function SettingsPage() {
                   checked={responsivenessCheck}
                   onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
                 />
+                {turnTimeBudget && (
+                  <TurnTimeBudgetSection
+                    def={turnTimeBudget}
+                    onChanged={(key, value) => updateSettingValue(key, value)}
+                  />
+                )}
               </>
             )}
             {tab === 'devices' && (

@@ -211,3 +211,38 @@ def test_v27_t13_the_section_says_a_changed_reading_is_not_a_repeat():
     assert _says(section, "changed"), "the section does not say a changed reading is no repeat"
     problem = _numbers_problem(section)
     assert problem is None, problem
+
+
+def test_v27_t25_the_section_names_the_turn_time_budget():
+    """verification-2-7 T25: a turn past its wall-clock budget ends between
+    rounds on a stated note. An operator who sees that note learns here which
+    setting it is and that it is checked between rounds, never mid-tool; the
+    section still states no number nothing pins."""
+    assert "turns.time_budget_s" in settings_store.DEFS_BY_KEY
+    section = _section()
+    assert "turns.time_budget_s" in section, "the section does not name turns.time_budget_s"
+    assert _says(section, "time_budget"), "the section does not name the round_stop reason"
+    assert _says(section, "between rounds"), "the section does not say when the budget is read"
+    problem = _numbers_problem(section)
+    assert problem is None, problem
+
+
+def test_v27_t25_the_section_points_to_the_settings_field_the_web_draws():
+    """verification-2-7 T25 (VERIFY gap): the section says where the budget is
+    set, and that place exists — the web's Settings → Behaviour draws a "Turn
+    time limit" section for turns.time_budget_s (TurnTimeBudgetSection.tsx,
+    mounted by SettingsPage). A pointer to a page that draws no field would
+    send the operator to the API by another name."""
+    page = SETTINGS_PAGES / "TurnTimeBudgetSection.tsx"
+    assert page.exists(), "no Settings section draws turns.time_budget_s"
+    source = page.read_text(encoding="utf-8")
+    assert "export const TURN_TIME_BUDGET_KEY = 'turns.time_budget_s'" in source
+    assert 'title="Turn time limit"' in source
+    settings_page = (SETTINGS_PAGES / "SettingsPage.tsx").read_text(encoding="utf-8")
+    assert "TurnTimeBudgetSection" in settings_page
+    tabs = (SETTINGS_PAGES / "tabs.ts").read_text(encoding="utf-8")
+    assert "label: 'Behaviour'" in tabs
+    section = _section()
+    assert _says(section, "Settings → Behaviour → Turn time limit"), (
+        "the section does not say where the time budget is set"
+    )

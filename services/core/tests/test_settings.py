@@ -78,6 +78,11 @@ KNOWN_KEYS = {
     "box.memory_gb",
     "box.pids",
     "box.max_running",
+    # verification-2-7 T25 (2026-10-13, report item 2): a turn's wall-clock
+    # budget in seconds — past it, the turn ends between rounds on a stated
+    # note (round_stop time_budget). Not a round count (migration 044 stays).
+    # Deliberate tripwire update: one def landed, so the set moved by one.
+    "turns.time_budget_s",
 }
 
 

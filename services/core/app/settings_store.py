@@ -318,6 +318,24 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
         validate=_int_range(1, 8, "boxes running at once"),
     ),
+    # verification-2-7 T25 (report item 2): the hard bound on one turn. A
+    # wall-clock budget, never a count of rounds (migration 044). Checked
+    # between rounds, after a round's tools have all run, so a call in flight
+    # always finishes; past it the turn ends on a stated note (round_stop
+    # time_budget). Every turn kind reads it: chat, agents, scheduled firings,
+    # beats and the eval runner share chat._run_turn.
+    SettingDef(
+        key="turns.time_budget_s",
+        type="int",
+        default=900,
+        description=(
+            "The wall-clock seconds one turn may run (60 to 86400). It is checked "
+            "between rounds, after a round's tools have all run: past it, no further "
+            "tool runs, she answers once from what the tools returned, and her reply "
+            "ends with a note stating the budget and the seconds the turn took."
+        ),
+        validate=_int_range(60, 86400, "seconds per turn"),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
@@ -330,6 +348,10 @@ BOX_LIMIT_KEYS: dict[str, str] = {
     "pids": "box.pids",
     "max_running": "box.max_running",
 }
+
+#: The per-turn wall-clock budget's key (verification-2-7 T25); chat._run_turn
+#: reads it at each turn's start.
+TURN_TIME_BUDGET = "turns.time_budget_s"
 
 #: The hub last-resort switch's key (epic hub-last-resort).
 HUB_LAST_RESORT = "routing.hub_last_resort"

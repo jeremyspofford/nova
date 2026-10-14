@@ -1231,12 +1231,15 @@ def test_every_round_stop_reason_is_pinned():
     the circling ones"): a round_stop may also be `unfittable` — a request that
     cannot fit its window, never sent, with no circling note — and
     chat._file_round_stop, the one place a round_stop is filed, refuses any
-    reason not pinned here."""
+    reason not pinned here. Moved again by verification-2-7 T25: `time_budget`,
+    a turn past its wall-clock budget (turns.time_budget_s) — not a circling
+    reason, and not a count of rounds."""
     assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
     assert chat.ROUND_STOP_REASONS == {
         chat.STOP_REPEATED_CALL,
         chat.STOP_NO_NEW_RESULTS,
         chat.STOP_UNFITTABLE,
+        chat.STOP_TIME_BUDGET,
     }
     turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
     with pytest.raises(ValueError, match="not a round_stop reason"):

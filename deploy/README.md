@@ -328,17 +328,32 @@ one of the stops below, and each one says why.
   `context_truncated`; its text is not kept and its tool calls do not run. It is
   re-sent once, fitted. If that is cut too, the turn ends with
   `Stopped: the request to <model> was cut at its W-token context window again …`.
-- **What bounds a runaway.** The circling stop; the owner's stop
+- **A turn past its time budget stops.** Every turn has a wall-clock budget, the
+  setting `turns.time_budget_s`, stored in seconds and set in Settings → Behaviour →
+  Turn time limit, which reads it in minutes. It is read when the turn starts
+  and checked between rounds, after a round's tools have all run, so a tool already
+  running always finishes and every result of that round is kept. Once the turn has
+  run past the budget, no further tool runs: she answers once more, with no tools
+  offered, exactly as at the circling stop, and her reply ends with
+  `[stopped after N tool rounds: the turn ran past its time budget of B seconds, E seconds in (turns.time_budget_s)]`,
+  where B is the budget and E the seconds the turn had taken. The trace records a
+  `round_stop` step with the reason `time_budget`, the budget and the elapsed seconds.
+  A round she answers without asking for a tool is her reply however long the turn
+  took. It is a budget of time, not a count of rounds, and it asks nothing: raise the
+  setting to give turns longer.
+- **What bounds a runaway.** The time budget; the circling stop; the owner's stop
   (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
   tool reports progress); the gateway's monthly spending caps on cloud providers; a
   gateway read that stays silent for 300 seconds, and each tool's own budget; and any
   round that fails.
   A local model costs nothing, so no spending cap stops it: a local turn that keeps
-  making new, different calls with new results runs until it answers, circles, or the
-  owner stops it. That is the owner's choice, not an oversight.
-- **Scheduled tasks and beats have no wall-clock cut.** They end the way a chat turn
-  does. Timers fire one after another, so a long scheduled turn delays the timers
-  behind it for as long as it works.
+  making new, different calls with new results runs until it answers, circles, runs
+  past its time budget, or the owner stops it. A live reading whose answer changes
+  every time it is read (an uptime) never circles, so the time budget is what ends it.
+- **Scheduled tasks and beats have no wall-clock cut from outside.** Nothing cuts a
+  firing mid-round: its turn ends the way a chat turn does, the time budget included.
+  Timers fire one after another, so a long scheduled turn delays the timers behind it
+  until it answers or reaches its budget.
 
 ## Decision models (Jev and Kev)
 

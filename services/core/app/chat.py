@@ -631,6 +631,19 @@ CIRCLING_NUDGE = (
     "brought nothing new. Answer now with what the tool results above already give "
     "you, and say plainly what is still unknown."
 )
+# The same narration round and refusal at the time-budget stop (verification-2-7
+# T25): the turn ran past turns.time_budget_s, which is not circling, so neither
+# says it was. Each states the true reason; the note and the statement of what
+# the tools returned still hold when the model ignores them.
+TIME_BUDGET_REFUSAL = (
+    f"{tools.ERROR_PREFIX}this turn ran past its time budget and no further tool "
+    "will run — answer with what you have"
+)
+TIME_BUDGET_NUDGE = (
+    "No further tool will run this turn: it has run past its time budget. Answer now "
+    "with what the tool results above already give you, and say plainly what is still "
+    "unknown."
+)
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -2775,8 +2788,29 @@ CIRCLING_NOTE_WORDS = {
 # tool result trimmed: it is never sent, and the turn ends on the stated sizes
 # (verification-2-7 T24). Not a circling reason — no narration round follows.
 STOP_UNFITTABLE = "unfittable"
+# A turn that ran past its wall-clock budget, settings_store.TURN_TIME_BUDGET
+# (verification-2-7 T25): checked where the circling stop is, after a round's
+# tools have all run, and ended the same way (one toolless narration round,
+# then a note). A budget of seconds, never a count of rounds; not a circling
+# reason, so it has its own note (_time_budget_words).
+STOP_TIME_BUDGET = "time_budget"
 # Every reason a `round_stop` span may carry; _file_round_stop refuses any other.
-ROUND_STOP_REASONS = frozenset({*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE})
+ROUND_STOP_REASONS = frozenset({*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET})
+
+# Where a turn reads the time: monotonic seconds, looked up as a module
+# attribute at each call (never bound at import), so the budget is measured on
+# one clock that a wall-clock change cannot move.
+turn_clock: Callable[[], float] = time.monotonic
+
+
+def _time_budget_words(budget_s: int, elapsed_s: int) -> str:
+    """What the time-budget stop's note says after "[stopped after N tool
+    rounds: ": the budget, the seconds the turn took and the setting's key,
+    each read from the stop's own facts. States; asks nothing."""
+    return (
+        f"the turn ran past its time budget of {budget_s} seconds, "
+        f"{elapsed_s} seconds in ({settings_store.TURN_TIME_BUDGET})"
+    )
 
 
 def _file_round_stop(turn: traces.Turn, reason: str, rounds: int, **facts: object) -> None:
@@ -3902,9 +3936,13 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     return reason
 
 
-def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
-    """The circling stop's narration round's refusal."""
-    return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
+def _refuse_out_of_rounds(
+    turn: traces.Turn, call: ToolCall, refusal: str = OUT_OF_ROUNDS_REFUSAL
+) -> str:
+    """The stopped turn's narration round's refusal: the circling stop's by
+    default, or the stated `refusal` of the stop that ended the turn (the
+    time-budget stop's, T25)."""
+    return _refuse_call(turn, call, refusal, "refused_out_of_rounds")
 
 
 def _refuse_markup_as_text(turn: traces.Turn, call: ToolCall) -> str:
@@ -6104,6 +6142,22 @@ async def _run_turn(
     # recorded only when this kind arms the stack-claim guard that reads it.
     # Set here, the one place a turn runs, so no caller keeps a list of kinds.
     stated_purpose = device_tools.TURN_PURPOSE.set(traces.purpose_of(turn))
+    # The turn's wall-clock budget (verification-2-7 T25): its start on
+    # turn_clock and the setting as it stands now, read ONCE here so a write
+    # mid-turn moves the next turn, never this one's bound. Every turn kind
+    # runs through here, so one read bounds them all.
+    turn_started_s = turn_clock()
+    try:
+        time_budget_s = int(await settings_store.read_value(pool, settings_store.TURN_TIME_BUDGET))
+    except Exception:
+        # Fail toward the default bound, never toward none: a settings read
+        # that raises must not leave a turn unbounded.
+        time_budget_s = settings_store.DEFS_BY_KEY[settings_store.TURN_TIME_BUDGET].default
+        logger.exception(
+            "chat turn %s: the time budget setting could not be read; using the default %s s",
+            turn.id,
+            time_budget_s,
+        )
     try:
         # Inside the try, so a persona that cannot be built still reaches
         # the finally that closes the turn.
@@ -6393,7 +6447,8 @@ async def _run_turn(
         # A round is one gateway call plus the tool calls it asks for. No count
         # of rounds ever stops a turn (owner, 2026-10-08: "not have a limit at
         # all"): the loop runs until the model answers, a round fails, the
-        # owner stops it, or the circling stop (RoundProgress) ends it.
+        # owner stops it, the circling stop (RoundProgress) ends it, or the
+        # turn has run past its wall-clock budget (T25, turns.time_budget_s).
         failure: str | None = None
         # The stated reason a thinking-only round ran out of links (no-ceiling
         # T3); None while every round found a link that answered.
@@ -6415,6 +6470,9 @@ async def _run_turn(
         progress = RoundProgress()
         stop_reason: str | None = None
         stop_rounds = 0
+        # The facts a stop states beside its reason (the time-budget stop's
+        # budget_s and elapsed_s), filed on its round_stop span as they are.
+        stop_facts: dict[str, int] = {}
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
@@ -6597,6 +6655,16 @@ async def _run_turn(
             # being skipped). Never span heads: those are cut and alias.
             results = [message["content"] for message in messages[before:]]
             reason = progress.after_round(calls, results)
+            if reason is None:
+                # The wall-clock budget (T25), read where the circling stop is:
+                # every call of this round has run and been kept, so the stop
+                # never cuts a tool, and it decides only whether ANOTHER tool
+                # round is asked — a round that answers is never discarded.
+                # When circling fires on the same round, its reason is filed.
+                elapsed_s = int(turn_clock() - turn_started_s)
+                if elapsed_s >= time_budget_s:
+                    reason = STOP_TIME_BUDGET
+                    stop_facts = {"budget_s": time_budget_s, "elapsed_s": elapsed_s}
             if reason is not None:
                 out_of_rounds = True
                 stop_reason = reason
@@ -6723,7 +6791,10 @@ async def _run_turn(
         if out_of_rounds:
             # The trace says why the turn stopped and after how many tool rounds:
             # one span per stopped turn, filed before the narration round.
-            _file_round_stop(turn, stop_reason, stop_rounds)
+            _file_round_stop(turn, stop_reason, stop_rounds, **stop_facts)
+            timed_out = stop_reason == STOP_TIME_BUDGET
+            # The log names the stop that happened: a time-budget stop did not circle.
+            stop_name = "the time-budget stop" if timed_out else "the circling stop"
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
             # already earned must not be swallowed by the circling stop (see
@@ -6739,7 +6810,7 @@ async def _run_turn(
                         *messages,
                         {
                             "role": "system",
-                            "content": CIRCLING_NUDGE,
+                            "content": TIME_BUDGET_NUDGE if timed_out else CIRCLING_NUDGE,
                         },
                     ],
                     (),
@@ -6755,12 +6826,12 @@ async def _run_turn(
                 final_text, final_calls, final_failure = "", [], str(exc)
                 narration_unsent = str(exc)
             if narration_unsent is not None:
-                logger.warning("the circling stop's narration round: %s", narration_unsent)
+                logger.warning("%s's narration round: %s", stop_name, narration_unsent)
             elif final_failure is not None:
                 # FAIL-OPEN: a dead narration round costs the answer, never the
                 # turn. Whatever streamed before it died stays (it was watched
                 # live) and the note below still lands.
-                logger.warning("the circling stop's narration round failed: %s", final_failure)
+                logger.warning("%s's narration round failed: %s", stop_name, final_failure)
             elif final_calls:
                 # It asked for tools anyway. NOTHING is dispatched: each call is
                 # answered with the stated result and recorded as a refused span,
@@ -6776,12 +6847,18 @@ async def _run_turn(
                 )
                 for call in final_calls:
                     emit(_activity_frame(call.name, "start"))
-                    result = _refuse_out_of_rounds(turn, call)
+                    result = _refuse_out_of_rounds(
+                        turn, call, TIME_BUDGET_REFUSAL if timed_out else OUT_OF_ROUNDS_REFUSAL
+                    )
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            backend_note = (
-                f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
-            )
+            if timed_out:
+                words = _time_budget_words(stop_facts["budget_s"], stop_facts["elapsed_s"])
+                backend_note = f"[stopped after {stop_rounds} tool rounds: {words}]"
+            else:
+                backend_note = (
+                    f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
+                )
             note = f"\n\n{backend_note}" if parts else backend_note
             # Did the narration round ANSWER? Read off its own outcome, never
             # off `parts` (earlier rounds' text and its raw markup) and never
