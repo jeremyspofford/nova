@@ -1,9 +1,8 @@
-# S38c: the task ledger — work that survives a cleared context — the spec
+# S38c: the task ledger — work that survives a cleared context — the spec (APPROVED 2026-10-14)
 
-**Status:** proposed 2026-10-14. Not approved. The owner approved the
-direction ("it all sounds good. we need this spec'd out."), not the details.
-§12 holds the open questions, each with a proposed answer. Nothing here is
-built.
+**Status:** approved 2026-10-14. The owner, on §12: "do what you propose" —
+every §12 question is ruled as proposed (rulings there). Steps 0–4 (§11) are
+built first; the ledger (steps 5–13) comes before S34.
 
 Read with [`../s38b/spec.md`](../s38b/spec.md) (summaries near the window,
 `read_result`), [`../s32/spec.md`](../s32/spec.md) §5 and §5.5 (her landing
@@ -728,9 +727,11 @@ it.
 
 ---
 
-## 12. Questions for the owner
+## 12. Questions for the owner — ruled 2026-10-14
 
-Each has a proposed answer. Nothing is ruled.
+The owner: "do what you propose". Every answer below is ruled as proposed.
+Question 11 left one placement to him; with "do what you propose" the
+orchestrator placed it (below), and he can move it.
 
 1. **Where does the ledger live?** *Proposed:* database rows, rendered by
    code to a read-only `tasks/<id>/ledger.md` in her workspace; she writes
@@ -763,6 +764,9 @@ Each has a proposed answer. Nothing is ruled.
 11. **Order.** *Proposed:* steps 1–4 now (they unblock the self-coding walk);
     the ledger before S34, which then builds on it. Where it sits against
     S32.4, S32.5 and S46a's boot agent is his call.
+    *Placed 2026-10-14:* steps 0–4 now; then the S32.3 walk to green, S32.4,
+    S32.5, and S46a's boot agent (ruled earlier the same day: after S32.5);
+    then the ledger (steps 5–13), before S34.
 
 ---
 
