@@ -3,6 +3,9 @@
 **Status:** approved 2026-10-13. The owner took every proposal in §9 ("go
 with your proposed").
 
+**Note (2026-10-14, the build):** the CI sender is `github_ci`, not `github-ci`: a sender's role is
+`event_<sender>`, and the gateway's role rule (`^[a-z_]{1,32}$`) refuses a hyphen.
+
 The owner ordered it on 2026-10-13: "do s38b, then s37c."
 
 From [`../doing-things.md`](../doing-things.md) (S37c) and
@@ -95,7 +98,7 @@ turn and reports. When S34 lands, the same event opens or resumes a goal
 7. **CI on GitHub** (§9, Q1). A source that reads, every 5 minutes, the latest
    workflow runs of the repos the owner lists, through GitHub's API with the
    token the GitHub MCP server already holds. A run that turns from green to
-   red (or ends red on a new commit) files an event for sender `github-ci`.
+   red (or ends red on a new commit) files an event for sender `github_ci`.
    No public address is needed.
 8. **A new routing role per sender**, named `event_<sender>`. An empty chain
    uses chat's, as `scheduled` does. The Routing page lists it.
@@ -144,7 +147,7 @@ Two corpus cases (bumps `suite_version`):
    "disk on the mini PC is 95% full"}'` returns 202.
 3. Pass: an Inbox notice names the event and her conclusion, and the turn,
    read by turn id, shows a disk check.
-4. CI: a red run on a throwaway branch of the repo shows up as a `github-ci`
+4. CI: a red run on a throwaway branch of the repo shows up as a `github_ci`
    event within 10 minutes.
 
 ## 7. Size and order

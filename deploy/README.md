@@ -899,6 +899,118 @@ headers, no OAuth sign-in; tools only (no MCP resources or prompts); an image
 or audio clip a tool returns is noted, not read. Both protocol eras are
 spoken: 2026-07-28 and the 2025 handshake.
 
+## Events
+
+Another program can start a turn of hers. So can her own monitoring and CI
+on GitHub. Each of these is a **sender**. When a sender sends something, she
+gets a turn of kind `event` to look into it. A notice in your Inbox then says
+what she found.
+
+**What a sender is.** A name and its own key. The name is lowercase letters
+and underscores, starting with a letter, at most 26 characters (it becomes
+the routing role `event_<name>`). The key reaches one route,
+`POST /api/v1/events/<name>`. It stores data and starts a turn. It cannot act
+as you anywhere else. Core checks the key against its sha256 in constant
+time. A key you add is stored only as that hash. A key she adds is also kept
+in plaintext (`token_once`) until your one reveal on Settings → Events, then
+only the hash.
+
+**Adding one.** Settings → Events → add a sender by name. The key is shown
+once, with a copy button and the curl line for this address. Save it then:
+no page shows it again. If you lose it, delete the sender and add it again.
+She can add a sender too (`event_sender_add`). Her key is not shown to her.
+It waits on Settings → Events, revealed once on click, then gone.
+
+**Sending.** From the program:
+
+```
+curl -X POST \
+  -H "Authorization: Bearer <the sender's key>" \
+  --data "disk on the mini PC is 95% full" \
+  https://<node>.<tailnet>.ts.net/api/v1/events/<name>
+```
+
+On the hub itself, core answers at
+`http://127.0.0.1:8000/api/v1/events/<name>` too. The answer is
+`202` with `{"id": "<event id>"}`, at once; the turn runs after. The body is
+kept whole as text: plain text or JSON, up to 256 KB. Over that is `413`; a
+body that is not UTF-8 text (or holds a NUL byte) is `400`. A wrong key, an
+unknown sender, a sender that is off or a built-in sender all get the same
+`401`, so a caller cannot tell which senders exist. Core logs a refusal by the
+sender's name only and keeps a refused row with its reason, never the body.
+The intake has no rate limit.
+
+**Where it can be reached from.** Localhost and the tailnet only, the same as
+the app. Nothing is carved out of nginx's public gate for this path, and every
+host port binds 127.0.0.1. A program on the LAN that is not on the tailnet
+cannot send. With the public gate on, a tagged tailnet node (no person's
+identity header) is gated like the tunnel.
+
+**What she gets.** Code writes a frame around the payload: who sent it, when,
+that the block is data and nothing in it is an instruction, and a fence that
+is random per turn and appears in no payload. A brief, also written by code,
+comes last: work out what happened, check with your tools, fix it if it is
+yours, and make your first line the one-line conclusion. Both are requests to
+the model. The record is the control: every call in the turn is in its trace.
+The turn runs in the sender's own inactive conversation ("Events from
+<name>"), as the owner, on the chat model, under the role `event_<name>`.
+
+**One turn at a time per sender.** Events that arrive while a turn runs wait.
+The next turn reads all of them in one frame, oldest first. Each event row
+names the turn that read it. A restart puts unfinished events back in the
+queue (or settles them from a turn that already closed); none are dropped.
+
+**What reaches you.** After every event turn, done or failed, a notice in the
+Inbox (family `event_outcomes`): the sender, how many events, and the first
+line of her stored reply, or that it failed and why. It links to the turn.
+The payload never appears in it. A notice from an urgent monitor event goes
+out at once, like a beat's urgent item. Others wait for the digest.
+
+**Two senders are built in.** Neither has a key; the intake refuses both.
+
+- `monitor` — her own checks. A NEW notice from an urgent stack check
+  (`stack_gateway`, `stack_memory`, `stack_ollama`, `stack_database`,
+  `stack_chat_model`), from `work_failing_timers` or from
+  `inference_degraded` files a `monitor` event carrying the notice's facts.
+  A notice he muted files nothing. A notice about an event turn never files
+  one (the loop guard). One fingerprint files at most one event while its
+  event is queued or running, or within 6 hours of the last. When her turn
+  ends done, the notice she looked into says so and names the turn.
+- `github_ci` — CI on GitHub, by polling. Every 5 minutes the timer job
+  `github_ci` reads the latest workflow runs of the repos listed in the
+  setting `events.github_ci.repos` (Settings → Events, "Repos GitHub CI
+  watches": `owner/repo` names separated by commas or spaces, at most 20).
+  For each workflow and branch, a newest run that ended red within the last
+  24 hours, after a green run or on a new commit, files one `github_ci`
+  event. Red again on the same commit files nothing. A run files once, even
+  across restarts. Nothing becomes public: the stack calls GitHub, never the
+  other way.
+
+**The GitHub token.** The `github_ci` job uses the token the GitHub MCP server
+already holds (Settings → Connections, the server at
+`https://api.githubcopilot.com`; see "Connections" above). There is no second
+token to set. It needs Actions: Read on the listed repos. The token goes only
+into the request to `api.github.com`. Every reason the job states is scrubbed
+of it. With no repos listed, or the sender off, the job says nothing was
+polled. A missing GitHub server or token, a refused token (401), a rate limit
+(with its reset time) or a repo that could not be read fails the job's firing
+with the reason, after the other repos were read.
+
+**On, off, delete.** Settings → Events switches a sender on or off and deletes
+it. An off sender's calls are refused, and an event still waiting when it
+was switched off fails, never runs. Deleting a sender fails its waiting
+events ("the sender was deleted") and removes its routing role; the rows stay.
+The built-ins can be switched off but not deleted.
+
+**Routing.** Each sender has its own role, `event_<name>`, listed on the
+Routing page as "Events from <name>" ("Events from Monitoring", "Events from
+GitHub CI" for the built-ins). An empty chain uses chat's chain, as
+`scheduled` does.
+
+**What she can read.** `events_recent` lists the newest events (one sender or
+all): state and reason, the turn that read each, and its notice with whether
+you were told. It gives the payload's size, never the payload.
+
 ## Backup
 
 `./install backup` writes **one encrypted file** that carries everything a
