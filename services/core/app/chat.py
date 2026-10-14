@@ -128,6 +128,12 @@ from app import (
     vision,
     wake,
 )
+from app.credential_mask import (  # noqa: F401 — re-exported for the span masks' tests
+    _ARGV_TOKEN_RE,
+    _CREDENTIAL_KEYS,
+    _CREDENTIAL_SUFFIXES,
+    _credential_key,
+)
 from app.identity import Person
 from app.mcp import client as mcp_client
 from app.mcp import servers as mcp_servers
@@ -1998,53 +2004,9 @@ def _clip(text: str, limit: int) -> str:
     return f"{text[:limit]}… (+{len(text) - limit} more chars, {len(text)} total)"
 
 
-# Argument keys whose VALUE is a credential (S37a, plan decision P14). Masked
-# before anything is bounded or stored: mcp_connect's token, a device command's
-# env GH_TOKEN, a header's API key must never reach turn_spans or Activity.
-_CREDENTIAL_KEYS = frozenset(
-    {
-        "token",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "api_key",
-        "apikey",
-        "secret",
-        "client_secret",
-        "password",
-        "passwd",
-        "authorization",
-        "cookie",
-        "set-cookie",
-        "private_key",
-    }
-)
-_CREDENTIAL_SUFFIXES = (
-    "_token",
-    "-token",
-    "_secret",
-    "-secret",
-    "_password",
-    "_api_key",
-    "-api-key",
-)
-
-
-def _credential_key(key: str, *, header: bool) -> bool:
-    """A credential-shaped argument KEY (S37a, plan decision P14). Outside a
-    `headers` object this tuple decides it alone, so a top-level `key`
-    argument (`"key": "digest"`) is NOT a credential. Inside one, the
-    header's NAME is the only clue (`X-Api-Key`, `X-Hass-Key`,
-    `Authorization`), so it is checked against `app.mcp.client.
-    is_credential_header` instead — the ONE predicate the client's own
-    reason scrub already uses (ruling T5-B-REVISED), so the scrub and this
-    mask can never disagree about a header name. This supersedes keeping a
-    second `_CREDENTIAL_HEADER_WORDS` tuple here (ruling F8's instruction,
-    before the carry)."""
-    lowered = key.strip().lower()
-    if lowered in _CREDENTIAL_KEYS or lowered.endswith(_CREDENTIAL_SUFFIXES):
-        return True
-    return header and mcp_client.is_credential_header(lowered)
+# `_CREDENTIAL_KEYS`, `_CREDENTIAL_SUFFIXES`, `_credential_key` and
+# `_ARGV_TOKEN_RE` live in `app.credential_mask` (mask-bearer T1) — the one
+# credential mask — and are imported back here, never copied.
 
 
 def _masked(value: object) -> str:
@@ -2418,12 +2380,6 @@ def _server_names_masked(parsed: object, tool_name: str | None, sink: _SpanScrub
     return out
 
 
-# A token by its own shape (S29 T6): GitHub's ghp_/gho_/ghu_/ghs_/ghr_ and
-# fine-grained github_pat_, and the sk- API keys, followed by 16 or more token
-# characters — the floor keeps a `ghp_fix` branch and `sk-learn` readable. The
-# lookbehind starts a match only at the head of a run of token characters, so
-# every run is tried once: linear in the text (it runs in core's event loop).
-_ARGV_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{16,}")
 _ARGV_WORD_RE = re.compile(r"(\s+)")
 
 

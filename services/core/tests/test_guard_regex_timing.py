@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import guards, tools
+from app import credential_mask, guards, tools
 
 BUDGET_S = 0.05
 
@@ -740,6 +740,50 @@ def test_every_guard_pattern_walks_1500_characters_of_padding_in_milliseconds(pa
             assert took < BUDGET_S, (
                 f"{pattern_name}.{method.__name__}({label}): {took * 1000:.1f} ms"
             )
+
+
+# The credential mask (mask-bearer T1) runs at every persist boundary, in the
+# same event loop. Its patterns are NOT guards and stay out of `_every_pattern`
+# (whose count is pinned); they get their own sweep: the shared padding inputs
+# plus the shapes each mask anchors on, padded after the anchor.
+def _credential_mask_inputs(n: int) -> dict[str, str]:
+    pad = " " * n
+    return {
+        **_sweep_inputs(n),
+        "header_then_spaces": "Authorization:" + pad + "x",
+        "header_quote_then_spaces": '"Authorization"' + pad + ":" + pad + '"' + pad + "x",
+        "scheme_then_spaces": "Authorization: Bearer" + pad + "!",
+        "bearer_then_spaces": "Bearer" + pad + "x",
+        "flag_then_spaces": "--token" + pad + "x",
+        "flags": "--a " * (n // 4) + "x",
+        "assign_run": "a" * n + "=",
+        "dashes_then_key": "-" * n + "token=",
+        "hyphen_run": "a-" * (n // 2) + ":",
+        "token_chars": "Authorization: Bearer " + "a." * (n // 2) + ".",
+        "colons": "Cookie:" * (n // 7) + "x",
+    }
+
+
+@pytest.mark.parametrize("pattern_name", sorted(credential_mask.PATTERNS))
+@pytest.mark.parametrize("width", [200, 1500])
+def test_every_credential_mask_pattern_walks_its_padding_in_milliseconds(pattern_name, width):
+    pattern = credential_mask.PATTERNS[pattern_name]
+    for label, text in _credential_mask_inputs(width).items():
+        for method in (pattern.search, pattern.match, pattern.fullmatch):
+            took = _best_of(lambda method=method, text=text: method(text), runs=2)
+            assert took < BUDGET_S, (
+                f"credential_mask.{pattern_name}.{method.__name__}({label}, {width}): "
+                f"{took * 1000:.1f} ms"
+            )
+        took = _best_of(lambda text=text: pattern.sub("", text), runs=2)
+        assert took < BUDGET_S, f"credential_mask.{pattern_name}.sub({label}, {width})"
+
+
+@pytest.mark.parametrize("width", [200, 1500])
+def test_the_whole_credential_mask_runs_in_milliseconds(width):
+    for label, text in _credential_mask_inputs(width).items():
+        took = _best_of(lambda text=text: credential_mask.mask(text), runs=2)
+        assert took < BUDGET_S, f"mask({label}, {width}): {took * 1000:.1f} ms"
 
 
 # The whole guard, on the listing shape the cubic pattern was reached through:
