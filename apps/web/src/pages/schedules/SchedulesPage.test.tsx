@@ -919,10 +919,9 @@ describe('SchedulesPage — T29: the controls on their own line, one line, one-l
     )
     expect(word, 'the word "Delete" is not its own element').toBeDefined()
     expect(word!.className).toMatch(/(^|\s)md:sr-only(\s|$)/)
-    // Pause and Run now keep their words at every width.
-    for (const name of [/^pause$/i, /run now/i]) {
-      expect(within(row).getByRole('button', { name }).querySelector('[class*="sr-only"]')).toBeNull()
-    }
+    // Re-pointed by T32 C2: "Pause and Run now keep their words at every
+    // width" is gone — with words they clipped the 1440 row on live data, so
+    // every control is icon-only from md up (T32 C2 pins all of them).
   })
 
   it('C5 (coverage): the icon-only Delete keeps aria-label and a title; a paused row\'s Resume keeps its word', async () => {
@@ -938,8 +937,9 @@ describe('SchedulesPage — T29: the controls on their own line, one line, one-l
     const del = within(row).getByRole('button', { name: /^delete$/i })
     expect(del.getAttribute('aria-label')).toBe('Delete')
     expect((del.getAttribute('title') ?? '').trim()).not.toBe('')
-    const resume = within(screen.getByTestId('schedules-row-t2')).getByRole('button', { name: /resume/i })
-    expect(resume.querySelector('[class*="sr-only"]')).toBeNull()
+    // Re-pointed by T32 C2: a paused row's Resume no longer keeps its word
+    // from md up; T32 C2 pins its md:sr-only word, aria-label and title.
+    expect(within(screen.getByTestId('schedules-row-t2')).getByRole('button', { name: /resume/i })).toBeDefined()
   })
 
   it('C6: a click anywhere in the actions cell — its padding included — never toggles the row', async () => {
@@ -952,5 +952,227 @@ describe('SchedulesPage — T29: the controls on their own line, one line, one-l
     fireEvent.click(last)
     expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
     expect(api.listTimerFirings).not.toHaveBeenCalled()
+  })
+})
+
+// T32 (verification 2-7, live data 2026-10-14): at 1440 with the sidebar open
+// the real rows clipped the actions cell (Pause / Run now cut, Delete off the
+// card) because T29 held words + headers on one line in an auto-layout table,
+// and the Distil beat's paused reason ran 13 lines. The mocked pass hid both:
+// its titles and reason were short. These fixtures are the live page's text.
+const LIVE_PAUSED_REASON =
+  "paused after 5 consecutive failures: the gateway refused (503): no model in the 'beat' chain can serve right now — dell:qwen3:8b: dell:qwen3:8b refused this request; dell:qwen3.8:27b: dell:qwen3.8:27b refused this request; openrouter:google/gemini-3.8-flash: openrouter refused (402): Insufficient credits. Add more using https://openrouter.ai/settings/credits — walled for another 1200 min"
+const LIVE_LONG_TITLE = 'Check for Nova updates using nova_about(check_updates_now=True). If new commits…'
+const SHORT_REASON = 'paused after 5 consecutive failures: no such device'
+
+/** The live page's rows: a long scheduled title, a job, the paused Distil beat. */
+function liveRows(): Timer[] {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+  return [
+    timer({
+      id: 'u1',
+      kind: 'scheduled',
+      title: LIVE_LONG_TITLE,
+      payload: { instruction: LIVE_LONG_TITLE },
+      schedule_words: 'every day at 08:00 America/New_York, next Wed 14 Oct 08:00 EDT',
+      next_fire_at: inMinutes(11),
+      last_firing: { status: 'ok', ended_at: ago(24 * 3600_000), reason: null },
+    }),
+    timer({
+      id: 'j1',
+      kind: 'job',
+      title: "Keep Nova's agents on the hub's build — one idle machine at a time, the hub's own first",
+      payload: { handler: 'agent_update' },
+      schedule_words: 'every 15 minutes, next Wed 14 Oct 11:59 UTC',
+      timezone: 'UTC',
+      created_via: 'system',
+      next_fire_at: inMinutes(11),
+      last_firing: { status: 'ok', ended_at: ago(3 * 60_000), reason: null },
+    }),
+    timer({
+      id: 'd1',
+      kind: 'beat',
+      title: 'Distil: turn what was said into facts her memory can find',
+      payload: { handler: 'distil' },
+      schedule_words: 'every hour at :35 America/New_York, next Fri 9 Oct 01:35 EDT',
+      created_via: 'system',
+      paused_at: ago(5 * 24 * 3600_000),
+      paused_reason: LIVE_PAUSED_REASON,
+      consecutive_failures: 5,
+      last_firing: { status: 'error', ended_at: ago(5 * 24 * 3600_000), reason: 'the gateway refused (503)' },
+    }),
+  ]
+}
+
+describe('SchedulesPage — T32: every row fits the card on real data; a long paused reason is clamped', () => {
+  /** A width utility (w-24, w-[140px], md:w-40) or an inline width. */
+  const WIDTH = /(^|\s)(md:|lg:)?w-(\d|\[)/
+
+  function columnWidths(): { heading: string; sized: boolean }[] {
+    const table = document.querySelector<HTMLTableElement>('table.stack-table')!
+    const cols = Array.from(table.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col'))
+    return screen.getAllByRole('columnheader').map((th, i) => {
+      const col = cols[i]
+      const sized =
+        WIDTH.test(th.className) ||
+        th.style.width !== '' ||
+        (col !== undefined && (WIDTH.test(col.className) || col.style.width !== ''))
+      return { heading: (th.textContent ?? '').trim(), sized }
+    })
+  }
+
+  /** The reason's Show more / Show less control, in the row's Status cell. */
+  function toggleIn(row: HTMLElement): HTMLButtonElement | null {
+    const status = row.querySelector<HTMLElement>('td[data-label="Status"]')!
+    return within(status).queryByRole('button', { name: /show (more|less)/i }) as HTMLButtonElement | null
+  }
+
+  it('C1: the table lays out fixed — every column but Schedule has a bounded width, Schedule absorbs the slack', async () => {
+    render(<SchedulesPage api={fakeApi([liveRows()])} pollMs={NEVER} />)
+    await screen.findByTestId('schedules-row-d1')
+    const table = document.querySelector<HTMLTableElement>('table.stack-table')!
+    expect(table.classList.contains('table-fixed'), 'an auto-layout table lets long text push the actions off the card').toBe(true)
+    const widths = columnWidths()
+    // T29 C2 holds: seven headings, the last the sr-only Actions.
+    expect(widths.map(w => w.heading)).toEqual(['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', 'Actions'])
+    expect(widths.filter(w => w.heading !== 'Schedule' && !w.sized).map(w => w.heading)).toEqual([])
+    expect(widths.find(w => w.heading === 'Schedule')!.sized, 'Schedule must take the slack, not a fixed width').toBe(false)
+  })
+
+  it('C2: every control is icon-only from md up — its word md:sr-only, named by aria-label, a title on hover, an icon drawn', async () => {
+    render(<SchedulesPage api={fakeApi([liveRows()])} pollMs={NEVER} />)
+    const active = await screen.findByTestId('schedules-row-u1')
+    const paused = screen.getByTestId('schedules-row-d1')
+    const controls: [HTMLElement, string][] = [
+      [active, 'Pause'],
+      [active, 'Run now'],
+      [active, 'Delete'],
+      [paused, 'Resume'],
+      [paused, 'Run now'],
+    ]
+    for (const [row, name] of controls) {
+      const group = within(row).getByTestId(`row-actions-${row.dataset.testid!.replace('schedules-row-', '')}`)
+      const button = within(group).getByRole('button', { name })
+      expect(button.getAttribute('aria-label'), `${name}: no aria-label to name it once the word is hidden`).toBe(name)
+      expect((button.getAttribute('title') ?? '').trim(), `${name}: no hover title`).not.toBe('')
+      expect(button.querySelector('svg'), `${name}: an icon-only control with no icon is blank`).not.toBeNull()
+      const word = Array.from(button.querySelectorAll<HTMLElement>('*')).find(
+        el => el.children.length === 0 && (el.textContent ?? '').trim() === name,
+      )
+      expect(word, `${name}: the word is not its own element`).toBeDefined()
+      // Hidden from md up only: the phone's full-width line keeps the word.
+      expect(word!.className, `${name}: the word should be md:sr-only`).toMatch(/(^|\s)md:sr-only(\s|$)/)
+      expect(word!.className).not.toMatch(/(^|\s)(sr-only|hidden)(\s|$)/)
+    }
+  })
+
+  it('C3: the live paused reason is clamped to two lines, whole in the DOM, with a Show more control beside it', async () => {
+    render(<SchedulesPage api={fakeApi([liveRows()])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-d1')
+    const reason = within(row).getByTestId('row-paused-reason')
+    // core's words, whole — the clamp is presentation, never a cut string.
+    expect(reason.textContent).toBe(LIVE_PAUSED_REASON)
+    expect(reason.className).toMatch(/(^|\s)line-clamp-2(\s|$)/)
+    const toggle = toggleIn(row)
+    expect(toggle, 'no Show more control on a reason clamped to two lines').not.toBeNull()
+    expect((toggle!.textContent ?? '').trim()).toBe('Show more')
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false')
+    expect(reason.id, 'the reason needs an id for the control to name').not.toBe('')
+    expect(toggle!.getAttribute('aria-controls')).toBe(reason.id)
+    // Outside the reason element, after it.
+    expect(reason.contains(toggle)).toBe(false)
+    expect(reason.compareDocumentPosition(toggle!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('C4: Show more reveals the whole reason and reads Show less; a second click clamps it again; neither opens the row', async () => {
+    const api = fakeApi([liveRows()])
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-d1')
+    const reason = within(row).getByTestId('row-paused-reason')
+    expect(toggleIn(row), 'no Show more control to click').not.toBeNull()
+    fireEvent.click(toggleIn(row)!)
+    expect(reason.className).not.toMatch(/(^|\s)line-clamp-\d/)
+    expect(reason.textContent).toBe(LIVE_PAUSED_REASON)
+    const less = toggleIn(row)!
+    expect((less.textContent ?? '').trim()).toBe('Show less')
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(less)
+    expect(reason.className).toMatch(/(^|\s)line-clamp-2(\s|$)/)
+    expect((toggleIn(row)!.textContent ?? '').trim()).toBe('Show more')
+    // The control is the reason's, not the row's: no drill-in, no fetch.
+    expect(screen.queryByTestId('schedules-detail-d1')).toBeNull()
+    expect(api.listTimerFirings).not.toHaveBeenCalled()
+  })
+
+  it('C5: only a reason too long for two lines is clamped — a short one, or none recorded, shows whole with no control', async () => {
+    const paused = { paused_at: new Date().toISOString(), consecutive_failures: 5 }
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [
+            timer({ id: 's1', ...paused, paused_reason: SHORT_REASON }),
+            timer({ id: 's2', ...paused, paused_reason: null }),
+            ...liveRows(),
+          ],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const long = await screen.findByTestId('schedules-row-d1')
+    expect(toggleIn(long), 'the live reason has no Show more').not.toBeNull()
+    for (const id of ['s1', 's2']) {
+      const row = screen.getByTestId(`schedules-row-${id}`)
+      expect(toggleIn(row), `${id}: a reason that fits needs no Show more`).toBeNull()
+      // Never hide text there is no control to reveal.
+      expect(within(row).getByTestId('row-paused-reason').className).not.toMatch(/(^|\s)line-clamp-\d/)
+    }
+    expect(within(screen.getByTestId('schedules-row-s1')).getByTestId('row-paused-reason').textContent).toBe(SHORT_REASON)
+  })
+
+  it('C6: a long title and its words wrap inside the Schedule column — long tokens break, no nowrap cell around them', async () => {
+    render(<SchedulesPage api={fakeApi([liveRows()])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-u1')
+    const td = row.querySelector<HTMLElement>('td[data-label="Schedule"]')!
+    expect(td.classList.contains('whitespace-nowrap')).toBe(false)
+    const BREAKS = /(^|\s)(break-words|break-all|\[overflow-wrap:anywhere\]|wrap-anywhere|wrap-break-word)(\s|$)/
+    /** True when `el` or an ancestor up to the cell breaks long tokens. */
+    const breaks = (el: HTMLElement) => {
+      for (let n: HTMLElement | null = el; n && n !== td.parentElement; n = n.parentElement) {
+        if (BREAKS.test(n.className)) return true
+      }
+      return false
+    }
+    const title = within(td).getByText(LIVE_LONG_TITLE)
+    expect(breaks(title), '"nova_about(check_updates_now=True)." would overflow a fixed column').toBe(true)
+    expect(breaks(within(td).getByTestId('schedule-words'))).toBe(true)
+  })
+
+  it('C7: every row\'s controls occupy the same slots — a job row keeps an empty, non-focusable, aria-hidden slot where Delete sits', async () => {
+    render(<SchedulesPage api={fakeApi([liveRows()])} pollMs={NEVER} />)
+    await screen.findByTestId('schedules-row-d1')
+    const group = (id: string) => screen.getByTestId(`row-actions-${id}`)
+    const slots = (id: string) => Array.from(group(id).children) as HTMLElement[]
+    // A width utility the md+ icon-only control is held to.
+    const widthsOf = (el: HTMLElement) => el.className.split(/\s+/).filter(c => /^(md:)?w-/.test(c))
+
+    // The rows with every control: Pause/Resume, Run now, Delete — three slots.
+    for (const [id, first] of [['u1', 'Pause'], ['d1', 'Resume']] as const) {
+      expect(slots(id).map(s => s.getAttribute('aria-label')), id).toEqual([first, 'Run now', 'Delete'])
+    }
+    const del = slots('u1')[2]
+    expect(widthsOf(del), 'Delete needs a fixed width for a slot to match it').not.toEqual([])
+
+    // The job row: no Delete, but the same three slots, the third an empty placeholder.
+    const job = slots('j1')
+    expect(within(group('j1')).queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(job.length, 'a job row with two slots puts Pause/Run now one slot right of the others').toBe(3)
+    expect(job.slice(0, 2).map(s => s.getAttribute('aria-label'))).toEqual(['Pause', 'Run now'])
+    const slot = job[2]
+    expect(slot.getAttribute('aria-hidden')).toBe('true')
+    expect(slot.tagName).not.toBe('BUTTON')
+    expect(slot.hasAttribute('tabindex')).toBe(false)
+    expect(slot.querySelector('button, a, input, select, textarea, [tabindex]')).toBeNull()
+    expect((slot.textContent ?? '').trim()).toBe('')
+    expect(widthsOf(slot), 'the slot is as wide as the Delete it stands in for').toEqual(widthsOf(del))
   })
 })
