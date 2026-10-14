@@ -87,6 +87,26 @@ async function openMenu() {
 }
 
 describe('ModelSelector', () => {
+  it('opens its menu outside a clipping parent, so the input card cannot cut it off', async () => {
+    // 2026-10-14: the menu was absolute inside the input card, whose
+    // overflow-hidden cut it off at the card's top edge.
+    const utils = render(
+      <div data-testid="clipper" style={{ overflow: 'hidden' }}>
+        <ModelSelector currentModel={GEMINI} onModelChanged={vi.fn()} api={fakeApi()} />
+      </div>,
+    )
+    await act(async () => {})
+    await openMenu()
+    const menu = screen.getByTestId('chat-model-menu')
+    expect(utils.getByTestId('clipper').contains(menu)).toBe(false)
+    expect(menu.style.position).toBe('fixed')
+    // A click inside the portalled menu is not an outside click.
+    fireEvent.mouseDown(within(menu).getByTestId('chat-model-order'))
+    expect(screen.queryByTestId('chat-model-menu')).not.toBeNull()
+    fireEvent.mouseDown(document.body)
+    await waitFor(() => expect(screen.queryByTestId('chat-model-menu')).toBeNull())
+  })
+
   it('shows the pick verbatim in the chat-model element', async () => {
     await renderSelector({ currentModel: 'hub:qwen3:8b', onModelChanged: vi.fn(), api: fakeApi() })
     expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:8b')
