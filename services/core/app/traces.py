@@ -345,6 +345,22 @@ async def open_turn(
     )
 
 
+def _without_nul(value: Any) -> Any:
+    """`value` with every NUL in every string (keys too, at any depth) swapped
+    for U+FFFD. Postgres refuses \\u0000 in jsonb, so one NUL a tool printed
+    into a span's result_head used to fail close_turn's whole transaction —
+    no spans and no status, for a turn that ran fine. Scrubbed here, at the
+    persist boundary, rather than in each writer of span meta: a writer added
+    tomorrow is covered without remembering to be."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, dict):
+        return {_without_nul(k): _without_nul(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_nul(v) for v in value]
+    return value
+
+
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
     """All the spans, the kept tool results (S38b), the action ledger and the
     final status, in one transaction or not at all — a turn that never closed has neither spans
@@ -370,7 +386,7 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 span.name,
                 span.started_at,
                 span.duration_ms,
-                span.meta,
+                _without_nul(span.meta),
             )
         for kept in turn.tool_results:
             content = kept.content.replace(_NUL, _NUL_STANDIN)
