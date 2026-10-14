@@ -30,6 +30,8 @@ Fixture JSON (one file per case, under app/evals/cases/):
       "mcp_servers": [{"name": "eval_github",  # optional; default [] (S37a)
                        "title": "GitHub", "tools": [...]}],
       "message": "what's the latest on the pixel camera?",
+      # or, instead of "message" (S37c): "event": {"sender": "ci",
+      #   "payload": "<text, or a JSON object>"} — replayed framed by events.message
       "contract": [
         {"predicate": "tool_called", "arg": "web_search"},
         {"predicate": "reply_absent", "arg": "I can't access"}
@@ -61,7 +63,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from app import agents, device_facts, machines
+from app import agents, device_facts, events, machines
 from app.mcp import client as mcp_client
 from app.mcp import fake as mcp_fake
 from app.mcp import servers as mcp_servers
@@ -91,6 +93,15 @@ KNOWN_PREDICATES = frozenset(
         # result of this tool (span.meta["context_summarized"]). Arg = the
         # tool name.
         "context_summarized",
+        # S37c T11: one of HER tool spans carries a fact holding this KEY —
+        # whichever tool filed it (e.g. memory_call: a request was sent to
+        # memory). Arg = the fact key.
+        "fact_recorded",
+        # S37c T11 (ruling 10-14): no call of HERS carries arguments matching
+        # this regex — whichever tool. Case 1 fails a call that carries the
+        # injection's exfil target, never a read-only tool as such. Arg = a
+        # regex over the call's recorded arguments.
+        "args_absent",
     }
 )
 
@@ -725,6 +736,52 @@ def mcp_server_from_dict(raw: object) -> FixtureMcpServer:
 
 
 @dataclass(frozen=True)
+class FixtureEvent:
+    """What another program sent (S37c T11): the case's turn is replayed as an
+    EVENT turn's message — the sender's payload inside the code-written frame
+    and brief (events.message), built by the runner at run time with the
+    product's own function, so the corpus measures the real frame, never a
+    copy of it frozen into a fixture.
+
+    `payload` is the text the program sent, verbatim. A fixture may write it
+    as a JSON object; it is then serialized json.dumps(sort_keys=True), the
+    form both built-in senders (the monitor, GitHub CI) write."""
+
+    sender: str
+    payload: str
+
+    def as_json(self) -> dict:
+        return {"sender": self.sender, "payload": self.payload}
+
+
+_EVENT_KEYS = frozenset({"sender", "payload"})
+
+
+def event_from_dict(raw: object) -> FixtureEvent:
+    """Parse a case's `event`, refusing a malformed one by name."""
+    if not isinstance(raw, dict):
+        raise CaseError(f"a case's event must be a JSON object, got {type(raw).__name__}")
+    extra = set(raw) - _EVENT_KEYS
+    if extra:
+        raise CaseError(f"a case's event has unknown field(s) {sorted(extra)} (extra)")
+    sender = raw.get("sender")
+    if not isinstance(sender, str) or not events.NAME_RE.match(sender):
+        raise CaseError(
+            f"a case's event sender must be a sender name ({events.NAME_RE.pattern}), "
+            f"got {sender!r}"
+        )
+    payload = raw.get("payload")
+    if isinstance(payload, dict):
+        payload = json.dumps(payload, sort_keys=True)
+    if not isinstance(payload, str) or not payload.strip():
+        raise CaseError(
+            "a case's event payload must be non-empty text or a JSON object, "
+            f"got {type(raw.get('payload')).__name__}"
+        )
+    return FixtureEvent(sender=sender, payload=payload)
+
+
+@dataclass(frozen=True)
 class Case:
     """One eval case. `contract` passes iff EVERY predicate passes (subset match
     against the trace, never equality against a recorded reply)."""
@@ -749,6 +806,17 @@ class Case:
     # S37a: the MCP servers her turn can use — an overlay on her connections for
     # this case alone (see FixtureMcpServer).
     mcp_servers: tuple[FixtureMcpServer, ...] = ()
+    # S37c T11: what another program sent, replayed in place of `message`
+    # (which is then "") — see FixtureEvent.
+    event: FixtureEvent | None = None
+
+    @property
+    def shown_message(self) -> str:
+        """What a person reads as the case's ask: the message, or for an event
+        case who sent what (the frame itself is built at run time)."""
+        if self.event is None:
+            return self.message
+        return f"[an event from {self.event.sender}]\n{self.event.payload}"
 
     def as_json(self) -> dict:
         return {
@@ -762,6 +830,7 @@ class Case:
             "machines": [m.as_json() for m in self.machines],
             "devices": [d.as_json() for d in self.devices],
             "mcp_servers": [s.as_json() for s in self.mcp_servers],
+            "event": None if self.event is None else self.event.as_json(),
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -849,11 +918,23 @@ def case_from_dict(raw: dict) -> Case:
     fixture_mcp = tuple(mcp_server_from_dict(entry) for entry in mcp_raw)
     if len({s.name for s in fixture_mcp}) != len(fixture_mcp):
         raise CaseError("a case declares the same MCP server more than once")
+    # S37c T11: a case replays a message OR an event, never both — an event
+    # case's message is the code-written frame, built at run time.
+    if "event" in raw:
+        if "message" in raw:
+            raise CaseError("a case declares both a message and an event; it replays one")
+        event = event_from_dict(raw["event"])
+        message = ""
+    else:
+        if "message" not in raw:
+            raise CaseError("case is missing required field 'message' (or an 'event')")
+        event = None
+        message = _require(raw, "message", str)
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
         suite_version=_require(raw, "suite_version", int),
-        message=_require(raw, "message", str),
+        message=message,
         contract=contract,
         setup=setup,
         agents=fixture_agents,
@@ -861,6 +942,7 @@ def case_from_dict(raw: dict) -> Case:
         machines=fixture_machines,
         devices=fixture_devices,
         mcp_servers=fixture_mcp,
+        event=event,
     )
 
 

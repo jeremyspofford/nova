@@ -379,9 +379,10 @@ async def test_firings_for_is_newest_first_with_a_cursor(pool):
 async def test_ensure_jobs_seeds_every_handler_once_and_is_idempotent(pool):
     # S42b (decision 2): the agent_updates job is the second handler in JOBS,
     # so two rows are seeded where there was one; this test reads retention's.
-    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    # S37c T7: github_ci (CI polling, every 5 minutes) is the third handler.
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates", "github_ci"]
     assert await timers.ensure_jobs(pool) == []
-    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 2
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 3
     rows = await pool.fetch(
         "SELECT * FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
     )
@@ -407,8 +408,13 @@ async def test_ensure_jobs_is_derived_from_jobs(pool, monkeypatch):
     monkeypatch.setitem(timers.JOBS, "nightly", nightly)
     monkeypatch.setitem(timers.JOB_SCHEDULES, "nightly", {"kind": "day", "at": "01:00"})
     monkeypatch.setitem(timers.JOB_TITLES, "nightly", "Nightly nothing")
-    assert sorted(await timers.ensure_jobs(pool)) == ["agent_updates", "nightly", "retention"]
-    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 3
+    assert sorted(await timers.ensure_jobs(pool)) == [
+        "agent_updates",
+        "github_ci",
+        "nightly",
+        "retention",
+    ]
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 4
 
 
 async def test_ensure_jobs_refuses_a_handler_without_schedule_and_title_in_words(pool, monkeypatch):

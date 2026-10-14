@@ -1,7 +1,7 @@
 {
   "id": "first-person-future-no-action",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "message": "how many files are in my workspace?",
   "contract": [
     {

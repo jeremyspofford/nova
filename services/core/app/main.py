@@ -28,6 +28,8 @@ from app import (
     devices_api,
     devices_ws,
     evals_api,
+    events,
+    events_api,
     governance_api,
     landing_run,
     landings,
@@ -77,6 +79,9 @@ async def lifespan(app: FastAPI):
     # Her repository's row (S32.2): written from what ./install recorded, so
     # routing reads a row, never the env; the owner's `environment` survives.
     await code_repos.sync_from_env(pool)
+    # Her own event senders (S37c): `monitor` and `github_ci` get their rows
+    # here, never from a migration, and an existing row (his on/off) is kept.
+    await events.ensure_builtins(pool)
     # This process is starting, not stopping (S15): begin_shutdown() below is a
     # latch on a module global, and a process that went through a lifespan once
     # already would otherwise never drain another queue.
@@ -85,6 +90,9 @@ async def lifespan(app: FastAPI):
     # the process that died — closed as 'interrupted' here, before any request
     # can read it as pending (traces.sweep_orphaned_turns says why).
     await traces.sweep_orphaned_turns(pool)
+    # And the events those turns were reading (S37c T5): put back to queued
+    # with the reason, never dropped; the first scheduler tick starts them.
+    await events.requeue_interrupted(app, pool)
     # And the messages the dead process had ACCEPTED but not yet sent (S15). A
     # fresh process runs no turns, so nothing will ever END to trigger their
     # drain: each one is cancelled with a stated reason the owner can read,
@@ -179,6 +187,8 @@ app.include_router(agent_dist_api.router)
 app.include_router(mcp_api.router)
 app.include_router(about_api.router)
 app.include_router(code_repos.router)
+app.include_router(events_api.router)
+app.include_router(events_api.senders_router)
 
 
 @app.exception_handler(StarletteHTTPException)

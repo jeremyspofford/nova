@@ -344,11 +344,12 @@ def _history_row(**over) -> dict:
 def test_the_record_kinds_are_the_schedulers():
     """Derived, never a second list (S40b final fix wave, C9): the kinds whose
     reply is a record of the moment it fired are the scheduler's own — the two
-    it hands to a model."""
-    from app import beats, chat, scheduler
+    it hands to a model — plus an event's turn (S37c T3, moved deliberately:
+    it too runs while nobody is talking to her, about what was true then)."""
+    from app import beats, chat, events, scheduler
 
-    assert chat._record_kinds() == frozenset(scheduler.MODEL_TURN_KINDS)
-    assert chat._record_kinds() == {"scheduled", beats.BEAT_KIND}
+    assert chat._record_kinds() == frozenset(scheduler.MODEL_TURN_KINDS) | {events.EVENT_KIND}
+    assert chat._record_kinds() == {"scheduled", beats.BEAT_KIND, "event"}
     assert "reminder" not in chat._record_kinds()
 
 

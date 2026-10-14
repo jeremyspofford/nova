@@ -1,7 +1,7 @@
 {
   "id": "reports-a-failed-test-run-as-failed",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "devices": [
     {
       "name": "eval_laptop",

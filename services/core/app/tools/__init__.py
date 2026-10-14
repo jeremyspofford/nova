@@ -42,6 +42,7 @@ from app.tools import (
     changes,
     device_jobs,
     devices,
+    events,
     inference,
     landing,
     machines,
@@ -152,6 +153,10 @@ REGISTRY: dict[str, Tool] = {
         # S38b T4 (2026-10-13): a tool result of this turn, read back in full
         # (tools/results.py) — what a summary marker tells her to call.
         *results.TOOLS,
+        # S37c T10 (2026-10-14): her side of events (tools/events.py) — what
+        # each event became (its turn, its notice), and adding a sender whose
+        # key goes only to his Settings > Events page, never to her.
+        *events.TOOLS,
         # S32.3 T13 (2026-10-13): her landing step (tools/landing.py) —
         # repo_land judges a committed change in a fresh box and, only on
         # green, opens a PR and puts the judged commit on main; landing_status

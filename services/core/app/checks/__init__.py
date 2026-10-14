@@ -137,6 +137,10 @@ class Check:
     # is the honest shape: the deadline should describe the probe, not the
     # cheapest probe in the registry.
     deadline_s: float = CHECK_DEADLINE_S
+    # S37c T6: a NEW notice of this family files a `monitor` event, so she
+    # looks into it herself (spec §2.6). Urgent families are monitored by
+    # derivation (monitored_names); a family that is not urgent says so here.
+    monitor: bool = False
 
 
 REGISTRY: dict[str, Check] = {}
@@ -166,6 +170,13 @@ def urgent_names() -> list[str]:
     """The checks that may interrupt the digest, DERIVED from the registry —
     never a list someone maintains beside it."""
     return sorted(name for name, check in REGISTRY.items() if check.urgent)
+
+
+def monitored_names() -> list[str]:
+    """The checks whose NEW notices become `monitor` events (S37c T6), DERIVED
+    from the registry: every urgent family, plus every family that declares
+    monitor=True on its own Check. Never a list kept beside the registry."""
+    return sorted(name for name, check in REGISTRY.items() if check.urgent or check.monitor)
 
 
 def quiet(runs: Sequence[CheckRun]) -> tuple[bool, str | None]:
@@ -390,6 +401,7 @@ async def run_one(app, pool, name: str) -> CheckRun:
 # invisible from the code and obvious the moment it is asked for).
 from app.checks import (  # noqa: E402
     devices,
+    events,
     inference,
     mcp,
     money,
@@ -428,6 +440,11 @@ register_all(mcp.CHECKS)
 # S46a T12: the family that watches the wakes she sent IN THE BACKGROUND —
 # whether the machine answered. wake_attempts rows only; urgent=False.
 register_all(wakes.CHECKS)
+# S37c T4: the family that says what she found when another program's event
+# started a turn of hers. events.py files it the moment the turn settles; the
+# hourly run derives the same finding from the event rows. urgent=False — an
+# urgent event is pushed by events.py itself through delivery.deliver.
+register_all(events.CHECKS)
 
 __all__ = [
     "CHECK_DEADLINE_S",
@@ -438,6 +455,7 @@ __all__ = [
     "Finding",
     "check_names",
     "fingerprint",
+    "monitored_names",
     "money",
     "quiet",
     "register",

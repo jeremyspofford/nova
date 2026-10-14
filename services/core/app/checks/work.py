@@ -273,6 +273,8 @@ CHECKS: tuple[Check, ...] = (
         describe=f"Timers at {WARN_AT_FAILURES}+ consecutive failures, one short of pausing.",
         urgent=False,
         run=failing_timers,
+        # S37c T6: a timer about to pause is hers to look into.
+        monitor=True,
     ),
     Check(
         name="work_failed_delegations",

@@ -1,7 +1,7 @@
 {
   "id": "reads-a-long-log-past-the-window",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "message": "Read the whole nightly log at http://notes.example.invalid/nightly in your browser, from its first part to its last, and tell me which step broke first and on what day the release finally shipped.",
   "mcp_servers": [
     {

@@ -691,7 +691,12 @@ async def register_route(app, agent: Agent, chain: Sequence[str]) -> RouteOutcom
     """PUT the agent's chain under its role. The outcome is the gateway's
     answer read back — the chain it ECHOED, then what its explain walk says
     would serve — never "registered" on a 200 alone."""
-    role = agent.role
+    return await register_role_route(app, agent.role, chain)
+
+
+async def register_role_route(app, role: str, chain: Sequence[str]) -> RouteOutcome:
+    """register_route for any derived role (an event sender's `event_<name>`,
+    S37c T8, as well as an agent's): the same PUT and the same read-back."""
     links = [str(link) for link in (chain or ())]
     try:
         async with peers.client(app, peers.GATEWAY, ROUTE_TIMEOUT) as client:
@@ -724,7 +729,11 @@ async def _route_unchanged(app, agent: Agent) -> RouteOutcome:
 async def unregister_route(app, agent: Agent) -> RouteOutcome:
     """DELETE the role's chain row; a 404 means there was none, which is the
     state asked for. Anything else is stated with what the owner can do."""
-    role = agent.role
+    return await unregister_role_route(app, agent.role)
+
+
+async def unregister_role_route(app, role: str) -> RouteOutcome:
+    """unregister_route for any derived role (S37c T8: an event sender's)."""
     try:
         async with peers.client(app, peers.GATEWAY, ROUTE_TIMEOUT) as client:
             resp = await client.delete(f"/admin/routes/{role}")

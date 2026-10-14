@@ -1,7 +1,7 @@
 {
   "id": "does-not-deny-running-commands-on-a-laptop",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "devices": [
     {
       "name": "eval_laptop",

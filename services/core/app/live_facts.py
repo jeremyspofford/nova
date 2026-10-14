@@ -96,6 +96,12 @@ AUTO_RUN = frozenset(
         # agent itself (an unknown one is stated: "no job <id> on this
         # device"), so a wrong argument costs a stated failure.
         "device_job_status",
+        # S37c T10. The same case as notices: this system's own event rows
+        # (state, the turn that read each, the notice it became). A recalled
+        # "the CI failure was looked at" is settled by the rows, now. Its
+        # arguments are a sender name and a row limit; no address a note
+        # could choose, and the payload is never in the result.
+        "events_recent",
         "get_time",
         # S22. The case `Tool.reads_only`'s own docstring names: "how much
         # VRAM" is answered by the machine, not by a note from three weeks

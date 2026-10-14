@@ -287,6 +287,8 @@ CHECKS: tuple[Check, ...] = (
         ),
         urgent=False,
         run=degraded,
+        # S37c T6: a degraded card is hers to look into (spec §9 Q2).
+        monitor=True,
     ),
 )
 

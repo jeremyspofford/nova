@@ -10,6 +10,7 @@ import {
   getCatalog as apiGetCatalog,
   getRoutes as apiGetRoutes,
   listAgents as apiListAgents,
+  listEventSenders as apiListEventSenders,
   putJevRouter as apiPutJevRouter,
   putRoute as apiPutRoute,
   setChatPrimary as apiSetChatPrimary,
@@ -18,6 +19,7 @@ import {
   type BuiltinRole,
   type CatalogRow,
   type CatalogSource,
+  type EventSender,
   type RouteExplain,
   type RouteProtocol,
   type RouteRouter,
@@ -27,6 +29,7 @@ import {
 import { formatRelativeTime } from '../activity/activityFormat'
 import { suitabilityEntries } from '../models/catalogFormat'
 import { LIBRARY } from './modelsFormat'
+import { eventRoleSender, senderTitle } from './eventsFormat'
 
 /**
  * Routing by role (S10-2). Each role has an ordered chain of `provider:model`
@@ -59,6 +62,7 @@ export interface RoutingApi {
   getCatalog: typeof apiGetCatalog
   deleteRoute: typeof apiDeleteRoute
   listAgents: typeof apiListAgents
+  listEventSenders: typeof apiListEventSenders
   putSetting: typeof apiPutSetting
   setChatPrimary: typeof apiSetChatPrimary
 }
@@ -72,6 +76,7 @@ const DEFAULT_API: RoutingApi = {
   getCatalog: apiGetCatalog,
   deleteRoute: apiDeleteRoute,
   listAgents: apiListAgents,
+  listEventSenders: apiListEventSenders,
   putSetting: apiPutSetting,
   setChatPrimary: apiSetChatPrimary,
 }
@@ -176,6 +181,8 @@ interface RoleWords {
   link?: string
   /** the agents list was read and no agent owns this role: it can be removed */
   orphan: boolean
+  /** what owned the role, for the Remove confirmation ("No agent has this name.") */
+  owner?: 'agent' | 'event sender'
 }
 
 /**
@@ -187,17 +194,42 @@ interface RoleWords {
  * state offers no Remove, because it cannot tell an orphan from a live
  * agent's role.
  */
-function wordsFor(role: string, builtin: boolean, agents: AgentSummary[] | null, agentsError: string | null): RoleWords {
+function wordsFor(
+  role: string,
+  builtin: boolean,
+  agents: AgentSummary[] | null,
+  agentsError: string | null,
+  senders: EventSender[] | null = [],
+  sendersError: string | null = null,
+): RoleWords {
   if (builtin) {
     const words = role in ROLE_WORDS ? ROLE_WORDS[role as BuiltinRole] : undefined
     return words ? { ...words, orphan: false } : { label: role, note: 'built-in role', orphan: false }
+  }
+  // S37c: an event sender's role, `event_<sender>` — read against the live
+  // senders list, never the agents list, and named in words, never its key.
+  const senderName = eventRoleSender(role)
+  if (senderName !== null) {
+    const label = `Events from ${senderTitle({ name: senderName })}`
+    if (senders === null) {
+      return { label, note: `could not read the event senders — ${sendersError ?? 'unknown'}`, orphan: false }
+    }
+    const sender = senders.find(s => s.name === senderName)
+    if (sender) {
+      return {
+        label: `Events from ${senderTitle(sender)}`,
+        note: `turns started by what ${senderTitle(sender)} sends; empty = the chat chain`,
+        orphan: false,
+      }
+    }
+    return { label, note: 'no event sender by this name', orphan: true, owner: 'event sender' }
   }
   if (agents === null) {
     return { label: role, badge: 'agent role', note: `could not read the agents list — ${agentsError ?? 'unknown'}`, orphan: false }
   }
   const agent = agents.find(a => a.role === role)
   if (agent) return { label: `Agent · ${agent.name}`, note: agent.purpose, link: `/agents/${agent.name}`, orphan: false }
-  return { label: role, note: 'no agent by this name', orphan: true }
+  return { label: role, note: 'no agent by this name', orphan: true, owner: 'agent' }
 }
 
 export function RoutingSection({
@@ -231,6 +263,9 @@ export function RoutingSection({
   // null = the agents list was NOT read (agentsError says why); [] = read and empty.
   const [agents, setAgents] = useState<AgentSummary[] | null>(null)
   const [agentsError, setAgentsError] = useState<string | null>(null)
+  // null = the event senders were NOT read (sendersError says why); [] = read and none.
+  const [senders, setSenders] = useState<EventSender[] | null>(null)
+  const [sendersError, setSendersError] = useState<string | null>(null)
   const [explains, setExplains] = useState<Record<string, RouteExplain | { error: string }>>({})
   const [error, setError] = useState<string | null>(null)
   // The catalogue only fills the "add" pickers and names Jev Router's link —
@@ -317,7 +352,7 @@ export function RoutingSection({
         },
       )
       try {
-        const [r, agentsRead] = await Promise.all([
+        const [r, agentsRead, sendersRead] = await Promise.all([
           api.getRoutes(),
           // The agents list decides whether a role's Remove is offered, so its
           // failure is kept as a fact of its own, never folded into "no agents".
@@ -325,11 +360,21 @@ export function RoutingSection({
             list => ({ list, error: null as string | null }),
             (err: unknown) => ({ list: null as AgentSummary[] | null, error: reasonOf(err) }),
           ),
+          // The same for the event senders (S37c): their failure is a fact of
+          // its own, and no event role is offered a Remove while it holds —
+          // and a read that throws at once costs the event roles' words,
+          // never the chains.
+          Promise.resolve().then(() => api.listEventSenders()).then(
+            list => ({ list, error: null as string | null }),
+            (err: unknown) => ({ list: null as EventSender[] | null, error: reasonOf(err) }),
+          ),
         ])
         if (seq === loadSeq.current) {
           setRoutes(r)
           setAgents(agentsRead.list)
           setAgentsError(agentsRead.error)
+          setSenders(sendersRead.list)
+          setSendersError(sendersRead.error)
           const entries = await Promise.all(
             r.roles
               .filter(role => !role.reserved)
@@ -435,7 +480,7 @@ export function RoutingSection({
         {routes?.roles.map(entry => {
           // A gateway that predates the flag still names the built-ins.
           const builtin = entry.builtin ?? entry.role in ROLE_WORDS
-          const words = wordsFor(entry.role, builtin, agents, agentsError)
+          const words = wordsFor(entry.role, builtin, agents, agentsError, senders, sendersError)
           return (
             <RoleEditor
               key={entry.role}
@@ -812,7 +857,7 @@ function RoleEditor({
             onChange={e => setAdding(e.target.value)}
             items={[{ value: '', label: wantsDecisions ? 'add a decision model…' : 'add a fallback…' }, ...options]}
             // Named as the card names it — `coder`, never `agent_coder` (R12).
-            label={`add to ${words.label.startsWith('Agent · ') ? words.label.slice('Agent · '.length) : role}`}
+            label={`add to ${words.label.startsWith('Agent · ') ? words.label.slice('Agent · '.length) : words.label.startsWith('Events from ') ? words.label : role}`}
             className="w-full sm:w-80"
           />
           <Button
@@ -931,7 +976,11 @@ function RoleEditor({
           open={confirmingRemove}
           onClose={() => setConfirmingRemove(false)}
           title={`Remove ${role}?`}
-          description={`Remove the chain for ${role}? No agent has this name.`}
+          description={
+            words.owner === 'event sender'
+              ? `Remove the chain for ${words.label}? No event sender has this name.`
+              : `Remove the chain for ${role}? No agent has this name.`
+          }
           confirmLabel="Remove"
           destructive
           onConfirm={() => {

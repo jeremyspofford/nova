@@ -188,7 +188,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agent_dist, agents, chat, devices, machines, peers, skills, traces
+from app import agent_dist, agents, chat, devices, events, machines, peers, skills, traces
 from app.browser import engine as browser_engine
 from app.evals import cases as cases_mod
 from app.evals import predicates, scratch
@@ -1125,6 +1125,17 @@ async def _teardown_fixture_skills(
     return warnings
 
 
+def replayed_message(case: cases_mod.Case, received_at: datetime) -> str:
+    """The text the case's turn is given. A message case: its message. An
+    event case (S37c T11): the payload framed exactly as a live event turn
+    frames it — events.message, the product's own frame and brief, called now
+    with this run's time, so the fence is fresh per run as in the product and a
+    change to the frame is measured by the corpus the day it lands."""
+    if case.event is None:
+        return case.message
+    return events.message(case.event.sender, [(received_at, case.event.payload)])
+
+
 async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) -> EvalRun:
     """Replay one case against `model` and score it. See the module docstring for
     the enforced properties (scratch isolation and the declared world, no
@@ -1212,6 +1223,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
 
         conversation_id = await _scratch_conversation(pool, person)
         history = _history_from_setup(case.setup)
+        message = replayed_message(case, datetime.now(UTC))
 
         # Mirror chat_stream: the user message is persisted into the SCRATCH
         # conversation, exactly as a real turn's history would be — the row
@@ -1221,7 +1233,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         await pool.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
             conversation_id,
-            case.message,
+            message,
         )
 
         turn = await traces.open_turn(
@@ -1263,7 +1275,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 turn,
                 person,
                 conversation_id,
-                case.message,
+                message,
                 history,
                 model,
                 emit,

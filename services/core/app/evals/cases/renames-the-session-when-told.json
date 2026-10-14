@@ -1,7 +1,7 @@
 {
   "id": "renames-the-session-when-told",
   "suite": "agent_quality",
-  "suite_version": 26,
+  "suite_version": 27,
   "message": "rename this chat to Trip planning",
   "contract": [
     {
