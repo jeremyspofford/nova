@@ -1,17 +1,17 @@
-# S46a: the boot agent — the spec (PROPOSED)
+# S46a: the boot agent — the spec (APPROVED 2026-10-14)
 
-**Status:** proposed 2026-10-14. **Not approved.** The owner asked for this on
-2026-10-14 (§2) and has not yet chosen between the proposal and its
-alternatives (§6). Nothing here is built. The proposal **changes a locked
-decision**: hub-topology D3, "How the agent runs" (2026-09-18). That is owner
-decision 1 in §10. The cable section (§8) reopens S46a's decision 5, "the Dell
-stays on Wi-Fi", and is owner decision 7.
+**Status:** approved 2026-10-14. The owner, on the §10 questions: "yes to all
+your recommendations. I'll get a network cable later." Every proposal in §10
+is ruled as proposed (see the rulings there). This **changes a locked
+decision**: hub-topology D3, "How the agent runs" (2026-09-18), and it reopens
+S46a's decision 5, "the Dell stays on Wi-Fi", for the cable (§8). Nothing here
+is built; the build comes after S32.5 (decision 5 in §10).
 
 This extends S46a ([`spec.md`](spec.md)), which is paused at T13a (owner,
 2026-10-13: "we'll table it ... accept the dell as is for now"). It adds a
 second setup family, `boot`, to S46a's setup table (§4.1 there), beside
-`wake`. Where this file and `spec.md` disagree, `spec.md` wins until the owner
-approves this one.
+`wake`. Where this file and `spec.md` disagree, this file wins for the `boot` family
+and the cable; `spec.md` wins for everything else.
 
 Read with [`spec.md`](spec.md) §2 (the locked decisions) and §4 (the setup
 table, the read-back contract, the admin path), with D3, P6 and P26 in
@@ -609,28 +609,26 @@ been tested. v1's wake went through the LAN, not a direct cable.
 
 ---
 
-## 10. Owner decisions needed
+## 10. Owner decisions — ruled 2026-10-14
 
-1. **Approve the proposal (§5), which changes D3,** or pick an alternative
-   from §6. Add D (restart sign-on) beside it if B-0 shows Windows Update
-   restarts?
-2. **Which machines get the boot instance:** every agent install except the
-   hub (proposed), or only machines that serve models or can be woken?
-3. **The Windows task's logon:** S4U, with no password stored (proposed). If
-   B-2 shows S4U cannot work: a stored password, or fall back to §6?
-4. **Who starts the runtime at boot:** the boot instance, detached, from the
-   setup table's runtime row (proposed), or a separate startup task per
-   runtime?
-5. **Order.** On 2026-10-07 S46a was placed after S32b. Proposed: step 0
-   (she fixes the Dell by hand-free chat) now; the build after S32.5, as S46a
-   resumes: S46a.3's setup-table core, then this family, then the rest of
-   S46a.
-6. **Windows first, then macOS** (proposed: macOS cannot be walked anyway),
-   or every OS in one cut?
-7. **The cable (§8).** Reopen decision 5 ("the Dell stays on Wi-Fi, no
-   cable")? If yes: a static subnet on the cable (proposed), link-local, raw
-   frames, or shared mode? And should the untested Wi-Fi unicast lead be
-   tried first?
+The owner: "yes to all your recommendations. I'll get a network cable later."
+
+1. **The proposal (§5) is approved, and D3 changes:** a boot instance that
+   stays and a desktop instance that takes over at sign-in. Not ruled: adding
+   D (restart sign-on) beside it if B-0 shows Windows Update restarts — ask
+   after B-0.
+2. **Every agent install except the hub** gets the boot instance.
+3. **The Windows task logs on with S4U**, no password stored. Not ruled: what
+   to do if B-2 shows S4U cannot work — ask then.
+4. **The boot instance starts the runtime**, detached, from the setup table's
+   runtime row.
+5. **Order:** step 0 now (she fixes the Dell through chat); the build after
+   S32.5, as S46a resumes: S46a.3's setup-table core, then this family, then
+   the rest of S46a.
+6. **Windows first, then macOS.**
+7. **The cable: decision 5 is reopened**, with a static subnet on the cable.
+   The owner gets a cable later. Not ruled: whether to try the Wi-Fi unicast
+   lead first.
 
 ---
 
