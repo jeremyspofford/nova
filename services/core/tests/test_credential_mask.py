@@ -246,3 +246,42 @@ def test_the_moved_names_live_in_credential_mask_and_chat_reexports_them():
     for name in ("_ARGV_TOKEN_RE", "_CREDENTIAL_KEYS", "_CREDENTIAL_SUFFIXES", "_credential_key"):
         assert getattr(chat, name) is getattr(credential_mask, name), name
     assert credential_mask._credential_key.__module__ == "app.credential_mask"
+
+
+# -- T3: the values one turn masked, masked bare too ---------------------------
+
+
+def test_a_value_masked_once_is_masked_bare_by_the_same_set():
+    secrets = credential_mask.Secrets()
+    assert secrets.mask(f"Authorization: Bearer {KEY}") == f"Authorization: Bearer {M}"
+    assert secrets.mask(f"the key {KEY} worked") == f"the key {M} worked"
+    assert secrets.mask_tree({"head": [f'{{"received": "{KEY}"}}']}) == {
+        "head": [f'{{"received": "{M}"}}']
+    }
+    # Idempotent: the placeholder is never masked again.
+    assert secrets.mask(f"the key {M} worked") == f"the key {M} worked"
+
+
+def test_a_cookie_pair_contributes_its_value_part():
+    secrets = credential_mask.Secrets()
+    cookie = "sid0f9e8d7c6b5a4c3d2"
+    secrets.mask(f"Set-Cookie: session={cookie}")
+    assert secrets.mask(f"your session is {cookie}.") == (
+        f"your session is <masked:{len(cookie)} chars>."
+    )
+
+
+def test_a_short_value_is_never_collected():
+    secrets = credential_mask.Secrets()
+    assert secrets.mask("Cookie: lang=en") == "Cookie: <masked:7 chars>"
+    assert secrets.mask("Cookie: id=7") == "Cookie: <masked:4 chars>"
+    for prose in ("I set lang=en for you", "id=7 is the first row", "en"):
+        assert secrets.mask(prose) == prose
+
+
+def test_on_secret_values_fill_the_set_and_a_fresh_set_knows_nothing():
+    secrets = credential_mask.Secrets()
+    credential_mask.mask(f"GH_TOKEN={KEY}", on_secret=secrets.add)
+    secrets.add("short")
+    assert secrets.mask(f"bare {KEY} and short") == f"bare {M} and short"
+    assert credential_mask.Secrets().mask(f"bare {KEY}") == f"bare {KEY}"

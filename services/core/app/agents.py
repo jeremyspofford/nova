@@ -47,7 +47,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import credential_mask, governance, identity, peers, spend_api, tools, traces
+from app import governance, identity, peers, spend_api, tools, traces
 from app import skills as skills_store
 from app.identity import Person
 from app.tools.base import ToolFailure
@@ -1686,7 +1686,8 @@ async def delegate(ctx, args: dict) -> str:
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
         log,
-        credential_mask.mask(brief),
+        # T3: with the calling turn's set, so a key it masked is masked bare.
+        traces.secrets_of(getattr(ctx, "turn_id", None)).mask(brief),
     )
     progress = getattr(ctx, "progress", None)
     error_statement: str | None = None

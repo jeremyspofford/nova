@@ -2052,7 +2052,10 @@ class _SpanScrub:
     string shorter than the client's own credential floor is never a
     candidate: masking a `v` must not rewrite every `v` in a sentence."""
 
-    def __init__(self) -> None:
+    def __init__(self, secrets: credential_mask.Secrets | None = None) -> None:
+        # mask-bearer T3: the turn's set, told every value the one mask
+        # replaced in this call's arguments (`masked_value`).
+        self._secrets = secrets
         self._pairs: dict[str, str] = {}
         # The subset `tree` applies to the span's facts. Text she TYPED on a
         # page is not in it (merge review round 2, 2026-10-07): a search she
@@ -2070,6 +2073,13 @@ class _SpanScrub:
                 self._pairs.setdefault(form, replacement)
                 if in_facts:
                     self._fact_pairs.setdefault(form, replacement)
+
+    def masked_value(self, value: str) -> None:
+        """`credential_mask.mask`'s on_secret: this span's scrub, and the
+        turn's set (so a later result or her reply is masked bare too)."""
+        self.add(value)
+        if self._secrets is not None:
+            self._secrets.add(value)
 
     def __call__(self, text: str) -> str:
         return _replace_all(text, self._pairs)
@@ -2288,7 +2298,11 @@ def _off_schema_masked(parsed: object, tool: tools.Tool, sink: _SpanScrub) -> ob
     return out
 
 
-def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _SpanScrub]:
+def _span_record(
+    raw: object,
+    tool_name: str | None = None,
+    secrets: credential_mask.Secrets | None = None,
+) -> tuple[object, _SpanScrub]:
     """What the model actually sent, recorded whether or not it parsed, and
     the scrub for that span's own text (`_SpanScrub`).
 
@@ -2305,7 +2319,7 @@ def _span_record(raw: object, tool_name: str | None = None) -> tuple[object, _Sp
     missing brace must not put a token or a secret path into turn_spans (S37a
     final review I1, N1-N5).
     """
-    sink = _SpanScrub()
+    sink = _SpanScrub(secrets)
     tool = tools.REGISTRY.get(tool_name) if tool_name is not None else None
     guarded = _carries_credentials(tool)
     if isinstance(raw, str):
@@ -2429,7 +2443,7 @@ def _env_masked(parsed: object, sink: _SpanScrub) -> object:
 
 
 def _argv_element_masked(element: str, sink: _SpanScrub) -> str:
-    return credential_mask.mask(element, on_secret=sink.add)
+    return credential_mask.mask(element, on_secret=sink.masked_value)
 
 
 def _span_arguments(raw: object, tool_name: str | None = None) -> object:
@@ -3341,14 +3355,18 @@ async def _ingest(
     conversation_id: uuid.UUID,
     exchange: dict,
     thread: dict | None = None,
+    secrets: credential_mask.Secrets | None = None,
 ) -> None:
+    # T3: the turn's own set (`secrets`, passed by _queue_ingest), so a key
+    # the turn masked anywhere is masked where the exchange repeats it bare.
+    masker = secrets if secrets is not None else credential_mask.Secrets()
     try:
         async with peers.client(app, peers.MEMORY, INGEST_TIMEOUT) as client:
             response = await client.post(
                 "/ingest",
                 # mask-bearer T2: what memory journals carries no credential
                 # (the exchange and a room's title, by the one mask).
-                json=credential_mask.mask_tree(
+                json=masker.mask_tree(
                     {
                         "person_id": str(person.id),
                         "conversation_id": str(conversation_id),
@@ -3389,7 +3407,7 @@ def _queue_ingest(
             thread = None if pool is None else await _thread_meta(pool, conversation_id)
             if thread is not None:
                 span.meta["thread_title"] = thread["title"]
-            await _ingest(app, person, conversation_id, exchange, thread)
+            await _ingest(app, person, conversation_id, exchange, thread, turn.secrets)
 
         _spawn(_send())
         span.meta["queued"] = True
@@ -3633,8 +3651,10 @@ async def _persist_assistant(
     (guards.without_leading_stamp), so none honoured the label either.
 
     mask-bearer T2: a credential she repeats is saved masked (the one mask,
-    `credential_mask.mask`) — what was streamed to him is not rewritten."""
-    text = credential_mask.mask(guards.without_leading_stamp(without_markup(text)))
+    `credential_mask.mask`) — what was streamed to him is not rewritten. T3:
+    with the turn's own set (traces.secrets_of), so a key this turn masked
+    anywhere is masked where her reply repeats it bare."""
+    text = traces.secrets_of(turn_id).mask(guards.without_leading_stamp(without_markup(text)))
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, turn_id) "
         "VALUES ($1, 'assistant', $2, $3)",
@@ -3721,7 +3741,7 @@ async def _run_tool(
     facts = ctx.facts_sink
     undo_before = _undo_mark(ctx)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name, turn.secrets)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
             # read off the wire. It still goes through schema validation — the
@@ -3848,7 +3868,7 @@ async def _run_script_step(
     a run of eight calls should move the bubble, not sit silent.
     """
     with turn.span("tool", name) as span:
-        span.meta["args_redacted"], scrub = _span_record(args, name)
+        span.meta["args_redacted"], scrub = _span_record(args, name, turn.secrets)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
@@ -4033,7 +4053,7 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         if fact not in reason:
             reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name, turn.secrets)
         span.meta["ok"] = False
         span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
@@ -4084,7 +4104,7 @@ def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[s
     with the subset-scoped sentence. Returns that stated result."""
     reason = unknown_tool_refusal(call.name, subset)
     with turn.span("tool", call.name) as span:
-        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name)
+        span.meta["args_redacted"], scrub = _span_record(call.arguments, call.name, turn.secrets)
         span.meta["ok"] = False
         span.meta["result_head"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
         span.meta["error"] = scrub(reason)[:SPAN_RESULT_HEAD_CHARS]
@@ -8905,11 +8925,14 @@ async def _open_turn(
     # mask-bearer T2: the row is saved with every credential masked; this
     # turn runs on `message` as he typed it (its own row is never in its
     # history), so only what is SAVED changes.
+    # T3: what it masked joins the turn's set once the turn exists (below),
+    # so her reply or a tool result repeating the value bare is masked too.
+    masked_in_message: list[str] = []
     message_id = await conn.fetchval(
         "INSERT INTO messages (conversation_id, role, content) "
         "VALUES ($1, 'user', $2) RETURNING id",
         conversation_id,
-        credential_mask.mask(message),
+        credential_mask.mask(message, on_secret=masked_in_message.append),
     )
     # S28: the uploads he sent with it, bound HERE — on the caller's
     # connection, inside the transaction that holds the conversation's lock
@@ -9014,6 +9037,7 @@ async def _open_turn(
         agent_id=None if agent is None else agent.id,
         role=None if agent is None else agent.role,
     )
+    turn.secrets.update(masked_in_message)
     if queued_id is not None:
         await queued.mark_claimed(conn, queued_id, turn.id)
     # Registered the instant it exists, inside the lock that decided it may

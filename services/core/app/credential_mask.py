@@ -38,7 +38,7 @@ goes to memory); the running turn still uses the real value.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from app.mcp import client as mcp_client
 
@@ -254,12 +254,67 @@ def mask_tree(value: object, on_secret: OnSecret = None) -> object:
     """`value` with `mask` applied to every string inside it — dict values,
     list and tuple items, at any depth. Keys and non-string leaves are kept
     as they were; the input is not mutated."""
+    return _walk(value, lambda text: mask(text, on_secret))
+
+
+def _walk(value: object, fn: Callable[[str], str]) -> object:
     if isinstance(value, str):
-        return mask(value, on_secret)
+        return fn(value)
     if isinstance(value, dict):
-        return {key: mask_tree(item, on_secret) for key, item in value.items()}
+        return {key: _walk(item, fn) for key, item in value.items()}
     if isinstance(value, list):
-        return [mask_tree(item, on_secret) for item in value]
+        return [_walk(item, fn) for item in value]
     if isinstance(value, tuple):
-        return tuple(mask_tree(item, on_secret) for item in value)
+        return tuple(_walk(item, fn) for item in value)
     return value
+
+
+# The floor for a value to be masked BARE (mask-bearer T3): the client's own
+# credential floor, so a short value a mask happened to replace (`Cookie:
+# id=7`'s `id=7`) never rewrites the same few characters in other text.
+SECRET_FLOOR = mcp_client._MIN_CREDENTIAL_CHARS
+
+
+class Secrets:
+    """The credential values ONE turn's masks replaced (mask-bearer T3), and
+    the mask that also replaces each of them where it stands bare — her reply
+    repeating the key with no header, a later tool result printing it.
+
+    Derived, never kept by hand: filled only from `mask`'s `on_secret` (every
+    `Secrets.mask` call collects what it replaced, and a caller that masked
+    elsewhere passes `add` as its `on_secret`). A value under SECRET_FLOOR is
+    not collected; a `name=value` cookie pair also contributes its value. One
+    set per traces.Turn: a value from another turn is never used."""
+
+    def __init__(self) -> None:
+        self._values: set[str] = set()
+
+    def add(self, value: object) -> None:
+        if not isinstance(value, str):
+            return
+        for candidate in (value, value.partition("=")[2]):
+            if len(candidate) >= SECRET_FLOOR:
+                self._values.add(candidate)
+
+    def update(self, values: Iterable[str]) -> None:
+        for value in values:
+            self.add(value)
+
+    def collect(self, text: str) -> None:
+        """Note what `mask` would replace in `text`, changing nothing."""
+        mask(text, on_secret=self.add)
+
+    def mask(self, text: str) -> str:
+        """`mask(text)`, collecting what it replaced, then every value this
+        turn collected replaced where it stands bare, longest first."""
+        if not text:
+            return text
+        text = mask(text, on_secret=self.add)
+        for secret in sorted(self._values, key=len, reverse=True):
+            if secret in text:
+                text = text.replace(secret, _masked(secret))
+        return text
+
+    def mask_tree(self, value: object) -> object:
+        """`self.mask` over every string inside `value`, as `mask_tree`."""
+        return _walk(value, self.mask)

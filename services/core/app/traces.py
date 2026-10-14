@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -214,6 +215,10 @@ def keep_result(turn: Turn, tool_call_id: str | None, tool: str, content: str) -
         content=content,
     )
     turn.tool_results.append(kept)
+    # mask-bearer T3: what the mask would replace in it joins the turn's set,
+    # so a later result or her reply repeating it bare is masked at persist.
+    # Collected only; the result she reads is unchanged.
+    turn.secrets.collect(content)
     return kept
 
 
@@ -299,9 +304,30 @@ class Turn:
     # what was sent is on the round spans, the full text in tool_results.
     summaries: dict[str, Any] = field(default_factory=dict)
     summary_failures: dict[str, str] = field(default_factory=dict)
+    # mask-bearer T3: the credential values this turn's masks replaced
+    # (credential_mask.Secrets), so every persist boundary also masks them
+    # where they stand bare. On the Turn, so they go with it.
+    secrets: credential_mask.Secrets = field(default_factory=credential_mask.Secrets)
+
+    def __post_init__(self) -> None:
+        _LIVE[self.id] = self
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
         return SpanRecorder(self, kind, name)
+
+
+# The turns alive in this process, by id, held WEAKLY (mask-bearer T3): a
+# boundary that knows only a turn id (an executor's ctx.turn_id, a persist
+# called with turn.id) reaches that turn's Secrets through `secrets_of`, and
+# the entry is gone the moment the Turn is — never a store of values.
+_LIVE: weakref.WeakValueDictionary[Any, Turn] = weakref.WeakValueDictionary()
+
+
+def secrets_of(turn_id: Any) -> credential_mask.Secrets:
+    """The live turn's Secrets, or an empty set (plain `mask`) when no turn
+    of that id is alive — a value from another turn is never used."""
+    turn = _LIVE.get(turn_id) if turn_id is not None else None
+    return turn.secrets if turn is not None else credential_mask.Secrets()
 
 
 def purpose_of(turn: Turn) -> str:
@@ -432,13 +458,14 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 span.started_at,
                 span.duration_ms,
                 # mask-bearer T2: the one credential mask, at the persist
-                # boundary — every writer of span meta is covered.
-                _without_nul(credential_mask.mask_tree(span.meta)),
+                # boundary — every writer of span meta is covered; T3: with
+                # every value this turn masked, masked bare too.
+                _without_nul(turn.secrets.mask_tree(span.meta)),
             )
         for kept in turn.tool_results:
             # Masked here, not on the Turn: the running turn's read_result
             # still reads what she was sent; `chars` is the stored length.
-            content = credential_mask.mask(kept.content).replace(_NUL, _NUL_STANDIN)
+            content = turn.secrets.mask(kept.content).replace(_NUL, _NUL_STANDIN)
             await conn.execute(
                 "INSERT INTO tool_results (turn_id, ref, tool_call_id, tool, content, chars) "
                 "VALUES ($1, $2, $3, $4, $5, $6)",

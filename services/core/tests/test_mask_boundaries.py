@@ -24,6 +24,8 @@ sees the real key — the mask is at persist only.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import gc
 import json
 import uuid
 
@@ -365,10 +367,200 @@ async def test_what_is_stored_on_purpose_keeps_its_bytes(pool):
 
 def test_every_boundary_calls_the_one_mask():
     """One function, not a second regex somewhere: each boundary module
-    imports credential_mask (a copy would drift)."""
+    calls credential_mask, directly or through the turn's set (T3:
+    traces.secrets_of / Turn.secrets, which is credential_mask.Secrets)."""
     import inspect
 
     from app.tools import memory_tools
 
     for module in (traces, chat, agents, device_jobs, queued, memory_tools):
-        assert "credential_mask" in inspect.getsource(module), module.__name__
+        source = inspect.getsource(module)
+        assert "credential_mask" in source or "secrets_of(" in source, module.__name__
+
+
+# -- T3: a value masked once this turn is masked bare everywhere it lands ------
+
+
+def _bare_answer(device):
+    """The laptop for T3: the curl echoes the header and sets a cookie; a
+    later `cat` prints the key and the cookie BARE (its own argv names
+    neither, so no per-call sink knows them); job.start refuses quoting
+    its argv."""
+
+    def answer(envelope: dict) -> dict:
+        argv = envelope["args"]["argv"]
+        if envelope["capability"] == "job.start":
+            return {"ok": False, "error": f"could not start: {' '.join(argv)}"}
+        if argv[0] == "cat":
+            return {"ok": True, "output": f"key: {KEY}\nsession: {COOKIE}\n", "exit_code": 0}
+        return {
+            "ok": True,
+            "output": f"> {HEADER}\n< HTTP/1.1 200 OK\n< Set-Cookie: session={COOKIE}\n",
+            "exit_code": 0,
+        }
+
+    return answer
+
+
+async def test_a_value_masked_this_turn_is_masked_bare_at_every_boundary(pool, mount_peers):
+    owner = await _owner(pool)
+    device, conn, _task = await _connect_host(pool, name=LAPTOP, hostname="laptop-host")
+    audit: list[str] = []
+    server = asyncio.create_task(_serve(device, conn, _bare_answer(device), audit))
+
+    # Only the user message carries API_KEY; only the curl's argv ARGV_TOKEN.
+    api_key = "a1b2c3d4e5f6g7h8k9"
+    argv_token = "t0k3nOnlyInTheArgv42"
+    message = (
+        f'please run curl -i -H "{HEADER}" -H "Cookie: lang=en" -H "X-Api-Key: {api_key}" '
+        f"{URL} on the laptop"
+    )
+    conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", owner.id
+    )
+    queued_id = await queued.enqueue_for_test(pool, conversation, owner.id, message)
+    reply = (
+        f"Done. The key {KEY} works, your session is {COOKIE}, and I set lang=en. "
+        f"{api_key} and {argv_token} went too."
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                _calls(
+                    (
+                        "c1",
+                        "device_run",
+                        {
+                            "device": LAPTOP,
+                            "argv": [
+                                "curl",
+                                "-H",
+                                HEADER,
+                                "-H",
+                                f"X-Auth-Token: {argv_token}",
+                                URL,
+                            ],
+                        },
+                    ),
+                ),
+            ),
+            (
+                _calls(
+                    ("c2", "device_run", {"device": LAPTOP, "argv": ["cat", "/tmp/events"]}),
+                    (
+                        "c3",
+                        "device_job_start",
+                        {"device": LAPTOP, "argv": ["sh", "-c", f"echo {KEY} {COOKIE}"]},
+                    ),
+                    ("c4", "memory_save", {"title": "events", "content": f"key {KEY}"}),
+                ),
+            ),
+            (text(reply),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+    try:
+        before = set(chat._BACKGROUND)
+        await chat.drain_queue(app, pool, conversation)
+        await asyncio.wait_for(chat.drain_background(), timeout=20)
+        await chat.settle_detached(before)
+        await asyncio.wait_for(memory.ingested.wait(), timeout=5)
+    finally:
+        server.cancel()
+
+    turn_id = await pool.fetchval("SELECT turn_id FROM queued_messages WHERE id = $1", queued_id)
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) == "ok"
+    # The running turn read the cat's bare echo as it came back.
+    assert f"key: {KEY}" in json.dumps(gateway.payloads)
+
+    found: list[str] = []
+    spans = await pool.fetch("SELECT meta::text AS m FROM turn_spans WHERE turn_id = $1", turn_id)
+    found += _leaks("turn_spans.meta", "\n".join(r["m"] for r in spans))
+    kept = await pool.fetch(
+        "SELECT tool, content, chars FROM tool_results WHERE turn_id = $1 ORDER BY ref", turn_id
+    )
+    for row in kept:
+        found += _leaks(f"tool_results[{row['tool']}]", row["content"])
+        assert row["chars"] == len(row["content"])
+    stored = await pool.fetchval(
+        "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant'", turn_id
+    )
+    found += _leaks("the assistant row", stored)
+    (ingest,) = memory.ingests
+    found += _leaks("the memory ingest payload", ingest)
+    (save,) = memory.saves
+    found += _leaks("the memory_save payload", save)
+    (job,) = await pool.fetch("SELECT argv, reason FROM device_jobs")
+    found += _leaks("device_jobs.argv", list(job["argv"]))
+    assert found == [], "\n".join(found)
+
+    # Masked in place, and the short cookie value (under the floor) untouched.
+    assert stored == (
+        f"Done. The key <masked:{len(KEY)} chars> works, your session is "
+        f"<masked:{len(COOKIE)} chars>, and I set lang=en. "
+        f"<masked:{len(api_key)} chars> and <masked:{len(argv_token)} chars> went too."
+    )
+    user_row = await pool.fetchval(
+        "SELECT content FROM messages WHERE conversation_id = $1 AND role = 'user'", conversation
+    )
+    assert "Cookie: <masked:7 chars>" in user_row
+
+
+async def test_a_value_from_another_turn_is_not_used_and_goes_with_its_turn(pool):
+    owner = await _owner(pool)
+    conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", owner.id
+    )
+    first = await traces.open_turn(pool, conversation_id=conversation, person_id=owner.id)
+    traces.keep_result(first, "c1", "device_run", f"> {HEADER}\n")
+    await chat._persist_assistant(pool, conversation, f"first: {KEY}", first.id)
+    second = await traces.open_turn(pool, conversation_id=conversation, person_id=owner.id)
+    traces.keep_result(second, "c1", "device_run", f"key: {KEY}\n")
+    await chat._persist_assistant(pool, conversation, f"second: {KEY}", second.id)
+    await traces.close_turn(pool, first, "ok")
+    await traces.close_turn(pool, second, "ok")
+
+    async def reply(turn_id):
+        return await pool.fetchval(
+            "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant'", turn_id
+        )
+
+    assert await reply(first.id) == f"first: <masked:{len(KEY)} chars>"
+    # The second turn's own masks never found the key: its rows keep it.
+    assert await reply(second.id) == f"second: {KEY}"
+    assert (
+        await pool.fetchval("SELECT content FROM tool_results WHERE turn_id = $1", second.id)
+        == f"key: {KEY}\n"
+    )
+
+    # Cleared with the turn: once the Turn object is gone, its id finds nothing.
+    first_id = first.id
+    assert traces.secrets_of(first_id).mask(KEY) == f"<masked:{len(KEY)} chars>"
+    del first
+    gc.collect()
+    assert traces.secrets_of(first_id).mask(KEY) == KEY
+
+
+async def test_the_delegate_brief_masks_bare_what_the_calling_turn_masked(
+    pool,
+    mount_peers,
+    root,  # noqa: F811
+):
+    owner = await _owner(pool)
+    coder = await _create(pool, mount_peers)
+    mount_peers(gateway=ScriptedGateway(rounds=((text("checked"),),)), memory=FakeMemory())
+    caller = await traces.open_turn(pool, person_id=owner.id)
+    traces.keep_result(caller, "c1", "device_run", f"> {HEADER}\n")
+    ctx = dataclasses.replace(_agent_ctx(owner), turn_id=caller.id)
+
+    result, ok = await tools.dispatch(
+        "delegate_to_agent", {"agent": "coder", "task": f"check the events API with {KEY}"}, ctx
+    )
+    assert ok, result
+    brief = await pool.fetchval(
+        "SELECT content FROM messages WHERE conversation_id = $1 AND role = 'user'",
+        coder.log_conversation_id,
+    )
+    assert KEY not in brief
+    assert f"Task: check the events API with <masked:{len(KEY)} chars>" in brief

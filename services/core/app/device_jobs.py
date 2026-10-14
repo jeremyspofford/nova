@@ -27,7 +27,7 @@ from datetime import datetime
 
 import asyncpg
 
-from app import credential_mask
+from app import credential_mask, traces
 
 logger = logging.getLogger("core")
 
@@ -106,7 +106,8 @@ async def insert(
         _as_uuid(turn_id) if turn_id is not None else None,
         # mask-bearer T2: the row records the command with its credentials
         # masked; the agent is sent the argv as given.
-        credential_mask.mask_tree(argv),
+        # T3: with the turn's own set (a key it masked anywhere, bare here).
+        traces.secrets_of(_as_uuid(turn_id) if turn_id is not None else None).mask_tree(argv),
         cwd,
         names,
         ran_in,
