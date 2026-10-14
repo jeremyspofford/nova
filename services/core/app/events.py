@@ -203,11 +203,34 @@ async def refuse(pool: asyncpg.Pool, name: str, reason: str) -> uuid.UUID:
     )
 
 
+class Refused(Exception):
+    """accept found the sender gone or off once it held its row: the call is
+    refused with `reason` (the intake answers the same 401)."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 async def accept(
     pool: asyncpg.Pool, name: str, payload: str, content_type: str | None
 ) -> uuid.UUID:
-    """Queue an accepted event whole and stamp the sender's last_sent_at."""
+    """Queue an accepted event whole and stamp the sender's last_sent_at.
+
+    The token was checked before the body was read, and the body can take as
+    long as the client likes; a delete or switch-off may land meanwhile. So
+    the sender is read again here under its row lock (FOR UPDATE — the lock
+    delete_sender and set_enabled take), in the transaction that inserts:
+    gone or off raises Refused and nothing is queued. Whichever commits first,
+    the other sees it: a delete after this commit fails the queued row."""
     async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT enabled FROM event_senders WHERE name = $1 FOR UPDATE", name
+        )
+        if row is None:
+            raise Refused(UNKNOWN_SENDER)
+        if not row["enabled"]:
+            raise Refused(SENDER_OFF)
         event_id = await conn.fetchval(
             "INSERT INTO events (sender, payload, content_type) VALUES ($1, $2, $3) RETURNING id",
             name,
@@ -356,6 +379,29 @@ async def _claim(pool: asyncpg.Pool, sender: str) -> list[asyncpg.Record]:
             "SELECT EXISTS (SELECT 1 FROM events WHERE sender = $1 AND state = 'running')",
             sender,
         ):
+            return []
+        # The sender is read under a share lock on its row, which a delete or
+        # switch-off (FOR UPDATE / UPDATE) waits on and vice versa: a sender
+        # that is gone or off runs no turn, whatever left its events queued.
+        # They are failed with why, never left to run later.
+        gone = await conn.fetchrow(
+            "SELECT enabled FROM event_senders WHERE name = $1 FOR SHARE", sender
+        )
+        if gone is None or not gone["enabled"]:
+            reason = SENDER_DELETED if gone is None else SENDER_SWITCHED_OFF
+            failed = await conn.fetch(
+                "UPDATE events SET state = 'failed', reason = $2 "
+                "WHERE sender = $1 AND state = 'queued' RETURNING id",
+                sender,
+                reason,
+            )
+            if failed:
+                logger.warning(
+                    "event sender %r: %d queued event(s) failed, not run: %s",
+                    sender,
+                    len(failed),
+                    reason,
+                )
             return []
         # RETURNING keeps no order of its own: the frame's order is the outer
         # ORDER BY, by when each event was received.
@@ -855,3 +901,138 @@ async def _link_monitor_notices(pool: asyncpg.Pool, finding) -> None:
             )
         except Exception:  # noqa: BLE001 - the outcome notice still names the turn
             logger.exception("monitor event %s: its notice could not name the turn", row["id"])
+
+
+# -- T8: senders as the owner manages them (Settings > Events, spec §2.1, §2.8) ----
+
+# A deleted sender's waiting events never run; this is what their rows say.
+SENDER_DELETED = "the sender was deleted"
+# A sender switched off after its event was queued: the event is failed, not run.
+SENDER_SWITCHED_OFF = "the sender was switched off before its turn started"
+
+# The columns a sender is shown with — never token_hash or token_once; whether
+# a kept token waits for its one reveal is a boolean.
+_LISTED = (
+    "name, kind, role, enabled, last_sent_at, added_by, created_at, "
+    "token_once IS NOT NULL AS token_waiting"
+)
+
+
+class NoSuchSender(LookupError):
+    """No sender has that name."""
+
+
+@dataclass(frozen=True)
+class Created:
+    """A sender just added: the row as listed, its token (the only copy) and
+    what the gateway did with its role."""
+
+    sender: dict
+    token: str
+    route: object
+
+
+@dataclass(frozen=True)
+class Deleted:
+    name: str
+    failed_events: int
+    route: object
+
+
+class RouteFailed(RuntimeError):
+    """The gateway did not take a new sender's role; the sender was removed.
+    The message is the gateway outcome in words."""
+
+
+def listed(row) -> dict:
+    """A sender row as the API shows it (JSON-ready)."""
+    return {
+        "name": row["name"],
+        "kind": row["kind"],
+        "role": row["role"],
+        "enabled": row["enabled"],
+        "last_sent_at": row["last_sent_at"].isoformat() if row["last_sent_at"] else None,
+        "added_by": row["added_by"],
+        "created_at": row["created_at"].isoformat(),
+        "token_waiting": row["token_waiting"],
+    }
+
+
+async def list_senders(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(f"SELECT {_LISTED} FROM event_senders ORDER BY name")
+    return [listed(r) for r in rows]
+
+
+async def _listed_one(pool: asyncpg.Pool, name: str) -> dict:
+    row = await pool.fetchrow(f"SELECT {_LISTED} FROM event_senders WHERE name = $1", name)
+    if row is None:
+        raise NoSuchSender(f"no event sender named {name!r}")
+    return listed(row)
+
+
+async def create_sender(
+    app, pool: asyncpg.Pool, name: str, *, added_by: str, reveal_once: bool = False
+) -> Created:
+    """Add a token sender and make its role `event_<name>` exist on the gateway
+    with an empty chain (chat's chain until Routing gives it one, spec §9 Q4).
+
+    The role is read back from the gateway's own answer (agents.
+    register_role_route). When the gateway does not take it, the sender is
+    removed again and RouteFailed says why: an add that did not happen never
+    hands out a token. A bad, built-in or duplicate name raises SenderError
+    before the gateway is asked."""
+    from app import agents
+
+    sender, token = await add_sender(pool, name, added_by=added_by, reveal_once=reveal_once)
+    route = await agents.register_role_route(app, sender.role, [])
+    if not route.registered:
+        await pool.execute("DELETE FROM event_senders WHERE name = $1", name)
+        logger.warning("event sender %r removed: its role was not made — %s", name, route.detail)
+        raise RouteFailed(route.detail)
+    return Created(sender=await _listed_one(pool, name), token=token, route=route)
+
+
+async def set_enabled(pool: asyncpg.Pool, name: str, enabled: bool) -> dict:
+    """Switch a sender on or off (built-ins too); the intake reads it per call."""
+    if not isinstance(enabled, bool):
+        raise SenderError(f"enabled is true or false (got {enabled!r})")
+    # The UPDATE takes the sender's row lock, so it serializes with an accept
+    # (FOR UPDATE) and a claim (FOR SHARE) reading the same row.
+    found = await pool.fetchval(
+        "UPDATE event_senders SET enabled = $2 WHERE name = $1 RETURNING name", name, enabled
+    )
+    if found is None:
+        raise NoSuchSender(f"no event sender named {name!r}")
+    logger.info("event sender %r switched %s", name, "on" if enabled else "off")
+    return await _listed_one(pool, name)
+
+
+async def delete_sender(app, pool: asyncpg.Pool, name: str) -> Deleted:
+    """Remove a token sender: its intake refuses from the moment the row is
+    gone, its queued events are failed with SENDER_DELETED (never run), its
+    history stays, and its role is removed from the gateway — a gateway that
+    fails is stated in the outcome, the sender is deleted all the same."""
+    from app import agents
+
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT name, kind, role FROM event_senders WHERE name = $1 FOR UPDATE", name
+        )
+        if row is None:
+            raise NoSuchSender(f"no event sender named {name!r}")
+        if row["kind"] != "token":
+            raise SenderError(f"{name!r} is a built-in sender; switch it off instead")
+        await conn.execute("DELETE FROM event_senders WHERE name = $1", name)
+        failed = await conn.fetch(
+            "UPDATE events SET state = 'failed', reason = $2 "
+            "WHERE sender = $1 AND state = 'queued' RETURNING id",
+            name,
+            SENDER_DELETED,
+        )
+    logger.info("event sender %r deleted; %d waiting event(s) failed", name, len(failed))
+    route = await agents.unregister_role_route(app, row["role"])
+    return Deleted(name=name, failed_events=len(failed), route=route)
+
+
+async def sender_names(pool: asyncpg.Pool) -> list[str]:
+    return [r["name"] for r in await pool.fetch("SELECT name FROM event_senders ORDER BY name")]

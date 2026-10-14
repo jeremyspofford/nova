@@ -498,6 +498,49 @@ async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_
     assert [r["role"] for r in rows] == ["agent_coder"] * 3 + ["agent_reviewer"]
 
 
+async def test_an_event_senders_role_walks_chats_chain_until_it_has_its_own(
+    client, pool, local
+):
+    """S37c (spec §2.8, §9 Q4): every event sender runs under its own role,
+    `event_<sender>`, which core PUTs with an empty chain when the sender is
+    added. With no row or an empty chain it walks chat's chain under its own
+    role (attributed to it in the ledger); with a chain of its own it serves
+    from that; the Routing page lists it as a derived chat-protocol role.
+    No gateway source names `event_`: ROLE_RE and borrows_chat_chain take it."""
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    assert routing.borrows_chat_chain("event_github_ci", [])
+    assert not routing.borrows_chat_chain("event_github_ci", ["hub:qwen3:4b"])
+
+    # No row yet: chat's chain, under the event role.
+    resp = await _chat(client, "event_test")
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert resp.headers["x-nova-route"] == "role=event_test;link=1"
+
+    # What core PUTs on add: an empty chain, echoed back.
+    put = await client.put("/admin/routes/event_test", json={"chain": []})
+    assert put.status_code == 200 and put.json() == {"role": "event_test", "chain": []}
+    resp = await _chat(client, "event_test")
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    ex = (await client.get("/admin/route/explain?role=event_test")).json()
+    assert ex["role"] == "event_test" and ex["would_serve"]["served_by"] == "hub:qwen3:8b"
+
+    # A chain of its own serves from it.
+    await client.put("/admin/routes/event_test", json={"chain": ["hub:qwen3:4b"]})
+    resp = await _chat(client, "event_test")
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+
+    page = (await client.get("/admin/routes")).json()["roles"]
+    (row,) = [r for r in page if r["role"] == "event_test"]
+    assert row["builtin"] is False and row["protocol"] == "chat"
+    rows = await pool.fetch("SELECT role FROM usage_events ORDER BY id")
+    assert [r["role"] for r in rows] == ["event_test"] * 3
+
+    # The longest sender name (26) still makes a role the gateway takes.
+    longest = "event_" + "a" + "b" * 25
+    assert (await client.put(f"/admin/routes/{longest}", json={"chain": []})).status_code == 200
+
+
 async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_removed(
     client, pool, local
 ):

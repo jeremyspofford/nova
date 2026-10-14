@@ -179,6 +179,7 @@ app.include_router(mcp_api.router)
 app.include_router(about_api.router)
 app.include_router(code_repos.router)
 app.include_router(events_api.router)
+app.include_router(events_api.senders_router)
 
 
 @app.exception_handler(StarletteHTTPException)

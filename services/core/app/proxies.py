@@ -274,11 +274,28 @@ async def _refuse_an_agent_role_with_no_agent(role: str) -> None:
             )
 
 
+async def _refuse_an_event_role_with_no_sender(role: str) -> None:
+    """The same rule for an event sender's role (`event_<name>`, S37c T8):
+    a chain for a sender that does not exist is refused here, by name."""
+    from app import events  # function-local, as agents above
+
+    if role.startswith(events.ROLE_PREFIX):
+        name = role[len(events.ROLE_PREFIX) :]
+        live = await events.sender_names(await db.get_pool())
+        if name not in live:
+            roles = ", ".join(events.ROLE_PREFIX + n for n in live) or "none yet"
+            raise HTTPException(
+                status_code=400,
+                detail=f"no event sender named {name!r} — live event roles: {roles}",
+            )
+
+
 @router.put("/routes/{role}")
 async def put_route(role: str, request: Request) -> Response:
     """Set a role's chain; the gateway's built-ins, its ROLE_RE and its
     protocol check answer verbatim."""
     await _refuse_an_agent_role_with_no_agent(role)
+    await _refuse_an_event_role_with_no_sender(role)
     return await _forward(request, "PUT", f"/admin/routes/{role}")
 
 
@@ -367,6 +384,7 @@ async def put_jev_router(role: str, request: Request) -> Response:
     The owner gets the first answer, which names the chat model; if the OFF
     asked again fails, the answer's note says so."""
     await _refuse_an_agent_role_with_no_agent(role)
+    await _refuse_an_event_role_with_no_sender(role)
     if role in chat.CHAT_MODEL_ROLES:
         # The pick's lock: both move chat.model together with a chain.
         async with chat_pick.LOCK:
