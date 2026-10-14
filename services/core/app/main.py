@@ -28,6 +28,7 @@ from app import (
     devices_api,
     devices_ws,
     evals_api,
+    events,
     governance_api,
     machines_api,
     mcp_api,
@@ -75,6 +76,9 @@ async def lifespan(app: FastAPI):
     # Her repository's row (S32.2): written from what ./install recorded, so
     # routing reads a row, never the env; the owner's `environment` survives.
     await code_repos.sync_from_env(pool)
+    # Her own event senders (S37c): `monitor` and `github_ci` get their rows
+    # here, never from a migration, and an existing row (his on/off) is kept.
+    await events.ensure_builtins(pool)
     # This process is starting, not stopping (S15): begin_shutdown() below is a
     # latch on a module global, and a process that went through a lifespan once
     # already would otherwise never drain another queue.

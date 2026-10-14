@@ -96,6 +96,11 @@ _TABLES = (
     # S38b T1: tool_results references turns (ON DELETE CASCADE); listed so
     # the re-migration starts from no table and rows never leak between tests.
     "tool_results",
+    # S37c T1: events references turns (ON DELETE SET NULL); event_senders
+    # references nothing. Both listed so the re-migration does not collide on
+    # their CREATE TABLE and rows never leak between tests.
+    "events",
+    "event_senders",
     "turn_spans",
     "turns",
     "messages",
