@@ -518,21 +518,27 @@ export function SchedulesPage({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border border-border glass-card dark:border-white/[0.08]">
-            <table className="stack-table w-full text-compact">
+            {/* Fixed layout (T32): every column but Schedule has a bounded
+                width (COLUMN_WIDTHS), so a long title or reason can never push
+                the controls off the card — Schedule takes the slack. */}
+            <table className="stack-table table-fixed w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
                   {/* One line each: NEXT FIRE / LAST OUTCOME never wrap. */}
                   {COLUMNS.map((heading, i) => (
                     <th
                       key={i}
-                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider whitespace-nowrap sticky top-0 bg-surface-elevated"
+                      className={clsx(
+                        'px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider whitespace-nowrap sticky top-0 bg-surface-elevated',
+                        COLUMN_WIDTHS[heading],
+                      )}
                     >
                       {heading}
                     </th>
                   ))}
                   {/* The controls' column: named for a screen reader, no
                       visible title over the buttons. */}
-                  <th className="px-4 py-3 whitespace-nowrap sticky top-0 bg-surface-elevated">
+                  <th className={clsx('px-4 py-3 whitespace-nowrap sticky top-0 bg-surface-elevated', ACTIONS_WIDTH)}>
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -587,9 +593,33 @@ export function SchedulesPage({
 
 /** The table's labelled columns. The row's controls follow in their own
  * last cell (T29): in the Schedule cell (T17) they squeezed into a phone
- * card's value column. At 1440 that cell fits because Delete is icon-only
- * from md up and the times read once (T17 C3). */
+ * card's value column. At 1440 that cell fits because every control is
+ * icon-only from md up (T32) in a bounded column of a fixed-layout table. */
 const COLUMNS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome'] as const
+/** Bounded widths for a fixed-layout table (T32): on live data an auto
+ *  layout let a long title or a raw gateway reason push the controls off the
+ *  card at 1440 with the sidebar open. Schedule has none — it absorbs the
+ *  slack. Below md the header is hidden and each row is a card, so these
+ *  only shape the desktop table. */
+const COLUMN_WIDTHS: Record<(typeof COLUMNS)[number], string | undefined> = {
+  Kind: 'w-[124px]',
+  Schedule: undefined,
+  'Runs as': 'w-[144px]',
+  'Next fire': 'w-[104px]',
+  Status: 'w-[220px]',
+  'Last outcome': 'w-[148px]',
+}
+/** Three icon-only controls from md up (T32 C2). */
+const ACTIONS_WIDTH = 'w-[148px]'
+/** The icon-only Delete's width from md up (its own px-2.5 + a 12px icon),
+ *  shared with the empty slot a job row keeps in its place (T32 C7). */
+const DELETE_SLOT_WIDTH = 'md:w-8'
+/** A paused reason longer than this is clamped to two lines with a Show more
+ *  control (T32). jsdom cannot measure lines, so the bound is characters:
+ *  the Status column holds ~30 caption characters a line. A reason at or
+ *  under it shows whole with no control — text is never hidden without a
+ *  way to reveal it. */
+const REASON_CLAMP_CHARS = 80
 /** The header's cells — the labelled columns plus the sr-only Actions one —
  *  which a note or detail row spans. */
 const COLUMN_COUNT = COLUMNS.length + 1
@@ -632,6 +662,10 @@ function ScheduleRow({
   const next = timer.next_fire_at === null ? null : formatNextFire(timer.next_fire_at)
   const outcome = lastOutcome(timer.last_firing)
   const summary = payloadSummary(timer)
+  const [reasonOpen, setReasonOpen] = useState(false)
+  const reason = timer.paused_reason ?? 'no reason recorded'
+  const reasonClamps = reason.length > REASON_CLAMP_CHARS
+  const reasonId = `paused-reason-${timer.id}`
 
   return (
     <>
@@ -648,7 +682,9 @@ function ScheduleRow({
             </Badge>
           </span>
         </td>
-        <td data-label="Schedule" className="px-4 py-2.5 min-w-[220px]">
+        {/* A long token ("nova_about(check_updates_now=True).") breaks inside
+            the column instead of overflowing it (T32 C6). */}
+        <td data-label="Schedule" className="px-4 py-2.5 break-words [overflow-wrap:anywhere]">
           <div className="text-content-primary font-medium">{timer.title}</div>
           {/* core's describe() words, verbatim — never recomputed here. */}
           <div className="text-caption text-content-tertiary" data-testid="schedule-words">
@@ -686,7 +722,7 @@ function ScheduleRow({
           )}
         </td>
         {/* Not nowrap: a paused row's reason wraps under the badge. */}
-        <td data-label="Status" className="px-4 py-2.5 min-w-[160px]">
+        <td data-label="Status" className="px-4 py-2.5">
           <span className="whitespace-nowrap">
             <Badge size="sm" color={state.color}>
               {state.label}
@@ -698,10 +734,36 @@ function ScheduleRow({
             )}
           </span>
           {state.state === 'paused' && (
-            // core's paused_reason, verbatim, as text — not only a hover.
-            <div className="mt-1 text-caption text-content-tertiary break-words" data-testid="row-paused-reason">
-              {timer.paused_reason ?? 'no reason recorded'}
-            </div>
+            <>
+              {/* core's paused_reason, verbatim, as text — not only a hover.
+                  A long one is clamped to two lines (whole in the DOM) with
+                  a control to reveal it; a short one is never clamped. */}
+              <div
+                id={reasonId}
+                className={clsx(
+                  'mt-1 text-caption text-content-tertiary break-words [overflow-wrap:anywhere]',
+                  reasonClamps && !reasonOpen && 'line-clamp-2',
+                )}
+                data-testid="row-paused-reason"
+              >
+                {reason}
+              </div>
+              {reasonClamps && (
+                <button
+                  type="button"
+                  className="mt-0.5 text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40 rounded-sm"
+                  aria-expanded={reasonOpen}
+                  aria-controls={reasonId}
+                  // The reason's control, not the row's: never opens the row.
+                  onClick={e => {
+                    e.stopPropagation()
+                    setReasonOpen(open => !open)
+                  }}
+                >
+                  {reasonOpen ? 'Show less' : 'Show more'}
+                </button>
+              )}
+            </>
           )}
         </td>
         <td data-label="Last outcome" className="px-4 py-2.5 whitespace-nowrap">
@@ -740,8 +802,10 @@ function ScheduleRow({
                 loading={busy === 'resume'}
                 disabled={busy !== undefined}
                 onClick={onResume}
+                aria-label="Resume"
+                title="Resume this schedule"
               >
-                Resume
+                <span className="md:sr-only">Resume</span>
               </Button>
             ) : (
               <Button
@@ -751,8 +815,10 @@ function ScheduleRow({
                 loading={busy === 'pause'}
                 disabled={busy !== undefined || state.state === 'finished'}
                 onClick={onPause}
+                aria-label="Pause"
+                title="Pause this schedule"
               >
-                Pause
+                <span className="md:sr-only">Pause</span>
               </Button>
             )}
             <Button
@@ -765,15 +831,16 @@ function ScheduleRow({
               // front mirrors the server's fact — it is not a gate.
               disabled={busy !== undefined || state.state === 'paused'}
               onClick={onFire}
+              aria-label="Run now"
               title={
                 state.state === 'paused'
                   ? 'Paused — resume it to run it'
                   : 'Set the next fire to now and run one scheduler tick — the firing goes through the same claim and history as a scheduled one'
               }
             >
-              Run now
+              <span className="md:sr-only">Run now</span>
             </Button>
-            {timer.kind !== 'job' && (
+            {timer.kind !== 'job' ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -783,11 +850,22 @@ function ScheduleRow({
                 onClick={onDelete}
                 // Icon-only from md up: the name stays "Delete" for a screen
                 // reader and on hover; the word shows on a phone's full line.
+                // Its width is fixed so a job row's empty slot can match it.
+                className={DELETE_SLOT_WIDTH}
                 aria-label="Delete"
                 title="Delete this schedule"
               >
                 <span className="md:sr-only">Delete</span>
               </Button>
+            ) : (
+              // A job row has no Delete (see the header comment), but keeps
+              // its slot from md up so every row's Pause/Run now line up in
+              // the right-aligned column. Empty, never focusable, hidden from
+              // a screen reader; the phone's word line needs no placeholder.
+              <span
+                aria-hidden="true"
+                className={`hidden md:block h-7 shrink-0 ${DELETE_SLOT_WIDTH}`}
+              />
             )}
           </div>
         </td>
