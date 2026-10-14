@@ -130,6 +130,8 @@ EXCUSED: dict[str, str] = {
 
 # (c) acts only inside Nova.
 NO_OUTSIDE_ACTION: dict[str, str] = {
+    # S38b T4 (2026-10-13): reads a result this turn already holds, in memory.
+    "read_result": "reads back a tool result of this turn, kept in core's own memory",
     "cancel_timer": "deletes one of this person's timers in Nova's database",
     "list_timers": "reads Nova's timers table",
     "get_time": "reads the clock",

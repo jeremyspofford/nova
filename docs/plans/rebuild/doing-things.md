@@ -676,6 +676,12 @@ near the model's context, the older ones are replaced by written summaries
 so the turn can go on; the full text stays on the trace, and a summary is
 marked as one. General — logs, files and command output as well as pages —
 which is why it is its own slice with its own evals and measurement.
+**Built on `slice/s38b` 2026-10-13, not merged** (spec
+`docs/plans/rebuild/s38b/spec.md`, close-out beside it): every tool result is
+kept in full in `tool_results`, a new tool `read_result(ref, part | query)`
+reads one back, and the round's span says `context_summarized`,
+`summaries_reused` or `summary_failed`, and `context_window_source` (served or
+declared). Measurement and the LIVE walk are owed.
 
 **S39 — Screens: see, record, then act (L).** An agent capability that
 captures the machine's desktop. The Windows agent runs in the user's

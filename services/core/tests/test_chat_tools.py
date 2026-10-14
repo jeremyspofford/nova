@@ -757,6 +757,30 @@ async def test_span_arguments_are_recorded_as_heads_not_whole_payloads(
     assert len(span["meta"]["result_head"]) <= chat.SPAN_RESULT_HEAD_CHARS
 
 
+async def test_a_nul_in_a_tool_result_still_closes_the_turn_with_its_spans(
+    owner_client, pool, mount_peers, workspace
+):
+    """jsonb refuses \\u0000. A file holding a NUL byte, read back, put it in the
+    span's result_head verbatim, close_turn's INSERT failed, and the turn
+    never closed: no status, no spans (found 2026-10-13 in S38b)."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("c1", "workspace_write_file", {"path": "bin.md", "content": "a\x00b"}),),
+            (whole_call("c2", "workspace_read_file", {"path": "bin.md"}),),
+            (text("read it"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client)
+
+    statuses = await pool.fetch("SELECT status FROM turns")
+    assert [row["status"] for row in statuses] == ["ok"]
+    wrote, read = await _spans(pool, "tool")
+    assert wrote["meta"]["args_redacted"]["content"] == "a\ufffdb"
+    assert read["meta"]["result_head"].startswith("a\ufffdb")
+
+
 # -- a backend with no tool support ----------------------------------------
 
 

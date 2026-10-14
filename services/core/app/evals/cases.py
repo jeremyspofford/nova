@@ -87,6 +87,10 @@ KNOWN_PREDICATES = frozenset(
         # how it ended, e.g. a device_run's exit code. Same '<tool> <json
         # object>' arg as tool_succeeded_with.
         "fact_matches",
+        # S38b T6: a round's llm_call span says it sent a summary of a kept
+        # result of this tool (span.meta["context_summarized"]). Arg = the
+        # tool name.
+        "context_summarized",
     }
 )
 
@@ -104,8 +108,22 @@ class PredicateSpec:
 
     predicate: str
     arg: str | None = None
+    # S38b T6 (orchestrator ruling 2026-10-13): the size, in characters, of
+    # the page a clause that measures reading PAST the window depends on.
+    # Declared, the clause applies only when a round's llm_call span states a
+    # context window too small to hold that page; with a big or unstated
+    # window it is not applicable and the case is scored on the rest
+    # (predicates.evaluate). Absent, the clause always applies.
+    page_chars: int | None = None
 
     def __post_init__(self) -> None:
+        if self.page_chars is not None and (
+            type(self.page_chars) is not int or self.page_chars <= 0
+        ):
+            raise CaseError(
+                f"predicate {self.predicate!r}: page_chars must be a positive integer "
+                f"(the page's size in characters), got {self.page_chars!r}"
+            )
         if self.predicate not in KNOWN_PREDICATES:
             raise CaseError(
                 f"unknown predicate {self.predicate!r} — known: "
@@ -120,6 +138,8 @@ class PredicateSpec:
         out: dict = {"predicate": self.predicate}
         if self.arg is not None:
             out["arg"] = self.arg
+        if self.page_chars is not None:
+            out["page_chars"] = self.page_chars
         return out
 
 
@@ -789,7 +809,11 @@ def case_from_dict(raw: dict) -> Case:
     if not contract_raw:
         raise CaseError("a case contract must have at least one predicate")
     contract = tuple(
-        PredicateSpec(predicate=_require(spec, "predicate", str), arg=spec.get("arg"))
+        PredicateSpec(
+            predicate=_require(spec, "predicate", str),
+            arg=spec.get("arg"),
+            page_chars=spec.get("page_chars"),
+        )
         for spec in contract_raw
     )
     setup = tuple(
