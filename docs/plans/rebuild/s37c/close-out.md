@@ -1,8 +1,8 @@
 # S37c: she reacts — the close-out
 
-**Status:** built on `slice/s37c`, not merged, not shipped. The full suites,
-the live scoring of the two new eval cases and the LIVE walk have not run
-(sections below). The spec is [`spec.md`](spec.md); the owner took every
+**Status:** shipped 2026-10-14 (PR #175, merge `bfa86f44`, deployed the same
+day). The full suites and LIVE steps 1-3 passed. LIVE step 4 (a red CI run)
+and the live scoring of the two new eval cases have not run (sections below). The spec is [`spec.md`](spec.md); the owner took every
 proposal in its §9 on 2026-10-13.
 
 What it does: another program, her own monitoring, or CI on GitHub can start
@@ -271,20 +271,34 @@ Equivalent only; none against a criterion.
 
 ## Full suites
 
-**NOT YET RUN** under the CPU lock: core, gateway, memory, web. Each task ran
-its own targeted tests against the scratch database.
+Run under the CPU lock on 2026-10-14 after merging `main`: core 13,399 passed
+and 1 failed, gateway 988, memory 251, web 1,996, `tsc` clean. The one failure
+was main's S32.3 listing pin, written before `events_recent` existed. It was
+updated on purpose in `39729ad9`. CI was green on that head.
 
 ## LIVE walk
 
-**NOT YET RUN.** After merge and deploy from `~/workspace/nova` `main`
-(spec §6):
+Steps 1-3 passed on 2026-10-14. The Dell's Ollama was down, so both turns ran
+on `openrouter:google/gemini-3.8-flash`.
 
-1. He adds a sender `test` on Settings → Events and copies the key.
-2. `curl -X POST .../api/v1/events/test -H "Authorization: Bearer …" -d
-   '{"text": "disk on the mini PC is 95% full"}'` returns 202.
-3. Pass: an Inbox notice names the event and her conclusion, and the turn,
-   read by turn id, shows a disk check.
-4. CI: a red run on a throwaway branch of the repo shows up as a `github_ci`
-   event within 10 minutes.
+1. He added a sender `test` on Settings > Events and asked Nova to send the
+   event. Chat turn `3b7781fa-0d51-49c2-bbeb-47335161e8d5` ran the curl
+   through `device_run` and got 202, event `982d4fc9`.
+2. Event turn `816c05f5-5805-46b5-9649-3084911c53de` (kind `event`, role
+   `event_test`) started on its own. It ran `df -h` on the mini PC (root
+   155 GB of 460 GB, 36%), `events_recent`, `notices` and
+   `docker system df`. Her reply: the disk is 36% full and the event was a
+   false alarm.
+3. The event row reads `done` with that turn, and an `event_outcomes` notice
+   was filed in the Inbox. It was not pushed, which is right for a
+   non-urgent event.
+4. **NOT YET RUN:** a red CI run showing up as a `github_ci` event. The
+   repos setting was empty.
 
-The turn ids go here.
+**Found by the walk:** the sender's key was stored in plain text in the chat
+turn's spans, its kept tool result, two messages and the memory journal.
+PR #182 (merge `1b85b46e`) masks credentials wherever a turn's text is saved.
+A live check with a dummy key (chat turn
+`15a4bfbc-38a8-4d21-b704-0877519fd6e6`) stored no key byte in the spans, kept
+results, messages or memory files. Rows written before #182 still hold the
+`test` key, and deleting that sender revokes it.
