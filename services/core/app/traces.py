@@ -361,6 +361,34 @@ def _without_nul(value: Any) -> Any:
     return value
 
 
+def _holds_nul(value: Any) -> bool:
+    """Whether any string in `value` (keys too, at any depth) holds a NUL."""
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_holds_nul(k) or _holds_nul(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_nul(v) for v in value)
+    return False
+
+
+def _storable_undo(turn: Turn, action: Action) -> Any:
+    """The action's undo payload, or None when jsonb would refuse it. Never
+    scrubbed like span meta: an undo payload is what a revert puts back, and a
+    NUL swapped for U+FFFD would restore something else and call it undone.
+    Dropped instead, the way an oversized prior is never captured — the row
+    still lands, and rewind reads None as "recorded nothing to put back"."""
+    if not _holds_nul(action.undo):
+        return action.undo
+    logger.warning(
+        "turn %s: %s's undo payload holds a NUL byte jsonb cannot store; "
+        "recorded without one, so a rewind lists it as not undone",
+        turn.id,
+        action.tool,
+    )
+    return None
+
+
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
     """All the spans, the kept tool results (S38b), the action ledger and the
     final status, in one transaction or not at all — a turn that never closed has neither spans
@@ -409,7 +437,7 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 seq,
                 action.tool,
                 action.ok,
-                action.undo,
+                _storable_undo(turn, action),
             )
         await conn.execute(
             "UPDATE turns SET status = $2, ended_at = now() WHERE id = $1", turn.id, status
