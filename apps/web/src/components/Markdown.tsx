@@ -200,7 +200,17 @@ function rehypeHighlightSubset() {
 
 const REHYPE_PLUGINS = [rehypeHighlightSubset]
 
-const HEADING = 'font-semibold mt-3 mb-1 first:mt-0 text-content-primary'
+// Section rhythm (2026-10-14, the "reads like a textbook" review against a
+// ChatGPT reply to the same question): a `###` used to render at 14px — the
+// body size — 12px under the paragraph above it, with 2px between bullets,
+// so a five-section answer read as one wall. Each heading level now steps
+// down in size from 18px to the body's 14px, a section opens with clear
+// space above it, and list items breathe. `first:mt-0` keeps a reply that
+// OPENS with a heading flush with the avatar.
+const HEADING = 'font-semibold first:mt-0 text-content-primary'
+const SECTION = `${HEADING} mt-6 mb-2`
+const SUBSECTION = `${HEADING} mt-5 mb-1.5`
+const MINOR = `${HEADING} mt-4 mb-1`
 
 // accent-700 on the light ground / accent-400 on the dark one — the pairing
 // the design system's own `.markdown-body a` rule chose (index.css), ~5.6:1.
@@ -330,27 +340,33 @@ function CodeBlock({
 }
 
 const COMPONENTS: Components = {
-  p: ({ node: _node, ...props }) => <p className="my-2 first:mt-0 last:mb-0" {...props} />,
-  h1: ({ node: _node, ...props }) => <h1 className={`${HEADING} text-h2`} {...props} />,
-  h2: ({ node: _node, ...props }) => <h2 className={`${HEADING} text-h3`} {...props} />,
-  h3: ({ node: _node, ...props }) => <h3 className={`${HEADING} text-h4`} {...props} />,
-  h4: ({ node: _node, ...props }) => <h4 className={`${HEADING} text-h4`} {...props} />,
-  h5: ({ node: _node, ...props }) => <h5 className={`${HEADING} text-h4`} {...props} />,
-  h6: ({ node: _node, ...props }) => <h6 className={`${HEADING} text-h4`} {...props} />,
+  p: ({ node: _node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  h1: ({ node: _node, ...props }) => <h1 className={`${SECTION} text-h2`} {...props} />,
+  h2: ({ node: _node, ...props }) => <h2 className={`${SECTION} text-h2`} {...props} />,
+  h3: ({ node: _node, ...props }) => <h3 className={`${SUBSECTION} text-h3`} {...props} />,
+  h4: ({ node: _node, ...props }) => <h4 className={`${MINOR} text-h4`} {...props} />,
+  h5: ({ node: _node, ...props }) => <h5 className={`${MINOR} text-h4`} {...props} />,
+  h6: ({ node: _node, ...props }) => <h6 className={`${MINOR} text-h4`} {...props} />,
   ul: ({ node: _node, ...props }) => (
-    <ul className="my-2 list-disc pl-5 space-y-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5" {...props} />
-  ),
-  ol: ({ node: _node, ...props }) => (
-    <ol className="my-2 list-decimal pl-5 space-y-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5" {...props} />
-  ),
-  li: ({ node: _node, ...props }) => <li className="[&>p]:my-0" {...props} />,
-  blockquote: ({ node: _node, ...props }) => (
-    <blockquote
-      className="my-2 border-l-2 border-border pl-3 text-content-secondary [&>p]:my-1"
+    <ul
+      className="my-3 list-disc pl-5 space-y-1.5 marker:text-content-tertiary [&_ul]:mt-1.5 [&_ul]:mb-0 [&_ol]:mt-1.5 [&_ol]:mb-0 [&_ul]:space-y-1 [&_ol]:space-y-1"
       {...props}
     />
   ),
-  hr: ({ node: _node, ...props }) => <hr className="my-3 border-border" {...props} />,
+  ol: ({ node: _node, ...props }) => (
+    <ol
+      className="my-3 list-decimal pl-5 space-y-1.5 marker:text-content-tertiary [&_ul]:mt-1.5 [&_ul]:mb-0 [&_ol]:mt-1.5 [&_ol]:mb-0 [&_ul]:space-y-1 [&_ol]:space-y-1"
+      {...props}
+    />
+  ),
+  li: ({ node: _node, ...props }) => <li className="pl-0.5 [&>p]:my-0" {...props} />,
+  blockquote: ({ node: _node, ...props }) => (
+    <blockquote
+      className="my-3 border-l-2 border-border pl-3 text-content-secondary [&>p]:my-1"
+      {...props}
+    />
+  ),
+  hr: ({ node: _node, ...props }) => <hr className="my-6 border-border" {...props} />,
   a: Anchor,
   img: Image,
   // `code` renders for both inline code and the child of a fenced block. The

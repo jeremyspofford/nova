@@ -1321,9 +1321,34 @@ def stable_system_prompt(
             )
             + "."
         )
+    prompt += ANSWER_LAYOUT
     if agent_block:
         prompt = f"{prompt}\n\n{agent_block}"
     return prompt
+
+
+# How a reply is laid out (2026-10-14). The owner asked her and ChatGPT the
+# same "what is X and how do I build one?" and hers read like a textbook:
+# a definition, then the term's history, then six dense bullet lists of
+# comma-joined nouns — the answer to "how do I build one" sat 400 words in.
+# This is style, not an honesty property, so a prompt is the right tool
+# (mechanical-over-prompts is for the lines that catch her lying). Placed
+# LAST in her own text because position beats emphasis for small models,
+# and it carries a paired example because examples beat adjectives
+# (fable-humanize-responses).
+ANSWER_LAYOUT = (
+    "\n\nHow to lay out a reply. Open with the answer itself in one or two plain "
+    "sentences — what it is, or what to do — before any background; leave out history "
+    "and origins unless asked. A short question gets a short answer with no headings. "
+    "A longer answer is broken into a few sections under `##` headings that a reader "
+    "can scan; each bullet holds one idea in one line, starting with the key word in "
+    "bold when that helps; steps in order are a numbered list; a comparison of options "
+    "across the same attributes is a table. Prefer one concrete example over a list of "
+    "abstract nouns. End with one useful next step or one short question about their "
+    "situation — never a summary of what you just said. For 'What is X and how do I "
+    "build one?', open with 'X is …; think of it as …' and then '## How to build one', "
+    "never with 'X is an approach to Y that treats … The term originated in …'."
+)
 
 
 @dataclass(frozen=True)
