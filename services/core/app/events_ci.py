@@ -5,12 +5,18 @@ workflow runs of the repos the owner lists (setting events.github_ci.repos)
 through GitHub's API, with the token the GitHub MCP server row already holds.
 Nothing becomes public: the stack calls out, GitHub never calls in.
 
-What files an event: for each (workflow, branch), its newest decisive run
-(green = success, red = failure/timed_out/startup_failure; anything else is
-passed over) is red, and the decisive run before it in the page was green, was
-red on a different commit, or is not in the page. Red again on the same commit
-files nothing. The decision reads GitHub's own run history; the KEY that stops
-a run filing twice is the event row's fingerprint `github_ci:<repo>:<run_id>`,
+The first successful read of a repo only records a baseline: a row in
+github_ci_baselines (the table, so a restart never baselines again), and
+nothing is filed — a run that went red before the owner listed the repo is the
+state he listed it in, not news. A failed read records no baseline.
+
+What files an event, after the baseline: for each (workflow, branch), its
+newest decisive run (green = success, red = failure/timed_out/startup_failure;
+anything else is passed over) is red, completed after the baseline, and the
+decisive run before it in the page was green, was red on a different commit, or
+is not in the page (a new branch). Red again on the same commit files nothing.
+The decision reads GitHub's own run history; the KEY that stops a run filing
+twice is the event row's fingerprint `github_ci:<repo>:<run_id>`,
 checked against every row of the sender under a per-fingerprint lock — the
 table, not memory, so a restart or two polls at once never file it again.
 
@@ -154,8 +160,9 @@ def _when(value: str | None) -> datetime | None:
         return None
 
 
-def _findings(repo: str, runs: list[dict], now: datetime) -> list[dict]:
-    """The payloads to file for one repo's page of runs (newest first)."""
+def _findings(repo: str, runs: list[dict], now: datetime, baselined_at: datetime) -> list[dict]:
+    """The payloads to file for one repo's page of runs (newest first). Only a
+    red run completed after the repo's baseline can file, whichever rule."""
     groups: dict[tuple, list[dict]] = {}
     for run in runs:
         if _decisive(run) is None:
@@ -168,7 +175,7 @@ def _findings(repo: str, runs: list[dict], now: datetime) -> list[dict]:
         if _decisive(latest) != "red":
             continue
         updated = _when(latest.get("updated_at"))
-        if updated is None or now - updated > LOOKBACK:
+        if updated is None or now - updated > LOOKBACK or updated <= baselined_at:
             continue
         previous = group[1] if len(group) > 1 else None
         if previous is None:
@@ -271,6 +278,21 @@ async def _read(client: httpx.AsyncClient, repo: str) -> list[dict]:
     return runs
 
 
+async def _baseline(pool: asyncpg.Pool, repo: str, now: datetime) -> datetime | None:
+    """None when this read is the repo's first (its baseline is recorded now);
+    else the baseline an earlier poll recorded. Two first reads at once: the
+    key lets one insert, and the other reads that row."""
+    if await pool.fetchval(
+        "INSERT INTO github_ci_baselines (repo, baselined_at) VALUES ($1, $2) "
+        "ON CONFLICT (repo) DO NOTHING RETURNING baselined_at",
+        repo,
+        now,
+    ):
+        logger.info("github_ci baseline recorded for %s", repo)
+        return None
+    return await pool.fetchval("SELECT baselined_at FROM github_ci_baselines WHERE repo = $1", repo)
+
+
 def _count(n: int) -> str:
     return f"{n} event{'' if n == 1 else 's'} filed"
 
@@ -294,6 +316,7 @@ async def poll(
     authorization = await _credential(pool)
     now = now or _now()
     filed: dict[str, int] = {}
+    baselined: set[str] = set()
     failures: list[str] = []
     async with httpx.AsyncClient(
         base_url=API,
@@ -316,11 +339,21 @@ async def poll(
                 logger.warning("github_ci poll: %s", reason)
                 continue
             filed[repo] = 0
-            for payload in _findings(repo, runs, now):
+            baselined_at = await _baseline(pool, repo, now)
+            if baselined_at is None:
+                baselined.add(repo)
+                continue
+            for payload in _findings(repo, runs, now, baselined_at):
                 if await _file(pool, payload):
                     filed[repo] += 1
     total = sum(filed.values())
-    read = ", ".join(f"{repo} ({_count(n)})" for repo, n in filed.items()) or "none"
+    read = (
+        ", ".join(
+            f"{repo} ({'baseline recorded, ' if repo in baselined else ''}{_count(n)})"
+            for repo, n in filed.items()
+        )
+        or "none"
+    )
     summary = f"{_count(total)}; repos read: {read}"
     if failures:
         raise PollFailed(f"{summary}; could not read: " + "; ".join(failures))

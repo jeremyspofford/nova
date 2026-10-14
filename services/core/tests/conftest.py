@@ -104,6 +104,9 @@ _TABLES = (
     # their CREATE TABLE and rows never leak between tests.
     "events",
     "event_senders",
+    # fix/ci-event-gaps T1: github_ci_baselines references nothing; listed so
+    # the re-migration does not collide and a baseline never leaks between tests.
+    "github_ci_baselines",
     "turn_spans",
     "turns",
     "messages",
