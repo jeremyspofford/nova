@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strconv"
 )
 
 // S30a: fs.read by line or byte range, on a file of any size. The cap
@@ -64,10 +65,38 @@ func numberArg(v any) (float64, bool) {
 	}
 }
 
-// wholeArg reads a non-negative whole number sent as a JSON number.
-// A string, a fraction, a negative, NaN/Inf or a value past 2^53 is refused.
+// wireWholeArg reads a value a whole-number key may carry on the wire: a JSON
+// number (numberArg), or a JSON string of ASCII digits only ("200", "007") —
+// models sometimes quote a number, and core forwards some args raw. Anything
+// else a string can hold (a sign, a space, a decimal point, an exponent, hex,
+// a non-ASCII digit, the empty string) is not a number. A digit string too
+// large for a float64 reads as +Inf, so the caller's range rule refuses it.
+// The caller still applies its own whole/range rules to the result.
+func wireWholeArg(v any) (float64, bool) {
+	s, isStr := v.(string)
+	if !isStr {
+		return numberArg(v)
+	}
+	if s == "" {
+		return 0, false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return 0, false
+	}
+	return f, true
+}
+
+// wholeArg reads a non-negative whole number sent as a JSON number or a
+// digits-only string (wireWholeArg). Any other string, a fraction, a
+// negative, NaN/Inf or a value past 2^53 is refused.
 func wholeArg(args map[string]any, key string) (int64, error) {
-	f, ok := numberArg(args[key])
+	f, ok := wireWholeArg(args[key])
 	if !ok {
 		return 0, fmt.Errorf("fs.read '%s' must be a whole number, got %T", key, args[key])
 	}

@@ -632,6 +632,30 @@ CIRCLING_NUDGE = (
     "brought nothing new. Answer now with what the tool results above already give "
     "you, and say plainly what is still unknown."
 )
+# The same narration round and refusal at the time-budget stop (verification-2-7
+# T25): the turn ran past turns.time_budget_s, which is not circling, so neither
+# says it was. Each states the true reason; the note and the statement of what
+# the tools returned still hold when the model ignores them.
+TIME_BUDGET_REFUSAL = (
+    f"{tools.ERROR_PREFIX}this turn ran past its time budget and no further tool "
+    "will run — answer with what you have"
+)
+TIME_BUDGET_NUDGE = (
+    "No further tool will run this turn: it has run past its time budget. Answer now "
+    "with what the tool results above already give you, and say plainly what is still "
+    "unknown."
+)
+# And at the token-budget stop (T26): the turn's rounds used turns.token_budget,
+# which is neither circling nor the clock, so each says only that.
+TOKEN_BUDGET_REFUSAL = (
+    f"{tools.ERROR_PREFIX}this turn has used its token budget and no further tool "
+    "will run — answer with what you have"
+)
+TOKEN_BUDGET_NUDGE = (
+    "No further tool will run this turn: it has used its token budget. Answer now "
+    "with what the tool results above already give you, and say plainly what is still "
+    "unknown."
+)
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -645,6 +669,35 @@ _TOOL_SUPPORT_MARKERS = ("tool", "function_call", "functions")
 
 class GatewayFailure(RuntimeError):
     """The gateway did not produce a completion, with a stated reason."""
+
+
+class RequestUnfittable(GatewayFailure):
+    """A round's request cannot fit the window of the link it would reach
+    (context_fit.fit said unfittable: her instructions, the latest ask and the
+    tools array are over the budget with every earlier result trimmed), so it
+    was NOT sent (verification-2-7 T24). Raised before any request and before
+    any llm_call span: nothing was called. Carries fit's own numbers; its
+    message is the stated sentence, so a caller that only reports the reason
+    still names the sizes."""
+
+    def __init__(self, report: context_fit.FitReport, link: str) -> None:
+        self.report = report
+        self.link = link
+        super().__init__(_unfittable_words(report, link))
+
+
+def _unfittable_words(report: context_fit.FitReport, link: str) -> str:
+    """The stated reason a request was not sent: the link, its window and
+    budget, the request's estimated prompt tokens and the tools' share."""
+    who = link or "the serving model"
+    return (
+        f"Stopped: the next request to {who} was not sent, because it cannot fit its "
+        f"{report.window}-token context window ({report.budget} tokens once room is kept "
+        f"for the reply). It came to an estimated {report.est_tokens} prompt tokens, "
+        f"{report.overhead_tokens} of them the tools offered to her, and her instructions, "
+        "your message and those tools do not fit even with every earlier tool result "
+        "trimmed."
+    )
 
 
 class ChatRequest(BaseModel):
@@ -2550,6 +2603,73 @@ def turn_usage(spans: Sequence[traces.Span]) -> dict | None:
     }
 
 
+# Core's own estimate of the tokens a SERVED round did not report
+# (verification-2-7 T26 C6), on its llm_call span beside — never in place of —
+# the gateway's prompt_tokens / completion_tokens: a reported figure is a
+# measurement, an estimate is not, and turn_usage reads only the former.
+EST_PROMPT_TOKENS = "est_prompt_tokens"
+EST_COMPLETION_TOKENS = "est_completion_tokens"
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _note_estimate(span, sent: Sequence[dict], tools_chars: int, written_chars: int) -> None:
+    """A served round's token counts the gateway did not state (no usage
+    chunk, or nulls), estimated at the chars-per-token
+    _SERVED_CHARS_PER_TOKEN holds for the link that served it
+    (DEFAULT_CHARS_PER_TOKEN when it has none): the prompt from exactly what
+    was sent — messages and tools array — and the completion from the chars
+    the model wrote (text and tool-call arguments). A count that was stated is
+    left alone; only the missing one is estimated."""
+    link = span.meta.get("served_by")
+    ratio = (
+        _SERVED_CHARS_PER_TOKEN.get(link, context_fit.DEFAULT_CHARS_PER_TOKEN)
+        if link
+        else context_fit.DEFAULT_CHARS_PER_TOKEN
+    )
+    if not _is_count(span.meta.get("prompt_tokens")):
+        span.meta[EST_PROMPT_TOKENS] = context_fit.estimate_tokens(sent, ratio, tools_chars)
+    if not _is_count(span.meta.get("completion_tokens")):
+        span.meta[EST_COMPLETION_TOKENS] = math.ceil(written_chars / ratio)
+
+
+def turn_tokens(spans: Sequence[traces.Span]) -> dict[str, int]:
+    """The tokens this turn's rounds used so far, for its token budget (T26):
+    the prompt and completion tokens of every llm_call span, as the gateway
+    reported them, or core's estimate where a served round reported none
+    (_note_estimate). A round refused before it was served carries neither
+    and counts 0 — no model ran. `estimated_rounds` counts the rounds any
+    estimate went into, so a stop can say its figure is partly estimated."""
+    prompt = completion = estimated = 0
+    for span in spans:
+        if span.kind != "llm_call":
+            continue
+        guessed = False
+        for reported, guess in (
+            ("prompt_tokens", EST_PROMPT_TOKENS),
+            ("completion_tokens", EST_COMPLETION_TOKENS),
+        ):
+            value = span.meta.get(reported)
+            if not _is_count(value):
+                value = span.meta.get(guess)
+                if not _is_count(value):
+                    continue
+                guessed = True
+            if reported == "prompt_tokens":
+                prompt += value
+            else:
+                completion += value
+        estimated += guessed
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "spent_tokens": prompt + completion,
+        "estimated_rounds": estimated,
+    }
+
+
 async def _owner_timezone(pool) -> str:
     try:
         return str(await settings_store.read_value(pool, "nova.timezone") or "UTC")
@@ -2740,12 +2860,115 @@ STALE_ROUNDS_LIMIT = 3
 STOP_REPEATED_CALL = "repeated_call"
 STOP_NO_NEW_RESULTS = "no_new_results"
 # What a circling stop's note says, after "[stopped after N tool rounds: ".
-# These are the only reasons a `round_stop` span ever files: no count of
-# rounds stops a turn (no-ceiling T4).
+# The circling reasons only: no count of rounds stops a turn (no-ceiling T4).
 CIRCLING_NOTE_WORDS = {
     STOP_REPEATED_CALL: "the same call was repeated",
     STOP_NO_NEW_RESULTS: "the last rounds brought nothing new",
 }
+# A round whose request cannot fit its served window, even with every earlier
+# tool result trimmed: it is never sent, and the turn ends on the stated sizes
+# (verification-2-7 T24). Not a circling reason — no narration round follows.
+STOP_UNFITTABLE = "unfittable"
+# A turn that ran past its wall-clock budget, settings_store.TURN_TIME_BUDGET
+# (verification-2-7 T25): checked where the circling stop is, after a round's
+# tools have all run, and ended the same way (one toolless narration round,
+# then a note). A budget of seconds, never a count of rounds; not a circling
+# reason, so it has its own note (_time_budget_words).
+STOP_TIME_BUDGET = "time_budget"
+# A turn whose rounds used its token budget, settings_store.TURN_TOKEN_BUDGET
+# (verification-2-7 T26): the prompt + completion tokens of every round so far,
+# summed (turn_tokens), checked right after the time budget and ended the same
+# way. A budget of tokens, never a count of rounds.
+STOP_TOKEN_BUDGET = "token_budget"
+# An agent turn whose agent reached its monthly cap while it ran
+# (verification-2-7 T27): agents.cap_problem re-read after every tool round,
+# where the stops above are checked. It wins a tie with them and is NOT
+# narrated — a narration round would be a spend past the cap the owner set —
+# so the turn ends through the pre-round cap's exit, on the cap's own sentence.
+STOP_AGENT_CAP = "agent_cap"
+# Every reason a `round_stop` span may carry; _file_round_stop refuses any other.
+ROUND_STOP_REASONS = frozenset(
+    {*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET, STOP_TOKEN_BUDGET, STOP_AGENT_CAP}
+)
+# The stops that end a turn with one toolless narration round: how the log
+# names each, the nudge its narration round is sent, and the refusal a call
+# that round asks for anyway gets. Each says only its own reason; any other
+# narrated stop is a circling one (_NARRATED_STOP_CIRCLING).
+_NARRATED_STOPS: dict[str, tuple[str, str, str]] = {
+    STOP_TIME_BUDGET: ("the time-budget stop", TIME_BUDGET_NUDGE, TIME_BUDGET_REFUSAL),
+    STOP_TOKEN_BUDGET: ("the token-budget stop", TOKEN_BUDGET_NUDGE, TOKEN_BUDGET_REFUSAL),
+}
+_NARRATED_STOP_CIRCLING = ("the circling stop", CIRCLING_NUDGE, OUT_OF_ROUNDS_REFUSAL)
+
+# Where a turn reads the time: monotonic seconds, looked up as a module
+# attribute at each call (never bound at import), so the budget is measured on
+# one clock that a wall-clock change cannot move.
+turn_clock: Callable[[], float] = time.monotonic
+
+
+def _time_budget_words(budget_s: int, elapsed_s: int) -> str:
+    """What the time-budget stop's note says after "[stopped after N tool
+    rounds: ": the budget, the seconds the turn took and the setting's key,
+    each read from the stop's own facts. States; asks nothing."""
+    return (
+        f"the turn ran past its time budget of {budget_s} seconds, "
+        f"{elapsed_s} seconds in ({settings_store.TURN_TIME_BUDGET})"
+    )
+
+
+async def _turn_budget(pool, key: str, turn_id: object) -> int:
+    """A per-turn budget setting (turns.time_budget_s, turns.token_budget) as
+    it stands at the turn's start. Fails toward the def's default bound, never
+    toward none: a settings read that raises must not leave a turn unbounded."""
+    try:
+        return int(await settings_store.read_value(pool, key))
+    except Exception:
+        default = settings_store.DEFS_BY_KEY[key].default
+        logger.exception(
+            "chat turn %s: the %s setting could not be read; using its default %s",
+            turn_id,
+            key,
+            default,
+        )
+        return default
+
+
+def _token_budget_words(facts: Mapping[str, int]) -> str:
+    """What the token-budget stop's note says after "[stopped after N tool
+    rounds: ": the tokens the turn used, the budget and the setting's key, and
+    how many rounds were estimated when any left a count unreported (none, or
+    only one of prompt and completion) — each read from the stop's own facts.
+    States; asks nothing."""
+    words = (
+        f"the turn used {facts['spent_tokens']:,} tokens against its token budget of "
+        f"{facts['budget_tokens']:,} ({settings_store.TURN_TOKEN_BUDGET})"
+    )
+    estimated = facts["estimated_rounds"]
+    if estimated:
+        rounds, theirs = ("1 round", "its") if estimated == 1 else (f"{estimated} rounds", "their")
+        words += (
+            f"; {rounds} did not report all {theirs} usage, so {theirs} unreported tokens "
+            "are estimated"
+        )
+    return words
+
+
+def _budget_note_words(reason: str, facts: Mapping[str, int]) -> str:
+    """The words after "[stopped after N tool rounds: " for a budget stop
+    (time or tokens), read off that stop's own facts."""
+    if reason == STOP_TIME_BUDGET:
+        return _time_budget_words(facts["budget_s"], facts["elapsed_s"])
+    return _token_budget_words(facts)
+
+
+def _file_round_stop(turn: traces.Turn, reason: str, rounds: int, **facts: object) -> None:
+    """The ONE place a `round_stop` span is filed: why the turn stopped, after
+    which round, and the facts the stop states. A reason not in
+    ROUND_STOP_REASONS raises, so no stop goes in the trace unnamed."""
+    if reason not in ROUND_STOP_REASONS:
+        raise ValueError(f"{reason!r} is not a round_stop reason")
+    with turn.span("round_stop", reason) as span:
+        span.meta.update({"reason": reason, "rounds": rounds, **facts})
 
 
 def _call_key(call: ToolCall) -> tuple[str, str]:
@@ -2774,10 +2997,21 @@ class RoundProgress:
     earlier this turn by any call (whitespace-normalised). The "Error:"
     prefix decides nothing: a new error text (a different missing binary)
     is a finding, and the same text again, error or not, is not.
+
+    A live reading (tools.live_reading_tool_names(): registered ephemeral AND
+    reads_only, read off the registry each round, no list of polling tools)
+    whose result differs from the one its own key returned last time restarts
+    that key's count at 1: the world it reads moved, which is progress — a
+    running job's device_job_status is not "the same call repeated"
+    (verification-2-7 T13). An unchanged reading counts as before, and every
+    other tool keeps the rule that a third identical ask is a loop even when
+    its output drifts. A reading flipping between texts it already returned
+    brings no news, so the stale stop still ends it.
     Pure: no I/O, inputs untouched, state per instance."""
 
     def __init__(self) -> None:
         self._dispatches: dict[tuple[str, str], int] = {}
+        self._last: dict[tuple[str, str], str] = {}
         self._seen: set[str] = set()
         self._stale_run = 0
 
@@ -2789,15 +3023,21 @@ class RoundProgress:
             )
         if not calls:
             return None
+        live = set(tools.live_reading_tool_names())
         repeated = False
         news = False
         for call, result in zip(calls, results, strict=True):
             key = _call_key(call)
-            count = self._dispatches.get(key, 0) + 1
+            text = " ".join(result.split())
+            last = self._last.get(key)
+            if call.name in live and last is not None and last != text:
+                count = 1
+            else:
+                count = self._dispatches.get(key, 0) + 1
             self._dispatches[key] = count
+            self._last[key] = text
             if count >= SAME_CALL_LIMIT:
                 repeated = True
-            text = " ".join(result.split())
             if text not in self._seen:
                 self._seen.add(text)
                 news = True
@@ -3757,6 +3997,10 @@ async def _dispatch_calls(
         call_ctx = dataclasses.replace(
             tool_ctx,
             progress=lambda detail, _name=call.name: _report_progress(turn, _name, emit, detail),
+            # Which coder made this call (S32.3 T2): read off the round that
+            # produced it, per call, because a fallback can move the model
+            # between rounds. Synchronous; provenance a commit records.
+            coder=_coder_of(turn),
             # A scripted skill's steps (S18) run through here, so each one
             # files its OWN span under the real tool's name. The seam exists
             # because dispatch does not write spans and _run_tool does: an
@@ -3851,9 +4095,13 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     return reason
 
 
-def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
-    """The circling stop's narration round's refusal."""
-    return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
+def _refuse_out_of_rounds(
+    turn: traces.Turn, call: ToolCall, refusal: str = OUT_OF_ROUNDS_REFUSAL
+) -> str:
+    """The stopped turn's narration round's refusal: the circling stop's by
+    default, or the stated `refusal` of the stop that ended the turn (the
+    time-budget stop's, T25)."""
+    return _refuse_call(turn, call, refusal, "refused_out_of_rounds")
 
 
 def _refuse_markup_as_text(turn: traces.Turn, call: ToolCall) -> str:
@@ -4048,17 +4296,29 @@ async def _gateway_round(
             )
         headers[peers.HEADER_PASS_OVER] = peers.pass_over_header(pass_over)
     requested = _requested_key(model, role)
+    # The tools array this round sends counts against the window (T24): in
+    # the summarizer's "nears the window" measure and in the fit alike.
+    tools_chars = context_fit.tools_chars(advertised)
     # S38b: before the round's own span opens, so the summary calls' spans
     # precede it. What comes back is what this round sends (summaries in
     # place of the oldest results); the turn's own messages stay whole.
-    messages, summarized = await _summarize_for_window(app, turn, messages, requested)
+    # Summarizing gets its chance FIRST; only what still cannot fit after it
+    # is unfittable.
+    messages, summarized = await _summarize_for_window(app, turn, messages, requested, tools_chars)
+    # Fitted BEFORE the llm_call span opens: a request that cannot fit raises
+    # RequestUnfittable here, so no request goes out and no span claims a call.
+    fitted_meta: dict = {}
+    sent = _fit_to_window(turn, fitted_meta, messages, requested, tools_chars)
+    # Whether the gateway answered 200: a refused round ran no model, so it
+    # counts no tokens; a served one that reports none is estimated (T26).
+    served = False
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
         span.meta["tools_advertised"] = bool(advertised)
         span.meta["purpose"] = purpose
         span.meta.update(summarized)
-        sent = _fit_to_window(turn, span, messages, requested)
+        span.meta.update(fitted_meta)
         try:
             async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
                 async with client.stream(
@@ -4077,6 +4337,7 @@ async def _gateway_round(
                         raise GatewayFailure(
                             f"the gateway refused the request ({response.status_code}): {detail}"
                         )
+                    served = True
                     async for line in response.aiter_lines():
                         line = line.strip()
                         if not line or line.startswith(":"):
@@ -4155,8 +4416,15 @@ async def _gateway_round(
                 span.meta["timeout_s"] = getattr(GATEWAY_TIMEOUT, phase)
         elapsed_s = time.perf_counter() - t0
         _note_throughput(span, t0, t_first_any, t_first_delta, elapsed_s, reasoning_chars)
-        _learn_chars_per_token(span, sent)
+        _learn_chars_per_token(span, sent, tools_chars)
         calls = buffer.finished()
+        if served:
+            _note_estimate(
+                span,
+                sent,
+                tools_chars,
+                sum(map(len, collected)) + sum(len(call.arguments) for call in calls),
+            )
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
         # redirect's — gets the same treatment from the same code. A model that
@@ -4645,6 +4913,27 @@ def _stated_window(header: str | None) -> int | None:
     return window if window > 0 else None
 
 
+def _coder_of(turn: traces.Turn) -> str | None:
+    """Which coder is writing, for ToolContext.coder (S32.3 T2; nova-codes
+    decision 6): "nova-loop <model>" for her own turn, "nova-agent <agent id>
+    <model>" for an agent's. The model is the one that served the turn's
+    latest ROUND — the round whose reply made the call being dispatched — as
+    the gateway stated it (served_by), else what that round asked for, else
+    the model the turn opened with. A judge or redirect call (no "round") is
+    never the coder. None when no model is known: the commit then says so.
+    Provenance only; nothing reads it to decide."""
+    model = ""
+    for span in reversed(turn.spans):
+        if span.kind == "llm_call" and "round" in span.meta:
+            model = span.meta.get("served_by") or span.meta.get("model") or ""
+            break
+    model = model or turn.model or ""
+    if not isinstance(model, str) or not model:
+        return None
+    who = "nova-loop" if turn.agent_id is None else f"nova-agent {turn.agent_id}"
+    return f"{who} {model}"
+
+
 def _last_served_link(turn: traces.Turn) -> str | None:
     """The link that served this turn's latest round — the link the next
     round is presumed to reach (a route that moves is T5's truncation check)."""
@@ -4671,25 +4960,39 @@ def _window_for(turn: traces.Turn, requested: str | None) -> tuple[str, int, flo
 
 
 def _fit_to_window(
-    turn: traces.Turn, span, messages: Sequence[dict], requested: str | None = None
+    turn: traces.Turn,
+    meta: dict,
+    messages: Sequence[dict],
+    requested: str | None = None,
+    tools_chars: int = 0,
 ) -> Sequence[dict]:
     """`messages` fitted (context_fit.fit) to the window of the link that last
     served this request (`requested`, across turns — T4b), or, when the round
     names no request, of the link that served this turn's last round; when
-    that link stated one. Else unchanged. The span's `context_fitted_to` says
-    which window the request was fitted to before it was sent (absent: none).
+    that link stated one. Else unchanged. `meta` (the round's llm_call span
+    meta) gets `context_fitted_to`: which window the request was fitted to
+    before it was sent (absent: none).
+
+    `tools_chars` is the tools array the round sends
+    (context_fit.tools_chars of exactly what goes in the payload's "tools"; 0
+    for a round sent with none): fixed overhead counted against the window
+    beside the messages, never trimmed (verification-2-7 T24). A request that
+    cannot fit even so — instructions, latest ask and tools over the budget —
+    raises RequestUnfittable: it is never sent, and the caller says why.
 
     Fits what is SENT only: fit never mutates its input, so the conversation
-    the turn keeps — and the tool results it persists — stay whole. The span
+    the turn keeps — and the tool results it persists — stay whole. The meta
     says what was trimmed, and only when something was."""
     found = _window_for(turn, requested)
     if found is None:
         return messages
-    _link, window, ratio = found
-    span.meta["context_fitted_to"] = window
-    fitted, report = context_fit.fit(messages, window, ratio)
+    link, window, ratio = found
+    fitted, report = context_fit.fit(messages, window, ratio, tools_chars)
+    if report.unfittable:
+        raise RequestUnfittable(report, link)
+    meta["context_fitted_to"] = window
     if report.tool_results_trimmed or report.rounds_dropped:
-        span.meta["context_trimmed"] = {
+        meta["context_trimmed"] = {
             "tool_results": report.tool_results_trimmed,
             "rounds_dropped": report.rounds_dropped,
             "est_tokens": report.est_tokens,
@@ -4793,7 +5096,11 @@ async def _write_summary(
 
 
 async def _summarize_for_window(
-    app, turn: traces.Turn, messages: Sequence[dict], requested: str | None
+    app,
+    turn: traces.Turn,
+    messages: Sequence[dict],
+    requested: str | None,
+    tools_chars: int = 0,
 ) -> tuple[Sequence[dict], dict]:
     """(what this round sends, the span keys saying what was summarized).
 
@@ -4804,7 +5111,12 @@ async def _summarize_for_window(
     sent as marker + summary. A summary that fails — refused, errored, timed
     out, empty — is stated as `summary_failed` and its result goes as it was,
     for _fit_to_window to trim as before; it is not retried this turn.
-    Never a marker without a summary (context_summary.apply refuses one)."""
+    Never a marker without a summary (context_summary.apply refuses one).
+
+    `tools_chars` is the tools array the round sends (the same overhead
+    _fit_to_window fits around, verification-2-7 T24): the 70% mark is
+    measured with it, so a round whose tools fill the window summarizes
+    before _fit_to_window would trim or find it unfittable."""
     found = _window_for(turn, requested)
     if found is None or not turn.tool_results:
         return messages, {}
@@ -4825,6 +5137,7 @@ async def _summarize_for_window(
         ratio,
         {call_id: kept.ref for call_id, kept in kept.items()},
         turn.summaries,
+        tools_chars,
     )
     if refs:
         by_ref = {kept.ref: kept for kept in kept.values()}
@@ -4856,16 +5169,18 @@ async def _summarize_for_window(
     return context_summary.apply(messages, turn.summaries), meta
 
 
-def _learn_chars_per_token(span, sent: Sequence[dict]) -> None:
+def _learn_chars_per_token(span, sent: Sequence[dict], tools_chars: int = 0) -> None:
     """Calibrate the served link's chars-per-token from this round's own
     prompt_tokens over the chars it was sent (counted as context_fit counts).
-    Tool schemas and template tokens land in the count too, so the ratio
-    errs toward trimming more, never less."""
+    The gateway's prompt_tokens count the tools array the round carried, so
+    its chars (`tools_chars`, the same overhead _fit_to_window fitted around)
+    go in with the messages: the tools are counted once, never a second time
+    on top of a ratio that already holds them (verification-2-7 T24)."""
     link = span.meta.get("served_by")
     prompt_tokens = span.meta.get("prompt_tokens")
     if not link or not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool):
         return
-    ratio = context_fit.calibrated_chars_per_token(sent, prompt_tokens)
+    ratio = context_fit.calibrated_chars_per_token(sent, prompt_tokens, tools_chars)
     if ratio is not None:
         _SERVED_CHARS_PER_TOKEN[link] = ratio
 
@@ -5033,16 +5348,20 @@ async def _collect_completion(
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     collected: list[str] = []
+    if role is _TURN_OR_JUDGE:
+        role = turn.role or "judge"
+    requested = _requested_key(model, role)
+    # No tools are sent, so no overhead; a request that still cannot fit
+    # raises RequestUnfittable before any span or request (T24).
+    fitted_meta: dict = {}
+    sent = _fit_to_window(turn, fitted_meta, messages, requested)
+    payload["messages"] = list(sent)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["purpose"] = purpose
         span.meta["tools_advertised"] = False
         span.meta["ok"] = False
-        if role is _TURN_OR_JUDGE:
-            role = turn.role or "judge"
-        requested = _requested_key(model, role)
-        sent = _fit_to_window(turn, span, messages, requested)
-        payload["messages"] = list(sent)
+        span.meta.update(fitted_meta)
         try:
             async with peers.client(app, peers.GATEWAY, timeout) as client:
                 async with client.stream(
@@ -5090,6 +5409,7 @@ async def _collect_completion(
             span.meta["error"] = peers.reason(exc)[:400]
             raise
         _learn_chars_per_token(span, sent)
+        _note_estimate(span, sent, 0, sum(map(len, collected)))
         span.meta["ok"] = True
     return "".join(collected)
 
@@ -5287,8 +5607,9 @@ async def _deferral_redirect(
                     )
                     is not None
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("deferral re-check raised; treating the redirect as complete")
+                _file_guard_crash(turn, "deferral", exc, recheck=True)
                 still_defers = False
         if not corrected or still_defers:
             span.meta["redirected"] = False
@@ -5351,8 +5672,9 @@ def _state_claim_stands(
         claim = guards.state_claim_check(
             text, turn.spans, device_names, purpose=traces.purpose_of(turn)
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("state-claim re-check raised; keeping the correction")
+        _file_guard_crash(turn, "state_claim", exc, recheck=True)
         return True
     return claim is not None and claim.device == subject
 
@@ -5369,8 +5691,9 @@ def _listing_claim_stands(
     as still unbacked, so the note never claims a listing nobody confirmed."""
     try:
         claim = guards.presented_listing_check(text, turn.spans, listing_tools, message)
-    except Exception:
+    except Exception as exc:
         logger.exception("presented-listing re-check raised; reading the claim as unbacked")
+        _file_guard_crash(turn, "presented_listing", exc, recheck=True)
         return True
     return claim is not None
 
@@ -5439,10 +5762,13 @@ def _safe_address() -> tuple[str | None, str | None]:
     return got.origin, got.reason
 
 
-def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, object]]:
+def _rewrite_class_claims(
+    text: str, user_message: str, turn: traces.Turn
+) -> list[tuple[str, object]]:
     """S47's REWRITE-class claims over `text`, in order, each seeing the one
     before it's rewrite: an invented pairing code, then a wrong address. Each is
-    fail-open on its own — a guard that raises is logged and rewrites nothing."""
+    fail-open on its own — a guard that raises is logged, filed as a raised
+    guard span on `turn`, and rewrites nothing."""
     found: list[tuple[str, object]] = []
     current = text
     origin, reason = _safe_address()
@@ -5455,8 +5781,9 @@ def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, objec
     ):
         try:
             claim = check(current)
-        except Exception:
+        except Exception as exc:
             logger.exception("%s guard raised; shipping the reply unrewritten", name)
+            _file_guard_crash(turn, name, exc)
             claim = None
         if claim is not None:
             found.append((name, claim))
@@ -5501,8 +5828,9 @@ def _append_class_claims(
     ):
         try:
             claim = check()
-        except Exception:
+        except Exception as exc:
             logger.exception("%s guard raised; shipping the reply uncorrected", name)
+            _file_guard_crash(turn, name, exc)
             claim = None
         if claim is not None:
             found.append((name, claim))
@@ -5528,6 +5856,22 @@ def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
                 phrase=claim.phrase,
                 retrievers_missing=claim.retrievers_missing,
             )
+
+
+def _file_guard_crash(turn: traces.Turn, name: str, exc: BaseException, **meta: Any) -> None:
+    """The guard span a guard that RAISED files (verification-2-7 T11).
+
+    Fail-open still holds — the reply ships uncorrected and the handler logs
+    the traceback — but the trace says the guard fell over, so a crashed guard
+    is never indistinguishable from one that looked and found nothing. Named
+    for the guard (the name its fired span uses; `meta` carries anything that
+    tells a family apart, e.g. bare-intent's kind), meta.error "<ExcType>:
+    <message>" bounded like every span's error, and traces.GUARD_RAISED so no
+    reader takes the crash for a correction."""
+    with turn.span("guard", name) as span:
+        span.meta.update(meta)
+        span.meta[traces.GUARD_RAISED] = True
+        span.meta["error"] = f"{type(exc).__name__}: {exc}"[:SPAN_RESULT_HEAD_CHARS]
 
 
 def _regen_rejected_by(
@@ -5657,8 +6001,9 @@ def _regen_rejected_by(
         try:
             if check() is not None:
                 return name
-        except Exception:
+        except Exception as exc:
             logger.exception("%s re-check raised over the redirect; not rejecting on it", name)
+            _file_guard_crash(turn, name, exc, recheck=True)
     return None
 
 
@@ -6033,8 +6378,9 @@ async def _claim_redirect(
         if did_the_work and claim_backed is not None:
             try:
                 did_the_work = bool(claim_backed())
-            except Exception:
+            except Exception as exc:
                 logger.exception("%s re-check raised; showing the no-call note", claim_kind)
+                _file_guard_crash(turn, claim_kind, exc, recheck=True)
                 did_the_work = False
             span.meta["claim_backed"] = did_the_work
         note = redirect_note if did_the_work else redirect_note_no_call
@@ -6131,7 +6477,9 @@ async def _run_turn(
     # if none is, so a turn never gets two.
     persisted_reply = False
 
-    async def _end_without_a_reply(stated: str, *, verbatim: bool = False) -> None:
+    async def _end_without_a_reply(
+        stated: str, *, verbatim: bool = False, unsent: bool = False
+    ) -> None:
         """The turn's ONE exit for a model call that did not answer.
 
         A turn that ends 'error' owes the owner a VISIBLE reply, not a blank:
@@ -6153,16 +6501,24 @@ async def _run_turn(
         the whole fact ("agent coder is over its monthly cap…") and no model
         was called for it to have failed. Everything else — decided 'error',
         persist first then emit, no ingest — is identical.
+
+        `unsent` (T24 C6) marks the unfittable stop: the request was never
+        sent, so nothing was called and nothing failed — persisted as-is like
+        `verbatim`, and the log line says it was not sent instead of calling
+        the turn failed.
         """
         nonlocal decided, persisted_reply
         statement = (
             stated
-            if verbatim
+            if verbatim or unsent
             else model_failure_statement(
                 model=_asked_model(turn, model), failure=stated, spans=turn.spans
             )
         )
-        logger.warning("chat turn %s failed: %s", turn.id, stated)
+        if unsent:
+            logger.warning("chat turn %s ended without sending its request: %s", turn.id, stated)
+        else:
+            logger.warning("chat turn %s failed: %s", turn.id, stated)
         decided = "error"
         await _persist_assistant(pool, conversation_id, statement, turn.id)
         persisted_reply = True
@@ -6211,6 +6567,13 @@ async def _run_turn(
     # recorded only when this kind arms the stack-claim guard that reads it.
     # Set here, the one place a turn runs, so no caller keeps a list of kinds.
     stated_purpose = device_tools.TURN_PURPOSE.set(traces.purpose_of(turn))
+    # The turn's wall-clock budget (verification-2-7 T25) and token budget
+    # (T26): its start on turn_clock and each setting as it stands now, read
+    # ONCE here so a write mid-turn moves the next turn, never this one's
+    # bound. Every turn kind runs through here, so one read bounds them all.
+    turn_started_s = turn_clock()
+    time_budget_s = await _turn_budget(pool, settings_store.TURN_TIME_BUDGET, turn.id)
+    token_budget = await _turn_budget(pool, settings_store.TURN_TOKEN_BUDGET, turn.id)
     try:
         # Inside the try, so a persona that cannot be built still reaches
         # the finally that closes the turn.
@@ -6248,17 +6611,23 @@ async def _run_turn(
         # runs (read_result); popped in the finally beside clear_doing.
         traces.track_results(turn)
 
-        if persona.agent is not None:
-            # The cap, BEFORE any recall or round: read from the same ledger
-            # the Spend page shows and recorded on its own span whatever it
-            # says — read, skipped (no cap), or unreadable (the turn runs and
-            # the span says so; fail-open, never quiet). A hit ends the turn
-            # through the one failure exit with the sentence persisted as-is:
-            # the assistant row, the error frame and the turn's status agree,
-            # and nothing was spent finding out.
+        async def _read_agent_cap(**where: int) -> tuple[str | None, dict]:
+            """The agent's monthly cap, read from the same ledger the Spend page
+            shows and recorded on its own `agent_cap` span whatever it says —
+            read, skipped (no cap), or unreadable (the turn runs and the span
+            says so; fail-open, never quiet). `where` is the span's place in the
+            turn: none before round 1, `after_round` between rounds (T27)."""
             with turn.span("agent_cap") as span:
                 problem, facts = await agents.cap_problem(app, pool, persona.agent)
-                span.meta.update(facts)
+                span.meta.update(facts, **where)
+            return problem, facts
+
+        if persona.agent is not None:
+            # The cap, BEFORE any recall or round. A hit ends the turn through
+            # the one failure exit with the sentence persisted as-is: the
+            # assistant row, the error frame and the turn's status agree, and
+            # nothing was spent finding out.
+            problem, _facts = await _read_agent_cap()
             if problem:
                 await _end_without_a_reply(problem, verbatim=True)
                 return
@@ -6503,7 +6872,9 @@ async def _run_turn(
         # A round is one gateway call plus the tool calls it asks for. No count
         # of rounds ever stops a turn (owner, 2026-10-08: "not have a limit at
         # all"): the loop runs until the model answers, a round fails, the
-        # owner stops it, or the circling stop (RoundProgress) ends it.
+        # owner stops it, the circling stop (RoundProgress) ends it, or the
+        # turn has run past its wall-clock budget (T25, turns.time_budget_s) or
+        # used its token budget (T26, turns.token_budget).
         failure: str | None = None
         # The stated reason a thinking-only round ran out of links (no-ceiling
         # T3); None while every round found a link that answered.
@@ -6511,6 +6882,9 @@ async def _run_turn(
         # The stated reason a round the served window cut twice ends the turn
         # (T5); None while no re-sent round was cut again.
         window_cut_end: str | None = None
+        # A round whose request could not fit its served window, never sent
+        # (verification-2-7 T24): the stop that ends the turn on its sizes.
+        unfittable: RequestUnfittable | None = None
         out_of_rounds = False
         # The tool_call ids of every call this turn whose executor was reached
         # (dispatch's own record, via _dispatch_calls): what the own-tool
@@ -6522,6 +6896,13 @@ async def _run_turn(
         progress = RoundProgress()
         stop_reason: str | None = None
         stop_rounds = 0
+        # The facts a stop states beside its reason (the time-budget stop's
+        # budget_s and elapsed_s; the token-budget stop's budget and turn_tokens),
+        # filed on its round_stop span as they are.
+        stop_facts: dict[str, int] = {}
+        # An agent turn that reached its monthly cap between rounds (T27): the
+        # cap's sentence and the facts the ledger read showed; None while under.
+        cap_stop: tuple[str, dict] | None = None
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
@@ -6617,34 +6998,7 @@ async def _run_turn(
             # that has already returned, and claiming its outcome is unknown
             # would be a false uncertainty about a call that finished.
             _stop_if_asked(turn, "between steps")
-            streamed_before = len(parts)
-            round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
-                app,
-                turn,
-                model,
-                messages,
-                advertised,
-                round_number=round_number,
-                on_delta=_stream_delta,
-                on_reasoning=_stream_reasoning,
-            )
-            cut = _cut_at_window(turn) if failure is None else None
-            if cut is not None:
-                # The served window cut this round (T5): the model never read
-                # the front of the request, so neither its text nor its calls
-                # are an answer. Its streamed text leaves the durable reply
-                # (it was shown live, so the watcher is told it is not kept),
-                # its calls are not dispatched, and the round is re-sent ONCE
-                # — fitted by _gateway_round to the window and the ratio this
-                # cut round's own prompt_tokens just taught (_note_served,
-                # _learn_chars_per_token).
-                if len(parts) > streamed_before:
-                    del parts[streamed_before:]
-                    emit(_frame({"correction": _window_cut_note(cut)}))
-                _file_round_retry(
-                    turn, "refit", cut.link or None, round_number, why="context_truncated"
-                )
-                _stop_if_asked(turn, "between steps")
+            try:
                 streamed_before = len(parts)
                 round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
                     app,
@@ -6658,11 +7012,46 @@ async def _run_turn(
                 )
                 cut = _cut_at_window(turn) if failure is None else None
                 if cut is not None:
-                    # Cut again after fitting: no third request. Its text is
-                    # not kept either; the turn ends on the stated cut.
-                    del parts[streamed_before:]
-                    window_cut_end = _window_cut_end(cut)
-                    break
+                    # The served window cut this round (T5): the model never read
+                    # the front of the request, so neither its text nor its calls
+                    # are an answer. Its streamed text leaves the durable reply
+                    # (it was shown live, so the watcher is told it is not kept),
+                    # its calls are not dispatched, and the round is re-sent ONCE
+                    # — fitted by _gateway_round to the window and the ratio this
+                    # cut round's own prompt_tokens just taught (_note_served,
+                    # _learn_chars_per_token).
+                    if len(parts) > streamed_before:
+                        del parts[streamed_before:]
+                        emit(_frame({"correction": _window_cut_note(cut)}))
+                    _file_round_retry(
+                        turn, "refit", cut.link or None, round_number, why="context_truncated"
+                    )
+                    _stop_if_asked(turn, "between steps")
+                    streamed_before = len(parts)
+                    round_text, calls, failure, thinking_only_end = await _round_past_thinking_only(
+                        app,
+                        turn,
+                        model,
+                        messages,
+                        advertised,
+                        round_number=round_number,
+                        on_delta=_stream_delta,
+                        on_reasoning=_stream_reasoning,
+                    )
+                    cut = _cut_at_window(turn) if failure is None else None
+                    if cut is not None:
+                        # Cut again after fitting: no third request. Its text is
+                        # not kept either; the turn ends on the stated cut.
+                        del parts[streamed_before:]
+                        window_cut_end = _window_cut_end(cut)
+                        break
+            except RequestUnfittable as exc:
+                # Her instructions, his ask and the tools cannot fit the window
+                # this round would reach (T24): it was never sent. No retry and
+                # no narration round — the turn ends on the stated sizes.
+                unfittable = exc
+                stop_rounds = round_number
+                break
             if failure is not None:
                 break
             # A round that answered is badged with who answered it; a failed
@@ -6696,12 +7085,72 @@ async def _run_turn(
             # being skipped). Never span heads: those are cut and alias.
             results = [message["content"] for message in messages[before:]]
             reason = progress.after_round(calls, results)
+            if reason is None:
+                # The wall-clock budget (T25), read where the circling stop is:
+                # every call of this round has run and been kept, so the stop
+                # never cuts a tool, and it decides only whether ANOTHER tool
+                # round is asked — a round that answers is never discarded.
+                # When circling fires on the same round, its reason is filed.
+                elapsed_s = int(turn_clock() - turn_started_s)
+                if elapsed_s >= time_budget_s:
+                    reason = STOP_TIME_BUDGET
+                    stop_facts = {"budget_s": time_budget_s, "elapsed_s": elapsed_s}
+            if reason is None:
+                # The token budget (T26), at the same point and for the same
+                # reasons: every round of this turn so far, this one's included,
+                # as reported or (served, unreported) estimated.
+                spent = turn_tokens(turn.spans)
+                if spent["spent_tokens"] >= token_budget:
+                    reason = STOP_TOKEN_BUDGET
+                    stop_facts = {"budget_tokens": token_budget, **spent}
+            if persona.agent is not None:
+                # The agent's cap (T27), re-read at the same point: this round
+                # has been spent, and another must not be asked past the cap the
+                # owner set — not even a narration round, so it wins a tie with
+                # every stop above.
+                problem, facts = await _read_agent_cap(after_round=round_number)
+                if problem:
+                    cap_stop = (problem, facts)
+                    stop_rounds = round_number
+                    break
             if reason is not None:
                 out_of_rounds = True
                 stop_reason = reason
                 stop_rounds = round_number
                 break
 
+        if cap_stop is not None:
+            problem, facts = cap_stop
+            _file_round_stop(
+                turn,
+                STOP_AGENT_CAP,
+                stop_rounds,
+                cap_usd=facts["cap_usd"],
+                spent_usd=facts["spent_usd"],
+            )
+            # The pre-round cap's exit, with what the tools that ran found in
+            # front of the cap's own sentence: no model was asked to fail.
+            found = tool_results_statement(turn.spans)
+            await _end_without_a_reply(f"{found}\n\n{problem}" if found else problem, verbatim=True)
+            return
+        if unfittable is not None:
+            report = unfittable.report
+            _file_round_stop(
+                turn,
+                STOP_UNFITTABLE,
+                stop_rounds,
+                window=report.window,
+                budget=report.budget,
+                est_tokens=report.est_tokens,
+                tools_tokens=report.overhead_tokens,
+                link=unfittable.link,
+            )
+            # Same end shape as the window-cut stop: what the tools that ran
+            # found, then why the next request was never sent.
+            found = tool_results_statement(turn.spans)
+            stated = str(unfittable)
+            await _end_without_a_reply(f"{found}\n\n{stated}" if found else stated, unsent=True)
+            return
         if window_cut_end is not None:
             # Same end shape as a thinking-only stop: what the tools found,
             # then why it stopped, persisted as-is.
@@ -6804,34 +7253,49 @@ async def _run_turn(
         if out_of_rounds:
             # The trace says why the turn stopped and after how many tool rounds:
             # one span per stopped turn, filed before the narration round.
-            with turn.span("round_stop", stop_reason) as stop_span:
-                stop_span.meta.update({"reason": stop_reason, "rounds": stop_rounds})
+            _file_round_stop(turn, stop_reason, stop_rounds, **stop_facts)
+            # The log, the nudge and the refusal name the stop that happened: a
+            # budget stop did not circle.
+            stop_name, stop_nudge, stop_refusal = _NARRATED_STOPS.get(
+                stop_reason, _NARRATED_STOP_CIRCLING
+            )
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
             # already earned must not be swallowed by the circling stop (see
             # CIRCLING_NUDGE). Its deltas stream and accumulate exactly like
             # any other round's, so the operator watches it arrive.
-            final_text, final_calls, final_failure = await _gateway_round(
-                app,
-                turn,
-                model,
-                [
-                    *messages,
-                    {
-                        "role": "system",
-                        "content": CIRCLING_NUDGE,
-                    },
-                ],
-                (),
-                round_number=0,
-                on_delta=_stream_delta,
-                on_reasoning=_stream_reasoning,
-            )
-            if final_failure is not None:
+            narration_unsent: str | None = None
+            try:
+                final_text, final_calls, final_failure = await _gateway_round(
+                    app,
+                    turn,
+                    model,
+                    [
+                        *messages,
+                        {
+                            "role": "system",
+                            "content": stop_nudge,
+                        },
+                    ],
+                    (),
+                    round_number=0,
+                    on_delta=_stream_delta,
+                    on_reasoning=_stream_reasoning,
+                )
+            except RequestUnfittable as exc:
+                # Not sent (T24 C6): no model was called, so it is not a dead
+                # narration round. The stated reason (window, estimated prompt
+                # tokens) rides in the backend block below, beside what the
+                # tools returned, and the log says it was not sent.
+                final_text, final_calls, final_failure = "", [], str(exc)
+                narration_unsent = str(exc)
+            if narration_unsent is not None:
+                logger.warning("%s's narration round: %s", stop_name, narration_unsent)
+            elif final_failure is not None:
                 # FAIL-OPEN: a dead narration round costs the answer, never the
                 # turn. Whatever streamed before it died stays (it was watched
                 # live) and the note below still lands.
-                logger.warning("the circling stop's narration round failed: %s", final_failure)
+                logger.warning("%s's narration round failed: %s", stop_name, final_failure)
             elif final_calls:
                 # It asked for tools anyway. NOTHING is dispatched: each call is
                 # answered with the stated result and recorded as a refused span,
@@ -6847,12 +7311,16 @@ async def _run_turn(
                 )
                 for call in final_calls:
                     emit(_activity_frame(call.name, "start"))
-                    result = _refuse_out_of_rounds(turn, call)
+                    result = _refuse_out_of_rounds(turn, call, stop_refusal)
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-            backend_note = (
-                f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
-            )
+            if stop_reason in CIRCLING_NOTE_WORDS:
+                backend_note = (
+                    f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
+                )
+            else:
+                words = _budget_note_words(stop_reason, stop_facts)
+                backend_note = f"[stopped after {stop_rounds} tool rounds: {words}]"
             note = f"\n\n{backend_note}" if parts else backend_note
             # Did the narration round ANSWER? Read off its own outcome, never
             # off `parts` (earlier rounds' text and its raw markup) and never
@@ -6869,6 +7337,8 @@ async def _run_turn(
                 and bool(without_markup(final_text).strip())
             )
             statement = None if answered else tool_results_statement(turn.spans)
+            if narration_unsent is not None:
+                statement = f"{statement}\n\n{narration_unsent}" if statement else narration_unsent
             if statement is not None:
                 # The statement rides with the note as one backend block: it
                 # streams now, before the note, and every REPLACE composition
@@ -7000,7 +7470,7 @@ async def _run_turn(
         # and a correction follows (guards.py, "the REWRITE class"). Every guard
         # below therefore judges the rewritten reply, and no composition — replace
         # or append — can persist the invented token.
-        rewrites = _rewrite_class_claims(text, message)
+        rewrites = _rewrite_class_claims(text, message, turn)
         for name, claim in rewrites:
             _file_rewrite_span(turn, name, claim)
             emit(_frame({"correction": claim.text}))
@@ -7020,8 +7490,9 @@ async def _run_turn(
             # device_names (read above): the only words an update claim's
             # machine can be — derived, never a list (S42b Task 23 fix round 1).
             correction = guards.narration_check(text, turn.spans, device_names)
-        except Exception:
+        except Exception as exc:
             logger.exception("narration guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "narration", exc)
             correction = None
         if correction is not None:
             with turn.span("guard", "narration") as span:
@@ -7051,8 +7522,9 @@ async def _run_turn(
             delegation_claim = guards.delegation_claim_check(
                 text, turn.spans, agent_names, self_name=self_name
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("delegation-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "delegation_claim", exc)
             delegation_claim = None
         if delegation_claim is not None:
             with turn.span("guard", "delegation_claim") as span:
@@ -7065,8 +7537,9 @@ async def _run_turn(
         # step, so a reply asserting one is a fabrication by construction.
         try:
             consent_correction = guards.consent_claim_check(text)
-        except Exception:
+        except Exception as exc:
             logger.exception("consent-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "consent_claim", exc)
             consent_correction = None
         # A fired consent guard gets ONE redirect (the FIX for the walk where
         # the correction was right and "try again" still did nothing). The
@@ -7141,8 +7614,9 @@ async def _run_turn(
             capability_correction = guards.capability_claim_check(
                 text, _capability_check_tools(persona.tool_names, turn.spans)
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("capability-claim guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "capability_claim", exc)
             capability_correction = None
         if capability_correction is not None:
             with turn.span("guard", "capability_claim") as span:
@@ -7172,8 +7646,9 @@ async def _run_turn(
             stack_claim = guards.stack_claim_check(
                 text, turn.spans, purpose=traces.purpose_of(turn)
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "stack_claim", exc)
             stack_claim = None
         if stack_claim is not None:
             with turn.span("guard", "stack_claim") as span:
@@ -7234,8 +7709,9 @@ async def _run_turn(
                 state_claim = guards.state_claim_check(
                     text, turn.spans, device_names, purpose=traces.purpose_of(turn)
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "state_claim", exc)
                 state_claim = None
         if state_claim is not None:
             state_is_machine = state_claim.subject_kind == "machine"
@@ -7356,8 +7832,9 @@ async def _run_turn(
                 listing_claim = guards.presented_listing_check(
                     text, turn.spans, listing_tools, message
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("presented-listing guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "presented_listing", exc)
                 listing_claim = None
         if listing_claim is not None:
             listing_meta = {
@@ -7648,8 +8125,9 @@ async def _run_turn(
             deferral = guards.deferral_check(
                 persisted, turn.spans, persona.tool_names, user_message=message
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("deferral guard raised; shipping the reply uncorrected")
+            _file_guard_crash(turn, "deferral", exc)
             deferral = None
         # The SIXTH sibling: a BARE-INTENT reply ("Got it. Checking the
         # workspace…") commits to nothing deferral_check can anchor on — no
@@ -7661,8 +8139,9 @@ async def _run_turn(
         if deferral is None:
             try:
                 bare_intent = guards.bare_intent_check(persisted, turn.spans)
-            except Exception:
+            except Exception as exc:
                 logger.exception("bare-intent guard raised; shipping the reply uncorrected")
+                _file_guard_crash(turn, "deferral", exc, kind="bare_intent")
                 bare_intent = None
         deferral_fired = deferral is not None or bare_intent is not None
         if (
@@ -7877,8 +8356,9 @@ async def _run_turn(
         if traces.purpose_of(turn) in OWN_TOOL_HANDBACK_KINDS:
             try:
                 own_tool = guards.own_tool_handback_check(persisted, turn.spans, persona.tool_names)
-            except Exception:
+            except Exception as exc:
                 logger.exception("own-tool handback guard raised; shipping the reply")
+                _file_guard_crash(turn, "own_tool_handback", exc)
                 own_tool = None
         own_tool_redirected = False
         if own_tool is not None:
@@ -7955,8 +8435,9 @@ async def _run_turn(
         if traces.purpose_of(turn) in CLEARED_OFFER_KINDS and not own_tool_redirected:
             try:
                 cleared = guards.cleared_offer_check(persisted)
-            except Exception:
+            except Exception as exc:
                 logger.exception("cleared-offer guard raised; shipping the reply")
+                _file_guard_crash(turn, "cleared_offer", exc)
                 cleared = None
         if cleared is not None:
             skipped = (
@@ -8142,8 +8623,9 @@ async def _run_turn(
             ):
                 try:
                     claim = check()
-                except Exception:
+                except Exception as exc:
                     logger.exception("%s guard raised; shipping the reply uncorrected", name)
+                    _file_guard_crash(turn, name, exc)
                     claim = None
                 if claim is not None:
                     said_claims.append((name, claim))
@@ -8614,8 +9096,9 @@ def _spawn_turn(
     client disconnect cancels only the forwarder, never this, so the turn
     finishes and persists the full reply regardless. put_nowait onto an
     unbounded queue never blocks, so a detached completion is never stalled by an
-    absent reader — the frames it emits after the client is gone are simply never
-    read. A drained queued turn has no reader from the start, and that is the
+    absent reader — and once the client is gone the queue is closed (a
+    `_FrameQueue`, T28), so the frames it emits after that are dropped, never
+    kept. A drained queued turn has no reader from the start, and that is the
     same path, not a second one.
 
     `decide` is passed through to `_run_turn` (the stream route alone sets it).
@@ -8862,7 +9345,7 @@ async def chat_stream(
     if await conversations.person_busy(pool, person.id):
         parallel = await runs_beside(request.app, pool, message)
 
-    queue: asyncio.Queue = asyncio.Queue()
+    queue = _FrameQueue()
     started: _Started | None = None
     accepted: dict | None = None
     committed = False
@@ -8930,7 +9413,8 @@ async def chat_stream(
         # A turn he typed asks the decision role (decision-role spec §2).
         decide=True,
     )
-    return StreamingResponse(
+    return _FrameStreamResponse(
+        queue,
         _stream_from_queue(queue),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -9040,6 +9524,61 @@ async def stop_turn(turn_id: uuid.UUID, person: Person = Depends(identity.requir
     }
 
 
+class _FrameQueue(asyncio.Queue):
+    """A stream turn's frame queue that goes nowhere once its reader has gone.
+
+    The turn runs detached (S2c): a client that leaves never stops it, and
+    `put_nowait` never blocks it. Before verification-2-7 T28 that meant every
+    frame emitted after the browser left (deltas, activity, cards) piled up
+    in an unbounded queue nobody would ever read, for the life of the turn.
+
+    `close()` is called when the response ends, by whatever path:
+    it releases what was queued unread and makes every later `put_nowait` a
+    no-op. Nothing a reader would see is lost: while the response is live the
+    queue is unbounded exactly as before, so a slow but connected reader still
+    gets every frame in order. A returning client reads the stored reply via
+    /conversations/{id}/state and /messages, never a frame.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    def put_nowait(self, item: str | None) -> None:
+        if self.closed:
+            return
+        super().put_nowait(item)
+
+    def close(self) -> None:
+        self.closed = True
+        while True:
+            try:
+                self.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+
+class _FrameStreamResponse(StreamingResponse):
+    """The stream route's response: it closes its frame queue when it ends.
+
+    Closed HERE, not only in `_stream_from_queue`'s `finally`: when a client
+    leaves, the generator is usually suspended at its `yield` (cancelled inside
+    `send`), and nothing resumes it — its `finally` runs only when it is
+    garbage collected, which can be long after the turn has flooded the queue.
+    The response's own call ends at the disconnect, every time.
+    """
+
+    def __init__(self, queue: _FrameQueue, content: AsyncIterator[str], **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._frames = queue
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._frames.close()
+
+
 async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:
     """Forward a detached turn's frames to whoever is still reading.
 
@@ -9049,9 +9588,18 @@ async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:
     persists. `None` is the end-of-turn sentinel `_run_turn` emits after the
     atomic trace close, so draining this generator to its end means the turn
     is fully on record.
+
+    Once it stops reading, its queue (a `_FrameQueue`) is closed, so frames the
+    turn emits after that are dropped rather than kept for no one (T28). The
+    response closes it too (`_FrameStreamResponse`), because a generator left
+    suspended at `yield` reaches this `finally` only when it is collected.
     """
-    while True:
-        frame = await queue.get()
-        if frame is None:
-            return
-        yield frame
+    try:
+        while True:
+            frame = await queue.get()
+            if frame is None:
+                return
+            yield frame
+    finally:
+        if isinstance(queue, _FrameQueue):
+            queue.close()

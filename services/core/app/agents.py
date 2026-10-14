@@ -1475,7 +1475,16 @@ def run_facts(
             failed.append(f"{span.name} — {_error_head(meta)}")
     notes = []
     for span in turn.spans:
-        if span.kind == "guard":
+        if span.kind == "guard" and traces.guard_raised(span.meta):
+            # A crash, not a fire (verification-2-7 T11): the guard fell over
+            # and her reply shipped without its check — stated as that.
+            error = str((span.meta or {}).get("error") or "")
+            raised = error.partition(":")[0].strip() or "an error"
+            notes.append(
+                f"{agent.name}'s own turn: the {span.name} guard raised {raised}"
+                " and did not check its reply"
+            )
+        elif span.kind == "guard":
             fired = f"{agent.name}'s own turn recorded a {span.name} correction"
             if (span.meta or {}).get("redirected") is True:
                 fired += " (its reply was regenerated)"

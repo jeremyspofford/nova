@@ -5,10 +5,11 @@ fact and never a code."""
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app import agents, chat, guards
+from app import agents, chat, guards, traces
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 from tests.test_chat_card import frames, set_chat_model, text, whole_call
@@ -110,7 +111,8 @@ def test_rewrite_class_claims_is_fail_open_when_address_raises(monkeypatch):
         raise RuntimeError("status file exploded")
 
     monkeypatch.setattr(chat.network, "address", boom)
-    found = chat._rewrite_class_claims("Your pairing code is ABCD-2345.", "add my laptop")
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    found = chat._rewrite_class_claims("Your pairing code is ABCD-2345.", "add my laptop", turn)
     assert [name for name, _ in found] == ["code_claim"]
 
 

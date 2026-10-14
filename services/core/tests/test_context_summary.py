@@ -281,3 +281,34 @@ def test_unknown_window_or_ratio_is_refused():
         candidates(messages, 0, CPT, kept, {})
     with pytest.raises(ValueError):
         candidates(messages, WINDOW, 0, kept, {})
+
+
+# -- verification-2-7 T24 x S38b: the tools array counts in both marks ------
+
+
+def test_the_tools_array_counts_toward_the_start_and_stop_marks():
+    """The round's tools array (context_fit.tools_chars) is sent beside the
+    messages, so the 70% start and the 50% stop are measured with it, as
+    context_fit.fit measures the request — the same overhead, never zero."""
+    budget = budget_for(WINDOW)
+    messages, kept = _conversation([[9000], [9000], [3000]])
+    assert 0.50 * budget < _est(messages) < 0.70 * budget
+    assert candidates(messages, WINDOW, CPT, kept, {}) == []
+
+    # Tools worth 10% of the budget push the same messages past the start.
+    overhead = int(0.10 * budget * CPT)
+    with_tools = estimate_tokens(messages, CPT, overhead)
+    assert with_tools > 0.70 * budget
+    picked = candidates(messages, WINDOW, CPT, kept, {}, overhead)
+    assert picked and picked[0] == "r1"
+    # And the stop holds WITH the tools: under 50% once the picks are in place.
+    after = apply(messages, _cap_summaries(messages, kept, picked))
+    assert estimate_tokens(after, CPT, overhead) < 0.50 * budget
+    fewer = apply(messages, _cap_summaries(messages, kept, picked[:-1]))
+    assert estimate_tokens(fewer, CPT, overhead) >= 0.50 * budget
+
+
+def test_a_negative_tools_overhead_is_refused():
+    messages, kept = _conversation([[8000], [8000]])
+    with pytest.raises(ValueError):
+        candidates(messages, WINDOW, CPT, kept, {}, -1)

@@ -71,6 +71,8 @@ which deploys what S32 lands.
   `047` (§5.3).
   *Note 2026-10-12:* `wake_attempts` was renumbered to `047` (#166) and
   S30c took `048` (`048_device_jobs.sql`), so `landings` moves to `049`.
+  *Note 2026-10-13:* S38b landed first with `049_tool_results.sql` (#173),
+  so `landings` is `050`.
 
 ## 2. Rulings that bind this design
 
@@ -312,9 +314,10 @@ One landing at a time per repo (a lock). Steps:
 
 ### 5.3 The record
 
-- Migration `049_landings.sql` (`046` became `code_repos`, built by S32.2 —
+- Migration `050_landings.sql` (`046` became `code_repos`, built by S32.2 —
   note 2026-10-11; `047` is `wake_attempts`, renumbered by #166; `048` is
-  S30c's `device_jobs` — note 2026-10-12): `landings` — id, change
+  S30c's `device_jobs` — note 2026-10-12; `049` is S38b's `tool_results`,
+  which landed first — note 2026-10-13): `landings` — id, change
   id, repo, branch, base SHA, commit SHA, author, coder, turn id, verdict,
   per-suite results (`{suite, exit, passed, failed, skipped, seconds,
   tail}`), `protected`, `dirty_outside`, the stored patch, merged SHA, push
@@ -339,6 +342,120 @@ Registry +6, each `NOT_AUTO_RUN` except the reads:
 
 `start_change` also starts the box. `list_changes` adds the box's state and
 the last landing per change.
+
+### 5.5 As built (S32.3, 2026-10-13)
+
+*As built (S32.3, 2026-10-13):* everything in §5.1–§5.4 was built. Where
+the build differs from the text above, or adds to it:
+
+- **Committing.** `change_commit` runs plain git argv on the repo machine
+  through its agent. Author and committer are both `Nova <nova@<repo
+  host>>`, whatever the machine's own git identity. Signing is turned off
+  for her commit, so a signing setup on the machine never blocks it. With no
+  model on record the trailer reads `Nova-Coder: nova-loop (model not
+  recorded)`, and the result says so. A message that carries its own
+  `Nova-Turn:` or `Nova-Coder:` line is refused, because git would read it
+  as a trailer. The tool context gained a `coder` field, which chat sets
+  from the model that served the round.
+- **The lock.** One landing at a time per repo machine and checkout. The
+  lock lives in core's process. A second landing waits, and its stage names
+  the one it waits for.
+- **Step 1 runs inside the call.** The commit check (uncommitted work,
+  nothing beyond `main`, a landing of the same change still running) is an
+  `Error:` from `repo_land` itself, and no row is written. Only then is a
+  `running` row inserted and its id returned. Steps 2–8 run in the
+  background.
+- **Rebase.** The rebase targets the fetched `main` SHA, as Nova and never
+  signed. A conflict records the verdict `conflict` with the files and the
+  base SHA, aborts the rebase, and judges nothing. `conflict` is a fourth
+  verdict beside green, red and could_not_measure.
+- **The clean copy.** `git archive <judged sha>` is unpacked at
+  `<checkout>/.worktrees/nova-<judge id>`, with a fresh 6-hex judge id. It
+  is not a git worktree, so `list_changes` never shows it. Its box is an
+  ordinary box for that judge id, because novad only mounts paths of that
+  shape. A commit whose `.gitattributes` uses `export-ignore` or
+  `export-subst` is refused as could_not_measure: `git archive` obeys those
+  and cannot be told not to, so a hidden test file could turn a landing
+  green.
+- **Suites.** Read from `suites.toml` at the fetched `main` SHA. The parse
+  is strict: a broken file, or a path no suite covers when the file has no
+  core suite, is could_not_measure, never "no suites, so green". The ruff
+  step runs `ruff check -- <files>` from the copy's root, not `uv run ruff
+  check`, since the root has no `pyproject.toml` (the box image carries
+  ruff). Ruff runs first.
+- **Running them.** Each command is one S30c job in the judge box, one at a
+  time, with `main`'s exact argv. pytest gets `-rs` through the
+  `PYTEST_ADDOPTS` environment variable, never as an extra word, because an extra word
+  would drop the CPU lock. The run stops at the first command that did not
+  pass; the rest read "did not run". A job is polled every 10 s, up to
+  90 minutes, then stopped. The whole log is read for counts and skip
+  reasons; only a 4 KiB tail is stored.
+- **Verdict details.** A database skip is could_not_measure even when the
+  run exits 0. So is a pytest run with no summary line, or with skips its
+  log does not explain. Exit 126 or 127, and pytest's exit 5 ("no tests
+  ran"), are could_not_measure, not red.
+- **Publishing a green landing (§9.2).** In order: push the judged SHA to
+  her branch (with a lease, so a branch someone else moved is refused),
+  open a PR with `gh pr create` (an open PR for the branch is reused), then
+  push that same SHA to `main` as a fast-forward, then move the deploy
+  checkout with `merge --ff-only` and check its HEAD. **This is a direct
+  push, not `gh pr merge`.** A merge or squash on GitHub would make a new
+  commit that was never judged; the push puts the judged SHA itself on
+  `main`, and GitHub then marks the PR merged. If `main` moved during the
+  landing, nothing is merged and the result says "land again". `gh` runs on
+  the repo machine, so it must be installed and signed in there; without
+  it, the branch is pushed and the landing reads green but not merged. A
+  checkout that cannot follow (on another branch, or a dirty file in the
+  way) is stated, and the merge stands.
+- **The record.** The verdict is written before publishing starts, so a
+  failed publish never loses it. The publish result (merged SHA, PR, push
+  result) is written once, and only on a green row. Only a merged SHA means
+  merged. The stored patch is capped at 1 MiB and flagged when cut.
+- **Close.** The judge box and the copy are always removed. Her change's box
+  and worktree are removed only after a merge. Her branch is always kept. A
+  close step that fails is added to the reason, and the verdict stands.
+- **`box.remove` is new in novad**, since S32.2 had no way to remove a box.
+  An agent older than this slice answers "unknown capability", and core
+  says to update it with `machine_update`. Until the repo machine's agent is
+  updated, every landing leaves its judge box behind and says so.
+- **Restarts.** At startup, core marks every landing still `running` as
+  could_not_measure ("core restarted during the landing; land again")
+  before it serves. Shutdown cancels landing tasks.
+- **Trap: the box limit.** The judge box is one more box. With two change
+  boxes already running (`box.max_running`, 2 by default), it cannot start and the
+  landing is could_not_measure, with the reason. Stop or close an idle
+  change first.
+- **The tools.**
+  - `close_change` lives in `tools/landing.py`, not `tools/changes.py`, to
+    avoid an import cycle. It removes the box first (the box mounts the
+    worktree), then the worktree with `--force`, naming any uncommitted
+    files it discards. It refuses while a landing of that change is
+    running.
+  - `landing_status` with no id lists the newest 10 landings. "Merged:" is
+    shown only for a merged SHA; a green landing without one says "Not
+    merged" and why.
+  - `repo_diff` compares her commits with the merge base of `origin/main`
+    as last fetched (it does not fetch). It shows one line per file:
+    status, line counts and the changed line ranges. Given a `path`, it
+    shows that one file's diff, cut at 16 KiB. One file at a time keeps the
+    result readable for a local model. Uncommitted files are named as not
+    in the diff.
+  - `stack_status` reads only this checkout's compose stack. For each
+    service it compares the containers' build SHA and content hash labels
+    with `main`'s head and that service's tree hash.
+  - **Auto-run.** Only `landing_status` is in `AUTO_RUN`; it reads core's
+    own table. `repo_diff` and `stack_status` are reads, but they stay in
+    `NOT_AUTO_RUN` with a stated reason, like `list_changes`: they run git
+    or docker on the repo machine through its agent, so when to look is her
+    call. This is how "except the reads" in §5.4 was read (orchestrator
+    ruling, 2026-10-13).
+- **Claims.** A new claim kind, `landed`, is backed only by a landing read
+  this turn that is green and has a merged SHA. The correction names what
+  the record shows. A green landing backs `tests_passed`; a red one, if it
+  is the latest record, leaves that claim corrected and names its failing
+  suite. A `commit` fact's files back `edited_file`.
+- **Not built here:** the Changes page and Inbox notice (S32.4) and the
+  `AGENTS.md` rewrite (S32.5).
 
 ## 6. Build identity
 
@@ -425,8 +542,11 @@ the build and its tests, not the live walk.
    docker-backed seal test were each a task; `suites.toml` came with it (the
    lock needs it), so S32.3 reads it rather than writing it.
 3. **S32.3 The landing step** (§5: `change_commit`, `repo_land` on S30c's
-   jobs, migration 049, the tools, the `landed` claim) —
+   jobs, migration 050, the tools, the `landed` claim) —
    about 7 h. **Waits on S30c.**
+   *As built (2026-10-13):* about 9¼ h planned — `box.remove` in novad, the
+   publish order (§9.2) and recovery after a restart were not in the 7 h.
+   Built, awaiting merge; §5.5 has the details.
 4. **S32.4 The Changes page and the Inbox notice** (§7) — about 3 h.
 5. **S32.5 `AGENTS.md`** (§8) — about 1½ h.
 

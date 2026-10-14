@@ -46,7 +46,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     slug: 'behaviour',
     label: 'Behaviour',
-    blurb: 'What she does on her own, and how her answers are checked.',
+    blurb: 'What she does on her own, how her answers are checked, and the time and tokens one turn may use.',
   },
   {
     slug: 'devices',

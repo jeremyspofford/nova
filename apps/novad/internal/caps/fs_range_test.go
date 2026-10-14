@@ -248,7 +248,7 @@ func TestFsReadBadOrMixedRangesAreStatedRefusals(t *testing.T) {
 		"negative offset":       {"offset": float64(-1), "length": float64(2)},
 		"zero length":           {"offset": float64(0), "length": float64(0)},
 		"fractional line":       {"start_line": float64(1.5), "end_line": float64(2)},
-		"string line":           {"start_line": "1", "end_line": "2"},
+		"string line":           {"start_line": "one", "end_line": "two"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

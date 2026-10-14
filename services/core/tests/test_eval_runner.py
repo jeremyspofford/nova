@@ -2456,3 +2456,149 @@ async def test_s29b_t5_c5_a_replays_device_run_span_carries_the_declared_run_fac
         }
     ]
     assert touched == []
+
+
+# -- verification-2-7 T9: a failed scratch-person DELETE is a stated warning --
+#
+# _cleanup_scratch_person only LOGGED a failed `DELETE FROM people`, so a run
+# whose scratch identity survived read as a clean teardown on its own result.
+# These tests make that DELETE raise (a pool wrapper that refuses exactly that
+# statement and hands every other call to the real pool) and require the
+# failure on the returned warnings — and, through run_case, on the case's
+# own detail["warnings"].
+
+
+class _DeleteRefusingPool:
+    """The real pool, except `DELETE FROM people WHERE id = $1` raises."""
+
+    def __init__(self, real, exc: BaseException) -> None:
+        self._real = real
+        self._exc = exc
+        self.refused: list[tuple] = []
+
+    async def execute(self, query, *args, **kwargs):
+        if query.strip().startswith("DELETE FROM people WHERE id = $1"):
+            self.refused.append(args)
+            raise self._exc
+        return await self._real.execute(query, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _ingested_turn():
+    """Duck-typed turn whose spans say a memory ingest was queued."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        spans=[SimpleNamespace(kind="memory_ingest", name="ingest", meta={"queued": True})]
+    )
+
+
+async def test_v27_t9_c1_a_failed_delete_is_a_returned_warning_naming_the_person(pool, mount_peers):
+    mount_peers(memory=FakeMemory())
+    person = await runner.scratch_person(pool)
+    refusing = _DeleteRefusingPool(pool, RuntimeError("people row is locked"))
+
+    warnings = await runner._cleanup_scratch_person(
+        app, refusing, person, datetime.now(UTC).date(), None
+    )
+
+    assert refusing.refused == [(person.id,)]  # the DELETE was tried, and failed
+    assert len(warnings) == 1, warnings
+    assert str(person.id) in warnings[0]
+    assert "delete" in warnings[0].lower()
+    assert "scratch person" in warnings[0].lower()
+    # the row really is still there — which is exactly what the warning states
+    assert await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", person.id) == 1
+    await pool.execute("DELETE FROM people WHERE id = $1", person.id)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("people row is locked"),
+        asyncpg.exceptions.ForeignKeyViolationError("still referenced from table x"),
+        OSError("connection reset by peer"),
+    ],
+    ids=["runtime", "fk-violation", "oserror"],
+)
+async def test_v27_t9_c2_the_warning_carries_the_error_type_and_message(pool, mount_peers, exc):
+    mount_peers(memory=FakeMemory())
+    person = await runner.scratch_person(pool)
+
+    warnings = await runner._cleanup_scratch_person(
+        app, _DeleteRefusingPool(pool, exc), person, datetime.now(UTC).date(), None
+    )
+
+    delete_warnings = [w for w in warnings if str(person.id) in w and "delete" in w.lower()]
+    assert len(delete_warnings) == 1, warnings
+    assert type(exc).__name__ in delete_warnings[0]
+    assert str(exc) in delete_warnings[0]
+    await pool.execute("DELETE FROM people WHERE id = $1", person.id)
+
+
+async def test_v27_t9_c3_never_raises_and_keeps_the_forget_warning_beside_it(pool, mount_peers):
+    memory = FakeMemory(forget_status=404)
+    mount_peers(memory=memory)
+    person = await runner.scratch_person(pool)
+
+    warnings = await runner._cleanup_scratch_person(
+        app,
+        _DeleteRefusingPool(pool, RuntimeError("people row is locked")),
+        person,
+        datetime.now(UTC).date(),
+        _ingested_turn(),
+    )
+
+    assert len(memory.forgets) == 1  # /forget still ran before the DELETE
+    assert len(warnings) == 2, warnings
+    assert any("forget" in w.lower() for w in warnings)
+    assert any("people row is locked" in w for w in warnings)
+    await pool.execute("DELETE FROM people WHERE id = $1", person.id)
+
+
+async def test_v27_t9_c4_the_failed_delete_is_still_logged(pool, mount_peers, caplog):
+    mount_peers(memory=FakeMemory())
+    person = await runner.scratch_person(pool)
+
+    with caplog.at_level("WARNING", logger="core"):
+        await runner._cleanup_scratch_person(
+            app,
+            _DeleteRefusingPool(pool, RuntimeError("people row is locked")),
+            person,
+            datetime.now(UTC).date(),
+            None,
+        )
+
+    logged = [r for r in caplog.records if r.levelno >= 30 and str(person.id) in r.getMessage()]
+    assert logged, [r.getMessage() for r in caplog.records]
+    await pool.execute("DELETE FROM people WHERE id = $1", person.id)
+
+
+async def test_v27_t9_c5_run_case_puts_the_failed_delete_on_the_cases_warnings(pool, mount_peers):
+    mount_peers(gateway=ScriptedGateway(rounds=((text("VRAM answer."),),)), memory=FakeMemory())
+    refusing = _DeleteRefusingPool(pool, RuntimeError("people row is locked"))
+
+    case = _case([PredicateSpec("reply_matches", r"VRAM")], cid="t9-run")
+    run = await runner.run_case(app, refusing, case, MODEL)
+
+    assert run.passed is True, run.detail  # the verdict is untouched by teardown trouble
+    assert len(refusing.refused) == 1
+    (person_id,) = refusing.refused[0]
+    warnings = run.detail.get("warnings") or []
+    matching = [w for w in warnings if str(person_id) in w and "people row is locked" in w]
+    assert len(matching) == 1, warnings
+    await pool.execute("DELETE FROM people WHERE id = $1", person_id)
+
+
+async def test_v27_t9_c6_a_delete_that_succeeds_adds_no_warning(pool, mount_peers):
+    mount_peers(memory=FakeMemory())
+    person = await runner.scratch_person(pool)
+
+    warnings = await runner._cleanup_scratch_person(
+        app, pool, person, datetime.now(UTC).date(), None
+    )
+
+    assert warnings == []
+    assert await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", person.id) == 0

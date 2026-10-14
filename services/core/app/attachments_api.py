@@ -29,6 +29,25 @@ from app.tools.workspace import root_from_env
 
 router = APIRouter(prefix="/api/v1/attachments", tags=["attachments"])
 
+# Served to anything that is not inline. `sandbox` is the directive that
+# matters (opaque origin, no script); the rest refuses every load the file
+# could make if a browser renders it despite the attachment disposition.
+DOWNLOAD_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+
+
+def served_inline(media_type: str) -> bool:
+    """Whether /content may show this file in place: an allow-list of what a
+    browser draws without running anything, never a deny-list of html.
+
+    SVG is an image/* type that IS markup and may carry <script>, so it is
+    not inline even though `sniff` never names it today — the rule must not
+    depend on what the sniffer happens to recognise.
+    """
+    kind = media_type.split(";", 1)[0].strip().lower()
+    if kind == "application/pdf":
+        return True
+    return kind.startswith("image/") and kind != "image/svg+xml"
+
 
 @router.post("")
 async def upload(
@@ -76,9 +95,17 @@ async def content(
     Scoped to the person who uploaded it: someone else's file is NOT FOUND
     rather than forbidden, the same answer every conversation route gives.
 
-    `Content-Disposition: inline` with the filename, so an image renders in
-    place and anything else keeps the name he chose when he saves it. The
-    media type is the SNIFFED one from the row, never a guess from the
+    Only what a browser shows without running anything is `inline`: a raster
+    image (so the picture he sent draws in the transcript) and a PDF (so it
+    opens in a tab). Everything else — html and xml above all, but every text
+    kind, audio and unknown bytes too — is an `attachment`: an uploaded page
+    served inline ran on Nova's origin with his session cookie. Every
+    response carries `nosniff`, so the declared type is the one the browser
+    uses; every non-inline one also carries a sandboxing CSP, so a browser
+    that renders it anyway gives it an opaque origin and no script — the
+    same shape workspace_api.py's /raw uses. Both keep the name he chose.
+
+    The media type is the SNIFFED one from the row, never a guess from the
     extension here — the same value the turn routed on, so what the browser
     renders and what she was sent cannot be two different opinions about one
     file.
@@ -100,11 +127,16 @@ async def content(
             status_code=410,
             detail=f"{file.filename} is recorded but its file is no longer in the workspace",
         )
+    inline = served_inline(file.media_type)
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if not inline:
+        headers["Content-Security-Policy"] = DOWNLOAD_CSP
     return FileResponse(
         target,
         media_type=file.media_type,
         filename=file.filename,
-        content_disposition_type="inline",
+        content_disposition_type="inline" if inline else "attachment",
+        headers=headers,
     )
 
 

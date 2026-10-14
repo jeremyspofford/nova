@@ -108,6 +108,13 @@ AUTO_RUN = frozenset(
         # ago. It takes NO arguments at all, so there is no argument a model
         # could have written wrong, and it reaches nothing outside this host.
         "inference_health",
+        # S32.3 T13 (2026-10-13). Whether a change of hers landed is answered by
+        # its row in Nova's own landings table, read now — never by a note
+        # saying "it's on main". It reaches no device and no address; its one
+        # argument is a landing id checked against that table (a malformed or
+        # unknown one is stated), so a wrong argument costs a stated failure,
+        # as device_job_status's job id does.
+        "landing_status",
         "list_agents",
         "list_timers",
         # S40. Where a model runs is answered by the gateway's own reading of
@@ -174,6 +181,15 @@ NOT_AUTO_RUN = {
     # 2026-10-08: her open changes are read by running git on the repo
     # machine through its agent; that look belongs to her own call.
     "list_changes": "it runs git on the repo machine through its agent; her call is when to look",
+    # S32.3 T13 (2026-10-13): the same case as list_changes — git and docker
+    # run on the repo machine through its agent; that look belongs to her call.
+    "repo_diff": (
+        "it runs git diff on the repo machine through its agent, for a change a note would "
+        "choose; her call is when to look"
+    ),
+    "stack_status": (
+        "it runs docker and git on the repo machine through its agent; her call is when to look"
+    ),
     "fetch_url": "the note would choose the address; nothing checks it against this system",
     "web_search": "the note would choose the query; a search reaches whoever answers it",
     "memory_search": "the note came out of memory, so checking it against memory proves nothing",

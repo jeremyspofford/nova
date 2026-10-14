@@ -617,3 +617,242 @@ describe('ActivityPage — span facts (S29 T8)', () => {
     expect(within(panel).getByText('fine')).toBeDefined()
   })
 })
+
+// T18 (verification 2-7): stacked on a phone the Time line read "Time  > 5m
+// ago" — the expand chevron sat inside the Time value.
+describe('ActivityPage — T18 the chevron sits outside the Time value', () => {
+  const CHEVRON = 'svg.lucide-chevron-right, svg.lucide-chevron-down'
+  const fiveMinutesAgo = () => new Date(Date.now() - 5 * 60_000).toISOString()
+
+  it('C4: the Time cell holds only the time — no svg, text exactly the relative time', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', started_at: fiveMinutesAgo() })]])} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const time = row.querySelector<HTMLTableCellElement>('td[data-label="Time"]')
+    expect(time, 'no Time cell').not.toBeNull()
+    expect(time!.querySelector('svg'), 'an icon inside the Time value').toBeNull()
+    expect(time!.textContent?.trim()).toBe('5m ago')
+  })
+
+  it('C5: one chevron per row, in no labelled cell, flipping right -> down -> right with the row', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail() })
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+
+    const only = () => {
+      const all = row.querySelectorAll(CHEVRON)
+      expect(all.length, 'the row draws exactly one chevron').toBe(1)
+      expect(all[0].closest('td[data-label]'), 'the chevron reads as part of a labelled value').toBeNull()
+      return all[0]
+    }
+    expect(only().classList.contains('lucide-chevron-right')).toBe(true)
+
+    fireEvent.click(row)
+    await screen.findByTestId('activity-detail-t1')
+    expect(only().classList.contains('lucide-chevron-down')).toBe(true)
+
+    fireEvent.click(row)
+    expect(screen.queryByTestId('activity-detail-t1')).toBeNull()
+    expect(only().classList.contains('lucide-chevron-right')).toBe(true)
+  })
+
+  it('C6: its own cell keeps the table whole — every cell stacks, headings match cells, the detail spans them all', async () => {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail() })
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const chevron = row.querySelector(CHEVRON)
+    expect(chevron, 'no chevron').not.toBeNull()
+    expect(chevron!.closest('td[data-label]'), 'the chevron is still inside a labelled value').toBeNull()
+
+    const cells = row.querySelectorAll(':scope > td').length
+    const table = row.closest('table')!
+    expect(table.querySelectorAll('thead > tr > th').length).toBe(cells)
+
+    fireEvent.click(row)
+    const panel = await screen.findByTestId('activity-detail-t1')
+    expect(panel.querySelector('td')!.colSpan).toBe(cells)
+    expectStacked()
+  })
+})
+
+
+// T20 (verification 2-7): the turn row and its spans read as product, not as
+// a debug dump — body text, a model NAME, span kinds in words.
+describe('ActivityPage — T20 the row and its spans read as words', () => {
+  const FULL = 'openrouter:google/gemini-3.8-flash'
+
+  /** The element itself or any ancestor up to (and including) `stop`
+   * carrying font-mono — i.e. is this text drawn in the mono face. */
+  function monoUpTo(el: Element, stop: Element): boolean {
+    let at: Element | null = el
+    while (at) {
+      if (at.classList.contains('font-mono')) return true
+      if (at === stop) return false
+      at = at.parentElement
+    }
+    return false
+  }
+
+  it('C1: the Kind, Model and Duration cells are body text — no font-mono on the cell or anything in it', async () => {
+    render(
+      <ActivityPage
+        api={fakeApi([[turn({ id: 't1', kind: 'chat', model: FULL, duration_ms: 482 })]])}
+      />,
+    )
+    const row = await screen.findByTestId('activity-row-t1')
+    for (const label of ['Kind', 'Model', 'Duration']) {
+      const cell = row.querySelector(`td[data-label="${label}"]`)
+      expect(cell, `no ${label} cell`).not.toBeNull()
+      expect(cell!.classList.contains('font-mono'), `${label} cell is mono`).toBe(false)
+      expect(cell!.querySelector('.font-mono'), `something in ${label} is mono`).toBeNull()
+    }
+  })
+
+  it('C2: the Model cell reads the model name (T19 modelName), the full id kept in a title', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: FULL })]])} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    const cell = row.querySelector<HTMLTableCellElement>('td[data-label="Model"]')!
+    expect(cell.textContent?.trim()).toBe('gemini-3.8-flash')
+    const titled = [cell, ...Array.from(cell.querySelectorAll('[title]'))].find(el => el.getAttribute('title') === FULL)
+    expect(titled, 'the full model id is in no title').toBeDefined()
+  })
+
+  it('C2: beside a named model, a turn with no model still reads an em dash, not an empty name', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: FULL }), turn({ id: 't2', model: null })]])} />)
+    const named = (await screen.findByTestId('activity-row-t1')).querySelector('td[data-label="Model"]')!
+    const none = screen.getByTestId('activity-row-t2').querySelector('td[data-label="Model"]')!
+    expect(named.textContent?.trim()).toBe('gemini-3.8-flash')
+    expect(none.textContent?.trim()).toBe('—')
+  })
+
+  async function openSpans(spans: ActivityTurnDetail['spans']) {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail({ spans }) })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText(/round 1/i)
+    return panel
+  }
+
+  const at = () => new Date().toISOString()
+  const llm = { kind: 'llm_call', name: FULL, started_at: at(), duration_ms: 900, meta: { round: 1, model: FULL } }
+
+  it('C5: an llm_call span reads "Model call" — the raw kind is nowhere in the panel text', async () => {
+    const panel = await openSpans([llm])
+    expect(within(panel).getByText('Model call')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/llm_call/)
+  })
+
+  it('C5: a guard span reads "Guard: delegation claim" — neither the raw kind nor the snake name is shown', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'delegation_claim', started_at: at(), duration_ms: 2, meta: {} },
+    ])
+    expect(within(panel).getByText('Guard: delegation claim')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/delegation_claim/)
+    expect(panel.textContent).not.toMatch(/\bguard\b/)
+  })
+
+  it('C5: a span kind this page has never seen reads as sentence-cased words, never dropped', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'future_thing', name: null, started_at: at(), duration_ms: 5, meta: {} },
+    ])
+    expect(within(panel).getByText('Future thing')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/future_thing/)
+  })
+
+  // COVERAGE (T20 GREEN): live turn_spans carry 152 llm_call rows with an
+  // empty model, and bare ids like 'qwen3.8:27b' (orchestrator FINDING).
+  it('C6: an llm_call span with an empty model states it, never an empty name', async () => {
+    const panel = await openSpans([{ ...llm, meta: { round: 1, model: '' } }])
+    const span = within(panel).getByTestId('llm-call-span')
+    expect(within(span).getByText('model not stated')).toBeDefined()
+  })
+
+  it('C2: a bare local id reads whole in the Model cell; an empty one reads an em dash', async () => {
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1', model: 'qwen3.8:27b' }), turn({ id: 't2', model: '' })]])} />)
+    const bare = (await screen.findByTestId('activity-row-t1')).querySelector('td[data-label="Model"]')!
+    const empty = screen.getByTestId('activity-row-t2').querySelector('td[data-label="Model"]')!
+    expect(bare.textContent?.trim()).toBe('qwen3.8:27b')
+    expect(empty.textContent?.trim()).toBe('—')
+  })
+
+  it('C6: an llm_call span names its model via modelName, the full id in a title, no provider prefix shown', async () => {
+    const panel = await openSpans([llm])
+    const span = within(panel).getByTestId('llm-call-span')
+    const name = within(span).getByText('gemini-3.8-flash')
+    expect(name.getAttribute('title') ?? name.closest('[title]')?.getAttribute('title')).toBe(FULL)
+    expect(span.textContent).not.toMatch(/openrouter:/)
+    expect(monoUpTo(name, span), 'the model name is drawn mono').toBe(false)
+  })
+})
+
+// T11 C6 (verification 2-7): a guard that RAISED files a guard span too
+// (chat._file_guard_crash: kind 'guard', named for the guard, meta.raised
+// === true — traces.GUARD_RAISED — and meta.error "<ExcType>: <message>").
+// The drill-in must not draw it as the same row as a guard that FIRED.
+describe('ActivityPage — T11 C6 a crashed guard reads as crashed, never as a fire', () => {
+  const at = () => new Date().toISOString()
+  const llm = { kind: 'llm_call', name: 'qwen3:8b', started_at: at(), duration_ms: 900, meta: { round: 1, model: 'qwen3:8b' } }
+
+  async function openSpans(spans: ActivityTurnDetail['spans']) {
+    const api = fakeApi([[turn({ id: 't1' })]], { t1: detail({ spans }) })
+    render(<ActivityPage api={api} />)
+    fireEvent.click(await screen.findByTestId('activity-row-t1'))
+    const panel = await screen.findByTestId('activity-detail-t1')
+    await within(panel).findByText(/round 1/i)
+    return panel
+  }
+
+  const crashed = (name: string, error: string, extra: Record<string, unknown> = {}) => ({
+    kind: 'guard',
+    name,
+    started_at: at(),
+    duration_ms: 1,
+    meta: { ...extra, raised: true, error },
+  })
+
+  it('C6: a raised guard span reads "Guard crashed: <name in words>" with its error text, never "Guard: <name>"', async () => {
+    const panel = await openSpans([llm, crashed('delegation_claim', 'RuntimeError: detector blew up')])
+    expect(within(panel).getByText('Guard crashed: delegation claim')).toBeDefined()
+    expect(panel.textContent).toContain('RuntimeError: detector blew up')
+    expect(within(panel).queryByText('Guard: delegation claim')).toBeNull()
+    expect(panel.textContent).not.toMatch(/delegation_claim/)
+  })
+
+  it('C6: bare-intent\'s crash (named "deferral", meta.kind "bare_intent") reads as the deferral guard crashing', async () => {
+    const panel = await openSpans([llm, crashed('deferral', 'ValueError: bad', { kind: 'bare_intent' })])
+    expect(within(panel).getByText('Guard crashed: deferral')).toBeDefined()
+    expect(panel.textContent).toContain('ValueError: bad')
+    expect(within(panel).queryByText('Guard: deferral')).toBeNull()
+  })
+
+  it('C6: a FIRED guard whose redirect failed (meta.error, no raised marker) still reads as the guard, not a crash', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'deferral', started_at: at(), duration_ms: 3, meta: { detected: true, error: 'redirect failed' } },
+    ])
+    expect(within(panel).getByText('Guard: deferral')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/crashed/i)
+  })
+
+  it('C6: a fired and a crashed guard in one turn are two different rows', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'narration', started_at: at(), duration_ms: 2, meta: { detected: true } },
+      crashed('narration', 'RuntimeError: boom'),
+    ])
+    expect(within(panel).getAllByText('Guard: narration')).toHaveLength(1)
+    expect(within(panel).getAllByText('Guard crashed: narration')).toHaveLength(1)
+    expect(panel.textContent).toContain('RuntimeError: boom')
+  })
+
+  it('C6: only raised === true marks a crash (traces.guard_raised is `is True`) — a truthy non-boolean does not', async () => {
+    const panel = await openSpans([
+      llm,
+      { kind: 'guard', name: 'narration', started_at: at(), duration_ms: 2, meta: { raised: 'yes' } },
+    ])
+    expect(within(panel).getByText('Guard: narration')).toBeDefined()
+    expect(panel.textContent).not.toMatch(/crashed/i)
+  })
+})

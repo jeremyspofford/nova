@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import chat, guards, tools
+from app import chat, guards, tools, traces
 from app.evals import cases as cases_mod
 from app.evals import runner
 from app.main import app
@@ -442,8 +442,9 @@ async def test_an_agent_not_given_mcp_call_may_say_it_cannot_reach_a_server(
 @requires_db
 @pytest.mark.parametrize("guard", ["server_denial_check", "server_claim_check"])
 async def test_a_server_guard_that_raises_fails_open(guard, pool, mount_peers, monkeypatch):
-    """Each on its own: a guard that raises appends nothing and files nothing,
-    and the other still says its one thing."""
+    """Each on its own: a guard that raises appends nothing and files only its
+    raised span (T12: no guard-raised path is silent in turn_spans), and the
+    other still says its one thing."""
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("detector blew up")
@@ -459,7 +460,14 @@ async def test_a_server_guard_that_raises_fails_open(guard, pool, mount_peers, m
     left = NO_CALL if guard == "server_denial_check" else DENIED
     assert await _reply(pool, turn.id) == f"{said}\n\n{left}"
     assert _corrections(frames) == [left]
-    assert len(await _guard_spans(pool, turn.id)) == 1
+    broken = "mcp_server_denial" if guard == "server_denial_check" else "mcp_server_claim"
+    other = "mcp_server_claim" if guard == "server_denial_check" else "mcp_server_denial"
+    spans = await _guard_spans(pool, turn.id)
+    fired = [s for s in spans if not traces.guard_raised(s["meta"])]
+    raised = [s for s in spans if traces.guard_raised(s["meta"])]
+    assert [s["name"] for s in fired] == [other]
+    assert [s["name"] for s in raised] == [broken]
+    assert raised[0]["meta"]["error"] == "RuntimeError: detector blew up"
 
 
 @requires_db

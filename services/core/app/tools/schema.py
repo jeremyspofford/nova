@@ -57,6 +57,86 @@ def _matches(value: Any, expected: str) -> bool:
     return True
 
 
+# A property keyword of core's own — not JSON Schema, and never advertised
+# (`advertised` strips it). On an "integer" property it says: a whole number
+# the model spelled as a float (2.0) or a digits-only string ("2", "002") is
+# that int (verification-2-7 T4). Models send counts in all three shapes, and
+# novad's wire side takes digits for exactly these keys too (T5). Per property,
+# never a widening of "integer" for every tool: device_run's timeout_s "5" is
+# still refused as a string.
+WHOLE_NUMBER = "x-nova-whole-number"
+
+
+def _digits_only(text: str) -> bool:
+    """At least one ASCII 0-9 and nothing else — no sign, space, point,
+    exponent, underscore or non-ASCII digit, all of which python's int()
+    would quietly take."""
+    return bool(text) and all("0" <= ch <= "9" for ch in text)
+
+
+def whole_numbers(schema: dict, arguments: Any) -> tuple[Any, str | None]:
+    """(arguments with each WHOLE_NUMBER property as an int, problem).
+
+    Runs before `validate`, which then holds the int to the property's own
+    minimum and maximum — so "0" for a 1-based line is refused for the bound,
+    not for its shape. A value that is not a whole number (2.7, "2.7", "abc",
+    " 2", NaN) is stated here and never truncated. A boolean, array, object or
+    null is left as it came, for `validate` to refuse as the wrong type: python
+    says int(True) == 1, JSON does not. The input dict is never mutated."""
+    if type(arguments) is not dict:
+        return arguments, None
+    properties: dict = schema.get("properties") or {}
+    out = arguments
+    for name, value in arguments.items():
+        spec = properties.get(name)
+        if not isinstance(spec, dict) or not spec.get(WHOLE_NUMBER):
+            continue
+        kind = type(value)
+        if kind is int or kind not in (float, str):
+            continue
+        whole: int | None = None
+        if kind is float and value.is_integer():  # False for NaN and +-inf
+            whole = int(value)
+        elif kind is str and _digits_only(value):
+            try:
+                whole = int(value)
+            except ValueError:  # past python's int-from-string digit limit
+                return arguments, (
+                    f"argument {name!r} must be a whole number, got a {len(value)}-digit string"
+                )
+        if whole is None:
+            return arguments, (
+                f"argument {name!r} must be a whole number, got {json_type_name(value)} "
+                f"{json.dumps(value)}"
+            )
+        if out is arguments:
+            out = dict(arguments)
+        out[name] = whole
+    return out, None
+
+
+def advertised(schema: dict) -> dict:
+    """`schema` as it goes on the wire: core's own WHOLE_NUMBER keyword is not
+    JSON Schema, and a provider that checks a function declaration's fields
+    could refuse it, so it is dropped. The schema itself is never mutated."""
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not any(
+        isinstance(spec, dict) and WHOLE_NUMBER in spec for spec in properties.values()
+    ):
+        return schema
+    return {
+        **schema,
+        "properties": {
+            name: (
+                {k: v for k, v in spec.items() if k != WHOLE_NUMBER}
+                if isinstance(spec, dict)
+                else spec
+            )
+            for name, spec in properties.items()
+        },
+    }
+
+
 def validate(schema: dict, arguments: Any) -> str | None:
     """None when `arguments` satisfies `schema`, else the stated reason.
 

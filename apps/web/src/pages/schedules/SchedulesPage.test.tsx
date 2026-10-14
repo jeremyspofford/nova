@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { SchedulesPage } from './SchedulesPage'
 import type { Agent, Timer, TimerFiring } from '../../lib/api'
 import { agentFixture } from '../agents/agentFixture'
+import { formatAbsolute } from './schedulesFormat'
 
 const inMinutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString()
 
@@ -692,6 +693,264 @@ describe('SchedulesPage — arriving from a link (S25.2.2)', () => {
     render(<SchedulesPage api={api} pollMs={NEVER} initialTimerId="gone" />)
 
     await waitFor(() => expect(api.listTimers).toHaveBeenCalled())
+    expect(api.listTimerFirings).not.toHaveBeenCalled()
+  })
+})
+
+describe('SchedulesPage — T17: actions inside the row, one time, a visible paused reason', () => {
+  // T29 re-pointed C1/C2: the controls moved back to their own last cell (a
+  // full-width line on a stacked card), headed by an sr-only "Actions".
+  const HEADINGS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', 'Actions']
+
+  /** The cell under a column, by its stacked-table label. */
+  function cell(row: HTMLElement, label: string): HTMLTableCellElement {
+    const td = row.querySelector<HTMLTableCellElement>(`td[data-label="${label}"]`)
+    expect(td, `no "${label}" cell in the row`).not.toBeNull()
+    return td!
+  }
+
+  /** Every td from `el` up that carries whitespace-nowrap. */
+  function nowrapCells(el: HTMLElement): HTMLElement[] {
+    const out: HTMLElement[] = []
+    for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+      if (n.tagName === 'TD' && n.classList.contains('whitespace-nowrap')) out.push(n)
+    }
+    return out
+  }
+
+  it('C1 (re-pointed by T29): seven headings, none empty, seven cells a row', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const headings = screen.getAllByRole('columnheader').map(th => (th.textContent ?? '').trim())
+    expect(headings).toEqual(HEADINGS)
+    expect(row.querySelectorAll(':scope > td').length).toBe(HEADINGS.length)
+  })
+
+  it('C1 (re-pointed by T29): the note and detail rows span exactly the seven columns', async () => {
+    const api = fakeApi([[timer({ id: 't1' })]])
+    api.pauseTimer = vi.fn(async () => {
+      throw new Error('timer not found (404)')
+    })
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    fireEvent.click(within(row).getByRole('button', { name: /^pause$/i }))
+    const note = await screen.findByTestId('schedules-note-t1')
+    expect(note.querySelector('td')!.colSpan).toBe(HEADINGS.length)
+    fireEvent.click(row)
+    const detail = await screen.findByTestId('schedules-detail-t1')
+    expect(detail.querySelector('td')!.colSpan).toBe(HEADINGS.length)
+  })
+
+  it('C2 (re-pointed by T29): the controls are one group in the row\'s own actions cell, after the Schedule words', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', title: 'stretch' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const group = within(row).getByTestId('row-actions-t1')
+    const actions = group.closest('td')!
+    expect(actions.classList.contains('stack-actions')).toBe(true)
+    for (const name of [/^pause$/i, /run now/i, /delete/i]) {
+      expect(within(group).getByRole('button', { name })).toBeDefined()
+    }
+    // Every control of the row is in the group — none left in another cell.
+    expect(within(row).getAllByRole('button').every(b => group.contains(b))).toBe(true)
+    // After the title and the words, not before them.
+    const words = within(row).getByTestId('schedule-words')
+    expect(words.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('C2: a paused row\'s Resume sits in the same group, and a control there never toggles the row', async () => {
+    const api = fakeApi([
+      [timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: 'paused from the Schedules page' })],
+    ])
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const group = within(row).getByTestId('row-actions-t1')
+    fireEvent.click(within(group).getByRole('button', { name: /resume/i }))
+    await waitFor(() => expect(api.resumeTimer).toHaveBeenCalledWith('t1'))
+    expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
+  })
+
+  it('C3: the next fire reads once, as the relative, with the instant on hover only', async () => {
+    const at = inMinutes(2)
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', next_fire_at: at })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const next = cell(row, 'Next fire')
+    expect((next.textContent ?? '').trim()).toBe('in 2m')
+    const absolute = formatAbsolute(at)
+    expect(next.textContent).not.toContain(absolute)
+    expect(next.querySelector(`[title="${absolute}"]`)).not.toBeNull()
+  })
+
+  it('C3: a fire a week or more out (relative is the instant) appears once, not twice', async () => {
+    const at = new Date(Date.now() + 10 * 24 * 3600_000).toISOString()
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1', next_fire_at: at })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect((cell(row, 'Next fire').textContent ?? '').trim()).toBe(formatAbsolute(at))
+  })
+
+  it('C4: a paused row shows core\'s reason as text under the Status badge, without opening it', async () => {
+    const reason = 'paused after 5 consecutive failures: no such device'
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [
+            timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: reason }),
+            timer({ id: 't2' }),
+          ],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    const shown = within(row).getByTestId('row-paused-reason')
+    expect(shown.textContent).toContain(reason)
+    expect(shown.closest('td')).toBe(cell(row, 'Status'))
+    expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
+    // An active row states no reason.
+    expect(within(screen.getByTestId('schedules-row-t2')).queryByTestId('row-paused-reason')).toBeNull()
+  })
+
+  it('C4: a paused row with no recorded reason says so in the row', async () => {
+    render(
+      <SchedulesPage
+        api={fakeApi([[timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: null })]])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect(within(row).getByTestId('row-paused-reason').textContent).toContain('no reason recorded')
+  })
+
+  it('C5: the reason wraps — no cell around it is whitespace-nowrap', async () => {
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [timer({ id: 't1', paused_at: new Date().toISOString(), paused_reason: 'a long reason '.repeat(12) })],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    expect(nowrapCells(within(row).getByTestId('row-paused-reason'))).toEqual([])
+  })
+})
+
+// T29 (verification 2-7, VISUAL 1): T17 put the controls in the Schedule
+// cell, so on a stacked card they squeezed into the value column (Delete fell
+// onto its own line) and at 1440 Delete wrapped under Pause/Run now and the
+// NEXT FIRE header wrapped. The controls go back to their own last cell — a
+// full-width line on a phone — held on one line, under one-line headers.
+describe('SchedulesPage — T29: the controls on their own line, one line, one-line headers', () => {
+  const css = Object.values(
+    import.meta.glob('/src/index.css', { query: '?raw', import: 'default', eager: true }),
+  )[0] as string
+
+  /** The row's own cells (not a nested table's). */
+  function cells(row: HTMLElement): HTMLTableCellElement[] {
+    return Array.from(row.querySelectorAll<HTMLTableCellElement>(':scope > td'))
+  }
+
+  it('C1: the controls sit in the row\'s last cell, a td.stack-actions with no label; no other cell holds a button', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' }), timer({ id: 't2', kind: 'job', title: 'retention' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const tds = cells(row)
+    const last = tds[tds.length - 1]
+    expect(last.classList.contains('stack-actions'), 'the last cell is not the stacked actions line').toBe(true)
+    expect(last.hasAttribute('data-label'), 'a labelled actions cell would squeeze into the value column').toBe(false)
+    expect(last.contains(within(row).getByTestId('row-actions-t1'))).toBe(true)
+    for (const td of tds.slice(0, -1)) {
+      expect(td.querySelector('button'), `a control left in "${td.dataset.label}"`).toBeNull()
+    }
+    // A job row's controls (no Delete) are in its actions cell too.
+    const job = screen.getByTestId('schedules-row-t2')
+    const jobLast = cells(job)[cells(job).length - 1]
+    expect(jobLast.classList.contains('stack-actions')).toBe(true)
+    expect(within(jobLast).getByRole('button', { name: /^pause$/i })).toBeDefined()
+    // Every cell still stacks readably (labelled, title or actions).
+    expectStacked()
+    // index.css draws a stack-actions cell full width (no label gutter).
+    const block = css.slice(css.indexOf('@media (max-width: 767px)'))
+    expect(block).toMatch(/td\.stack-actions\s*\{[^}]*padding-left:\s*0/)
+  })
+
+  it('C2: the header names the actions column for a screen reader only, and the note/detail rows span it', async () => {
+    const api = fakeApi([[timer({ id: 't1' })]])
+    api.pauseTimer = vi.fn(async () => {
+      throw new Error('timer not found (404)')
+    })
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const ths = screen.getAllByRole('columnheader')
+    expect(ths.length).toBe(cells(row).length)
+    const lastTh = ths[ths.length - 1]
+    expect((lastTh.textContent ?? '').trim()).toBe('Actions')
+    const hidden = lastTh.classList.contains('sr-only') || lastTh.querySelector('.sr-only') !== null
+    expect(hidden, 'the Actions heading should be sr-only, not a visible column title').toBe(true)
+    fireEvent.click(within(row).getByRole('button', { name: /^pause$/i }))
+    const note = await screen.findByTestId('schedules-note-t1')
+    expect(note.querySelector('td')!.colSpan).toBe(ths.length)
+    fireEvent.click(row)
+    const detail = await screen.findByTestId('schedules-detail-t1')
+    expect(detail.querySelector('td')!.colSpan).toBe(ths.length)
+  })
+
+  it('C3: the control group holds one line — not flex-wrap, nowrap on the group itself', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const group = within(row).getByTestId('row-actions-t1')
+    expect(group.className).not.toMatch(/\bflex-wrap\b/)
+    // On the group, not only the td: the stacked td is white-space: normal.
+    expect(group.className).toMatch(/\b(whitespace-nowrap|flex-nowrap)\b/)
+  })
+
+  it('C4: every column header is one line (whitespace-nowrap) — NEXT FIRE never wraps', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' })]])} pollMs={NEVER} />)
+    await screen.findByTestId('schedules-row-t1')
+    const ths = screen.getAllByRole('columnheader')
+    const wrapping = ths.filter(th => !th.classList.contains('whitespace-nowrap')).map(th => th.textContent)
+    expect(wrapping).toEqual([])
+  })
+
+  it('C5: Delete is compact from md up — its word is md:sr-only, its accessible name still "Delete"', async () => {
+    render(<SchedulesPage api={fakeApi([[timer({ id: 't1' })]])} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const del = within(row).getByRole('button', { name: /^delete$/i })
+    const word = Array.from(del.querySelectorAll<HTMLElement>('*')).find(
+      el => el.children.length === 0 && (el.textContent ?? '').trim() === 'Delete',
+    )
+    expect(word, 'the word "Delete" is not its own element').toBeDefined()
+    expect(word!.className).toMatch(/(^|\s)md:sr-only(\s|$)/)
+    // Pause and Run now keep their words at every width.
+    for (const name of [/^pause$/i, /run now/i]) {
+      expect(within(row).getByRole('button', { name }).querySelector('[class*="sr-only"]')).toBeNull()
+    }
+  })
+
+  it('C5 (coverage): the icon-only Delete keeps aria-label and a title; a paused row\'s Resume keeps its word', async () => {
+    // The sr-only word alone would still name the button in jsdom, so pin the
+    // aria-label (what names it when the word is hidden) and the hover title.
+    render(
+      <SchedulesPage
+        api={fakeApi([[timer({ id: 't1' }), timer({ id: 't2', paused_at: new Date().toISOString(), paused_reason: 'x' })]])}
+        pollMs={NEVER}
+      />,
+    )
+    const row = await screen.findByTestId('schedules-row-t1')
+    const del = within(row).getByRole('button', { name: /^delete$/i })
+    expect(del.getAttribute('aria-label')).toBe('Delete')
+    expect((del.getAttribute('title') ?? '').trim()).not.toBe('')
+    const resume = within(screen.getByTestId('schedules-row-t2')).getByRole('button', { name: /resume/i })
+    expect(resume.querySelector('[class*="sr-only"]')).toBeNull()
+  })
+
+  it('C6: a click anywhere in the actions cell — its padding included — never toggles the row', async () => {
+    const api = fakeApi([[timer({ id: 't1' })]])
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-t1')
+    const tds = cells(row)
+    const last = tds[tds.length - 1]
+    expect(last.classList.contains('stack-actions')).toBe(true)
+    fireEvent.click(last)
+    expect(screen.queryByTestId('schedules-detail-t1')).toBeNull()
     expect(api.listTimerFirings).not.toHaveBeenCalled()
   })
 })

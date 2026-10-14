@@ -60,6 +60,9 @@ _TABLES = (
     # S30c T9: device_jobs references devices AND turns, so it drops ahead of
     # both; left out, rows leak between tests (its CREATE is IF NOT EXISTS).
     "device_jobs",
+    # S32.3 T1: landings references turns, so it drops ahead of it; left
+    # out, rows leak between tests (its CREATE is IF NOT EXISTS).
+    "landings",
     "agents",
     "device_audit",
     "devices",

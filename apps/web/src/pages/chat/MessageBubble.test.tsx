@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from './MessageBubble'
 import type { LiveDelegation, MessageRow } from './chatReducer'
 import { attachmentFixture } from './attachmentFixture'
+import { usd } from '../spend/spendFormat'
 
 function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
@@ -137,7 +138,9 @@ describe('MessageBubble — the live tool-call line', () => {
 
   it('shows the turn\'s cost beside who answered, and nothing when no round was priced', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
-    expect(screen.getByTestId('turn-cost').textContent).toContain('$0.0013')
+    // T21: sub-cent reads "< $0.01" for display; the exact figure stays on hover.
+    expect(screen.getByTestId('turn-cost').textContent).toContain('< $0.01')
+    expect(screen.getByTestId('turn-cost').getAttribute('title')).toContain('$0.0013')
     render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', cost: null })} />)
     expect(screen.getAllByTestId('served-by')).toHaveLength(2)
     expect(screen.getAllByTestId('turn-cost')).toHaveLength(1)
@@ -312,13 +315,61 @@ describe('MessageBubble — who answered (S10-pre)', () => {
     expect(screen.queryByTestId('served-by')).toBeNull()
   })
 
-  it('shows provider:model exactly as stated', () => {
+  // Re-pointed by T19 (was: textContent exactly 'anthropic:claude-opus-5'):
+  // the stated id is kept whole, in the name's title; the line reads the name.
+  it('shows the model\'s name, with provider:model exactly as stated in its title', () => {
     render(
       <MessageBubble
         row={assistantRow({ text: 'hi', streaming: false, servedBy: 'anthropic:claude-opus-5' })}
       />,
     )
-    expect(screen.getByTestId('served-by').textContent).toBe('anthropic:claude-opus-5')
+    expect(screen.getByTestId('served-by').textContent).toBe('claude-opus-5')
+    expect(screen.getByTestId('served-by-name').getAttribute('title')).toBe('anthropic:claude-opus-5')
+  })
+})
+
+describe('MessageBubble — T19 the model line reads as a name', () => {
+  const GEMINI = 'openrouter:google/gemini-3.8-flash'
+
+  it('C3: the visible name is the model, never the provider prefix or vendor path; the full id is its title', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: GEMINI, cost: 0.03 })} />)
+    const name = screen.getByTestId('served-by-name')
+    expect(name.textContent).toBe('gemini-3.8-flash')
+    expect(name.getAttribute('title')).toBe(GEMINI)
+    const line = screen.getByTestId('served-by').textContent ?? ''
+    expect(line).not.toContain('openrouter:')
+    expect(line).not.toContain('google/')
+  })
+
+  it('C3: a local id keeps its tag in the name', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b' })} />)
+    expect(screen.getByTestId('served-by-name').textContent).toBe('qwen3:8b')
+    expect(screen.getByTestId('served-by-name').getAttribute('title')).toBe('hub:qwen3:8b')
+  })
+
+  it('C4: the name never wraps mid-name — its own nowrap element, the cost outside it', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: GEMINI, cost: 0.03 })} />)
+    const name = screen.getByTestId('served-by-name')
+    expect(name.className.split(/\s+/).some(c => c === 'whitespace-nowrap' || c === 'truncate')).toBe(true)
+    expect(name.contains(screen.getByTestId('turn-cost'))).toBe(false)
+    expect(screen.getByTestId('served-by').contains(screen.getByTestId('turn-cost'))).toBe(true)
+  })
+
+  it('C5: the model line and the fallback warning are two spaced lines, never one run touching', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', routeReason: 'fell back to link 2 — openrouter over its monthly cap' })}
+      />,
+    )
+    const servedBy = screen.getByTestId('served-by')
+    const fallback = screen.getByTestId('route-fallback')
+    for (const el of [servedBy, fallback]) {
+      const classes = el.className.split(/\s+/)
+      expect(classes, el.dataset.testid).toContain('flex')
+      expect(classes, el.dataset.testid).not.toContain('inline-flex')
+    }
+    expect(servedBy.compareDocumentPosition(fallback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(fallback.className.split(/\s+/).some(c => /^mt-(1|1\.5|2|2\.5|3)$/.test(c))).toBe(true)
   })
 })
 
@@ -905,5 +956,30 @@ describe('MessageBubble — a rewind marker is a divider, not his bubble (chat r
     expect(chatLine).toContain('4')
     expect(executionsLine).toContain('4')
     expect(chatLine).not.toBe(executionsLine)
+  })
+})
+
+describe('MessageBubble — T21: the turn cost reads like Spend', () => {
+  it('C5: the turn cost is "· " + usd(cost) — sub-cent "< $0.01", zero "$0.00", grouped like Spend', () => {
+    const cases: [number, string][] = [
+      [0.0013, usd(0.0013)],
+      [0, usd(0)],
+      [0.03, usd(0.03)],
+      [1234.5, usd(1234.5)],
+    ]
+    expect(cases[0][1]).toBe('< $0.01')
+    expect(cases[1][1]).toBe('$0.00')
+    cases.forEach(([cost, shown], i) => {
+      render(<MessageBubble row={assistantRow({ id: `t21-${i}`, text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost })} />)
+      const el = screen.getAllByTestId('turn-cost')[i]
+      expect(el.textContent?.replace(/\s+/g, ' ').trim()).toBe(`· ${shown}`)
+    })
+  })
+
+  it('C5: the turn cost keeps its exact four-decimal figure on hover', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
+    const el = screen.getByTestId('turn-cost')
+    expect(el.textContent).not.toContain('0.0013')
+    expect(el.getAttribute('title')).toContain(usd(0.0013, 4))
   })
 })

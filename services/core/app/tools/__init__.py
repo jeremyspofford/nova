@@ -44,6 +44,7 @@ from app.tools import (
     devices,
     events,
     inference,
+    landing,
     machines,
     mcp,
     memory_tools,
@@ -156,6 +157,13 @@ REGISTRY: dict[str, Tool] = {
         # each event became (its turn, its notice), and adding a sender whose
         # key goes only to his Settings > Events page, never to her.
         *events.TOOLS,
+        # S32.3 T13 (2026-10-13): her landing step (tools/landing.py) —
+        # repo_land judges a committed change in a fresh box and, only on
+        # green, opens a PR and puts the judged commit on main; landing_status
+        # reads one back; repo_diff, close_change and stack_status complete
+        # the set. change_commit came in with changes.TOOLS above. Nothing
+        # here waits on anyone (test_no_approvals).
+        *landing.TOOLS,
     )
 }
 
@@ -271,7 +279,8 @@ def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
     """The OpenAI `tools` array, derived from the registry rather than
     written out beside it — a tool added to a module is advertised by that
     fact alone, and can never be advertised with a schema different from
-    the one dispatch validates against.
+    the one dispatch validates against (less core's own whole-number
+    keyword, schema.advertised, which no provider is shown).
 
     `names` is a subset to advertise (an agent's toolset); None means the
     whole registry, in tool_names() order, exactly as before. A subset is
@@ -296,7 +305,7 @@ def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
             "function": {
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.parameters,
+                "parameters": schema.advertised(tool.parameters),
             },
         }
         for tool in (REGISTRY[name] for name in chosen)
@@ -370,6 +379,14 @@ async def dispatch(
         )
 
     parsed, problem = _parse_arguments(arguments)
+    if problem is not None:
+        return _retryable(problem), False
+
+    # Part of reading the call, not a decision about it: a whole number the
+    # model spelled 2.0 or "2", on a property that declares it takes one, is
+    # read as the int it is (verification-2-7 T4); validate then holds it to
+    # the property's bounds like any other int.
+    parsed, problem = schema.whole_numbers(tool.parameters, parsed)
     if problem is not None:
         return _retryable(problem), False
 

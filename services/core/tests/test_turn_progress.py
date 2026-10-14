@@ -21,6 +21,8 @@ import dataclasses
 import inspect
 import json
 import socket
+import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -1223,9 +1225,33 @@ def test_the_loop_counts_no_allowance():
     assert "max_tool_rounds" not in source
 
 
-def test_the_only_round_stop_reasons_are_the_circling_ones():
-    """C2: the circling note words name every reason a round_stop can carry."""
+def test_every_round_stop_reason_is_pinned():
+    """C2: the circling note words name the two circling reasons. Moved
+    deliberately by verification-2-7 T24 (was "the only round_stop reasons are
+    the circling ones"): a round_stop may also be `unfittable` — a request that
+    cannot fit its window, never sent, with no circling note — and
+    chat._file_round_stop, the one place a round_stop is filed, refuses any
+    reason not pinned here. Moved again by verification-2-7 T25: `time_budget`,
+    a turn past its wall-clock budget (turns.time_budget_s) — not a circling
+    reason, and not a count of rounds. Moved again by verification-2-7 T26:
+    `token_budget`, a turn past its token budget (turns.token_budget) — the
+    tokens its rounds reported, summed; not circling, not a count of rounds.
+    Moved again by verification-2-7 T27: `agent_cap`, an agent turn whose
+    monthly cap (agents.cap_problem) was reached between rounds — the owner's
+    spend limit, not circling, not a count of rounds."""
     assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
+    assert chat.ROUND_STOP_REASONS == {
+        chat.STOP_REPEATED_CALL,
+        chat.STOP_NO_NEW_RESULTS,
+        chat.STOP_UNFITTABLE,
+        chat.STOP_TIME_BUDGET,
+        chat.STOP_TOKEN_BUDGET,
+        chat.STOP_AGENT_CAP,
+    }
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    with pytest.raises(ValueError, match="not a round_stop reason"):
+        chat._file_round_stop(turn, "too_many_rounds", 1)
+    assert turn.spans == []
 
 
 @requires_db
@@ -1234,7 +1260,18 @@ async def test_sixty_productive_rounds_run_to_the_models_answer(
 ):
     """C1: 60 rounds of distinct calls, each bringing a new result, all run;
     the turn ends on the model's own answer, status ok, stored and streamed
-    alike, with no round_stop, no "[stopped after" note, no narration round."""
+    alike, with no round_stop, no "[stopped after" note, no narration round.
+
+    PIN MOVED (verification-2-7 T26, 2026-10-13): these rounds report no usage,
+    so each now counts core's estimate (~17-19k tokens, mostly the tools array)
+    toward turns.token_budget, and ~53 of them cross the 1,000,000 default. The
+    token budget is a separate bound with its own tests (test_turn_token_budget);
+    this pins that no COUNT of rounds stops a turn, so the budget is set to its
+    maximum, which 60 such rounds stay far below."""
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "turns.token_budget", "value": 100_000_000}
+    )
+    assert resp.status_code == 200, resp.text
     ran = _arm_probe(monkeypatch, lambda q, n: f"{q} found thing #{n}")
     qs = [f"q{i}" for i in range(SIXTY)]
 
@@ -1558,3 +1595,262 @@ async def test_a_turn_he_stops_after_tool_rounds_files_no_round_stop(
     assert len(steps) < 400
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) == "stopped"
     assert _stops(await _spans_of(pool, turn_id)) == []
+
+
+# == verification-2-7 T13: a live reading that changed is progress, not a repeat ==
+#
+# The verification report (2026-10-13, item 7): the circling stop ended a turn
+# on the 3rd identical device_job_status poll while the job was still running
+# and its record still moving. A call to a LIVE-READING tool
+# (tools.live_reading_tool_names(): registered ephemeral AND reads_only, read
+# off the registry at check time, no list of "polling tools") whose result
+# differs from the one that same key returned last time restarts that key's
+# repeat count: the world it reads changed, which is progress. An unchanged
+# reading counts as before, and every other tool keeps T3's rule (device_run
+# `date` with drifting output still stops on the 3rd — T3's C2 pins above).
+
+JOB_KEY = {"device": "hub", "job": "j-1"}
+
+
+def _job_status(log_bytes: int, state: str = "running", job: str = "j-1") -> str:
+    """A device_job_status result in _describe's shape."""
+    text = (
+        f"job {job} on hub: {state} — ran_in box nova-box-1; argv: uv run pytest -q "
+        f"in /w/.worktrees/nova-1; started 2026-10-13T10:00:00Z; log {log_bytes} bytes "
+        "(read it with device_job_log)."
+    )
+    if state == "running":
+        text += " Still running — no exit code yet; what it did is not known until it ends."
+    return text
+
+
+DONE_STATUS = _job_status(9000, state="done exit 0")
+LIVE = {"ephemeral": True, "reads_only": True}
+
+
+def _poll(progress: chat.RoundProgress, result: str, i: int, key: dict = JOB_KEY) -> str | None:
+    return progress.after_round([_call("device_job_status", key, i)], [result])
+
+
+def test_v27_t13_device_job_status_is_a_live_reading():
+    """The fact the exemption reads: device_job_status is declared ephemeral and
+    reads_only, so it is in the registry's derived live-reading set."""
+    assert "device_job_status" in tools.live_reading_tool_names()
+    assert "device_run" not in tools.live_reading_tool_names()
+
+
+def test_v27_t13_c1_polls_of_a_running_job_whose_record_moves_never_repeat():
+    progress = chat.RoundProgress()
+    outcomes = [_poll(progress, _job_status(100 * (i + 1)), i) for i in range(10)]
+    assert outcomes == [None] * 10
+
+
+def test_v27_t13_c1_changing_polls_within_one_round_never_repeat():
+    progress = chat.RoundProgress()
+    n = chat.SAME_CALL_LIMIT + 2
+    calls = [_call("device_job_status", JOB_KEY, i) for i in range(n)]
+    results = [_job_status(100 * (i + 1)) for i in range(n)]
+    assert progress.after_round(calls, results) is None
+
+
+def test_v27_t13_c2_an_unchanged_reading_still_stops_on_the_limit_th_in_a_row():
+    # From the start: the same text SAME_CALL_LIMIT times stops on the last.
+    same = chat.RoundProgress()
+    outcomes = [_poll(same, _job_status(500), i) for i in range(chat.SAME_CALL_LIMIT)]
+    assert outcomes == [None] * (chat.SAME_CALL_LIMIT - 1) + [chat.STOP_REPEATED_CALL]
+
+    # After a changing streak: the count restarts at the last change, so the
+    # stop comes on the SAME_CALL_LIMIT-th identical result in a row.
+    streak = chat.RoundProgress()
+    results = [_job_status(10), _job_status(20), _job_status(30)]
+    results += [DONE_STATUS] * chat.SAME_CALL_LIMIT
+    outcomes = [_poll(streak, r, i) for i, r in enumerate(results)]
+    assert outcomes == [None] * (len(results) - 1) + [chat.STOP_REPEATED_CALL]
+
+
+def test_v27_t13_c2_a_result_differing_only_in_whitespace_is_unchanged():
+    progress = chat.RoundProgress()
+    results = [_job_status(10), _job_status(20), DONE_STATUS]
+    results += [f"  {DONE_STATUS}\n", DONE_STATUS.replace(" ", "   ")]
+    outcomes = [_poll(progress, r, i) for i, r in enumerate(results)]
+    assert outcomes == [None] * (len(results) - 1) + [chat.STOP_REPEATED_CALL]
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        LIVE,
+        {"ephemeral": False, "reads_only": True},
+        {"ephemeral": True, "reads_only": False},
+        None,
+    ],
+    ids=["live-reading", "reads-only-only", "ephemeral-only", "not-registered"],
+)
+def test_v27_t13_c3_the_exemption_follows_the_registry_declaration_alone(declared, monkeypatch):
+    """A tool registered today with both declarations is covered by that fact
+    alone; take either away (or leave it unregistered) and drifting results
+    stop on the SAME_CALL_LIMIT-th dispatch as T3 always did."""
+    name = "t13_reading"
+
+    async def read(args: dict, ctx: ToolContext) -> str:
+        return "unused"
+
+    if declared is None:
+        monkeypatch.delitem(tools.REGISTRY, name, raising=False)
+    else:
+        monkeypatch.setitem(
+            tools.REGISTRY, name, Tool(name, "d", {"type": "object"}, read, **declared)
+        )
+    assert (name in tools.live_reading_tool_names()) is (declared == LIVE)
+
+    progress = chat.RoundProgress()
+    n = chat.SAME_CALL_LIMIT + 3
+    outcomes = [
+        progress.after_round([_call(name, {"q": "x"}, i)], [f"reading at 16:4{i}"])
+        for i in range(n)
+    ]
+    if declared == LIVE:
+        assert outcomes == [None] * n
+    else:
+        assert outcomes[: chat.SAME_CALL_LIMIT] == [None] * (chat.SAME_CALL_LIMIT - 1) + [
+            chat.STOP_REPEATED_CALL
+        ]
+
+
+def test_v27_t13_c4_another_call_between_polls_changes_nothing_about_the_count():
+    # Changing polls with other calls between them: never a repeat.
+    changing = chat.RoundProgress()
+    outcomes = []
+    for i in range(chat.SAME_CALL_LIMIT + 2):
+        outcomes.append(_poll(changing, _job_status(100 * (i + 1)), 2 * i))
+        outcomes.append(_fresh_round(changing, 2 * i + 1))
+    assert outcomes == [None] * len(outcomes)
+
+    # Unchanged polls with other (news) calls between them: the poll still
+    # stops on its SAME_CALL_LIMIT-th unchanged dispatch, the others never
+    # break the run.
+    same = chat.RoundProgress()
+    results = [_job_status(10), _job_status(20)] + [_job_status(30)] * chat.SAME_CALL_LIMIT
+    outcomes = []
+    for i, result in enumerate(results):
+        outcomes.append(_poll(same, result, 2 * i))
+        if i < len(results) - 1:
+            outcomes.append(_fresh_round(same, 2 * i + 1))
+    assert outcomes == [None] * (len(outcomes) - 1) + [chat.STOP_REPEATED_CALL]
+
+
+def test_v27_t13_c4_each_key_has_its_own_count_and_last_result():
+    """Two jobs polled in turn: each key is compared with ITS last result, so
+    job 2 answering what job 1 said last is not job 2 repeating itself, and
+    both moving is never a repeat."""
+    job2 = {"device": "hub", "job": "j-2"}
+    progress = chat.RoundProgress()
+    outcomes = []
+    for i in range(chat.SAME_CALL_LIMIT + 2):
+        outcomes.append(
+            progress.after_round(
+                [
+                    _call("device_job_status", JOB_KEY, 2 * i),
+                    _call("device_job_status", job2, 2 * i + 1),
+                ],
+                [_job_status(100 * (i + 1)), _job_status(100 * (i + 1), job="j-2")],
+            )
+        )
+    assert outcomes == [None] * len(outcomes)
+
+
+def test_v27_t13_c5_a_reading_flipping_between_seen_texts_is_stale_not_progress():
+    """A, B, A, B, A: each poll differs from its key's last result, so it is no
+    repeat; but from the 3rd on every result is text already returned this
+    turn, so STALE_ROUNDS_LIMIT stale rounds in a row stop as no_new_results."""
+    progress = chat.RoundProgress()
+    a, b = _job_status(10), _job_status(20)
+    flips = [a, b] * (chat.STALE_ROUNDS_LIMIT + 1)
+    n = 2 + chat.STALE_ROUNDS_LIMIT
+    outcomes = [_poll(progress, r, i) for i, r in enumerate(flips[:n])]
+    assert outcomes == [None] * (n - 1) + [chat.STOP_NO_NEW_RESULTS]
+
+
+LIVE_PROBE = "t13_live_probe"
+
+
+def _arm_live_probe(monkeypatch, answer) -> list[str]:
+    """A registered LIVE-READING tool (ephemeral AND reads_only) whose executor
+    returns answer(q, n) for its n-th run this test (0-based)."""
+    ran: list[str] = []
+
+    async def probe(args: dict, ctx: ToolContext) -> str:
+        ran.append(args["q"])
+        return answer(args["q"], len(ran) - 1)
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        LIVE_PROBE,
+        Tool(LIVE_PROBE, "d", PROBE_SCHEMA, probe, reads_only=True, ephemeral=True),
+    )
+    return ran
+
+
+def _live_rounds(n: int, start: int = 1) -> tuple:
+    return tuple((whole_call(f"l{i}", LIVE_PROBE, {"q": "job"}),) for i in range(start, start + n))
+
+
+@requires_db
+async def test_v27_t13_c6_a_turn_polling_a_moving_reading_runs_every_poll_and_is_not_stopped(
+    owner_client, pool, mount_peers, workspace, monkeypatch
+):
+    """Five polls of one live reading, its answer moving each time: all five
+    run, the model answers, no round_stop, no note. Then a turn whose reading
+    does not move stops after round 3 with the repeated-call note, as before."""
+    moving = [True]
+    ran = _arm_live_probe(
+        monkeypatch,
+        lambda q, n: (
+            f"{q}: running, log {100 * (n + 1)} bytes"
+            if moving[0]
+            else f"{q}: running, log 0 bytes"
+        ),
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            *_live_rounds(5),
+            (text_delta("The job finished."),),
+            *_live_rounds(3, start=10),
+            (text_delta(PROSE),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "watch the job")
+    first = await pool.fetchval("SELECT id FROM turns ORDER BY started_at DESC LIMIT 1")
+    assert ran == ["job"] * 5
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", first) == "ok"
+    assert _stops(await _spans_of(pool, first)) == []
+    assert await _stored(pool) == "The job finished."
+
+    moving[0] = False
+    await _say(owner_client, "watch it again")
+    assert ran == ["job"] * 8
+    _stop_held(_stops(await _spans_of(pool)), chat.STOP_REPEATED_CALL, 3)
+    assert await _stored(pool) == f"{PROSE}\n\n{NOTE_REPEATED.format(n=3)}"
+
+
+def test_v27_t13_cov_the_live_set_is_read_at_check_time_not_at_construction(monkeypatch):
+    """C3 coverage: the declaration is read off the registry each round, never
+    cached when the turn's RoundProgress is built — a tool that becomes a live
+    reading mid-turn gets the exemption from that round on."""
+    name = "t13_late_reading"
+
+    async def read(args: dict, ctx: ToolContext) -> str:
+        return "unused"
+
+    monkeypatch.delitem(tools.REGISTRY, name, raising=False)
+    progress = chat.RoundProgress()
+    assert progress.after_round([_call(name, {"q": "x"}, 0)], ["reading at 16:40"]) is None
+    monkeypatch.setitem(tools.REGISTRY, name, Tool(name, "d", {"type": "object"}, read, **LIVE))
+    n = chat.SAME_CALL_LIMIT + 2
+    outcomes = [
+        progress.after_round([_call(name, {"q": "x"}, i)], [f"reading at 16:5{i}"])
+        for i in range(1, n + 1)
+    ]
+    assert outcomes == [None] * n

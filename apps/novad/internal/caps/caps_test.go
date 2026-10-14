@@ -167,7 +167,10 @@ func TestSystemInfoReportsRealNumbers(t *testing.T) {
 // Names), never because a name was written twice.
 func TestNamesAreDerivedFromTheTable(t *testing.T) {
 	want := []string{
-		"admin.exec", "admin.install", "admin.uninstall", "apps.launch", "apps.list", "box.exec", "box.start", "box.status", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
+		"admin.exec", "admin.install", "admin.uninstall", "apps.launch", "apps.list", "box.exec",
+		// S32.3 T7 (2026-10-13): box.remove added deliberately — a landing's close
+		// and close_change take a change's box down.
+		"box.remove", "box.start", "box.status", "daemon.update", "facts.refresh", "fs.edit", "fs.list",
 		"fs.read", "fs.search", "fs.write",
 		// S30c T4 (2026-10-12): job.* added deliberately — work that outlives a turn.
 		"job.list", "job.log", "job.start", "job.status", "job.stop",

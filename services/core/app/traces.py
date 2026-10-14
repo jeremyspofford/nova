@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +45,20 @@ logger = logging.getLogger("core")
 # number both read, so a backend-run check reads identically in the trace to
 # the call she made (S29 T7; tests/test_live_facts.py t7).
 SPAN_RESULT_HEAD_CHARS = 500
+
+# A guard span filed because the guard itself RAISED (verification-2-7 T11):
+# chat.py writes it with meta.error ("<ExcType>: <message>") and this marker
+# beside it. meta.error alone cannot say so: a guard that FIRED and whose
+# redirect then failed carries meta.error too. Every reader that takes a guard
+# span's presence as a correction (the eval predicates, the skills ledger, an
+# agent's run facts) asks guard_raised first — a crash is not a fire.
+GUARD_RAISED = "raised"
+
+
+def guard_raised(meta: Mapping[str, Any] | None) -> bool:
+    """Is this guard span the record of the guard crashing, not firing?"""
+    return isinstance(meta, Mapping) and meta.get(GUARD_RAISED) is True
+
 
 # 'stopped' (S15) is deliberately NOT 'interrupted'. Interrupted means no
 # process was running the turn — the startup sweep's word, and the scheduler
@@ -361,6 +376,34 @@ def _without_nul(value: Any) -> Any:
     return value
 
 
+def _holds_nul(value: Any) -> bool:
+    """Whether any string in `value` (keys too, at any depth) holds a NUL."""
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_holds_nul(k) or _holds_nul(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_nul(v) for v in value)
+    return False
+
+
+def _storable_undo(turn: Turn, action: Action) -> Any:
+    """The action's undo payload, or None when jsonb would refuse it. Never
+    scrubbed like span meta: an undo payload is what a revert puts back, and a
+    NUL swapped for U+FFFD would restore something else and call it undone.
+    Dropped instead, the way an oversized prior is never captured — the row
+    still lands, and rewind reads None as "recorded nothing to put back"."""
+    if not _holds_nul(action.undo):
+        return action.undo
+    logger.warning(
+        "turn %s: %s's undo payload holds a NUL byte jsonb cannot store; "
+        "recorded without one, so a rewind lists it as not undone",
+        turn.id,
+        action.tool,
+    )
+    return None
+
+
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
     """All the spans, the kept tool results (S38b), the action ledger and the
     final status, in one transaction or not at all — a turn that never closed has neither spans
@@ -409,7 +452,7 @@ async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
                 seq,
                 action.tool,
                 action.ok,
-                action.undo,
+                _storable_undo(turn, action),
             )
         await conn.execute(
             "UPDATE turns SET status = $2, ended_at = now() WHERE id = $1", turn.id, status

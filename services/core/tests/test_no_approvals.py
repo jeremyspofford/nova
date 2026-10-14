@@ -104,6 +104,12 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # Chat sets it, the one place a turn runs; it is None everywhere else. It
     # names a turn, not a principal: nothing reads it to decide whether a call
     # may run, and dispatch never does (test_dispatch_never_reads_turn_id).
+    # 2026-10-13 (S32.3 T2): `coder` joins the set (10 -> 11). It is PROVENANCE
+    # like turn_id: which coder (her loop or an agent, and the model that served
+    # the round) made the call, so change_commit can write the Nova-Coder
+    # trailer (nova-codes decision 6). Chat binds it per call; nothing reads it
+    # to decide whether a call may run, and dispatch never does
+    # (test_dispatch_never_reads_coder).
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
@@ -115,6 +121,7 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
         "undo_sink",
         "conversation_id",
         "turn_id",
+        "coder",
     }
 
 
@@ -248,6 +255,21 @@ def test_dispatch_never_reads_turn_id():
     names = [node.attr for node in ast.walk(_dispatch_def(tree)) if isinstance(node, ast.Attribute)]
     assert "turn_id" not in names, (
         "dispatch reads ToolContext.turn_id — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+
+
+def test_dispatch_never_reads_coder():
+    """The AST twin of the ToolContext pin's `coder` (S32.3 T2, 2026-10-13).
+
+    `coder` names which coder made a call, so a commit can say who wrote it.
+    The moment dispatch consults it — "only her loop may commit", "not a local
+    model" — it is a principal a permission binds to. Executors may read it to
+    RECORD it; dispatch may not read it at all."""
+    tree = ast.parse(TOOLS_INIT.read_text(encoding="utf-8"))
+    names = [node.attr for node in ast.walk(_dispatch_def(tree)) if isinstance(node, ast.Attribute)]
+    assert "coder" not in names, (
+        "dispatch reads ToolContext.coder — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

@@ -23,7 +23,7 @@ import json
 
 import pytest
 
-from app import chat, guards, tools
+from app import chat, guards, tools, traces
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
@@ -565,7 +565,9 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     owner_client, pool, mount_peers, workspace, monkeypatch
 ):
     """The detector itself is fail-OPEN: if presented_listing_check raises,
-    the reply ships unchanged — one gateway call, no redirect, no span."""
+    the reply ships unchanged — one gateway call, no redirect. The trace says
+    the guard fell over (verification-2-7 T11): one presented_listing span
+    marked raised, never a fired one."""
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("detector blew up")
@@ -578,5 +580,8 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
 
     assert gateway.calls == 1
     assert await _stored(pool) == FABRICATED
-    assert [s["name"] for s in await _guard_spans(pool)] == []
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["presented_listing"]
+    assert traces.guard_raised(spans[0]["meta"])
+    assert spans[0]["meta"]["error"] == "RuntimeError: detector blew up"
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]

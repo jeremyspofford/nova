@@ -198,7 +198,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # sentence would name nothing she has. A read of this turn's own results;
     # nothing waits on anyone (test_no_approvals green).
     # Deliberate snapshot update (S37c T10, 2026-10-14): events_recent and
-    # event_sender_add (tools/events.py), so SEVENTY-FOUR -> SEVENTY-SIX.
+    # event_sender_add (tools/events.py), so SEVENTY-FOUR -> SEVENTY-SIX as
+    # built; merged onto main's S32.3 landing set (80), recomputed from the
+    # merged tree: EIGHTY -> EIGHTY-TWO.
     # Spec §2.9: "did the CI failure get looked at?" is read from the event
     # rows (state, turn, notice), not remembered; §2.1: she can add a sender,
     # and its key waits on his Settings > Events page, never in her context.
@@ -354,9 +356,25 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # a summary replaced it in what is sent. reads_only.
         "read_result",
         # S37c T10 (2026-10-14): what each event became, and adding a sender
-        # (tools/events.py). SEVENTY-FOUR -> SEVENTY-SIX.
+        # (tools/events.py). SEVENTY-FOUR -> SEVENTY-SIX as built; merged onto
+        # main's S32.3 landing set: EIGHTY -> EIGHTY-TWO.
         "events_recent",
         "event_sender_add",
+        # S32.3 T13 (2026-10-13): her landing step — change_commit (a commit on
+        # the host, Nova as author, Nova-Turn/Nova-Coder trailers), repo_land
+        # (a landing judged in a fresh box, merged only on green),
+        # landing_status, repo_diff, close_change and stack_status
+        # (tools/changes.py, tools/landing.py). SEVENTY-THREE -> SEVENTY-NINE
+        # as built; T15 (2026-10-13) rebased onto S38b's read_result (74), so
+        # recomputed from the merged tree: SEVENTY-FOUR -> EIGHTY.
+        # landing_status, repo_diff and stack_status are reads_only; the other
+        # three are not. Nothing waits on anyone (test_no_approvals green).
+        "change_commit",
+        "repo_land",
+        "landing_status",
+        "repo_diff",
+        "close_change",
+        "stack_status",
     }
 
 
@@ -781,12 +799,22 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         "device_job_status",
         "device_job_log",
         # S38b T4 (2026-10-13): reading back a result this turn already holds
-        # (the live map of its kept results) changes nothing. 31 -> 32.
+        # (the live map of its kept results) changes nothing. 32 -> 33.
         "read_result",
         # S37c T10 (2026-10-14): reading the event rows changes nothing. Its
         # twin event_sender_add is deliberately NOT here: it adds a sender and
-        # its routing role. 32 -> 33.
+        # its routing role. 32 -> 33 as built; merged onto main's S32.3
+        # reads (36): 36 -> 37.
         "events_recent",
+        # S32.3 T13 (2026-10-13): a landing read back from Nova's own table, a
+        # change's committed diff (git diff on the repo machine) and the
+        # running stack's build labels (docker ps) change nothing. Their
+        # twins change_commit, repo_land and close_change are deliberately
+        # NOT here. 32 -> 35 as built; T15 (2026-10-13) rebased onto S38b's
+        # read_result, recomputed from the merged tree: 33 -> 36.
+        "landing_status",
+        "repo_diff",
+        "stack_status",
     }
 
 
@@ -837,6 +865,11 @@ def test_every_tool_that_writes_says_it_changes_something():
         "device_job_stop",
         # S37c T10: it adds a sender row and its routing role on the gateway.
         "event_sender_add",
+        # S32.3 T13: a commit on the host, a landing that may merge to main,
+        # and a change's box and worktree removed.
+        "change_commit",
+        "repo_land",
+        "close_change",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 

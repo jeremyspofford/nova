@@ -12,6 +12,8 @@ import re
 import uuid
 from pathlib import Path
 
+import pytest
+
 from app import attachments
 from tests.conftest import requires_db
 
@@ -174,3 +176,145 @@ async def test_an_attachment_that_is_not_his_is_not_found(owner_client):
     resp = await owner_client.get(f"/api/v1/attachments/{uuid.uuid4()}/content")
 
     assert resp.status_code == 404, resp.text
+
+
+# -- markup never runs on Nova's origin (verification fix 3, T2) -------------------
+#
+# An uploaded .html was served `inline` as text/html with no nosniff and no
+# CSP: a page he attached ran on Nova's origin, with his session cookie. Only
+# the kinds a browser shows without running anything — images and PDF — are
+# inline; everything else downloads, with nosniff and a sandboxing CSP, the
+# same shape workspace_api.py's /raw already uses.
+
+
+PDF_BYTES = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\n"
+MP3_BYTES = b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\x00" * 32
+BIN_BYTES = b"\x00\x01\x02\x03binary\x00"
+
+TEXT_KINDS = [
+    ("page.html", b"<html><body><script>alert(document.cookie)</script></body></html>"),
+    ("feed.xml", b"<?xml version='1.0'?><x><script>alert(1)</script></x>"),
+    ("notes.txt", b"plain words\n"),
+    ("rows.csv", b"a,b\n1,2\n"),
+    ("data.json", b'{"a": 1}'),
+    ("readme.md", b"# heading\n"),
+]
+NOT_INLINE = [*TEXT_KINDS, ("song.mp3", MP3_BYTES), ("blob.bin", BIN_BYTES)]
+
+
+async def _content(client, tmp_path, monkeypatch, name: str, body: bytes):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    conversation = await _conversation(client)
+    up = await _upload(client, conversation, name, body)
+    assert up.status_code == 200, up.text
+    got = up.json()["attachment"]
+    resp = await client.get(f"/api/v1/attachments/{got['id']}/content")
+    assert resp.status_code == 200, resp.text
+    return resp
+
+
+def _disposition_type(resp) -> str:
+    return resp.headers.get("content-disposition", "").split(";", 1)[0].strip().lower()
+
+
+async def test_an_uploaded_html_page_downloads_and_never_renders(
+    owner_client, tmp_path, monkeypatch
+):
+    """C1: the defect itself — markup he attached must not run as a page."""
+    name, body = TEXT_KINDS[0]
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    assert _disposition_type(resp) == "attachment", resp.headers.get("content-disposition")
+    assert "page.html" in resp.headers["content-disposition"]
+    assert resp.content == body
+
+
+@pytest.mark.parametrize(("name", "body"), TEXT_KINDS[1:], ids=[n for n, _ in TEXT_KINDS[1:]])
+async def test_every_text_kind_is_served_as_an_attachment(
+    owner_client, tmp_path, monkeypatch, name, body
+):
+    """C2: xml is markup too, and text/plain sniffed by an old browser can
+    become html — no text kind is inline."""
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    assert _disposition_type(resp) == "attachment", resp.headers.get("content-disposition")
+    assert name in resp.headers["content-disposition"]
+
+
+@pytest.mark.parametrize(
+    ("name", "body"),
+    [("shot.png", PNG), ("doc.pdf", PDF_BYTES), *NOT_INLINE],
+    ids=["shot.png", "doc.pdf", *[n for n, _ in NOT_INLINE]],
+)
+async def test_every_content_response_carries_nosniff(
+    owner_client, tmp_path, monkeypatch, name, body
+):
+    """C3: the declared type is the one the browser uses, never its guess —
+    the inline image included."""
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    assert resp.headers.get("x-content-type-options", "").lower() == "nosniff"
+
+
+@pytest.mark.parametrize(("name", "body"), NOT_INLINE, ids=[n for n, _ in NOT_INLINE])
+async def test_every_non_inline_response_is_sandboxed_by_csp(
+    owner_client, tmp_path, monkeypatch, name, body
+):
+    """C4: if a browser renders it anyway (opened from the downloads bar, a
+    browser that ignores the disposition), the CSP sandbox gives it an opaque
+    origin and no script."""
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    csp = resp.headers.get("content-security-policy", "")
+    assert "sandbox" in [d.strip().split(" ", 1)[0] for d in csp.split(";")], csp
+
+
+@pytest.mark.parametrize(
+    ("name", "body", "media"),
+    [("shot.png", PNG, "image/png"), ("doc.pdf", PDF_BYTES, "application/pdf")],
+    ids=["png", "pdf"],
+)
+async def test_images_and_pdf_stay_inline(owner_client, tmp_path, monkeypatch, name, body, media):
+    """C5: the transcript still draws the picture he sent, and a PDF still
+    opens in a tab — the fix narrows inline, it does not remove it."""
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    assert _disposition_type(resp) == "inline", resp.headers.get("content-disposition")
+    assert resp.headers["content-type"].startswith(media)
+
+
+@pytest.mark.parametrize(
+    ("name", "body"), [("song.mp3", MP3_BYTES), ("blob.bin", BIN_BYTES)], ids=["mp3", "bin"]
+)
+async def test_binary_kinds_that_are_not_images_or_pdf_download(
+    owner_client, tmp_path, monkeypatch, name, body
+):
+    """C6: inline is an allow-list of what a browser shows without running
+    anything, not a deny-list of html — audio and unknown bytes download."""
+    resp = await _content(owner_client, tmp_path, monkeypatch, name, body)
+
+    assert _disposition_type(resp) == "attachment", resp.headers.get("content-disposition")
+
+
+@pytest.mark.parametrize(
+    ("media", "inline"),
+    [
+        ("image/png", True),
+        ("image/jpeg", True),
+        ("application/pdf", True),
+        ("IMAGE/PNG; charset=binary", True),
+        ("image/svg+xml", False),
+        ("text/html", False),
+        ("text/xml", False),
+        ("text/plain", False),
+        ("audio/mpeg", False),
+        ("application/octet-stream", False),
+    ],
+)
+def test_the_inline_rule_is_an_allow_list_that_excludes_svg(media, inline):
+    """C5/C6 at the rule itself: SVG is image/* but IS markup that can carry
+    <script>; the sniffer never names it today, so no upload can reach this
+    case — the rule must hold without relying on that."""
+    from app.attachments_api import served_inline
+
+    assert served_inline(media) is inline

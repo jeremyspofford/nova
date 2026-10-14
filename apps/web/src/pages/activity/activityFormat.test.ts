@@ -8,6 +8,7 @@ import {
   isWorkspacePathTool,
   mcpCallLabel,
   viewFacts,
+  spanLabel,
 } from './activityFormat'
 
 describe('statusBadge', () => {
@@ -236,5 +237,50 @@ describe('viewFacts (S29 T8)', () => {
       'run: x · target: y',
       'file: null · target: z',
     ])
+  })
+})
+
+// T20 (verification 2-7): span kinds read as words, not llm_call / guard.
+describe('spanLabel — T20 span kinds read as words', () => {
+  // Every span kind services/core/app writes to turn_spans at b33570d9
+  // (turn.span("<kind>", ...) in chat.py, beats.py, scheduler.py,
+  // decisions.py, live_facts.py; wake.py BACKGROUND_WAKE_SPAN).
+  const CORE_KINDS = [
+    'llm_call', 'tool', 'guard', 'memory_recall', 'memory_ingest', 'agent_names',
+    'round_retry', 'round_stop', 'agent_cap', 'agent_roster', 'skills_roster',
+    'mcp_roster', 'model_swap', 'decisions', 'job', 'beat', 'urgent', 'checks',
+    'distil', 'background_wake',
+  ]
+
+  it('C3 llm_call reads "Model call", whatever the span is named', () => {
+    expect(spanLabel('llm_call', null)).toBe('Model call')
+    expect(spanLabel('llm_call', 'openrouter:google/gemini-3.8-flash')).toBe('Model call')
+  })
+
+  it('C3 a guard reads "Guard: <its name in words>"', () => {
+    expect(spanLabel('guard', 'delegation_claim')).toBe('Guard: delegation claim')
+    expect(spanLabel('guard', 'narration')).toBe('Guard: narration')
+    expect(spanLabel('guard', 'own_tool_handback')).toBe('Guard: own tool handback')
+  })
+
+  it('C3 a guard with no name reads "Guard", never "Guard: " or "Guard: null"', () => {
+    expect(spanLabel('guard', null)).toBe('Guard')
+    expect(spanLabel('guard', '')).toBe('Guard')
+  })
+
+  it('C4 every kind core writes reads as words: not the raw key, no underscore, capitalised', () => {
+    for (const kind of CORE_KINDS) {
+      const label = spanLabel(kind, null)
+      expect(label, kind).not.toBe(kind)
+      expect(label, kind).not.toMatch(/_/)
+      expect(label.charAt(0), kind).toBe(label.charAt(0).toUpperCase())
+      expect(label.trim().length, kind).toBeGreaterThan(0)
+    }
+  })
+
+  it('C4 an unknown kind falls back to sentence-cased words, never empty, never thrown on', () => {
+    expect(spanLabel('future_thing', null)).toBe('Future thing')
+    expect(spanLabel('frobnicate', 'x')).toBe('Frobnicate')
+    expect(() => spanLabel('', null)).not.toThrow()
   })
 })

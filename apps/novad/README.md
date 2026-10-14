@@ -507,6 +507,7 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
 | `box.start`  | brings the change's box up (network, cache volume, Postgres, box — each created if missing, started if stopped; a running box is left alone); `start_change` sends it |
 | `box.exec`   | the same, then `docker exec -w <cwd> -u <uid>:<gid> nova-box-<id> argv…` — argv only, the same 64 KiB output cap and timeout words as `shell.exec`; a nonzero exit is `ok:true` with its code |
 | `box.status` | every box on this machine and its state (`running` / `stopped`), from `docker ps -a --filter label=nova.box`; `list_changes` sends it |
+| `box.remove` | takes `{change}` only and removes that change's box, its Postgres, network and dependency cache (`rm -f`, `network rm`, `volume rm`; anything already gone is skipped); a landing's close and `close_change` send it. A docker refusal is ok:false "cannot remove the box nova-box-<id>: <docker's words>" |
 
 - **The shape is Go code here, never data from the wire.** Core sends only
   `{argv, cwd, change, checkout, branch, limits}`; `internal/box` derives
@@ -545,15 +546,18 @@ boxes" in `deploy/README.md`). Core sends them only to the repo's machine
   checks once a minute; a box idle 30 minutes is stopped with its Postgres. A
   box already running when the agent started counts from the first time it is
   seen. A box that runs a live job (see Jobs, below) is never stopped: its
-  idle time counts from the last check that saw the job. Removal is not here
-  yet (S32.3).
+  idle time counts from the last check that saw the job. Removal is
+  `box.remove` (S32.3): a box with a live job is removed all the same (the
+  caller asked), and the job ends with it.
 - **Where.** Linux (and macOS) with docker on the agent's PATH and the agent
   running as the owner, who must be able to use docker. The isolated network
   mode needs docker 28+. On Windows there is no box manager: each of the
-  three answers "cannot: no box manager on this agent".
+  four answers "cannot: no box manager on this agent".
 - An agent from before S32.2 answers `unknown capability "box.exec"`; core
   turns that into "…'s agent predates the box — update it with
-  machine_update; nothing was run".
+  machine_update; nothing was run". One from before S32.3 answers `unknown
+  capability "box.remove"`; core turns that into "…'s agent predates box
+  removal — update it with machine_update".
 
 ## Jobs (S30c)
 
