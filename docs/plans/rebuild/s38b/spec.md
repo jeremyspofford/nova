@@ -156,7 +156,7 @@ registry pin (`read_result`) and a corpus pin move, on purpose.
 
 ## 10. Interplay
 
-- **S32.3 (another session):** it takes migration 049; whichever lands second
+- **S32.3 (another session):** S38b landed first with 049_tool_results, so S32.3 renumbers to 050; whichever lands second
   renumbers once.
 - **S34 goals:** long attempts use these summaries (`nova-codes.md`).
 - **S37c (next):** event payloads are tool-result-shaped and get the same

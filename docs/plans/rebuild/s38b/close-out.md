@@ -29,7 +29,7 @@ These docs (T7) are not committed yet.
 
 ## What was built, per task
 
-**T1 — every result kept in full.** Core migration `050_tool_results.sql`
+**T1 — every result kept in full.** Core migration `049_tool_results.sql`
 (049 is S32.3's). One row per tool result she is sent: `turn_id`, `ref`
 (`r1`, `r2`, … in call order, the turn's own handle), `tool_call_id`, `tool`,
 `content`, `chars`. `chat._run_tool` appends the result to the turn in memory,
