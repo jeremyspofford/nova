@@ -154,6 +154,10 @@ NO_OUTSIDE_ACTION: dict[str, str] = {
     "set_chat_model": "writes the chat pick in Nova's settings",
     "spend_report": "reads Nova's spend ledger",
     "update_agent": "edits an agent row in Nova",
+    # S37c T10 (2026-10-14): her side of events — rows in Nova, and a role on
+    # her own gateway; nothing is sent to the program that will call.
+    "events_recent": "reads Nova's events rows and their notices",
+    "event_sender_add": "a sender row in Nova and its routing role on Nova's own gateway",
 }
 
 

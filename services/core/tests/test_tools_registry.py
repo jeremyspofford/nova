@@ -197,6 +197,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # read it back with read_result(ref, part|query); without the tool that
     # sentence would name nothing she has. A read of this turn's own results;
     # nothing waits on anyone (test_no_approvals green).
+    # Deliberate snapshot update (S37c T10, 2026-10-14): events_recent and
+    # event_sender_add (tools/events.py), so SEVENTY-FOUR -> SEVENTY-SIX.
+    # Spec §2.9: "did the CI failure get looked at?" is read from the event
+    # rows (state, turn, notice), not remembered; §2.1: she can add a sender,
+    # and its key waits on his Settings > Events page, never in her context.
+    # Neither is an approval; nothing waits on anyone (test_no_approvals green).
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -347,6 +353,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # S38b T4 (2026-10-13): a result of this turn, read back in full after
         # a summary replaced it in what is sent. reads_only.
         "read_result",
+        # S37c T10 (2026-10-14): what each event became, and adding a sender
+        # (tools/events.py). SEVENTY-FOUR -> SEVENTY-SIX.
+        "events_recent",
+        "event_sender_add",
     }
 
 
@@ -773,6 +783,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # S38b T4 (2026-10-13): reading back a result this turn already holds
         # (the live map of its kept results) changes nothing. 31 -> 32.
         "read_result",
+        # S37c T10 (2026-10-14): reading the event rows changes nothing. Its
+        # twin event_sender_add is deliberately NOT here: it adds a sender and
+        # its routing role. 32 -> 33.
+        "events_recent",
     }
 
 
@@ -821,6 +835,8 @@ def test_every_tool_that_writes_says_it_changes_something():
         "device_job_start",
         # S30c T11: it ends a job on a device.
         "device_job_stop",
+        # S37c T10: it adds a sender row and its routing role on the gateway.
+        "event_sender_add",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"
 
