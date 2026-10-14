@@ -3275,3 +3275,134 @@ async def test_a_run_the_device_answered_did_not_finish_is_read_as_its_answer(
     assert claim is not None, result
     assert claim.record.case == case, result
     assert claim.text == text, result
+
+
+# -- verification-2-7 T8: a close that raised is not reported as a close ------
+#
+# Hub.disconnect's bool says whether a live socket was actually closed. When
+# conn.close() raised, nothing confirms the socket went down, so the answer is
+# False — while the hub still forgets that socket (no command is ever routed
+# to it again) and the failure is stated in the log. Its two callers (the
+# revoke route and a re-pair through /enroll) answer for the committed row,
+# never for the socket, and must keep doing so when the close fails.
+
+
+class _CloseRaises(FakeWSConn):
+    """A socket whose close() fails the way a real one can."""
+
+    def __init__(self, exc: BaseException) -> None:
+        super().__init__()
+        self._exc = exc
+        self.close_calls = 0
+
+    async def close(self, code: int = 1000) -> None:
+        self.close_calls += 1
+        raise self._exc
+
+
+_CLOSE_FAILURES = [
+    pytest.param(ConnectionResetError("socket went away"), id="connection-reset"),
+    pytest.param(
+        RuntimeError("Cannot call close once a close message has been sent"), id="runtime"
+    ),
+    pytest.param(devices_ws.ConnectionClosed(), id="connection-closed"),
+]
+
+
+@pytest.mark.parametrize("exc", _CLOSE_FAILURES)
+async def test_v27_t8_c1_a_close_that_raised_is_not_reported_as_closed(pool, exc):
+    device_id, _device = await _enroll(pool)
+    conn = _CloseRaises(exc)
+    devices_ws.hub.register(device_id, conn)
+    closed = await devices_ws.hub.disconnect(device_id, "revoked")
+    assert conn.close_calls == 1  # it did try
+    assert closed is False
+
+
+async def test_v27_t8_c1_a_repair_close_that_raised_is_not_reported_as_closed(pool):
+    device_id, _device = await _enroll(pool)
+    devices_ws.hub.register(device_id, _CloseRaises(OSError("broken pipe")))
+    assert await devices_ws.hub.disconnect(device_id, "re-paired") is False
+
+
+async def test_v27_t8_c2_a_socket_whose_close_raised_is_still_forgotten(pool):
+    device_id, _device = await _enroll(pool, name="pc")
+    conn = _CloseRaises(ConnectionResetError("socket went away"))
+    devices_ws.hub.register(device_id, conn)
+    in_flight = asyncio.create_task(
+        devices_ws.hub.command(
+            pool, device_id=device_id, name="pc", capability="system.info", args={}, timeout=2
+        )
+    )
+    await asyncio.wait_for(conn.next_sent(), 2)  # the command reached the socket
+    await devices_ws.hub.disconnect(device_id, "revoked")
+    # The command waiting on that socket is answered now, in words, not at its timeout.
+    with pytest.raises(devices.DeviceRefused) as exc:
+        await asyncio.wait_for(in_flight, 1)
+    assert "device connection closed: revoked" in exc.value.reason
+    # And the hub never routes another command to the socket it tried to kill.
+    assert not devices_ws.hub.is_connected(device_id)
+    assert devices_ws.hub.in_flight(device_id) == 0
+    sent_before = len(conn.sent)
+    with pytest.raises(devices_ws.NotSent, match="not connected"):
+        await devices_ws.hub.command(
+            pool, device_id=device_id, name="pc", capability="system.info", args={}, timeout=1
+        )
+    assert len(conn.sent) == sent_before
+
+
+async def test_v27_t8_c3_a_close_that_raised_is_stated_in_the_log(pool, caplog):
+    device_id, _device = await _enroll(pool)
+    devices_ws.hub.register(device_id, _CloseRaises(ConnectionResetError("socket went away")))
+    with caplog.at_level("WARNING", logger="core"):
+        await devices_ws.hub.disconnect(device_id, "revoked")
+    stated = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and str(device_id) in r.getMessage() and r.exc_info
+    ]
+    assert stated, [r.getMessage() for r in caplog.records]
+    assert isinstance(stated[0].exc_info[1], ConnectionResetError)
+
+
+async def test_v27_t8_c5_revoke_answers_for_the_row_when_the_close_raised(owner_client, pool):
+    device_id, _device = await _enroll(pool, name="laptop")
+    conn = _CloseRaises(ConnectionResetError("socket went away"))
+    devices_ws.hub.register(device_id, conn)
+    resp = await owner_client.post(f"/api/v1/devices/{device_id}/revoke")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert conn.close_calls == 1
+    assert body["device"]["id"] == str(device_id)
+    assert body["device"]["revoked_at"] is not None  # the committed revoke is the answer
+    assert body["device"]["connected"] is False  # never "still connected", never "closed"
+    assert set(body) == {"device"}  # no socket claim rides along
+    assert await pool.fetchval("SELECT revoked_at FROM devices WHERE id = $1", device_id)
+    assert not devices_ws.hub.is_connected(device_id)
+
+
+async def test_v27_t8_c5_a_repair_answers_for_the_row_when_the_old_close_raised(client, pool):
+    device_id, _old = await _enroll(pool, name="pc")
+    conn = _CloseRaises(ConnectionResetError("socket went away"))
+    devices_ws.hub.register(device_id, conn)
+    person = await _person(pool)
+    code = await devices.mint_pairing_code(pool, created_by=person.id, device_id=device_id)
+    new = FakeDevice()
+    resp = await client.post(
+        "/api/v1/devices/enroll",
+        json={
+            "code": code["code"],
+            "pubkey": new.pubkey_hex,
+            "name": "pc",
+            "platform": "linux",
+            "hostname": "h",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert conn.close_calls == 1
+    assert body["device_id"] == str(device_id) and body["repaired"] is True
+    assert (
+        await pool.fetchval("SELECT pubkey FROM devices WHERE id = $1", device_id) == new.pubkey_hex
+    )
+    assert not devices_ws.hub.is_connected(device_id)  # the old key's socket is gone

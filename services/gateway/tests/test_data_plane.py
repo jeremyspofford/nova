@@ -571,3 +571,145 @@ async def test_an_empty_pass_over_header_changes_nothing(client, pool, monkeypat
     assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
     assert resp.headers["x-nova-route"] == "role=chat;link=1"
     assert _dialled(fake) == ["qwen3:8b"]
+
+
+# ── verification-2-7 T7: walk_role's 503 states the links it never tried ───
+# walk_role stops after six attempts. A chain longer than that, whose first six
+# links refuse, used to end "every link in the … chain refused" while links
+# were still untried: a success-shaped sentence over a failure. The bound
+# stays (a liveness bound, not this task's to lift); the 503 says what it did.
+
+from tests.fakes import FakeOpenAICompat as _Cloud  # noqa: E402
+
+UNTRIED_PHRASE = "not tried"
+
+
+async def _refusing_chain(client, pool, monkeypatch, mount_backend, links: int) -> _Cloud:
+    """A cloud provider whose every completion is a 503 (a 5xx walls only the
+    model, so each next link stays runnable), and a chat chain of `links`
+    models on it. The hub lists no models, so it is never dialled."""
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    hub = FakeOllama(deltas=("Hel", "lo"), tags=())
+    mount_backend("http://ollama.test", hub.app)
+    await backends.save_config(pool, {"kind": "ollama", "model": "qwen3:8b"})
+    cloud = _Cloud(accepts_key="sk-1", completions_status=503)
+    mount_backend("http://refuser.test", cloud.app)
+    made = await client.post(
+        "/admin/providers",
+        json={
+            "name": "refuser",
+            "adapter": "openai-chat",
+            "base_url": "http://refuser.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-1",
+        },
+    )
+    assert made.status_code == 200, made.text
+    chain = [f"refuser:m{i}" for i in range(links)]
+    put = await client.put("/admin/routes/chat", json={"chain": chain})
+    assert put.status_code == 200 and put.json()["chain"] == chain, put.text
+    return cloud
+
+
+async def _chat_walk(client):
+    return await client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+        headers={"X-Nova-Role": "chat", "X-Nova-Purpose": "chat"},
+    )
+
+
+def _cloud_dialled(cloud: _Cloud) -> list[str]:
+    return [b["model"] for p, b in cloud.seen if p.endswith("/chat/completions")]
+
+
+async def test_t7_a_walk_that_stops_with_links_untried_never_says_every_link_refused(
+    client, pool, monkeypatch, mount_backend
+):
+    """C1: eight links, six refuse, two never dialled — the 503 does not
+    claim the whole chain refused."""
+    await _refusing_chain(client, pool, monkeypatch, mount_backend, links=8)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    error = resp.json()["error"]
+    assert "every link" not in error, error
+
+
+async def test_t7_the_503_names_each_link_never_tried_in_chain_order(
+    client, pool, monkeypatch, mount_backend
+):
+    """C2: the links the walk never reached are named, in their chain order."""
+    await _refusing_chain(client, pool, monkeypatch, mount_backend, links=8)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    error = resp.json()["error"]
+    assert "refuser:m6" in error and "refuser:m7" in error, error
+    assert error.index("refuser:m6") < error.index("refuser:m7"), error
+
+
+async def test_t7_the_503_says_those_links_were_not_tried(client, pool, monkeypatch, mount_backend):
+    """C3: the untried links are stated AS untried (never listed as refusals),
+    and only those: a dialled link is not called untried."""
+    await _refusing_chain(client, pool, monkeypatch, mount_backend, links=8)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    error = resp.json()["error"]
+    assert UNTRIED_PHRASE in error, error
+    untried_part = error[error.index(UNTRIED_PHRASE) :]
+    assert "refuser:m6" in untried_part and "refuser:m7" in untried_part, error
+    for dialled in (f"refuser:m{i}" for i in range(6)):
+        assert dialled not in untried_part, error
+
+
+async def test_t7_the_attempt_bound_stays_six_and_untried_links_are_never_dialled(
+    client, pool, monkeypatch, mount_backend
+):
+    """C4: the fix states the bound, it does not lift it — six links dialled,
+    the two named untried were never dialled, and the 503 says so."""
+    cloud = await _refusing_chain(client, pool, monkeypatch, mount_backend, links=8)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    assert _cloud_dialled(cloud) == [f"m{i}" for i in range(6)]
+    error = resp.json()["error"]
+    assert UNTRIED_PHRASE in error and "refuser:m7" in error, error
+
+
+async def test_t7_a_chain_whose_every_link_refused_keeps_its_wording(
+    client, pool, monkeypatch, mount_backend
+):
+    """C5: six links — exactly the bound — all dialled, all refused: nothing
+    untried, so the walk's old sentence is the true one and no link is called
+    untried. (A shorter chain ends in resolve's NothingRunnable 503 instead,
+    which has its own words and is not this task's.)"""
+    cloud = await _refusing_chain(client, pool, monkeypatch, mount_backend, links=6)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    assert _cloud_dialled(cloud) == [f"m{i}" for i in range(6)]
+    error = resp.json()["error"]
+    assert "every link in the 'chat' chain refused this request" in error, error
+    assert UNTRIED_PHRASE not in error, error
+
+
+async def test_t7_one_link_left_untried_is_named_alone(client, pool, monkeypatch, mount_backend):
+    """COVERAGE (C2/C3, one past the bound): seven links, six refuse — the
+    single untried link is named as not tried, in the singular, and the
+    walk still never claims every link refused."""
+    cloud = await _refusing_chain(client, pool, monkeypatch, mount_backend, links=7)
+
+    resp = await _chat_walk(client)
+
+    assert resp.status_code == 503, resp.text
+    assert _cloud_dialled(cloud) == [f"m{i}" for i in range(6)]
+    error = resp.json()["error"]
+    assert "every link" not in error, error
+    assert error.endswith("1 link was not tried: refuser:m6"), error

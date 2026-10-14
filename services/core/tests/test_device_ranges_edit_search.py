@@ -133,6 +133,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 
 import pytest
 
@@ -1035,3 +1036,444 @@ def test_t7_c4_the_description_states_the_hit_form_the_caps_and_the_next_read():
     assert "200" in text and "2000" in text, text
     assert "literal" in lower, text
     assert "device_read_file" in text and "start_line" in text, text
+
+
+# == verification-2-7 T4: a whole number in any shape is forwarded as an int ==========
+#
+# The model sends a count as 2, 2.0 or "2"; the agent takes a JSON integer. A
+# whole number in any of those shapes reaches the frame as an int; anything
+# else (2.7, "abc", " 2", NaN) is a stated refusal naming the key and "whole
+# number", before any frame, and never truncated.
+
+_V27_LINE_META = {
+    "bytes_total": 340_000,
+    "lines_total": 9000,
+    "range": {"start_line": 2, "end_line": 3},
+    "eof": False,
+}
+_V27_BYTE_META = {"bytes_total": 340_000, "range": {"offset": 2, "length": 3}, "eof": False}
+
+
+def _v27_ints(sent: dict, keys: tuple[str, ...]) -> list[str]:
+    """The keys whose forwarded value is not a python int (bool excluded)."""
+    return [k for k in keys if type(sent.get(k)) is not int]
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [(2.0, 3.0), ("2", "3"), (2, "3"), ("002", 3.0)],
+)
+async def test_v27_t4_c1_a_whole_line_range_in_any_shape_is_forwarded_as_ints(pool, start, end):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "mini", "path": _PATH, "start_line": start, "end_line": end},
+        output="two\nthree\n",
+        meta=_V27_LINE_META,
+    )
+    assert ok is True, result
+    assert sent == {"path": _PATH, "start_line": 2, "end_line": 3}, sent
+    assert _v27_ints(sent, ("start_line", "end_line")) == [], sent
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "offset,length",
+    [(2.0, 3.0), ("2", "3"), ("0002", 3)],
+)
+async def test_v27_t4_c1_a_whole_byte_range_in_any_shape_is_forwarded_as_ints(pool, offset, length):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "mini", "path": _PATH, "offset": offset, "length": length},
+        output="abc",
+        meta=_V27_BYTE_META,
+    )
+    assert ok is True, result
+    assert sent == {"path": _PATH, "offset": 2, "length": 3}, sent
+    assert _v27_ints(sent, ("offset", "length")) == [], sent
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("given", [200.0, "200", "50", 50.0])
+async def test_v27_t4_c2_a_whole_max_matches_in_any_shape_is_forwarded_as_an_int(pool, given):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", max_matches=given),
+        output=_HITS,
+        meta=_SEARCH_META,
+    )
+    assert ok is True, result
+    assert sent == {"path": _TREE, "pattern": "_SpanScrub", "max_matches": int(float(given))}
+    assert _v27_ints(sent, ("max_matches",)) == [], sent
+    await _close(conn, task)
+
+
+# Not whole numbers: a fraction (as a float or a string), words, empty, signs,
+# spaces, exponent/hex/underscore spellings python's int() would quietly take,
+# and the non-finite floats json.loads accepts.
+_V27_NOT_WHOLE = [
+    2.7,
+    "2.7",
+    "2.0",
+    "abc",
+    "",
+    " 2",
+    "2 ",
+    "+2",
+    "-1",
+    "2e3",
+    "0x10",
+    "1_000",
+    float("nan"),
+    float("inf"),
+]
+
+
+@pytest.mark.parametrize("bad", _V27_NOT_WHOLE, ids=repr)
+async def test_v27_t4_c3_a_non_whole_read_range_is_stated_never_truncated(pool, bad):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "mini", "path": _PATH, "start_line": bad, "end_line": 9},
+        output="x",
+        meta=_V27_LINE_META,
+    )
+    assert ok is False, result
+    assert sent == {}, f"start_line={bad!r} reached the agent as {sent}"
+    assert result.startswith("Error:"), result
+    assert "start_line" in result, result
+    assert "whole number" in result, result
+    assert _files(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("bad", _V27_NOT_WHOLE, ids=repr)
+async def test_v27_t4_c3_a_non_whole_max_matches_is_stated_never_truncated(pool, bad):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", max_matches=bad),
+        output=_HITS,
+        meta=_SEARCH_META,
+    )
+    assert ok is False, result
+    assert sent == {}, f"max_matches={bad!r} reached the agent as {sent}"
+    assert result.startswith("Error:"), result
+    assert "max_matches" in result, result
+    assert "whole number" in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "tool,extra",
+    [
+        ("device_search", {"max_matches": "0"}),
+        ("device_search", {"max_matches": "2001"}),
+        ("device_search", {"max_matches": 2001.0}),
+        ("device_search", {"max_matches": 0.0}),
+        ("device_read_file", {"start_line": "0", "end_line": "5"}),
+        ("device_read_file", {"start_line": 0.0, "end_line": 5}),
+        ("device_read_file", {"offset": "0", "length": "0"}),
+    ],
+    ids=repr,
+)
+async def test_v27_t4_c4_a_normalized_value_still_meets_the_schema_bounds(pool, tool, extra):
+    """A whole number given as a string or float is held to the same minimum
+    and maximum as the int it stands for — and refused for THAT reason (the
+    bound), not for its shape."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    base = _search_args("mini") if tool == "device_search" else {"device": "mini", "path": _PATH}
+    result, ok, facts, sent = await _call(pool, conn, device, tool, {**base, **extra})
+    assert ok is False, result
+    assert sent == {}, f"{extra} reached the agent as {sent}"
+    assert "at least" in result or "at most" in result, result
+    assert facts == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("bad", [True, False, [2], {"n": 2}, None], ids=repr)
+async def test_v27_t4_c5_a_boolean_or_container_is_never_a_number(pool, bad):
+    """Pin (passes before GREEN): python's bool is an int and int(True) == 1;
+    normalizing must not start accepting `true` as a line number."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    for tool, args in (
+        ("device_read_file", {"device": "mini", "path": _PATH, "start_line": bad, "end_line": 3}),
+        ("device_search", _search_args("mini", max_matches=bad)),
+    ):
+        result, ok, facts, sent = await _call(pool, conn, device, tool, args)
+        assert ok is False, (tool, result)
+        assert sent == {}, f"{tool} {bad!r} reached the agent as {sent}"
+        assert facts == []
+    await _close(conn, task)
+
+
+async def test_v27_t4_c6_other_tools_integer_arguments_stay_strict(pool):
+    """Pin (passes before GREEN): the change is scoped to device_read_file's
+    range keys and device_search's max_matches. device_run's timeout_s as a
+    string is still refused before any frame (novad's numberArg is strict
+    there too, T5)."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_run",
+        {"device": "mini", "argv": ["true"], "timeout_s": "5"},
+    )
+    assert ok is False, result
+    assert sent == {}, f"timeout_s '5' reached the agent as {sent}"
+    await _close(conn, task)
+
+
+# -- COVERAGE additions (verification-2-7 T4) ------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["٢", "２", "²", "1٣"], ids=repr)
+async def test_v27_t4_cov_a_non_ascii_digit_string_is_not_a_whole_number(pool, bad):
+    """C3 / the digits-only assumption: ASCII 0-9 only. str.isdigit() and int()
+    both take an Arabic-Indic or fullwidth digit (and isdigit a superscript);
+    the agent's wire rule (T5) does not, so neither does core."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("mini", max_matches=bad),
+        output=_HITS,
+        meta=_SEARCH_META,
+    )
+    assert ok is False, result
+    assert sent == {}, f"max_matches={bad!r} reached the agent as {sent}"
+    assert result.startswith("Error:") and "whole number" in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+async def test_v27_t4_cov_a_digit_string_past_pythons_int_limit_is_stated_not_raised(pool):
+    """A digits-only string longer than python's int-from-string limit makes
+    int() raise; that must come back as a stated refusal, never an exception
+    out of dispatch."""
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "mini", "path": _PATH, "start_line": "9" * 5000, "end_line": 9},
+    )
+    assert ok is False, result
+    assert sent == {}
+    assert result.startswith("Error:"), result
+    assert "start_line" in result and "whole number" in result, result
+    assert facts == []
+    await _close(conn, task)
+
+
+def test_v27_t4_cov_the_whole_number_keyword_never_goes_on_the_wire():
+    """core's own schema keyword is not JSON Schema: the registry carries it on
+    exactly the T4 properties, and no advertised tool shows it to a provider —
+    while the rest of each advertised schema is the registry's own."""
+    from app.tools import schema
+
+    marked = {
+        (name, prop)
+        for name, tool in tools.REGISTRY.items()
+        for prop, spec in (tool.parameters.get("properties") or {}).items()
+        if isinstance(spec, dict) and spec.get(schema.WHOLE_NUMBER)
+    }
+    assert marked == {
+        ("device_read_file", "start_line"),
+        ("device_read_file", "end_line"),
+        ("device_read_file", "offset"),
+        ("device_read_file", "length"),
+        ("device_search", "max_matches"),
+    }
+    for entry in tools.advertised_tools():
+        function = entry["function"]
+        params = function["parameters"]
+        assert schema.WHOLE_NUMBER not in json.dumps(params), function["name"]
+        registered = tools.REGISTRY[function["name"]].parameters
+        props = registered.get("properties") or {}
+        assert (
+            params
+            == {
+                **registered,
+                "properties": {
+                    p: {k: v for k, v in s.items() if k != schema.WHOLE_NUMBER}
+                    for p, s in props.items()
+                },
+            }
+            or params == registered
+        ), function["name"]
+    # Stripping never mutates the registry's schema.
+    assert tools.REGISTRY["device_search"].parameters["properties"]["max_matches"][
+        schema.WHOLE_NUMBER
+    ]
+
+
+# == verification-2-7 T6: an agent from before wire numbers is stated ==============
+#
+# Before bae41a1d (2026-10-10) novad's fs.read and fs.search took a number only
+# as a float64, but the client decodes frames with UseNumber, so every number on
+# the wire was a json.Number and was refused: fs.read "must be a whole number,
+# got json.Number" (%T), fs.search "must be a whole number from 1 to 2000, got
+# 200" (%v of a json.Number prints its digits). Those builds cannot change, so
+# the wording is frozen; she is told the agent needs machine_update, not the
+# agent's words, which read as a fault in her own arguments.
+
+_V27_T6_OLD_READ = "fs.read '{key}' must be a whole number, got json.Number"
+_V27_T6_OLD_SEARCH = "fs.search 'max_matches' must be a whole number from 1 to 2000, got {n}"
+
+
+def _v27_t6_says_update(result: str) -> bool:
+    return (
+        result.startswith("Error:")
+        and "predates wire numbers" in result
+        and "machine_update" in result
+        and "nothing" in result
+    )
+
+
+@pytest.mark.parametrize(
+    "key,rng,meta",
+    [
+        ("start_line", {"start_line": 2, "end_line": 3}, _V27_LINE_META),
+        ("end_line", {"start_line": 2, "end_line": 3}, _V27_LINE_META),
+        ("offset", {"offset": 2, "length": 3}, _V27_BYTE_META),
+        ("length", {"offset": 2, "length": 3}, _V27_BYTE_META),
+    ],
+)
+async def test_v27_t6_c1_an_old_agents_json_number_read_refusal_is_stated_as_predating(
+    pool, key, rng, meta
+):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_read_file",
+        {"device": "dell", "path": _PATH, **rng},
+        ok=False,
+        exit_code=None,
+        error=_V27_T6_OLD_READ.format(key=key),
+    )
+    assert sent == {"path": _PATH, **rng}, "the range never reached the agent"
+    assert ok is False, result
+    assert _v27_t6_says_update(result), result
+    assert "dell" in result, result
+    assert _files(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize("n", [200, 5, 2000, 1])
+async def test_v27_t6_c2_an_old_agents_max_matches_refusal_is_stated_as_predating(pool, n):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, facts, sent = await _call(
+        pool,
+        conn,
+        device,
+        "device_search",
+        _search_args("dell", max_matches=n),
+        ok=False,
+        exit_code=None,
+        error=_V27_T6_OLD_SEARCH.format(n=n),
+    )
+    assert sent.get("max_matches") == n, "max_matches never reached the agent"
+    assert ok is False, result
+    assert _v27_t6_says_update(result), result
+    assert "dell" in result, result
+    assert _searches(facts) == []
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "tool,args,error",
+    [
+        (
+            "device_read_file",
+            {"device": "dell", "path": _PATH, "start_line": 2, "end_line": 3},
+            _V27_T6_OLD_READ.format(key="start_line"),
+        ),
+        (
+            "device_search",
+            _search_args("dell", max_matches=200),
+            _V27_T6_OLD_SEARCH.format(n=200),
+        ),
+    ],
+    ids=["read", "search"],
+)
+async def test_v27_t6_c3_the_stated_failure_replaces_the_agents_number_words(
+    pool, tool, args, error
+):
+    _id, device, conn, task = await _connect(pool, name="dell")
+    result, ok, _facts, sent = await _call(
+        pool, conn, device, tool, args, ok=False, exit_code=None, error=error
+    )
+    assert sent, "the call never reached the agent"
+    assert ok is False, result
+    assert "json.Number" not in result, result
+    assert "must be a whole number" not in result, result
+    assert "predates wire numbers" in result, result
+    await _close(conn, task)
+
+
+@pytest.mark.parametrize(
+    "tool,args,said",
+    [
+        (
+            "device_read_file",
+            {"device": "mini", "path": _PATH, "start_line": 2, "end_line": 3},
+            "fs.read 'start_line' must be a whole number, got string",
+        ),
+        (
+            "device_read_file",
+            {"device": "mini", "path": _PATH, "offset": 2, "length": 3},
+            "fs.read 'offset' must be a whole number >= 0, got -1",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got 0",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got 2001",
+        ),
+        (
+            "device_search",
+            _search_args("mini", max_matches=200),
+            "fs.search 'max_matches' must be a whole number from 1 to 2000, got abc",
+        ),
+    ],
+    ids=["read-string", "read-negative", "search-0", "search-2001", "search-abc"],
+)
+async def test_v27_t6_c4_a_current_agents_number_refusal_is_its_own_words(pool, tool, args, said):
+    _id, device, conn, task = await _connect(pool, name="mini")
+    result, ok, _facts, sent = await _call(
+        pool, conn, device, tool, args, ok=False, exit_code=None, error=said
+    )
+    assert sent, "the call never reached the agent"
+    assert ok is False, result
+    assert said in result, result
+    assert "predates" not in result, result
+    await _close(conn, task)

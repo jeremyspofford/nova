@@ -17,7 +17,7 @@ import math
 
 import pytest
 
-from app import context_fit, context_summary, peers
+from app import context_fit, context_summary, peers, tools
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, Refusal
 from tests.test_chat_context_window import (  # noqa: F401 - _forget_served_links is autouse
@@ -69,12 +69,21 @@ def _file(workspace, name: str, tag: str, chars: int = FILE_CHARS) -> str:
     return body
 
 
+def _tools_chars() -> int:
+    """The tools array an owner chat round sends (verification-2-7 T24: it
+    counts against the window, in the fit and in the 70% mark alike)."""
+    return context_fit.tools_chars(tools.advertised_tools())
+
+
 def _window_at(fraction_of_budget: float, extra_tokens: int = TWO_READS_TOKENS):
-    """A window whose budget puts the first request plus `extra_tokens` at
-    `fraction_of_budget` — sized to the real prompt, never a pinned length."""
+    """A window whose budget puts the first request, with the tools array it
+    carries, plus `extra_tokens` at `fraction_of_budget` — sized to the real
+    prompt, never a pinned length."""
 
     def size(messages: list[dict]) -> int:
-        est = context_fit.estimate_tokens(messages, context_fit.DEFAULT_CHARS_PER_TOKEN)
+        est = context_fit.estimate_tokens(
+            messages, context_fit.DEFAULT_CHARS_PER_TOKEN, _tools_chars()
+        )
         return math.ceil((est + extra_tokens) / fraction_of_budget / 0.875)
 
     return size
@@ -337,8 +346,15 @@ async def test_no_stated_window_means_no_summary_call(owner_client, pool, mount_
 
 
 async def test_a_result_bigger_than_the_window_is_summarized_in_pieces_into_one(
-    owner_client, pool, mount_peers, workspace
+    owner_client, pool, mount_peers, workspace, monkeypatch
 ):
+    # verification-2-7 T24: the tools array counts against the window, and a
+    # summary piece's room (no tools sent) is at least that array's chars —
+    # more than one workspace read can return. So the turn advertises the
+    # read tool alone: a result bigger than the summarizer's room, beside a
+    # tools array a window this size can still hold.
+    real = tools.advertised_tools
+    monkeypatch.setattr(tools, "advertised_tools", lambda names=None: real([READ]))
     first = _file(workspace, "a.log", "alpha")
     # A small latest read, so the answer round fits once r1 is summarized.
     _file(workspace, "b.log", "beta", chars=400)

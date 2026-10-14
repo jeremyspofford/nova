@@ -14,10 +14,20 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 
+import pytest
+
 from app import context_fit
-from app.context_fit import budget_for, estimate_tokens, fit
+from app.context_fit import (
+    MESSAGE_OVERHEAD_TOKENS,
+    budget_for,
+    calibrated_chars_per_token,
+    chars_of,
+    estimate_tokens,
+    fit,
+)
 
 CPT = 4.0
 NOTE = re.compile(r"\[trimmed (\d+) chars[^\]]*?\b(\d+)-token[^\]]*\]$")
@@ -294,3 +304,275 @@ def test_estimate_counts_tool_call_names_and_text_parts_of_a_picture_ask():
     assert estimate_tokens(long, CPT) >= estimate_tokens(short, CPT) + 900
     parts = [{"role": "user", "content": [{"type": "text", "text": "y" * 4000}]}]
     assert estimate_tokens(parts, CPT) >= 1000
+
+
+# --- verification-2-7 T23: the advertised tools array counts, once ----------
+#
+# The tools array rides every request beside the messages (~60.7k chars for
+# 73 tools at b33570d9) and the model is charged for it, so fit() takes its
+# chars as a fixed overhead. The calibration takes the same overhead, so a
+# ratio learned from a round's prompt_tokens (which already include the
+# tools) never has the tools added on top of it a second time.
+
+TOOLS_CHARS = 60_700  # the live array's size at b33570d9
+
+
+def _tools(n: int) -> list[dict]:
+    """A tools array shaped like tools.advertised_tools()."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": f"tool_{i}",
+                "description": f"Does thing {i}. " * 8,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "where"}},
+                    "required": ["path"],
+                },
+            },
+        }
+        for i in range(n)
+    ]
+
+
+def _with_tools_est(messages: list[dict], overhead: int, cpt: float) -> int:
+    """C2's formula, by hand: one ceil over messages + tools."""
+    return math.ceil((chars_of(messages) + overhead) / cpt) + MESSAGE_OVERHEAD_TOKENS * len(
+        messages
+    )
+
+
+# C1: the overhead is the tools array's own chars.
+
+
+def test_v27_t23_tools_chars_is_the_json_length_of_the_array_and_zero_without_tools():
+    tools = _tools(5)
+    assert context_fit.tools_chars(tools) == len(json.dumps(tools))
+    assert context_fit.tools_chars(tuple(tools)) == len(json.dumps(tools))
+    assert context_fit.tools_chars(_tools(10)) > context_fit.tools_chars(tools)
+    assert context_fit.tools_chars(None) == 0
+    assert context_fit.tools_chars([]) == 0
+
+
+# C2: estimate_tokens counts the overhead with the messages.
+
+
+def test_v27_t23_estimate_counts_the_overhead_with_the_messages():
+    messages = [
+        {"role": "system", "content": "You are Nova. " * 50},
+        {"role": "user", "content": "list the files"},
+        *_round(1, ["a.txt\nb.txt"]),
+    ]
+    assert estimate_tokens(messages, CPT, 0) == estimate_tokens(messages, CPT)
+    for overhead in (1, 999, TOOLS_CHARS):
+        assert estimate_tokens(messages, CPT, overhead) == _with_tools_est(
+            messages, overhead, CPT
+        ), overhead
+    assert estimate_tokens(messages, CPT, TOOLS_CHARS) >= estimate_tokens(messages, CPT) + (
+        TOOLS_CHARS // 4
+    )
+
+
+def test_v27_t23_a_negative_overhead_is_refused():
+    messages = [{"role": "user", "content": "hi"}]
+    with pytest.raises(ValueError):
+        estimate_tokens(messages, CPT, -1)
+    with pytest.raises(ValueError):
+        fit(messages, 8192, CPT, -1)
+
+
+# C3: fit() counts the overhead, states its share, and fits the messages
+# into what the tools leave.
+
+
+def test_v27_t23_the_report_counts_and_states_the_overhead():
+    messages = [
+        {"role": "system", "content": "You are Nova."},
+        {"role": "user", "content": "run python --version"},
+        *_round(1, ["Python 3.12.3"]),
+    ]
+    before = copy.deepcopy(messages)
+    fitted, report = fit(messages, 32768, CPT, TOOLS_CHARS)
+    assert fitted == before
+    assert report.overhead_tokens == math.ceil(TOOLS_CHARS / CPT)
+    assert report.est_tokens == estimate_tokens(fitted, CPT, TOOLS_CHARS)
+    assert report.est_tokens == _with_tools_est(fitted, TOOLS_CHARS, CPT)
+    assert report.est_tokens <= report.budget
+    assert report.fits is True
+    assert report.unfittable is False
+
+
+def test_v27_t23_a_request_that_fits_only_without_the_tools_is_trimmed_to_fit_with_them():
+    window = 32768
+    old, new = "a" * 30_000, "b" * 30_000
+    messages = [
+        {"role": "system", "content": "S" * 8000},
+        {"role": "user", "content": "compare the two files"},
+        *_round(1, [old]),
+        *_round(2, [new]),
+    ]
+    before = copy.deepcopy(messages)
+    budget = budget_for(window)
+    assert estimate_tokens(before, CPT) <= budget, "fixture: the messages alone fit"
+    assert _with_tools_est(before, TOOLS_CHARS, CPT) > budget, "fixture: not with the tools"
+
+    fitted, report = fit(messages, window, CPT, TOOLS_CHARS)
+
+    assert messages == before, "fit mutated its input"
+    assert report.tool_results_trimmed >= 1
+    assert report.chars_removed > 0
+    tools = [m for m in fitted if m["role"] == "tool"]
+    assert tools[0]["tool_call_id"] == "call_1_0"
+    _assert_note(old, tools[0]["content"], window)
+    assert json.dumps(_systems(fitted)) == json.dumps(_systems(before))
+    assert _last_user(fitted) == before[1]
+    _assert_paired(fitted)
+    assert report.est_tokens == _with_tools_est(fitted, TOOLS_CHARS, CPT)
+    assert report.est_tokens <= report.budget
+    assert report.fits is True
+    assert report.unfittable is False
+
+
+def test_v27_t23_oldest_rounds_drop_when_the_tools_leave_too_little_room():
+    window = 32768
+    rounds = [_round(n, ["ok"], text=c * 20_000) for n, c in ((1, "t"), (2, "u"), (3, "v"))]
+    messages = [
+        {"role": "system", "content": "You are Nova."},
+        {"role": "user", "content": "do the three things"},
+        *(m for r in rounds for m in r),
+    ]
+    before = copy.deepcopy(messages)
+    budget = budget_for(window)
+    assert estimate_tokens(before, CPT) <= budget, "fixture: the messages alone fit"
+    assert _with_tools_est(before, TOOLS_CHARS, CPT) > budget, "fixture: not with the tools"
+
+    fitted, report = fit(messages, window, CPT, TOOLS_CHARS)
+
+    assert messages == before, "fit mutated its input"
+    assert report.rounds_dropped >= 1
+    kept = {m["tool_call_id"] for m in fitted if m["role"] == "tool"}
+    assert "call_1_0" not in kept, "the oldest round was not the one dropped"
+    assert "call_3_0" in kept
+    _assert_paired(fitted)
+    assert report.est_tokens == _with_tools_est(fitted, TOOLS_CHARS, CPT)
+    assert report.est_tokens <= report.budget
+    assert report.fits is True
+
+
+# C4: unfittable when the overhead leaves no room.
+
+
+def test_v27_t23_instructions_and_ask_that_fit_alone_are_unfittable_with_the_tools():
+    window = 8192
+    overhead = 20_000
+    messages = [
+        {"role": "system", "content": "S" * 20_000},
+        {"role": "user", "content": "his question"},
+        *_round(1, ["r" * 4000]),
+    ]
+    before = copy.deepcopy(messages)
+    budget = budget_for(window)
+    assert estimate_tokens(before[:2], CPT) <= budget, "fixture: instructions + ask fit alone"
+    assert _with_tools_est(before[:2], overhead, CPT) > budget, "fixture: not with the tools"
+
+    fitted, report = fit(messages, window, CPT, overhead)
+
+    assert messages == before, "fit mutated its input"
+    assert fitted == before, "an unfittable request was mangled"
+    assert report.unfittable is True
+    assert report.fits is False
+    assert report.est_tokens == _with_tools_est(fitted, overhead, CPT)
+    assert report.est_tokens > report.budget
+    assert report.overhead_tokens == math.ceil(overhead / CPT)
+
+
+def test_v27_t23_tools_alone_over_the_budget_is_unfittable_and_says_how_much():
+    window = 2048
+    messages = [
+        {"role": "system", "content": "You are Nova."},
+        {"role": "user", "content": "hi"},
+    ]
+    before = copy.deepcopy(messages)
+    fitted, report = fit(messages, window, CPT, TOOLS_CHARS)
+    assert fitted == before
+    assert report.unfittable is True
+    assert report.fits is False
+    assert report.overhead_tokens == math.ceil(TOOLS_CHARS / CPT)
+    assert report.overhead_tokens > report.budget
+    assert report.est_tokens > report.budget
+
+
+# C5: calibration absorbs the overhead once, never twice.
+
+
+def test_v27_t23_calibration_divides_messages_and_tools_by_the_measured_tokens():
+    sent = [
+        {"role": "system", "content": "S" * 8000},
+        {"role": "user", "content": "go"},
+        *_round(1, ["x" * 4000]),
+    ]
+    prompt_tokens = 20_000
+    text_tokens = prompt_tokens - MESSAGE_OVERHEAD_TOKENS * len(sent)
+    assert calibrated_chars_per_token(sent, prompt_tokens, TOOLS_CHARS) == pytest.approx(
+        (chars_of(sent) + TOOLS_CHARS) / text_tokens
+    )
+    # The overhead-free form is unchanged.
+    assert calibrated_chars_per_token(sent, prompt_tokens) == pytest.approx(
+        chars_of(sent) / text_tokens
+    )
+    # A picture-only ask has no text, but the tools it was sent with still
+    # say what a char costs.
+    picture = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,QQ"}}],
+        }
+    ]
+    assert calibrated_chars_per_token(picture, 300, 1000) == pytest.approx(
+        1000 / (300 - MESSAGE_OVERHEAD_TOKENS)
+    )
+
+
+def test_v27_t23_a_calibrated_round_refits_unchanged_not_double_counted():
+    """Round N was sent with the tools and the gateway measured its
+    prompt_tokens under the budget. Calibrated with the same overhead, round
+    N+1 (same messages, same tools) estimates that same count and is sent
+    whole — the tools are in the ratio's numerator, not added again on top
+    of a ratio that already absorbed them."""
+    window = 32768
+    sent = [
+        {"role": "system", "content": "S" * 8000},
+        {"role": "user", "content": "compare the two files"},
+        *_round(1, ["a" * 16_000]),
+        *_round(2, ["b" * 16_000]),
+    ]
+    before = copy.deepcopy(sent)
+    budget = budget_for(window)
+    measured = 27_000
+    assert measured <= budget
+
+    ratio = calibrated_chars_per_token(sent, measured, TOOLS_CHARS)
+    assert ratio is not None
+    assert estimate_tokens(sent, ratio, TOOLS_CHARS) in (measured, measured + 1)
+    # The hazard this pins: a ratio learned WITHOUT the overhead already
+    # holds the tools' tokens, so adding them again would read far over.
+    old_ratio = calibrated_chars_per_token(sent, measured)
+    assert estimate_tokens(sent, old_ratio, TOOLS_CHARS) > budget
+
+    fitted, report = fit(sent, window, ratio, TOOLS_CHARS)
+
+    assert fitted == before, "a round measured under budget was trimmed on the re-fit"
+    assert report.tool_results_trimmed == 0
+    assert report.rounds_dropped == 0
+    assert report.est_tokens in (measured, measured + 1)
+    assert report.overhead_tokens == math.ceil(TOOLS_CHARS / ratio)
+    assert report.overhead_tokens > 0
+    assert report.fits is True
+    assert report.unfittable is False
+
+
+def test_v27_t23_calibration_refuses_a_negative_overhead():
+    sent = [{"role": "user", "content": "x" * 400}]
+    with pytest.raises(ValueError):
+        calibrated_chars_per_token(sent, 200, -1)

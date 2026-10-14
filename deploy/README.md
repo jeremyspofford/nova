@@ -278,7 +278,11 @@ one of the stops below, and each one says why.
   then does not run. Her reply ends with a note that says why:
   `[stopped after N tool rounds: the same call was repeated]` or
   `[stopped after N tool rounds: the last rounds brought nothing new]`, where N is the
-  rounds it used. The trace records why in a `round_stop` step.
+  rounds it used. The trace records why in a `round_stop` step. A live reading (a tool
+  declared both ephemeral and read-only, such as `device_job_status` on a running job)
+  whose answer changed since that same call last ran is not a repeat: its count starts
+  over, because what it reads moved. The same answer again still counts, and a reading
+  that only flips back to answers it already gave brings nothing new.
 - **What a stopped reply shows when she does not answer.** When that last answer has no
   words of its own, fails, or asks for a tool, the reply lists what the tools returned,
   under "What this turn's tools returned, as far as its trace recorded each result:",
@@ -310,23 +314,65 @@ one of the stops below, and each one says why.
   what is sent is fitted; the conversation and the trace keep every result whole. The
   trace records `context_window` and, when it trimmed, `context_trimmed` on the round.
   The window is remembered per serving link, so the first round of the next turn is
-  fitted too; a link whose window was never stated is sent as is.
+  fitted too; a link whose window was never stated is sent as is. The tools offered to
+  her are sent with every round and count against the window too; they are never
+  trimmed. When her instructions, your message and the tools do not fit even with every
+  earlier tool result trimmed, the round is not sent at all: the turn ends with
+  `Stopped: the next request to <model> was not sent, because it cannot fit its W-token context window …`,
+  naming the window, the request's estimated prompt tokens and the tools' share of
+  them, after what the tools that already ran returned. The trace records it as a
+  `round_stop` step with the reason `unfittable` and those sizes. No answer round
+  follows that stop.
 - **A round the window still cut is re-sent once.** When the gateway counts a prompt
   that reached the window (`prompt_tokens` at the window minus one), the round is marked
   `context_truncated`; its text is not kept and its tool calls do not run. It is
   re-sent once, fitted. If that is cut too, the turn ends with
   `Stopped: the request to <model> was cut at its W-token context window again …`.
-- **What bounds a runaway.** The circling stop; the owner's stop
+- **A turn past its time budget stops.** Every turn has a wall-clock budget, the
+  setting `turns.time_budget_s`, stored in seconds and set in Settings → Behaviour →
+  Turn time limit, which reads it in minutes. It is read when the turn starts
+  and checked between rounds, after a round's tools have all run, so a tool already
+  running always finishes and every result of that round is kept. Once the turn has
+  run past the budget, no further tool runs: she answers once more, with no tools
+  offered, exactly as at the circling stop, and her reply ends with
+  `[stopped after N tool rounds: the turn ran past its time budget of B seconds, E seconds in (turns.time_budget_s)]`,
+  where B is the budget and E the seconds the turn had taken. The trace records a
+  `round_stop` step with the reason `time_budget`, the budget and the elapsed seconds.
+  A round she answers without asking for a tool is her reply however long the turn
+  took. It is a budget of time, not a count of rounds, and it asks nothing: raise the
+  setting to give turns longer.
+- **A turn past its token budget stops.** Every turn also has a token budget, the
+  setting `turns.token_budget`, set in Settings → Behaviour → Turn token limit. The
+  prompt and completion tokens each round of the turn reported are summed; a round
+  that was served but did not report its prompt or completion tokens has the missing
+  count estimated from what it sent and wrote, never counted as nothing (a round the gateway refused ran no model and counts
+  nothing). The budget is read when the turn starts and checked between rounds, at the
+  same point as the time budget, so every result of the round that crossed it is kept.
+  Past it, no further tool runs: she answers once more, with no tools offered, and her
+  reply ends with
+  `[stopped after N tool rounds: the turn used S tokens against its token budget of B (turns.token_budget)]`,
+  where S is the tokens the turn used and B the budget; when any round's tokens were
+  estimated, the note adds how many rounds did not report all their usage and that
+  their unreported tokens are estimated. The trace records a `round_stop` step with the reason `token_budget`, the
+  budget, the tokens used (prompt and completion) and how many rounds were estimated.
+  A round she answers without asking for a tool is her reply whatever it used, and the
+  count starts again with each turn. It is a budget of tokens, not a count of rounds,
+  and it asks nothing: raise the setting to give turns more.
+- **What bounds a runaway.** The time budget; the token budget; the circling stop; the owner's stop
   (`POST /api/v1/chat/turns/{id}/stop`, checked between rounds, as text arrives and as a
   tool reports progress); the gateway's monthly spending caps on cloud providers; a
   gateway read that stays silent for 300 seconds, and each tool's own budget; and any
   round that fails.
   A local model costs nothing, so no spending cap stops it: a local turn that keeps
-  making new, different calls with new results runs until it answers, circles, or the
-  owner stops it. That is the owner's choice, not an oversight.
-- **Scheduled tasks and beats have no wall-clock cut.** They end the way a chat turn
-  does. Timers fire one after another, so a long scheduled turn delays the timers
-  behind it for as long as it works.
+  making new, different calls with new results runs until it answers, circles, runs
+  past its time or token budget, or the owner stops it. A live reading whose answer
+  changes every time it is read (an uptime) never circles, so the time and token
+  budgets are what end it.
+- **Scheduled tasks and beats have no wall-clock cut from outside.** Nothing cuts a
+  firing mid-round: its turn ends the way a chat turn does, the time and token budgets
+  included.
+  Timers fire one after another, so a long scheduled turn delays the timers behind it
+  until it answers or reaches its budget.
 
 ## Decision models (Jev and Kev)
 

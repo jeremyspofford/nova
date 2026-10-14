@@ -21,8 +21,9 @@ scripted gateway to pin what the turn then does:
 from __future__ import annotations
 
 import json
+import logging
 
-from app import chat, tools
+from app import chat, guards, tools
 from app.tools.base import Tool, ToolContext, ToolFailure
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
@@ -600,3 +601,96 @@ async def test_a_handback_after_the_budget_is_spent_appends_the_note_and_files_w
     assert stored.startswith(reply)
     assert stored.endswith(f"\n\n{note}")
     assert _corrections(sent)[-1] == note
+
+
+# --- verification-2-7 T10: a crashed detector is handled by chat.py ----------
+# guards.own_tool_handback_check no longer swallows its detector's exception;
+# the turn's own handler (try/logger.exception, ships the reply) is the one
+# place a crash is handled, and it must keep the turn alive.
+
+
+class _DetectorBoom(RuntimeError):
+    pass
+
+
+def _crash_records(caplog, words: str) -> list:
+    return [
+        r
+        for r in caplog.records
+        if r.name == "core"
+        and r.levelno >= logging.ERROR
+        and words in r.getMessage()
+        and r.exc_info
+        and isinstance(r.exc_info[1], _DetectorBoom)
+    ]
+
+
+async def test_v27_t10_a_crashing_detector_keeps_the_turn_alive_and_is_logged(
+    owner_client, pool, mount_peers, monkeypatch, caplog
+):
+    """C4: the detector raises over her handback. The turn still closes ok
+    with [DONE], her reply is stored as she wrote it (no handback note, no
+    redirect round), and chat.py's handler logged the crash WITH the
+    exception — not a silent None that reads as a pass."""
+    caplog.set_level(logging.WARNING)
+    _c9_tools(monkeypatch)
+
+    def broken(text, names):
+        raise _DetectorBoom("own-tool handback detector fell over")
+
+    monkeypatch.setattr(guards, "_own_tool_handback", broken)
+    gateway = ScriptedGateway(rounds=(_c9_round_one(), (text(C9_HANDBACK),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, C9_MESSAGE)
+
+    assert sent[-1] == DONE
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    assert gateway.calls == 2, "a crashed detector redirects nothing"
+    assert await _stored_reply(pool) == C9_HANDBACK
+    assert [s for s in await _handback_spans(pool) if s["meta"].get("detected")] == []
+    assert _crash_records(caplog, "own-tool handback guard raised"), (
+        "chat.py's handler must log the detector's crash with the exception"
+    )
+
+
+async def test_v27_t10_a_crash_in_the_regen_recheck_does_not_reject_the_redirect(
+    owner_client, pool, mount_peers, monkeypatch, caplog
+):
+    """C6: the detector is sound over her handback (the redirect runs) and
+    crashes over the regenerated answer, inside _regen_rejected_by. The crash
+    does not reject the regen — the redirect stands, her answer is the stored
+    reply, the turn is ok — and the re-check logs it with the exception."""
+    caplog.set_level(logging.WARNING)
+    _start, edit, _read = _c9_tools(monkeypatch)
+    real = guards._own_tool_handback
+    seen: list[str] = []
+
+    def flaky(text, names):
+        seen.append(text)
+        if len(seen) >= 2:
+            raise _DetectorBoom("own-tool handback detector fell over on the regen")
+        return real(text, names)
+
+    monkeypatch.setattr(guards, "_own_tool_handback", flaky)
+    gateway = ScriptedGateway(
+        rounds=(
+            _c9_round_one(),
+            (text(C9_HANDBACK),),
+            (call_delta(0, call_id="r1", name="device_edit_file", arguments=EDIT_RIGHT),),
+            (text(C9_ANSWER),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, C9_MESSAGE)
+
+    assert sent[-1] == DONE
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    spans = [s for s in await _handback_spans(pool) if s["meta"].get("detected")]
+    assert len(spans) == 1 and spans[0]["meta"]["redirected"] is True, spans
+    assert edit.calls == [EDIT_FAILED, EDIT_RIGHT]
+    assert await _stored_reply(pool) == C9_ANSWER
+    assert _crash_records(caplog, "own_tool_handback re-check raised over the redirect"), (
+        "the regen re-check must log the detector's crash with the exception"
+    )

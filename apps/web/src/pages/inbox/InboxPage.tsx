@@ -22,16 +22,16 @@ import { formatAbsolute } from '../schedules/schedulesFormat'
 import {
   actedLine,
   deliveryVerdicts,
-  factLines,
-  livePill,
   muteWords,
   draftWords,
   readWords,
   sightingsWords,
   silenceWords,
-  stateBadge,
+  statusParts,
+  subjectLink,
   talkWords,
 } from './inboxFormat'
+import { factLabel, formatFact } from '../../lib/factFormat'
 
 /**
  * The Inbox (S11): everything she noticed while nobody was watching.
@@ -254,14 +254,14 @@ export function InboxPage({
       </div>
 
       {/* The server's count, over every row — not a count of what this page
-          happens to be holding. Left off entirely when there is nothing to
-          list, where the empty state already says it. */}
+          happens to be holding. It says only the count (verification 2-7,
+          T16): where it came from is this comment's business, not his. Left
+          off entirely when there is nothing to list, where the empty state
+          already says it. */}
       {unseenCount !== null && notices !== null && notices.length > 0 && (
         <div className="mb-6 flex flex-wrap items-center gap-3">
           <p className="text-compact text-content-secondary" data-testid="unseen-count">
-            {unseenCount === 0
-              ? 'Nothing here is unread.'
-              : `${unseenCount} unread — counted by the server, not by this page.`}
+            {unseenCount === 0 ? 'Nothing here is unread.' : `${unseenCount} unread`}
           </p>
           {unseenCount > 0 && (
             <Button size="sm" variant="secondary" disabled={clearing} onClick={() => void readAll()}>
@@ -462,8 +462,11 @@ function NoticeCard({
   onTalk: () => void
   onDraft: () => void
 }) {
-  const state = stateBadge(notice.state)
-  const live = livePill(notice)
+  // Verification 2-7, T30: urgent is the card's one Badge again, beside the
+  // title (VISUAL 2: as a word on the status line it lost its emphasis). Its
+  // word and title still come from statusParts; the line is built without it.
+  const urgent = notice.urgent ? statusParts(notice)[0] : undefined
+  const status = statusParts({ ...notice, urgent: false })
   const acted = actedLine(notice)
   const sightings = sightingsWords(notice.repeats)
   const mute = muteWords(notice)
@@ -472,7 +475,13 @@ function NoticeCard({
   const talk = talkWords(notice)
   const draft = draftWords(notice)
   const lines = deliveryVerdicts(notice)
-  const facts = factLines(notice.facts)
+  // Verification 2-7, T15: each fact reads through lib/factFormat (label in
+  // words, value shortened or reworded, raw kept in `full`); a subject he can
+  // go and look at still links by its whole value (S25.2.2).
+  const facts = Object.entries(notice.facts ?? {}).map(([key, value]) => ({
+    ...formatFact(key, value),
+    href: subjectLink(key, value) ?? undefined,
+  }))
 
   return (
     <div
@@ -485,13 +494,6 @@ function NoticeCard({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <div className="min-w-0 sm:flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            {notice.urgent && (
-              <span data-testid="urgent-badge" title="the check itself declares this urgent — nothing she wrote can promote a finding">
-                <Badge size="sm" color="danger">
-                  urgent
-                </Badge>
-              </span>
-            )}
             {/* A title can carry a URL or a key with no space in it (a
                 provider's refusal names its billing page); `anywhere` lets
                 it wrap instead of pushing the whole page sideways on a phone
@@ -499,20 +501,37 @@ function NoticeCard({
             <span className="min-w-0 text-content-primary font-medium [overflow-wrap:anywhere]">
               <HumanText text={notice.title} />
             </span>
+            {urgent && (
+              <Badge color="danger" size="sm" title={urgent.title} data-testid="notice-urgent">
+                {urgent.text}
+              </Badge>
+            )}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
-            <span className="font-mono" title="the check that found it">
-              {notice.check_name}
+          {/* Verification 2-7, T30: the check name is its own row. Sharing a
+              flex row with the status line, the two read as one phrase
+              ("Timer failing  Still true · told you"). */}
+          <div className="mt-0.5 text-micro text-content-secondary">
+            <span data-testid="notice-check" title={`the check that found it: ${notice.check_name}`}>
+              {factLabel(notice.check_name)}
             </span>
-            <span data-testid="live-pill" title={live.title}>
-              <Badge size="sm" color={live.color}>
-                {live.label}
-              </Badge>
-            </span>
-            <span data-testid="state-badge">
-              <Badge size="sm" color={state.color}>
-                {state.label}
-              </Badge>
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-micro text-content-tertiary">
+            {/* Verification 2-7, T16: one status line, not up to three
+                pills. Each word keeps the title its pill had; a failed
+                delivery is the word coloured for attention (urgent is the
+                Badge above, T30). */}
+            <span data-testid="notice-status">
+              {status.map((part, i) => (
+                <span key={i}>
+                  {i > 0 && ' · '}
+                  <span
+                    title={part.title}
+                    className={part.danger ? 'text-danger font-medium' : undefined}
+                  >
+                    {part.text}
+                  </span>
+                </span>
+              ))}
             </span>
             {sightings && (
               <span data-testid="sightings" title="how many times a check returned these exact facts">
@@ -603,23 +622,42 @@ function NoticeCard({
       )}
 
       {facts.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-micro text-content-tertiary" data-testid="notice-facts">
+        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-micro text-content-tertiary" data-testid="notice-facts">
           {facts.map(fact => (
-            <li key={fact.key} title={fact.title} className="min-w-0 [overflow-wrap:anywhere]">
-              {fact.key}:{' '}
+            <li key={fact.key} className="min-w-0 [overflow-wrap:anywhere]">
+              {fact.label}:{' '}
               {fact.href === undefined ? (
-                <span className="text-content-secondary">{fact.value}</span>
+                <span className="text-content-secondary" title={fact.full}>
+                  {fact.text}
+                </span>
               ) : (
                 <Link
                   to={fact.href}
+                  title={fact.full}
                   className="text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
                 >
-                  {fact.value}
+                  {fact.text}
                 </Link>
               )}
             </li>
           ))}
         </ul>
+      )}
+
+      {/* The raw evidence, exactly as core wrote it (the fingerprint was
+          computed from these): closed by default, so the card face reads as
+          product while nothing is lost. */}
+      {facts.length > 0 && (
+        <details className="mt-1 text-micro text-content-tertiary" data-testid="notice-details">
+          <summary className="cursor-pointer select-none hover:text-content-secondary">Details</summary>
+          <ul className="mt-1 space-y-0.5 font-mono">
+            {facts.map(fact => (
+              <li key={fact.key} className="min-w-0 [overflow-wrap:anywhere]">
+                {fact.key}: {fact.full ?? fact.text}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <div className="mt-2 flex flex-wrap gap-x-3 text-micro text-content-tertiary">
@@ -645,7 +683,7 @@ function NoticeCard({
                 // A delivery's own words can hold a long unbroken token (a
                 // device's error output); it wraps rather than pushing the
                 // page sideways on a phone.
-                'font-mono text-micro [overflow-wrap:anywhere]',
+                'text-micro [overflow-wrap:anywhere]',
                 line.verdict === 'ok' && 'text-success',
                 line.verdict === 'failed' && 'text-danger',
                 line.verdict === 'stated' && 'text-content-tertiary',

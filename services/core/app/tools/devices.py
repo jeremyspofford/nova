@@ -857,6 +857,29 @@ _RANGE_KEYS = ("start_line", "end_line", "offset", "length")
 _OLD_AGENT_CAP_REFUSAL = re.compile(r"^file is \d+ bytes, over the ")
 
 
+# An agent from before wire numbers (novad before bae41a1d, 2026-10-10) took a
+# range argument only as a float64, but its client decodes frames with
+# UseNumber, so every number on the wire was a json.Number and was refused in
+# these frozen words (fs_range.go wholeArg, %T). They read as a fault in her
+# own arguments; what is true is that the agent needs machine_update.
+_OLD_AGENT_READ_NUMBER_REFUSAL = re.compile(
+    r"^fs\.read '(start_line|end_line|offset|length)' must be a whole number, got json\.Number$"
+)
+
+
+def _predates_wire_numbers(row, *, nothing: str, again: str) -> ToolFailure:
+    return ToolFailure(
+        f"{row['name']}: this agent predates wire numbers — it refuses every number "
+        f"it is sent, so nothing was {nothing}. Update it with machine_update, then "
+        f"{again} again."
+    )
+
+
+def _old_agent_refused_read_number(error: str, read_args: dict) -> bool:
+    found = _OLD_AGENT_READ_NUMBER_REFUSAL.match(error)
+    return found is not None and found.group(1) in read_args
+
+
 def _predates_ranges(row) -> ToolFailure:
     return ToolFailure(
         f"{row['name']}: this agent predates range reads — it cannot read part of a "
@@ -870,7 +893,9 @@ async def device_read_file(args: dict, ctx: ToolContext) -> str:
     read_args: dict = {"path": path}
     for key in _RANGE_KEYS:
         if key in args:
-            read_args[key] = int(args[key])
+            # Already an int: dispatch reads 2.0/"2" as 2 and refuses 2.7 in
+            # words (schema.WHOLE_NUMBER) — nothing here may truncate one.
+            read_args[key] = args[key]
     ranged = len(read_args) > 1
     result = await _command(pool, row, "fs.read", read_args, ctx=ctx)
     if not ranged:
@@ -884,8 +909,11 @@ async def device_read_file(args: dict, ctx: ToolContext) -> str:
     meta = result.get("meta")
     meta = meta if isinstance(meta, dict) else {}
     if not result.get("ok"):
-        if _OLD_AGENT_CAP_REFUSAL.match(str(result.get("error") or "")):
+        error = str(result.get("error") or "")
+        if _OLD_AGENT_CAP_REFUSAL.match(error):
             raise _predates_ranges(row)
+        if _old_agent_refused_read_number(error, read_args):
+            raise _predates_wire_numbers(row, nothing="of the range read", again="read the range")
         _require_ok(result, row)
     if "range" not in meta:
         raise _predates_ranges(row)
@@ -1480,6 +1508,22 @@ _SEARCH_OPTIONAL_KEYS = ("literal", "ignore_case", "max_matches")
 _SEARCH_DEFAULT_MATCHES = 200
 _SEARCH_MAX_MATCHES = 2000
 
+# The frozen max_matches refusal of an agent from before wire numbers
+# (fs_search.go before bae41a1d, %v): a json.Number prints its digits, so the
+# old agent refusing the in-range whole number core sent says "got <that
+# number>". A current agent says this only for a value out of range or not a
+# number, and dispatch's schema (minimum/maximum) never sends one of those, so
+# an echo of the very number sent is the old agent.
+_OLD_AGENT_SEARCH_NUMBER_REFUSAL = re.compile(
+    r"^fs\.search 'max_matches' must be a whole number from 1 to 2000, got (\d+)$"
+)
+
+
+def _old_agent_refused_max_matches(error: str, search_args: dict) -> bool:
+    found = _OLD_AGENT_SEARCH_NUMBER_REFUSAL.match(error)
+    sent = search_args.get("max_matches")
+    return found is not None and type(sent) is int and int(found.group(1)) == sent
+
 
 async def device_search(args: dict, ctx: ToolContext) -> str:
     """Search a directory tree on a device for a regex or literal (S30a T7).
@@ -1501,6 +1545,8 @@ async def device_search(args: dict, ctx: ToolContext) -> str:
                 f"{row['name']}: this agent predates code search — it cannot search files, "
                 "so nothing was searched. Update it with machine_update, then search again."
             )
+        if _old_agent_refused_max_matches(str(result.get("error") or ""), search_args):
+            raise _predates_wire_numbers(row, nothing="searched", again="search")
         _require_ok(result, row)
     meta = result.get("meta")
     meta = meta if isinstance(meta, dict) else {}
@@ -1658,21 +1704,25 @@ TOOLS: tuple[Tool, ...] = (
                 },
                 "start_line": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "First line to read (1-based); give end_line with it.",
                 },
                 "end_line": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "Last line to read (inclusive); give start_line with it.",
                 },
                 "offset": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 0,
                     "description": "Byte offset to start reading at; give length with it.",
                 },
                 "length": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "description": "Number of bytes to read from offset; give offset with it.",
                 },
@@ -1722,6 +1772,7 @@ TOOLS: tuple[Tool, ...] = (
                 },
                 "max_matches": {
                     "type": "integer",
+                    schema.WHOLE_NUMBER: True,
                     "minimum": 1,
                     "maximum": _SEARCH_MAX_MATCHES,
                     "description": (

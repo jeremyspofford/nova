@@ -205,6 +205,11 @@ class Decision:
     #: failure is never dialled again for up to 30 min, so `unreachable` alone
     #: would go quiet while the machine behind it is still not answering.
     connect_walled: tuple[str, ...] = ()
+    #: Served ids (chain order) of the chain links AFTER the chosen one, which
+    #: this resolve never judged: a walk that stops here leaves them untried,
+    #: and walk_role's 503 names them (verification 2-7 T7). Empty for a
+    #: standby or last-resort pick — every chain link was judged first.
+    unjudged: tuple[str, ...] = ()
 
     def header(self) -> str:
         from urllib.parse import quote
@@ -1070,6 +1075,14 @@ def _provider_of(link: str, by_name: dict[str, dict]) -> tuple[str | None, str]:
     return provider_name, model
 
 
+def _served_link(link: str, by_name: dict[str, dict]) -> str:
+    """One chain link as its served id (`provider:model`) — the key skip,
+    unreachable and passed_over use — or the link as written when no
+    provider owns it."""
+    name, model = _provider_of(link, by_name)
+    return f"{name}:{model}" if name else link
+
+
 def switched_off(row: dict) -> str | None:
     """Why this engine serves nothing right now, or None. `serving` is the
     owner's switch (engines.serving; PUT /admin/engines/{name}) — installed
@@ -1440,6 +1453,7 @@ async def _resolve(
                 reason=reason,
                 role=role,
                 verdicts=verdicts,
+                unjudged=tuple(_served_link(rest, by_name) for rest in chain[index:]),
             )
     # The standby's pick on the hub, when it chose one and it could not serve:
     # its verdict stands, and the last resort never judges the hub twice.

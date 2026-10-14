@@ -113,6 +113,23 @@ input[type="number"] {
   --status-warning: var(--tier-warning, 146 64 14);
   --status-danger: var(--tier-danger, 185 28 28);
   --status-info: var(--tier-info, 29 78 216);
+  /* Chart series (the Spend chart's model colours, T22): eight FIXED hues
+     that no theme rewrites — a series colour that followed the accent made
+     every model read as the same teal. Light uses the Tailwind 700 steps (at
+     least 3:1 on every built-in card and ground), dark the 400 steps; every
+     pair stays at least a CIEDE2000 of 10 apart in each mode
+     (src/pages/spend/modelPalette.test.ts measures both). No series is red:
+     slot 5 was the danger colour exactly, so a model's swatch read as an
+     error — every slot stays a CIEDE2000 of at least 15 from every danger
+     colour the app paints (T31, verification-2-7). */
+  --chart-1: 29 78 216;   /* blue */
+  --chart-2: 180 83 9;    /* amber */
+  --chart-3: 21 128 61;   /* green */
+  --chart-4: 109 40 217;  /* violet */
+  --chart-5: 77 124 15;   /* lime */
+  --chart-6: 14 116 144;  /* cyan */
+  --chart-7: 190 24 93;   /* pink */
+  --chart-8: 162 28 175;  /* fuchsia */
 }
 /* Dark mode */
 html.dark {
@@ -146,6 +163,15 @@ html.dark {
   --status-warning: var(--tier-warning, 251 191 36);
   --status-danger: var(--tier-danger, 248 113 113);
   --status-info: var(--tier-info, 96 165 250);
+  /* chart series: the same eight hues at their 400 steps (see :root) */
+  --chart-1: 96 165 250;
+  --chart-2: 251 191 36;
+  --chart-3: 74 222 128;
+  --chart-4: 167 139 250;
+  --chart-5: 163 230 53;
+  --chart-6: 34 211 238;
+  --chart-7: 244 114 182;
+  --chart-8: 232 121 249;
 }
 
 @layer base {
@@ -172,6 +198,13 @@ html.dark {
       radial-gradient(ellipse at 85% 20%, rgb(var(--glow-2-light) / 0.18) 0%, transparent 50%),
       rgb(var(--neutral-50));
     color: rgb(var(--neutral-900));
+  }
+  /* Form controls do not inherit word-spacing by default, so a button or
+     input ran its words together ("Signin", "Plana weekend trip"). Kept in
+     this layer, ahead of the monospace reset below: an unlayered element
+     rule would outrank the layered .font-mono and space out a mono input. */
+  button, input, textarea, select {
+    word-spacing: inherit;
   }
   /* Monospace has its own fixed advance; extra word spacing would misalign
      columns in code and listings. */
@@ -533,6 +566,13 @@ html.dark .skeleton {
   }
   .stack-table > tbody > tr > td.hidden {
     display: none;
+  }
+  /* The label is absolutely positioned, so it adds no height of its own: a
+     cell shorter than it (an empty Tools cell, a one-line micro value) would
+     let it spill onto the next line's label. At least the label's extent —
+     its top offset plus its line-height (border-box: padding counts). */
+  .stack-table > tbody > tr > td[data-label] {
+    min-height: 1.5rem;
   }
   .stack-table > tbody > tr > td[data-label]::before {
     content: attr(data-label);

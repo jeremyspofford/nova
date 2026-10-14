@@ -18,8 +18,9 @@ pattern (#145):
 from __future__ import annotations
 
 import json
+import logging
 
-from app import chat, tools
+from app import chat, guards, tools
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
@@ -201,3 +202,103 @@ def test_the_nudge_lists_the_turns_calls_and_leaves_scope_to_her():
     assert "without asking" in nudge
     note = chat.cleared_offer_note("disable Fast Startup now")
     assert "disable Fast Startup now" in note and "no approval step" in note
+
+
+# --- verification-2-7 T10: a crashed detector is handled by chat.py ----------
+# guards.cleared_offer_check no longer swallows its detector's exception; the
+# turn's own handler (try/logger.exception, ships the reply) is the one place
+# a crash is handled, and it must keep the turn alive.
+
+
+class _DetectorBoom(RuntimeError):
+    pass
+
+
+def _crash_records(caplog, words: str) -> list:
+    return [
+        r
+        for r in caplog.records
+        if r.name == "core"
+        and r.levelno >= logging.ERROR
+        and words in r.getMessage()
+        and r.exc_info
+        and isinstance(r.exc_info[1], _DetectorBoom)
+    ]
+
+
+async def test_v27_t10_a_crashing_detector_keeps_the_turn_alive_and_is_logged(
+    owner_client, pool, mount_peers, monkeypatch, caplog
+):
+    """C5: the detector raises over her offer. The turn still closes ok with
+    [DONE], her reply is stored as she wrote it (no cleared-offer note, no
+    redirect round), and chat.py's handler logged the crash WITH the
+    exception — not a silent None that reads as a pass."""
+    caplog.set_level(logging.WARNING)
+    _arm_run(monkeypatch)
+
+    def broken(text: str):
+        raise _DetectorBoom("cleared-offer detector fell over")
+
+    monkeypatch.setattr(guards, "_cleared_offer", broken)
+    gateway = ScriptedGateway(
+        rounds=(
+            (call_delta(0, call_id="a1", name="device_run", arguments=READ),),
+            (text(OFFER),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert sent[-1] == DONE
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    assert gateway.calls == 2, "a crashed detector redirects nothing"
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == OFFER
+    assert [m for m in await _spans(pool) if m.get("detected")] == []
+    assert _crash_records(caplog, "cleared-offer guard raised"), (
+        "chat.py's handler must log the detector's crash with the exception"
+    )
+
+
+async def test_v27_t10_a_crash_in_the_regen_recheck_does_not_reject_the_redirect(
+    owner_client, pool, mount_peers, monkeypatch, caplog
+):
+    """C6: the detector is sound over her offer (the redirect runs) and
+    crashes over the regenerated answer, inside _regen_rejected_by. The crash
+    does not reject the regen — the redirect stands, her answer is the stored
+    reply, the turn is ok — and the re-check logs it with the exception."""
+    caplog.set_level(logging.WARNING)
+    run = _arm_run(monkeypatch)
+    real = guards._cleared_offer
+    seen: list[str] = []
+
+    def flaky(text: str):
+        seen.append(text)
+        if len(seen) >= 2:
+            raise _DetectorBoom("cleared-offer detector fell over on the regen")
+        return real(text)
+
+    monkeypatch.setattr(guards, "_cleared_offer", flaky)
+    gateway = ScriptedGateway(
+        rounds=(
+            (call_delta(0, call_id="a1", name="device_run", arguments=READ),),
+            (text(OFFER),),
+            (call_delta(0, call_id="a2", name="device_run", arguments=CHANGE),),
+            (text(ANSWER),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert sent[-1] == DONE
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    spans = [m for m in await _spans(pool) if m.get("detected")]
+    assert len(spans) == 1 and spans[0]["redirected"] is True, spans
+    assert run.calls == [READ, CHANGE]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == ANSWER
+    assert _crash_records(caplog, "cleared_offer re-check raised over the redirect"), (
+        "the regen re-check must log the detector's crash with the exception"
+    )

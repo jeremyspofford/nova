@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from app import guards, tools
 
 TOOLS = tools.tool_names()
@@ -328,16 +330,18 @@ def test_her_own_lead_inside_a_line_is_silent():
     silent("Let me run `device_info` now.")
 
 
-def test_a_failure_inside_the_guard_fails_open():
-    """C4: a guard that crashes a turn is worse than a miss — an unreadable
-    tool list yields None, never an exception."""
+def test_a_failure_inside_the_guard_reaches_the_caller():
+    """C4, re-pointed by verification-2-7 T10: a crash is not a pass. An
+    unreadable tool list raises to the caller (chat.py's handler logs it and
+    ships the reply) instead of a silent None; a missing reply is still None."""
 
     def broken():
         yield "device_info"
         raise RuntimeError("registry unreadable")
 
     fires("Run `device_info`.", "device_info")
-    assert guards.own_tool_handback_check("Run `device_info`.", [], broken()) is None
+    with pytest.raises(RuntimeError, match="registry unreadable"):
+        guards.own_tool_handback_check("Run `device_info`.", [], broken())
     assert guards.own_tool_handback_check(None, [], TOOLS) is None
 
 
@@ -366,3 +370,59 @@ def test_her_tool_not_the_object_of_his_verb_is_silent():
     fires("Check the build with `nova_about`.", "nova_about")
     silent("Check the build `nova_about` reported above against the mini pc's.")
     silent("Compare it to what `device_info` returned for the Dell.")
+
+
+# --- verification-2-7 T10: a crashed detector reaches the caller -------------
+
+
+class _DetectorBoom(RuntimeError):
+    pass
+
+
+def test_v27_t10_a_crashing_detector_raises_to_the_caller(monkeypatch):
+    """C2: the detector's own exception, unchanged — never None."""
+    boom = _DetectorBoom("detector fell over")
+
+    def broken(text, names):
+        raise boom
+
+    monkeypatch.setattr(guards, "_own_tool_handback", broken)
+    with pytest.raises(_DetectorBoom) as raised:
+        guards.own_tool_handback_check("Run `device_info`.", [], TOOLS)
+    assert raised.value is boom
+
+
+def test_v27_t10_a_crash_on_an_honest_reply_raises_too(monkeypatch):
+    """C2: a crash is not a pass even on a reply that would be silent."""
+
+    def broken(text, names):
+        raise ValueError("bad pattern state")
+
+    monkeypatch.setattr(guards, "_own_tool_handback", broken)
+    with pytest.raises(ValueError, match="bad pattern state"):
+        guards.own_tool_handback_check("I ran `device_info`.", [], TOOLS)
+
+
+def test_v27_t10_an_unreadable_tool_list_raises_to_the_caller():
+    """C2: the old fail-open case — the iterable dies while being read."""
+
+    def broken():
+        yield "device_info"
+        raise _DetectorBoom("registry unreadable")
+
+    with pytest.raises(_DetectorBoom, match="registry unreadable"):
+        guards.own_tool_handback_check("I ran `device_info`.", [], broken())
+
+
+@pytest.mark.parametrize(
+    ("reply", "available"),
+    [
+        (None, TOOLS),
+        ("", TOOLS),
+        ("Run `device_info`.", []),
+        ("Run `device_info`.", None),
+    ],
+)
+def test_v27_t10_no_reply_or_no_tools_is_no_claim_not_an_error(reply, available):
+    """C3: a missing reply or an empty/missing tool list is not a crash."""
+    assert guards.own_tool_handback_check(reply, [], available) is None

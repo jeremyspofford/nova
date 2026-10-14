@@ -105,22 +105,27 @@ def candidates(
     chars_per_token: float,
     kept_refs: Mapping[str, str],
     summarized: Mapping[str, Summary],
+    overhead_chars: int = 0,
 ) -> list[str]:
     """The refs to summarize this round, oldest first.
 
     `kept_refs` maps a tool_call_id to its kept ref (T1); `summarized` maps a
     tool_call_id to the summary already written for it this turn (counted in
-    place, never picked again)."""
+    place, never picked again). `overhead_chars` is the tools array the round
+    sends (context_fit.tools_chars): counted beside the messages in both
+    marks, as context_fit.fit counts it (verification-2-7 T23/T24)."""
     if window <= 0:
         raise ValueError(f"window must be positive, got {window!r}")
     if chars_per_token <= 0:
         raise ValueError(f"chars_per_token must be positive, got {chars_per_token!r}")
+    if overhead_chars < 0:
+        raise ValueError(f"overhead_chars must not be negative, got {overhead_chars!r}")
     budget = budget_for(window)
     start, stop = START_FRACTION * budget, STOP_FRACTION * budget
 
     current = apply(messages, summarized)
     chars, count = sum(_message_chars(m) for m in current), len(current)
-    if _tokens(chars, count, chars_per_token) < start:
+    if _tokens(chars, count, chars_per_token, overhead_chars) < start:
         return []
 
     rounds = _rounds(messages)
@@ -130,7 +135,7 @@ def candidates(
 
     picked: list[str] = []
     for index, message in enumerate(messages):
-        if _tokens(chars, count, chars_per_token) < stop:
+        if _tokens(chars, count, chars_per_token, overhead_chars) < stop:
             break
         if message.get("role") != "tool" or index in latest:
             continue

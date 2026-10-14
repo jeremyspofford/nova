@@ -176,3 +176,53 @@ export function viewFacts(facts: unknown): string[] {
   if (!Array.isArray(facts)) return [JSON.stringify(facts) ?? String(facts)]
   return facts.map(viewFact)
 }
+
+/** Span kinds whose words are not just the key with its underscores
+ * spaced: `llm_call` is a model call, `distil` the notes distilled, a roster
+ * the list a turn was handed. Every other kind — known today or added later
+ * — reads as its own key in sentence case (sentenceWords), so a kind core
+ * starts writing tomorrow is never dropped and never shown as a raw key. */
+const SPAN_WORDS: Record<string, string> = {
+  llm_call: 'Model call',
+  tool: 'Tool call',
+  memory_recall: 'Memory recall',
+  memory_ingest: 'Memory saved',
+  agent_names: 'Agent names',
+  agent_cap: 'Agent spend cap',
+  agent_roster: 'Agents offered',
+  skills_roster: 'Skills offered',
+  mcp_roster: 'MCP servers offered',
+  model_swap: 'Model switched',
+  distil: 'Notes distilled',
+  background_wake: 'Background wake',
+}
+
+/** `future_thing` -> "Future thing": underscores to spaces, first letter up. */
+function sentenceWords(key: string): string {
+  const words = key.replace(/_+/g, ' ').trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Span'
+}
+
+/** T20 (verification 2-7): a span's kind (and, for a guard, its name) as
+ * words a reader knows — "Model call", "Guard: delegation claim" — with a
+ * sentence-cased fallback for a kind this page has never seen. Only a
+ * guard's name joins its label: a guard's name is a snake key
+ * (guards.py), every other span's name is already readable or a tool's own
+ * identifier, shown beside the label as it is. */
+export function spanLabel(kind: string, name: string | null, meta?: Record<string, unknown>): string {
+  if (kind === 'guard') {
+    const words = (name ?? '').replace(/_+/g, ' ').trim()
+    const head = meta && guardRaised(meta) ? 'Guard crashed' : 'Guard'
+    return words ? `${head}: ${words}` : head
+  }
+  return SPAN_WORDS[kind] ?? sentenceWords(kind)
+}
+
+/** T11 C6 (verification 2-7): a guard span is a CRASH only when it carries
+ * the raised marker as exactly `true` — the web twin of core's
+ * traces.guard_raised (`meta.get(GUARD_RAISED) is True`). meta.error alone
+ * is not the marker: a guard that FIRED and whose redirect then failed
+ * carries meta.error too, and it is still a fire. */
+export function guardRaised(meta: Record<string, unknown>): boolean {
+  return meta.raised === true
+}

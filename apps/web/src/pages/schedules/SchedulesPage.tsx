@@ -521,14 +521,20 @@ export function SchedulesPage({
             <table className="stack-table w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
-                  {['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', ''].map((heading, i) => (
+                  {/* One line each: NEXT FIRE / LAST OUTCOME never wrap. */}
+                  {COLUMNS.map((heading, i) => (
                     <th
                       key={i}
-                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider sticky top-0 bg-surface-elevated"
+                      className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider whitespace-nowrap sticky top-0 bg-surface-elevated"
                     >
                       {heading}
                     </th>
                   ))}
+                  {/* The controls' column: named for a screen reader, no
+                      visible title over the buttons. */}
+                  <th className="px-4 py-3 whitespace-nowrap sticky top-0 bg-surface-elevated">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
@@ -578,6 +584,15 @@ export function SchedulesPage({
     </div>
   )
 }
+
+/** The table's labelled columns. The row's controls follow in their own
+ * last cell (T29): in the Schedule cell (T17) they squeezed into a phone
+ * card's value column. At 1440 that cell fits because Delete is icon-only
+ * from md up and the times read once (T17 C3). */
+const COLUMNS = ['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome'] as const
+/** The header's cells — the labelled columns plus the sr-only Actions one —
+ *  which a note or detail row spans. */
+const COLUMN_COUNT = COLUMNS.length + 1
 
 function ScheduleRow({
   timer,
@@ -664,20 +679,29 @@ function ScheduleRow({
           ) : next === null ? (
             <span className="text-content-tertiary">—</span>
           ) : (
-            <span title={next.absolute}>
-              <span className="text-content-primary">{next.relative}</span>
-              <span className="block text-micro text-content-tertiary">{next.absolute}</span>
+            // One time, one format: the relative, the instant on hover.
+            <span className="text-content-primary" title={next.absolute}>
+              {next.relative}
             </span>
           )}
         </td>
-        <td data-label="Status" className="px-4 py-2.5 whitespace-nowrap">
-          <Badge size="sm" color={state.color}>
-            {state.label}
-          </Badge>
-          {timer.consecutive_failures > 0 && (
-            <span className="ml-2 text-micro text-danger" data-testid="consecutive-failures">
-              {timer.consecutive_failures} failure{timer.consecutive_failures === 1 ? '' : 's'} in a row
-            </span>
+        {/* Not nowrap: a paused row's reason wraps under the badge. */}
+        <td data-label="Status" className="px-4 py-2.5 min-w-[160px]">
+          <span className="whitespace-nowrap">
+            <Badge size="sm" color={state.color}>
+              {state.label}
+            </Badge>
+            {timer.consecutive_failures > 0 && (
+              <span className="ml-2 text-micro text-danger" data-testid="consecutive-failures">
+                {timer.consecutive_failures} failure{timer.consecutive_failures === 1 ? '' : 's'} in a row
+              </span>
+            )}
+          </span>
+          {state.state === 'paused' && (
+            // core's paused_reason, verbatim, as text — not only a hover.
+            <div className="mt-1 text-caption text-content-tertiary break-words" data-testid="row-paused-reason">
+              {timer.paused_reason ?? 'no reason recorded'}
+            </div>
           )}
         </td>
         <td data-label="Last outcome" className="px-4 py-2.5 whitespace-nowrap">
@@ -698,9 +722,16 @@ function ScheduleRow({
             </span>
           )}
         </td>
-        {/* Actions never toggle the row. */}
+        {/* The row's controls: their own last cell — a full-width line on a
+            stacked card, right-aligned in the table. A click anywhere in it
+            (a button or its padding) never toggles the row. */}
         <td className="stack-actions px-4 py-2.5 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
-          <span className="inline-flex items-center gap-1.5">
+          {/* One line: never wrapped (the stacked td is white-space:
+              normal, so the nowrap sits on the group itself). */}
+          <div
+            className="inline-flex flex-nowrap items-center gap-1.5 whitespace-nowrap"
+            data-testid={`row-actions-${timer.id}`}
+          >
             {state.state === 'paused' ? (
               <Button
                 size="sm"
@@ -750,16 +781,20 @@ function ScheduleRow({
                 loading={busy === 'delete'}
                 disabled={busy !== undefined}
                 onClick={onDelete}
+                // Icon-only from md up: the name stays "Delete" for a screen
+                // reader and on hover; the word shows on a phone's full line.
+                aria-label="Delete"
+                title="Delete this schedule"
               >
-                Delete
+                <span className="md:sr-only">Delete</span>
               </Button>
             )}
-          </span>
+          </div>
         </td>
       </tr>
       {(rowError || ranNow) && (
         <tr className="bg-surface-elevated/40" data-testid={`schedules-note-${timer.id}`}>
-          <td colSpan={7} className="px-6 py-2 text-caption">
+          <td colSpan={COLUMN_COUNT} className="px-6 py-2 text-caption">
             {rowError && <p className="text-danger">{rowError}</p>}
             {ranNow && <RanNowLine firing={ranNow} />}
           </td>
@@ -767,7 +802,7 @@ function ScheduleRow({
       )}
       {expanded && (
         <tr data-testid={`schedules-detail-${timer.id}`} className="bg-surface-elevated/40">
-          <td colSpan={7} className="px-6 py-4">
+          <td colSpan={COLUMN_COUNT} className="px-6 py-4">
             <div className="space-y-4">
               <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-caption">
                 <dt className="text-content-tertiary">Schedule</dt>

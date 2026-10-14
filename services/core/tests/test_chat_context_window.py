@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -266,7 +267,9 @@ async def test_a_later_round_over_the_window_is_fitted_before_it_is_sent(
     owner_client, pool, mount_peers, workspace
 ):
     listing = _big_file(workspace)
-    gateway = _read_then_answer(_link(), window=_window_with_room(1500))
+    gateway = _read_then_answer(_link())
+    # T24: the window holds the tools array sent beside the messages.
+    gateway.window = _window_with_tools_room(gateway, 1500)
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, ASK)
@@ -287,9 +290,12 @@ async def test_a_later_round_over_the_window_is_fitted_before_it_is_sent(
     assert len(tool[0]["content"]) < len(listing)
     assert "[trimmed " in tool[0]["content"]
     assert f"{window}-token" in tool[0]["content"]
-    # And the request sent fits the budget at the ratio it was fitted with.
+    # And the request sent fits the budget at the ratio it was fitted with,
+    # the tools array it carried counted beside it (T24).
     assert context_fit.estimate_tokens(
-        second, context_fit.DEFAULT_CHARS_PER_TOKEN
+        second,
+        context_fit.DEFAULT_CHARS_PER_TOKEN,
+        context_fit.tools_chars(gateway.payloads[1].get("tools")),
     ) <= context_fit.budget_for(window)
 
     metas = await _llm_metas(pool)
@@ -305,8 +311,10 @@ async def test_a_round_inside_the_window_is_sent_untouched_and_says_nothing_was_
     owner_client, pool, mount_peers, workspace
 ):
     listing = _big_file(workspace)
-    # Room for the whole listing at the default ratio, with no usage stated.
-    gateway = _read_then_answer(_link(), window=_window_with_room(LISTING_ROOM_TOKENS))
+    # Room for the whole listing at the default ratio, with no usage stated
+    # (and, T24, beside the tools array the round carries).
+    gateway = _read_then_answer(_link())
+    gateway.window = _window_with_tools_room(gateway, LISTING_ROOM_TOKENS)
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, ASK)
@@ -331,10 +339,12 @@ async def test_the_ratio_is_calibrated_from_the_previous_rounds_prompt_tokens(
     chars — so the second round is trimmed by what the first round measured,
     not by the default."""
     _big_file(workspace)
-    gateway = _read_then_answer(
-        _link(),
-        window=_window_with_room(LISTING_ROOM_TOKENS),
-        prompt_tokens=lambda messages: context_fit.estimate_tokens(messages, 3.0),
+    gateway = _read_then_answer(_link())
+    # T24: the window holds the tools array too, and the gateway's count
+    # includes it, as a real prompt_tokens does.
+    gateway.window = _window_with_tools_room(gateway, LISTING_ROOM_TOKENS)
+    gateway.prompt_tokens = lambda messages: context_fit.estimate_tokens(
+        messages, 3.0, _tools_chars_of_last(gateway)
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
@@ -344,7 +354,8 @@ async def test_the_ratio_is_calibrated_from_the_previous_rounds_prompt_tokens(
     window = int(gateway._window_value)
     tool = [m for m in second if m["role"] == "tool"]
     assert len(tool) == 1 and "[trimmed " in tool[0]["content"]
-    assert context_fit.estimate_tokens(second, 3.0) <= context_fit.budget_for(window)
+    tools_chars = context_fit.tools_chars(gateway.payloads[1].get("tools"))
+    assert context_fit.estimate_tokens(second, 3.0, tools_chars) <= context_fit.budget_for(window)
     metas = await _llm_metas(pool)
     assert metas[1]["context_trimmed"]["tool_results"] == 1
 
@@ -375,12 +386,15 @@ async def test_a_window_learned_for_one_link_never_fits_another(
     owner_client, pool, mount_peers, workspace
 ):
     """The window is the served link's: a tiny window another link stated
-    leaves this link's request whole."""
+    leaves this link's request whole. (T24: "tiny" is room for the request
+    and its tools plus 1500 tokens — far under the listing — since a window
+    under the tools array alone would leave nothing sendable.)"""
     listing = _big_file(workspace)
-    taught = WindowGateway(rounds=((text("ok"),),), served_by=_link(), window=4096)
+    taught = WindowGateway(rounds=((text("ok"),),), served_by=_link())
+    taught.window = _window_with_tools_room(taught, 1500)
     mount_peers(gateway=taught, memory=FakeMemory())
     await _say(owner_client, "hello")
-    assert (await _llm_metas(pool))[0]["context_window"] == 4096
+    assert (await _llm_metas(pool))[0]["context_window"] == int(taught._window_value)
 
     gateway = _read_then_answer(_link(), window=None)
     mount_peers(gateway=gateway, memory=FakeMemory())
@@ -513,25 +527,31 @@ async def test_a_fallback_link_with_its_own_window_fits_the_rounds_after_it(
             (text("python is not installed there."),),
             (text("Python 3.12."),),
         ),
-        served=((a, 32768), (b, 8192), (b, 8192), (a, 32768)),
     )
+    # T24: B's window (was 8192) is sized once, off the first request B
+    # answers, to hold it with its tools array plus 1500 tokens — so it
+    # still cannot hold the listing; a fixed 8192 is under the tools alone.
+    b_window = _sized_once(_window_with_tools_room(gateway, 1500))
+    gateway.served = ((a, 32768), (b, b_window), (b, b_window), (a, 32768))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, "hello")
     await _say(owner_client, ASK)
     await _say(owner_client, ASK)
 
+    b_stated = b_window.value
+    assert b_stated is not None and b_stated < 32768
     metas = await _llm_metas(pool)
-    assert [m.get("context_window") for m in metas] == [32768, 8192, 8192, 32768]
+    assert [m.get("context_window") for m in metas] == [32768, b_stated, b_stated, 32768]
     # Turn 2 round 1: fitted to A's window, answered by B.
     assert metas[1].get("context_fitted_to") == 32768
     # Turn 2 round 2: fitted to B's window, the link that served round 1.
-    assert metas[2].get("context_fitted_to") == 8192
+    assert metas[2].get("context_fitted_to") == b_stated
     tool = [m for m in gateway.payloads[2]["messages"] if m["role"] == "tool"]
     assert len(tool) == 1 and listing not in tool[0]["content"]
-    assert "8192-token" in tool[0]["content"]
+    assert f"{b_stated}-token" in tool[0]["content"]
     # Turn 3 round 1: B is the link that last served the model.
-    assert metas[3].get("context_fitted_to") == 8192
+    assert metas[3].get("context_fitted_to") == b_stated
 
 
 async def test_fitting_a_round_never_trims_the_turns_own_messages(
@@ -551,8 +571,9 @@ async def test_fitting_a_round_never_trims_the_turns_own_messages(
             (whole_call("c2", "workspace_read_file", {"path": "note.txt"}),),
             (text("python is not installed there."),),
         ),
-        served=((a, _window_with_room(1500)), (b, 131072), (b, 131072)),
     )
+    # T24: A's small window holds the tools array too (sized with it).
+    gateway.served = ((a, _window_with_tools_room(gateway, 1500)), (b, 131072), (b, 131072))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, ASK)
@@ -605,7 +626,10 @@ def _cut_gateway(link: str, *, cut_again: bool) -> WindowGateway:
     prompt_tokens == window - 1: the request was cut (turn 0f7af448: 32767 on
     a 32768 window). Round 3 is the re-send; with `cut_again` it is cut too,
     else its count is honest."""
-    gateway = _read_then_answer(link, window=_window_with_room(LISTING_ROOM_TOKENS))
+    gateway = _read_then_answer(link)
+    # T24: room for the listing beside the tools array the round carries, and
+    # an honest count includes those tools (as the gateway's own count does).
+    gateway.window = _window_with_tools_room(gateway, LISTING_ROOM_TOKENS)
     gateway.rounds = (
         gateway.rounds[0],
         (text(LISTING_ANSWER),),
@@ -617,7 +641,9 @@ def _cut_gateway(link: str, *, cut_again: bool) -> WindowGateway:
             return None
         window = int(gateway._window_value)
         if _trimmed(messages) and not cut_again:
-            return context_fit.estimate_tokens(messages, context_fit.DEFAULT_CHARS_PER_TOKEN)
+            return context_fit.estimate_tokens(
+                messages, context_fit.DEFAULT_CHARS_PER_TOKEN, _tools_chars_of_last(gateway)
+            )
         return window - 1
 
     gateway.prompt_tokens = counted
@@ -784,7 +810,11 @@ async def test_a_cut_round_whose_answer_states_no_window_is_judged_by_its_links_
     link = _link()
     _big_file(workspace)
     gateway = _cut_gateway(link, cut_again=False)
-    gateway.served = ((link, _window_with_room(LISTING_ROOM_TOKENS)), (link, None), (link, None))
+    gateway.served = (
+        (link, _window_with_tools_room(gateway, LISTING_ROOM_TOKENS)),
+        (link, None),
+        (link, None),
+    )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, ASK)
@@ -834,6 +864,465 @@ async def test_a_round_cut_twice_never_runs_the_calls_either_cut_round_asked_for
     assert "python is not installed there." not in reply
 
 
+# == verification-2-7 T24: the tools array sent is fitted around; a request
+#    that cannot fit is never sent and the turn says why ======================
+#
+# Every window here is sized from the tools array the gateway actually
+# RECEIVED (payload["tools"], i.e. tools.advertised_tools() as sent — never
+# the registry's own parameters), read off the request the window is computed
+# for. A round sent with no tools would carry no overhead.
+
+UNFITTABLE = "unfittable"
+APPROVAL_WORDS = ("approve", "allow", "permission", "confirm", "would you like", "should i")
+
+
+def _tools_chars_of_last(gateway: WindowGateway) -> int:
+    """The chars of the tools array the request the gateway is answering
+    carried (seen is appended before the window/usage callables run)."""
+    body = gateway.seen[-1][1] or {}
+    return context_fit.tools_chars(body.get("tools"))
+
+
+def _window_with_tools_room(
+    gateway: WindowGateway, extra_tokens: int, ratio: float = context_fit.DEFAULT_CHARS_PER_TOKEN
+) -> Callable[[list[dict]], int]:
+    """A window whose budget is the first request's estimate at `ratio` WITH
+    the tools array it was sent with, plus `extra_tokens`."""
+
+    def size(messages: list[dict]) -> int:
+        tools_chars = _tools_chars_of_last(gateway)
+        assert tools_chars > 0, "the round was sent with no tools array"
+        want = context_fit.estimate_tokens(messages, ratio, tools_chars) + extra_tokens
+        window = math.ceil(want / (1 - context_fit.REPLY_RESERVE_FRACTION)) + 2
+        assert context_fit.budget_for(window) >= want
+        return window
+
+    return size
+
+
+def _window_without_tools_room(extra_tokens: int) -> Callable[[list[dict]], int]:
+    """A window whose budget holds the first request's MESSAGES (no tools) at
+    the default ratio plus `extra_tokens` — and so, with extra_tokens under the
+    tools' own share, cannot hold her instructions, his ask and the tools."""
+    return _window_with_room(extra_tokens)
+
+
+class _sized_once:  # noqa: N801 — used like the window helpers it wraps
+    """A window callable evaluated on the first request it is asked for, then
+    stated unchanged on every later one (a served link's window is fixed);
+    `value` is what it stated, None before then."""
+
+    def __init__(self, size: Callable[[list[dict]], int]) -> None:
+        self._size = size
+        self.value: int | None = None
+
+    def __call__(self, messages: list[dict]) -> int:
+        if self.value is None:
+            self.value = self._size(messages)
+        return self.value
+
+
+def _number_in(n: int, text: str) -> bool:
+    return str(n) in text or f"{n:,}" in text
+
+
+async def _say_stream(client, message: str, model: str = "qwen3:8b") -> str:
+    resp = await client.put("/api/v1/settings", json={"key": "chat.model", "value": model})
+    assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/chat/stream", json={"message": message})
+    assert resp.status_code == 200, resp.text
+    return resp.text
+
+
+async def _round_stops(pool) -> list[tuple[str, dict]]:
+    rows = await pool.fetch(
+        "SELECT name, meta FROM turn_spans WHERE kind = 'round_stop' ORDER BY started_at"
+    )
+    return [(row["name"], row["meta"]) for row in rows]
+
+
+# -- C1: the overhead fitted around is the tools array actually sent ---------
+
+
+async def test_v27_t24_a_round_that_fits_without_the_tools_but_not_with_them_is_trimmed(
+    owner_client, pool, mount_peers, workspace
+):
+    """Room for the whole listing beside the messages, but not beside the
+    tools array too: round 2 is trimmed, and the span's estimate is the sent
+    messages WITH the chars of the very tools array that round carried."""
+    listing = _big_file(workspace)
+    gateway = _read_then_answer(_link())
+    gateway.window = _window_with_tools_room(gateway, 1500)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 2
+    first_payload, second_payload = gateway.payloads
+    tools_sent = second_payload.get("tools")
+    assert tools_sent and tools_sent == first_payload.get("tools")
+    tools_chars = context_fit.tools_chars(tools_sent)
+    window = int(gateway._window_value)
+    budget = context_fit.budget_for(window)
+    ratio = context_fit.DEFAULT_CHARS_PER_TOKEN
+    # Precondition: without the tools, the whole listing would have fit.
+    assert (
+        context_fit.estimate_tokens(first_payload["messages"], ratio) + LISTING_ROOM_TOKENS
+        <= budget
+    )
+
+    second = second_payload["messages"]
+    tool = [m for m in second if m["role"] == "tool"]
+    assert len(tool) == 1 and listing not in tool[0]["content"]
+    assert "[trimmed " in tool[0]["content"]
+    assert context_fit.estimate_tokens(second, ratio, tools_chars) <= budget
+
+    metas = await _llm_metas(pool)
+    trimmed = metas[1]["context_trimmed"]
+    assert trimmed["tool_results"] == 1
+    assert trimmed["est_tokens"] == context_fit.estimate_tokens(second, ratio, tools_chars)
+
+
+# -- C2: the calibration holds the same overhead, so the tools count once ----
+
+
+async def test_v27_t24_a_round_the_measured_ratio_says_fits_with_its_tools_is_sent_whole(
+    owner_client, pool, mount_peers, workspace
+):
+    """The gateway's count (3.0 chars/token, tools included, as a real
+    prompt_tokens is) says round 2 fits with its tools: it is sent whole. A
+    ratio calibrated from the messages alone (tools left out of the chars)
+    plus the tools counted again on top would trim it."""
+    listing = _big_file(workspace)
+    gateway = _read_then_answer(_link())
+    gateway.prompt_tokens = lambda messages: context_fit.estimate_tokens(
+        messages, 3.0, _tools_chars_of_last(gateway)
+    )
+    listing_tokens = math.ceil(BIG_FILE_CHARS / 3.0) + 300
+    gateway.window = _window_with_tools_room(gateway, listing_tokens, ratio=3.0)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 2
+    second = gateway.payloads[1]["messages"]
+    tool = [m for m in second if m["role"] == "tool"]
+    assert len(tool) == 1 and listing in tool[0]["content"]
+    assert "[trimmed " not in tool[0]["content"]
+    metas = await _llm_metas(pool)
+    window = int(gateway._window_value)
+    assert metas[1].get("context_fitted_to") == window
+    assert "context_trimmed" not in metas[1]
+
+
+async def test_v27_t24_a_calibrated_round_is_fitted_with_the_measured_ratio_and_its_tools(
+    owner_client, pool, mount_peers, workspace
+):
+    """With room for only part of the listing at the measured 3.0 and the
+    tools: round 2 is trimmed to what the measured ratio and the sent tools
+    leave, and its span's estimate is that request at 3.0 with the tools."""
+    _big_file(workspace)
+    gateway = _read_then_answer(_link())
+    gateway.prompt_tokens = lambda messages: context_fit.estimate_tokens(
+        messages, 3.0, _tools_chars_of_last(gateway)
+    )
+    gateway.window = _window_with_tools_room(gateway, 1500, ratio=3.0)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 2
+    second_payload = gateway.payloads[1]
+    second = second_payload["messages"]
+    tools_chars = context_fit.tools_chars(second_payload.get("tools"))
+    window = int(gateway._window_value)
+    tool = [m for m in second if m["role"] == "tool"]
+    assert len(tool) == 1 and "[trimmed " in tool[0]["content"]
+    measured = context_fit.estimate_tokens(second, 3.0, tools_chars)
+    assert measured <= context_fit.budget_for(window) + 1
+    metas = await _llm_metas(pool)
+    assert abs(metas[1]["context_trimmed"]["est_tokens"] - measured) <= 1
+
+
+# -- C3: an unfittable round is never sent; the turn ends on a stated stop ---
+
+
+async def test_v27_t24_an_unfittable_round_is_not_sent_and_the_turn_states_the_sizes(
+    owner_client, pool, mount_peers, workspace
+):
+    """The window holds her instructions and his ask, but not with the tools
+    array beside them: round 2 cannot fit by trimming anything. It is never
+    sent (the gateway answers once); one round_stop span (reason
+    'unfittable', round 2) states the window, the budget, the estimated
+    prompt tokens and the tools' share; the turn ends 'error' on one stored
+    statement naming the window, the estimate and the tools tokens, the same
+    words streamed as the error frame; the tool round that ran stays run."""
+    _big_file(workspace)
+    gateway = _read_then_answer(_link(), window=_window_without_tools_room(500))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    body = await _say_stream(owner_client, ASK)
+
+    assert gateway.calls == 1
+    tools_chars = context_fit.tools_chars(gateway.payloads[0].get("tools"))
+    window = int(gateway._window_value)
+    budget = context_fit.budget_for(window)
+    tools_tokens = math.ceil(tools_chars / context_fit.DEFAULT_CHARS_PER_TOKEN)
+    assert tools_tokens > 500  # precondition: the tools alone outgrow the room
+
+    stops = await _round_stops(pool)
+    assert len(stops) == 1
+    name, meta = stops[0]
+    assert name == UNFITTABLE and chat.STOP_UNFITTABLE == UNFITTABLE
+    assert meta["reason"] == UNFITTABLE
+    assert meta["rounds"] == 2
+    assert meta["window"] == window
+    assert meta["budget"] == budget
+    assert meta["tools_tokens"] == tools_tokens
+    assert meta["est_tokens"] > budget and meta["est_tokens"] >= tools_tokens
+
+    tool_spans = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'tool'")
+    assert [r["name"] for r in tool_spans] == ["workspace_read_file"]
+    assert await _turn_status(pool) == "error"
+    (reply,) = await _assistant_rows(pool)
+    assert _number_in(window, reply)
+    assert _number_in(meta["est_tokens"], reply)
+    assert _number_in(tools_tokens, reply)
+    assert "python is not installed there." not in reply
+    assert '"error"' in body and _number_in(window, body) and _number_in(tools_tokens, body)
+
+
+# -- C4: the stop states a fact; it never asks the owner --------------------
+
+
+async def test_v27_t24_the_unfittable_stop_asks_nothing_and_sends_nothing_more(
+    owner_client, pool, mount_peers, workspace
+):
+    """No approval shape (owner ruling no-approvals.md): the statement asks
+    no question and seeks no permission, no consent frame streams, and no
+    further round of any kind (narration, retry) reaches the gateway. The
+    reason is its own, not a circling reason."""
+    _big_file(workspace)
+    gateway = _read_then_answer(_link(), window=_window_without_tools_room(500))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    body = await _say_stream(owner_client, ASK)
+
+    assert gateway.calls == 1
+    assert [name for name, _ in await _round_stops(pool)] == [chat.STOP_UNFITTABLE]
+    assert chat.STOP_UNFITTABLE not in chat.CIRCLING_NOTE_WORDS
+    (reply,) = await _assistant_rows(pool)
+    assert "?" not in reply
+    lowered = reply.lower()
+    assert not [w for w in APPROVAL_WORDS if w in lowered]
+    assert "consent" not in body.lower()
+
+
+# -- C5: round 1 of a later turn is held to the same rule --------------------
+
+
+async def test_v27_t24_the_first_round_of_the_next_turn_is_not_sent_when_it_cannot_fit(
+    owner_client, pool, mount_peers, workspace
+):
+    """The window learned on turn 1's answer cannot hold turn 2's
+    instructions, ask and tools: turn 2 sends nothing at all, files one
+    round_stop (unfittable, round 1) and ends on the stated sizes."""
+    gateway = WindowGateway(
+        rounds=((text("Python 3.12."),), (text("Still 3.12."),)),
+        served_by=_link(),
+        window=_window_without_tools_room(500),
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+    assert gateway.calls == 1
+    await _say(owner_client, "and on the dell?")
+
+    assert gateway.calls == 1
+    window = int(gateway._window_value)
+    stops = await _round_stops(pool)
+    assert [(name, meta["rounds"]) for name, meta in stops] == [(UNFITTABLE, 1)]
+    assert stops[0][1]["window"] == window
+    assert await _turn_status(pool) == "error"
+    rows = await _assistant_rows(pool)
+    assert len(rows) == 2 and rows[0] == "Python 3.12."
+    assert _number_in(window, rows[1]) and "Still 3.12." not in rows[1]
+
+
+# -- T24 COVERAGE -------------------------------------------------------------
+
+
+async def test_v27_t24_cov_the_round_never_sent_files_no_llm_call_span(
+    owner_client, pool, mount_peers, workspace
+):
+    """C3 (a call the trace claims is a call that was made): the unfittable
+    round is fitted before its llm_call span opens, so the trace holds exactly
+    one llm_call per request the gateway received — round 1's — and no span
+    for the round that was never sent."""
+    _big_file(workspace)
+    gateway = _read_then_answer(_link(), window=_window_without_tools_room(500))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 1
+    metas = await _llm_metas(pool)
+    assert len(metas) == gateway.calls
+    assert metas[0]["round"] == 1
+    assert [name for name, _ in await _round_stops(pool)] == [UNFITTABLE]
+
+
+async def test_v27_t24_cov_a_circling_stops_narration_round_that_cannot_fit_is_not_sent(
+    owner_client, pool, mount_peers, workspace
+):
+    """C1/C4 at the circling stop: the third identical read is answered by a
+    link stating a window too small for even her instructions and his ask
+    (no tools are offered to the narration round, so its overhead is 0). The
+    narration round is not sent — the gateway answers the three loop rounds
+    only — and the stop still ends the turn the circling way: the backend's
+    statement of what the tools returned, then the circling note. The only
+    round_stop is the circling one."""
+    a, b = _link(), _link()
+    _big_file(workspace)
+    read = whole_call("c1", "workspace_read_file", {"path": "listing.txt"})
+    gateway = WindowGateway(
+        rounds=((read,), (read,), (read,), (text("never sent"),)),
+        served=((a, None), (a, None), (b, 64)),
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == chat.SAME_CALL_LIMIT
+    assert [name for name, _ in await _round_stops(pool)] == [chat.STOP_REPEATED_CALL]
+    assert len(await _llm_metas(pool)) == chat.SAME_CALL_LIMIT
+    (reply,) = await _assistant_rows(pool)
+    assert chat.TOOL_RESULTS_HEADER in reply
+    stop_words = chat.CIRCLING_NOTE_WORDS[chat.STOP_REPEATED_CALL]
+    assert f"[stopped after {chat.SAME_CALL_LIMIT} tool rounds: {stop_words}]" in reply
+    assert "never sent" not in reply
+
+
+# -- C6: nothing was called, so nothing says a model was called or failed ----
+#
+# The unfittable request was never sent: no model saw it, none could fail it.
+# A model-failure statement ("I didn't get a response from …", RETRY_HINT)
+# around the sizes would be a claim the trace contradicts — the VERIFY
+# survivor (verbatim dropped) was exactly that.
+
+MODEL_CLAIMS = (
+    "didn't get a response",
+    "did not get a response",
+    "no response",
+    "model failed",
+    "the model couldn't",
+    "the model could not",
+    "failed",
+    "try again",
+)
+
+
+def _stream_texts(body: str) -> tuple[str, list[str]]:
+    """The SSE body -> (every streamed text delta joined, every error frame)."""
+    deltas: list[str] = []
+    errors: list[str] = []
+    for block in body.strip().split("\n\n"):
+        payload = block.removeprefix("data: ")
+        if not payload.startswith("{"):
+            continue
+        frame = json.loads(payload)
+        if isinstance(frame.get("t"), str):
+            deltas.append(frame["t"])
+        if isinstance(frame.get("error"), str):
+            errors.append(frame["error"])
+    return "".join(deltas), errors
+
+
+def _logged_unsent_as_failed(caplog) -> list[str]:
+    """Every log line that carries the unfittable statement ("… was not
+    sent …") and still calls it a failure: the log is read too, and a
+    request never sent did not fail."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if "was not sent" in r.getMessage() and "failed" in r.getMessage().lower()
+    ]
+
+
+def _model_claims(text: str) -> list[str]:
+    lowered = text.lower()
+    claims = [w for w in MODEL_CLAIMS if w in lowered]
+    if chat.RETRY_HINT.lower() in lowered:
+        claims.append(chat.RETRY_HINT)
+    return claims
+
+
+async def test_v27_t24_c6_the_unfittable_stop_never_claims_a_model_was_called_or_failed(
+    owner_client, pool, mount_peers, workspace, caplog
+):
+    """The stored reply, the error frame and every streamed text frame of the
+    unfittable stop carry no model-failure wording (never composed through
+    model_failure_statement): they state the request was not sent, with the
+    window, the estimated prompt tokens and the tools tokens. The error frame
+    is the stored reply, word for word."""
+    _big_file(workspace)
+    gateway = _read_then_answer(_link(), window=_window_without_tools_room(500))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    body = await _say_stream(owner_client, ASK)
+
+    assert gateway.calls == 1
+    ((_, meta),) = await _round_stops(pool)
+    (reply,) = await _assistant_rows(pool)
+    streamed, errors = _stream_texts(body)
+    assert errors == [reply]
+    for surface in (reply, streamed):
+        assert _model_claims(surface) == [], surface
+    assert "was not sent" in reply.lower()
+    for n in (meta["window"], meta["est_tokens"], meta["tools_tokens"]):
+        assert _number_in(n, reply)
+    assert _logged_unsent_as_failed(caplog) == []
+
+
+async def test_v27_t24_c6_a_circling_narration_round_that_cannot_fit_says_it_was_not_sent(
+    owner_client, pool, mount_peers, workspace, caplog
+):
+    """At the circling stop the narration round's request cannot fit a link
+    stating a 64-token window: it is not sent, and the turn says so instead
+    of passing it off as a dead narration round. The stored reply and the
+    streamed text state that the request was not sent, naming the 64-token
+    window and the request's estimated prompt tokens (over that window's
+    budget), beside what the tools returned and the circling note — and
+    neither claims a model was called or failed."""
+    a, b = _link(), _link()
+    _big_file(workspace)
+    read = whole_call("c1", "workspace_read_file", {"path": "listing.txt"})
+    gateway = WindowGateway(
+        rounds=((read,), (read,), (read,), (text("never sent"),)),
+        served=((a, None), (a, None), (b, 64)),
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    body = await _say_stream(owner_client, ASK)
+
+    assert gateway.calls == chat.SAME_CALL_LIMIT
+    (reply,) = await _assistant_rows(pool)
+    streamed, _ = _stream_texts(body)
+    budget = context_fit.budget_for(64)
+    for surface in (reply, streamed):
+        assert _model_claims(surface) == [], surface
+        assert "was not sent" in surface.lower(), surface
+        assert _number_in(64, surface)
+        estimates = [
+            int(n.replace(",", "")) for n in re.findall(r"(\d[\d,]*) prompt tokens", surface)
+        ]
+        assert any(n > budget for n in estimates), surface
+    assert chat.TOOL_RESULTS_HEADER in reply
+    stop_words = chat.CIRCLING_NOTE_WORDS[chat.STOP_REPEATED_CALL]
+    assert f"[stopped after {chat.SAME_CALL_LIMIT} tool rounds: {stop_words}]" in reply
+    assert _logged_unsent_as_failed(caplog) == []
+
+
 # -- S38b T5: a cloud link's DECLARED window (the catalog's context_length) --
 
 
@@ -846,9 +1335,11 @@ async def test_a_declared_window_is_recorded_with_its_source_and_fits_later_roun
     listing = _big_file(workspace)
     gateway = _read_then_answer(
         f"cloudy:remote-{uuid.uuid4().hex[:8]}",
-        window=_window_with_room(1500),
         window_source="declared",
     )
+    # verification-2-7 T24: the window holds the tools array sent beside the
+    # messages (a window under the tools alone would leave nothing sendable).
+    gateway.window = _window_with_tools_room(gateway, 1500)
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client, ASK)

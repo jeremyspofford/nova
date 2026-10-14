@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +45,20 @@ logger = logging.getLogger("core")
 # number both read, so a backend-run check reads identically in the trace to
 # the call she made (S29 T7; tests/test_live_facts.py t7).
 SPAN_RESULT_HEAD_CHARS = 500
+
+# A guard span filed because the guard itself RAISED (verification-2-7 T11):
+# chat.py writes it with meta.error ("<ExcType>: <message>") and this marker
+# beside it. meta.error alone cannot say so: a guard that FIRED and whose
+# redirect then failed carries meta.error too. Every reader that takes a guard
+# span's presence as a correction (the eval predicates, the skills ledger, an
+# agent's run facts) asks guard_raised first — a crash is not a fire.
+GUARD_RAISED = "raised"
+
+
+def guard_raised(meta: Mapping[str, Any] | None) -> bool:
+    """Is this guard span the record of the guard crashing, not firing?"""
+    return isinstance(meta, Mapping) and meta.get(GUARD_RAISED) is True
+
 
 # 'stopped' (S15) is deliberately NOT 'interrupted'. Interrupted means no
 # process was running the turn — the startup sweep's word, and the scheduler

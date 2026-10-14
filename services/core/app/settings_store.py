@@ -318,6 +318,43 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
         validate=_int_range(1, 8, "boxes running at once"),
     ),
+    # verification-2-7 T25 (report item 2): the hard bound on one turn. A
+    # wall-clock budget, never a count of rounds (migration 044). Checked
+    # between rounds, after a round's tools have all run, so a call in flight
+    # always finishes; past it the turn ends on a stated note (round_stop
+    # time_budget). Every turn kind reads it: chat, agents, scheduled firings,
+    # beats and the eval runner share chat._run_turn.
+    SettingDef(
+        key="turns.time_budget_s",
+        type="int",
+        default=900,
+        description=(
+            "The wall-clock seconds one turn may run (60 to 86400). It is checked "
+            "between rounds, after a round's tools have all run: past it, no further "
+            "tool runs, she answers once from what the tools returned, and her reply "
+            "ends with a note stating the budget and the seconds the turn took."
+        ),
+        validate=_int_range(60, 86400, "seconds per turn"),
+    ),
+    # verification-2-7 T26 (report item 2): the same bound in tokens. The
+    # prompt + completion tokens every round of the turn reported, summed; a
+    # served round that reported none counts core's estimate, never 0. Checked
+    # where the time budget is, between rounds; past it the turn ends on a
+    # stated note (round_stop token_budget). Never a count of rounds.
+    SettingDef(
+        key="turns.token_budget",
+        type="int",
+        default=1_000_000,
+        description=(
+            "The prompt and completion tokens one turn may use, summed over its rounds "
+            "(10000 to 100000000). It is checked between rounds, after a round's tools "
+            "have all run; a round that reports no usage is estimated from what it sent "
+            "and wrote. Past it, no further tool runs, she answers once from what the "
+            "tools returned, and her reply ends with a note stating the tokens used and "
+            "the budget."
+        ),
+        validate=_int_range(10_000, 100_000_000, "tokens per turn"),
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
@@ -330,6 +367,14 @@ BOX_LIMIT_KEYS: dict[str, str] = {
     "pids": "box.pids",
     "max_running": "box.max_running",
 }
+
+#: The per-turn wall-clock budget's key (verification-2-7 T25); chat._run_turn
+#: reads it at each turn's start.
+TURN_TIME_BUDGET = "turns.time_budget_s"
+
+#: The per-turn token budget's key (verification-2-7 T26); chat._run_turn
+#: reads it at each turn's start, beside the time budget.
+TURN_TOKEN_BUDGET = "turns.token_budget"
 
 #: The hub last-resort switch's key (epic hub-last-resort).
 HUB_LAST_RESORT = "routing.hub_last_resort"

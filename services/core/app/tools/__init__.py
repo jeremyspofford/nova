@@ -274,7 +274,8 @@ def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
     """The OpenAI `tools` array, derived from the registry rather than
     written out beside it — a tool added to a module is advertised by that
     fact alone, and can never be advertised with a schema different from
-    the one dispatch validates against.
+    the one dispatch validates against (less core's own whole-number
+    keyword, schema.advertised, which no provider is shown).
 
     `names` is a subset to advertise (an agent's toolset); None means the
     whole registry, in tool_names() order, exactly as before. A subset is
@@ -299,7 +300,7 @@ def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
             "function": {
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.parameters,
+                "parameters": schema.advertised(tool.parameters),
             },
         }
         for tool in (REGISTRY[name] for name in chosen)
@@ -373,6 +374,14 @@ async def dispatch(
         )
 
     parsed, problem = _parse_arguments(arguments)
+    if problem is not None:
+        return _retryable(problem), False
+
+    # Part of reading the call, not a decision about it: a whole number the
+    # model spelled 2.0 or "2", on a property that declares it takes one, is
+    # read as the int it is (verification-2-7 T4); validate then holds it to
+    # the property's bounds like any other int.
+    parsed, problem = schema.whole_numbers(tool.parameters, parsed)
     if problem is not None:
         return _retryable(problem), False
 

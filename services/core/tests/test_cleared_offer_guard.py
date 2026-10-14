@@ -20,6 +20,8 @@ detection is missing and holds precision once it lands.
 
 from __future__ import annotations
 
+import pytest
+
 from app import guards
 
 TURN_F816E1C2_TAIL = (
@@ -120,3 +122,43 @@ def test_it_never_reads_his_message():
 
     params = list(inspect.signature(guards.cleared_offer_check).parameters)
     assert params == ["reply_text"], params
+
+
+# --- verification-2-7 T10: a crashed detector reaches the caller -------------
+# chat.py's handler (try/logger.exception, ships the reply) is the ONE place a
+# crash is handled; a guard that swallows its own exception and answers None is
+# indistinguishable from a clean pass.
+
+
+class _DetectorBoom(RuntimeError):
+    pass
+
+
+def test_v27_t10_a_crashing_detector_raises_to_the_caller(monkeypatch):
+    """C1: the detector's own exception, unchanged — never None."""
+    boom = _DetectorBoom("detector fell over")
+
+    def broken(text: str):
+        raise boom
+
+    monkeypatch.setattr(guards, "_cleared_offer", broken)
+    with pytest.raises(_DetectorBoom) as raised:
+        guards.cleared_offer_check(TURN_F816E1C2_TAIL)
+    assert raised.value is boom
+
+
+def test_v27_t10_a_crash_on_an_honest_reply_raises_too(monkeypatch):
+    """C1: a crash is not a pass even on a reply that would be silent."""
+
+    def broken(text: str):
+        raise ValueError("bad pattern state")
+
+    monkeypatch.setattr(guards, "_cleared_offer", broken)
+    with pytest.raises(ValueError, match="bad pattern state"):
+        guards.cleared_offer_check("Done: Fast Startup is off.")
+
+
+@pytest.mark.parametrize("reply", [None, ""])
+def test_v27_t10_no_reply_is_no_claim_not_an_error(reply):
+    """C3: a missing reply is not a crash."""
+    assert guards.cleared_offer_check(reply) is None

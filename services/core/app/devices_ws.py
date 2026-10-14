@@ -386,7 +386,9 @@ class Hub:
         """Kill a device's socket now — the revoke path calls this so a revoked
         machine drops immediately rather than at its next heartbeat, and a
         re-pair so the old key's socket does. Returns True only if a live
-        socket was actually closed."""
+        socket was actually closed: False when there was none, and False when
+        close() raised — nothing confirms that socket went down. Either way the
+        hub forgets the socket, so no command is routed to it again."""
         did = str(device_id)
         conn = self._conns.pop(did, None)
         self._epochs.pop(did, None)
@@ -399,6 +401,7 @@ class Hub:
             await conn.close(REVOKED_CLOSE)
         except Exception:
             logger.warning("closing device socket %s failed", did, exc_info=True)
+            return False
         return True
 
 
