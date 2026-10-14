@@ -284,3 +284,129 @@ async def test_with_no_refused_model_on_record_it_makes_no_call_and_says_it_cann
     assert result.status is None
     assert _completion_posts(fake) == []
     assert await _probe_rows(pool) == []
+
+
+# ══ T4: which walls are due a probe ════════════════════════════════════════
+
+
+async def _provider_row(pool, name):
+    """A cloud provider row for a wall to hang off (provider_walls' FK)."""
+    await pool.execute(
+        "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key) VALUES "
+        "($1, 'openai-chat', 'https://' || $1 || '.test/v1', 'static-bearer', 'sk-1') "
+        "ON CONFLICT (name) DO NOTHING",
+        name,
+    )
+
+
+async def _stored_wall(
+    pool, provider, status, *, refused_ago_s, probed_ago_s=None, left_s=4 * 3600, model=""
+):
+    """A provider_walls row as record_refusal leaves one, its refusal
+    `refused_ago_s` old (updated_at) and `left_s` still to run; probed
+    `probed_ago_s` ago when given, never probed otherwise."""
+    await _provider_row(pool, provider)
+    await pool.execute(
+        "INSERT INTO provider_walls (provider, model, walled_until, reason, status, strikes, "
+        "updated_at) VALUES ($1, $2, now() + make_interval(secs => $3), $4, $5, 2, "
+        "now() - make_interval(secs => $6))",
+        provider,
+        model,
+        float(left_s),
+        f"{provider} refused ({status}): out of something",
+        status,
+        float(refused_ago_s),
+    )
+    if probed_ago_s is not None:
+        await pool.execute(
+            "UPDATE provider_walls SET probed_at = now() - make_interval(secs => $3) "
+            "WHERE provider = $1 AND model = $2",
+            provider,
+            model,
+            float(probed_ago_s),
+        )
+
+
+async def _due(pool) -> set[tuple[str, str]]:
+    return {(w["provider"], w["model"]) for w in await wall_probe.due_walls(pool)}
+
+
+# ── c2: a credit wall an hour old, never probed, is due — as a wall ────────
+
+
+async def test_a_credit_wall_refused_over_an_hour_ago_and_never_probed_is_due(pool):
+    await _stored_wall(pool, "openrouter", 402, refused_ago_s=2 * 3600)
+
+    due = await wall_probe.due_walls(pool)
+
+    assert len(due) == 1, due
+    wall = due[0]
+    assert (wall["provider"], wall["model"]) == ("openrouter", routing.WHOLE_PROVIDER)
+    assert wall["status"] == 402
+    assert wall["reason"] == "openrouter refused (402): out of something"
+    assert wall["probed_at"] is None
+    # The same wall walls() hands back: its stored refusal time and end.
+    stored = (await routing.walls(pool))[("openrouter", routing.WHOLE_PROVIDER)]
+    assert wall["refused_at"] == stored["refused_at"]
+    assert wall["walled_until"] == stored["walled_until"]
+
+
+async def test_a_fresh_credit_wall_is_never_probed_and_not_due(pool):
+    await _provider_row(pool, "openrouter")
+    await routing.record_refusal(pool, {"name": "openrouter"}, 402, CREDITS, model="remote-model")
+
+    stamped = await pool.fetchval("SELECT probed_at FROM provider_walls")
+
+    assert stamped is None
+    assert await _due(pool) == set()
+
+
+# ── c3: the hour is WALL_PROBE_EVERY_S, counted from the refusal ───────────
+
+
+async def test_a_credit_wall_refused_under_an_hour_ago_is_not_due_yet(pool):
+    assert wall_probe.WALL_PROBE_EVERY_S == 3600
+    await _stored_wall(pool, "early", 402, refused_ago_s=3590)
+    await _stored_wall(pool, "late", 402, refused_ago_s=3610)
+
+    assert await _due(pool) == {("late", routing.WHOLE_PROVIDER)}
+
+
+# ── c4: the hour counts from the LATER of the refusal and the last probe ───
+
+
+async def test_the_hour_counts_from_the_later_of_the_refusal_and_the_last_probe(pool):
+    # Refused long ago, probed recently: the probe restarts the hour.
+    await _stored_wall(pool, "probed-recently", 402, refused_ago_s=3 * 3600, probed_ago_s=600)
+    # Refused long ago, last probed over an hour ago: due again.
+    await _stored_wall(pool, "probed-long-ago", 402, refused_ago_s=3 * 3600, probed_ago_s=3660)
+    # Probed 2 h ago, then refused again 10 min ago (a real turn): not due.
+    await _stored_wall(pool, "refused-since", 402, refused_ago_s=600, probed_ago_s=2 * 3600)
+
+    assert await _due(pool) == {("probed-long-ago", routing.WHOLE_PROVIDER)}
+
+
+# ── c5: only a stored credit status is ever due — read off the row ─────────
+
+
+async def test_only_a_wall_whose_stored_status_is_a_credit_status_is_ever_due(pool):
+    assert wall_probe.CREDIT_STATUSES == frozenset({402})
+    for status in (401, 403, 429, 500, 502, 503):
+        await _stored_wall(pool, f"p{status}", status, refused_ago_s=3 * 3600)
+    await _stored_wall(pool, "p502", 502, refused_ago_s=3 * 3600, model="some-model")
+    # The name decides nothing: openrouter rate-limited is not due, and any
+    # provider out of credit is.
+    await _stored_wall(pool, "openrouter", 429, refused_ago_s=3 * 3600)
+    await _stored_wall(pool, "anthropic", 402, refused_ago_s=3 * 3600)
+
+    assert await _due(pool) == {("anthropic", routing.WHOLE_PROVIDER)}
+
+
+# ── c6: a wall that has run out is not a wall ─────────────────────────────
+
+
+async def test_a_wall_past_its_walled_until_is_never_due(pool):
+    await _stored_wall(pool, "expired", 402, refused_ago_s=3 * 3600, left_s=-60)
+    await _stored_wall(pool, "standing", 402, refused_ago_s=3 * 3600)
+
+    assert await _due(pool) == {("standing", routing.WHOLE_PROVIDER)}

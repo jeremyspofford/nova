@@ -22,6 +22,15 @@ from app import adapters, providers, usage
 PURPOSE = "wall_probe"
 NO_MODEL = "cannot probe: no refused model on record"
 
+# The stored wall statuses that mean "out of credit": a wall is a credit wall
+# because of the status its refusal STORED on the row, never because of which
+# provider it is. 401/403 (the key) and 429 (a rate) do not lift by waiting
+# for a top-up, and a 5xx wall is an outage with its own short ladder.
+CREDIT_STATUSES = frozenset({402})
+# A credit wall is due a probe this long after the later of its latest
+# refusal and its last probe.
+WALL_PROBE_EVERY_S = 3600
+
 
 @dataclass(frozen=True)
 class ProbeResult:
@@ -95,3 +104,23 @@ async def probe_wall(app, pool: asyncpg.Pool, wall: dict) -> ProbeResult:
             served=False, reason=f"{provider} probe: {error}", model=model, status=call.status
         )
     return ProbeResult(served=True, model=model, status=call.status)
+
+
+async def due_walls(pool: asyncpg.Pool) -> list[dict]:
+    """The live credit walls due a probe, each shaped as routing.walls()
+    hands a wall back (refused_at = the stored refusal time) plus probed_at.
+
+    Due = still standing, STORED status in CREDIT_STATUSES, and the later of
+    its latest refusal (updated_at) and its last probe (probed_at; NULL when
+    never probed, which greatest() skips) at least WALL_PROBE_EVERY_S old.
+    """
+    rows = await pool.fetch(
+        "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
+        "updated_at AS refused_at, probed_at "
+        "FROM provider_walls WHERE walled_until > now() AND status = ANY($1::int[]) "
+        "AND greatest(updated_at, probed_at) <= now() - make_interval(secs => $2) "
+        "ORDER BY provider, model",
+        sorted(CREDIT_STATUSES),
+        float(WALL_PROBE_EVERY_S),
+    )
+    return [dict(r) for r in rows]
