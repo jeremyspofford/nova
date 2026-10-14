@@ -11,6 +11,9 @@ on record it makes no call at all and states that it cannot probe.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import httpx
 import pytest
 from starlette.applications import Starlette
@@ -410,3 +413,313 @@ async def test_a_wall_past_its_walled_until_is_never_due(pool):
     await _stored_wall(pool, "standing", 402, refused_ago_s=3 * 3600)
 
     assert await _due(pool) == {("standing", routing.WHOLE_PROVIDER)}
+
+
+# ══ T5: the tick probes the due walls; the loop ticks; lifespan runs it ════
+
+
+async def _cloud(client, mount_backend, name: str, base: str, fake: FakeOpenAICompat):
+    """A cloud provider row `name` over `fake` at `base`; fake.seen cleared."""
+    mount_backend(base, fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": name,
+            "adapter": "openai-chat",
+            "base_url": f"{base}/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-1",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    fake.seen.clear()
+    return fake
+
+
+async def _walled_for_credits(pool, provider: str, *, refused_ago_s: float, model="remote-model"):
+    """`provider` walled by a real 402 refusal (record_refusal) whose refusal
+    is `refused_ago_s` old, with that 402 on the ledger."""
+    row = await providers.get_row(pool, provider)
+    await routing.record_refusal(pool, row, 402, CREDITS, model=model)
+    await _ledger(pool, provider, model, ago_s=refused_ago_s)
+    await pool.execute(
+        "UPDATE provider_walls SET updated_at = now() - make_interval(secs => $2) "
+        "WHERE provider = $1",
+        provider,
+        float(refused_ago_s),
+    )
+
+
+async def _three_providers(client, pool, mount_backend):
+    """Two credit walls due a probe (refused 2 h ago) and one not (refused
+    10 min ago); every provider still out of credit, so every wall stands."""
+    fakes = {}
+    for name in ("openrouter", "deepinfra", "freshly"):
+        fakes[name] = await _cloud(
+            client,
+            mount_backend,
+            name,
+            f"http://{name}.test",
+            FakeOpenAICompat(accepts_key="sk-1", affords_tokens=0),
+        )
+    await _walled_for_credits(pool, "openrouter", refused_ago_s=2 * 3600)
+    await _walled_for_credits(pool, "deepinfra", refused_ago_s=2 * 3600)
+    await _walled_for_credits(pool, "freshly", refused_ago_s=600)
+    return fakes
+
+
+async def _probed_at(pool) -> dict:
+    return {
+        r["provider"]: r["probed_at"]
+        for r in await pool.fetch("SELECT provider, probed_at FROM provider_walls")
+    }
+
+
+# ── c1: a tick probes every due wall exactly once, and only the due ones ──
+
+
+async def test_a_tick_probes_every_due_wall_once_and_no_wall_that_is_not_due(
+    client, pool, mount_backend
+):
+    fakes = await _three_providers(client, pool, mount_backend)
+
+    await wall_probe.tick(app, pool)
+
+    assert len(_completion_posts(fakes["openrouter"])) == 1
+    assert len(_completion_posts(fakes["deepinfra"])) == 1
+    assert _completion_posts(fakes["freshly"]) == []
+    # Each through probe_wall: one wall_probe ledger row per due wall.
+    rows = await _probe_rows(pool)
+    assert sorted(r["provider"] for r in rows) == ["deepinfra", "openrouter"]
+
+
+# ── c2: a tick stamps probed_at on what it probed; the next tick is quiet ──
+
+
+async def test_a_tick_stamps_probed_at_on_each_wall_it_probed_and_no_other(
+    client, pool, mount_backend
+):
+    await _three_providers(client, pool, mount_backend)
+    before = await pool.fetchval("SELECT now()")
+
+    await wall_probe.tick(app, pool)
+
+    stamped = await _probed_at(pool)
+    after = await pool.fetchval("SELECT now()")
+    for provider in ("openrouter", "deepinfra"):
+        assert stamped[provider] is not None, stamped
+        assert before <= stamped[provider] <= after
+    assert stamped["freshly"] is None
+
+
+async def test_a_second_tick_straight_after_probes_nothing(client, pool, mount_backend):
+    fakes = await _three_providers(client, pool, mount_backend)
+
+    await wall_probe.tick(app, pool)
+    await wall_probe.tick(app, pool)
+
+    assert len(_completion_posts(fakes["openrouter"])) == 1
+    assert len(_completion_posts(fakes["deepinfra"])) == 1
+    assert _completion_posts(fakes["freshly"]) == []
+    assert len(await _probe_rows(pool)) == 2
+
+
+async def test_a_probe_that_raises_is_logged_and_the_tick_probes_the_next_wall(
+    client, pool, mount_backend, monkeypatch, caplog
+):
+    """COVERAGE (c1/c4): one provider's probe raising never starves the
+    other due walls in the same tick; it is logged with its traceback and
+    left unstamped, so it is due again next tick."""
+    fakes = await _three_providers(client, pool, mount_backend)
+    real = wall_probe.probe_wall
+
+    async def deepinfra_breaks(app_, pool_, wall):
+        if wall["provider"] == "deepinfra":
+            raise RuntimeError("boom: deepinfra probe broke")
+        return await real(app_, pool_, wall)
+
+    monkeypatch.setattr(wall_probe, "probe_wall", deepinfra_breaks)
+    caplog.set_level(logging.INFO)
+
+    await wall_probe.tick(app, pool)
+
+    assert len(_completion_posts(fakes["openrouter"])) == 1
+    stamped = await _probed_at(pool)
+    assert stamped["openrouter"] is not None
+    assert stamped["deepinfra"] is None
+    assert any(
+        r.levelno >= logging.ERROR and r.exc_info and "boom" in str(r.exc_info[1])
+        for r in caplog.records
+    ), [(r.levelname, r.getMessage()) for r in caplog.records]
+
+
+# ── c3: the loop ticks once per interval, PROBE_TICK_S by default ──────────
+
+# Every loop test runs the loop under asyncio.wait_for(..., LOOP_BOUND_S),
+# and every fake tick/sleep yields to the event loop, so a loop that never
+# sleeps or never ends FAILS with TimeoutError instead of hanging the run
+# (the gateway has no per-test timeout).
+LOOP_BOUND_S = 5
+
+
+def _recording(events: list, *, stop_after_sleeps: int):
+    """A tick and a sleep that log into `events`; the sleep cancels the loop
+    after `stop_after_sleeps` sleeps, the way a shutdown does. Both yield."""
+
+    async def fake_tick(app_, pool_):
+        await asyncio.sleep(0)
+        events.append(("tick", app_, pool_))
+
+    async def fake_sleep(seconds):
+        await asyncio.sleep(0)
+        events.append(("sleep", seconds))
+        if sum(1 for e in events if e[0] == "sleep") >= stop_after_sleeps:
+            raise asyncio.CancelledError
+
+    return fake_tick, fake_sleep
+
+
+def _no_two_ticks_without_a_sleep(events: list) -> bool:
+    kinds = [e[0] for e in events]
+    return all(not (a == b == "tick") for a, b in zip(kinds, kinds[1:]))
+
+
+async def test_the_loop_ticks_once_every_probe_tick_s_by_default(pool, monkeypatch):
+    assert wall_probe.PROBE_TICK_S == 300
+    events: list = []
+    fake_tick, fake_sleep = _recording(events, stop_after_sleeps=3)
+    monkeypatch.setattr(wall_probe, "tick", fake_tick)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(wall_probe.loop(app, pool, sleep=fake_sleep), LOOP_BOUND_S)
+
+    sleeps = [e[1] for e in events if e[0] == "sleep"]
+    ticks = [e for e in events if e[0] == "tick"]
+    assert sleeps == [300, 300, 300]
+    assert len(ticks) >= 2, events
+    assert all(t[1] is app and t[2] is pool for t in ticks)
+    assert _no_two_ticks_without_a_sleep(events), events
+
+
+async def test_the_loop_ticks_at_the_interval_it_is_given(pool, monkeypatch):
+    events: list = []
+    fake_tick, fake_sleep = _recording(events, stop_after_sleeps=2)
+    monkeypatch.setattr(wall_probe, "tick", fake_tick)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(wall_probe.loop(app, pool, every=7, sleep=fake_sleep), LOOP_BOUND_S)
+
+    assert [e[1] for e in events if e[0] == "sleep"] == [7, 7]
+    assert sum(1 for e in events if e[0] == "tick") >= 1
+
+
+# ── c4: a tick that raises is logged and the loop lives on; cancel ends it ─
+
+
+async def test_a_tick_that_raises_is_logged_and_the_loop_ticks_again(pool, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    calls: list = []
+
+    async def failing_once(app_, pool_):
+        await asyncio.sleep(0)
+        calls.append(len(calls))
+        if len(calls) == 1:
+            raise RuntimeError("boom: the ledger was unreachable")
+
+    sleeps: list = []
+
+    async def fake_sleep(seconds):
+        await asyncio.sleep(0)
+        sleeps.append(seconds)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(wall_probe, "tick", failing_once)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(wall_probe.loop(app, pool, every=1, sleep=fake_sleep), LOOP_BOUND_S)
+
+    assert len(calls) >= 2, calls  # it ticked again after the failure
+    logged = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.ERROR
+        and r.exc_info
+        and isinstance(r.exc_info[1], RuntimeError)
+        and "boom" in str(r.exc_info[1])
+    ]
+    assert logged, [(r.levelname, r.getMessage()) for r in caplog.records]
+
+
+async def test_a_cancelled_tick_ends_the_loop_and_is_not_swallowed(pool, monkeypatch):
+    calls: list = []
+
+    async def cancelled(app_, pool_):
+        await asyncio.sleep(0)
+        calls.append(1)
+        raise asyncio.CancelledError
+
+    async def fake_sleep(seconds):
+        # A loop that sleeps after a cancelled tick swallowed the cancel.
+        # Failing HERE (outside the loop's try) ends even a loop that catches
+        # BaseException, so the mutant fails instead of spinning: a wait_for
+        # timeout lands in the tick as often as in the sleep, and a swallowed
+        # timeout-cancel would hang wait_for itself.
+        await asyncio.sleep(0)
+        raise AssertionError("the loop slept after a cancelled tick: the cancel was swallowed")
+
+    monkeypatch.setattr(wall_probe, "tick", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(wall_probe.loop(app, pool, every=1, sleep=fake_sleep), LOOP_BOUND_S)
+
+    assert calls == [1]
+
+
+# ── c5: lifespan starts the loop once the pool is up, cancels it on exit ───
+
+
+async def test_lifespan_runs_the_probe_loop_on_its_pool_and_cancels_it_before_closing_it(
+    pool, monkeypatch
+):
+    from app import main
+
+    async def no_migrations(dsn, directory):
+        return None
+
+    monkeypatch.setattr(main, "run_migrations", no_migrations)
+    started = asyncio.Event()
+    seen: dict = {}
+
+    async def fake_loop(app_, pool_, **kwargs):
+        seen["app"], seen["pool"] = app_, pool_
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            seen["pool_closing_at_cancel"] = pool_.is_closing()
+            raise
+
+    monkeypatch.setattr(wall_probe, "loop", fake_loop)
+
+    async def start_and_shut_down():
+        async with main.lifespan(app):
+            await asyncio.wait_for(started.wait(), 2)
+            assert seen["app"] is app
+            assert seen["pool"] is pool  # the pool lifespan brought up
+            assert "pool_closing_at_cancel" not in seen  # running, not cancelled
+
+    # Bounded WITHOUT cancelling: a timeout-cancel of a shutdown stuck on
+    # `await probing` would cancel the loop itself and let a lifespan that
+    # never cancels it pass. So wait, and a shutdown still running after the
+    # bound FAILS (then is cancelled, which frees the stuck task).
+    lifecycle = asyncio.create_task(start_and_shut_down())
+    done, _ = await asyncio.wait({lifecycle}, timeout=LOOP_BOUND_S)
+    if not done:
+        lifecycle.cancel()
+        await asyncio.wait({lifecycle}, timeout=LOOP_BOUND_S)
+        pytest.fail("lifespan shutdown never finished: the probe loop was not cancelled")
+    await lifecycle  # re-raise an assertion from inside the lifespan
+
+    # Shutdown cancelled the loop and waited for it, before the pool closed.
+    assert seen.get("pool_closing_at_cancel") is False

@@ -11,13 +11,17 @@ and no `error`, never "the status was ok".
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import asyncpg
 
 from app import adapters, providers, usage
+
+logger = logging.getLogger(__name__)
 
 PURPOSE = "wall_probe"
 NO_MODEL = "cannot probe: no refused model on record"
@@ -30,6 +34,8 @@ CREDIT_STATUSES = frozenset({402})
 # A credit wall is due a probe this long after the later of its latest
 # refusal and its last probe.
 WALL_PROBE_EVERY_S = 3600
+# How often the gateway's probe loop looks for due walls.
+PROBE_TICK_S = 300
 
 
 @dataclass(frozen=True)
@@ -124,3 +130,44 @@ async def due_walls(pool: asyncpg.Pool) -> list[dict]:
         float(WALL_PROBE_EVERY_S),
     )
     return [dict(r) for r in rows]
+
+
+async def tick(app, pool: asyncpg.Pool) -> None:
+    """Probe every due credit wall once (through probe_wall, so each probe is
+    one call and one ledger row) and stamp its probed_at.
+
+    A probe that raises is logged with its traceback and the tick moves on to
+    the next wall, so one broken provider never starves the others; that
+    wall keeps its old probed_at and is due again next tick.
+    """
+    for wall in await due_walls(pool):
+        provider, model = wall["provider"], wall["model"]
+        try:
+            result = await probe_wall(app, pool, wall)
+        except Exception:
+            logger.exception("wall probe of %s raised; the next tick tries again", provider)
+            continue
+        await pool.execute(
+            "UPDATE provider_walls SET probed_at = now() WHERE provider = $1 AND model = $2",
+            provider,
+            model,
+        )
+        if result.served:
+            logger.info("wall probe: %s served %s", provider, result.model)
+        else:
+            logger.info("wall probe: %s not served: %s", provider, result.reason)
+
+
+async def loop(app, pool: asyncpg.Pool, *, every: float | None = None, sleep=None) -> None:
+    """Tick, then sleep `every` seconds (PROBE_TICK_S by default), until
+    cancelled. A tick that raises is logged with its traceback and the loop
+    lives on; a cancellation (from the tick or the sleep) ends it and
+    propagates — it is never logged-and-continued."""
+    every = PROBE_TICK_S if every is None else every
+    sleep = asyncio.sleep if sleep is None else sleep
+    while True:
+        try:
+            await tick(app, pool)
+        except Exception:
+            logger.exception("wall probe tick raised; the loop ticks again in %ss", every)
+        await sleep(every)
