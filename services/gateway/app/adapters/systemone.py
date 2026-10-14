@@ -27,6 +27,7 @@ from starlette.responses import Response
 from app.adapters import base
 from app.adapters.base import (
     DECISIONS,
+    Balance,
     Listing,
     ListingUnavailable,
     ProviderRefused,
@@ -78,6 +79,10 @@ class SystemOne:
     def headers(self, row: dict) -> dict[str, str]:
         # providers.validate_shape allows `none` and `static-bearer` only.
         return base.bearer_or_header(row, header_name="api-key")
+
+    async def balance(self, app, row: dict) -> Balance | None:
+        """This protocol's providers state no balance the gateway can read."""
+        return None
 
     async def list_models(self, app, row: dict) -> Listing:
         return await base.fetch_listing(

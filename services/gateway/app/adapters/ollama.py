@@ -32,6 +32,7 @@ from starlette.responses import Response
 from app.adapters import openai_chat
 from app.adapters.base import (
     MODELS_TIMEOUT,
+    Balance,
     Listing,
     ProviderRefused,
     VerifyResult,
@@ -316,6 +317,10 @@ class Ollama:
 
     def headers(self, row: dict) -> dict[str, str]:
         return {}
+
+    async def balance(self, app, row: dict) -> Balance | None:
+        """This protocol's providers state no balance the gateway can read."""
+        return None
 
     async def list_models(self, app, row: dict) -> Listing:
         url = base_url_of(row)

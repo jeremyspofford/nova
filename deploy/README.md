@@ -425,6 +425,22 @@ still decides, and every guard still judges what she writes.
   after that resets the ladder. A refused key or a rate limit (401, 402, 403, 429) walls
   the whole provider for an hour, then 6, then 24. "Try it again" in Settings → Routing
   clears a wall at once.
+- **An out-of-credits wall lifts itself once the money is there.** When a provider
+  refuses for credits (402) and it can tell what is left on its key, the gateway asks
+  it again instead of waiting out the hour. Today only OpenRouter can: the gateway
+  reads the key's remaining limit, or, for a key with no limit, the account's credits
+  minus its usage. This read costs nothing and runs no model. It happens when routing
+  meets the wall: on a turn, on Settings → Routing, or on Nova's own money check. Each
+  provider is read at most once a minute, and a read gets 5 seconds before it is
+  dropped, so a slow provider never holds up a turn. If the read shows money above
+  zero, the wall is cleared at once: that same turn can use the provider, and the
+  wall is gone from Settings → Routing. If the read shows nothing left, is refused,
+  fails, times out or does not state a number, the wall stays exactly as it was, with
+  its reason and its time left. An unreadable balance never counts as money. Each
+  read is noted in the gateway's log, lifted with the balance or kept with why. A
+  provider that cannot report a balance, and every other kind of wall (a refused key,
+  a rate limit, an outage), keeps the ladder above. If a lifted provider refuses for
+  credits again, it is walled again, starting from an hour.
 - **Where it does not run (yet).** Scheduled firings and agents' turns never ask. Neither
   does a second message sent while she is still answering the first — it is queued, then
   drained without the step once her turn ends. The eval runner's turns do run it,

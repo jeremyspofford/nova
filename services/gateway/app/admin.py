@@ -1040,9 +1040,13 @@ async def get_routes(request: Request) -> dict:
     front of the chain each walks: its own, or chat's when it has none."""
     pool = await db.get_pool()
     chains = await routing.chains(pool)
-    walled = await routing.walls(pool)
     kept = await routing.router_kept(pool)
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
+    # The walls core's money check reads: a money wall whose provider now
+    # states money is lifted before it is listed, the same as a turn meets it.
+    walled = await routing.recheck_money_walls(
+        request.app, pool, by_name, await routing.walls(pool)
+    )
     chat_model = (request.query_params.get("chat_model") or "").strip() or None
     walks_it = {
         name.strip()

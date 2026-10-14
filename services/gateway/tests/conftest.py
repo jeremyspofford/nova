@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 import asyncpg
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -219,3 +220,42 @@ def hub_machine(monkeypatch, tmp_path):
     monkeypatch.setattr(devices_vram, "read_vram", _read)
     engines.clear_cache()
     return card
+
+
+OPENROUTER_ORIGIN = "https://openrouter.ai"
+
+
+class _NoRealOpenRouter(httpx.AsyncBaseTransport):
+    """What reaches openrouter.ai when no test mounted a fake there: refused
+    as a connection that never opened, and recorded."""
+
+    def __init__(self) -> None:
+        self.reached: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.reached.append(f"{request.method} {request.url}")
+        raise httpx.ConnectError(
+            "the gateway suite never reaches openrouter.ai — mount a fake", request=request
+        )
+
+
+@pytest.fixture(autouse=True)
+def no_real_openrouter():
+    """No test reaches openrouter.ai (money-wall T3). Routing reads a walled
+    OpenRouter key's balance (GET {base}/key) whenever it meets a 402 wall,
+    so a test that walls an openrouter.ai row without mounting a fake would
+    otherwise call the real API with whatever key the row holds. This mounts
+    a refusing, recording transport at the origin before every test; a test
+    that mounts its own fake there replaces it, and anything that reached the
+    guard fails the test at teardown, naming the request."""
+    guard = _NoRealOpenRouter()
+    transports = dict(getattr(app.state, "peer_transports", {}))
+    transports[OPENROUTER_ORIGIN] = guard
+    app.state.peer_transports = transports
+    yield guard
+    current = getattr(app.state, "peer_transports", {})
+    if current.get(OPENROUTER_ORIGIN) is guard:
+        app.state.peer_transports = {
+            url: t for url, t in current.items() if url != OPENROUTER_ORIGIN
+        }
+    assert not guard.reached, f"a test reached openrouter.ai with no fake mounted: {guard.reached}"

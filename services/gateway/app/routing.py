@@ -57,7 +57,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -1054,6 +1054,78 @@ async def note_success(pool: asyncpg.Pool, provider: str, model: str) -> None:
     )
 
 
+# How often a money wall (a provider-wide 402) asks its provider for the
+# balance: at most once per provider per RECHECK_S, read when routing meets it.
+RECHECK_S = 60.0
+# How long one balance read may take inside a turn before it is abandoned and
+# the wall kept: a stalled /key costs its own wall's lifting, never the turn.
+BALANCE_DEADLINE_S = 5.0
+_rechecked: dict[str, float] = {}
+
+
+async def recheck_money_walls(
+    app,
+    pool: asyncpg.Pool,
+    by_name: dict[str, dict],
+    walled: dict[tuple[str, str], dict],
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[tuple[str, str], dict]:
+    """Lift every money wall whose provider now states money; return `walled`
+    without the lifted providers' walls (a new map — the caller's is kept).
+
+    A money wall is a provider-wide 402. Whether it can be re-checked is the
+    provider's own adapter's answer (`balance` -> None means it cannot), never
+    a list of names here. Each provider is read at most once per RECHECK_S
+    (stamped BEFORE the read, so concurrent turns never both read), every read
+    runs at once under one BALANCE_DEADLINE_S, and only a read that states a
+    number above zero clears: a refused, failed, slow or numberless read keeps
+    the wall exactly as it was and says why. Every other wall keeps its ladder.
+    """
+    due: list[dict] = []
+    for (provider, model), wall in walled.items():
+        if model != WHOLE_PROVIDER or wall.get("status") != 402:
+            continue
+        row = by_name.get(provider)
+        if row is None:
+            continue
+        now = clock()
+        last = _rechecked.get(provider)
+        if last is not None and now - last < RECHECK_S:
+            continue
+        _rechecked[provider] = now
+        due.append(row)
+    readings = await asyncio.gather(*(_read_balance(app, row) for row in due))
+    lifted: set[str] = set()
+    for row, (remaining, words) in zip(due, readings, strict=True):
+        name = row["name"]
+        if words is None:
+            continue  # this provider states no balance: today's ladder
+        if remaining is not None and remaining > 0:
+            await clear_wall(pool, name)
+            lifted.add(name)
+            logger.warning("wall lifted: %s balance %g (%s)", name, remaining, words)
+        else:
+            logger.warning("wall kept: %s — %s", name, words)
+    return {key: wall for key, wall in walled.items() if key[0] not in lifted}
+
+
+async def _read_balance(app, row: dict) -> tuple[float | None, str | None]:
+    """(remaining, words) from the row's adapter, inside BALANCE_DEADLINE_S.
+    words None = the adapter states no balance. Nothing raised by a reader
+    reaches the turn: it is an unknown balance, stated."""
+    deadline = BALANCE_DEADLINE_S
+    try:
+        balance = await asyncio.wait_for(for_row(row).balance(app, row), deadline)
+    except TimeoutError:
+        return None, f"the balance read timed out after {deadline:g}s"
+    except Exception as exc:  # noqa: BLE001 — a reader's bug keeps the wall, stated
+        return None, f"the balance read failed — {type(exc).__name__}: {exc}"
+    if balance is None:
+        return None, None
+    return balance.remaining, balance.words
+
+
 # ── the walk ───────────────────────────────────────────────────────────────
 
 # How long the standby waits on ollama's own /api/show answers before it
@@ -1400,7 +1472,10 @@ async def _resolve(
                 }
             ],
         )
-    walled = await walls(pool)
+    # A money wall whose provider now states money lifts here, before any
+    # link is judged (bounded: one read per provider per RECHECK_S, each
+    # inside BALANCE_DEADLINE_S); every other wall is judged as it stands.
+    walled = await recheck_money_walls(app, pool, by_name, await walls(pool))
     # Observe only the engines this chain names, once each, and never one
     # its owner switched off.
     seen: dict[str, engines.EngineView] = {}
