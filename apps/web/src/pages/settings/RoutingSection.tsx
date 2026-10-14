@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { ArrowUp, Plus, RefreshCw, Star, Trash2, Waypoints, X } from 'lucide-react'
 import { Badge, Button, ConfirmDialog, Section, Select, Toggle, Banner } from '../../components/ui'
@@ -23,10 +23,12 @@ import {
   type RouteExplain,
   type RouteProtocol,
   type RouteRouter,
+  type RouteWall,
   type Routes,
   type SettingDef,
 } from '../../lib/api'
-import { formatRelativeTime } from '../activity/activityFormat'
+import { formatTimeUntil } from '../activity/activityFormat'
+import { formatStamp } from '../../lib/humanText'
 import { suitabilityEntries } from '../models/catalogFormat'
 import { LIBRARY } from './modelsFormat'
 import { eventRoleSender, senderTitle } from './eventsFormat'
@@ -553,9 +555,10 @@ export function RoutingSection({
                 <li key={w.provider} className="flex flex-wrap items-center gap-2">
                   <span className="font-mono">{w.provider}</span>
                   <span>{w.reason}</span>
-                  <span className="text-content-tertiary">
-                    skipped until {formatRelativeTime(w.walled_until)} (strike {w.strikes})
+                  <span className="text-content-tertiary" data-testid={`routing-wall-until-${w.provider}`}>
+                    skipped until <Stamp iso={w.walled_until} /> ({formatTimeUntil(w.walled_until)}, strike {w.strikes})
                   </span>
+                  <WallTimes wall={w} />
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1082,6 +1085,42 @@ function HubLastResortSwitch({ def, onSwitch }: { def: SettingDef; onSwitch: (on
         </p>
       )}
     </div>
+  )
+}
+
+/** When a wall's latest refusal happened and when the gateway last probed
+ * it (epic wall-probe T10), from the walls[] fields GET /routes returns.
+ * Each field is shown only when the gateway sent it: an older gateway that
+ * omits refused_at/probed_at gets nothing invented; probed_at null is a
+ * stated "not probed yet". Probe wording appears only on a wall the gateway
+ * says it probes (walls[].probed, its probe loop's own rule — the page keeps
+ * no list of its own), so a wall it never probes, or a gateway that does not
+ * say, never reads as if a probe is coming. Each stamp keeps its raw ISO one hover away. */
+function WallTimes({ wall }: { wall: RouteWall }) {
+  const parts: ReactNode[] = []
+  if (wall.refused_at) parts.push(<>refused <Stamp iso={wall.refused_at} /></>)
+  if (wall.probed === true) {
+    if (wall.probed_at === null) parts.push('not probed yet')
+    else if (wall.probed_at) parts.push(<>last probed <Stamp iso={wall.probed_at} /></>)
+  }
+  if (parts.length === 0) return null
+  return (
+    <span className="text-content-tertiary" data-testid={`routing-wall-times-${wall.provider}`}>
+      {parts.map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && ' · '}
+          {part}
+        </Fragment>
+      ))}
+    </span>
+  )
+}
+
+function Stamp({ iso }: { iso: string }) {
+  return (
+    <time dateTime={iso} title={iso}>
+      {formatStamp(iso)}
+    </time>
   )
 }
 

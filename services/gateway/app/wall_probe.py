@@ -120,33 +120,42 @@ async def probe_wall(app, pool: asyncpg.Pool, wall: dict) -> ProbeResult:
     return ProbeResult(served=True, model=model, status=call.status)
 
 
+def is_probed(wall: dict, row: dict | None) -> bool:
+    """Whether the probe loop checks this wall at all, whatever its age: its
+    STORED status is in CREDIT_STATUSES and its provider is not an engine.
+
+    The one rule: due_walls picks by it, and GET /admin/routes says it of
+    each wall (walls[].probed), so the owner's page never keeps its own copy.
+    An engine's wall is never probed: a completion never lifts an engine's
+    wall (data_plane's note_success rule — it lapses on its own ladder), and
+    a served probe's outcome IS note_success. Which provider is an engine is
+    engines.is_engine(row) on its providers row, never a list of names. A
+    wall whose provider row is gone (a delete racing the read) is not probed.
+    """
+    return wall["status"] in CREDIT_STATUSES and row is not None and not engines.is_engine(row)
+
+
 async def due_walls(pool: asyncpg.Pool) -> list[dict]:
     """The live credit walls due a probe, each shaped as routing.walls()
     hands a wall back (refused_at = the stored refusal time) plus probed_at.
 
-    Due = still standing, STORED status in CREDIT_STATUSES, and the later of
-    its latest refusal (updated_at) and its last probe (probed_at; NULL when
-    never probed, which greatest() skips) at least WALL_PROBE_EVERY_S old.
-
-    An engine's wall is never due, whatever its status: a completion never
-    lifts an engine's wall (data_plane's note_success rule — it lapses on
-    its own ladder), and a served probe's outcome IS note_success. Which
-    provider is an engine is engines.is_engine(row) on its providers row —
-    the rule routing uses — never a list of names.
+    Due = still standing, probed at all (is_probed: a credit status, not an
+    engine), and the later of its latest refusal (updated_at) and its last
+    probe (probed_at; NULL when never probed, which greatest() skips) at
+    least WALL_PROBE_EVERY_S old.
     """
     rows = await pool.fetch(
         "SELECT provider, model, walled_until, reason, status, strikes, connect_failed, "
         "updated_at AS refused_at, probed_at "
-        "FROM provider_walls WHERE walled_until > now() AND status = ANY($1::int[]) "
-        "AND greatest(updated_at, probed_at) <= now() - make_interval(secs => $2) "
+        "FROM provider_walls WHERE walled_until > now() "
+        "AND greatest(updated_at, probed_at) <= now() - make_interval(secs => $1) "
         "ORDER BY provider, model",
-        sorted(CREDIT_STATUSES),
         float(WALL_PROBE_EVERY_S),
     )
     if not rows:
         return []
     by_name = {row["name"]: row for row in await providers.list_rows(pool)}
-    return [dict(r) for r in rows if not engines.is_engine(by_name[r["provider"]])]
+    return [dict(r) for r in rows if is_probed(r, by_name.get(r["provider"]))]
 
 
 async def tick(app, pool: asyncpg.Pool) -> None:

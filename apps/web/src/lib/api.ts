@@ -802,6 +802,15 @@ export interface RouteWall {
   reason: string
   status: number
   strikes: number
+  /** ISO time of the wall's latest refusal; absent from a gateway older than it. */
+  refused_at?: string
+  /** ISO time of the gateway's last credit-wall probe, null when never
+   * probed; absent from a gateway older than the probe. */
+  probed_at?: string | null
+  /** Whether the gateway's credit-wall probe checks this wall at all — the
+   * probe loop's own rule (wall_probe.is_probed), so the page keeps no copy
+   * of it; absent from a gateway older than it. */
+  probed?: boolean
 }
 
 export interface Routes {

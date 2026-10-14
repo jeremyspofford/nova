@@ -1036,3 +1036,58 @@ async def test_which_wall_is_an_engines_is_decided_by_engines_is_engine(pool, mo
 
     monkeypatch.setattr(engines, "is_engine", lambda row: row["name"] == "openrouter")
     assert await _due(pool) == {(ENGINE, routing.WHOLE_PROVIDER)}
+
+
+# ══ T10b: the routes page says which walls the probe checks ═════════════════
+#
+# Settings → Routing used to keep its own copy of CREDIT_STATUSES to decide
+# whether a wall gets probe wording. The gateway now says so per wall
+# (`probed`), from the predicate due_walls itself uses — never a second list.
+
+
+async def _routes_probed(client) -> dict[str, bool]:
+    walls = (await client.get("/admin/routes")).json()["walls"]
+    return {w["provider"]: w.get("probed", "ABSENT") for w in walls}
+
+
+async def _three_kinds_of_wall(pool):
+    """A cloud 402 wall, a cloud 429 wall and an engine's 402 wall, each
+    refused 2 h ago and never probed — old enough that age decides nothing."""
+    await _engine_row(pool)
+    await _stored_wall(pool, ENGINE, 402, refused_ago_s=2 * 3600)
+    await _stored_wall(pool, "openrouter", 402, refused_ago_s=2 * 3600)
+    await _stored_wall(pool, "anthropic", 429, refused_ago_s=2 * 3600)
+
+
+# ── c1: each wall says whether the probe checks it ──────────────────────────
+
+
+async def test_the_routes_page_says_of_each_wall_whether_the_probe_checks_it(client, pool):
+    await _three_kinds_of_wall(pool)
+
+    probed = await _routes_probed(client)
+
+    assert probed == {"openrouter": True, "anthropic": False, ENGINE: False}
+    assert all(type(v) is bool for v in probed.values()), probed
+
+
+# ── c2: `probed` is the probe loop's own rule, not a copy of it ─────────────
+
+
+async def test_the_routes_pages_probed_is_the_rule_due_walls_uses(client, pool, monkeypatch):
+    await _three_kinds_of_wall(pool)
+
+    async def agree() -> set[str]:
+        said = {p for p, v in (await _routes_probed(client)).items() if v is True}
+        due = {provider for provider, _ in await _due(pool)}
+        assert said == due, f"routes page says {said}, the probe loop probes {due}"
+        return said
+
+    assert await agree() == {"openrouter"}
+
+    monkeypatch.setattr(wall_probe, "CREDIT_STATUSES", frozenset({429}))
+    assert await agree() == {"anthropic"}
+
+    monkeypatch.setattr(wall_probe, "CREDIT_STATUSES", frozenset({402}))
+    monkeypatch.setattr(engines, "is_engine", lambda row: False)
+    assert await agree() == {"openrouter", ENGINE}

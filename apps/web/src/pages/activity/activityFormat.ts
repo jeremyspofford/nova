@@ -124,6 +124,21 @@ export function formatRelativeTime(iso: string, now: Date = new Date()): string 
   })
 }
 
+/** A FUTURE time as "how long from now" ("in 4h"), for a stamp that is
+ * meant to be ahead, like a credit wall's walled_until (epic wall-probe T10).
+ * Under 5 seconds ahead, or already past, it is "now". Kept apart from
+ * formatRelativeTime, whose callers all show past events: there a stamp ahead
+ * of the browser clock is clock skew and must keep reading "just now". */
+export function formatTimeUntil(iso: string, now: Date = new Date()): string {
+  const aheadSec = Math.round((new Date(iso).getTime() - now.getTime()) / 1000)
+
+  if (aheadSec < 5) return 'now'
+  if (aheadSec < MINUTE) return `in ${aheadSec}s`
+  if (aheadSec < HOUR) return `in ${Math.round(aheadSec / MINUTE)}m`
+  if (aheadSec < DAY) return `in ${Math.round(aheadSec / HOUR)}h`
+  return `in ${Math.round(aheadSec / DAY)}d`
+}
+
 /** A value as one line of text: a string as itself, anything else as JSON
  * (never the empty string `JSON.stringify(undefined)` would give). */
 function factValue(v: unknown): string {

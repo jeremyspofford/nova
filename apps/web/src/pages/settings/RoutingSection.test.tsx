@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { RoutingSection } from './RoutingSection'
 import type { AgentSummary, CatalogRow, EventSender, RouteExplain, Routes, SettingDef } from '../../lib/api'
+import { formatStamp } from '../../lib/humanText'
 
 function row(id: string, kind: 'local' | 'cloud', installed?: boolean): CatalogRow {
   const [provider, ...rest] = id.split(':')
@@ -523,6 +524,91 @@ describe('RoutingSection', () => {
     expect(screen.getByTestId('routing-walls').textContent).toContain('openrouter refused (402): insufficient credits')
     fireEvent.click(screen.getByRole('button', { name: 'clear wall openrouter' }))
     await waitFor(() => expect(api.clearWall).toHaveBeenCalledWith('openrouter'))
+  })
+
+  describe('a wall says when it was refused and when it was last probed (epic wall-probe T10)', () => {
+    const REFUSED = '2026-10-13T17:59:24.512000+00:00'
+    const PROBED = '2026-10-14T13:05:02.004000+00:00'
+    const wallWith = (extra: Partial<Routes['walls'][number]>): Routes => ({ ...ROUTES, walls: [{ ...ROUTES.walls[0], ...extra }] })
+
+    it('shows the refusal time and the last probe time, each a readable stamp over its raw value', async () => {
+      renderSection({ getRoutes: vi.fn(async () => wallWith({ refused_at: REFUSED, probed_at: PROBED, probed: true })) })
+      await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+      const times = screen.getByTestId('routing-wall-times-openrouter')
+      expect(times.textContent).toBe(`refused ${formatStamp(REFUSED)} · last probed ${formatStamp(PROBED)}`)
+      expect([...times.querySelectorAll('time')].map(t => [t.getAttribute('dateTime'), t.getAttribute('title')])).toEqual([
+        [REFUSED, REFUSED],
+        [PROBED, PROBED],
+      ])
+      // Body text, not the provider name's monospace.
+      expect(times.closest('.font-mono')).toBeNull()
+      expect(times.querySelector('.font-mono')).toBeNull()
+    })
+
+    it('says "not probed yet" when the gateway sends probed_at null', async () => {
+      renderSection({ getRoutes: vi.fn(async () => wallWith({ refused_at: REFUSED, probed_at: null, probed: true })) })
+      await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+      expect(screen.getByTestId('routing-wall-times-openrouter').textContent).toBe(`refused ${formatStamp(REFUSED)} · not probed yet`)
+    })
+
+    it('invents nothing when an older gateway sends neither field', async () => {
+      renderSection()
+      await waitFor(() => expect(screen.getByTestId('routing-walls')).toBeTruthy())
+      expect(screen.queryByTestId('routing-wall-times-openrouter')).toBeNull()
+      const walls = screen.getByTestId('routing-walls').textContent ?? ''
+      expect(walls).not.toContain('probed')
+      expect(walls).not.toContain('refused 2')
+      // The only stamp is walled_until, which every gateway sends.
+      expect([...screen.getByTestId('routing-walls').querySelectorAll('time')].map(t => t.getAttribute('dateTime'))).toEqual([ROUTES.walls[0].walled_until])
+    })
+
+    it('a gateway with refused_at but no probed_at (before the probe shipped) gives only the refusal time', async () => {
+      renderSection({ getRoutes: vi.fn(async () => wallWith({ refused_at: REFUSED })) })
+      await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+      expect(screen.getByTestId('routing-wall-times-openrouter').textContent).toBe(`refused ${formatStamp(REFUSED)}`)
+    })
+
+    it('a live wall says the real time it ends and how long that is from now, never "just now"', async () => {
+      // Four hours and a minute ahead of the real clock: a FUTURE walled_until.
+      const until = new Date(Date.now() + 4 * 3600_000 + 60_000).toISOString()
+      renderSection({ getRoutes: vi.fn(async () => wallWith({ walled_until: until, strikes: 7 })) })
+      await waitFor(() => expect(screen.getByTestId('routing-wall-until-openrouter')).toBeTruthy())
+      const span = screen.getByTestId('routing-wall-until-openrouter')
+      expect(span.textContent).toBe(`skipped until ${formatStamp(until)} (in 4h, strike 7)`)
+      expect(span.textContent).not.toContain('just now')
+      const time = span.querySelector('time')
+      expect([time?.getAttribute('dateTime'), time?.getAttribute('title')]).toEqual([until, until])
+    })
+
+    // epic wall-probe T10b: whether a wall is probed is the gateway's call
+    // (walls[].probed, from wall_probe's own rule) — the page keeps no list.
+    it('says nothing about probing a wall the gateway says it does not probe, or does not say (T10b)', async () => {
+      for (const status of [402, 401, 429]) {
+        for (const probed of [false, undefined]) {
+          for (const probed_at of [null, PROBED]) {
+            const wall = { ...ROUTES.walls[0], status, refused_at: REFUSED, probed_at, ...(probed === undefined ? {} : { probed }) }
+            renderSection({ getRoutes: vi.fn(async () => ({ ...ROUTES, walls: [wall] })) })
+            await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+            expect(screen.getByTestId('routing-wall-times-openrouter').textContent).toBe(`refused ${formatStamp(REFUSED)}`)
+            expect(screen.getByTestId('routing-walls').textContent).not.toContain('probed')
+            cleanup()
+          }
+        }
+      }
+    })
+
+    it('gives probe wording to a wall the gateway says it probes, whatever its status (T10b)', async () => {
+      for (const status of [402, 429, 599]) {
+        renderSection({ getRoutes: vi.fn(async () => wallWith({ status, refused_at: REFUSED, probed_at: null, probed: true })) })
+        await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+        expect(screen.getByTestId('routing-wall-times-openrouter').textContent).toBe(`refused ${formatStamp(REFUSED)} · not probed yet`)
+        cleanup()
+        renderSection({ getRoutes: vi.fn(async () => wallWith({ status, refused_at: REFUSED, probed_at: PROBED, probed: true })) })
+        await waitFor(() => expect(screen.getByTestId('routing-wall-times-openrouter')).toBeTruthy())
+        expect(screen.getByTestId('routing-wall-times-openrouter').textContent).toBe(`refused ${formatStamp(REFUSED)} · last probed ${formatStamp(PROBED)}`)
+        cleanup()
+      }
+    })
   })
 
   it('shows the decision role in its own words and offers it decision models only', async () => {

@@ -33,6 +33,7 @@ from app import (
     providers,
     routing,
     usage,
+    wall_probe,
     windows,
 )
 from app import curated as curated_mod
@@ -1049,6 +1050,9 @@ async def get_routes(request: Request) -> dict:
                 **w,
                 "walled_until": w["walled_until"].isoformat(),
                 "refused_at": w["refused_at"].isoformat(),
+                # Whether the credit-wall probe checks it: the probe loop's
+                # own rule, so the page never keeps a copy of it.
+                "probed": wall_probe.is_probed(w, by_name.get(w["provider"])),
             }
             for w in walled.values()
         ],
