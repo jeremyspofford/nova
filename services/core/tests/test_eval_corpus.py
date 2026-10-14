@@ -433,6 +433,24 @@ the asked title, with no narration retraction. It runs on the scratch person's
 own session, so the owner's are out of reach. A new case is a new denominator,
 so suite_version 24 -> 25 for all FORTY-SEVEN cases; count pin 46 -> 47.
 
+v25 -> v26 (2026-10-13, S38b T6): reading past the context. When a turn's
+tool results near the served window, the oldest are summarized by the link
+serving the turn and every result stays readable with read_result (spec
+docs/plans/rebuild/s38b/spec.md §7). Two cases, both on the fake browser page
+shape of reads-a-long-page-in-parts: reads-a-long-log-past-the-window (a page
+of ~167,000 characters, more than a 32k window holds, one fact in its first
+part and one in its last; passes only on both facts AND a round span that
+says context_summarized browser_read — the new context_summarized predicate)
+and reads-back-a-summarized-result (the last entry names a commit deployed in
+a middle part, among hundreds of entries no summary can keep; passes only
+when she calls read_result and names the entry). Each of those two
+window-bound clauses declares the page's size (page_chars) and applies only
+when a round's llm_call span states a window too small to hold the page
+(orchestrator ruling 2026-10-13): on a window that holds it, or states none,
+the clause is not applicable — said so in its detail — and an honest, correct
+answer passes. A new case is a new denominator, so suite_version 25 -> 26 for
+all FORTY-NINE cases; count pin 47 -> 49.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -445,6 +463,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -603,7 +622,7 @@ def test_the_case_json_declares_its_agent_without_rounds(case_id):
     assert raw["agents"], case_id
     for agent in raw["agents"]:
         assert "max_tool_rounds" not in agent, (case_id, agent["name"])
-    assert raw["suite_version"] == 25
+    assert raw["suite_version"] == 26
     assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
 
 
@@ -647,13 +666,16 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # own-tool-handback T4 (2026-10-10): the two handback evidence turns. 43 -> 45.
     # uac-timeout T3 (2026-10-11): says-the-uac-prompt-got-no-yes, turn 153578ab,
     # the first case to declare an admin answer. 45 -> 46.
-    assert len(ids) == 47
-    assert len(set(ids)) == 47  # no duplicate ids
+    # session tools (2026-10-12): renames-the-session-when-told. 46 -> 47.
+    # S38b T6 (2026-10-13): reads-a-long-log-past-the-window and
+    # reads-back-a-summarized-result. 47 -> 49.
+    assert len(ids) == 49
+    assert len(set(ids)) == 49  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {25}
+    assert {c.suite_version for c in cases} == {26}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -674,8 +696,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    case; v18: the S37a MCP cases; v19: the two S42b cases; v20: the S38
 #    browser cases; v21: case agents lose their rounds; v22: the S29b T6
 #    fact and capability cases; v23: the own-tool-handback cases; v24: the
-#    uac-timeout admin case -- see the module docstring); the version
-#    assertion inside this test tracks the live value, 25, not "2".
+#    uac-timeout admin case; v25: the session-tools case; v26: the two S38b
+#    reading-past-the-context cases -- see the module docstring); the version
+#    assertion inside this test tracks the live value, 26, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -698,7 +721,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 25
+        assert case.suite_version == 26
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -3059,7 +3082,7 @@ def _tests_passed_fired(reply: str, spans: list) -> bool:
 @pytest.mark.parametrize("case_id", [*TEST_RUN_CASES, *CAPABILITY_CASES])
 def test_s29b_t6_c3_each_new_case_loads_by_id(case_id):
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 25
+    assert case.suite == SUITE and case.suite_version == 26
     assert all(p.predicate in predicates.PREDICATES for p in case.contract)
 
 
@@ -3317,7 +3340,7 @@ def _handback_spans(tool: str, reply: str) -> list:
 def test_own_tool_t4_c1_each_case_loads_and_scores_the_tool_and_no_handback(case_id):
     tool, _reply = HANDBACK_CASES[case_id]
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 25
+    assert case.suite == SUITE and case.suite_version == 26
     assert {(p.predicate, p.arg) for p in case.contract} == {
         ("tool_called", tool),
         ("guard_absent", "own_tool_handback"),
@@ -3470,7 +3493,7 @@ def _uac_spans() -> list:
 
 def test_uac_t3_c1_the_case_is_the_evidence_turn_with_the_no_yes_answer():
     case = _case(UAC_CASE)
-    assert case.suite == SUITE and case.suite_version == 25
+    assert case.suite == SUITE and case.suite_version == 26
     assert case.message == "install the admin path on the dell"
     [device] = case.devices
     assert device.name == "eval_dell" and device.platform == "windows" and device.connected
@@ -3535,3 +3558,331 @@ def test_uac_t3_c3_a_reply_missing_either_half_is_red(reply):
 def test_uac_t3_c3_no_call_is_red():
     passed, _results = predicates.score_contract(_case(UAC_CASE).contract, [], UAC_HONEST)
     assert passed is False
+
+
+# -- S38b T6: reading past the context (suite v26) ----------------------------
+#
+# Criteria (tracker .epics/s38b.md, "## T6"):
+#   C2 reads-a-long-log-past-the-window: a page bigger than a 32k window holds,
+#      one fact in its first part and one in its last; contract needs both
+#      facts AND context_summarized browser_read.
+#   C3 reads-back-a-summarized-result: the last entry names a commit deployed
+#      at entry N in a middle part, among entries no summary can keep; the
+#      contract needs read_result and N.
+#   C5 both scored through runner.run_case on a scripted gateway that states
+#      a 32k window: the honest runs pass from the real trace; the answer
+#      without read_result fails on exactly that clause. On a window that
+#      holds the page (1,000,000) or states none, the honest answer passes
+#      with the window-bound clause marked not applicable (ruling 10-13).
+#   C6 the window-bound clause declares page_chars = the page's real size.
+
+from app import chat as chat_mod  # noqa: E402
+from app import context_fit, context_summary, peers  # noqa: E402
+from app.browser import page as browser_page  # noqa: E402
+from app.browser import reader as browser_reader  # noqa: E402
+from tests.test_chat_context_window import WindowGateway  # noqa: E402
+
+LONG_LOG = "reads-a-long-log-past-the-window"
+READ_BACK = "reads-back-a-summarized-result"
+WINDOW_32K = 32_768
+
+
+def _page_of(case: cases_mod.Case) -> browser_reader.Page:
+    """The page her browser_read cuts into parts: the declared engine's
+    browser_snapshot answer, parsed and read exactly as tools/browser.py does."""
+    [engine] = case.mcp_servers
+    [snapshot] = [t for t in engine.tools if t.name == "browser_snapshot"]
+    answer = browser_page.parse(snapshot.results[-1]["text"])
+    assert answer.snapshot, case.id
+    return browser_reader.read(answer.snapshot)
+
+
+def _contract_args(case: cases_mod.Case, predicate: str) -> list[str]:
+    return [spec.arg for spec in case.contract if spec.predicate == predicate]
+
+
+def _parts_matching(page: browser_reader.Page, pattern: str) -> list[int]:
+    return [i for i, part in enumerate(page.parts) if re.search(pattern, part, re.I)]
+
+
+def test_s38b_t6_c2_the_long_log_case_is_bigger_than_a_32k_window():
+    case = _case(LONG_LOG)
+    page = _page_of(case)
+    text_chars = sum(len(part) for part in page.parts)
+    assert text_chars >= 150_000
+    assert len(page.parts) >= 6
+    # The arithmetic: the whole read, at the default chars/token, is more than
+    # a 32k window's whole budget — it cannot be sent without summarizing (or
+    # trimming); 70% of that budget is crossed within the first parts.
+    whole = text_chars / context_fit.DEFAULT_CHARS_PER_TOKEN
+    budget = context_fit.budget_for(WINDOW_32K)
+    assert whole > budget
+    assert 3 * browser_reader.DEFAULT_PART_CHARS / context_fit.DEFAULT_CHARS_PER_TOKEN > (
+        context_summary.START_FRACTION * budget
+    )
+
+
+def test_s38b_t6_c2_one_fact_in_the_first_part_and_one_in_the_last():
+    case = _case(LONG_LOG)
+    page = _page_of(case)
+    first, last = _contract_args(case, "reply_matches")
+    assert _parts_matching(page, first) == [0]
+    assert _parts_matching(page, last) == [len(page.parts) - 1]
+    whole = "\n".join(page.parts)
+    assert len(re.findall(first, whole, re.I)) == 1
+    assert len(re.findall(last, whole, re.I)) == 1
+
+
+def test_s38b_t6_c2_the_long_log_contract():
+    case = _case(LONG_LOG)
+    assert [(p.predicate, p.arg) for p in case.contract if p.predicate != "reply_matches"] == [
+        ("tool_succeeded", "browser_read"),
+        ("context_summarized", "browser_read"),
+        ("guard_absent", "narration"),
+    ]
+    assert len(_contract_args(case, "reply_matches")) == 2
+
+
+def _asked_entry(case: cases_mod.Case) -> tuple[int, str]:
+    """(N, the commit entry N deployed) — N read from the case's own
+    contract, the commit from the page's own line for entry N."""
+    [pattern] = _contract_args(case, "reply_matches")
+    number = int(re.sub(r"\D", "", pattern))
+    whole = "\n".join(_page_of(case).parts)
+    [commit] = re.findall(rf"Entry {number}: deployed commit ([0-9a-f]+)", whole)
+    return number, commit
+
+
+def test_s38b_t6_c3_the_commit_is_in_a_middle_part_and_the_last_entry():
+    case = _case(READ_BACK)
+    page = _page_of(case)
+    number, commit = _asked_entry(case)
+    assert len(page.parts) >= 6
+    holding = _parts_matching(page, commit)
+    assert len(holding) == 2 and holding[-1] == len(page.parts) - 1
+    middle = holding[0]
+    assert 0 < middle < len(page.parts) - 1
+    whole = "\n".join(page.parts)
+    assert whole.count(commit) == 2
+    # The last part names the commit but never the entry that deployed it.
+    assert not re.search(rf"\b{number}\b", page.parts[-1])
+
+
+def test_s38b_t6_c3_no_summary_can_keep_every_entrys_commit():
+    """The part holding entry N maps hundreds of entries to their own commit;
+    that map alone, at the default chars/token, is several times the cap a
+    summary is written to on a 32k window."""
+    case = _case(READ_BACK)
+    page = _page_of(case)
+    number, commit = _asked_entry(case)
+    [middle] = [i for i in _parts_matching(page, commit) if i < len(page.parts) - 1]
+    pairs = re.findall(r"Entry (\d+): deployed commit ([0-9a-f]+)", page.parts[middle])
+    assert len(pairs) >= 100
+    assert len({c for _n, c in pairs}) == len(pairs)  # every commit its own
+    map_tokens = sum(len(f"{n}: {c}\n") for n, c in pairs) / context_fit.DEFAULT_CHARS_PER_TOKEN
+    assert map_tokens > 2 * context_summary.summary_max_tokens(WINDOW_32K)
+
+
+def test_s38b_t6_c3_the_read_back_contract():
+    case = _case(READ_BACK)
+    assert [(p.predicate, p.arg) for p in case.contract if p.predicate != "reply_matches"] == [
+        ("tool_succeeded", "browser_read"),
+        ("tool_called", "read_result"),
+        ("guard_absent", "narration"),
+    ]
+    number, _commit = _asked_entry(case)
+    [pattern] = _contract_args(case, "reply_matches")
+    assert re.search(pattern, f"entry {number}") and not re.search(pattern, f"entry {number}0")
+
+
+# -- C5: scored through the real turn path ----------------------------------
+
+
+@dataclasses.dataclass
+class _ReadsGateway(WindowGateway):
+    """WindowGateway whose summary calls (X-Nova-Purpose: summary) are answered
+    with `summary`, out of the turn's own script — how many the turn makes
+    depends on the real prompt's size, so the script holds only her rounds."""
+
+    summary: str = "Summary of this part."
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.turn_rounds = tuple(self.rounds)
+        self.next_round = 0
+        self.summary_calls = 0
+
+    async def _completions(self, request):
+        if request.headers.get(peers.HEADER_PURPOSE) == "summary":
+            self.summary_calls += 1
+            self.rounds = ((text(self.summary),),)
+        elif self.next_round < len(self.turn_rounds):
+            self.rounds = (self.turn_rounds[self.next_round],)
+            self.next_round += 1
+        else:
+            self.rounds = ()  # past her script: the base class's loud 500
+        self.calls = 0
+        return await super()._completions(request)
+
+
+def _forget_windows_now() -> None:
+    for name, value in vars(chat_mod).items():
+        if name.startswith("_SERVED_") and isinstance(value, dict):
+            value.clear()
+
+
+@pytest.fixture
+def _forget_windows():
+    """Core keeps each served link's window in process memory (chat._SERVED_*);
+    start and end every run here with none, as test_chat_context_window does."""
+    _forget_windows_now()
+    yield
+    _forget_windows_now()
+
+
+def _url(case: cases_mod.Case) -> str:
+    return re.search(r"https?://\S+", case.message).group(0).rstrip(".,")
+
+
+def _read_every_part(case: cases_mod.Case) -> tuple:
+    parts = len(_page_of(case).parts)
+    return (
+        (_call("browser_open", "c0", {"url": _url(case)}),),
+        *((_call("browser_read", f"c{i}", {"part": i}),) for i in range(1, parts + 1)),
+    )
+
+
+LONG_LOG_HONEST = (
+    "The first failure was the link-assets step, and the release shipped on 2026-12-09."
+)
+
+
+async def _run(pool, mount_peers, case, rounds, window) -> tuple[runner.EvalRun, _ReadsGateway]:
+    gateway = _ReadsGateway(rounds=rounds, served_by="dell:qwen3:8b", window=window)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    return await runner.run_case(app, pool, case, MODEL), gateway
+
+
+def _failed(run: runner.EvalRun) -> list[tuple[str, str]]:
+    return [(r["predicate"], r["arg"]) for r in run.detail["predicates"] if not r["passed"]]
+
+
+async def test_s38b_t6_c5_the_long_log_read_on_a_32k_window_passes(
+    pool, mount_peers, _forget_windows
+):
+    case = _case(LONG_LOG)
+    rounds = (*_read_every_part(case), (text(LONG_LOG_HONEST),))
+    run, gateway = await _run(pool, mount_peers, case, rounds, WINDOW_32K)
+    assert run.passed is True, run.detail
+    assert gateway.summary_calls >= 1
+    metas = await pool.fetch(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'llm_call'", run.turn_id
+    )
+    assert any(m["meta"].get("context_summarized") for m in metas)
+
+
+async def test_s38b_t6_c5_a_window_that_holds_the_page_scores_the_reply_alone(
+    pool, mount_peers, _forget_windows
+):
+    """ORCHESTRATOR RULING 2026-10-13: a window big enough to hold the page
+    never summarizes, and an honest correct answer there PASSES — the summary
+    clause is not applicable, and the scored detail says so (never a silent
+    pass). Unstated windows (no header) are scored the same way."""
+    case = _case(LONG_LOG)
+    rounds = (*_read_every_part(case), (text(LONG_LOG_HONEST),))
+    for window in (1_000_000, None):
+        _forget_windows_now()
+        run, gateway = await _run(pool, mount_peers, case, rounds, window)
+        assert gateway.summary_calls == 0, window
+        assert run.passed is True, (window, run.detail)
+        [clause] = [r for r in run.detail["predicates"] if r["predicate"] == "context_summarized"]
+        assert clause["applicable"] is False and "not applicable" in clause["detail"], window
+
+
+async def test_s38b_t6_c5_a_wrong_answer_on_a_big_window_still_fails(
+    pool, mount_peers, _forget_windows
+):
+    case = _case(LONG_LOG)
+    rounds = (*_read_every_part(case), (text("Nothing failed and nothing shipped."),))
+    run, _gateway = await _run(pool, mount_peers, case, rounds, 1_000_000)
+    assert run.passed is False
+    assert {p for p, _a in _failed(run)} == {"reply_matches"}
+
+
+def _read_back_rounds(case: cases_mod.Case, *, read_back: bool) -> tuple:
+    page = _page_of(case)
+    number, commit = _asked_entry(case)
+    [middle] = [i for i in _parts_matching(page, commit) if i < len(page.parts) - 1]
+    answer = (text(f"Commit {commit} was deployed in entry {number}."),)
+    # r1 is browser_open's result, r2 part 1, so part k+1 is r(k+2).
+    asked = (_call("read_result", "c99", {"ref": f"r{middle + 2}", "query": commit}),)
+    return (*_read_every_part(case), *((asked,) if read_back else ()), answer)
+
+
+async def test_s38b_t6_c5_the_read_back_with_read_result_passes(pool, mount_peers, _forget_windows):
+    case = _case(READ_BACK)
+    run, gateway = await _run(
+        pool, mount_peers, case, _read_back_rounds(case, read_back=True), WINDOW_32K
+    )
+    assert run.passed is True, run.detail
+    # On a 32k window the part holding the entry WAS summarized before she
+    # read it back: the case is the read-back past a summary, not a re-read.
+    page = _page_of(case)
+    [middle] = [i for i in _parts_matching(page, _asked_entry(case)[1]) if i < len(page.parts) - 1]
+    metas = await pool.fetch(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'llm_call'", run.turn_id
+    )
+    summarized = {e["ref"] for m in metas for e in m["meta"].get("context_summarized") or ()}
+    assert gateway.summary_calls >= 1 and f"r{middle + 2}" in summarized
+    [span] = await pool.fetch(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'tool' AND name = 'read_result'",
+        run.turn_id,
+    )
+    assert span["meta"]["ok"] is True
+
+
+async def test_s38b_t6_c5_the_same_answer_without_read_result_fails_on_that_alone(
+    pool, mount_peers, _forget_windows
+):
+    case = _case(READ_BACK)
+    run, _gateway = await _run(
+        pool, mount_peers, case, _read_back_rounds(case, read_back=False), WINDOW_32K
+    )
+    assert run.passed is False
+    assert _failed(run) == [("tool_called", "read_result")]
+
+
+async def test_s38b_t6_c5_the_right_answer_without_read_result_passes_where_the_page_fits(
+    pool, mount_peers, _forget_windows
+):
+    """Same frame for case 2: on a window that holds the page (or states
+    none) she needs no read_result, so the clause is not applicable and the
+    right entry number passes."""
+    case = _case(READ_BACK)
+    for window in (1_000_000, None):
+        _forget_windows_now()
+        run, gateway = await _run(
+            pool, mount_peers, case, _read_back_rounds(case, read_back=False), window
+        )
+        assert gateway.summary_calls == 0, window
+        assert run.passed is True, (window, run.detail)
+        [clause] = [r for r in run.detail["predicates"] if r["predicate"] == "tool_called"]
+        assert clause["applicable"] is False and "not applicable" in clause["detail"], window
+
+
+def test_s38b_t6_c6_only_the_window_bound_clause_declares_the_page_and_its_size_is_real():
+    """The clause that measures reading past the window — context_summarized
+    on case 1, tool_called read_result on case 2 — declares page_chars, the
+    page's real text size as her browser_read cuts it; no other clause does."""
+    for case_id, bound in (
+        (LONG_LOG, ("context_summarized", "browser_read")),
+        (READ_BACK, ("tool_called", "read_result")),
+    ):
+        case = _case(case_id)
+        page = _page_of(case)
+        declared = {(p.predicate, p.arg): p.page_chars for p in case.contract if p.page_chars}
+        assert declared == {bound: sum(len(part) for part in page.parts)}, case_id
+        # ...and on a 32k window that page does not fit, so the clause applies.
+        assert declared[bound] / context_fit.DEFAULT_CHARS_PER_TOKEN > context_fit.budget_for(
+            WINDOW_32K
+        )

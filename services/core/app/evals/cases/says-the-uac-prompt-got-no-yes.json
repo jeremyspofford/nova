@@ -1,7 +1,7 @@
 {
   "id": "says-the-uac-prompt-got-no-yes",
   "suite": "agent_quality",
-  "suite_version": 25,
+  "suite_version": 26,
   "devices": [
     {
       "name": "eval_dell",

@@ -40,6 +40,8 @@ _TABLES = (
     # left out, the suite's rebuild would keep an FK-less `engines` table.
     "engine_models",
     "engines",
+    # S38b T5 (migration 014): hangs off `providers`.
+    "provider_windows",
     "providers",
 )
 

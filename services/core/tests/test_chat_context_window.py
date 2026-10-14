@@ -43,6 +43,7 @@ from tests.fakes import (
 pytestmark = requires_db
 
 WINDOW_HEADER = "X-Nova-Context-Window"
+WINDOW_SOURCE_HEADER = "X-Nova-Context-Window-Source"
 
 # A file big enough that its read alone is thousands of tokens, under the
 # workspace tool's 32 KB read cap so the tool returns it whole.
@@ -96,6 +97,9 @@ class WindowGateway(ScriptedGateway):
     # or None for no header). A round past the tuple uses `served_by` and
     # `window`.
     served: tuple = ()
+    # S38b T5: X-Nova-Context-Window-Source on every answer that states a
+    # window ("served" | "declared"); None sends no source header.
+    window_source: str | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -149,6 +153,8 @@ class WindowGateway(ScriptedGateway):
         headers = {"X-Nova-Served-By": served_by}
         if window is not None:
             headers[WINDOW_HEADER] = str(window)
+            if self.window_source is not None:
+                headers[WINDOW_SOURCE_HEADER] = self.window_source
         return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
 
@@ -826,3 +832,122 @@ async def test_a_round_cut_twice_never_runs_the_calls_either_cut_round_asked_for
     assert LISTING_ANSWER not in reply
     assert RECUT_ANSWER not in reply
     assert "python is not installed there." not in reply
+
+
+# -- S38b T5: a cloud link's DECLARED window (the catalog's context_length) --
+
+
+async def test_a_declared_window_is_recorded_with_its_source_and_fits_later_rounds(
+    owner_client, pool, mount_peers, workspace
+):
+    """C5: the gateway states a cloud model's declared window, marked
+    declared. Core records the source on the span and fits the next round to
+    that window exactly as it does a served one."""
+    listing = _big_file(workspace)
+    gateway = _read_then_answer(
+        f"cloudy:remote-{uuid.uuid4().hex[:8]}",
+        window=_window_with_room(1500),
+        window_source="declared",
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    window = int(gateway._window_value)
+    second = gateway.payloads[1]["messages"]
+    tool = [m for m in second if m["role"] == "tool"]
+    assert len(tool) == 1 and listing not in tool[0]["content"]
+    assert f"{window}-token" in tool[0]["content"]
+    metas = await _llm_metas(pool)
+    assert [m["context_window"] for m in metas] == [window, window]
+    assert [m.get("context_window_source") for m in metas] == ["declared", "declared"]
+    assert metas[1]["context_trimmed"]["tool_results"] == 1
+
+
+async def test_a_served_window_says_served(owner_client, pool, mount_peers, workspace):
+    gateway = WindowGateway(
+        rounds=((text("Python 3.12."),),),
+        served_by=_link(),
+        window=32768,
+        window_source="served",
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    (meta,) = await _llm_metas(pool)
+    assert meta["context_window"] == 32768
+    assert meta["context_window_source"] == "served"
+
+
+@pytest.mark.parametrize("source", [None, "guessed"])
+async def test_an_unstated_or_unknown_source_records_none(
+    owner_client, pool, mount_peers, workspace, source
+):
+    """A4: a window with no source header (or one core does not know) is
+    still the window; no source is invented for it."""
+    gateway = WindowGateway(
+        rounds=((text("Python 3.12."),),),
+        served_by=_link(),
+        window=32768,
+        window_source=source,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    (meta,) = await _llm_metas(pool)
+    assert meta["context_window"] == 32768
+    assert "context_window_source" not in meta
+
+
+async def test_a_round_reaching_a_declared_window_is_never_marked_truncated(
+    owner_client, pool, mount_peers, workspace
+):
+    """C6: a cloud provider refuses a request over its window, it does not
+    cut the front the way ollama does — so prompt_tokens at a DECLARED window
+    is not evidence of a cut: no context_truncated, no round_retry, no
+    re-send. (The same count at a served window is a cut — the tests above.)"""
+    _big_file(workspace)
+    gateway = _cut_gateway(f"cloudy:remote-{uuid.uuid4().hex[:8]}", cut_again=False)
+    gateway.window_source = "declared"
+    gateway.rounds = gateway.rounds[:2]
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 2
+    window = int(gateway._window_value)
+    metas = await _llm_metas(pool)
+    assert metas[1]["prompt_tokens"] == window - 1
+    assert not any("context_truncated" in m for m in metas)
+    assert await _spans_of(pool, "round_retry") == []
+    assert await _turn_status(pool) == "ok"
+    (reply,) = await _assistant_rows(pool)
+    assert LISTING_ANSWER in reply
+
+
+async def test_a_round_stating_no_window_on_a_declared_link_is_never_marked_truncated(
+    owner_client, pool, mount_peers, workspace
+):
+    """C6: the cut check falls back to the link's last stated window when the
+    round's own answer states none — and a link whose last window was
+    declared is still never read as cut."""
+    link = f"cloudy:remote-{uuid.uuid4().hex[:8]}"
+    _big_file(workspace)
+    gateway = _cut_gateway(link, cut_again=False)
+    gateway.window_source = "declared"
+    gateway.rounds = gateway.rounds[:2]
+    gateway.served = ((link, gateway.window), (link, None))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, ASK)
+
+    assert gateway.calls == 2
+    window = int(gateway._window_value)
+    metas = await _llm_metas(pool)
+    assert metas[0]["context_window_source"] == "declared"
+    assert "context_window" not in metas[1]
+    assert metas[1]["prompt_tokens"] == window - 1
+    assert not any("context_truncated" in m for m in metas)
+    assert await _turn_status(pool) == "ok"

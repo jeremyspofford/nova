@@ -93,6 +93,9 @@ _TABLES = (
     # be here or the re-migration collides on their CREATE TABLE.
     "turn_actions",
     "rewinds",
+    # S38b T1: tool_results references turns (ON DELETE CASCADE); listed so
+    # the re-migration starts from no table and rows never leak between tests.
+    "tool_results",
     "turn_spans",
     "turns",
     "messages",

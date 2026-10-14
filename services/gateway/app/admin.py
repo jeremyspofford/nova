@@ -34,6 +34,7 @@ from app import (
     providers,
     routing,
     usage,
+    windows,
 )
 from app import curated as curated_mod
 from app import fit as fit_mod
@@ -659,6 +660,13 @@ async def _record_prices_after_save(pool, saved: dict, shape: dict) -> None:
     call is priced from stored rows and never fetches a listing itself.
     No second call to the provider — the save's own listing is enough."""
     models = shape.get("_listing_models")
+    if models is None:
+        return
+    # S38b T5: and the windows it declared, so a cloud link is fitted too.
+    try:
+        await windows.record_listing_windows(pool, saved["name"], models)
+    except Exception:  # noqa: BLE001 — a lost window is stated absent, never a save failure
+        logger.exception("could not record listing windows for %s", saved.get("name"))
     if not models:
         return
     try:
@@ -867,6 +875,12 @@ async def _listing_for(app, pool, row: dict) -> adapters.Listing:
         await usage.record_listing_prices(pool, row, listing.models)
     except Exception:
         logger.exception("could not record listing prices for %s", name)
+    # S38b T5: the windows it declared, kept the same way — a completion on a
+    # cloud link is stated its window without fetching a listing.
+    try:
+        await windows.record_listing_windows(pool, name, listing.models)
+    except Exception:
+        logger.exception("could not record listing windows for %s", name)
     return listing
 
 
