@@ -2928,6 +2928,42 @@ def _file_round_stop(turn: traces.Turn, reason: str, rounds: int, **facts: objec
         span.meta.update({"reason": reason, "rounds": rounds, **facts})
 
 
+# The turn ended without HER answer (fix/ci-event-gaps T2): the stored reply is
+# the backend's (what the tools returned, a stated failure, a note), not hers.
+# Every round_stop reason, plus the exits that end a turn with no stop span.
+NO_ANSWER_WINDOW_CUT = "window_cut"
+NO_ANSWER_THINKING_ONLY = "thinking_only"
+NO_ANSWER_MODEL_FAILURE = "model_failure"
+NO_ANSWER_NO_LINK = "no_link"
+NO_ANSWER_MARKUP_ONLY = "markup_only"
+NO_ANSWER_EMPTY_REPLY = "empty_reply"
+NO_ANSWER_REASONS = frozenset(
+    {
+        *ROUND_STOP_REASONS,
+        NO_ANSWER_WINDOW_CUT,
+        NO_ANSWER_THINKING_ONLY,
+        NO_ANSWER_MODEL_FAILURE,
+        NO_ANSWER_NO_LINK,
+        NO_ANSWER_MARKUP_ONLY,
+        NO_ANSWER_EMPTY_REPLY,
+    }
+)
+
+
+def _file_no_answer(turn: traces.Turn, reason: str, words: str) -> None:
+    """The ONE place a `no_answer` span is filed: the turn ends on a reply the
+    BACKEND wrote, and why, in the backend's own stop words — a code fact a
+    reader of the turn (the event notice, checks/events.py) can name the stop
+    from, never by reading the reply's words. A reason outside
+    NO_ANSWER_REASONS, or no words, raises: no stop goes in the trace unnamed."""
+    if reason not in NO_ANSWER_REASONS:
+        raise ValueError(f"{reason!r} is not a no_answer reason")
+    if not words or not words.strip():
+        raise ValueError(f"a no_answer span ({reason}) needs the stop's words")
+    with turn.span("no_answer", reason) as span:
+        span.meta.update({"reason": reason, "words": words.strip()})
+
+
 def _call_key(call: ToolCall) -> tuple[str, str]:
     """A call's identity for the circling check: its name plus its arguments,
     canonical (sorted-key, compact JSON) when they parse, else the raw string.
@@ -6448,7 +6484,12 @@ async def _run_turn(
     persisted_reply = False
 
     async def _end_without_a_reply(
-        stated: str, *, verbatim: bool = False, unsent: bool = False
+        stated: str,
+        *,
+        reason: str,
+        words: str | None = None,
+        verbatim: bool = False,
+        unsent: bool = False,
     ) -> None:
         """The turn's ONE exit for a model call that did not answer.
 
@@ -6476,8 +6517,13 @@ async def _run_turn(
         sent, so nothing was called and nothing failed — persisted as-is like
         `verbatim`, and the log line says it was not sent instead of calling
         the turn failed.
+
+        `reason` and `words` (fix/ci-event-gaps T2) file the turn's
+        `no_answer` span: no exit through here is her answer. `words` default
+        to `stated`, the backend's own words for the stop.
         """
         nonlocal decided, persisted_reply
+        _file_no_answer(turn, reason, words if words is not None else stated)
         statement = (
             stated
             if verbatim or unsent
@@ -6495,7 +6541,7 @@ async def _run_turn(
         emit(_frame({"error": statement}))
         emit(DONE_FRAME)
 
-    async def _end_no_link(statement: str) -> None:
+    async def _end_no_link(statement: str, words: str) -> None:
         """The turn's exit when no link could answer and the route named a
         machine it woke (S46a T11, the owner's "Don't wait, fall back" with
         nothing to fall back to). The statement is the backend's, built from
@@ -6503,6 +6549,7 @@ async def _run_turn(
         ingested — and the turn is not a failure: it closes ok, persisted
         first, then streamed as the reply."""
         nonlocal decided, persisted_reply
+        _file_no_answer(turn, NO_ANSWER_NO_LINK, words)
         logger.info("chat turn %s: no link could answer; stated the wake", turn.id)
         await _persist_assistant(pool, conversation_id, statement, turn.id)
         persisted_reply = True
@@ -6599,7 +6646,7 @@ async def _run_turn(
             # nothing was spent finding out.
             problem, _facts = await _read_agent_cap()
             if problem:
-                await _end_without_a_reply(problem, verbatim=True)
+                await _end_without_a_reply(problem, reason=STOP_AGENT_CAP, verbatim=True)
                 return
 
         # Nova's roster of agents to delegate to, read from the table for
@@ -7101,7 +7148,12 @@ async def _run_turn(
             # The pre-round cap's exit, with what the tools that ran found in
             # front of the cap's own sentence: no model was asked to fail.
             found = tool_results_statement(turn.spans)
-            await _end_without_a_reply(f"{found}\n\n{problem}" if found else problem, verbatim=True)
+            await _end_without_a_reply(
+                f"{found}\n\n{problem}" if found else problem,
+                reason=STOP_AGENT_CAP,
+                words=problem,
+                verbatim=True,
+            )
             return
         if unfittable is not None:
             report = unfittable.report
@@ -7119,7 +7171,12 @@ async def _run_turn(
             # found, then why the next request was never sent.
             found = tool_results_statement(turn.spans)
             stated = str(unfittable)
-            await _end_without_a_reply(f"{found}\n\n{stated}" if found else stated, unsent=True)
+            await _end_without_a_reply(
+                f"{found}\n\n{stated}" if found else stated,
+                reason=STOP_UNFITTABLE,
+                words=stated,
+                unsent=True,
+            )
             return
         if window_cut_end is not None:
             # Same end shape as a thinking-only stop: what the tools found,
@@ -7127,6 +7184,8 @@ async def _run_turn(
             found = tool_results_statement(turn.spans)
             await _end_without_a_reply(
                 f"{found}\n\n{window_cut_end}" if found else window_cut_end,
+                reason=NO_ANSWER_WINDOW_CUT,
+                words=window_cut_end,
                 verbatim=True,
             )
             return
@@ -7137,6 +7196,8 @@ async def _run_turn(
             found = tool_results_statement(turn.spans)
             await _end_without_a_reply(
                 f"{found}\n\n{thinking_only_end}" if found else thinking_only_end,
+                reason=NO_ANSWER_THINKING_ONLY,
+                words=thinking_only_end,
                 verbatim=True,
             )
             return
@@ -7147,7 +7208,7 @@ async def _run_turn(
             no_link = await _no_link_reply(app, turn, failure)
             if no_link is not None:
                 found = tool_results_statement(turn.spans)
-                await _end_no_link(f"{found}\n\n{no_link}" if found else no_link)
+                await _end_no_link(f"{found}\n\n{no_link}" if found else no_link, no_link)
                 return
             stated = failure
             failed_round = _last_llm_span(turn.spans)
@@ -7163,7 +7224,7 @@ async def _run_turn(
                 # GATEWAY stated can be about tools: a timeout or an empty
                 # stream is composed here and mentions "tool calls" itself.
                 stated = f"the serving model/backend does not support tools — {failure}"
-            await _end_without_a_reply(stated)
+            await _end_without_a_reply(stated, reason=NO_ANSWER_MODEL_FAILURE)
             return
 
         # A note the BACKEND wrote about how the turn ended — the circling stop, or a
@@ -7285,12 +7346,13 @@ async def _run_turn(
                     emit(_activity_frame(call.name, "error", result))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             if stop_reason in CIRCLING_NOTE_WORDS:
+                stop_words = CIRCLING_NOTE_WORDS[stop_reason]
                 backend_note = (
                     f"[stopped after {stop_rounds} tool rounds: {CIRCLING_NOTE_WORDS[stop_reason]}]"
                 )
             else:
-                words = _budget_note_words(stop_reason, stop_facts)
-                backend_note = f"[stopped after {stop_rounds} tool rounds: {words}]"
+                stop_words = _budget_note_words(stop_reason, stop_facts)
+                backend_note = f"[stopped after {stop_rounds} tool rounds: {stop_words}]"
             note = f"\n\n{backend_note}" if parts else backend_note
             # Did the narration round ANSWER? Read off its own outcome, never
             # off `parts` (earlier rounds' text and its raw markup) and never
@@ -7306,6 +7368,10 @@ async def _run_turn(
                 and not final_calls
                 and bool(without_markup(final_text).strip())
             )
+            if not answered:
+                # The code fact that she never answered (T2): the stop's own
+                # note words, beside the round_stop span filed above.
+                _file_no_answer(turn, stop_reason, stop_words)
             statement = None if answered else tool_results_statement(turn.spans)
             if narration_unsent is not None:
                 statement = f"{statement}\n\n{narration_unsent}" if statement else narration_unsent
@@ -7345,6 +7411,7 @@ async def _run_turn(
                 if refused_markup
                 else markup_calls.MALFORMED_MARKUP_NOTE
             )
+            _file_no_answer(turn, NO_ANSWER_MARKUP_ONLY, backend_note)
             parts.append(backend_note)
             text_note = backend_note
             emit(_frame({"t": backend_note}))
@@ -7357,7 +7424,7 @@ async def _run_turn(
             # empty round is a stated failure in _gateway_round this is
             # defence in depth — a turn whose every round produced something
             # that was then stripped (markup) can still land here.
-            await _end_without_a_reply(EMPTY_REPLY)
+            await _end_without_a_reply(EMPTY_REPLY, reason=NO_ANSWER_EMPTY_REPLY)
             return
 
         # The honesty guards: a reply is a claim, the spans are the fact. All

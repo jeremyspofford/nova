@@ -255,6 +255,28 @@ hyphen. The spec now says `github_ci`, with a note.
 - **When S34 lands**, an event should open or resume a goal (spec §8). Today
   it starts a turn and reports.
 
+## Fixed after the walk (fix/ci-event-gaps)
+
+Event turn `314390b4-4edb-4669-bcae-b925c6a0380f` showed two gaps.
+
+- **A newly listed repo filed an old red run.** The first poll of
+  `jeremyspofford/nova` filed run 38448065811 on `fix/guard-followups`,
+  red on 2026-10-13 before the repo was listed (payload `"previous": null`).
+  A run never seen before is neither green-to-red nor red on a new commit.
+  Now the first successful poll records a baseline in `github_ci_baselines`
+  (migration 052) and files nothing. Only a run completed after the baseline
+  can file. A failed poll records no baseline. Commit `cd435413`.
+- **The notice title quoted a fallback line.** The turn hit its token budget
+  before answering. Its stored reply is the backend's fallback, and the
+  `event_outcomes` notice took that reply's first line as its title. Now
+  every exit where she did not answer files one `no_answer` span
+  (`chat._file_no_answer`) naming the reason in the backend's own words. The
+  notice reads that span: "she stopped before answering" with the reason, or
+  "failed" with the reason. When she answered, her first line is still the
+  title. Commit `b0f4fc14`.
+
+Not fixed: the token budget for event turns (gap 3). It waits on the owner.
+
 ## Survivors (mutation testing)
 
 Equivalent only; none against a criterion.

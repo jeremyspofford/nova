@@ -2,9 +2,11 @@
 
 Every 5 minutes a job reads the latest workflow runs of the repos the owner
 lists, through GitHub's API, with the token the GitHub MCP server already
-holds — nothing becomes public. A run that turns green -> red, or ends red on
-a new commit, files ONE `github_ci` event (keyed by the run, so it never files
-twice, across restarts); the scheduler's tick starts her turn on it.
+holds — nothing becomes public. The first poll of a repo only records a
+baseline (a row, so it survives restarts) and files nothing. After it, a run
+completed later that turns green -> red, or ends red on a new commit or a new
+branch, files ONE `github_ci` event (keyed by the run, so it never files twice,
+across restarts); the scheduler's tick starts her turn on it.
 
 The token is a secret: it goes out as the Authorization header to GitHub and
 nowhere else — not a log line, the job's result, a span, a raised reason or a
@@ -117,10 +119,33 @@ async def _repos(pool, value: str) -> None:
     )
 
 
-async def _ready(pool, repos: str = "o/r") -> None:
+# Long before every run the filing tests build: the baseline the earlier,
+# already-done first poll of a listed repo would have left.
+BASELINED_AT = NOW - timedelta(days=2)
+
+
+async def _baseline(pool, *repos: str, at: datetime = BASELINED_AT) -> None:
+    """Seed each repo's baseline row, as its first poll would have."""
+    for repo in repos:
+        await pool.execute(
+            "INSERT INTO github_ci_baselines (repo, baselined_at) VALUES ($1, $2)", repo, at
+        )
+
+
+async def _baselines(pool) -> dict:
+    rows = await pool.fetch("SELECT repo, baselined_at FROM github_ci_baselines")
+    return {r["repo"]: r["baselined_at"] for r in rows}
+
+
+async def _ready(pool, repos: str = "o/r", *, baseline: bool = True) -> None:
+    """The sender, the GitHub row and the listed repos; with `baseline`, each
+    repo was already polled once (its baseline row is seeded), so the poll
+    under test applies the filing rules."""
     await events.ensure_builtins(pool)
     await _github(pool)
     await _repos(pool, repos)
+    if baseline:
+        await _baseline(pool, *events_ci.parse_repos(repos))
 
 
 async def _poll(pool, fake: Fake) -> str:
@@ -400,10 +425,148 @@ async def test_filings_of_one_run_at_once_file_one(pool):
     """The key check and the insert run under the run's own lock: without it,
     filings racing on one run each read "not filed yet" and each insert."""
     await events.ensure_builtins(pool)
-    payload = events_ci._findings("o/r", [_run(2, "failure", "b"), _run(1, "success", "a")], NOW)[0]
+    runs = [_run(2, "failure", "b"), _run(1, "success", "a")]
+    payload = events_ci._findings("o/r", runs, NOW, BASELINED_AT)[0]
     filed = await asyncio.gather(*(events_ci._file(pool, payload) for _ in range(8)))
     assert filed.count(True) == 1
     assert len(await _ci_events(pool)) == 1
+
+
+# -- C3b: the first poll of a repo is a baseline ------------------------------------------
+
+
+@requires_db
+async def test_the_first_poll_of_a_repo_records_a_baseline_and_files_nothing(pool):
+    """The incident (event turn 314390b4, run 38448065811): a run that went red
+    before the repo was listed, with nothing before it in the page, filed on
+    the first poll. On first sight the state is recorded, never news."""
+    await _ready(pool, baseline=False)
+    fake = Fake(
+        {
+            "o/r": [
+                _run(9, "failure", "f", branch="fix/guard-followups"),
+                _run(2, "failure", "b"),
+                _run(1, "success", "a"),
+            ]
+        }
+    )
+    result = await _poll(pool, fake)
+    assert await _ci_events(pool) == []
+    assert await _baselines(pool) == {"o/r": NOW}
+    assert "o/r (baseline recorded, 0 events filed)" in result
+    assert result.startswith("0 events filed")
+
+
+@requires_db
+async def test_a_second_poll_of_the_same_runs_after_the_baseline_files_nothing(pool):
+    await _ready(pool, baseline=False)
+    fake = Fake(
+        {
+            "o/r": [
+                _run(9, "failure", "f", branch="feature"),
+                _run(2, "failure", "b"),
+                _run(1, "success", "a"),
+            ]
+        }
+    )
+    await _poll(pool, fake)
+    later = await events_ci.poll(pool, transport=fake.transport, now=NOW + timedelta(minutes=5))
+    assert await _ci_events(pool) == []
+    assert "o/r (0 events filed)" in later
+    assert await _baselines(pool) == {"o/r": NOW}
+
+
+@requires_db
+async def test_a_red_run_on_a_new_branch_completed_after_the_baseline_files(pool):
+    await _ready(pool, baseline=False)
+    before = NOW - timedelta(hours=1)
+    first = [_run(1, "success", "a", ago=timedelta(hours=2))]
+    await events_ci.poll(pool, transport=Fake({"o/r": first}).transport, now=before)
+    assert await _ci_events(pool) == []
+    runs = [_run(5, "failure", "n", branch="new-branch"), *first]
+    await _poll(pool, Fake({"o/r": runs}))
+    (row,) = await _ci_events(pool)
+    payload = json.loads(row["payload"])
+    assert payload["run_id"] == 5 and payload["branch"] == "new-branch"
+    assert payload["previous"] is None
+
+
+@requires_db
+async def test_green_to_red_completed_after_the_baseline_files(pool):
+    await _ready(pool, baseline=False)
+    before = NOW - timedelta(hours=1)
+    first = [_run(1, "success", "a", ago=timedelta(hours=2))]
+    await events_ci.poll(pool, transport=Fake({"o/r": first}).transport, now=before)
+    await _poll(pool, Fake({"o/r": [_run(2, "failure", "b"), *first]}))
+    (row,) = await _ci_events(pool)
+    payload = json.loads(row["payload"])
+    assert payload["run_id"] == 2 and "green" in payload["why"]
+
+
+@requires_db
+async def test_a_green_to_red_completed_before_the_baseline_never_files(pool):
+    """Every rule needs the red run completed after the baseline — not only
+    the nothing-before-it one — or a pre-listing green->red files on the
+    SECOND poll."""
+    await _ready(pool, baseline=False)
+    await _baseline(pool, "o/r", at=NOW - timedelta(minutes=5))
+    fake = Fake(
+        {
+            "o/r": [
+                _run(2, "failure", "b"),
+                _run(1, "success", "a"),
+                _run(4, "failure", "y", branch="x"),
+                _run(3, "failure", "x", branch="x"),
+            ]
+        }
+    )
+    await _poll(pool, fake)
+    assert await _ci_events(pool) == []
+
+
+@requires_db
+async def test_the_baseline_is_a_row_read_by_every_poll(pool):
+    """No memory: a poll with no history in this process reads the row, and
+    with the row gone the next poll baselines again."""
+    await _ready(pool)
+    fake = Fake({"o/r": [_run(2, "failure", "b"), _run(1, "success", "a")]})
+    await _poll(pool, fake)
+    assert len(await _ci_events(pool)) == 1
+    await pool.execute("DELETE FROM events")
+    await pool.execute("DELETE FROM github_ci_baselines")
+    result = await _poll(pool, fake)
+    assert await _ci_events(pool) == []
+    assert "baseline recorded" in result
+    assert await _baselines(pool) == {"o/r": NOW}
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (401, {"message": "Bad credentials"}, {}),
+        (429, {"message": "API rate limit exceeded"}, {"x-ratelimit-remaining": "0"}),
+    ],
+)
+async def test_a_failed_first_poll_records_no_baseline(pool, answer):
+    await _ready(pool, baseline=False)
+    with pytest.raises(events_ci.PollFailed):
+        await _poll(pool, Fake({"o/r": answer}))
+    assert await _baselines(pool) == {}
+    runs = Fake({"o/r": [_run(2, "failure", "b"), _run(1, "success", "a")]})
+    result = await events_ci.poll(pool, transport=runs.transport, now=NOW + timedelta(minutes=5))
+    assert "baseline recorded" in result
+    assert await _ci_events(pool) == []
+
+
+@requires_db
+async def test_two_first_polls_at_once_record_one_baseline_and_file_nothing(pool):
+    await _ready(pool, baseline=False)
+    fake = Fake({"o/r": [_run(2, "failure", "b"), _run(1, "success", "a")]})
+    results = await asyncio.gather(*(_poll(pool, fake) for _ in range(5)))
+    assert sum("baseline recorded" in r for r in results) == 1
+    assert await _ci_events(pool) == []
+    assert list(await _baselines(pool)) == ["o/r"]
 
 
 # -- C4: the token -----------------------------------------------------------------------------

@@ -277,6 +277,10 @@ async def test_v27_t27_c2_crossing_the_cap_mid_turn_ends_on_the_caps_sentence(
     reply = await _reply(pool, turn.id)
     assert reply == f"{statement}\n\n{sentence}"
     assert "Checking both." not in reply
+    # ci-event-gaps T2: the cap's own sentence, never the statement in front of it.
+    assert [dict(s.meta) for s in spans if s.kind == "no_answer"] == [
+        {"reason": chat.STOP_AGENT_CAP, "words": sentence}
+    ]
     assert await _status(pool, turn.id) == "error"
     assert _parsed(frames)[-2:] == [{"error": reply}, "[DONE]"]
     caps = _cap_spans(spans)

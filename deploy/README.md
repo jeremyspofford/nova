@@ -1096,7 +1096,11 @@ queue (or settles them from a turn that already closed); none are dropped.
 **What reaches you.** After every event turn, done or failed, a notice in the
 Inbox (family `event_outcomes`): the sender, how many events, and the first
 line of her stored reply, or that it failed and why. It links to the turn.
-The payload never appears in it. A notice from an urgent monitor event goes
+A turn that ended without her answer (a token or time budget, circling, a
+model failure, a reply the backend wrote) carries a `no_answer` trace span
+naming why. The notice then says "she stopped before answering" with that
+reason, or that it failed and the same reason. It never quotes the first line
+of a reply the backend wrote. The payload never appears in it. A notice from an urgent monitor event goes
 out at once, like a beat's urgent item. Others wait for the digest.
 
 **Two senders are built in.** Neither has a key; the intake refuses both.
@@ -1116,7 +1120,11 @@ out at once, like a beat's urgent item. Others wait for the digest.
   For each workflow and branch, a newest run that ended red within the last
   24 hours, after a green run or on a new commit, files one `github_ci`
   event. Red again on the same commit files nothing. A run files once, even
-  across restarts. Nothing becomes public: the stack calls GitHub, never the
+  across restarts. The first successful poll of a newly listed repo records a
+  baseline (a row in `github_ci_baselines`) and files nothing: what is red
+  then was red before he listed it. Only a run completed after the baseline
+  can file, by either rule. A failed poll (a bad token, a rate limit) records
+  no baseline; the next successful one does. Nothing becomes public: the stack calls GitHub, never the
   other way.
 
 **The GitHub token.** The `github_ci` job uses the token the GitHub MCP server

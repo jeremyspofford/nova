@@ -394,3 +394,179 @@ async def test_a_turn_whose_burst_straddles_the_window_stays_one_finding(pool):
     run = await checks.run_one(app, pool, event_checks.OUTCOMES)
     assert [f.facts["events"] for f in run.findings] == [[str(old), str(new)]]
     assert run.findings[0].key == f"event_turn:{turn_id}"
+
+
+# -- fix/ci-event-gaps T2: a turn that never answered says why -----------------
+#
+# Event turn 314390b4 (2026-10-14) hit its token budget before answering; its
+# stored reply was the backend's "What this turn's tools returned…" statement and
+# the notice quoted that header as her conclusion. The title now comes from the
+# turn's `no_answer` span (chat._file_no_answer), a code fact — never the reply.
+
+BUDGET_KEY = "turns.token_budget"
+
+
+def _usage(prompt: int, completion: int) -> dict:
+    return {
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "local": True,
+            "metered": True,
+            "recorded": True,
+        },
+    }
+
+
+def _probe_round(i: int, q: str) -> tuple:
+    from tests.test_chat_tools import whole_call
+    from tests.test_turn_progress import PROBE
+
+    return (whole_call(f"c{i}", PROBE, {"q": q}), _usage(20_000, 500))
+
+
+async def _budget_stopped_event(pool, mount_peers, monkeypatch, narration: tuple) -> uuid.UUID:
+    """An event turn whose one tool round spends 20,500 tokens against a
+    10,000 budget, then the narration round `narration`."""
+    from tests.test_turn_progress import _arm_probe
+
+    _arm_probe(monkeypatch, lambda q, n: f"{q}: disk at 92%")
+    await _owner(pool)
+    await _set_model(pool)
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ($1, '10000'::jsonb)", BUDGET_KEY
+    )
+    await events.add_sender(pool, "test", added_by="owner")
+    gateway = ScriptedGateway(rounds=(_probe_round(1, "df"), narration))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    event_id = await _event(pool)
+    await _run(pool)
+    return await pool.fetchval("SELECT turn_id FROM events WHERE id = $1", event_id)
+
+
+@requires_db
+async def test_t2_a_turn_stopped_at_its_token_budget_names_the_stop_not_the_fallback(
+    pool, mount_peers, monkeypatch
+):
+    """The incident shape: the narration round says nothing, the stored reply
+    opens with the backend's tool-results header. The notice names the token
+    budget from the span and never quotes the header."""
+    turn_id = await _budget_stopped_event(pool, mount_peers, monkeypatch, ())
+    reply = await pool.fetchval(
+        "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant'", turn_id
+    )
+    assert reply.startswith(chat.TOOL_RESULTS_HEADER), reply
+    (notice,) = await _outcomes(pool)
+    assert notice.facts["outcome"] == "done"
+    assert "she stopped before answering" in notice.title
+    assert "token budget" in notice.title and BUDGET_KEY in notice.title
+    assert chat.TOOL_RESULTS_HEADER not in notice.title
+    assert "What this turn's tools returned" not in notice.title
+    # The hourly run derives the same title, so the beat folds onto it.
+    run = await checks.run_one(app, pool, event_checks.OUTCOMES)
+    (finding,) = run.findings
+    assert finding.title == notice.title
+    assert checks.fingerprint(finding) == notice.fingerprint
+
+
+@requires_db
+async def test_t2_a_stopped_turn_whose_narration_answered_keeps_her_first_line(
+    pool, mount_peers, monkeypatch
+):
+    turn_id = await _budget_stopped_event(
+        pool, mount_peers, monkeypatch, (text("Disk is at 92% on /var.\nMore detail."),)
+    )
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM turn_spans WHERE turn_id = $1 AND kind = 'no_answer'", turn_id
+        )
+        == 0
+    )
+    (notice,) = await _outcomes(pool)
+    assert notice.title == "An event from test: Disk is at 92% on /var."
+    run = await checks.run_one(app, pool, event_checks.OUTCOMES)
+    assert [f.title for f in run.findings] == [notice.title]
+
+
+@requires_db
+async def test_t2_a_failed_turn_after_tools_names_the_failure_not_the_fallback(
+    pool, mount_peers, monkeypatch
+):
+    """A model failure after a tool round: the row's reason is the error frame
+    (the composed statement); the title is the failure's own words from the
+    no_answer span, the same derivation as a verbatim exit whose frame opens
+    with the tool-results header (the table test below)."""
+    from tests.test_turn_progress import _arm_probe
+
+    _arm_probe(monkeypatch, lambda q, n: f"{q}: disk at 92%")
+    await _owner(pool)
+    await _set_model(pool)
+    await events.add_sender(pool, "test", added_by="owner")
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                _probe_round(1, "df"),
+                Refusal(503, {"error": {"message": "no backend"}}),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    event_id = await _event(pool)
+    await _run(pool)
+    row = await pool.fetchrow("SELECT state, reason FROM events WHERE id = $1", event_id)
+    assert row["state"] == "failed"
+    (notice,) = await _outcomes(pool)
+    words = await pool.fetchval(
+        "SELECT meta->>'words' FROM turn_spans WHERE turn_id = $1 AND kind = 'no_answer'",
+        notice.turn_id,
+    )
+    assert "no backend" in words
+    assert notice.title == f"An event from test failed: {words}"
+    # Not the composed statement the row's reason holds (the error frame).
+    assert row["reason"].startswith("I didn't get a response")
+    assert "I didn't get a response" not in notice.title
+    assert chat.TOOL_RESULTS_HEADER not in notice.title
+    run = await checks.run_one(app, pool, event_checks.OUTCOMES)
+    assert [f.title for f in run.findings] == [notice.title]
+
+
+_ROW = {"sender": "test", "turn_id": uuid.UUID(int=7), "id": uuid.UUID(int=8)}
+
+
+def _rows(state: str, reason: str | None = None) -> list[dict]:
+    return [{**_ROW, "state": state, "reason": reason}]
+
+
+def test_t2_every_no_answer_reason_titles_from_its_words():
+    """Table-driven over every reason chat may file: done says she stopped
+    before answering and the words; failed says failed and the words; the
+    reply (the backend's statement) and the row's reason are never quoted."""
+    fallback = f"{chat.TOOL_RESULTS_HEADER}\n- probe: ok"
+    for reason in sorted(chat.NO_ANSWER_REASONS):
+        words = f"the words for {reason}"
+        done = event_checks.finding_for(_rows("done"), fallback, words)
+        assert done.title == f"An event from test: she stopped before answering — {words}"
+        failed = event_checks.finding_for(_rows("failed", fallback), fallback, words)
+        assert failed.title == f"An event from test failed: {words}"
+        for title in (done.title, failed.title):
+            assert chat.TOOL_RESULTS_HEADER not in title
+
+
+def test_t2_no_span_keeps_her_first_line_and_the_rows_reason():
+    assert (
+        event_checks.finding_for(_rows("done"), "All clear.\nmore").title
+        == "An event from test: All clear."
+    )
+    assert (
+        event_checks.finding_for(_rows("failed", "the turn failed — x"), None).title
+        == "An event from test failed: the turn failed — x"
+    )
+
+
+def test_t2_long_or_multiline_stop_words_are_one_line_and_cut():
+    words = "first line\n\nsecond line " + "x" * 400
+    title = event_checks.finding_for(_rows("done"), None, words).title
+    assert "\n" not in title
+    assert title.endswith("…")
+    assert "first line second line" in title

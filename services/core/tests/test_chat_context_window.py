@@ -724,6 +724,10 @@ async def test_a_re_sent_round_cut_again_ends_the_turn_with_a_stated_failure(
     assert str(window - 1) in reply
     assert LISTING_ANSWER not in reply
     assert RECUT_ANSWER not in reply
+    # ci-event-gaps T2: the window-cut sentence is the no_answer span's words.
+    (no_answer,) = await _spans_of(pool, "no_answer")
+    assert no_answer["reason"] == chat.NO_ANSWER_WINDOW_CUT
+    assert reply.endswith(no_answer["words"]) and str(window) in no_answer["words"]
 
 
 async def test_a_round_well_under_its_window_is_never_marked_truncated(
@@ -1112,6 +1116,10 @@ async def test_v27_t24_the_unfittable_stop_asks_nothing_and_sends_nothing_more(
     assert [name for name, _ in await _round_stops(pool)] == [chat.STOP_UNFITTABLE]
     assert chat.STOP_UNFITTABLE not in chat.CIRCLING_NOTE_WORDS
     (reply,) = await _assistant_rows(pool)
+    # ci-event-gaps T2: the unfittable statement, never the tool results before it.
+    (no_answer,) = await _spans_of(pool, "no_answer")
+    assert no_answer["reason"] == chat.STOP_UNFITTABLE
+    assert reply.endswith(no_answer["words"]) and chat.TOOL_RESULTS_HEADER not in no_answer["words"]
     assert "?" not in reply
     lowered = reply.lower()
     assert not [w for w in APPROVAL_WORDS if w in lowered]

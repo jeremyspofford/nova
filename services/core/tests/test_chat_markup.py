@@ -308,6 +308,10 @@ async def test_a_malformed_block_is_stripped_and_nothing_is_dispatched(
     assert stored == markup_calls.MALFORMED_MARKUP_NOTE
     _no_markup(stored)
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    # ci-event-gaps T2: the note is the backend's, so the trace says she never answered.
+    meta = await pool.fetchval("SELECT meta FROM turn_spans WHERE kind = 'no_answer'")
+    meta = meta if isinstance(meta, dict) else json.loads(meta)
+    assert meta == {"reason": chat.NO_ANSWER_MARKUP_ONLY, "words": stored}
 
 
 # -- (c) THE INVARIANT, at the persist boundary ------------------------------

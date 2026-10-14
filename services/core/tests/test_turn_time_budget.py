@@ -287,6 +287,10 @@ async def test_v27_t25_c3_a_silent_narration_gets_the_statement_then_the_note_an
     assert gateway.payloads[3].get("tools") in (None, [])
     spans = await _spans_of(pool)
     _budget_stop_held(_stops(spans), rounds=3, budget=DEFAULT_BUDGET, elapsed=1200)
+    # ci-event-gaps T2: she did not answer, so the trace says so in the note's words.
+    (no_answer,) = [dict(s.meta) for s in spans if s.kind == "no_answer"]
+    assert no_answer["reason"] == chat.STOP_TIME_BUDGET
+    assert no_answer["words"] == chat._time_budget_words(DEFAULT_BUDGET, 1200)
     statement = chat.tool_results_statement(spans)
     assert isinstance(statement, str)
     stored = await _stored(pool)

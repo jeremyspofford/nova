@@ -155,6 +155,12 @@ async def test_no_link_left_closes_ok_with_the_wake_stated_from_its_row(
     assert not any(isinstance(f, dict) and "error" in f for f in frames)
     for word in ("asleep", "woke", "awake", "02:00:5e"):
         assert word not in reply
+    # ci-event-gaps T2: an ok turn, but the reply is the backend's, not hers.
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'no_answer'", turn_id
+    )
+    meta = meta if isinstance(meta, dict) else json.loads(meta)
+    assert meta == {"reason": chat.NO_ANSWER_NO_LINK, "words": reply}
     await _settle_wakes()
 
 

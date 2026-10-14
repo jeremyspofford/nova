@@ -244,6 +244,8 @@ async def test_v27_t26_c2_a_turn_past_its_budget_ends_after_that_rounds_tools_wi
     assert "estimated" not in note, note
     assert stored == f"{PROSE}\n\n{note}"
     assert "".join(_texts(sent)) == stored
+    # ci-event-gaps T2: she answered, so no no_answer span.
+    assert [s for s in await _spans_of(pool) if s.kind == "no_answer"] == []
 
 
 @requires_db
@@ -307,7 +309,13 @@ async def test_v27_t26_c2_an_agent_turn_past_its_budget_stops_the_same_way(
 
     assert ran == ["a", "b", "c"]
     assert gateway.calls == 4
-    _token_stop(_stops(turn.spans), rounds=3, budget=300_000)
+    stop = _token_stop(_stops(turn.spans), rounds=3, budget=300_000)
+    # ci-event-gaps T2: the narration said nothing; the trace names the stop.
+    (no_answer,) = [dict(s.meta) for s in turn.spans if s.kind == "no_answer"]
+    assert no_answer == {
+        "reason": TOKEN_BUDGET,
+        "words": chat._budget_note_words(TOKEN_BUDGET, stop),
+    }
     statement = chat.tool_results_statement(turn.spans)
     assert isinstance(statement, str)
     reply = await _reply(pool, turn.id)

@@ -68,9 +68,14 @@ async def test_an_agent_over_its_cap_ends_before_any_round(pool, mount_peers, ro
     )
     assert [(r["role"], r["content"]) for r in rows] == [("assistant", STATEMENT)]
     assert await _status(pool, turn.id) == "error"
-    # One span, the cap's, saying what the ledger said — and nothing else ran.
+    # The cap's span, saying what the ledger said — and nothing else ran; then
+    # (ci-event-gaps T2) the no_answer span naming the cap in its own sentence.
     spans = await _spans(pool, turn.id)
-    assert [(s["kind"], s["name"]) for s in spans] == [("agent_cap", None)]
+    assert [(s["kind"], s["name"]) for s in spans] == [
+        ("agent_cap", None),
+        ("no_answer", "agent_cap"),
+    ]
+    assert spans[1]["meta"] == {"reason": "agent_cap", "words": STATEMENT}
     assert spans[0]["meta"] == {
         "role": "agent_coder",
         "cap_usd": 20.0,
