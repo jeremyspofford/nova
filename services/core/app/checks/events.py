@@ -17,6 +17,14 @@ and her one-line conclusion — the first line of her STORED reply — or that i
 failed and the row's reason. Never the payload: that is data for her, not
 words for his screen.
 
+A turn that ended without HER answer (fix/ci-event-gaps T2) — a stop, a
+failure, a note the backend wrote — carries a `no_answer` span (chat.
+_file_no_answer) naming the reason in the backend's own words. That span, a
+code fact, is the title's source then, for done and failed alike: the stored
+reply is the backend's (it may open with "What this turn's tools returned…")
+and its first line is never quoted as her conclusion. Read here only, so the
+immediate _tell and the hourly run derive the same title.
+
 Non-urgent: urgency is declared only by the stack family (tests/test_checks.py
 pins it). An urgent event's notice is pushed by events.py itself, through
 delivery.deliver with urgent set.
@@ -24,6 +32,7 @@ delivery.deliver with urgent set.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from app.checks import Check, Finding
@@ -66,16 +75,30 @@ def conclusion(reply: str | None) -> str | None:
     return None
 
 
-def finding_for(rows: list, reply: str | None) -> Finding:
+def _clipped(words: str) -> str:
+    """Stop words as one line, cut at CONCLUSION_CHARS like a conclusion."""
+    line = " ".join(words.split())
+    if len(line) > CONCLUSION_CHARS:
+        line = line[: CONCLUSION_CHARS - 1].rstrip() + "…"
+    return line
+
+
+def finding_for(rows: list, reply: str | None, no_answer: str | None = None) -> Finding:
     """The notice one settled group of events deserves: the rows a turn read
-    (or the one row no turn opened for), oldest first, and her stored reply."""
+    (or the one row no turn opened for), oldest first, her stored reply, and
+    the turn's `no_answer` words when it ended without her answer."""
     first = rows[0]
     sender = first["sender"]
     turn_id = first["turn_id"]
     failed = [row for row in rows if row["state"] == "failed"]
     outcome = "failed" if failed else "done"
     what = f"An event from {sender}" if len(rows) == 1 else f"{len(rows)} events from {sender}"
-    if failed:
+    if no_answer:
+        stop = _clipped(no_answer)
+        title = (
+            f"{what} failed: {stop}" if failed else f"{what}: she stopped before answering — {stop}"
+        )
+    elif failed:
         title = f"{what} failed: {failed[0]['reason'] or 'no reason was stated'}"
     else:
         line = conclusion(reply)
@@ -100,6 +123,22 @@ async def _reply(pool, turn_id: uuid.UUID | None) -> str | None:
     )
 
 
+async def _no_answer(pool, turn_id: uuid.UUID | None) -> str | None:
+    """The words of the turn's `no_answer` span (chat._file_no_answer), or
+    None when it has none — she answered, or no turn ran."""
+    if turn_id is None:
+        return None
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'no_answer' "
+        "ORDER BY started_at DESC LIMIT 1",
+        turn_id,
+    )
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    words = meta.get("words") if isinstance(meta, dict) else None
+    return words if isinstance(words, str) and words.strip() else None
+
+
 async def outcomes(pool, *, ids: list[uuid.UUID] | None = None) -> list[tuple[Finding, bool]]:
     """(finding, urgent) per settled group: the rows `ids` names, or every row
     received within WINDOW_DAYS. `urgent` is True when any event in the group
@@ -117,8 +156,10 @@ async def outcomes(pool, *, ids: list[uuid.UUID] | None = None) -> list[tuple[Fi
         groups.setdefault(row["turn_id"] or ("event", row["id"]), []).append(row)
     out: list[tuple[Finding, bool]] = []
     for group in groups.values():
-        reply = await _reply(pool, group[0]["turn_id"])
-        out.append((finding_for(group, reply), any(row["urgent"] for row in group)))
+        turn_id = group[0]["turn_id"]
+        reply = await _reply(pool, turn_id)
+        stop = await _no_answer(pool, turn_id)
+        out.append((finding_for(group, reply, stop), any(row["urgent"] for row in group)))
     return out
 
 

@@ -566,6 +566,12 @@ async def test_every_link_thinking_only_ends_the_turn_with_what_the_tools_found(
     assert row.startswith(statement + "\n\n")
     assert f"{REASON}: {DELL}, {HUB}" in row
     assert GATEWAY_503 in row
+    # ci-event-gaps T2: the thinking-only sentence, never the statement before it.
+    (no_answer,) = [dict(s.meta) for s in ran.turn.spans if s.kind == "no_answer"]
+    assert no_answer == {
+        "reason": chat.NO_ANSWER_THINKING_ONLY,
+        "words": row.removeprefix(statement + "\n\n"),
+    }
 
 
 # -- T3 criterion 4: no loop when the chain cannot move ------------------------

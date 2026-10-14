@@ -564,7 +564,11 @@ async def test_a_capped_agents_firing_is_an_error_with_the_cap_statement(pool, m
     assert [path for path, _ in gateway.seen] == ["/admin/spend"]
     assert memory.recalls == []
     spans = await _spans(pool, firing["turn_id"])
-    assert [(s["kind"], s["name"]) for s in spans] == [("agent_cap", None)]
+    # ci-event-gaps T2: the cap's span, then the no_answer span naming it.
+    assert [(s["kind"], s["name"]) for s in spans] == [
+        ("agent_cap", None),
+        ("no_answer", "agent_cap"),
+    ]
     assert (await timers.get(pool, row["id"]))["consecutive_failures"] == 1
 
 
