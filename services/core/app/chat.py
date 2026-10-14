@@ -8822,8 +8822,9 @@ def _spawn_turn(
     client disconnect cancels only the forwarder, never this, so the turn
     finishes and persists the full reply regardless. put_nowait onto an
     unbounded queue never blocks, so a detached completion is never stalled by an
-    absent reader — the frames it emits after the client is gone are simply never
-    read. A drained queued turn has no reader from the start, and that is the
+    absent reader — and once the client is gone the queue is closed (a
+    `_FrameQueue`, T28), so the frames it emits after that are dropped, never
+    kept. A drained queued turn has no reader from the start, and that is the
     same path, not a second one.
 
     `decide` is passed through to `_run_turn` (the stream route alone sets it).
@@ -9070,7 +9071,7 @@ async def chat_stream(
     if await conversations.person_busy(pool, person.id):
         parallel = await runs_beside(request.app, pool, message)
 
-    queue: asyncio.Queue = asyncio.Queue()
+    queue = _FrameQueue()
     started: _Started | None = None
     accepted: dict | None = None
     committed = False
@@ -9138,7 +9139,8 @@ async def chat_stream(
         # A turn he typed asks the decision role (decision-role spec §2).
         decide=True,
     )
-    return StreamingResponse(
+    return _FrameStreamResponse(
+        queue,
         _stream_from_queue(queue),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -9248,6 +9250,61 @@ async def stop_turn(turn_id: uuid.UUID, person: Person = Depends(identity.requir
     }
 
 
+class _FrameQueue(asyncio.Queue):
+    """A stream turn's frame queue that goes nowhere once its reader has gone.
+
+    The turn runs detached (S2c): a client that leaves never stops it, and
+    `put_nowait` never blocks it. Before verification-2-7 T28 that meant every
+    frame emitted after the browser left (deltas, activity, cards) piled up
+    in an unbounded queue nobody would ever read, for the life of the turn.
+
+    `close()` is called when the response ends, by whatever path:
+    it releases what was queued unread and makes every later `put_nowait` a
+    no-op. Nothing a reader would see is lost: while the response is live the
+    queue is unbounded exactly as before, so a slow but connected reader still
+    gets every frame in order. A returning client reads the stored reply via
+    /conversations/{id}/state and /messages, never a frame.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    def put_nowait(self, item: str | None) -> None:
+        if self.closed:
+            return
+        super().put_nowait(item)
+
+    def close(self) -> None:
+        self.closed = True
+        while True:
+            try:
+                self.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+
+class _FrameStreamResponse(StreamingResponse):
+    """The stream route's response: it closes its frame queue when it ends.
+
+    Closed HERE, not only in `_stream_from_queue`'s `finally`: when a client
+    leaves, the generator is usually suspended at its `yield` (cancelled inside
+    `send`), and nothing resumes it — its `finally` runs only when it is
+    garbage collected, which can be long after the turn has flooded the queue.
+    The response's own call ends at the disconnect, every time.
+    """
+
+    def __init__(self, queue: _FrameQueue, content: AsyncIterator[str], **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._frames = queue
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._frames.close()
+
+
 async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:
     """Forward a detached turn's frames to whoever is still reading.
 
@@ -9257,9 +9314,18 @@ async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:
     persists. `None` is the end-of-turn sentinel `_run_turn` emits after the
     atomic trace close, so draining this generator to its end means the turn
     is fully on record.
+
+    Once it stops reading, its queue (a `_FrameQueue`) is closed, so frames the
+    turn emits after that are dropped rather than kept for no one (T28). The
+    response closes it too (`_FrameStreamResponse`), because a generator left
+    suspended at `yield` reaches this `finally` only when it is collected.
     """
-    while True:
-        frame = await queue.get()
-        if frame is None:
-            return
-        yield frame
+    try:
+        while True:
+            frame = await queue.get()
+            if frame is None:
+                return
+            yield frame
+    finally:
+        if isinstance(queue, _FrameQueue):
+            queue.close()
