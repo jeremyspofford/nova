@@ -98,6 +98,15 @@ def _int_range(lo: int, hi: int, what: str) -> Callable[[Any], str | None]:
 _DECISION_BUDGET = f"{decisions.TURN_BUDGET_S:g} s"
 
 
+def _github_ci_repos_problem(value: Any) -> str | None:
+    """events_ci's own rule for the CI repos list (S37c T7), imported late:
+    events_ci reads settings through this module."""
+    from app import events_ci
+
+    problem = events_ci.repos_problem(value)
+    return None if problem is None else f"{problem} (list owner/repo names)"
+
+
 def def_json(definition: SettingDef) -> dict:
     """The def as the API lists it — every field but the validate callable."""
     return {
@@ -317,6 +326,18 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "after 30 minutes."
         ),
         validate=_int_range(1, 8, "boxes running at once"),
+    ),
+    SettingDef(
+        key="events.github_ci.repos",
+        type="str",
+        default="",
+        description=(
+            "GitHub repos whose CI she watches, as owner/repo names separated by commas or "
+            "spaces. Every 5 minutes the github_ci job reads their latest "
+            "workflow runs with the GitHub connection's token; a run that turns red starts "
+            "her look. Empty: nothing is polled."
+        ),
+        validate=_github_ci_repos_problem,
     ),
 )
 

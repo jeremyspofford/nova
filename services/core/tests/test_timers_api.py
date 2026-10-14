@@ -342,7 +342,7 @@ async def test_jobs_are_visible_to_every_person_with_their_own_history(owner_cli
     # S42b (decision 2): two jobs now — retention and agent_updates. The row
     # this test fires is retention's, selected by its handler: `kind = 'job'`
     # alone names two rows.
-    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates", "github_ci"]
     job_id = await pool.fetchval(
         "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
     )
@@ -351,7 +351,8 @@ async def test_jobs_are_visible_to_every_person_with_their_own_history(owner_cli
     for client in (owner_client, await _client_for(pool, stranger)):
         listed = (await client.get("/api/v1/timers")).json()["timers"]
         jobs = {t["payload"]["handler"]: t for t in listed if t["kind"] == "job"}
-        assert set(jobs) == {"retention", "agent_updates"}
+        # S37c T7: github_ci joined the install's jobs.
+        assert set(jobs) == {"retention", "agent_updates", "github_ci"}
         assert jobs["retention"]["id"] == str(job_id)
         assert all(j["created_via"] == "system" for j in jobs.values())
         assert jobs["retention"]["last_firing"]["status"] == "ok"
@@ -359,8 +360,9 @@ async def test_jobs_are_visible_to_every_person_with_their_own_history(owner_cli
         assert [f["id"] for f in firings] == [str(firing)]
     # The stranger sees THEIR timer beside the jobs; the owner does not.
     stranger_rows = (await (await _client_for(pool, stranger)).get("/api/v1/timers")).json()
-    assert sorted(t["kind"] for t in stranger_rows["timers"]) == ["job", "job", "reminder"]
+    assert sorted(t["kind"] for t in stranger_rows["timers"]) == ["job", "job", "job", "reminder"]
     assert [t["kind"] for t in (await owner_client.get("/api/v1/timers")).json()["timers"]] == [
+        "job",
         "job",
         "job",
     ]
@@ -708,7 +710,7 @@ async def test_bind_agent_binds_unbinds_and_refuses_in_words(owner_client, pool)
     assert refused.value.reason == (
         "only a scheduled turn can be bound to an agent — this is a reminder"
     )
-    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates", "github_ci"]
     job_id = await pool.fetchval(
         "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
     )
@@ -782,7 +784,7 @@ async def test_put_agent_refusals_name_the_agents_the_kind_and_the_owner(owner_c
     row = await _scheduled(pool, person, conversation)
     reminder = await _reminder(pool, person, conversation)
     foreign = await _scheduled(pool, stranger, theirs, title="theirs")
-    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates"]
+    assert await timers.ensure_jobs(pool) == ["retention", "agent_updates", "github_ci"]
     job_id = await pool.fetchval(
         "SELECT id FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
     )

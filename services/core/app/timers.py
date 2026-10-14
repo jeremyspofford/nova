@@ -611,3 +611,12 @@ JOB_SCHEDULES["agent_updates"] = agent_updates.JOB_SCHEDULE
 JOB_TITLES["agent_updates"] = (
     "Keep Nova's agents on the hub's build — one idle machine at a time, the hub's own first"
 )
+
+# S37c T7: GitHub CI as a sender, by polling (spec §2.7, owner §9 Q1). Every
+# 5 minutes: 288 small `job` turns a day on the trace. A run that turns red
+# files a github_ci event; the tick starts her turn on it.
+from app import events_ci  # noqa: E402
+
+JOBS["github_ci"] = events_ci.github_ci
+JOB_SCHEDULES["github_ci"] = events_ci.JOB_SCHEDULE
+JOB_TITLES["github_ci"] = events_ci.JOB_TITLE

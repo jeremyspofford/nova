@@ -624,9 +624,11 @@ async def test_list_shows_the_persons_own_timers_and_the_jobs_never_another_pers
     # The install's jobs are hers to see (the Schedules page shows them too),
     # stated as system rows. S42b (decision 2): two — retention and
     # agent_updates.
-    assert "2 housekeeping jobs (system):" in result
+    # S37c T7: three — github_ci (CI polling) joined them.
+    assert "3 housekeeping jobs (system):" in result
     assert f"job {timers.JOB_TITLES['retention']!r}" in result
     assert f"job {timers.JOB_TITLES['agent_updates']!r}" in result
+    assert f"job {timers.JOB_TITLES['github_ci']!r}" in result
     assert "PAUSED" not in result
 
 
@@ -753,8 +755,9 @@ async def test_cancel_refuses_what_is_not_hers_by_name(pool, tmp_path):
         assert ok is False
         assert "no timer of yours matches" in result
     assert len(await _rows(pool, other)) == 1
-    # Both of the install's jobs are still there (S42b: retention and agent_updates).
-    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 2
+    # Every one of the install's jobs is still there (retention, agent_updates,
+    # and S37c T7's github_ci).
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'job'") == 3
 
 
 async def test_cancel_with_no_timers_at_all_says_so(pool, tmp_path):
@@ -967,7 +970,7 @@ async def test_list_timers_from_an_agent_turn_lists_the_timers_bound_to_it(pool,
     assert ok is True
     assert result.startswith("2 timers of yours")
     assert "'stretch'" in result and "'review the diffs'" in result
-    assert "2 housekeeping jobs (system):" in result
+    assert "3 housekeeping jobs (system):" in result
 
 
 async def test_list_bound_is_the_store_projection_newest_first(pool, tmp_path):

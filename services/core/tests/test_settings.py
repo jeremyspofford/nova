@@ -78,6 +78,9 @@ KNOWN_KEYS = {
     "box.memory_gb",
     "box.pids",
     "box.max_running",
+    # S37c T7 (spec §2.7, owner §9 Q1): the repos whose GitHub CI the
+    # github_ci job polls. Deliberate tripwire update: one def landed.
+    "events.github_ci.repos",
 }
 
 
