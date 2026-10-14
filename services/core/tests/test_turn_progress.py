@@ -1235,7 +1235,10 @@ def test_every_round_stop_reason_is_pinned():
     a turn past its wall-clock budget (turns.time_budget_s) — not a circling
     reason, and not a count of rounds. Moved again by verification-2-7 T26:
     `token_budget`, a turn past its token budget (turns.token_budget) — the
-    tokens its rounds reported, summed; not circling, not a count of rounds."""
+    tokens its rounds reported, summed; not circling, not a count of rounds.
+    Moved again by verification-2-7 T27: `agent_cap`, an agent turn whose
+    monthly cap (agents.cap_problem) was reached between rounds — the owner's
+    spend limit, not circling, not a count of rounds."""
     assert set(chat.CIRCLING_NOTE_WORDS) == {chat.STOP_REPEATED_CALL, chat.STOP_NO_NEW_RESULTS}
     assert chat.ROUND_STOP_REASONS == {
         chat.STOP_REPEATED_CALL,
@@ -1243,6 +1246,7 @@ def test_every_round_stop_reason_is_pinned():
         chat.STOP_UNFITTABLE,
         chat.STOP_TIME_BUDGET,
         chat.STOP_TOKEN_BUDGET,
+        chat.STOP_AGENT_CAP,
     }
     turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
     with pytest.raises(ValueError, match="not a round_stop reason"):

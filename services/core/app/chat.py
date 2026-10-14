@@ -2877,9 +2877,15 @@ STOP_TIME_BUDGET = "time_budget"
 # summed (turn_tokens), checked right after the time budget and ended the same
 # way. A budget of tokens, never a count of rounds.
 STOP_TOKEN_BUDGET = "token_budget"
+# An agent turn whose agent reached its monthly cap while it ran
+# (verification-2-7 T27): agents.cap_problem re-read after every tool round,
+# where the stops above are checked. It wins a tie with them and is NOT
+# narrated — a narration round would be a spend past the cap the owner set —
+# so the turn ends through the pre-round cap's exit, on the cap's own sentence.
+STOP_AGENT_CAP = "agent_cap"
 # Every reason a `round_stop` span may carry; _file_round_stop refuses any other.
 ROUND_STOP_REASONS = frozenset(
-    {*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET, STOP_TOKEN_BUDGET}
+    {*CIRCLING_NOTE_WORDS, STOP_UNFITTABLE, STOP_TIME_BUDGET, STOP_TOKEN_BUDGET, STOP_AGENT_CAP}
 )
 # The stops that end a turn with one toolless narration round: how the log
 # names each, the nudge its narration round is sent, and the refusal a call
@@ -6334,17 +6340,23 @@ async def _run_turn(
         )
         traces.set_doing(turn.id, "starting")
 
-        if persona.agent is not None:
-            # The cap, BEFORE any recall or round: read from the same ledger
-            # the Spend page shows and recorded on its own span whatever it
-            # says — read, skipped (no cap), or unreadable (the turn runs and
-            # the span says so; fail-open, never quiet). A hit ends the turn
-            # through the one failure exit with the sentence persisted as-is:
-            # the assistant row, the error frame and the turn's status agree,
-            # and nothing was spent finding out.
+        async def _read_agent_cap(**where: int) -> tuple[str | None, dict]:
+            """The agent's monthly cap, read from the same ledger the Spend page
+            shows and recorded on its own `agent_cap` span whatever it says —
+            read, skipped (no cap), or unreadable (the turn runs and the span
+            says so; fail-open, never quiet). `where` is the span's place in the
+            turn: none before round 1, `after_round` between rounds (T27)."""
             with turn.span("agent_cap") as span:
                 problem, facts = await agents.cap_problem(app, pool, persona.agent)
-                span.meta.update(facts)
+                span.meta.update(facts, **where)
+            return problem, facts
+
+        if persona.agent is not None:
+            # The cap, BEFORE any recall or round. A hit ends the turn through
+            # the one failure exit with the sentence persisted as-is: the
+            # assistant row, the error frame and the turn's status agree, and
+            # nothing was spent finding out.
+            problem, _facts = await _read_agent_cap()
             if problem:
                 await _end_without_a_reply(problem, verbatim=True)
                 return
@@ -6617,6 +6629,9 @@ async def _run_turn(
         # budget_s and elapsed_s; the token-budget stop's budget and turn_tokens),
         # filed on its round_stop span as they are.
         stop_facts: dict[str, int] = {}
+        # An agent turn that reached its monthly cap between rounds (T27): the
+        # cap's sentence and the facts the ledger read showed; None while under.
+        cap_stop: tuple[str, dict] | None = None
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
@@ -6817,12 +6832,36 @@ async def _run_turn(
                 if spent["spent_tokens"] >= token_budget:
                     reason = STOP_TOKEN_BUDGET
                     stop_facts = {"budget_tokens": token_budget, **spent}
+            if persona.agent is not None:
+                # The agent's cap (T27), re-read at the same point: this round
+                # has been spent, and another must not be asked past the cap the
+                # owner set — not even a narration round, so it wins a tie with
+                # every stop above.
+                problem, facts = await _read_agent_cap(after_round=round_number)
+                if problem:
+                    cap_stop = (problem, facts)
+                    stop_rounds = round_number
+                    break
             if reason is not None:
                 out_of_rounds = True
                 stop_reason = reason
                 stop_rounds = round_number
                 break
 
+        if cap_stop is not None:
+            problem, facts = cap_stop
+            _file_round_stop(
+                turn,
+                STOP_AGENT_CAP,
+                stop_rounds,
+                cap_usd=facts["cap_usd"],
+                spent_usd=facts["spent_usd"],
+            )
+            # The pre-round cap's exit, with what the tools that ran found in
+            # front of the cap's own sentence: no model was asked to fail.
+            found = tool_results_statement(turn.spans)
+            await _end_without_a_reply(f"{found}\n\n{problem}" if found else problem, verbatim=True)
+            return
         if unfittable is not None:
             report = unfittable.report
             _file_round_stop(
