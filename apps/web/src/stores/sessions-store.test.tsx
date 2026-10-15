@@ -107,7 +107,7 @@ afterEach(() => {
 describe('SessionsProvider and the sidebar list', () => {
   it('lists core’s sessions and marks the main one', async () => {
     const out = mount(fakeApi([session('a', { main: true }), session('b')]))
-    await screen.findByText('label a')
+    await screen.findByText('Main')
     expect(screen.getByText('label b')).toBeTruthy()
     expect(out.store!.mainId).toBe('a')
     // The main pane names no session, so it is showing the main one.
@@ -128,7 +128,7 @@ describe('SessionsProvider and the sidebar list', () => {
     await screen.findByText('label b')
     fireEvent.click(screen.getByText('label b'))
     expect(out.path).toBe('/chat?session=b')
-    fireEvent.click(screen.getByText('label a'))
+    fireEvent.click(screen.getByText('Main'))
     expect(out.path).toBe('/chat')
   })
 
@@ -206,15 +206,15 @@ describe('SessionsProvider and the sidebar list', () => {
   })
 
   it('renames in place; a blank name goes back to the derived label', async () => {
-    const api = fakeApi([session('a', { main: true })])
+    const api = fakeApi([session('a', { main: true }), session('b')])
     mount(api)
-    await screen.findByText('label a')
-    fireEvent.click(screen.getByTestId('session-menu-a'))
-    fireEvent.click(screen.getByTestId('rename-a'))
-    const input = screen.getByTestId('rename-input-a')
+    await screen.findByText('label b')
+    fireEvent.click(screen.getByTestId('session-menu-b'))
+    fireEvent.click(screen.getByTestId('rename-b'))
+    const input = screen.getByTestId('rename-input-b')
     fireEvent.change(input, { target: { value: 'Dell wifi' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(api.renameSession).toHaveBeenCalledWith('a', 'Dell wifi'))
+    await waitFor(() => expect(api.renameSession).toHaveBeenCalledWith('b', 'Dell wifi'))
     await screen.findByText('Dell wifi')
   })
 
@@ -255,7 +255,7 @@ describe('SessionsProvider and the sidebar list', () => {
   it('a new session opens in the focused pane', async () => {
     const api = fakeApi([session('a', { main: true })])
     const out = mount(api)
-    await screen.findByText('label a')
+    await screen.findByText('Main')
     fireEvent.click(screen.getByTestId('new-session'))
     await waitFor(() => expect(out.path).toBe('/chat?session=new-1'))
   })
@@ -295,23 +295,25 @@ describe('SessionsProvider and the sidebar list', () => {
 })
 
 describe('SessionsList — layout (Main, then Recents)', () => {
-  it('puts the main session under Main and the rest under Recents', async () => {
+  it('shows the main session as one row reading Main, and the rest under Recents', async () => {
+    // Owner, 2026-10-15: "Main" is the chat itself — clicking it opens the
+    // main session, with no session to pick beneath it.
     mount(fakeApi([session('b'), session('a', { main: true }), session('c')]))
     await screen.findByText('label c')
     const main = screen.getByTestId('sessions-main')
     const recents = screen.getByTestId('sessions-recents')
-    expect(main.textContent).toContain('Main')
-    expect(main.textContent).toContain('label a')
-    expect(main.textContent).not.toContain('label b')
+    expect(main.querySelectorAll('li')).toHaveLength(1)
+    expect(main.textContent).toBe('Main')
+    expect(within(main).getByTestId('session-a')).toBeTruthy()
     expect(recents.textContent).toContain('Recents')
     expect(recents.textContent).toContain('label b')
     expect(recents.textContent).toContain('label c')
-    expect(recents.textContent).not.toContain('label a')
+    expect(screen.queryByText('label a')).toBeNull()
   })
 
   it('draws no Recents heading when the main session is the only one', async () => {
     mount(fakeApi([session('a', { main: true })]))
-    await screen.findByText('label a')
+    await screen.findByText('Main')
     expect(screen.queryByTestId('sessions-recents')).toBeNull()
   })
 
@@ -342,7 +344,7 @@ describe('SessionsList — layout (Main, then Recents)', () => {
 
   it('offers New chat as a labelled action', async () => {
     mount(fakeApi([session('a', { main: true })]))
-    await screen.findByText('label a')
+    await screen.findByText('Main')
     expect(screen.getByTestId('new-session').textContent).toContain('New chat')
   })
 })
@@ -390,7 +392,7 @@ describe('session hotkeys (Alt+Shift, ⌥⇧ on a Mac) act on the session being 
   it('Alt+Shift+N starts a new chat from anywhere', async () => {
     const api = fakeApi([session('a', { main: true })])
     const out = mount(api, '/files')
-    await screen.findByText('label a')
+    await screen.findByText('Main')
     press('KeyN', '˜')
     await waitFor(() => expect(out.path).toBe('/chat?session=new-1'))
   })

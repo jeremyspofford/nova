@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ChevronDown, Coins, Info, LogOut, Settings as SettingsIcon, Activity as ActivityIcon } from 'lucide-react'
+import { ChevronDown, Coins, LogOut, Settings as SettingsIcon, Activity as ActivityIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -41,9 +41,7 @@ const ITEMS: Item[] = [
   // page called Spend and "What she has done" one called Activity.
   { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },
   { to: '/activity', label: 'Activity', icon: ActivityIcon, minRole: 'admin' },
-  // What this instance is: its build, whether there is anything newer, and
-  // the machines and apps it is made of (pages/about).
-  { to: '/about', label: 'About Nova', icon: Info, minRole: 'guest' },
+  // About Nova moved into Settings (owner, 2026-10-15; settingsNav.ts).
 ]
 
 /** Where the menu's pages live: its own items, and every page Settings

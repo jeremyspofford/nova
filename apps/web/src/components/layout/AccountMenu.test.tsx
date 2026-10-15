@@ -61,8 +61,8 @@ describe('AccountMenu', () => {
       .getAllByRole('menuitem')
       .map(i => i.getAttribute('href'))
       .filter(Boolean)
-    // /about joined 2026-10-07 with its page (pages/about/AboutPage.tsx).
-    expect(hrefs).toEqual(['/settings', '/spend', '/activity', '/about'])
+    // /about moved into Settings 2026-10-15 (settingsNav.ts).
+    expect(hrefs).toEqual(['/settings', '/spend', '/activity'])
   })
 
   it('offers a guest only what a guest can reach', async () => {
@@ -74,9 +74,7 @@ describe('AccountMenu', () => {
       .getAllByRole('menuitem')
       .map(i => i.getAttribute('href'))
       .filter(Boolean)
-    // About is every signed-in person's: what this instance is, nothing
-    // anyone could change from it.
-    expect(hrefs).toEqual(['/settings', '/about'])
+    expect(hrefs).toEqual(['/settings'])
   })
 
   it('closes on Escape', async () => {

@@ -40,6 +40,14 @@ describe('SETTINGS_NAV', () => {
     expect(settingsLocation('/settings/events')).toMatchObject({ top: true, entry: { label: 'Events' } })
   })
 
+  // Owner, 2026-10-15: About Nova lives under Settings, not the account menu.
+  it('lists About Nova last under System, for everyone signed in', () => {
+    const system = SETTINGS_NAV.find(g => g.label === 'System')!
+    const about = system.items[system.items.length - 1]
+    expect(about).toMatchObject({ to: '/about', label: 'About Nova', minRole: 'guest' })
+    expect(settingsLocation('/about')).toMatchObject({ top: true, entry: { to: '/about' } })
+  })
+
   it('lists nothing twice, and has no empty group', () => {
     const tos = items.map(i => i.to)
     expect(new Set(tos).size).toBe(tos.length)

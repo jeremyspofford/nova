@@ -147,7 +147,6 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/spend" element={<SpendPage />} />
-        <Route path="/about" element={<AboutPage />} />
         {/* SETTINGS, and the pages that moved into it out of the sidebar
             (2026-10-08): one shell with its own nav around all of them
             (SettingsShell). Each page keeps its address — the Inbox, chat
@@ -167,6 +166,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/quality" element={<AIQualityPage />} />
           <Route path="/governance" element={<GovernancePage />} />
+          <Route path="/about" element={<AboutPage />} />
         </Route>
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />

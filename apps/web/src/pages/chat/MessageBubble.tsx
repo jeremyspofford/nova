@@ -1,5 +1,6 @@
 import { memo, useState, type ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
+import clsx from 'clsx'
 import {
   AlertTriangle,
   BellRing,
@@ -22,6 +23,7 @@ import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
 import { isSetupKind } from '../../lib/setupSteps'
 import { modelName } from '../../lib/modelFormat'
+import { formatStamp } from '../../lib/humanText'
 import { usd } from '../spend/spendFormat'
 import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
@@ -569,8 +571,9 @@ export const MessageBubble = memo(function MessageBubble({
               look at this" was the whole message. An empty bubble above a
               picture is a thing he did not send. */}
           <Attached files={row.attachments ?? []} />
-          {(stub || onRewind) && (
+          {(stub || onRewind || row.sentAt) && (
             <div className="flex justify-end items-start gap-1">
+              <MessageTime at={row.sentAt} className="mt-1.5 mr-1" />
               {stub}
               {onRewind && (
                 <RewindControl disabled={rewindDisabled} onChoose={mode => onRewind(row.id, mode)} />
@@ -582,9 +585,6 @@ export const MessageBubble = memo(function MessageBubble({
     )
   }
 
-  // The avatar is the writer's initial: the agent's when one wrote the row
-  // (S12), Nova's N otherwise.
-  const initial = row.agent ? row.agent.charAt(0).toUpperCase() : 'N'
   // Every delegation this store watched on this row, oldest first, the one
   // in flight last. One list (not done + current separately) so a line's
   // expanded state survives the moment its delegation closes and a new one
@@ -599,16 +599,9 @@ export const MessageBubble = memo(function MessageBubble({
     row.activity?.tool === DELEGATE_TOOL && row.delegation?.status === 'working'
 
   return (
-    <div className="flex gap-3 items-start" data-testid="message-assistant" data-message-id={row.id}>
-      <div className="shrink-0 mt-0.5">
-        <div
-          data-testid="assistant-avatar"
-          title={row.agent ? `agent ${row.agent}` : 'Nova'}
-          className="h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold select-none bg-accent-dim text-accent"
-        >
-          {initial}
-        </div>
-      </div>
+    // No avatar (owner, 2026-10-15): the "N" beside every reply said nothing
+    // — an agent's reply is named by its label below.
+    <div className="flex items-start" data-testid="message-assistant" data-message-id={row.id}>
       <div className="flex-1 min-w-0 pb-1">
         {(row.turnKind !== null || row.agent !== null) && (
           <div className="flex flex-wrap items-center gap-x-2">
@@ -700,6 +693,8 @@ export const MessageBubble = memo(function MessageBubble({
             title="the provider and model that produced this reply, as recorded on the turn's trace"
             className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-micro text-content-tertiary font-mono"
           >
+            <MessageTime at={row.sentAt} />
+            {row.sentAt && <span aria-hidden="true">·</span>}
             <Cpu size={11} className="shrink-0" />
             <span data-testid="served-by-name" title={row.servedBy} className="min-w-0 truncate">
               {modelName(row.servedBy)}
@@ -709,6 +704,11 @@ export const MessageBubble = memo(function MessageBubble({
                 · {usd(row.cost)}
               </span>
             )}
+          </p>
+        )}
+        {!row.servedBy && row.sentAt && (
+          <p className="mt-1.5">
+            <MessageTime at={row.sentAt} />
           </p>
         )}
         {/* The gateway served this turn from a fallback link (S10-2, rail 20:
@@ -738,6 +738,29 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   )
 })
+
+/**
+ * When the message was sent (owner, 2026-10-15): the time alone for today,
+ * the date with it otherwise; the full local stamp on hover. Drawn only once
+ * the row has a `sentAt`, which a reply gets when it FINISHES — never while
+ * it streams (chatReducer).
+ */
+function MessageTime({ at, className }: { at: string | null; className?: string }) {
+  if (!at) return null
+  const t = new Date(at)
+  if (Number.isNaN(t.getTime())) return null
+  const today = t.toDateString() === new Date().toDateString()
+  return (
+    <time
+      data-testid="message-time"
+      dateTime={at}
+      title={t.toLocaleString()}
+      className={clsx('font-sans text-micro text-content-tertiary', className)}
+    >
+      {today ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : formatStamp(at)}
+    </time>
+  )
+}
 
 /**
  * A failed turn. Deliberately not an assistant bubble: an error rendered as

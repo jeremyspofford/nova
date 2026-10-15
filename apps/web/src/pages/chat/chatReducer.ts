@@ -146,6 +146,11 @@ export type MessageRow = {
    * a client id until a load replaces it — core has never heard of that id,
    * so nothing may address it (a rewind to it would only be refused). */
   stored?: boolean
+  /** When the message was sent (owner, 2026-10-15): core's `created_at` on a
+   * stored row — an assistant row is written when the turn ends — or, live,
+   * the moment he sent his or her reply finished (`done`, or `stopped`).
+   * null while it is still streaming, and on a reply that never finished. */
+  sentAt: string | null
 }
 
 export type ErrorRow = {
@@ -284,6 +289,7 @@ export type FetchedMessage = {
   id: string
   role: string
   content: string
+  created_at?: string
   served_by?: string | null
   turn_kind?: string | null
   cost_usd?: number | null
@@ -344,6 +350,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     delegations: [],
     attachments: [],
     cards: [],
+    sentAt: null,
     ...row,
   }
 }
@@ -565,6 +572,7 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
             streaming: false,
             activity: null,
             stoppedNote: event.note,
+            sentAt: new Date().toISOString(),
           }),
         ),
         streaming: false,
@@ -583,7 +591,9 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         return { ...replacePendingWithError(state, NO_REPLY), turnId: null }
       }
       return {
-        ...withPending(state, row => settleDelegation({ ...row, streaming: false, activity: null })),
+        ...withPending(state, row =>
+          settleDelegation({ ...row, streaming: false, activity: null, sentAt: new Date().toISOString() }),
+        ),
         streaming: false,
         pendingId: null,
         turnId: null,
@@ -633,6 +643,7 @@ function serverRow(m: FetchedMessage): MessageRow {
     cards: Array.isArray(m.cards) ? m.cards : [],
     // Chat rewind: the marker's stored rewinds row, verbatim.
     rewind: m.rewind ?? null,
+    sentAt: typeof m.created_at === 'string' ? m.created_at : null,
     stored: true,
   })
 }
@@ -904,6 +915,7 @@ function sameRows(a: ChatRow[], b: ChatRow[]): boolean {
       row.streaming === other.streaming &&
       row.interrupted === other.interrupted &&
       row.agent === other.agent &&
+      row.sentAt === other.sentAt &&
       sameDelegations(row.delegations, other.delegations) &&
       sameCards(row.cards, other.cards)
     )
@@ -1036,7 +1048,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         rows: [
           ...state.rows,
-          message({ id: action.userId, role: 'user', text: action.text }),
+          message({ id: action.userId, role: 'user', text: action.text, sentAt: new Date().toISOString() }),
           message({ id: action.assistantId, role: 'assistant', streaming: true }),
         ],
         streaming: true,
