@@ -1,6 +1,8 @@
 # S54 — Her replies can carry interface, not only markdown
 
-**Status:** designed 2026-10-14, not built. Fable-authored; the decisions marked
+**Status:** S54a built 2026-10-15, live walk + eval run owed (what you will see:
+[`what-she-can-draw.md`](what-she-can-draw.md)); S54b and S54c not built.
+Fable-authored; the decisions marked
 **LOCKED** are the owner's, from the 2026-10-14 chat.
 
 ## Why

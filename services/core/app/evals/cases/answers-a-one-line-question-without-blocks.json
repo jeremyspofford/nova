@@ -1,0 +1,12 @@
+{
+  "id": "answers-a-one-line-question-without-blocks",
+  "suite": "agent_quality",
+  "suite_version": 28,
+  "message": "What's the capital of Australia?",
+  "contract": [
+    {
+      "predicate": "ui_block_absent"
+    }
+  ],
+  "comment": "The guidance's other half (spec §4: never a block for a short answer). MEASURES: a one-line question gets no ```nova-ui block at all — an invalid attempt counts as one, since it lands in his bubble as code (ui_block_absent). WHAT IT CANNOT MEASURE: whether the answer is right. S54a T14 (spec docs/plans/rebuild/s54/spec.md §5): a new case is a new denominator, so suite_version moved 27 -> 28 for the S54a cases (all fifty-five). Scored off the turn's ui_blocks span, which chat.py files at the main persist boundary from ui_blocks.check() of the STORED reply, never off the reply's wording."
+}

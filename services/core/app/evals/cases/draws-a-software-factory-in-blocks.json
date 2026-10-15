@@ -1,0 +1,15 @@
+{
+  "id": "draws-a-software-factory-in-blocks",
+  "suite": "agent_quality",
+  "suite_version": 28,
+  "message": "What's a software factory and how do I build one?",
+  "contract": [
+    {
+      "predicate": "ui_blocks_valid"
+    },
+    {
+      "predicate": "ui_block_present"
+    }
+  ],
+  "comment": "The owner's own question (2026-10-14), the one that started S54: its good answer carries structure prose buries — the layers of a factory and the steps to build one. MEASURES: she draws at least one VALID ```nova-ui block (ui_block_present, any type — steps or layers are both right) and none of her blocks is invalid (ui_blocks_valid). WHAT IT CANNOT MEASURE: whether the answer comes first, whether the block's content is right, or how it looks; the live walk and the screenshot cover that. S54a T14 (spec docs/plans/rebuild/s54/spec.md §5): a new case is a new denominator, so suite_version moved 27 -> 28 for the S54a cases (all fifty-five). Scored off the turn's ui_blocks span, which chat.py files at the main persist boundary from ui_blocks.check() of the STORED reply, never off the reply's wording."
+}

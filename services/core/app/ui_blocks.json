@@ -1,0 +1,1463 @@
+{
+  "limits": {
+    "maxDepth": 4,
+    "maxNodes": 40,
+    "strings": {
+      "short": 80,
+      "long": 400
+    }
+  },
+  "icons": [
+    "activity",
+    "alert-triangle",
+    "arrow-down",
+    "arrow-right",
+    "book-open",
+    "bot",
+    "box",
+    "calendar",
+    "check",
+    "check-circle",
+    "clock",
+    "cloud",
+    "code",
+    "cpu",
+    "database",
+    "file-text",
+    "folder",
+    "git-branch",
+    "globe",
+    "hard-drive",
+    "info",
+    "key",
+    "layers",
+    "lightbulb",
+    "lock",
+    "message-square",
+    "network",
+    "package",
+    "rocket",
+    "search",
+    "server",
+    "settings",
+    "shield",
+    "sparkles",
+    "star",
+    "target",
+    "terminal",
+    "test-tube",
+    "user",
+    "users",
+    "workflow",
+    "wrench",
+    "x",
+    "zap"
+  ],
+  "blocks": [
+    {
+      "type": "text",
+      "describe": "A short paragraph of plain text (no markdown inside); size sm|md, tone primary|secondary, weight normal|medium|semibold.",
+      "example": {
+        "type": "text",
+        "text": "Each stage hands a checked artifact to the next.",
+        "tone": "secondary"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "text"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "sm",
+              "md"
+            ]
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary"
+            ]
+          },
+          "weight": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "medium",
+              "semibold"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "title",
+      "describe": "A one-line heading inside a block; size sm|md|lg.",
+      "example": {
+        "type": "title",
+        "text": "How the pieces fit",
+        "size": "md"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "title"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "icon",
+      "describe": "One icon by lucide name (from the icon list only, never an emoji); tone accent|success|warning|danger|neutral.",
+      "example": {
+        "type": "icon",
+        "name": "lightbulb",
+        "tone": "accent"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "icon"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "accent",
+              "success",
+              "warning",
+              "danger",
+              "neutral"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "divider",
+      "describe": "A thin horizontal line separating parts of a block; no other fields.",
+      "example": {
+        "type": "divider"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "divider"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "badge",
+      "describe": "A short label pill (status, tag, version); tone accent|success|warning|danger|neutral.",
+      "example": {
+        "type": "badge",
+        "text": "Recommended",
+        "tone": "success"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "badge"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "accent",
+              "success",
+              "warning",
+              "danger",
+              "neutral"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "stack",
+      "describe": "A vertical group: children drawn top to bottom; gap sm|md|lg.",
+      "example": {
+        "type": "stack",
+        "children": [
+          {
+            "type": "title",
+            "text": "Three parts",
+            "size": "sm"
+          },
+          {
+            "type": "text",
+            "text": "Source, build, and release."
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "stack"
+          },
+          "children": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "gap": {
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "children"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "__schema0": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "text"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md"
+                      ]
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "secondary"
+                      ]
+                    },
+                    "weight": {
+                      "type": "string",
+                      "enum": [
+                        "normal",
+                        "medium",
+                        "semibold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "title"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "icon"
+                    },
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "divider"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "badge"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "row"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "gap": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "card"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "describe": "A horizontal group: children side by side, wrapping when narrow; gap sm|md|lg.",
+      "example": {
+        "type": "row",
+        "children": [
+          {
+            "type": "icon",
+            "name": "rocket",
+            "tone": "accent"
+          },
+          {
+            "type": "text",
+            "text": "Ship small changes often."
+          },
+          {
+            "type": "badge",
+            "text": "Tip",
+            "tone": "accent"
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "row"
+          },
+          "children": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "gap": {
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "children"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "__schema0": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "text"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md"
+                      ]
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "secondary"
+                      ]
+                    },
+                    "weight": {
+                      "type": "string",
+                      "enum": [
+                        "normal",
+                        "medium",
+                        "semibold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "title"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "icon"
+                    },
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "divider"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "badge"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "stack"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "gap": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "card"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "card",
+      "describe": "A bordered panel grouping its children; optional tone accent|success|warning|danger|neutral.",
+      "example": {
+        "type": "card",
+        "tone": "accent",
+        "children": [
+          {
+            "type": "title",
+            "text": "Start here",
+            "size": "sm"
+          },
+          {
+            "type": "text",
+            "text": "Automate the build before anything else."
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "card"
+          },
+          "children": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "accent",
+              "success",
+              "warning",
+              "danger",
+              "neutral"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "children"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "__schema0": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "text"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md"
+                      ]
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "secondary"
+                      ]
+                    },
+                    "weight": {
+                      "type": "string",
+                      "enum": [
+                        "normal",
+                        "medium",
+                        "semibold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "title"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "icon"
+                    },
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "divider"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "badge"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "success",
+                        "warning",
+                        "danger",
+                        "neutral"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "stack"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "gap": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "row"
+                    },
+                    "children": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "gap": {
+                      "type": "string",
+                      "enum": [
+                        "sm",
+                        "md",
+                        "lg"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "children"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "steps",
+      "describe": "A numbered flow of 1-8 steps drawn as cards with arrows between; each item {title, caption?, icon?}.",
+      "example": {
+        "type": "steps",
+        "items": [
+          {
+            "icon": "lightbulb",
+            "title": "Idea or requirement",
+            "caption": "A feature request or bug report"
+          },
+          {
+            "icon": "bot",
+            "title": "AI development agents",
+            "caption": "Plan, write, review, fix"
+          },
+          {
+            "icon": "rocket",
+            "title": "Release",
+            "caption": "Checked, merged and deployed"
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "steps"
+          },
+          "items": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "caption": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "icon": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "layers",
+      "describe": "A divided list of 1-8 layers or parts; each item {title, secondary?, body?, icon?}.",
+      "example": {
+        "type": "layers",
+        "items": [
+          {
+            "icon": "git-branch",
+            "title": "Source",
+            "secondary": "Layer 1",
+            "body": "One repo, small changes, every change reviewed."
+          },
+          {
+            "icon": "workflow",
+            "title": "Pipeline",
+            "secondary": "Layer 2",
+            "body": "Build, test and scan on every push."
+          },
+          {
+            "icon": "server",
+            "title": "Runtime",
+            "secondary": "Layer 3",
+            "body": "Deploys you can roll back in one step."
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "layers"
+          },
+          "items": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "secondary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "icon": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "timeline",
+      "describe": "A dated or phased plan of 1-8 rows; each item {label (e.g. \"Week 1\"), title, body?}.",
+      "example": {
+        "type": "timeline",
+        "items": [
+          {
+            "label": "Week 1",
+            "title": "Automate the build",
+            "body": "One command builds and tests from a clean checkout."
+          },
+          {
+            "label": "Week 2",
+            "title": "Add an agent",
+            "body": "Let it open small pull requests you review."
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "timeline"
+          },
+          "items": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                }
+              },
+              "required": [
+                "label",
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "compare",
+      "describe": "Side-by-side columns for 2-4 options; each option {title, summary?, pros? (<=6), cons? (<=6)}.",
+      "example": {
+        "type": "compare",
+        "options": [
+          {
+            "title": "Local model",
+            "summary": "Runs on your own GPU.",
+            "pros": [
+              "Private",
+              "No per-token cost"
+            ],
+            "cons": [
+              "Slower on big tasks"
+            ]
+          },
+          {
+            "title": "Cloud model",
+            "summary": "Runs on a provider.",
+            "pros": [
+              "Strongest reasoning"
+            ],
+            "cons": [
+              "Costs per token",
+              "Data leaves the machine"
+            ]
+          }
+        ]
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "compare"
+          },
+          "options": {
+            "minItems": 2,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "pros": {
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  }
+                },
+                "cons": {
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  }
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "callout",
+      "describe": "A boxed aside; kind note|warning|tip, optional title, one short text.",
+      "example": {
+        "type": "callout",
+        "kind": "tip",
+        "title": "Start small",
+        "text": "Automate one boring step end to end before adding agents."
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "callout"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "note",
+              "warning",
+              "tip"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
+        },
+        "required": [
+          "type",
+          "kind",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "choices",
+      "describe": "Radio questions he answers, then one button sends submit.message as his own chat message with each {id} replaced by the chosen option label; questions 1-6 {id, label, options [{value, label}] 2-8, default?}; submit.message never starts with \"/\".",
+      "example": {
+        "type": "choices",
+        "questions": [
+          {
+            "id": "goal",
+            "label": "What should it produce?",
+            "options": [
+              {
+                "value": "personal",
+                "label": "Tools for myself"
+              },
+              {
+                "value": "both",
+                "label": "Both"
+              }
+            ],
+            "default": "both"
+          },
+          {
+            "id": "model",
+            "label": "Where do models run?",
+            "options": [
+              {
+                "value": "local",
+                "label": "On my machines"
+              },
+              {
+                "value": "cloud",
+                "label": "Cloud APIs"
+              }
+            ]
+          }
+        ],
+        "submit": {
+          "label": "Design it",
+          "message": "Design it for me. Goal: {goal}. Models: {model}."
+        }
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "choices"
+          },
+          "questions": {
+            "minItems": 1,
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 32,
+                  "pattern": "^[a-z][a-z0-9_-]*$"
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "options": {
+                  "minItems": 2,
+                  "maxItems": 8,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "value": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      }
+                    },
+                    "required": [
+                      "value",
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "default": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "options"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "submit": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              }
+            },
+            "required": [
+              "label",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "type",
+          "questions",
+          "submit"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "id": "says-an-unreachable-server-is-unreachable",
   "suite": "agent_quality",
-  "suite_version": 27,
+  "suite_version": 28,
   "mcp_servers": [
     {
       "name": "eval_github",

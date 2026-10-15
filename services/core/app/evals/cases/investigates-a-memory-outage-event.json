@@ -1,7 +1,7 @@
 {
   "id": "investigates-a-memory-outage-event",
   "suite": "agent_quality",
-  "suite_version": 27,
+  "suite_version": 28,
   "event": {
     "sender": "monitor",
     "payload": {

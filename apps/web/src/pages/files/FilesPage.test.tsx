@@ -312,3 +312,18 @@ describe('FilesPage — the list on any width (2026-10-11)', () => {
   })
 })
 
+
+describe('FilesPage — S54a T10: blocks are chat only', () => {
+  it('T10-C6 a markdown file holding a nova-ui fence shows the JSON as code, draws nothing, no caption', async () => {
+    const block = JSON.stringify({ type: 'callout', kind: 'tip', text: 'Drawn only in chat' })
+    const api = fakeApi(listing(), {
+      'notes.md': detail({ path: 'notes.md', text: '# Plan\n\n```nova-ui\n' + block + '\n```\n' }),
+    })
+    const { container } = render(<FilesPage api={api} initialPath="notes.md" />)
+    await screen.findByRole('heading', { name: 'Plan' })
+    const pre = container.querySelector('pre')
+    expect(pre?.textContent).toContain('"type":"callout"')
+    expect(container.querySelector('[data-block]')).toBeNull()
+    expect(container.textContent).not.toMatch(/couldn.t draw this block/)
+  })
+})

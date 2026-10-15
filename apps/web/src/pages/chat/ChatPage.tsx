@@ -576,6 +576,11 @@ export function ChatPage({
   // `??`, not `||`: an empty pick the store was told about is "no pick", not
   // a cue to fall back to the value read when the app started.
   const model = state.model ?? initialModel ?? ''
+  // S54a: a reply's blocks are answered once any user row follows it.
+  const lastUserIndex = state.rows.reduce(
+    (last, row, i) => (row.kind === 'message' && row.role === 'user' ? i : last),
+    -1,
+  )
 
   return (
     <div
@@ -670,11 +675,15 @@ export function ChatPage({
             </p>
           )}
 
-          {state.rows.map(row =>
+          {state.rows.map((row, i) =>
             row.kind === 'message' ? (
               <MessageBubble
                 key={row.id}
                 row={row}
+                // S54a: a `choices` block submits through the same send path
+                // as the input, and freezes once he has said anything after it.
+                onSend={sendMessage}
+                answered={i < lastUserIndex}
                 // A count, never the latest line: previewing the newest
                 // reply would re-introduce exactly the interleaving rooms
                 // exist to remove. undefined means this message offers no

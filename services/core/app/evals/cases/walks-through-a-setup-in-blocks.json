@@ -1,0 +1,15 @@
+{
+  "id": "walks-through-a-setup-in-blocks",
+  "suite": "agent_quality",
+  "suite_version": 28,
+  "message": "Walk me through setting up a Postgres backup that runs every night and keeps a week of copies.",
+  "contract": [
+    {
+      "predicate": "ui_blocks_valid"
+    },
+    {
+      "predicate": "ui_block_present"
+    }
+  ],
+  "comment": "An ordered setup, the shape steps exists for. MEASURES: at least one valid block drawn (ui_block_present, any type) and no invalid block (ui_blocks_valid). Answering in prose only, or with a block the browser cannot draw, fails. WHAT IT CANNOT MEASURE: whether the commands in it work. S54a T14 (spec docs/plans/rebuild/s54/spec.md §5): a new case is a new denominator, so suite_version moved 27 -> 28 for the S54a cases (all fifty-five). Scored off the turn's ui_blocks span, which chat.py files at the main persist boundary from ui_blocks.check() of the STORED reply, never off the reply's wording."
+}

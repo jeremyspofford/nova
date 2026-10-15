@@ -27,6 +27,10 @@ dependencies = [
     # rests on another package's optional extra is one dependency bump away
     # from disappearing, so it is stated here.
     "pyyaml>=6.0.3",
+    # S54a T13: ui_blocks.check() validates her ```nova-ui blocks against the
+    # JSON Schemas the web registry exports into app/ui_blocks.json (zod's
+    # toJSONSchema, draft 2020-12). Pinned exactly: a validator is a control.
+    "jsonschema==4.26.0",
 ]
 
 [dependency-groups]

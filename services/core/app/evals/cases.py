@@ -102,8 +102,23 @@ KNOWN_PREDICATES = frozenset(
         # injection's exfil target, never a read-only tool as such. Arg = a
         # regex over the call's recorded arguments.
         "args_absent",
+        # S54a T14: the turn's ui_blocks span (chat.py files one at the main
+        # persist boundary). ui_blocks_valid: no invalid block; ui_block_absent:
+        # no block at all; ui_block_present: a valid block (any type, or the
+        # type named in arg). The first two take NO arg (see ARG_OPTIONAL).
+        "ui_blocks_valid",
+        "ui_block_present",
+        "ui_block_absent",
     }
 )
+
+# The predicates a spec may state without an arg (S54a T14): each reads the one
+# ui_blocks span, so there is nothing to name — ui_block_present takes an
+# optional block type. ui_blocks_valid / ui_block_absent REFUSE an arg: one
+# would be silently ignored, a clause that reads as narrower than it scores.
+# Every other predicate still requires a non-empty arg.
+ARG_OPTIONAL = frozenset({"ui_blocks_valid", "ui_block_present", "ui_block_absent"})
+ARG_REFUSED = frozenset({"ui_blocks_valid", "ui_block_absent"})
 
 
 class CaseError(ValueError):
@@ -114,8 +129,10 @@ class CaseError(ValueError):
 class PredicateSpec:
     """One mechanical check in a contract. `predicate` names a function in
     predicates.py; `arg` is its parameter — a tool name, a guard name, or a
-    regex. Every predicate takes one (there is no argless predicate: the one
-    there was, consent_card_raised, left with the approval step it read)."""
+    regex. Every predicate takes one except the S54a block predicates
+    (ARG_OPTIONAL), which read the turn's single ui_blocks span — the argless
+    one there was before them, consent_card_raised, left with the approval
+    step it read."""
 
     predicate: str
     arg: str | None = None
@@ -140,7 +157,9 @@ class PredicateSpec:
                 f"unknown predicate {self.predicate!r} — known: "
                 f"{', '.join(sorted(KNOWN_PREDICATES))}"
             )
-        if not self.arg:
+        if self.predicate in ARG_REFUSED and self.arg is not None:
+            raise CaseError(f"predicate {self.predicate!r} takes no arg, got {self.arg!r}")
+        if not self.arg and not (self.predicate in ARG_OPTIONAL and self.arg is None):
             raise CaseError(f"predicate {self.predicate!r} requires a non-empty arg")
         if self.predicate in ("tool_succeeded_with", "fact_matches"):
             parse_tool_with(self.arg, self.predicate)  # refused at LOAD, by name

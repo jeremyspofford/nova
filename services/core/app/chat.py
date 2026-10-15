@@ -126,6 +126,7 @@ from app import (
     skills,
     tools,
     traces,
+    ui_blocks,
     vision,
     wake,
 )
@@ -1321,6 +1322,9 @@ def stable_system_prompt(
             )
             + "."
         )
+    # S54a: the component-block catalog, read from the web-generated
+    # ui_blocks.json, sits just before ANSWER_LAYOUT so the layout stays last.
+    prompt += ui_blocks.catalog_prompt()
     prompt += ANSWER_LAYOUT
     if agent_block:
         prompt = f"{prompt}\n\n{agent_block}"
@@ -3700,7 +3704,7 @@ async def _persist_assistant(
     conversation_id: uuid.UUID,
     text: str,
     turn_id: uuid.UUID | None = None,
-) -> None:
+) -> str:
     """The assistant row, linked to the turn that produced it (S10-pre): the
     link is what lets a transcript be badged from the trace rather than
     from anything the reply says about itself.
@@ -3714,7 +3718,10 @@ async def _persist_assistant(
     mask-bearer T2: a credential she repeats is saved masked (the one mask,
     `credential_mask.mask`) — what was streamed to him is not rewritten. T3:
     with the turn's own set (traces.secrets_of), so a key this turn masked
-    anywhere is masked where her reply repeats it bare."""
+    anywhere is masked where her reply repeats it bare.
+
+    Returns the text as stored, so a fact recorded about the reply (S54a's
+    ui_blocks span) describes the row he reads, not an earlier draft."""
     text = traces.secrets_of(turn_id).mask(guards.without_leading_stamp(without_markup(text)))
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, turn_id) "
@@ -3723,6 +3730,22 @@ async def _persist_assistant(
         text,
         turn_id,
     )
+    return text
+
+
+def _record_ui_blocks(turn: traces.Turn, stored: str) -> None:
+    """S54a T13: file the facts about her ```nova-ui blocks in the stored reply
+    as one `ui_blocks` span — {ui_blocks, invalid, first_error, types}, filed
+    on every persisted turn, 0 blocks included, so a validity rate has its
+    denominator. Facts only: it runs AFTER the row is written, never changes
+    the reply, and a check that raises is filed as the span's error (the eval
+    predicates then read the turn as not measured) instead of failing the turn."""
+    with turn.span("ui_blocks") as span:
+        try:
+            span.meta.update(ui_blocks.check(stored))
+        except Exception as exc:
+            logger.exception("ui_blocks check raised on turn %s", turn.id)
+            span.meta["error"] = f"{type(exc).__name__}: {exc}"[:300]
 
 
 def _undo_mark(ctx: tools.ToolContext) -> int:
@@ -8704,8 +8727,9 @@ async def _run_turn(
         # _collect_completion rather than a scanned round. A no-op on clean text.
         persisted = without_markup(persisted)
 
-        await _persist_assistant(pool, conversation_id, persisted, turn.id)
+        stored = await _persist_assistant(pool, conversation_id, persisted, turn.id)
         persisted_reply = True
+        _record_ui_blocks(turn, stored)
         # Memory hygiene: a guarded consent/capability turn is interaction
         # PLUMBING, not knowledge. A turn the consent guard had to correct, or
         # that the capability guard had to correct, is "awaiting approval" / "I

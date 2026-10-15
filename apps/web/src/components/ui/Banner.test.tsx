@@ -43,6 +43,10 @@ describe('no pasted banners', () => {
       .map(([path]) => path)
     // PullControl is a download panel that turns red on failure, not a
     // message banner: its neutral state is a bordered panel of its own.
-    expect(pasted).toEqual(['/src/pages/models/PullControl.tsx'])
+    // The ui-blocks card (S54a) is the same kind of thing: a container panel
+    // holding her other blocks, toned by any of five theme tones (accent,
+    // success and neutral among them), not a message — her message-shaped
+    // block, callout, draws through Banner.
+    expect(pasted).toEqual(['/src/components/ui-blocks/card.tsx', '/src/pages/models/PullControl.tsx'])
   })
 })

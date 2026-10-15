@@ -433,3 +433,83 @@ describe('Markdown — copy button on code blocks', () => {
     expect(button?.getAttribute('aria-label')).toBe('Copy failed')
   })
 })
+
+// ---------------------------------------------------------------------------
+// S54a T9: ```nova-ui fences draw as components, in chat only.
+// ---------------------------------------------------------------------------
+import { readFileSync } from 'node:fs'
+import { UiBlocksContext, type UiBlocksCtx } from './ui-blocks/context'
+
+const NOVA_STEPS = JSON.stringify({
+  type: 'steps',
+  items: [
+    { title: 'Idea or requirement', caption: 'A feature request' },
+    { title: 'Release', caption: 'Merged and deployed' },
+  ],
+})
+const NOVA_BAD = '{"type": "steps", "items": []}'
+const fence = (body: string) => `Here is the flow.\n\n\`\`\`nova-ui\n${body}\n\`\`\`\n\nThat is all.`
+const CAPTION_RE = /couldn.t draw this block: /
+
+function mdInChat(text: string, ctx: Partial<UiBlocksCtx> = {}) {
+  const value: UiBlocksCtx = { onSend: vi.fn(), answered: false, streaming: false, ...ctx }
+  return render(
+    <UiBlocksContext.Provider value={value}>
+      <Markdown text={text} />
+    </UiBlocksContext.Provider>,
+  ).container
+}
+
+describe('Markdown — S54a T9: nova-ui fences', () => {
+  it('T9-C4 under the chat context a valid nova-ui fence draws the component, prose around it intact', () => {
+    const c = mdInChat(fence(NOVA_STEPS))
+    expect(c.textContent).toContain('Idea or requirement')
+    expect(c.querySelector('pre')).toBeNull()
+    expect(c.textContent).not.toContain('"type"')
+    expect(c.textContent).toContain('Here is the flow.')
+    expect(c.textContent).toContain('That is all.')
+  })
+
+  it('T9-C4b under the chat context a malformed fence is code plus the reason, never blank', () => {
+    const c = mdInChat(fence(NOVA_BAD))
+    expect(c.querySelector('pre')?.textContent).toContain(NOVA_BAD)
+    expect(c.textContent).toMatch(CAPTION_RE)
+  })
+
+  it('T9-C4c other fences are untouched under the chat context (python still highlights)', () => {
+    const c = mdInChat('```python\nx = 1\n```')
+    expect(c.querySelector('pre > code')?.className).toMatch(/language-python/)
+    expect(c.textContent).not.toMatch(CAPTION_RE)
+  })
+
+  it('T9-C5 with no chat context (the Files path) a valid nova-ui fence stays plain code, no caption', () => {
+    const c = md(fence(NOVA_STEPS))
+    expect(c.querySelector('pre')?.textContent).toContain('"type"')
+    expect(c.querySelector('[data-block]')).toBeNull()
+    expect(c.textContent).not.toMatch(CAPTION_RE)
+    // the contrast that makes this a chat-only rule: the same text draws in chat
+    cleanupAndCheckChatDraws()
+  })
+
+  it('T9-C6 streaming: an unclosed nova-ui fence renders as code without a caption', () => {
+    const c = mdInChat('Here is the flow.\n\n```nova-ui\n{"type": "steps", "items": [{"title": "Ide', {
+      streaming: true,
+    })
+    expect(c.querySelector('pre')?.textContent).toContain('"type": "steps"')
+    expect(c.textContent).not.toMatch(CAPTION_RE)
+  })
+
+  it('T9-C7 the header comment names the nova-ui route, chat-only context and the visible fallback', () => {
+    const src = readFileSync('src/components/Markdown.tsx', 'utf8')
+    const header = src.slice(src.indexOf('/**'), src.indexOf('*/') + 2)
+    expect(header).toMatch(/nova-ui/)
+    expect(header).toMatch(/UiBlocksContext/)
+    expect(header).toMatch(/chat only/i)
+    expect(header).toMatch(/couldn.t draw this block/)
+  })
+})
+
+function cleanupAndCheckChatDraws() {
+  const c = mdInChat(fence(NOVA_STEPS))
+  expect(c.querySelector('pre')).toBeNull()
+}
