@@ -162,10 +162,11 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
     return () => window.removeEventListener('keydown', onKey)
   }, [touch])
 
-  const row = (session: ChatSession) => (
+  const row = (session: ChatSession, label?: string) => (
     <SessionRow
       key={session.id}
       session={session}
+      label={label}
       open={openIds.has(session.id)}
       shown={onChat && openIds.has(session.id)}
       focused={focusedId === session.id}
@@ -215,16 +216,17 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
       )}
 
       {main.length > 0 && (
+        // The main session IS "Main" (owner, 2026-10-15): one row that opens
+        // it, not a heading with the session to pick underneath.
         <div data-testid="sessions-main">
-          <div className={heading}>Main</div>
-          <ul className="space-y-0.5">{main.map(row)}</ul>
+          <ul className="space-y-0.5">{main.map(s => row(s, 'Main'))}</ul>
         </div>
       )}
 
       {recents.length > 0 && (
         <div data-testid="sessions-recents" className={main.length > 0 ? 'mt-6' : undefined}>
           <div className={heading}>Recents</div>
-          <ul className="space-y-0.5">{recents.map(row)}</ul>
+          <ul className="space-y-0.5">{recents.map(s => row(s))}</ul>
         </div>
       )}
 
@@ -305,6 +307,7 @@ function SessionsListBody({ onNavigate, touch = false }: { onNavigate?: () => vo
 
 function SessionRow({
   session,
+  label = session.label,
   open,
   shown,
   focused,
@@ -316,6 +319,8 @@ function SessionRow({
   fail,
 }: {
   session: ChatSession
+  /** What the row reads; the session's own label unless given ("Main"). */
+  label?: string
   open: boolean
   /** In a pane that is on screen right now (open, and the chat is showing). */
   shown: boolean
@@ -429,7 +434,7 @@ function SessionRow({
         type="button"
         onClick={onOpen}
         aria-current={focused ? 'page' : undefined}
-        title={touch ? session.label : `${session.label}\nDrag onto the chat to open it side by side`}
+        title={touch ? label : `${label}\nDrag onto the chat to open it side by side`}
         className={clsx(
           // Plain text, no leading icon: the page links above carry icons,
           // conversations do not — the same split Claude's sidebar makes, so
@@ -444,7 +449,7 @@ function SessionRow({
               : 'text-content-secondary hover:bg-surface-card hover:text-content-primary',
         )}
       >
-        <span className="min-w-0 flex-1 truncate">{session.label}</span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
         {session.busy && (
           <span
             title="Nova is working in this session"
@@ -456,7 +461,7 @@ function SessionRow({
         <button
           type="button"
           data-testid={`session-menu-${session.id}`}
-          aria-label={`Actions for ${session.label}`}
+          aria-label={`Actions for ${label}`}
           aria-expanded={menu}
           onClick={() => setMenu(v => !v)}
           className={clsx(

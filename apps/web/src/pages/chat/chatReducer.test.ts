@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { SetupCard } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
 import {
@@ -2036,5 +2036,50 @@ describe('chatReducer — a send that core queued (chat sessions)', () => {
     })
     expect(state.rows).toHaveLength(settled)
     expect(state.queued).toHaveLength(1)
+  })
+})
+
+describe('chatReducer — when a message was sent (owner, 2026-10-15)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('takes a stored row’s time from core’s created_at', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [
+        { id: 'm1', role: 'user', content: 'hi', created_at: '2026-10-15T09:00:00+00:00' },
+        { id: 'm2', role: 'assistant', content: 'hello', created_at: '2026-10-15T09:00:07+00:00' },
+      ],
+    })
+    expect(messages(state).map(m => m.sentAt)).toEqual([
+      '2026-10-15T09:00:00+00:00',
+      '2026-10-15T09:00:07+00:00',
+    ])
+  })
+
+  it('stamps his message when he sends it, and her reply only when it finishes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+    let state = started()
+    expect(messages(state)[0].sentAt).toBe('2026-10-15T10:00:00.000Z')
+    vi.setSystemTime(new Date('2026-10-15T10:00:05Z'))
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'hel' } as StreamEvent })
+    // Still updating: no time yet.
+    expect(messages(state)[1].sentAt).toBeNull()
+    vi.setSystemTime(new Date('2026-10-15T10:00:09Z'))
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(messages(state)[1].sentAt).toBe('2026-10-15T10:00:09.000Z')
+  })
+
+  it('stamps a stopped reply when it stops, and never an interrupted one', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-15T11:00:00Z'))
+    let state = chatReducer(started(), { type: 'event', event: { type: 'delta', text: 'x' } as StreamEvent })
+    state = chatReducer(state, { type: 'event', event: { type: 'stopped', note: 'stopped' } as StreamEvent })
+    expect(messages(state)[1].sentAt).toBe('2026-10-15T11:00:00.000Z')
+
+    let cut = chatReducer(started(), { type: 'event', event: { type: 'delta', text: 'x' } as StreamEvent })
+    cut = chatReducer(cut, { type: 'event', event: { type: 'interrupted' } as StreamEvent })
+    expect(messages(cut)[1].sentAt).toBeNull()
   })
 })

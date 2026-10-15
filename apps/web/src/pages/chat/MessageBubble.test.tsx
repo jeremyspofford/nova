@@ -28,6 +28,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     delegations: [],
     attachments: [],
     cards: [],
+    sentAt: null,
     ...overrides,
   }
 }
@@ -231,6 +232,7 @@ function userRow(text: string): MessageRow {
     delegations: [],
     attachments: [],
     cards: [],
+    sentAt: null,
   }
 }
 
@@ -427,20 +429,20 @@ describe('MessageBubble — where a row came from, when it was not a chat turn (
 })
 
 describe('MessageBubble — a row an agent wrote (S12)', () => {
-  it('labels the row with the agent\'s name, linking to its page, and takes its initial for the avatar', () => {
+  it('labels the row with the agent\'s name, linking to its page', () => {
     render(<MessageBubble row={assistantRow({ text: 'fixed', streaming: false, agent: 'coder' })} />)
     const label = screen.getByTestId('agent-label')
     expect(label.textContent).toBe('coder')
     const link = label.querySelector('a')
     expect(link?.getAttribute('href')).toBe('/agents/coder')
     expect(link?.getAttribute('title')).toBe('this reply was written by the agent coder — see /agents/coder')
-    expect(screen.getByTestId('assistant-avatar').textContent).toBe('C')
   })
 
-  it('shows no label and the N avatar for Nova\'s own reply', () => {
+  it('shows no label and no avatar for Nova\'s own reply', () => {
+    // Owner, 2026-10-15: no "N" beside every reply.
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
     expect(screen.queryByTestId('agent-label')).toBeNull()
-    expect(screen.getByTestId('assistant-avatar').textContent).toBe('N')
+    expect(screen.queryByTestId('assistant-avatar')).toBeNull()
   })
 
   it('is a router Link inside a Router, an anchor outside one — same href either way', () => {
@@ -981,5 +983,28 @@ describe('MessageBubble — T21: the turn cost reads like Spend', () => {
     const el = screen.getByTestId('turn-cost')
     expect(el.textContent).not.toContain('0.0013')
     expect(el.getAttribute('title')).toContain(usd(0.0013, 4))
+  })
+})
+
+describe('MessageBubble — when it was sent (owner, 2026-10-15)', () => {
+  const at = '2026-10-15T14:05:00Z'
+  const shown = new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+  it('shows the time her finished reply was sent, the full stamp on hover', () => {
+    render(<MessageBubble row={assistantRow({ text: 'done', streaming: false, sentAt: at })} />)
+    const stamp = screen.getByTestId('message-time')
+    expect(stamp.textContent).toContain(shown)
+    expect(stamp.getAttribute('dateTime')).toBe(at)
+    expect(stamp.getAttribute('title')).toBeTruthy()
+  })
+
+  it('shows no time while the reply is still streaming', () => {
+    render(<MessageBubble row={assistantRow({ text: 'partial', streaming: true, sentAt: null })} />)
+    expect(screen.queryByTestId('message-time')).toBeNull()
+  })
+
+  it('shows the time on his own message', () => {
+    render(<MessageBubble row={{ ...userRow('hi'), sentAt: at }} />)
+    expect(screen.getByTestId('message-time').textContent).toContain(shown)
   })
 })

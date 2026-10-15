@@ -223,7 +223,7 @@ describe('AppLayout — which nav renders', () => {
     // Main session are the way back, as in Claude's sidebar. So the pin is
     // that tapping the Main session from another page lands on the chat.
     expect(within(drawer).getByTestId('new-session')).toBeDefined()
-    fireEvent.click(await within(drawer).findByText('the main one'))
+    fireEvent.click(await within(drawer).findByText('Main'))
     await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/chat'))
   })
 

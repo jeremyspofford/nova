@@ -105,28 +105,13 @@ describe('Sidebar — the Inbox badge (S11)', () => {
   })
 })
 
-describe('the brand mark', () => {
-  /** Asked for 2026-09-14: the N beside her name is a choice, not a
-   *  hardcoded letter, and it is chosen separately from the favicon. */
-  it('is drawn from the palette rather than hardcoded', async () => {
+describe('the sidebar header', () => {
+  /** Owner, 2026-10-15: no icon beside "Nova" in the sidebar. The mark is
+   *  still chosen in Appearance and drawn on the sign-in and public pages. */
+  it('names Nova with no brand mark beside it', async () => {
     renderSidebar(async () => ({ notices: [], unseen_count: 0, muted_count: 0 }))
 
-    const mark = await screen.findByTestId('brand-mark')
-    expect(decodeURIComponent(mark.getAttribute('src') ?? '')).toContain('<svg')
-  })
-
-  it('gives the tile treatment to a filled mark only', async () => {
-    // A rounded tile and its glow belong to a solid shape. Drawn behind art
-    // that fades to transparency they read as a square halo around a round
-    // orb, so the choice declares which it is.
-    localStorage.setItem(
-      'nova-appearance',
-      JSON.stringify({ preset: 'nova', presetChosen: true, brandIcon: 'orb' }),
-    )
-    renderSidebar(async () => ({ notices: [], unseen_count: 0, muted_count: 0 }))
-
-    const mark = await screen.findByTestId('brand-mark')
-    expect(mark.className).not.toContain('rounded-lg')
-    localStorage.clear()
+    expect(await screen.findByText('Nova')).toBeDefined()
+    expect(screen.queryByTestId('brand-mark')).toBeNull()
   })
 })

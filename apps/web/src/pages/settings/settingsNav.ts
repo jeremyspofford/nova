@@ -3,6 +3,7 @@ import {
   Bot,
   Boxes,
   Gauge,
+  Info,
   MonitorSmartphone,
   Palette,
   Plug,
@@ -38,7 +39,8 @@ import { SETTINGS_TABS, resolveTab } from './tabs'
  *   Nova    — who else runs, what she knows how to do, how she behaves,
  *             what she can reach
  *   Models  — which model answers, every model she can run, how well each does
- *   System  — the machines in it, and the record of what happened to them
+ *   System  — the machines in it, the record of what happened to them, and
+ *             what this instance is (About)
  */
 
 export type SettingsNavItem = {
@@ -100,6 +102,10 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
       // Governance is the devices' audit trail — every pairing, revoke and
       // chain break — so it sits under Devices rather than on its own.
       { to: '/governance', label: 'Governance', icon: ScrollText, minRole: 'admin' },
+      // What this instance is: its build, whether there is anything newer,
+      // and the machines and apps it is made of (pages/about). Moved here
+      // from the account menu (owner, 2026-10-15).
+      { to: '/about', label: 'About Nova', icon: Info, minRole: 'guest' },
     ],
   },
 ]
