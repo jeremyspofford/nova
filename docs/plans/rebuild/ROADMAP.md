@@ -438,6 +438,7 @@ kept for the record).
 | — | the decision role (Jev, Kev) | `decision-role/spec.md`, `decision-role/plan.md` (close-out at its end) — **shipped 2026-09-29** |
 | — | a model per chat session | [`session-models.md`](session-models.md) — **designed 2026-10-08**, not built |
 | S53 | Rovers — standing agents that own a responsibility | [`s53/spec.md`](s53/spec.md) — **designed 2026-10-14**, not built; right after S34b |
+| S54 | her replies can carry interface (component blocks inside markdown: registry, composition, choices; a layout role only if the evals call for it) | [`s54/spec.md`](s54/spec.md) — **designed 2026-10-14**, not built; after S32.5, before the boot agent (Fable's recommendation, owner did not place it) |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +
 provenance. The owner's hand-pulled `muse-glimmer:latest` showed no metadata —

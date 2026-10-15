@@ -81,6 +81,27 @@ describe('Markdown — GitHub-flavoured structure renders as elements', () => {
     expect(c.querySelector('ul')?.className).toMatch(/list-disc/)
   })
 
+  it('steps heading sizes down to the body size, so a section heading reads as one', () => {
+    // A `###` rendered at text-h4 (14px, the body size) made every section
+    // heading look like a bold sentence — the "textbook wall" of 2026-10-14.
+    const c = md('## Section\n\n### Sub\n\n#### Minor\n\ntext')
+    expect(c.querySelector('h2')?.className).toMatch(/\btext-h2\b/)
+    expect(c.querySelector('h3')?.className).toMatch(/\btext-h3\b/)
+    expect(c.querySelector('h4')?.className).toMatch(/\btext-h4\b/)
+  })
+
+  it('sets a section apart from the text above it, more for a bigger heading', () => {
+    const c = md('para\n\n## Section\n\npara\n\n### Sub\n\npara')
+    expect(c.querySelector('h2')?.className).toMatch(/\bmt-6\b/)
+    expect(c.querySelector('h3')?.className).toMatch(/\bmt-5\b/)
+  })
+
+  it('spaces list items apart, not 2px', () => {
+    const c = md('- one\n- two\n\n1. first\n2. second')
+    expect(c.querySelector('ul')?.className).toMatch(/\bspace-y-1\.5\b/)
+    expect(c.querySelector('ol')?.className).toMatch(/\bspace-y-1\.5\b/)
+  })
+
   it('keeps a single newline as a line break, so a one-per-line listing stays one per line', () => {
     // The /help listing (lib/commands.ts) is "Available commands:\n\n/a — …\n/b — …".
     const c = md('Available commands:\n\n/clear — empty this chat\n/help — this listing')
