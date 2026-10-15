@@ -1,7 +1,7 @@
 {
   "id": "does-not-deny-web-search",
   "suite": "agent_quality",
-  "suite_version": 27,
+  "suite_version": 28,
   "message": "can you search the web?",
   "contract": [
     {"predicate": "guard_absent", "arg": "capability_claim"}

@@ -264,6 +264,61 @@ def args_absent(spans: Sequence[Any], reply: str, pattern: str | None) -> tuple[
     )
 
 
+def _ui_span(spans: Sequence[Any]) -> Any | None:
+    """The turn's `ui_blocks` span (S54a T13): chat.py files exactly one at the
+    main persist boundary, 0 blocks included. None when the turn filed none,
+    or filed one whose check raised (meta.error, no counts) — either way the
+    turn's blocks were not measured, and every block predicate FAILS on that
+    rather than reading silence as a pass."""
+    for s in spans:
+        if s.kind == "ui_blocks" and isinstance(s.meta.get("invalid"), int):
+            return s
+    return None
+
+
+_UI_NOT_RECORDED = "no ui_blocks span: the turn's blocks were not recorded"
+
+
+def ui_blocks_valid(spans: Sequence[Any], reply: str, arg: str | None) -> tuple[bool, str]:
+    """Every ```nova-ui block she drew this turn validated (0 blocks passes:
+    nothing drawn is nothing broken). Read from the span, never the reply."""
+    span = _ui_span(spans)
+    if span is None:
+        return False, _UI_NOT_RECORDED
+    n, invalid = span.meta.get("ui_blocks", 0), span.meta["invalid"]
+    if invalid:
+        return False, f"{invalid} of {n} block(s) invalid; first: {span.meta.get('first_error')}"
+    return True, f"{n} block(s), all valid"
+
+
+def ui_block_present(spans: Sequence[Any], reply: str, block_type: str | None) -> tuple[bool, str]:
+    """She drew at least one VALID block (any type with no arg, else one of
+    `block_type`). An invalid block is code on his screen, not a drawing."""
+    span = _ui_span(spans)
+    if span is None:
+        return False, _UI_NOT_RECORDED
+    types = list(span.meta.get("types") or [])
+    if block_type is None:
+        if types:
+            return True, f"valid block(s) drawn: {', '.join(types)}"
+        return False, f"no valid block drawn ({span.meta.get('ui_blocks', 0)} fence(s))"
+    if block_type in types:
+        return True, f"a valid {block_type} block drawn"
+    return False, f"no valid {block_type} block (drawn: {', '.join(types) or 'none'})"
+
+
+def ui_block_absent(spans: Sequence[Any], reply: str, arg: str | None) -> tuple[bool, str]:
+    """She drew no block at all — an invalid attempt counts as one, since it
+    still lands in his bubble as a code fence."""
+    span = _ui_span(spans)
+    if span is None:
+        return False, _UI_NOT_RECORDED
+    n = span.meta.get("ui_blocks", 0)
+    if n:
+        return False, f"{n} block(s) drawn"
+    return True, "no block drawn"
+
+
 # The registry. Its keys MUST equal cases.KNOWN_PREDICATES — a test pins that, so
 # a predicate added to one and forgotten in the other is a loud failure, not a
 # case that loads and then never scores.
@@ -280,6 +335,9 @@ PREDICATES: dict[str, Predicate] = {
     "context_summarized": context_summarized,
     "fact_recorded": fact_recorded,
     "args_absent": args_absent,
+    "ui_blocks_valid": ui_blocks_valid,
+    "ui_block_present": ui_block_present,
+    "ui_block_absent": ui_block_absent,
 }
 
 assert set(PREDICATES) == set(KNOWN_PREDICATES), (

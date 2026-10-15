@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import clsx from 'clsx'
 import {
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { Badge, ProgressBar, Banner } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
+import { UiBlocksContext, type UiBlocksCtx } from '../../components/ui-blocks/context'
 import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation, RewindMode, StoredRewind } from '../../lib/api'
 import { isSetupKind } from '../../lib/setupSteps'
@@ -537,6 +538,8 @@ export const MessageBubble = memo(function MessageBubble({
   onOpenThread,
   onRewind,
   rewindDisabled = false,
+  onSend,
+  answered = false,
 }: {
   row: MessageRow
   /** How many messages the room off this message holds. undefined means it
@@ -548,7 +551,23 @@ export const MessageBubble = memo(function MessageBubble({
   onRewind?: (messageId: string, mode: RewindMode) => void
   /** Chat rewind (T7): true while a turn runs (core would answer 409). */
   rewindDisabled?: boolean
+  /** S54a T10: the chat send path a `choices` block submits through. undefined
+   *  means this bubble's blocks draw but cannot send. */
+  onSend?: (text: string) => void
+  /** S54a T10: a later user message exists, so this reply's blocks are frozen. */
+  answered?: boolean
 }) {
+  // S54a: her blocks draw only under this context (chat only). A bubble with
+  // no send path freezes them, as an answered one does: a button that cannot
+  // send is a decoy.
+  const blocks = useMemo<UiBlocksCtx>(
+    () => ({
+      onSend: onSend ?? (() => {}),
+      answered: answered || !onSend,
+      streaming: row.streaming,
+    }),
+    [onSend, answered, row.streaming],
+  )
   const stub =
     replies !== undefined && onOpenThread ? (
       <ThreadStub replies={replies} onOpen={() => onOpenThread(row.id)} />
@@ -617,7 +636,9 @@ export const MessageBubble = memo(function MessageBubble({
             column. */}
         <div className="text-body leading-relaxed text-content-primary break-words">
           {row.text ? (
-            <Markdown text={row.text} />
+            <UiBlocksContext.Provider value={blocks}>
+              <Markdown text={row.text} />
+            </UiBlocksContext.Provider>
           ) : row.streaming && !row.activity ? (
             <LoadingDots />
           ) : null}

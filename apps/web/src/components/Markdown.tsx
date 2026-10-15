@@ -35,6 +35,8 @@ import diff from 'highlight.js/lib/languages/diff'
 import dockerfile from 'highlight.js/lib/languages/dockerfile'
 import ini from 'highlight.js/lib/languages/ini'
 import './highlight.css'
+import { UiBlocksContext } from './ui-blocks/context'
+import { UiBlock } from './ui-blocks/UiBlock'
 
 /**
  * Assistant reply text rendered as GitHub-flavoured markdown.
@@ -67,6 +69,17 @@ import './highlight.css'
  *   links (`#…`, which is what remark-gfm footnotes emit) stay in the page.
  * - Tables sit inside their own `overflow-x-auto` box and code blocks scroll
  *   horizontally, so a wide reply never scrolls the page.
+ * - A ```nova-ui fence (S54a) draws as a component block in chat only: the
+ *   `pre` override routes it to `UiBlock` only when `UiBlocksContext` is
+ *   present, and only the chat bubble (MessageBubble) provides it, so the
+ *   Files viewer and every other caller keep showing the fence as code. The
+ *   fence's JSON is parsed with JSON.parse and checked against the
+ *   registry's zod schemas — never evaluated, and no model-written code runs;
+ *   a block draws only through the registry's own components, with theme
+ *   tones, never a colour value she wrote. A block that fails to parse or
+ *   validate stays visible: the code plus "couldn't draw this block: <first
+ *   error>", never blank (held back only while the reply still streams,
+ *   when an unfinished fence is simply code still arriving).
  *
  * Syntax highlighting (`rehypeHighlightSubset` below): a fenced block tagged
  * with a registered language gets highlight.js token spans (`hljs-keyword`,
@@ -339,6 +352,30 @@ function CodeBlock({
   )
 }
 
+/**
+ * A fence's `<pre>`: a ```nova-ui fence becomes a component block, but only
+ * under `UiBlocksContext` (which only the chat bubble provides); every other
+ * fence, and a nova-ui fence anywhere else, is the plain code block.
+ */
+function Pre(props: PreProps) {
+  const ctx = useContext(UiBlocksContext)
+  const source = ctx ? novaUiSource(props.node) : undefined
+  if (source === undefined) return <CodeBlock {...props} />
+  return <UiBlock source={source} fallback={<CodeBlock {...props} />} />
+}
+
+/** The raw text of a `<pre><code class="language-nova-ui">`, else undefined. */
+function novaUiSource(node: unknown): string | undefined {
+  const pre = node as Element | undefined
+  const code = pre?.children?.find(
+    (c): c is Element => c.type === 'element' && c.tagName === 'code',
+  )
+  if (!code || fenceLanguage(code) !== 'nova-ui') return undefined
+  // nova-ui is not a registered grammar, so the code element's children are
+  // the fence's text nodes, untouched by the highlighter.
+  return code.children.map(c => (c.type === 'text' ? c.value : '')).join('')
+}
+
 const COMPONENTS: Components = {
   p: ({ node: _node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
   h1: ({ node: _node, ...props }) => <h1 className={`${SECTION} text-h2`} {...props} />,
@@ -385,7 +422,7 @@ const COMPONENTS: Components = {
       {...props}
     />
   ),
-  pre: CodeBlock,
+  pre: Pre,
   table: ({ node: _node, ...props }) => (
     <div className="my-2 max-w-full overflow-x-auto">
       <table className="border-collapse text-compact" {...props} />

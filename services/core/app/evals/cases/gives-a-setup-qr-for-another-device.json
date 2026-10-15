@@ -1,7 +1,7 @@
 {
   "id": "gives-a-setup-qr-for-another-device",
   "suite": "agent_quality",
-  "suite_version": 27,
+  "suite_version": 28,
   "message": "How do I put you on my tablet?",
   "contract": [
     {

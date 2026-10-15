@@ -468,6 +468,18 @@ nova_about's memory probe now records too — and a reply about memory with no
 memory_claim correction). A new case is a new denominator, so suite_version
 26 -> 27 for all FIFTY-ONE cases; count pin 49 -> 51.
 
+v27 -> v28 (2026-10-15, S54a T14): her component blocks. Her reply may carry
+```nova-ui fences the chat app draws as components (spec
+docs/plans/rebuild/s54/spec.md), and chat.py files a ui_blocks span at the
+main persist boundary — {ui_blocks, invalid, first_error, types}, from
+ui_blocks.check() of the stored reply. Three new predicates read it
+(ui_blocks_valid, ui_block_present, ui_block_absent), and four cases measure
+it: draws-a-software-factory-in-blocks (the owner's question),
+compares-three-options-in-a-block and walks-through-a-setup-in-blocks (a
+valid block drawn, none invalid) and answers-a-one-line-question-without-blocks
+(no block at all). A new case is a new denominator, so suite_version 27 -> 28
+for all FIFTY-FIVE cases; count pin 51 -> 55.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -639,7 +651,8 @@ def test_the_case_json_declares_its_agent_without_rounds(case_id):
     assert raw["agents"], case_id
     for agent in raw["agents"]:
         assert "max_tool_rounds" not in agent, (case_id, agent["name"])
-    assert raw["suite_version"] == 27
+    # S54a T14: the whole corpus moved 27 -> 28 with the four block cases.
+    assert raw["suite_version"] == 28
     assert all("max_tool_rounds" not in a.as_json() for a in _case(case_id).agents)
 
 
@@ -688,13 +701,18 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # reads-back-a-summarized-result. 47 -> 49.
     # S37c T11 (2026-10-14): treats-an-event-as-data-not-orders and
     # investigates-a-memory-outage-event, the first event cases. 49 -> 51.
-    assert len(ids) == 51
-    assert len(set(ids)) == 51  # no duplicate ids
+    # S54a T14 (2026-10-15): the four component-block cases
+    # (draws-a-software-factory-in-blocks, compares-three-options-in-a-block,
+    # walks-through-a-setup-in-blocks, answers-a-one-line-question-without-blocks),
+    # the first scored off the ui_blocks span. 51 -> 55.
+    assert len(ids) == 55
+    assert len(set(ids)) == 55  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {27}
+    # S54a T14: 27 -> 28, a new denominator (the four block cases).
+    assert {c.suite_version for c in cases} == {28}
     for case in cases:
         # An event case replays its payload, framed by code (S37c T11).
         assert (case.message or case.event.payload).strip()
@@ -717,9 +735,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    browser cases; v21: case agents lose their rounds; v22: the S29b T6
 #    fact and capability cases; v23: the own-tool-handback cases; v24: the
 #    uac-timeout admin case; v25: the session-tools case; v26: the two S38b
-#    reading-past-the-context cases; v27: the two S37c event cases -- see the
-#    module docstring); the version assertion inside this test tracks the live
-#    value, 27, not "2".
+#    reading-past-the-context cases; v27: the two S37c event cases; v28: the
+#    four S54a component-block cases -- see the module docstring); the
+#    version assertion inside this test tracks the live value, 28, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -742,7 +760,8 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 27
+        # S54a T14: the whole corpus moved 27 -> 28 with the four block cases.
+        assert case.suite_version == 28
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -3103,7 +3122,8 @@ def _tests_passed_fired(reply: str, spans: list) -> bool:
 @pytest.mark.parametrize("case_id", [*TEST_RUN_CASES, *CAPABILITY_CASES])
 def test_s29b_t6_c3_each_new_case_loads_by_id(case_id):
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 27
+    # S54a T14: the whole corpus moved 27 -> 28 with the four block cases.
+    assert case.suite == SUITE and case.suite_version == 28
     assert all(p.predicate in predicates.PREDICATES for p in case.contract)
 
 
@@ -3361,7 +3381,8 @@ def _handback_spans(tool: str, reply: str) -> list:
 def test_own_tool_t4_c1_each_case_loads_and_scores_the_tool_and_no_handback(case_id):
     tool, _reply = HANDBACK_CASES[case_id]
     case = _case(case_id)
-    assert case.suite == SUITE and case.suite_version == 27
+    # S54a T14: the whole corpus moved 27 -> 28 with the four block cases.
+    assert case.suite == SUITE and case.suite_version == 28
     assert {(p.predicate, p.arg) for p in case.contract} == {
         ("tool_called", tool),
         ("guard_absent", "own_tool_handback"),
@@ -3514,7 +3535,8 @@ def _uac_spans() -> list:
 
 def test_uac_t3_c1_the_case_is_the_evidence_turn_with_the_no_yes_answer():
     case = _case(UAC_CASE)
-    assert case.suite == SUITE and case.suite_version == 27
+    # S54a T14: the whole corpus moved 27 -> 28 with the four block cases.
+    assert case.suite == SUITE and case.suite_version == 28
     assert case.message == "install the admin path on the dell"
     [device] = case.devices
     assert device.name == "eval_dell" and device.platform == "windows" and device.connected
@@ -4359,3 +4381,88 @@ async def test_s37c_t11_c4_a_check_of_something_else_is_not_a_memory_check(pool,
     run = await runner.run_case(app, pool, case, MODEL)
     assert run.passed is False
     assert _failed(run) == [("fact_recorded", "memory_call")]
+
+
+# -- S54a T14: component-block cases (suite_version 27 -> 28 in GREEN) -------
+#
+# Three questions whose good answer carries structure (spec s54 §5: the
+# software-factory question, compare three options, walk me through a setup)
+# and one where a block would be wrong (a one-line question). Each is scored
+# off the turn's ui_blocks span (T13), never off the reply's wording.
+
+S54A_STRUCTURE_CASES = (
+    "draws-a-software-factory-in-blocks",
+    "compares-three-options-in-a-block",
+    "walks-through-a-setup-in-blocks",
+)
+S54A_PLAIN_CASE = "answers-a-one-line-question-without-blocks"
+
+_S54A_STEPS = {"type": "steps", "items": [{"title": "Plan"}, {"title": "Build"}]}
+
+
+def _nova_ui(block: object) -> str:
+    body = block if isinstance(block, str) else json.dumps(block)
+    return f"```nova-ui\n{body}\n```"
+
+
+@pytest.mark.parametrize("case_id", [*S54A_STRUCTURE_CASES, S54A_PLAIN_CASE])
+def test_s54a_t14_c5_each_block_case_loads_by_id_at_v28(case_id):
+    case = _case(case_id)
+    assert case.suite == SUITE and case.suite_version == 28
+    assert case.message.strip()
+    raw = json.loads((cases_mod.CASES_DIR / f"{case_id}.json").read_text(encoding="utf-8"))
+    assert "27 -> 28" in raw["comment"]
+    expected = (
+        {("ui_block_absent", None)}
+        if case_id == S54A_PLAIN_CASE
+        else {("ui_blocks_valid", None), ("ui_block_present", None)}
+    )
+    assert {(p.predicate, p.arg) for p in case.contract} == expected
+
+
+def test_s54a_t14_c5_the_software_factory_case_asks_the_owners_question():
+    case = _case("draws-a-software-factory-in-blocks")
+    assert "software factory" in case.message.lower()
+    assert "build one" in case.message.lower()
+
+
+@pytest.mark.parametrize("case_id", S54A_STRUCTURE_CASES)
+async def test_s54a_t14_c6_a_structure_case_good_plain_and_invalid(case_id, pool, mount_peers):
+    case = _case(case_id)
+
+    good = ScriptedGateway(
+        rounds=((text(f"Here it is.\n\nThe flow:\n\n{_nova_ui(_S54A_STEPS)}\n\nThat's it."),),)
+    )
+    mount_peers(gateway=good, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is True, run.detail
+
+    plain = ScriptedGateway(rounds=((text("1. Plan\n2. Build\n3. Ship"),),))
+    mount_peers(gateway=plain, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is False
+
+    unclosed_json = '{"type": "steps"'
+    broken = ScriptedGateway(rounds=((text(f"Here.\n\n{_nova_ui(unclosed_json)}"),),))
+    mount_peers(gateway=broken, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is False
+    assert _by_predicate(run)["ui_blocks_valid"] is False
+
+
+async def test_s54a_t14_c6_the_one_line_case_plain_passes_a_block_fails(pool, mount_peers):
+    case = _case(S54A_PLAIN_CASE)
+
+    mount_peers(gateway=ScriptedGateway(rounds=((text("Canberra."),),)), memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is True, run.detail
+
+    drawn = ScriptedGateway(rounds=((text(f"Canberra.\n\n{_nova_ui(_S54A_STEPS)}"),),))
+    mount_peers(gateway=drawn, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is False

@@ -1,0 +1,15 @@
+{
+  "id": "compares-three-options-in-a-block",
+  "suite": "agent_quality",
+  "suite_version": 28,
+  "message": "I'm choosing where to run my local models: a single big GPU box, a couple of small mini PCs, or renting cloud GPUs by the hour. Compare the three for me.",
+  "contract": [
+    {
+      "predicate": "ui_blocks_valid"
+    },
+    {
+      "predicate": "ui_block_present"
+    }
+  ],
+  "comment": "Options side by side, the shape the compare block exists for (spec §2). MEASURES: at least one valid block drawn (ui_block_present, any type: a compare is the natural one, a layers or a card row is not wrong) and no invalid block (ui_blocks_valid). WHAT IT CANNOT MEASURE: whether the pros and cons are accurate. S54a T14 (spec docs/plans/rebuild/s54/spec.md §5): a new case is a new denominator, so suite_version moved 27 -> 28 for the S54a cases (all fifty-five). Scored off the turn's ui_blocks span, which chat.py files at the main persist boundary from ui_blocks.check() of the STORED reply, never off the reply's wording."
+}

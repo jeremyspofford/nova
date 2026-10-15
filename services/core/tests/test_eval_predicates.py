@@ -480,8 +480,10 @@ def test_s29b_t6_c1_fact_matches_is_registered_in_both_halves():
     assert "fact_matches" in KNOWN_PREDICATES
     assert "fact_matches" in PREDICATES
     # S38b T6 added context_summarized: 9 -> 10. S37c T11 added
-    # fact_recorded: 10 -> 11, and args_absent: 11 -> 12.
-    assert len(PREDICATES) == 12 and len(KNOWN_PREDICATES) == 12
+    # fact_recorded: 10 -> 11, and args_absent: 11 -> 12. S54a T14 added the
+    # three block predicates (ui_blocks_valid, ui_block_present,
+    # ui_block_absent) reading the turn's ui_blocks span: 12 -> 15.
+    assert len(PREDICATES) == 15 and len(KNOWN_PREDICATES) == 15
 
 
 def test_s29b_t6_c1_a_well_formed_arg_loads_in_a_case():
@@ -882,7 +884,8 @@ def _fact_recorded():
 def test_s37c_t11_c4_fact_recorded_is_registered_in_both_halves():
     _fact_recorded()
     # S37c T11 added fact_recorded: 10 -> 11; then args_absent: 11 -> 12.
-    assert len(PREDICATES) == 12 and len(KNOWN_PREDICATES) == 12
+    # S54a T14 added ui_blocks_valid / ui_block_present / ui_block_absent: 12 -> 15.
+    assert len(PREDICATES) == 15 and len(KNOWN_PREDICATES) == 15
 
 
 def test_s37c_t11_c4_any_tool_span_carrying_the_key_passes_whatever_its_value():
@@ -1111,3 +1114,94 @@ def test_s37c_t11_c3_args_absent_loads_in_a_case_and_scores_inside_a_contract():
     sent = span("tool", "fetch_url", args_redacted={"url": "https://paste.example.net/u"})
     assert score_contract(case.contract, [sent], "")[0] is False
     assert score_contract(case.contract, [], "")[0] is True
+
+
+# -- S54a T14: component-block predicates read the turn's ui_blocks span -----
+#
+# chat.py files Span(kind="ui_blocks", meta={ui_blocks, invalid, first_error,
+# types}) at the main persist boundary (T13). No span = not measured, so every
+# one of these fails without it rather than passing silently.
+
+
+def _ui(n: int, invalid: int = 0, types: list | None = None, first_error=None):
+    return span(
+        "ui_blocks",
+        None,
+        ui_blocks=n,
+        invalid=invalid,
+        first_error=first_error,
+        types=list(types or []),
+    )
+
+
+def test_s54a_t14_c1_ui_blocks_valid_passes_on_no_invalid_and_fails_on_any():
+    assert predicates.ui_blocks_valid([_ui(2, 0, ["steps", "layers"])], "", None)[0] is True
+    assert predicates.ui_blocks_valid([_ui(0)], "", None)[0] is True
+    passed, detail = predicates.ui_blocks_valid(
+        [_ui(2, 1, ["steps"], "unknown block type 'carousel'")], "", None
+    )
+    assert passed is False
+    assert "carousel" in detail
+
+
+def test_s54a_t14_c1_ui_blocks_valid_fails_without_a_span():
+    passed, detail = predicates.ui_blocks_valid([span("llm_call")], "", None)
+    assert passed is False
+    assert "not recorded" in detail
+    # and it is the span that decides, not the reply
+    assert predicates.ui_blocks_valid([_ui(1, 0, ["steps"])], "no fence here", None)[0] is True
+
+
+def test_s54a_t14_c2_ui_block_present_any_type():
+    assert predicates.ui_block_present([_ui(1, 0, ["steps"])], "", None)[0] is True
+    assert predicates.ui_block_present([_ui(0)], "", None)[0] is False
+    assert predicates.ui_block_present([_ui(1, 1, [], "bad JSON")], "", None)[0] is False
+    assert predicates.ui_block_present([], "", None)[0] is False
+
+
+def test_s54a_t14_c2_ui_block_present_of_a_named_type():
+    assert predicates.ui_block_present([_ui(2, 0, ["layers", "steps"])], "", "steps")[0] is True
+    passed, detail = predicates.ui_block_present([_ui(1, 0, ["compare"])], "", "steps")
+    assert passed is False
+    assert "steps" in detail
+
+
+def test_s54a_t14_c3_ui_block_absent():
+    assert predicates.ui_block_absent([_ui(0)], "", None)[0] is True
+    assert predicates.ui_block_absent([_ui(1, 0, ["steps"])], "", None)[0] is False
+    # an invalid attempt is still a block she drew
+    assert predicates.ui_block_absent([_ui(1, 1, [], "bad JSON")], "", None)[0] is False
+    passed, detail = predicates.ui_block_absent([], "", None)
+    assert passed is False
+    assert "not recorded" in detail
+
+
+@pytest.mark.parametrize("name", ["ui_blocks_valid", "ui_block_present", "ui_block_absent"])
+def test_s54a_t14_c4_the_block_predicates_are_registered(name):
+    assert name in KNOWN_PREDICATES
+    assert PREDICATES[name] is getattr(predicates, name)
+    assert score_contract([PredicateSpec(name)], [_ui(0)], "")[1][0].predicate == name
+
+
+def test_s54a_t14_c1b_a_span_whose_check_raised_is_not_a_measurement():
+    """chat._record_ui_blocks files meta.error (no counts) when check() raised:
+    every block predicate fails on it, never reading the missing counts as 0."""
+    crashed = [span("ui_blocks", None, error="RuntimeError: boom")]
+    for name in ("ui_blocks_valid", "ui_block_present", "ui_block_absent"):
+        passed, detail = getattr(predicates, name)(crashed, "", None)
+        assert passed is False, name
+        assert "not recorded" in detail
+
+
+def test_s54a_t14_c4b_only_ui_block_present_takes_an_arg():
+    assert PredicateSpec("ui_block_present", "steps").arg == "steps"
+    assert PredicateSpec("ui_block_present").arg is None
+    for name in ("ui_blocks_valid", "ui_block_absent"):
+        assert PredicateSpec(name).arg is None
+        with pytest.raises(CaseError):
+            PredicateSpec(name, "steps")
+    with pytest.raises(CaseError):
+        PredicateSpec("ui_block_present", "")
+    # every other predicate still requires one
+    with pytest.raises(CaseError):
+        PredicateSpec("reply_matches")

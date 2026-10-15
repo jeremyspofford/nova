@@ -1008,3 +1008,80 @@ describe('MessageBubble — when it was sent (owner, 2026-10-15)', () => {
     expect(screen.getByTestId('message-time').textContent).toContain(shown)
   })
 })
+
+// ---------------------------------------------------------------------------
+// S54a T10: the bubble is where blocks draw, and where a choices submit goes.
+// ---------------------------------------------------------------------------
+const CHOICES_BLOCK = {
+  type: 'choices',
+  questions: [
+    {
+      id: 'goal',
+      label: 'What should it produce?',
+      options: [
+        { value: 'personal', label: 'Tools for myself' },
+        { value: 'both', label: 'Both' },
+      ],
+      default: 'both',
+    },
+  ],
+  submit: { label: 'Design it', message: 'Design it for me. Goal: {goal}.' },
+}
+const choicesReply = 'Pick one.\n\n```nova-ui\n' + JSON.stringify(CHOICES_BLOCK) + '\n```\n'
+
+describe('MessageBubble — S54a T10: blocks in her reply', () => {
+  it('T10-C1 a choices submit calls the passed onSend once with the composed text', () => {
+    const onSend = vi.fn()
+    render(
+      <MessageBubble
+        row={assistantRow({ text: choicesReply, streaming: false })}
+        onSend={onSend}
+      />,
+    )
+    fireEvent.click(screen.getByRole('radio', { name: 'Tools for myself' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Design it' }))
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend).toHaveBeenCalledWith('Design it for me. Goal: Tools for myself.')
+  })
+
+  it('T10-C2 answered: every radio is disabled and a click sends nothing', () => {
+    const onSend = vi.fn()
+    render(
+      <MessageBubble
+        row={assistantRow({ text: choicesReply, streaming: false })}
+        onSend={onSend}
+        answered
+      />,
+    )
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.length).toBe(2)
+    for (const r of radios) expect(r.disabled).toBe(true)
+    const btn = screen.queryByRole('button', { name: 'Design it' })
+    if (btn) fireEvent.click(btn)
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('T10-C3 a reply still streaming draws its block but the button is not live', () => {
+    const onSend = vi.fn()
+    render(
+      <MessageBubble row={assistantRow({ text: choicesReply, streaming: true })} onSend={onSend} />,
+    )
+    const btn = screen.getByRole('button', { name: 'Design it' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+})
+
+describe('MessageBubble — S54a T10 coverage', () => {
+  it('T10-C2b a bubble with no send path draws its block but the button is not live', () => {
+    render(<MessageBubble row={assistantRow({ text: choicesReply, streaming: false })} />)
+    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    const btn = screen.getByRole('button', { name: 'Design it' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('T10-C1b his own bubble never draws a block: a nova-ui fence he typed stays his text', () => {
+    render(<MessageBubble row={{ ...assistantRow({ text: choicesReply }), role: 'user' }} onSend={vi.fn()} />)
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.getByTestId('message-user').textContent).toContain('"type":"choices"')
+  })
+})

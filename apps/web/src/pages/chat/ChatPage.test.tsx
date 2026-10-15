@@ -1567,3 +1567,80 @@ describe('ChatPage — jump to the latest message', () => {
   })
 })
 
+
+// ---------------------------------------------------------------------------
+// S54a T10: ChatPage hands each bubble the send path and derives "answered".
+// ---------------------------------------------------------------------------
+describe('ChatPage — S54a T10: choices blocks', () => {
+  const block = {
+    type: 'choices',
+    questions: [
+      {
+        id: 'goal',
+        label: 'What should it produce?',
+        options: [
+          { value: 'personal', label: 'Tools for myself' },
+          { value: 'both', label: 'Both' },
+        ],
+        default: 'both',
+      },
+    ],
+    submit: { label: 'Design it', message: 'Design it for me. Goal: {goal}.' },
+  }
+  const reply = 'Pick one.\n\n```nova-ui\n' + JSON.stringify(block) + '\n```\n'
+
+  it('T10-C4 answered is derived from a later user row: frozen after one, live without', async () => {
+    renderChat({
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [
+        stored('u1', 'user', 'how do I build one?'),
+        stored('a1', 'assistant', reply),
+        stored('u2', 'user', 'Design it for me. Goal: Both.'),
+        stored('a2', 'assistant', reply),
+      ]),
+    })
+    await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(4))
+    const [first, second] = assistantBubbles()
+    for (const r of within(first).getAllByRole('radio') as HTMLInputElement[]) {
+      expect(r.disabled).toBe(true)
+    }
+    for (const r of within(second).getAllByRole('radio') as HTMLInputElement[]) {
+      expect(r.disabled).toBe(false)
+    }
+  })
+
+  it('T10-C5 a submit goes out through sendMessage: his bubble shows the composed text', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    render(
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage
+            api={fakeApi({
+              getActiveConversation: vi.fn(async () => conversation()),
+              getMessages: vi.fn(async () => [
+                stored('u1', 'user', 'how do I build one?'),
+                stored('a1', 'assistant', reply),
+              ]),
+            })}
+            pollIntervalMs={5}
+          />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByRole('radio', { name: 'Tools for myself' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Design it' }))
+    await waitFor(() => {
+      const mine = screen.getAllByTestId('message-user').map(el => el.textContent ?? '')
+      expect(mine.some(t => t.includes('Design it for me. Goal: Tools for myself.'))).toBe(true)
+    })
+    expect(fetchImpl).toHaveBeenCalled()
+  })
+})
