@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { MobileTitleSlot } from '../../components/layout/PageHeader'
-import { PaneBarTitle } from './PaneBarTitle'
+import { PaneBarTitle, PaneTitle } from './PaneBarTitle'
 
 // 2026-10-11: below lg the chat draws no header of its own, so the phone's
 // top bar sat empty beside the menu button. The session's name goes there.
@@ -20,9 +20,11 @@ describe('PaneBarTitle', () => {
     expect(within(slot).getByRole('heading', { name: 'help me setup nova' })).toBeDefined()
   })
 
-  it('marks the main session', () => {
+  it('shows only the main tag for the main session, never its old name', () => {
+    // Owner, 2026-10-15: the main chat is "main", not the name it once had.
     const slot = withSlot(<PaneBarTitle label="the main one" main show />)
-    expect(within(slot).getByTitle(/main session/i)).toBeDefined()
+    expect(within(slot).getByTestId('main-tag').textContent).toBe('main')
+    expect(slot.textContent).not.toContain('the main one')
   })
 
   it('draws nothing for a pane that is not the one in front', () => {
@@ -33,5 +35,19 @@ describe('PaneBarTitle', () => {
   it('draws nothing without a top bar (desktop has the pane header)', () => {
     render(<PaneBarTitle label="desk" main={false} show />)
     expect(screen.queryByText('desk')).toBeNull()
+  })
+})
+
+describe('PaneTitle (the desktop pane header)', () => {
+  it('names an ordinary session, with no main tag', () => {
+    render(<PaneTitle label="update the agent" main={false} />)
+    expect(screen.getByRole('heading', { name: 'update the agent' })).toBeDefined()
+    expect(screen.queryByTestId('main-tag')).toBeNull()
+  })
+
+  it('draws the main session as the tag alone', () => {
+    const { container } = render(<PaneTitle label="primary" main />)
+    expect(screen.getByTestId('main-tag').textContent).toBe('main')
+    expect(container.textContent).not.toContain('primary')
   })
 })

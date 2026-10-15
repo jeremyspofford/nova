@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import clsx from 'clsx'
-import { Columns2, Home, X } from 'lucide-react'
+import { Columns2, X } from 'lucide-react'
 import { ChatSlot, MAIN_SLOT, useChatStore } from '../../stores/chat-store'
 import { SESSION_DRAG_TYPE, useSessions, type ShownPane } from '../../stores/sessions-store'
 import { ChatPage, type ChatLocation } from './ChatPage'
-import { PaneBarTitle } from './PaneBarTitle'
+import { PaneBarTitle, PaneTitle } from './PaneBarTitle'
 import { MAX_PANES, type DropZone } from './paneLayout'
 
 /**
@@ -101,18 +101,7 @@ function PaneBody({
       {focused && (
         <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
       )}
-      <h1 className="truncate text-h3 text-content-primary" data-testid="pane-title">
-        {sessions.label(pane.sessionId)}
-      </h1>
-      {main && (
-        <span
-          title="Where her digests and reminders set outside a chat land"
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-dim px-2 py-0.5 text-micro text-accent"
-        >
-          <Home size={10} />
-          main
-        </span>
-      )}
+      <PaneTitle label={sessions.label(pane.sessionId)} main={main} />
       {state.streaming && (
         <span className="text-caption text-content-tertiary shrink-0">responding…</span>
       )}
