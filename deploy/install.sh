@@ -2813,7 +2813,7 @@ report_update() {
 }
 
 cmd_update() {
-  local from="" to="" branch head_branch reason dirty n named
+  local from="" to="" running="" branch head_branch reason dirty n named
   while [ $# -gt 0 ]; do
     case "$1" in
       --attempt)
@@ -2853,13 +2853,28 @@ cmd_update() {
     || update_refuse "git fetch origin $branch failed (above) — nothing was changed"
   to="$(update_git rev-parse --verify -q "refs/remotes/origin/$branch")" \
     || update_refuse "origin/$branch could not be read after the fetch"
-  if [ "$from" = "$to" ]; then
+  update_git merge-base --is-ancestor "$from" "$to" \
+    || update_refuse "this checkout and origin/$branch have diverged — an update only fast-forwards; merge on the hub by hand"
+  # What RUNS is NOVA_COMMIT (record_build stamps it at every ./install), and
+  # the checkout can move without a reinstall: repo_land's "the deploy checkout
+  # follows", or a hand `git pull`. Core offers an update by comparing the
+  # running commit with the branch, so judging "nothing to install" by HEAD
+  # alone answered that offer with up_to_date and installed nothing, every
+  # time. What runs is also what a failed install rolls back to. Unstamped,
+  # HEAD is all there is to go on.
+  running="$(get_env_value NOVA_COMMIT)"
+  [ -n "$running" ] || running="$from"
+  if [ "$from" = "$to" ] && [ "$running" = "$to" ]; then
     log "update: already at origin/$branch (${from:0:12}) — nothing to install"
     report_update up_to_date "$from" "$to" ""
     return 0
   fi
-  update_git merge-base --is-ancestor "$from" "$to" \
-    || update_refuse "this checkout and origin/$branch have diverged — an update only fast-forwards; merge on the hub by hand"
+  if [ "$running" != "$from" ]; then
+    update_git merge-base --is-ancestor "$running" "$from" 2>/dev/null \
+      || update_refuse "this hub runs ${running:0:12}, and the checkout (${from:0:12}) does not contain it — a failed install could not roll back to what runs; ./install installs what is checked out"
+    log "update: the checkout is at ${from:0:12} but ${running:0:12} is what runs (moved without a reinstall) — installing from there"
+    from="$running"
+  fi
   log "update: ${from:0:12} -> ${to:0:12}; backing up first…"
   update_backup \
     || update_refuse "the backup before the update failed (above) — nothing was changed; ./install backup shows why"

@@ -3076,8 +3076,15 @@ fi
 # ── ./install update: fast-forward, back up, reinstall, roll back, report ───
 # A real bare "origin" and a real clone per case; only the report to core, the
 # backup and the reinstall are stubbed (they need docker). Every case prints
-#   "<exit>|<reports, ; separated>|<stderr>|<HEAD after>|<from>|<to>"
+#   "<exit>|<reports, ; separated>|<stderr>|<HEAD after>|<from>|<to>|<running>"
+# where <from> is HEAD before the update and <running> the NOVA_COMMIT .env
+# says runs — HEAD, as ./install's record_build stamps it, unless the scenario
+# moved the checkout without a reinstall.
 #   $1 scenario: behind | same | diverged | dirty | branch | nobranch
+#                | pulled   (origin moved; the checkout pulled it, no reinstall)
+#                | midway   (pulled one commit, origin has moved again since)
+#                | stale    (at origin; NOVA_COMMIT names a commit not in history)
+#                | unstamped (at origin; .env records no NOVA_COMMIT)
 #   $2 backup rc   $3 first install rc   $4 second install rc   $5 extra args
 run_update() {
   (
@@ -3100,16 +3107,32 @@ run_update() {
     ENV_FILE="$tmp/.env"
     printf 'NOVA_REPO_BRANCH=main\n' > "$ENV_FILE"
     case "$1" in
-      behind|diverged)
+      behind|diverged|pulled|midway)
         printf 'v2\n' > "$tmp/seed/f"; g -C "$tmp/seed" commit -q -am two
         g -C "$tmp/seed" push -q origin HEAD:main 2>/dev/null ;;
     esac
+    running="$(git -C "$REPO_ROOT" rev-parse HEAD)"
     case "$1" in
       diverged) printf 'mine\n' > "$REPO_ROOT/g"; g -C "$REPO_ROOT" add g; g -C "$REPO_ROOT" commit -q -m mine ;;
       dirty) printf 'edited\n' > "$REPO_ROOT/f" ;;
       branch) g -C "$REPO_ROOT" checkout -q -b side ;;
       nobranch) printf 'A=1\n' > "$ENV_FILE" ;;
+      # The deploy checkout moved WITHOUT ./install: repo_land's "the deploy
+      # checkout follows", or a hand `git pull`. What runs is still `one`.
+      pulled|midway) g -C "$REPO_ROOT" pull -q --ff-only 2>/dev/null ;;
     esac
+    case "$1" in
+      midway)
+        printf 'v3\n' > "$tmp/seed/f"; g -C "$tmp/seed" commit -q -am three
+        g -C "$tmp/seed" push -q origin HEAD:main 2>/dev/null ;;
+    esac
+    case "$1" in
+      pulled|midway) ;;
+      stale) running=0123456789abcdef0123456789abcdef01234567 ;;
+      unstamped) running="" ;;
+      *) running="$(git -C "$REPO_ROOT" rev-parse HEAD)" ;;
+    esac
+    [ -z "$running" ] || printf 'NOVA_COMMIT=%s\n' "$running" >> "$ENV_FILE"
     from="$(git -C "$REPO_ROOT" rev-parse HEAD)"
     to="$(git -C "$tmp/origin.git" rev-parse main)"
     refuse_if_moved() { :; }
@@ -3124,8 +3147,9 @@ run_update() {
     BACKUP_RC="${2:-0}"; FIRST_RC="${3:-0}"; SECOND_RC="${4:-0}"; INSTALLS=0
     # shellcheck disable=SC2086
     err="$( ( set -e; cmd_update ${5:-} ) 2>&1 )"; code=$?
-    printf '%s|%s|%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/reports" 2>/dev/null)" \
-      "$(printf '%s' "$err" | tr '\n' ' ')" "$(git -C "$REPO_ROOT" rev-parse HEAD)" "$from" "$to"
+    printf '%s|%s|%s|%s|%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/reports" 2>/dev/null)" \
+      "$(printf '%s' "$err" | tr '\n' ' ')" "$(git -C "$REPO_ROOT" rev-parse HEAD)" "$from" "$to" \
+      "$running"
   )
 }
 ATTEMPT=0b8f6b0e-5c1e-4b1a-9a57-2f0f1d2a3b4c
@@ -3159,6 +3183,50 @@ expect_tn_lacks "update: and installs nothing" "$UP_BACKUP" 2 "install 1"
 UP_SAME="$(run_update same)"
 expect_tn "update: nothing new exits 0" "$UP_SAME" 0 2 "--outcome up_to_date"
 expect_tn_lacks "update: nothing new installs nothing" "$UP_SAME" 2 "install 1"
+UP_UNSTAMPED="$(run_update unstamped)"
+expect_tn "update: at origin with no NOVA_COMMIT is still nothing to install" "$UP_UNSTAMPED" 0 2 \
+  "--outcome up_to_date"
+
+# The checkout already at origin is NOT "nothing to install" while an older
+# build runs: core offers the update because it compares the RUNNING commit
+# (NOVA_COMMIT), and before this an update the page offered after repo_land or
+# a hand `git pull` reported up_to_date and installed nothing, every time.
+UP_PULLED="$(run_update pulled 0 0 0 "--attempt $ATTEMPT")"
+UP_PULLED_TO="$(tn_field "$UP_PULLED" 6)"; UP_PULLED_RUN="$(tn_field "$UP_PULLED" 7)"
+expect_str "update: (pulled: the checkout was already at origin)" "$(tn_field "$UP_PULLED" 5)" "$UP_PULLED_TO"
+expect_tn "update: a checkout pulled without a reinstall is installed" "$UP_PULLED" 0 2 \
+  "install 1 at $UP_PULLED_TO;"
+expect_tn "update: and reported installed, from what RAN" "$UP_PULLED" 0 2 \
+  "--attempt $ATTEMPT --outcome installed --from $UP_PULLED_RUN --to $UP_PULLED_TO"
+expect_tn_lacks "update: (pulled) not reported as nothing to install" "$UP_PULLED" 2 "up_to_date"
+expect_tn_lacks "update: (pulled) installs exactly once" "$UP_PULLED" 2 "install 2"
+
+UP_PULLED_ROLL="$(run_update pulled 0 1 0)"
+UP_PULLED_ROLL_RUN="$(tn_field "$UP_PULLED_ROLL" 7)"
+expect_str "update: a failed install of a pulled checkout exits 1" "$(tn_field "$UP_PULLED_ROLL" 1)" "1"
+expect_str "update: and rolls back to what RAN, not to the pulled HEAD" \
+  "$(tn_field "$UP_PULLED_ROLL" 4)" "$UP_PULLED_ROLL_RUN"
+expect_tn "update: what ran is reinstalled" "$UP_PULLED_ROLL" 1 2 "install 2 at $UP_PULLED_ROLL_RUN;"
+expect_tn "update: reported failed, rolled back to what ran" "$UP_PULLED_ROLL" 1 2 \
+  "rolled back to ${UP_PULLED_ROLL_RUN:0:12}"
+
+UP_PULLED_BACKUP="$(run_update pulled 1 0 0)"
+expect_tn "update: (pulled) a failed backup refuses" "$UP_PULLED_BACKUP" 1 3 "backup before the update failed"
+expect_str "update: (pulled) and leaves the checkout where it was" \
+  "$(tn_field "$UP_PULLED_BACKUP" 4)" "$(tn_field "$UP_PULLED_BACKUP" 5)"
+expect_tn_lacks "update: (pulled) and installs nothing" "$UP_PULLED_BACKUP" 2 "install 1"
+
+UP_MIDWAY="$(run_update midway 0 1 0)"
+UP_MIDWAY_RUN="$(tn_field "$UP_MIDWAY" 7)"
+expect_tn "update: midway fast-forwards to origin and installs it" "$UP_MIDWAY" 1 2 \
+  "install 1 at $(tn_field "$UP_MIDWAY" 6);"
+expect_str "update: midway rolls back to what RAN, a commit behind the old HEAD" \
+  "$(tn_field "$UP_MIDWAY" 4)" "$UP_MIDWAY_RUN"
+
+UP_STALE="$(run_update stale)"
+expect_tn "update: a NOVA_COMMIT the checkout lacks refuses" "$UP_STALE" 1 3 "does not contain it"
+expect_tn "update: and reports it refused" "$UP_STALE" 1 2 "--outcome refused"
+expect_tn_lacks "update: and installs nothing" "$UP_STALE" 2 "install 1"
 
 UP_DIV="$(run_update diverged)"
 expect_tn "update: diverged refuses" "$UP_DIV" 1 3 "diverged"

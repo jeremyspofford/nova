@@ -113,10 +113,12 @@ trace.
 ### How it runs
 
 1. **Start**: `nova_update` (her tool) or **Update now** on `/about`, which
-   is the same `nova_updates.start`. It runs only when GitHub says there is
-   something to fast-forward to, the hub was brought up clean, the checkout's
-   path is known (`NOVA_CHECKOUT`, written by `record_build`), and the hub's
-   own agent is connected. Otherwise it fails with the reason. A
+   is the same `nova_updates.start`. It runs only when GitHub says the
+   branch has commits the RUNNING build (`NOVA_COMMIT`) lacks, the
+   checkout's path is known (`NOVA_CHECKOUT`, written by `record_build`), and
+   the hub's own agent is connected. Otherwise it fails with the reason. (A
+   dirty checkout is not judged here: `NOVA_DIRTY` is stale by the time
+   anyone clicks, so the installer reads it live, cb1b4c7.) A
    `nova_updates` row is opened as `sent` **before** anything is sent. A
    unique partial index holds one open update at a time.
 2. **Send**: one signed `shell.exec` to the hub's own agent. The script is
@@ -128,11 +130,19 @@ trace.
    and the tool says **started**, never installed.
 3. **`./install update`** (`cmd_update`): it refuses (with a report) a missing
    `NOVA_REPO_BRANCH`, a checkout on another branch, uncommitted tracked
-   changes, a failed fetch, or a diverged branch. Already at `origin/<branch>`
-   is reported as `up_to_date`. Otherwise it **backs up first** (S41; a failed
-   backup refuses with nothing changed), runs `git merge --ff-only`, then
-   `cmd_install`. If that install fails, it runs `git reset --keep` back to the
-   old commit and installs again, then reports `failed` with which half held.
+   changes, a failed fetch, or a diverged branch. It is `up_to_date` only when
+   both the checkout AND what runs (`NOVA_COMMIT`) are at `origin/<branch>`.
+   The checkout can move without a reinstall: repo_land's "the deploy
+   checkout follows", or a hand `git pull`. Until 2026-10-16 that state was
+   reported `up_to_date` and installed nothing, while core, which compares
+   the running commit, kept offering the update. So **Update now** never
+   took. Otherwise it **backs up first** (S41; a failed backup refuses with
+   nothing changed), runs `git merge --ff-only`, then `cmd_install`. If that
+   install fails, it runs `git reset --keep` back to **the commit that was
+   running** (not the moved HEAD) and installs again. It then reports
+   `failed` with which half held. If `NOVA_COMMIT` names a commit the
+   checkout does not contain, nothing could be rolled back to it, so it
+   refuses.
 4. **Decide**: the installer runs `python -m app.updates_cli finish` in the
    core it just brought up. `installed` becomes **confirmed only if that core's
    own `NOVA_COMMIT` is the target**. Otherwise it is recorded as `failed`,
@@ -147,10 +157,13 @@ read fails during the restart.
 
 ### What was checked
 
-- `deploy/install_test.sh`: 26 `cmd_update` cases against real git (a bare
+- `deploy/install_test.sh`: 46 `cmd_update` cases against real git (a bare
   origin and a clone): fast-forward and install at the new commit, rollback
   and reinstall of the old one, both failing, backup failure, nothing new,
-  diverged, dirty, wrong branch, no branch recorded, bad arguments.
+  diverged, dirty, wrong branch, no branch recorded, bad arguments. Also a
+  checkout pulled without a reinstall (it installs, and a failed install
+  rolls back to what ran), one pulled midway, a stale `NOVA_COMMIT`, and an
+  unstamped `.env`.
 - `tests/test_nova_updates.py`: start/refuse/one-at-a-time/stale, finish
   confirmed only by the reporting core's commit, the CLI, the tool, the
   route, and the real launch script run under `sh` (detached, quoted, exact
