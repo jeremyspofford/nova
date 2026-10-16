@@ -5042,6 +5042,16 @@ def _fit_to_window(
         return messages
     link, window, ratio = found
     fitted, report = context_fit.fit(messages, window, ratio, tools_chars)
+    if report.unfittable and link in _SERVED_CHARS_PER_TOKEN:
+        # A LEARNED ratio called it unfittable. A refused request is never
+        # sent, so no count would ever come back to correct a wrong ratio and
+        # the link would stay locked until core restarted. Forget it and fit
+        # at the default; the refusal stands only if even that cannot fit
+        # (tests/test_ratio_poison.py).
+        del _SERVED_CHARS_PER_TOKEN[link]
+        fitted, report = context_fit.fit(
+            messages, window, context_fit.DEFAULT_CHARS_PER_TOKEN, tools_chars
+        )
     if report.unfittable:
         raise RequestUnfittable(report, link)
     meta["context_fitted_to"] = window
@@ -5462,7 +5472,12 @@ async def _collect_completion(
         except Exception as exc:
             span.meta["error"] = peers.reason(exc)[:400]
             raise
-        _learn_chars_per_token(span, sent)
+        # No _learn_chars_per_token here: the link's ONE ratio fits the rounds
+        # that carry her tools array, and a tool-less prompt says nothing about
+        # those. A summary of a dense log (~1.7 chars a token, honestly) taught
+        # it once and her ~68k-char tools were then estimated at ~39k tokens:
+        # every later round on the link refused as unfittable (S54a eval run,
+        # 2026-10-15; tests/test_ratio_poison.py).
         _note_estimate(span, sent, 0, sum(map(len, collected)))
         span.meta["ok"] = True
     return "".join(collected)
