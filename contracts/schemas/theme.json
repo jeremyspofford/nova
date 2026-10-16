@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/theme.json",
+  "title": "Theme",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "variant", "tokens"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "name": { "type": "string", "maxLength": 100 },
+    "variant": { "enum": ["light", "dark", "system"] },
+    "extends": { "type": "string", "description": "Optional built-in theme id to inherit tokens from." },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "CSS custom property overrides (keys must start with --u-).",
+      "propertyNames": { "pattern": "^--u-" }
+    },
+    "fonts": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "pattern": "^--u-font-" }
+    }
+  }
+}

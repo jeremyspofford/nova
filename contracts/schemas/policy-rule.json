@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/policy-rule.json",
+  "title": "PolicyRule",
+  "type": "object",
+  "required": ["id", "scope", "match", "effect", "enabled"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string", "maxLength": 200 },
+    "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 100 },
+    "enabled": { "type": "boolean", "default": true },
+    "scope": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["global", "project", "thread", "run", "session", "dot", "tool", "plugin", "site"] },
+        "ref": { "type": "string" }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "array", "items": { "enum": ["builtin", "mcp", "plugin", "computer"] } },
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["path", "host", "account"] },
+            "pattern": { "type": "string" },
+            "host": { "type": "string" },
+            "pathPrefix": { "type": "string" }
+          }
+        },
+        "effect": {
+          "type": "array",
+          "items": { "enum": ["external_communication", "purchase", "account_change", "credential_change", "data_delete", "file_write", "exec", "network"] }
+        },
+        "readOnly": { "type": "boolean" }
+      }
+    },
+    "effect": { "enum": ["allow", "ask", "handoff", "deny"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

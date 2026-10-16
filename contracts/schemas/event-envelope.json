@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/event-envelope.json",
+  "title": "EventEnvelope",
+  "type": "object",
+  "required": ["id", "name", "schemaVersion", "ts", "actor", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$" },
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "accountId": { "type": "string" },
+    "actor": { "type": "string", "pattern": "^(user|system|agent:.+|dot:.+)$" },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "threadId": { "type": "string" },
+        "runId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "dotId": { "type": "string" },
+        "callId": { "type": "string" }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}

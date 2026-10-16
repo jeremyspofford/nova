@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/plugin-manifest.json",
+  "title": "PluginManifest",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "version", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "name": { "type": "string", "maxLength": 100 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
+    "description": { "type": "string", "maxLength": 500 },
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "name": { "type": "string" }, "url": { "type": "string", "format": "uri" } }
+    },
+    "license": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "unison": { "type": "string" } }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": { "type": "array", "items": { "type": "string" } },
+        "fs": { "type": "array", "items": { "type": "string" } },
+        "secrets": { "type": "array", "items": { "type": "string" } },
+        "commands": { "type": "boolean", "default": false },
+        "panels": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "boolean", "default": false }
+      }
+    },
+    "skills": { "type": "array", "items": { "type": "string" } },
+    "mcpServers": {
+      "type": "object",
+      "additionalProperties": { "$ref": "mcp-config.json#/$defs/server" }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": { "id": { "type": "string" }, "title": { "type": "string" } }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "panels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "entry"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "entry": { "type": "string" },
+              "location": { "enum": ["sidebar", "inspector", "bottom", "modal"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

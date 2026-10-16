@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/computer-exec.json",
+  "title": "ComputerExec",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["cmd"],
+      "additionalProperties": false,
+      "properties": {
+        "cmd": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": "string" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
+        "stdin": { "type": "string" },
+        "network": { "enum": ["none", "allowlist"], "default": "none" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["exitCode"],
+      "additionalProperties": false,
+      "properties": {
+        "exitCode": { "type": "integer" },
+        "signal": { "type": "string" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "truncated": { "type": "boolean" },
+        "durationMs": { "type": "integer" }
+      }
+    },
+    "chunk": {
+      "type": "object",
+      "required": ["chunkType"],
+      "additionalProperties": false,
+      "properties": {
+        "chunkType": { "enum": ["stdout", "stderr", "exit"] },
+        "data": { "type": "string" },
+        "exitCode": { "type": "integer" }
+      }
+    }
+  }
+}

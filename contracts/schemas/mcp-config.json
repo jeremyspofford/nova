@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/mcp-config.json",
+  "title": "McpConfig",
+  "$defs": {
+    "server": {
+      "type": "object",
+      "required": ["transport"],
+      "additionalProperties": false,
+      "properties": {
+        "transport": { "enum": ["stdio", "sse", "http"] },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Values may be secret references (secret://...)."
+        },
+        "url": { "type": "string", "format": "uri" },
+        "auth": { "type": "string", "description": "secret:// reference" },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "network": { "type": "array", "items": { "type": "string" } },
+            "fs": { "enum": ["none", "read", "project"] }
+          }
+        },
+        "enabled": { "type": "boolean", "default": true }
+      },
+      "allOf": [
+        { "if": { "properties": { "transport": { "const": "stdio" } } }, "then": { "required": ["command"] } },
+        { "if": { "properties": { "transport": { "enum": ["sse", "http"] } } }, "then": { "required": ["url"] } }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "servers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/server" } }
+  }
+}

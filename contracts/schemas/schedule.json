@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unison.dev/schemas/schedule.json",
+  "title": "Schedule",
+  "type": "object",
+  "required": ["instructions", "timezone", "deliveryTargets"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "target": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["run", "dot"] },
+        "dotId": { "type": "string" }
+      }
+    },
+    "when": {
+      "oneOf": [
+        { "type": "object", "required": ["cron"], "additionalProperties": false, "properties": { "cron": { "type": "string" } } },
+        { "type": "object", "required": ["intervalSeconds"], "additionalProperties": false, "properties": { "intervalSeconds": { "type": "integer", "minimum": 60 } } }
+      ]
+    },
+    "timezone": { "type": "string", "description": "IANA timezone, e.g. America/Los_Angeles" },
+    "startsAt": { "type": "string", "format": "date-time" },
+    "endsAt": { "type": "string", "format": "date-time" },
+    "instructions": { "type": "string", "maxLength": 8000 },
+    "notifyCondition": { "type": "string", "maxLength": 1000 },
+    "deliveryTargets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["inapp", "os", "slack", "teams", "email", "webhook"] },
+          "ref": { "type": "string" }
+        }
+      }
+    },
+    "enabled": { "type": "boolean", "default": true }
+  },
+  "oneOf": [{ "required": ["when"] }, { "required": ["id"] }]
+}
