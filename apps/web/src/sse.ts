@@ -40,6 +40,8 @@ export interface StreamHandle {
   close: () => void;
   /** Id of the last event delivered, used as the resume cursor. */
   lastEventId: () => string | null;
+  /** Also listen for these event names, now and after every reconnect. */
+  listen: (names: readonly string[]) => void;
 }
 
 export function openStream(
@@ -53,6 +55,7 @@ export function openStream(
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const seen = new Set<string>();
+  const listening = new Set(names);
 
   const deliver = (ev: MessageEvent<string>) => {
     let env: EventEnvelope;
@@ -97,7 +100,7 @@ export function openStream(
       attempt++;
       timer = setTimeout(connect, delay);
     };
-    for (const name of names) es.addEventListener(name, deliver);
+    for (const name of listening) es.addEventListener(name, deliver);
   };
 
   connect();
@@ -108,6 +111,13 @@ export function openStream(
       source?.close();
     },
     lastEventId: () => lastId,
+    listen: (more) => {
+      for (const name of more) {
+        if (listening.has(name)) continue;
+        listening.add(name);
+        source?.addEventListener(name, deliver);
+      }
+    },
   };
 }
 

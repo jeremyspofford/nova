@@ -71,6 +71,13 @@
           "uniqueItems": true,
           "description": "Applied after enabledTools."
         },
+        "readOnlyTools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "maxItems": 500,
+          "uniqueItems": true,
+          "description": "Tools the owner declared read-only in Settings, matched like enabledTools; their descriptors carry userReadOnly (FR-082, FR-189, docs/08 §1). Only the owner sets it: ignored in plugin manifests, and never taken from the server's hints."
+        },
         "required": {
           "type": "boolean",
           "default": false,

@@ -17,8 +17,14 @@ export const SETTINGS_SECTIONS = [
   'plugins',
   'clients',
   'permissions',
+  'computer-use',
+  'agents',
   'notifications',
+  'channels',
+  'triggers',
   'devices',
+  'network',
+  'browser',
   'appearance',
   'keyboard',
   'import',
@@ -37,6 +43,10 @@ export type Route =
   | { name: 'spaces'; spaceId: string | null; pageId: string | null }
   | { name: 'sites'; siteId: string | null }
   | { name: 'apps'; entryId: string | null }
+  /** /devices, /devices/add, /devices/:id (docs/04 §9, docs/23). */
+  | { name: 'devices'; deviceId: string | null }
+  /** /computers, /computers/:id (FR-080). */
+  | { name: 'computers'; computerId: string | null }
   | { name: 'open'; target: string }
   | { name: 'onboarding' };
 
@@ -57,6 +67,8 @@ export function parseRoute(pathname: string, search = ''): Route {
   if (head === 'spaces') return { name: 'spaces', spaceId: arg ?? null, pageId: parts[2] ?? null };
   if (head === 'sites') return { name: 'sites', siteId: arg ?? null };
   if (head === 'apps') return { name: 'apps', entryId: arg ?? null };
+  if (head === 'computers') return { name: 'computers', computerId: arg ?? null };
+  if (head === 'devices') return { name: 'devices', deviceId: arg ?? null };
   if (head === 'open')
     return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };
   const messageId = new URLSearchParams(search).get('m');

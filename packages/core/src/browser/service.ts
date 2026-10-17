@@ -8,6 +8,10 @@
 //     check (`browser.act`, resource = the site) applies the site's level rule, the confirmation
 //     tiers and the approval card; "Auto approve with review" sites add the auto-reviewer;
 //   - every action is recorded with before/after screenshots (FR-098);
+//   - a Code session's dev servers (FR-097): a grant lets the thread's browser reach exactly the
+//     dev server's 127.0.0.1 host and port (the egress proxy's grant, local binding in the
+//     browser's proxy policy, its own guards) without `browser.allowLocalSites`, and the pane
+//     opens it as the user's action, recorded like every other;
 //   - page content is untrusted: labelled, scanned for instructions (a finding, never executed)
 //     and for external-agent signatures (FR-194), and every check is tainted by `page`.
 // The listed browser tools are read-only to the runtime's own check because each action is
@@ -16,6 +20,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import {
+  NovaError,
   uuidv7,
   type ActionEffectClass,
   type BrowserActionResult,
@@ -62,8 +67,11 @@ import {
   BROWSER_ACT_TOOL,
   BROWSER_SITE_TOOL,
   BrowserSites,
+  devServerAllowed,
   isLocalHost,
+  isLoopbackHost,
   normalizeHost,
+  originKey,
   type SiteDecision,
 } from './sites.ts';
 import type { ExternalAgentGuard } from '../agents/types.ts';
@@ -217,6 +225,14 @@ export class BrowserService {
   readonly #launching = new Map<string, Promise<BrowserSession>>();
   /** Injection findings already audited, per session and URL. */
   readonly #flagged = new Set<string>();
+  /**
+   * Granted dev servers (FR-097): `accountId:computerId` -> `host:port` -> how many grants hold
+   * it, and the egress proxy's grant, given once per host and port.
+   */
+  readonly #devServers = new Map<
+    string,
+    Map<string, { count: number; revokeProxy: (() => void) | null }>
+  >();
   #gate: ToolGate | null;
   #egress: EgressProxy | null;
   #reviewer: Reviewer | null;
@@ -344,7 +360,9 @@ export class BrowserService {
       .catch(() => undefined);
   }
 
-  async #computerOf(call: BrowserCall): Promise<string> {
+  async #computerOf(
+    call: Pick<BrowserCall, 'accountId' | 'threadId' | 'mode' | 'computerId'>,
+  ): Promise<string> {
     if (call.computerId) return call.computerId;
     let id: string | null = null;
     if (this.#computerFor) {
@@ -439,7 +457,16 @@ export class BrowserService {
       this.sites.networkLists(s.accountId),
       this.#o.setting('browser.allowLocalSites'),
     ]);
-    s.permissions = { allow: lists.allow, deny: lists.deny, allowLocal };
+    s.permissions = {
+      allow: lists.allow,
+      deny: lists.deny,
+      allowLocal,
+      devServers: this.#devServersOf(s.accountId, s.computerId),
+    };
+  }
+
+  #devServersOf(accountId: string, computerId: string): string[] {
+    return [...(this.#devServers.get(`${accountId}:${computerId}`)?.keys() ?? [])];
   }
 
   async #ready(call: BrowserCall): Promise<{ s: BrowserSession; computerId: string } | ToolResult> {
@@ -878,6 +905,8 @@ export class BrowserService {
     const ready = await this.#ready(call);
     if (!('s' in ready)) return ready;
     const { s, computerId } = ready;
+    // A dev server granted to this browser (FR-097): its own host and port only.
+    const dev = devServerAllowed(s.permissions, url.href);
     const refuse = async (code: string, message: string, pattern: string | null) => {
       await this.#navigated(call, computerId, url.href, false);
       await this.#record(call, s, {
@@ -909,14 +938,14 @@ export class BrowserService {
         `${host} is on the blocked list${site.source === 'network' ? ' of the network settings' : ''}, so the browser will not open it.`,
         site.pattern,
       );
-    if (isLocalHost(host) && !(await this.#o.setting('browser.allowLocalSites')))
+    if (!dev && isLocalHost(host) && !(await this.#o.setting('browser.allowLocalSites')))
       return refuse(
         'blocked_site',
         `${host} is a local or private-network address; the agent browser opens those only when browser.allowLocalSites is on.`,
         null,
       );
     let approvalId: string | null = null;
-    if (site.access !== 'allowed' && !(s.visitHost && s.visitHost === host)) {
+    if (!dev && site.access !== 'allowed' && !(s.visitHost && s.visitHost === host)) {
       const checked = await this.#siteCheck(call, s, host, url.href);
       if (!checked.go) {
         await this.#navigated(call, computerId, url.href, false);
@@ -935,7 +964,8 @@ export class BrowserService {
       // Allowed once (or for this chat by a grant): the host stays open while the browser is on it.
       if ((await this.sites.decide(call.accountId, host)).access !== 'allowed') s.visitHost = host;
     }
-    await s.ensureReachable(host);
+    if (dev) await s.ensureLocalBinding();
+    else await s.ensureReachable(host);
     const result = await this.#perform(
       call,
       s,
@@ -1508,17 +1538,7 @@ export class BrowserService {
 
   /** The page tools of a thread's browser: listed as `page:<host>.<name>`. */
   async pageToolsFor(accountId: string, threadId: string | null, mode: BrowserCall['mode']) {
-    const computerId = await this.#computerOf({
-      accountId,
-      threadId,
-      turnId: null,
-      callId: '',
-      projectId: null,
-      mode,
-      origin: 'model',
-      profile: { id: '', hash: '' },
-      signal: new AbortController().signal,
-    });
+    const computerId = await this.#computerOf({ accountId, threadId, mode });
     const s = this.session(accountId, computerId);
     const host = s?.host;
     if (!s || !host) return [];
@@ -1827,6 +1847,141 @@ export class BrowserService {
       : fail('not_available', r.reason);
   }
 
+  // ---- dev servers of Code sessions (FR-097, FR-067) ---------------------------------------------
+
+  /** The computer a thread's browser runs on: the resolver's (an agent's), else `thread-<id>`. */
+  computerForThread(
+    accountId: string,
+    threadId: string | null,
+    mode: BrowserCall['mode'] = 'code',
+  ): Promise<string> {
+    return this.#computerOf({ accountId, threadId, mode });
+  }
+
+  /**
+   * Let a computer's browser reach a dev server on the Hub's loopback (FR-097, docs/12 §4.2 and
+   * §8), for exactly that host and port and only while the grant lasts: the egress proxy's
+   * dev-server grant for the browser's proxy scope, the browser's own guards (which otherwise
+   * open local addresses only with `browser.allowLocalSites`), and local binding in the browser's
+   * proxy policy, which a running browser gets by restarting with its cookies before it next
+   * opens the server. Local binding opens nothing by itself: the proxy also needs this grant.
+   */
+  async grantDevServer(input: {
+    accountId: string;
+    computerId: string;
+    host: string;
+    port: number;
+  }): Promise<{ revoke(): Promise<void> }> {
+    const host = normalizeHost(input.host);
+    if (!isLoopbackHost(host))
+      throw new NovaError(
+        'validation',
+        `dev-server grants cover loopback addresses only, not ${host}`,
+      );
+    if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65_535)
+      throw new NovaError('validation', `the dev server's port must be 1-65535`);
+    const { accountId, computerId, port } = input;
+    const key = `${accountId}:${computerId}`;
+    const origin = `${host}:${port}`;
+    const grants =
+      this.#devServers.get(key) ??
+      new Map<string, { count: number; revokeProxy: (() => void) | null }>();
+    this.#devServers.set(key, grants);
+    const held = grants.get(origin);
+    if (held) held.count++;
+    else
+      grants.set(origin, {
+        count: 1,
+        revokeProxy:
+          this.#egress?.grantDevServer?.({
+            accountId,
+            scope: { kind: 'sandbox', id: `browser:${computerId}` },
+            host,
+            port,
+          }) ?? null,
+      });
+    const live = this.session(accountId, computerId);
+    if (live) await this.#refresh(live);
+    await this.#audit(accountId, 'browser.devserver.granted', origin, { computerId });
+    let revoked = false;
+    return {
+      revoke: async () => {
+        if (revoked) return;
+        revoked = true;
+        const g = grants.get(origin);
+        if (g && --g.count <= 0) {
+          grants.delete(origin);
+          g.revokeProxy?.();
+        }
+        if (!grants.size && this.#devServers.get(key) === grants) this.#devServers.delete(key);
+        const s = this.session(accountId, computerId);
+        if (s) await this.#refresh(s);
+        await this.#audit(accountId, 'browser.devserver.revoked', origin, { computerId });
+      },
+    };
+  }
+
+  /**
+   * Open a granted dev server in a computer's browser for the user who started it (FR-097, the
+   * Code browser pane): a navigation on the user's behalf, without the new-site prompt, recorded
+   * in the action trace with before/after screenshots. Only a granted dev server's own host and
+   * port are opened this way; whatever the page then loads or opens passes the usual guards and
+   * site permissions. Like the user's takeover input, it does not wait for a paused agent.
+   */
+  async openDevServer(input: {
+    accountId: string;
+    threadId: string | null;
+    url: string;
+    computerId?: string;
+    signal?: AbortSignal;
+  }): Promise<ToolResult> {
+    let url: URL;
+    try {
+      url = new URL(input.url.trim());
+    } catch {
+      return fail('invalid_arguments', `"${input.url.slice(0, 200)}" is not a URL`);
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password)
+      return fail('invalid_arguments', 'a dev server opens at a plain http or https address');
+    const host = normalizeHost(url.hostname);
+    const origin = originKey(url.href) ?? host;
+    const computerId =
+      input.computerId ?? (await this.computerForThread(input.accountId, input.threadId));
+    if (!this.#devServersOf(input.accountId, computerId).includes(origin))
+      return fail('not_granted', `${origin} is not a dev server granted to this browser`);
+    const r = await this.#open(input.accountId, computerId);
+    if ('error' in r) return r.error;
+    const s = r.session;
+    await this.#refresh(s);
+    const call: BrowserCall = {
+      accountId: input.accountId,
+      threadId: input.threadId,
+      turnId: null,
+      callId: `devserver:${uuidv7()}`,
+      projectId: null,
+      mode: 'code',
+      origin: 'ui',
+      profile: { id: 'workspace', hash: '' },
+      signal: input.signal ?? AbortSignal.timeout(NAV_TIMEOUT_MS * 2),
+      computerId,
+    };
+    if (!devServerAllowed(s.permissions, url.href))
+      return fail('blocked_site', `${host} is on the blocked list.`);
+    await s.ensureLocalBinding();
+    const result = await this.#perform(
+      call,
+      s,
+      { tool: 'devserver.open', action: 'navigate', target: origin },
+      async () => {
+        const res = await s.driver.goto(url.href, NAV_TIMEOUT_MS);
+        s.sync();
+        return `Opened ${s.url}${res.status ? ` (HTTP ${res.status})` : ''}.`;
+      },
+    );
+    await this.#navigated(call, computerId, url.href, result.ok);
+    return result;
+  }
+
   // ---- the seam controller (computers, screen) --------------------------------------------------
 
   controllerFor(accountId: string, computerId: string): AgentBrowserController {
@@ -1919,10 +2074,14 @@ export class BrowserService {
         return fail('invalid_arguments', 'the browser opens http and https addresses only');
       const site = await this.sites.decide(c.accountId, host);
       if (site.access === 'blocked') return fail('blocked_site', `${host} is on the blocked list.`);
-      if (isLocalHost(host) && !(await this.#o.setting('browser.allowLocalSites')))
+      const dev = devServerAllowed(s.permissions, action.url);
+      if (!dev && isLocalHost(host) && !(await this.#o.setting('browser.allowLocalSites')))
         return fail('blocked_site', `${host} is a local or private-network address.`);
-      if (site.access !== 'allowed') s.visitHost = host;
-      await s.ensureReachable(host);
+      if (dev) await s.ensureLocalBinding();
+      else {
+        if (site.access !== 'allowed') s.visitHost = host;
+        await s.ensureReachable(host);
+      }
       return this.#perform(c, s, { ...meta, target: host }, async () => {
         await s.driver.goto(action.url, NAV_TIMEOUT_MS);
         return `Opened ${s.driver.url()}.`;

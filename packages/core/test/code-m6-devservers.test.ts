@@ -1,16 +1,82 @@
 // Dev servers (FR-097, FR-067; docs/10 §7): detection of common frameworks and
-// `.nova/launch.json`, start in the session sandbox as an exec session, the URL handed to the
-// browser pane through the egress proxy's dev-server grant, stop, stop-all and exits noticed.
+// `.nova/launch.json`, start in the session sandbox as an exec session, the port published through
+// the sandbox's bridge, the URL handed to the browser pane through the egress proxy's dev-server
+// grant and opened once the server answers, stop, stop-all and exits noticed.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { connect, createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isNovaError } from '@nova/shared';
-import { MAX_DEV_SERVERS, detectDevServers } from '../src/index.ts';
+import {
+  DevServerManager,
+  MAX_DEV_SERVERS,
+  detectDevServers,
+  type AuditRecord,
+  type ExecRequest,
+  type ExecRequestExtras,
+  type ExecResult,
+  type SandboxClient,
+} from '../src/index.ts';
 import { ACCOUNT } from './helpers.ts';
 import { SessionSandbox, makeCodeM6Env, until, type CodeM6Env } from './code-m6-env.ts';
 
+/**
+ * A sandbox with its own network, like the real substrates: a published port is reachable only
+ * through the bridge it reports (here a plain TCP relay on another Hub port), closed with the
+ * command.
+ */
+class BridgedSandbox implements SandboxClient {
+  readonly substrate = 'container' as const;
+  readonly inner = new SessionSandbox();
+  readonly bridges = new Map<string, { server: Server; hostPort: number; turnId: string | null }>();
+
+  available() {
+    return this.inner.available();
+  }
+  async exec(req: ExecRequest & ExecRequestExtras): Promise<ExecResult> {
+    const r = await this.inner.exec(req);
+    if (r.status !== 'running' || !req.publish) return r;
+    const port = req.publish.port;
+    const server = createServer((c) => {
+      const u = connect(port, '127.0.0.1');
+      c.on('error', () => u.destroy());
+      u.on('error', () => c.destroy());
+      c.pipe(u);
+      u.pipe(c);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const a = server.address();
+    const hostPort = typeof a === 'object' && a ? a.port : 0;
+    this.bridges.set(r.sessionId, { server, hostPort, turnId: req.turnId ?? null });
+    return { ...r, published: { port, hostPort } };
+  }
+  async poll(sessionId: string, yieldMs: number): Promise<ExecResult> {
+    const r = await this.inner.poll(sessionId, yieldMs);
+    if (r.status === 'exited') this.#close(sessionId);
+    return r;
+  }
+  async write(sessionId: string, input: { signal?: 'interrupt' | 'terminate' }): Promise<void> {
+    await this.inner.write(sessionId, input);
+    if (input.signal === 'terminate') this.#close(sessionId);
+  }
+  async killTurn(turnId: string): Promise<void> {
+    await this.inner.killTurn(turnId);
+    for (const [id, b] of this.bridges) if (b.turnId === turnId) this.#close(id);
+  }
+  stop(): void {
+    this.inner.stop();
+    for (const id of [...this.bridges.keys()]) this.#close(id);
+  }
+  #close(sessionId: string): void {
+    const b = this.bridges.get(sessionId);
+    if (!b) return;
+    this.bridges.delete(sessionId);
+    b.server.close();
+  }
+}
+
 let e: CodeM6Env | null = null;
-let box: SessionSandbox | null = null;
+let box: SessionSandbox | BridgedSandbox | null = null;
 afterEach(async () => {
   box?.stop();
   await e?.close();
@@ -214,6 +280,79 @@ describe('dev servers', () => {
       'remote_environment',
     );
   });
+
+  it("publishes the server's port through the sandbox's bridge and opens it once it answers", async () => {
+    const bridged = new BridgedSandbox();
+    box = bridged;
+    e = await makeCodeM6Env({ sandbox: bridged });
+    mkdirSync(join(e.repo, '.nova'));
+    writeFileSync(
+      join(e.repo, '.nova', 'launch.json'),
+      JSON.stringify({
+        configurations: [
+          // Listens a second after it starts: the browser pane opens it once it answers.
+          { name: 'slow', command: `sleep 1; ${SERVER}`, port: 43_301 },
+          { name: 'never', command: 'sleep 30', port: 43_302 },
+        ],
+      }),
+    );
+    const audit: AuditRecord[] = [];
+    const dm = new DevServerManager({
+      code: e.svc,
+      audit: { append: (r) => Promise.resolve(void audit.push(r)) },
+      startYieldMs: 300,
+      readyWaitMs: 100,
+      readyTimeoutMs: 10_000,
+    });
+    const grants: { host: string; port: number }[] = [];
+    let revoked = 0;
+    dm.useGrant((input) => {
+      grants.push({ host: input.host, port: input.port });
+      return Promise.resolve({
+        url: null,
+        revoke: () => {
+          revoked++;
+          return Promise.resolve();
+        },
+      });
+    });
+    const opened: string[] = [];
+    dm.useOpener((input) => {
+      opened.push(input.url);
+      return Promise.resolve();
+    });
+    try {
+      const s = await e.svc.create(ACCOUNT, { folder: e.repo });
+      const v = await dm.start(ACCOUNT, s.id, { candidateId: 'launch:slow' }, 'user');
+      expect(bridged.inner.reqs.at(-1)).toMatchObject({
+        network: 'off',
+        env: { PORT: '43301' },
+        publish: { port: 43_301 },
+      });
+      const hostPort = bridged.bridges.get(v.execSessionId!)!.hostPort;
+      expect(hostPort).not.toBe(43_301);
+      // The URL is the bridge's port on the Hub; the view keeps the server's own port.
+      expect(v).toMatchObject({ status: 'running', port: 43_301 });
+      expect(v.url).toBe(`http://127.0.0.1:${hostPort}/`);
+      expect(grants).toEqual([{ host: '127.0.0.1', port: hostPort }]);
+      // Not answering yet: the pane opens it in the background once it does.
+      expect(opened).toEqual([]);
+      await until(() => opened.length === 1, 10_000);
+      expect(opened).toEqual([v.url]);
+      expect(await (await fetch(v.url!)).text()).toBe('hello from dev');
+      await dm.stop(ACCOUNT, s.id, v.id, 'user');
+      expect(revoked).toBe(1);
+      expect(bridged.bridges.size).toBe(0);
+      // A server stopped before it ever answered is never opened.
+      const never = await dm.start(ACCOUNT, s.id, { candidateId: 'launch:never' }, 'agent');
+      await dm.stop(ACCOUNT, s.id, never.id, 'agent');
+      await new Promise((r) => setTimeout(r, 600));
+      expect(opened).toHaveLength(1);
+      expect(revoked).toBe(2);
+    } finally {
+      await dm.close();
+    }
+  }, 20_000);
 
   it('needs a sandbox', async () => {
     e = await makeCodeM6Env({ sandbox: null });

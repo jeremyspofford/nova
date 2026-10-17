@@ -1,0 +1,227 @@
+/* Computers (FR-080), Settings → Network (FR-102, FR-193) and the before/after screenshots of the
+   Activity trace (FR-098). Colors, spacing and type come only from design tokens. */
+
+/* ---- shared badges ------------------------------------------------------------------------ */
+.ws-badge[data-tone='danger'] {
+  border-color: var(--u-danger);
+}
+.computers-state {
+  flex: none;
+  font-size: var(--u-text-sm);
+}
+
+/* ---- computers list and page ---------------------------------------------------------------- */
+.computers-row-main,
+.network-row-main {
+  display: grid;
+  flex: 1;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.computers-row-detail {
+  margin: 0;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.computers-actions,
+.network-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.computers-sandbox {
+  gap: var(--u-space-2);
+}
+.computers-sandbox > h2 {
+  margin: 0;
+}
+.computers-inline-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  color: var(--u-danger);
+  font-size: var(--u-text-sm);
+}
+.computers-detail {
+  overflow-wrap: anywhere;
+}
+.computers-facts {
+  max-width: 100%;
+}
+.computers-limits {
+  gap: var(--u-space-2);
+}
+.computers-slot {
+  display: grid;
+  gap: var(--u-space-3);
+  min-width: 0;
+}
+
+/* ---- network: host lists, rules, credentials, decision log ---------------------------------- */
+.hosts {
+  display: grid;
+  gap: var(--u-space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.hosts > legend {
+  margin-bottom: var(--u-space-1);
+  padding: 0;
+}
+.hosts-list {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hosts-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+  padding: var(--u-space-1) var(--u-space-1) var(--u-space-1) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+}
+.hosts-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.hosts-note {
+  font-size: var(--u-text-xs);
+}
+.hosts-add {
+  align-items: flex-start;
+}
+.hosts-add > .nv-btn {
+  margin-top: calc(var(--u-text-sm) * 1.5 + var(--u-space-1));
+}
+.network-hosts {
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.network-filters {
+  align-items: flex-end;
+}
+.network-log {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.network-decision {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-left-width: 4px;
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+}
+.network-decision[data-decision='deny'] {
+  border-left-color: var(--u-danger);
+}
+.network-decision[data-decision='allow'] {
+  border-left-color: var(--u-success);
+}
+.network-decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+}
+.network-request {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.network-time {
+  font-size: var(--u-text-xs);
+}
+.network-cause {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+
+/* ---- Activity trace screenshots (FR-098) ---------------------------------------------------- */
+.shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-2);
+  margin: var(--u-space-1) 0 var(--u-space-2) var(--u-space-6);
+}
+.shot {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  width: 160px;
+  max-width: calc(50% - var(--u-space-1));
+}
+.shot figcaption {
+  font-size: var(--u-text-xs);
+}
+.shot-button {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  cursor: zoom-in;
+}
+.shot-button:hover {
+  border-color: var(--u-accent);
+}
+.shot-button:focus-visible {
+  outline: 2px solid var(--u-accent);
+  outline-offset: 2px;
+}
+.shot-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top left;
+}
+.shot-none {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  padding: var(--u-space-2);
+  border: 1px dashed var(--u-border);
+  border-radius: var(--u-radius-sm);
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+  text-align: center;
+}
+.nv-dialog.shot-dialog {
+  width: min(1100px, 100%);
+}
+.shot-full {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  border: 1px solid var(--u-border);
+  object-fit: contain;
+}
+
+/* ---- phones (docs/04 §4.3) ------------------------------------------------------------------ */
+.app[data-layout='phone'] .shots {
+  margin-left: 0;
+}
+.app[data-layout='phone'] .network-actions,
+.app[data-layout='phone'] .computers-actions {
+  width: 100%;
+}

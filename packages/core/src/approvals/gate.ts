@@ -341,9 +341,11 @@ export class PolicyGate implements ToolGate {
       });
     const { profile, fallback } = await loadPermissionProfile(store.db, req.accountId, profileId);
     if (fallback) this.#o.log?.warn('permission profile fell back to read-only', { fallback });
-    const [rootSetting, egressAllow, approvalSetting, folders] = await Promise.all([
+    const [rootSetting, egressAllow, egressDeny, approvalSetting, folders] = await Promise.all([
       setting('tools.roots'),
       setting('network.egressAllow'),
+      // Hosts nothing may reach (FR-193): they deny a tool's network call too, not only the proxy.
+      setting('network.egressDeny'),
       setting('tools.approvalPolicy', req.projectId),
       this.#projectFolders(req.projectId),
     ]);
@@ -426,7 +428,7 @@ export class PolicyGate implements ToolGate {
       fs,
       egress: {
         allow: [...egressAllow, ...(resolved.network.allow ?? [])],
-        deny: resolved.network.deny ?? [],
+        deny: [...egressDeny, ...(resolved.network.deny ?? [])],
       },
     };
     // The mode name is a label for display and audit only (docs/12 §2.1).

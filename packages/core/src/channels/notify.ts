@@ -38,6 +38,11 @@ export interface RouteDecision {
 
 export interface NotificationSender {
   sendTo(accountId: string, bindingId: string, text: string): Promise<ChannelReceipt>;
+  /**
+   * Whether a notification may go to this binding: a shared channel (other people read it)
+   * follows the private-to-shared policy (docs/13 §4), and nothing private goes there unasked.
+   */
+  mayNotify?(accountId: string, bindingId: string): Promise<boolean>;
 }
 
 export interface NotificationRouterOptions {
@@ -467,12 +472,22 @@ export class NotificationRouter {
           error = 'channels are not available';
         } else {
           try {
-            const res = await this.#sender.sendTo(
-              r.account_id,
-              r.binding_id,
-              r.body ? `${r.title}\n${r.body}` : r.title,
-            );
-            receipt = res.id;
+            if (
+              this.#sender.mayNotify &&
+              !(await this.#sender.mayNotify(r.account_id, r.binding_id))
+            ) {
+              // Recorded as not sent, with the reason (the table has no `withheld` state).
+              status = 'failed';
+              error =
+                'withheld: a shared channel, and the private-to-shared policy does not allow it';
+            } else {
+              const res = await this.#sender.sendTo(
+                r.account_id,
+                r.binding_id,
+                r.body ? `${r.title}\n${r.body}` : r.title,
+              );
+              receipt = res.id;
+            }
           } catch (err) {
             status = 'failed';
             error = (err instanceof Error ? err.message : String(err)).slice(0, 500);

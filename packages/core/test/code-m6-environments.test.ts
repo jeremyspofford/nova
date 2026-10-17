@@ -177,6 +177,27 @@ describe('saved environments', () => {
     await expect(reason(e.svc.envs.remove(ACCOUNT, v.id))).resolves.toBe('conflict:in_use');
   });
 
+  it('never offers Bypass in an SSH environment: Nova has no sandbox there (FR-063)', async () => {
+    e = await makeCodeM6Env({ values: { 'code.allowBypass': true } });
+    const v = await e.svc.envs.create(ACCOUNT, sshReq());
+    const remote = join(e.dir, 'remote-bypass');
+    mkdirSync(remote, { recursive: true });
+    await expect(
+      reason(
+        e.svc.create(ACCOUNT, { folder: remote, environmentId: v.id, permissionMode: 'bypass' }),
+      ),
+    ).resolves.toBe('validation:mode_unavailable');
+    const s = await e.svc.create(ACCOUNT, { folder: remote, environmentId: v.id });
+    await expect(reason(e.svc.update(ACCOUNT, s.id, { permissionMode: 'bypass' }))).resolves.toBe(
+      'validation:mode_unavailable',
+    );
+    // A local folder on the Hub's container sandbox may use it.
+    const local = join(e.dir, 'local-bypass');
+    mkdirSync(local, { recursive: true });
+    const l = await e.svc.create(ACCOUNT, { folder: local, permissionMode: 'bypass' });
+    expect(l.permissionMode).toBe('bypass');
+  });
+
   it('keeps remote commands running across a dropped connection and shows the buffered output (FR-078)', async () => {
     e = await makeCodeM6Env();
     const v = await e.svc.envs.create(ACCOUNT, sshReq());

@@ -110,6 +110,13 @@ import type {
   updatePlanSchema,
   updateScheduleSchema,
 } from '@nova/shared';
+import { agentsApi } from './agents/api.ts';
+import { browserApi } from './browser/api.ts';
+import { channelsApi } from './channels/api.ts';
+import { codeM6Api } from './code/api-m6.ts';
+import { computersApi } from './computers/api.ts';
+import { devicesApi } from './devices/api.ts';
+import { screenApi } from './screen/api.ts';
 import { spacesApi } from './spaces/api.ts';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
@@ -670,6 +677,13 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
 
     // ---- M6 areas (each in its own module) -----------------------------------------------------
     ...spacesApi(call),
+    ...agentsApi(call),
+    ...computersApi(call),
+    ...devicesApi(call),
+    ...codeM6Api(call),
+    ...channelsApi(call),
+    ...browserApi(call),
+    ...screenApi(call),
   };
 }
 

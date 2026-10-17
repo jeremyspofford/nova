@@ -16,6 +16,11 @@
 // relays 127.0.0.1:3128 to it: the proxy is the only route out, for Docker and Podman alike,
 // rootful or rootless. Without the proxy, `allowedNetwork: 'open'` keeps the M3 behavior (the
 // engine's default network, unfiltered) and anything else fails closed (no network).
+//
+// Dev servers (FR-097): a request with `publish: {port}` gets the dev-server bridge (sandbox-
+// publish.ts): its folder is bind-mounted at /run/nova/publish, a forwarder inside listens on a
+// socket there and relays to the port, and the Hub serves it on a free port of its 127.0.0.1.
+// Both substrates do it the same way; the command's network is unchanged.
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
@@ -32,6 +37,14 @@ import {
 } from './sandbox-egress.ts';
 import { MicroVmSandbox, type MicroVmRunner } from './sandbox-microvm.ts';
 import { sandboxMounts } from './sandbox-protect.ts';
+import {
+  PERL_PUBLISH_FORWARDER,
+  PUBLISH_MOUNT,
+  openPublish,
+  publishBase,
+  publishPrelude,
+  type PublishBridge,
+} from './sandbox-publish.ts';
 import {
   ProcessSandbox,
   type LaunchPlan,
@@ -70,6 +83,18 @@ export {
   type BwrapSandboxOptions,
   type SeccompArch,
 } from './sandbox-bwrap.ts';
+export {
+  NODE_PUBLISH_FORWARDER,
+  PERL_PUBLISH_FORWARDER,
+  PUBLISH_MOUNT,
+  PUBLISH_SOCKET,
+  checkPublishPort,
+  openPublish,
+  publishBase,
+  publishPrelude,
+  type PublishBridge,
+  type PublishOptions,
+} from './sandbox-publish.ts';
 export { threadSandboxRouter, type ThreadSandboxPick } from './sandbox-router.ts';
 export {
   GIT_CONTROL_FILES,
@@ -192,11 +217,23 @@ export class ContainerSandbox extends ProcessSandbox {
     return value;
   }
 
+  /** The container's user as numbers, when `--user` is numeric. */
+  get sandboxUser(): { uid: number; gid: number } | null {
+    const m = /^(\d+):(\d+)$/.exec(this.#user);
+    return m ? { uid: Number(m[1]), gid: Number(m[2]) } : null;
+  }
+
   /**
    * Arguments for `<bin> run`, exposed for tests. `egress` is the command's proxy session: with
-   * one, the container's only route out is the mounted proxy socket.
+   * one, the container's only route out is the mounted proxy socket. `publish` is the command's
+   * dev-server bridge (its folder and the port inside).
    */
-  runArgs(req: ExecRequest, name: string, egress: SandboxEgressSession | null = null): string[] {
+  runArgs(
+    req: ExecRequest,
+    name: string,
+    egress: SandboxEgressSession | null = null,
+    publish: Pick<PublishBridge, 'dir' | 'port'> | null = null,
+  ): string[] {
     const args = [
       'run',
       '--rm',
@@ -226,12 +263,12 @@ export class ContainerSandbox extends ProcessSandbox {
     if (!unfiltered) args.push('--network', 'none');
     // The host's filesystem root is never mounted: a profile's "whole filesystem" is the
     // container's own (docs/12 §7.1). Then the protected paths in the roots (§7.2); the engine
-    // mounts parents before children.
+    // mounts parents before children. Dev-server bridges are hidden like the data folder.
     const mounts = sandboxMounts({
       roots: req.roots.filter((r) => r.path !== '/' && !/^[A-Za-z]:[\\/]?$/.test(r.path)),
       cwd: req.cwd,
       gitWrite: req.gitWrite === true,
-      deniedPaths: this.deniedPaths,
+      deniedPaths: [...this.deniedPaths, publishBase()],
     });
     for (const m of mounts) {
       if (m.path.includes(',') || m.path.includes('\n'))
@@ -254,29 +291,34 @@ export class ContainerSandbox extends ProcessSandbox {
       // Proxy variables win over anything the caller set: the proxy is the only route.
       Object.assign(env, proxyEnv(egress), { NOVA_EGRESS_FORWARDER: PERL_FORWARDER });
     }
+    let prelude = egress ? forwarderPrelude('perl', egress.socketName) : '';
+    if (publish) {
+      if (publish.dir.includes(',') || publish.dir.includes('\n'))
+        throw new NovaError('server_error', `the dev-server bridge path cannot contain commas`);
+      args.push('--mount', `type=bind,source=${publish.dir},target=${PUBLISH_MOUNT}`);
+      env.NOVA_PUBLISH_FORWARDER = PERL_PUBLISH_FORWARDER;
+      prelude = `${prelude}${prelude ? ' ' : ''}${publishPrelude('perl', publish.port)}`;
+    }
     for (const [k, v] of Object.entries(env)) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) args.push('-e', `${k}=${v}`);
     }
-    if (egress)
-      args.push(
-        this.#image,
-        'sh',
-        '-c',
-        `${forwarderPrelude('perl', egress.socketName)} exec sh -c "$1"`,
-        'nova-sandbox',
-        req.cmd,
-      );
+    if (prelude)
+      args.push(this.#image, 'sh', '-c', `${prelude} exec sh -c "$1"`, 'nova-sandbox', req.cmd);
     else args.push(this.#image, 'sh', '-c', req.cmd);
     return args;
   }
 
   protected async plan(req: SandboxExecRequest, name: string): Promise<LaunchPlan> {
     const { session, note } = await openEgress(this.#egress, req);
+    let publish: PublishBridge | null = null;
     let args: string[];
     try {
-      args = this.runArgs(req, name, session);
+      if (req.publish)
+        publish = await openPublish({ port: req.publish.port, sandboxUser: this.sandboxUser });
+      args = this.runArgs(req, name, session, publish);
     } catch (err) {
       await session?.close().catch(() => undefined);
+      await publish?.close().catch(() => undefined);
       throw err;
     }
     const plan: LaunchPlan = {
@@ -285,7 +327,12 @@ export class ContainerSandbox extends ProcessSandbox {
       kill: () => this.#cli(['kill', name]),
       interrupt: () => this.#cli(['kill', '--signal', 'INT', name]),
     };
-    if (session) plan.cleanup = () => session.close();
+    if (session || publish)
+      plan.cleanup = async () => {
+        await session?.close().catch(() => undefined);
+        await publish?.close().catch(() => undefined);
+      };
+    if (publish) plan.published = { port: publish.port, hostPort: publish.hostPort };
     if (note) plan.note = note;
     return plan;
   }

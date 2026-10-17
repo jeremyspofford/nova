@@ -1,11 +1,14 @@
 // Scheduled (FR-055, FR-187, FR-206, ADR-079; docs/09 §6): every schedule with its rule, next
 // run, last run and last outcome (including No news and Output missing), and its actions: Run
-// now, Edit, Pause or Resume, History (fires, catch-up windows and skips) and Delete. Self-set
-// wakes of agents show as set by the agent. `?fromRun=<id>` opens New schedule filled in from a
-// finished run ("Schedule it"); `?new=1` opens it blank.
+// now, Edit, Pause or Resume, History (fires, catch-up windows and skips) and Delete. Schedules
+// of an agent name it ("Set by Scout" for a self-set wake, with its reason, FR-206) and link to
+// it. `?fromRun=<id>` opens New schedule filled in from a finished run ("Schedule it"); `?new=1`
+// opens it blank.
 import { useEffect, useId, useState } from 'react';
 import type { ProjectView, ScheduleFireView, ScheduleView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, useToast } from '@nova/ui';
+import { useAgentsApi } from '../agents/api.ts';
+import { agentPath } from '../agents/format.ts';
 import { errorMessage } from '../api.ts';
 import { navigate, useLocation } from '../router.ts';
 import { useServices } from '../services.tsx';
@@ -20,11 +23,16 @@ import './work.css';
 
 type DialogState = { editing: ScheduleView | null; seed?: ScheduleSeed } | null;
 
-const ORIGIN_TEXT: Record<ScheduleView['origin'], string | null> = {
-  user: null,
-  agent: 'Created by an agent',
-  agent_self: 'Set by agent',
-};
+/** Who set a schedule, when an agent did or it wakes one; the agent's name when it is known. */
+export function scheduleOriginText(
+  s: Pick<ScheduleView, 'origin' | 'agentId'>,
+  agentName: string | undefined,
+): string | null {
+  if (s.origin === 'agent_self') return agentName ? `Set by ${agentName}` : 'Set by agent';
+  if (s.origin === 'agent') return agentName ? `Created by ${agentName}` : 'Created by an agent';
+  if (s.agentId) return agentName ? `For ${agentName}` : 'For an agent';
+  return null;
+}
 
 export function ScheduledView() {
   const { api } = useServices();
@@ -38,6 +46,23 @@ export function ScheduledView() {
   const [confirmDelete, setConfirmDelete] = useState<ScheduleView | null>(null);
   const [history, setHistory] = useState<Set<string>>(new Set());
   const [historyVersion, setHistoryVersion] = useState(0);
+  const agentsApi = useAgentsApi();
+  const [agentNames, setAgentNames] = useState<ReadonlyMap<string, string>>(new Map());
+  // Names only matter when an agent's schedule is listed; a failure keeps the generic words.
+  const needsNames = items?.some((s) => s.agentId && !agentNames.has(s.agentId)) ?? false;
+  useEffect(() => {
+    if (!needsNames) return;
+    let alive = true;
+    Promise.resolve()
+      .then(() => agentsApi.listAgents())
+      .then(
+        ({ items: agents }) => alive && setAgentNames(new Map(agents.map((a) => [a.id, a.name]))),
+        () => undefined,
+      );
+    return () => {
+      alive = false;
+    };
+  }, [agentsApi, needsNames]);
 
   const params = new URLSearchParams(loc.includes('?') ? loc.slice(loc.indexOf('?') + 1) : '');
   const fromRun = params.get('fromRun');
@@ -176,7 +201,8 @@ export function ScheduledView() {
       {items?.length ? (
         <ul className="ws-list" aria-label="Schedules">
           {items.map((s) => {
-            const origin = ORIGIN_TEXT[s.origin];
+            const agentName = s.agentId ? agentNames.get(s.agentId) : undefined;
+            const origin = scheduleOriginText(s, agentName);
             const project = projectName(s.projectId);
             const showHistory = history.has(s.id);
             return (
@@ -193,8 +219,18 @@ export function ScheduledView() {
                       </span>
                     )}
                     {origin ? (
-                      <span className="ws-badge">
-                        <Icon name="agents" /> {origin}
+                      <span className="ws-badge" data-origin={s.origin}>
+                        <Icon name="agents" />{' '}
+                        {s.agentId && agentName ? (
+                          <a
+                            href={agentPath(s.agentId)}
+                            onClick={(e) => followLink(e, agentPath(s.agentId ?? ''))}
+                          >
+                            {origin}
+                          </a>
+                        ) : (
+                          origin
+                        )}
                       </span>
                     ) : null}
                     {project ? (
@@ -203,6 +239,14 @@ export function ScheduledView() {
                       </span>
                     ) : null}
                   </span>
+                  {s.wakeReason ? (
+                    <span className="ws-row-meta">
+                      <span>
+                        <span className="muted">Reason: </span>
+                        <span data-untrusted="true">{s.wakeReason}</span>
+                      </span>
+                    </span>
+                  ) : null}
                   <span className="ws-row-meta">
                     <span>Next run: {s.enabled ? formatDateTime(s.nextRunAt) : 'Paused'}</span>
                     <span>Last run: {formatWhen(s.lastRunAt)}</span>

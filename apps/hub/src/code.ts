@@ -61,6 +61,7 @@ import {
   type EnvSshTransport,
   type GitHostClient,
   type SandboxClient,
+  type SandboxEgress,
   type TerminalManager,
   type ThreadPolicySource,
   type ThreadStatusSource,
@@ -129,6 +130,11 @@ export interface CodeDeps {
   sweepIntervalMs?: number;
   /** A sandbox for a container environment's image (default: docker or podman with it). */
   containerSandbox?: (image: string) => SandboxClient | null;
+  /**
+   * The egress proxy (late-bound, the computers area's): a container environment reaches the
+   * network only through it, like every other sandbox (docs/12 §8).
+   */
+  egress?: () => SandboxEgress | null;
   /** `novad` over SSH; usually bound later with `useSsh`. */
   sshTransport?: EnvSshTransport;
   /** Build Git host clients (tests point them at a mock host). */
@@ -188,19 +194,19 @@ export function setupCode(ctx: HubContext & CodeDeps): Promise<CodeArea> {
     sandbox: () => ctx.sandbox?.() ?? null,
     ...(ctx.home !== undefined ? { home: ctx.home } : {}),
     secrets: ctx.secrets,
-    // A container environment runs its image on the same engine and network rule as the tools'
-    // sandbox (apps/hub/src/tools.ts).
+    // A container environment runs its image on the same engine as the tools' sandbox, with the
+    // network only through the egress proxy (none without it, fail closed).
     containerSandbox:
       ctx.containerSandbox ??
-      ((image) =>
-        detectSandbox({
+      ((image) => {
+        const egress = ctx.egress?.() ?? null;
+        return detectSandbox({
           mode: process.env.NOVA_SANDBOX ?? 'auto',
           image,
           deniedPaths: [ctx.dataDir],
-          ...(process.env.NOVA_SANDBOX_NETWORK === 'open'
-            ? { allowedNetwork: 'open' as const }
-            : {}),
-        })),
+          ...(egress ? { egress } : {}),
+        });
+      }),
     sshTransport: ctx.sshTransport ?? null,
     log,
   });

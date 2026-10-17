@@ -544,7 +544,9 @@ export class ScheduleService {
       name: 'schedule.created',
       actor,
       accountId,
-      payload: { scheduleId: id, origin: row.origin },
+      // An agent's schedule names it, so agent views refetch only their own (FR-206).
+      ...(row.agent_id ? { correlation: { agentId: row.agent_id } } : {}),
+      payload: { scheduleId: id, origin: row.origin, agentId: row.agent_id },
     });
     if (row.origin === 'agent_self' && row.agent_id)
       await this.#events.emit({
@@ -661,7 +663,9 @@ export class ScheduleService {
       name: 'schedule.changed',
       actor,
       accountId,
-      payload: { scheduleId: id, origin: row.origin, changed: keys },
+      // An agent's schedule names it, so agent views refetch only their own (FR-206).
+      ...(row.agent_id ? { correlation: { agentId: row.agent_id } } : {}),
+      payload: { scheduleId: id, origin: row.origin, changed: keys, agentId: row.agent_id },
     });
     await this.#auditAppend({
       accountId,
@@ -689,7 +693,9 @@ export class ScheduleService {
       name: 'schedule.cancelled',
       actor,
       accountId,
-      payload: { scheduleId: id, origin: row.origin },
+      // An agent's schedule names it, so agent views refetch only their own (FR-206).
+      ...(row.agent_id ? { correlation: { agentId: row.agent_id } } : {}),
+      payload: { scheduleId: id, origin: row.origin, agentId: row.agent_id },
     });
     await this.#auditAppend({
       accountId,

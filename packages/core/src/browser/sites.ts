@@ -99,11 +99,46 @@ export function sameSite(pattern: string, host: string): boolean {
   return host === `www.${pattern}` || pattern === `www.${host}`;
 }
 
+/** Loopback names and addresses: where the Hub publishes dev servers. */
+export function isLoopbackHost(host: string): boolean {
+  const h = normalizeHost(host);
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (isIP(h) === 4) return h.split('.')[0] === '127';
+  return h === '::1' || h === '0:0:0:0:0:0:0:1';
+}
+
 /** What a running browser may reach, refreshed by the service before each action. */
 export interface SitePermissions {
   allow: readonly string[];
   deny: readonly string[];
   allowLocal: boolean;
+  /** Dev servers granted to this browser (FR-097): `host:port`, loopback only. */
+  devServers?: readonly string[];
+}
+
+/** The `host:port` origin key of a URL (default ports filled in), or null. */
+export function originKey(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+    return `${normalizeHost(u.hostname)}:${port}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A granted dev server (FR-097, docs/12 §4.2): exactly its host and port, never a blocked host.
+ * Local addresses then load without `browser.allowLocalSites`; every other host and port of
+ * that address still follows the rules below.
+ */
+export function devServerAllowed(perm: SitePermissions, url: string): boolean {
+  if (!perm.devServers?.length) return false;
+  const key = originKey(url);
+  if (!key || !perm.devServers.includes(key)) return false;
+  const host = normalizeHost(new URL(url).hostname);
+  return !perm.deny.some((p) => hostMatch(p, host));
 }
 
 /**
@@ -243,13 +278,19 @@ export class BrowserSites {
   }
 
   /** The patterns the egress proxy lets the browser reach, and the ones it never does. */
-  async networkLists(accountId: string): Promise<{ allow: string[]; deny: string[] }> {
-    const [egressAllow, egressDeny] = await Promise.all([
+  async networkLists(
+    accountId: string,
+  ): Promise<{ allow: string[]; deny: string[]; mode: 'off' | 'allowlist' | 'limited' }> {
+    const [egressAllow, egressDeny, egressMode] = await Promise.all([
       this.#setting('network.egressAllow'),
       this.#setting('network.egressDeny'),
+      this.#setting('network.egressMode'),
     ]);
     const rows = this.#rows(accountId);
     return {
+      // The Hub's network mode bounds the browser like every sandbox (FR-193): off is no
+      // network, limited is reads only; allowlist leaves the sites and lists to decide.
+      mode: egressMode,
       allow: [...rows.filter((r) => r.access === 'allow').map((r) => r.pattern), ...egressAllow],
       deny: [...rows.filter((r) => r.access === 'block').map((r) => r.pattern), ...egressDeny],
     };

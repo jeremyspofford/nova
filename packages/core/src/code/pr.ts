@@ -157,6 +157,13 @@ export class PullRequestService {
     req: CodePushRequest,
     actor: 'user' | 'agent',
   ): Promise<PushResultView> {
+    // The Git host's token goes only over https: never in clear to an http:// remote.
+    if (t.host && /^http:\/\//i.test(t.url))
+      throw new NovaError(
+        'policy_denied',
+        'the remote uses http://; Nova sends the Git host token only over https',
+        { details: { reason: 'insecure_remote' } },
+      );
     let hostDefault: string | null = null;
     let isProtected = false;
     if (t.host && t.repo) {
@@ -191,7 +198,7 @@ export class PullRequestService {
     }
     const hook = await this.#prePush(s, t);
     const env: Record<string, string> = {};
-    if (t.host && /^https?:\/\//i.test(t.url)) {
+    if (t.host && /^https:\/\//i.test(t.url)) {
       const token = await this.#o.hosts.token(s.accountId, t.host.id);
       if (token) {
         // The header lives in this call's environment only; nothing is written to a config file.

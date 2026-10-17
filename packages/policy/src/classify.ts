@@ -138,19 +138,25 @@ export function effectiveEffects(tool: ToolDescriptor, extra?: ActionClass): Act
 }
 
 /**
- * Read-only for policy purposes: only Nova's own tools can be read-only (an MCP `readOnlyHint`
- * is an untrusted hint that may tighten, never loosen, docs/08 §1), and only when nothing but
- * the network is among its effects.
+ * Read-only for policy purposes, and only when nothing but the network is among its effects
+ * (declared, from its action class, and for untrusted tools inferred from its name and
+ * description) and no annotation says it writes, sends, deletes or executes:
+ * - Nova's own tools by their `readOnly` annotation;
+ * - an MCP tool only when the owner declared it read-only in Settings (`userReadOnly`, FR-189:
+ *   only what the user sets carries authority) and the server does not call it destructive. The
+ *   server's `readOnlyHint` is an untrusted hint that may tighten, never loosen (docs/08 §1).
  */
 export function isReadOnly(tool: ToolDescriptor, effects: readonly ActionEffect[]): boolean {
   const a = tool.annotations;
+  const declared = TRUSTED_SOURCES.has(tool.source)
+    ? a?.readOnly === true
+    : tool.source === 'mcp' && tool.userReadOnly === true && a?.destructive !== true;
   return (
-    TRUSTED_SOURCES.has(tool.source) &&
-    a?.readOnly === true &&
-    a.action !== 'write' &&
-    a.action !== 'send' &&
-    a.action !== 'delete' &&
-    a.action !== 'execute' &&
+    declared &&
+    a?.action !== 'write' &&
+    a?.action !== 'send' &&
+    a?.action !== 'delete' &&
+    a?.action !== 'execute' &&
     effects.every((e) => e === 'network')
   );
 }

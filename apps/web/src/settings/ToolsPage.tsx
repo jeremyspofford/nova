@@ -4,7 +4,7 @@
 // SearXNG instance behind web search. The server list refreshes every 5 s while the page is open.
 // M4 adds installing a server from a bundle (FR-199) and OAuth sign-in for remote servers
 // (FR-047).
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { McpLogLine, McpServerView, ToolDescriptor, ToolView } from '@nova/shared';
 import {
   Button,
@@ -30,6 +30,10 @@ import { EFFECT_TEXT, EFFECT_TONE, MCP_STATUS, SOURCE_TEXT, TIER_TEXT } from './
 import '../workspace.css';
 
 export const MCP_POLL_MS = 5000;
+
+/** What marking an MCP tool "Reads only" means (FR-082, FR-189: the owner's declaration). */
+export const READS_ONLY_HELP =
+  "Nova treats this tool as reading only: agents' research may use it, and it is allowed without asking. Only mark tools that never change anything.";
 
 export function ToolsPage() {
   const { api } = useServices();
@@ -447,6 +451,7 @@ function ServerTools({
   const toast = useToast();
   const [tools, setTools] = useState<ToolDescriptor[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const helpId = useId();
 
   useEffect(() => {
     let alive = true;
@@ -471,6 +476,19 @@ function ServerTools({
       toast.show(`Could not change ${name}: ${errorMessage(err)}`, { tone: 'error' });
     }
   };
+  // The owner's "Reads only" list (FR-082). The Hub matches an entry by the server's name, the
+  // bare name or the canonical name, so unmarking removes the tool under any of them.
+  const readsOnly = (t: ToolDescriptor) =>
+    server.readOnlyTools.some((x) => x === bare(t.name) || x === t.name);
+  const markReadsOnly = async (t: ToolDescriptor, on: boolean) => {
+    const name = bare(t.name);
+    const rest = server.readOnlyTools.filter((x) => x !== name && x !== t.name);
+    try {
+      onSaved(await api.updateMcpServer(server.id, { readOnlyTools: on ? [...rest, name] : rest }));
+    } catch (err) {
+      toast.show(`Could not change ${name}: ${errorMessage(err)}`, { tone: 'error' });
+    }
+  };
 
   return (
     <section id={id} className="ws-subpanel" aria-label={`Tools from ${server.name}`}>
@@ -482,6 +500,11 @@ function ServerTools({
       {tools === null && !error ? <Spinner label="Loading tools" /> : null}
       {tools?.length === 0 ? (
         <p className="muted">No tools listed. A server lists its tools once it is connected.</p>
+      ) : null}
+      {tools?.length ? (
+        <p id={helpId} className="muted">
+          {READS_ONLY_HELP}
+        </p>
       ) : null}
       {tools?.length ? (
         <ul className="ws-list">
@@ -498,12 +521,24 @@ function ServerTools({
                     <span className="muted ws-row-meta">Not in this server&apos;s allow list.</span>
                   ) : null}
                 </div>
-                <Switch
-                  label={`Use ${t.name}`}
-                  checked={allowListed && !server.disabledTools.includes(name)}
-                  disabled={!allowListed || !!server.pluginId}
-                  onChange={(v) => void toggle(name, v)}
-                />
+                <div className="row ws-row-actions">
+                  <label className="ws-check">
+                    <input
+                      type="checkbox"
+                      checked={readsOnly(t)}
+                      disabled={!!server.pluginId}
+                      aria-describedby={helpId}
+                      onChange={(e) => void markReadsOnly(t, e.target.checked)}
+                    />
+                    <span>Reads only</span>
+                  </label>
+                  <Switch
+                    label={`Use ${t.name}`}
+                    checked={allowListed && !server.disabledTools.includes(name)}
+                    disabled={!allowListed || !!server.pluginId}
+                    onChange={(v) => void toggle(name, v)}
+                  />
+                </div>
               </li>
             );
           })}

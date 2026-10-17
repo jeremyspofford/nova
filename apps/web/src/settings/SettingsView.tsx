@@ -12,6 +12,12 @@ import { ProfilePage } from './ProfilePage.tsx';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { PermissionsPage } from './PermissionsPage.tsx';
 import { CodePage } from './CodePage.tsx';
+import { AgentsSettings } from '../agents/AgentsSettings.tsx';
+import { BrowserSettings } from '../browser/BrowserSettings.tsx';
+import { ChannelsPage } from '../channels/ChannelsPage.tsx';
+import { TriggersPage } from '../channels/TriggersPage.tsx';
+import { NetworkPage } from '../network/NetworkPage.tsx';
+import { ComputerUseSettings } from '../screen/ComputerUseSettings.tsx';
 import { ToolsPage } from './ToolsPage.tsx';
 import { KeyboardPage } from './KeyboardPage.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -28,8 +34,14 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   plugins: 'Plugins & skills',
   clients: 'Apps & clients',
   permissions: 'Permissions',
+  'computer-use': 'Computer use',
+  agents: 'Agents',
   notifications: 'Notifications',
+  channels: 'Channels',
+  triggers: 'Triggers',
   devices: 'Devices',
+  network: 'Network',
+  browser: 'Browser',
   appearance: 'Appearance',
   keyboard: 'Keyboard',
   import: 'Import',
@@ -78,9 +90,15 @@ export function SettingsView({
         {section === 'clients' ? <ClientsPage /> : null}
         {section === 'import' ? <ImportPage /> : null}
         {section === 'permissions' ? <PermissionsPage /> : null}
+        {section === 'computer-use' ? <ComputerUseSettings /> : null}
+        {section === 'agents' ? <AgentsSettings /> : null}
         {section === 'notifications' ? <NotificationsPage /> : null}
+        {section === 'channels' ? <ChannelsPage /> : null}
+        {section === 'triggers' ? <TriggersPage /> : null}
         {section === 'diagnostics' ? <DiagnosticsPage /> : null}
         {section === 'devices' ? <DevicesPage /> : null}
+        {section === 'network' ? <NetworkPage /> : null}
+        {section === 'browser' ? <BrowserSettings /> : null}
         {section === 'appearance' ? <AppearancePage /> : null}
         {section === 'keyboard' ? <KeyboardPage /> : null}
       </div>

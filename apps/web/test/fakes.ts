@@ -7,6 +7,7 @@ import { vi, type Mock } from 'vitest';
 import {
   checkSettingWrite,
   resolveAll,
+  resolveSetting,
   type EventEnvelope,
   type MessageView,
   type ModelView,
@@ -23,6 +24,12 @@ import { m3Impl, m3State, type M3State } from './fakes-m3.ts';
 import { m4Impl, m4State, type M4State } from './fakes-m4.ts';
 import { m5CodeImpl, m5CodeState, type M5CodeState } from './fakes-m5-code.ts';
 import { m5WorkImpl, m5WorkState, type M5WorkState } from './fakes-m5-work.ts';
+import { m6AgentsImpl, m6AgentsState, type M6AgentsState } from './fakes-m6-agents.ts';
+import { m6BrowserImpl, m6BrowserState, type M6BrowserState } from './fakes-m6-browser.ts';
+import { m6ChannelsImpl, m6ChannelsState, type M6ChannelsState } from './fakes-m6-channels.ts';
+import { m6CodeImpl, m6CodeState, type M6CodeState } from './fakes-m6-code.ts';
+import { m6ComputersImpl, m6ComputersState, type M6ComputersState } from './fakes-m6-computers.ts';
+import { m6DevicesImpl, m6DevicesState, type M6DevicesState } from './fakes-m6-devices.ts';
 import { m6SpacesImpl, m6SpacesState, type M6SpacesState } from './fakes-m6-spaces.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
@@ -116,6 +123,12 @@ export interface HubState {
   /** Work runs, goals, schedules and requests (test/fakes-m5-work.ts). */
   m5work: M5WorkState;
   m6spaces: M6SpacesState;
+  m6computers: M6ComputersState;
+  m6channels: M6ChannelsState;
+  m6browser: M6BrowserState;
+  m6agents: M6AgentsState;
+  m6devices: M6DevicesState;
+  m6code: M6CodeState;
   /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
   m5code: M5CodeState;
 }
@@ -141,8 +154,24 @@ export function createHub(init: Partial<HubState> = {}) {
     m4: m4State(),
     m5work: m5WorkState(),
     m6spaces: m6SpacesState(),
+    m6computers: m6ComputersState(),
+    m6channels: m6ChannelsState(),
+    // No computers by default: the global control indicator stays idle in app tests.
+    m6browser: m6BrowserState({ computers: [] }),
     m5code: m5CodeState(),
+    m6agents: m6AgentsState(),
+    m6devices: m6DevicesState(),
+    m6code: m6CodeState(),
     ...init,
+  };
+  // Agents' goals and schedules live in the Work state, so /goals and /schedules see them; a new
+  // agent's main thread joins the chat threads.
+  if (!init.m6agents) state.m6agents = m6AgentsState({ work: state.m5work });
+  state.m6agents.onCreate ??= (a) => {
+    const tid = a.primaryThreadId;
+    if (!tid || state.threads.some((t) => t.id === tid)) return;
+    state.threads = [...state.threads, thread({ id: tid, mode: 'agent', title: a.name })];
+    if (!state.messages.has(tid)) state.messages.set(tid, []);
   };
 
   const maybeFail = (name: keyof Api) => {
@@ -500,7 +529,43 @@ export function createHub(init: Partial<HubState> = {}) {
     }),
     ...m5WorkImpl(state.m5work, { id, ts: () => ts(), maybeFail }),
     ...m6SpacesImpl(state.m6spaces, { id, ts: () => ts(), maybeFail }),
+    ...m6ComputersImpl(state.m6computers, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      global: () => ({
+        mode: resolveSetting('network.egressMode', layers()).value,
+        allow: resolveSetting('network.egressAllow', layers()).value,
+        deny: resolveSetting('network.egressDeny', layers()).value,
+      }),
+    }),
+    ...m6ChannelsImpl(state.m6channels, { id, ts: () => ts(), maybeFail }),
+    ...m6DevicesImpl(state.m6devices, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      approvals: {
+        list: () => state.m3.approvals,
+        add: (a) => {
+          state.m3.approvals = [...state.m3.approvals, a];
+        },
+      },
+    }),
+    ...m6AgentsImpl(state.m6agents, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      settings: () => state.settings,
+    }),
+    ...m6BrowserImpl(state.m6browser, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      setting: (k) => resolveSetting(k, layers()).value,
+    }),
     ...m5CodeImpl(state.m5code, { id, ts: () => ts(), maybeFail }),
+    // After the M5 part: it replaces createCodeSession with the M6 version.
+    ...m6CodeImpl(state.m6code, { id, ts: () => ts(), maybeFail, m5: state.m5code }),
     attachmentUrl: (aid) => `/api/v1/attachments/${aid}`,
     fetchAttachment: async () => new Blob(['file-bytes'], { type: 'text/plain' }),
     threadStreamUrl: (tid) => `/api/v1/threads/${tid}/stream`,

@@ -159,7 +159,7 @@ function post(body: string, o: { token?: string; secret?: string; ts?: number; i
     headers: {
       authorization: `Bearer ${o.token ?? TOKEN}`,
       'x-nova-timestamp': ts,
-      'x-nova-signature': signBody(o.secret ?? SECRET, ts, body),
+      'x-nova-signature': signBody(o.secret ?? SECRET, ts, body, o.id),
       ...(o.id ? { 'x-nova-event-id': o.id } : {}),
     },
     rawBody: new Uint8Array(Buffer.from(body)),
@@ -231,6 +231,13 @@ describe('webhook triggers', () => {
     );
     expect((await triggers.receiveWebhook(t.id, post('plain text'))).status).toBe('started');
     expect((await triggers.receiveWebhook(t.id, post('plain text'))).status).toBe('duplicate');
+    expect(runs.created).toHaveLength(3);
+    // The event id is signed: a captured delivery replayed with a new id does not verify.
+    const replay = post('plain text', { id: 'h-2' });
+    replay.headers['x-nova-signature'] = post('plain text').headers['x-nova-signature'];
+    await expect(triggers.receiveWebhook(t.id, replay)).rejects.toMatchObject({
+      code: 'token_required',
+    });
     expect(runs.created).toHaveLength(3);
     expect(fieldAt({ a: { b: 7 } }, 'a.b')).toBe('7');
     expect(fieldAt({ a: [1] }, 'a.0')).toBeNull();

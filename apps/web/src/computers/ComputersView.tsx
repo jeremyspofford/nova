@@ -1,0 +1,949 @@
+// Computers (FR-080, FR-107, FR-195; docs/11 §1-§2, §8): /computers lists the account's computers
+// (each agent's own, and connected devices), shows the Hub's sandbox and holds the settings every
+// computer shares; /computers/:id is one computer: where its commands run and why they cannot,
+// its agent, its resource limits, its snapshots (take, restore, delete) and its network. The
+// browser and screen views of a computer (apps/web/src/browser, src/screen) mount in the slots
+// `browserPanel` and `screenPanel`.
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  SETTINGS,
+  type ComputerSnapshotView,
+  type ComputerView,
+  type DiagnosticsSnapshot,
+  type EgressScopeView,
+} from '@nova/shared';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  Icon,
+  RadioGroup,
+  Spinner,
+  TextField,
+  useToast,
+} from '@nova/ui';
+import { ApiError, errorMessage } from '../api.ts';
+import { navigate } from '../router.ts';
+import { useAnnounce, useServices } from '../services.tsx';
+import { useSettings } from '../settings.tsx';
+import { MANAGED, formatWhen, plural } from '../settings/common.ts';
+import { SwitchField } from '../settings/controls.tsx';
+import { useDebounced } from '../work/events.ts';
+import { followLink } from '../work/nav.tsx';
+import { useComputersApi, type AgentRef } from './api.ts';
+import { COMPUTER_EVENTS, eventComputerId, useHubEvents } from './events.ts';
+import {
+  KIND_TEXT,
+  MODE_TEXT,
+  NETWORK_PATH,
+  STATE_TEXT,
+  agentPath,
+  computerPath,
+  computerTitle,
+  formatBytes,
+  formatDateTime,
+  formatMemory,
+  formatSeconds,
+  hubSandboxText,
+  substrateText,
+} from './format.ts';
+import '../workspace.css';
+import './computers.css';
+
+/** Where the browser and screen views of a computer mount (render props, given the computer). */
+export interface ComputerPanels {
+  browserPanel?: (computer: ComputerView) => ReactNode;
+  screenPanel?: (computer: ComputerView) => ReactNode;
+}
+
+export function ComputersView({
+  computerId,
+  ...panels
+}: { computerId: string | null } & ComputerPanels) {
+  if (computerId) return <ComputerPage key={computerId} computerId={computerId} {...panels} />;
+  return <ComputerList />;
+}
+
+function Breadcrumb() {
+  return (
+    <nav aria-label="Breadcrumb" className="ws-breadcrumb">
+      <a href={computerPath()} onClick={(e) => followLink(e, computerPath())}>
+        <Icon name="back" /> Computers
+      </a>
+    </nav>
+  );
+}
+
+/** Agents by id, to name each computer's owner; empty until loaded (or if it cannot load). */
+function useAgentNames(): Map<string, string> {
+  const api = useComputersApi();
+  const [names, setNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    api.listComputerAgents().then(
+      ({ items }: { items: AgentRef[] }) => {
+        if (alive) setNames(new Map(items.map((a) => [a.id, a.name])));
+      },
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api]);
+  return names;
+}
+
+export function StateBadge({ state }: { state: ComputerView['state'] }) {
+  const s = STATE_TEXT[state];
+  return (
+    <span className="ws-badge computers-state" data-tone={s.tone ?? undefined}>
+      <Icon name={s.icon} /> {s.label}
+    </span>
+  );
+}
+
+/** Why a computer cannot do everything now, in the Hub's words (degraded, error, offline). */
+function StatusDetail({ computer: c }: { computer: ComputerView }) {
+  if (!c.detail) return null;
+  if (c.state === 'degraded' || c.state === 'error')
+    return (
+      <div className="ws-callout computers-detail" role="note">
+        <Icon name="alert" />
+        <p>{c.detail}</p>
+      </div>
+    );
+  return <p className="muted ws-flush computers-detail">{c.detail}</p>;
+}
+
+// ---- the list --------------------------------------------------------------------------------
+
+export function ComputerList() {
+  const api = useComputersApi();
+  const names = useAgentNames();
+  const [items, setItems] = useState<ComputerView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    api.listComputers().then(
+      ({ items: list }) => {
+        if (!alive) return;
+        setItems(list);
+        setError(null);
+      },
+      (err: unknown) => alive && setError(errorMessage(err, 'Could not load the computers.')),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, attempt]);
+
+  const reload = useDebounced(() => setAttempt((n) => n + 1), 150);
+  useHubEvents(COMPUTER_EVENTS, () => reload());
+
+  return (
+    <div className="ws-page computers-page">
+      <header className="ws-page-header">
+        <h1>Computers</h1>
+      </header>
+      <p className="muted ws-flush">
+        Each agent works on a computer of its own. Its files, installed software and browser
+        sign-ins are kept between runs, and it reaches the network only through Nova&apos;s egress
+        proxy.
+      </p>
+      <HubSandbox />
+      {error ? (
+        <div role="alert" className="ws-error">
+          <p>{error}</p>
+          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        </div>
+      ) : null}
+      {items === null && !error ? <Spinner label="Loading computers" /> : null}
+      {items?.length === 0 ? (
+        <EmptyState
+          title="No computers yet"
+          description="An agent gets its own computer the first time it needs one. Create an agent to get started."
+          icon="agents"
+          level={2}
+          action={<Button onClick={() => navigate('/agents')}>Go to Agents</Button>}
+        />
+      ) : null}
+      {items?.length ? (
+        <ul className="ws-list" aria-label="Computers">
+          {items.map((c) => {
+            const owner = c.agentId ? (names.get(c.agentId) ?? null) : null;
+            return (
+              <li key={c.id} className="ws-list-row">
+                <div className="computers-row-main">
+                  <a
+                    href={computerPath(c.id)}
+                    className="ws-card-link"
+                    onClick={(e) => followLink(e, computerPath(c.id))}
+                  >
+                    {computerTitle(c, owner)}
+                  </a>
+                  <span className="muted ws-row-meta">
+                    <span>{KIND_TEXT[c.kind].label}</span>
+                    <span>{substrateText(c.substrate)}</span>
+                    <span>{plural(c.snapshotCount, 'snapshot')}</span>
+                    <span>Last used {formatWhen(c.lastUsedAt)}</span>
+                  </span>
+                  {c.detail &&
+                  (c.state === 'degraded' || c.state === 'error' || c.kind === 'local_host') ? (
+                    <p className="computers-row-detail">{c.detail}</p>
+                  ) : null}
+                </div>
+                <StateBadge state={c.state} />
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <ComputerSettings />
+    </div>
+  );
+}
+
+/** The Hub's sandbox (FR-107, FR-195): where commands run, or why they cannot. */
+function HubSandbox() {
+  const { api } = useServices();
+  const [snap, setSnap] = useState<DiagnosticsSnapshot['sandbox'] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api.diagnostics().then(
+      (d) => {
+        if (!alive) return;
+        setSnap(d.sandbox);
+        setError(null);
+      },
+      (err: unknown) => alive && setError(errorMessage(err, 'Could not check the sandbox.')),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, attempt]);
+
+  return (
+    <section className="computers-sandbox ws-card" aria-labelledby="hub-sandbox">
+      <h2 id="hub-sandbox" className="ws-subhead">
+        Sandbox on this Hub
+      </h2>
+      {error ? (
+        <div className="computers-inline-error" role="alert">
+          <span>{error}</span>
+          <Button variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
+            Retry
+          </Button>
+        </div>
+      ) : snap === null ? (
+        <Spinner label="Checking the sandbox" />
+      ) : snap.available ? (
+        <>
+          <p className="ws-ok ws-flush">
+            <Icon name="check" /> Commands run in: {hubSandboxText(snap.substrate)}
+          </p>
+          {snap.detail ? <p className="muted ws-flush">{snap.detail}</p> : null}
+        </>
+      ) : (
+        <>
+          <p className="ws-warning">
+            <Icon name="alert" /> Commands cannot run on this Hub.
+          </p>
+          <p className="ws-flush">{snap.detail}</p>
+          <p className="muted ws-flush">
+            Nova never runs agent commands outside a sandbox. Agents can still read and write their
+            files.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---- settings every computer shares (computers.*) --------------------------------------------
+
+const LIMIT_FIELDS = [
+  { key: 'cpus', label: 'CPU cores', min: 0.25, max: 64, step: 0.25 },
+  { key: 'memoryMb', label: 'Memory (MB)', min: 256, max: 262_144, step: 256 },
+  { key: 'wallClockSeconds', label: 'Time per command (seconds)', min: 10, max: 86_400, step: 1 },
+] as const;
+type LimitKey = (typeof LIMIT_FIELDS)[number]['key'];
+type Limits = Record<LimitKey, number>;
+
+function ComputerSettings() {
+  const settings = useSettings();
+  const toast = useToast();
+  const announce = useAnnounce();
+  const place = settings.get('computers.agentComputer');
+  const microVm = settings.get('computers.microVm');
+  const fail = (err: unknown) =>
+    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+
+  return (
+    <section className="ws-section" aria-labelledby="computers-settings">
+      <h2 id="computers-settings">Settings for all computers</h2>
+      <RadioGroup
+        legend="Where a new agent's computer runs"
+        name="computers-agent-computer"
+        value={place.value}
+        locked={place.locked}
+        options={[
+          {
+            value: 'local_container',
+            label: KIND_TEXT.local_container.label,
+            description: 'An isolated sandbox on the Hub. Its files stay on the Hub.',
+          },
+          {
+            value: 'cloud',
+            label: KIND_TEXT.cloud.label,
+            description:
+              'Keeps working while your devices are off. In this version a mock cloud runner on the Hub stands in for it.',
+          },
+        ]}
+        hint="Agents that already have a computer keep it."
+        onChange={(v) => {
+          const next = v === 'cloud' ? 'cloud' : 'local_container';
+          settings.set('computers.agentComputer', next).then(
+            () => announce('Saved.'),
+            (err: unknown) => fail(err),
+          );
+        }}
+      />
+      <LimitsForm />
+      <SwitchField
+        label="Micro-VM sandboxes (experimental)"
+        description="Off by default. Used when this Hub runs its sandboxes as micro-VMs, which needs a hypervisor and a KVM runner on the host; without them commands are unavailable, never run outside a sandbox. Takes effect after the Hub restarts."
+        checked={microVm.value.enabled}
+        locked={microVm.locked}
+        onChange={(on) =>
+          void settings
+            .set('computers.microVm', { ...microVm.value, enabled: on })
+            .catch((err: unknown) => fail(err))
+        }
+      />
+      <p className="ws-flush">
+        Where computers can reach on the network:{' '}
+        <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
+          Settings, Network
+        </a>
+        .
+      </p>
+    </section>
+  );
+}
+
+function LimitsForm() {
+  const settings = useSettings();
+  const toast = useToast();
+  const limits = settings.get('computers.limits');
+  const id = useId();
+  const [draft, setDraft] = useState<Record<LimitKey, string> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const shown = draft ?? {
+    cpus: String(limits.value.cpus),
+    memoryMb: String(limits.value.memoryMb),
+    wallClockSeconds: String(limits.value.wallClockSeconds),
+  };
+  const errors: Partial<Record<LimitKey, string>> = {};
+  for (const f of LIMIT_FIELDS) {
+    const raw = shown[f.key].trim();
+    const n = Number(raw);
+    if (!raw || !Number.isFinite(n)) errors[f.key] = 'Enter a number.';
+    else if (n < f.min || n > f.max) errors[f.key] = `Between ${f.min} and ${f.max}.`;
+    else if (f.key !== 'cpus' && !Number.isInteger(n)) errors[f.key] = 'Enter a whole number.';
+  }
+  const valid = Object.keys(errors).length === 0;
+  const dirty = draft !== null;
+
+  const save = async () => {
+    if (!valid || !dirty || busy) return;
+    const next: Limits = {
+      cpus: Number(shown.cpus),
+      memoryMb: Number(shown.memoryMb),
+      wallClockSeconds: Number(shown.wallClockSeconds),
+    };
+    if (!SETTINGS['computers.limits'].schema.safeParse(next).success) return;
+    setBusy(true);
+    try {
+      await settings.set('computers.limits', next);
+      setDraft(null);
+      toast.show('Limits saved.', { tone: 'success' });
+    } catch (err) {
+      toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      className="ws-fieldset computers-limits"
+      aria-labelledby={`${id}-legend`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <span id={`${id}-legend`} className="nv-field-label">
+        Limits for every command
+      </span>
+      {limits.locked ? <span className="nv-field-hint nv-field-lock">{MANAGED}</span> : null}
+      <div className="ws-preset-grid">
+        {LIMIT_FIELDS.map((f) => (
+          <TextField
+            key={f.key}
+            label={f.label}
+            type="number"
+            inputMode="decimal"
+            min={f.min}
+            max={f.max}
+            step={f.step}
+            value={shown[f.key]}
+            disabled={limits.locked}
+            error={dirty ? errors[f.key] : undefined}
+            onChange={(e) => setDraft({ ...shown, [f.key]: e.target.value })}
+          />
+        ))}
+      </div>
+      <p className="nv-field-hint ws-flush">
+        CPU and memory apply after the Hub restarts; the time limit applies to the next command.
+      </p>
+      <div className="ws-toolbar">
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={!dirty || !valid || busy || limits.locked}
+        >
+          {busy ? <Spinner /> : null} Save limits
+        </Button>
+        {dirty ? (
+          <Button variant="ghost" onClick={() => setDraft(null)}>
+            Discard changes
+          </Button>
+        ) : null}
+      </div>
+    </form>
+  );
+}
+
+// ---- one computer ----------------------------------------------------------------------------
+
+export function ComputerPage({
+  computerId,
+  browserPanel,
+  screenPanel,
+}: { computerId: string } & ComputerPanels) {
+  const api = useComputersApi();
+  const toast = useToast();
+  const names = useAgentNames();
+  const limits = useSettings().get('computers.limits').value;
+  const [computer, setComputer] = useState<ComputerView | null>(null);
+  const [snapshots, setSnapshots] = useState<ComputerSnapshotView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [dialog, setDialog] = useState<
+    | { kind: 'snapshot' }
+    | { kind: 'restore'; snap: ComputerSnapshotView }
+    | { kind: 'delete'; snap: ComputerSnapshotView }
+    | null
+  >(null);
+  const [stopping, setStopping] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.getComputer(computerId), api.listComputerSnapshots(computerId)]).then(
+      ([c, s]) => {
+        if (!alive) return;
+        setComputer(c);
+        setSnapshots(s.items);
+        setError(null);
+      },
+      (err: unknown) => {
+        if (!alive) return;
+        if (err instanceof ApiError && err.status === 404) setGone(true);
+        else setError(errorMessage(err, 'Could not load this computer.'));
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, computerId, attempt]);
+
+  const reload = useDebounced(() => setAttempt((n) => n + 1), 150);
+  useHubEvents(COMPUTER_EVENTS, (env) => {
+    if (eventComputerId(env) === computerId) reload();
+  });
+
+  if (gone)
+    return (
+      <div className="ws-page computers-page">
+        <Breadcrumb />
+        <EmptyState
+          title="Computer not found"
+          description="It may have been removed with its agent."
+          level={2}
+          action={<Button onClick={() => navigate(computerPath())}>All computers</Button>}
+        />
+      </div>
+    );
+
+  const c = computer;
+  const owner = c?.agentId ? (names.get(c.agentId) ?? null) : null;
+  const device = c?.kind === 'local_host';
+  const canStop = c ? c.state === 'running' || c.state === 'starting' : false;
+
+  const stop = () => {
+    if (!c || stopping) return;
+    setStopping(true);
+    api
+      .stopComputer(c.id)
+      .then(
+        (v) => {
+          setComputer(v);
+          toast.show('Computer stopped. It starts again the next time it is needed.');
+        },
+        (err: unknown) => toast.show(`Could not stop it: ${errorMessage(err)}`, { tone: 'error' }),
+      )
+      .finally(() => setStopping(false));
+  };
+
+  return (
+    <div className="ws-page computers-page">
+      <Breadcrumb />
+      {error ? (
+        <div role="alert" className="ws-error">
+          <p>{error}</p>
+          <Button onClick={() => setAttempt((n) => n + 1)}>Retry</Button>
+        </div>
+      ) : null}
+      {!c && !error ? <Spinner label="Loading the computer" /> : null}
+      {c ? (
+        <>
+          <header className="ws-page-header">
+            <h1>{computerTitle(c, owner)}</h1>
+            <div className="computers-actions">
+              <StateBadge state={c.state} />
+              {canStop ? (
+                <Button disabled={stopping} onClick={stop}>
+                  {stopping ? <Spinner /> : <Icon name="stop" />} Stop
+                </Button>
+              ) : null}
+            </div>
+          </header>
+          <StatusDetail computer={c} />
+          <dl className="ws-dl computers-facts">
+            <dt>Kind</dt>
+            <dd>
+              {KIND_TEXT[c.kind].label}
+              <span className="muted"> · {KIND_TEXT[c.kind].description}</span>
+            </dd>
+            <dt>Runs commands in</dt>
+            <dd>{substrateText(c.substrate)}</dd>
+            {c.agentId ? (
+              <>
+                <dt>Agent</dt>
+                <dd>
+                  <a
+                    href={agentPath(c.agentId)}
+                    onClick={(e) => followLink(e, agentPath(c.agentId ?? ''))}
+                  >
+                    {owner ?? 'Open the agent'}
+                  </a>
+                </dd>
+              </>
+            ) : null}
+            {c.deviceId ? (
+              <>
+                <dt>Device</dt>
+                <dd>
+                  <a href="/settings/devices" onClick={(e) => followLink(e, '/settings/devices')}>
+                    Manage in Settings, Devices
+                  </a>
+                </dd>
+              </>
+            ) : null}
+            {c.baseImage ? (
+              <>
+                <dt>Base image</dt>
+                <dd>
+                  <code className="ws-code-inline">{c.baseImage}</code>
+                </dd>
+              </>
+            ) : null}
+            <dt>Created</dt>
+            <dd>{formatDateTime(c.createdAt)}</dd>
+            <dt>Last used</dt>
+            <dd>{formatWhen(c.lastUsedAt)}</dd>
+          </dl>
+
+          {browserPanel ? <div className="computers-slot">{browserPanel(c)}</div> : null}
+          {screenPanel ? <div className="computers-slot">{screenPanel(c)}</div> : null}
+
+          {device ? null : (
+            <section className="ws-section" aria-labelledby="computer-limits">
+              <h2 id="computer-limits">Resource limits</h2>
+              <dl className="ws-stats">
+                <div>
+                  <dt>CPU</dt>
+                  <dd>{plural(limits.cpus, 'core')}</dd>
+                </div>
+                <div>
+                  <dt>Memory</dt>
+                  <dd>{formatMemory(limits.memoryMb)}</dd>
+                </div>
+                <div>
+                  <dt>Time per command</dt>
+                  <dd>{formatSeconds(limits.wallClockSeconds)}</dd>
+                </div>
+              </dl>
+              <p className="muted ws-flush">
+                Every command on this computer runs within these limits; one that goes over is
+                stopped. They are the same for all computers:{' '}
+                <a href={computerPath()} onClick={(e) => followLink(e, computerPath())}>
+                  change them on the Computers page
+                </a>
+                .
+              </p>
+            </section>
+          )}
+
+          <Snapshots
+            computer={c}
+            snapshots={snapshots}
+            onCreate={() => setDialog({ kind: 'snapshot' })}
+            onRestore={(snap) => setDialog({ kind: 'restore', snap })}
+            onDelete={(snap) => setDialog({ kind: 'delete', snap })}
+          />
+
+          <ComputerNetwork computer={c} owner={owner} />
+
+          {dialog?.kind === 'snapshot' ? (
+            <SnapshotDialog
+              computerId={c.id}
+              onClose={() => setDialog(null)}
+              onDone={() => {
+                setDialog(null);
+                reload();
+              }}
+            />
+          ) : null}
+          {dialog?.kind === 'restore' ? (
+            <RestoreDialog
+              computerId={c.id}
+              snap={dialog.snap}
+              onClose={() => setDialog(null)}
+              onDone={(v) => {
+                setDialog(null);
+                setComputer(v);
+                reload();
+              }}
+            />
+          ) : null}
+          <Dialog
+            open={dialog?.kind === 'delete'}
+            title="Delete this snapshot?"
+            description={
+              dialog?.kind === 'delete'
+                ? `“${snapshotName(dialog.snap)}” from ${formatDateTime(dialog.snap.createdAt)} is deleted. The computer's files now are not changed. This cannot be undone.`
+                : undefined
+            }
+            onClose={() => setDialog(null)}
+            footer={
+              <>
+                <Button onClick={() => setDialog(null)}>Cancel</Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    if (dialog?.kind !== 'delete') return;
+                    const snap = dialog.snap;
+                    setDialog(null);
+                    api.deleteComputerSnapshot(c.id, snap.id).then(
+                      () => {
+                        toast.show('Snapshot deleted.', { tone: 'success' });
+                        reload();
+                      },
+                      (err: unknown) =>
+                        toast.show(`Could not delete it: ${errorMessage(err)}`, { tone: 'error' }),
+                    );
+                  }}
+                >
+                  Delete snapshot
+                </Button>
+              </>
+            }
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function snapshotName(s: ComputerSnapshotView): string {
+  return s.label?.trim() || 'Snapshot';
+}
+
+function Snapshots({
+  computer: c,
+  snapshots,
+  onCreate,
+  onRestore,
+  onDelete,
+}: {
+  computer: ComputerView;
+  snapshots: ComputerSnapshotView[] | null;
+  onCreate: () => void;
+  onRestore: (s: ComputerSnapshotView) => void;
+  onDelete: (s: ComputerSnapshotView) => void;
+}) {
+  const device = c.kind === 'local_host';
+  return (
+    <section className="ws-section" aria-labelledby="computer-snapshots">
+      <div className="ws-section-header">
+        <h2 id="computer-snapshots">Snapshots</h2>
+        {device ? null : (
+          <Button onClick={onCreate}>
+            <Icon name="save" /> Take a snapshot
+          </Button>
+        )}
+      </div>
+      {device ? (
+        <p className="muted ws-flush">
+          Snapshots are not available for a connected device: its files are managed on the device.
+        </p>
+      ) : (
+        <p className="muted ws-flush">
+          A snapshot keeps a copy of this computer&apos;s files. Restoring one puts them back as
+          they were.
+        </p>
+      )}
+      {snapshots === null ? <Spinner label="Loading snapshots" /> : null}
+      {snapshots?.length === 0 && !device ? (
+        <p className="ws-flush">No snapshots yet. Take one before a change you may want to undo.</p>
+      ) : null}
+      {snapshots?.length ? (
+        <ul className="ws-list" aria-label="Snapshots">
+          {snapshots.map((s) => (
+            <li key={s.id} className="ws-list-row">
+              <div className="computers-row-main">
+                <span className="ws-card-link">{snapshotName(s)}</span>
+                <span className="muted ws-row-meta">
+                  <span>{formatDateTime(s.createdAt)}</span>
+                  <span>{formatBytes(s.sizeBytes)}</span>
+                </span>
+              </div>
+              <span className="computers-actions">
+                {device ? null : (
+                  <Button
+                    aria-label={`Restore ${snapshotName(s)} from ${formatDateTime(s.createdAt)}`}
+                    onClick={() => onRestore(s)}
+                  >
+                    <Icon name="undo" /> Restore
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  aria-label={`Delete ${snapshotName(s)} from ${formatDateTime(s.createdAt)}`}
+                  onClick={() => onDelete(s)}
+                >
+                  <Icon name="trash" /> Delete
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function SnapshotDialog({
+  computerId,
+  onClose,
+  onDone,
+}: {
+  computerId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const api = useComputersApi();
+  const toast = useToast();
+  const ref = useRef<HTMLInputElement>(null);
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await api.createComputerSnapshot(
+        computerId,
+        label.trim() ? { label: label.trim() } : {},
+      );
+      toast.show(`Snapshot “${snapshotName(s)}” taken.`, { tone: 'success' });
+      onDone();
+    } catch (err) {
+      setError(errorMessage(err, 'Could not take the snapshot.'));
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open title="Take a snapshot" onClose={onClose} initialFocusRef={ref}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <TextField
+          ref={ref}
+          label="Label (optional)"
+          value={label}
+          maxLength={200}
+          hint="For example, “Before the upgrade”."
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        {error ? (
+          <p className="nv-field-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="nv-dialog-footer">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={busy}>
+            {busy ? <Spinner /> : null} Take snapshot
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function RestoreDialog({
+  computerId,
+  snap,
+  onClose,
+  onDone,
+}: {
+  computerId: string;
+  snap: ComputerSnapshotView;
+  onClose: () => void;
+  onDone: (c: ComputerView) => void;
+}) {
+  const api = useComputersApi();
+  const toast = useToast();
+  const id = useId();
+  const [keep, setKeep] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const when = formatDateTime(snap.createdAt);
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (keep)
+        await api.createComputerSnapshot(computerId, {
+          label: `Before restoring ${snapshotName(snap)}`.slice(0, 200),
+        });
+      const v = await api.restoreComputer(computerId, snap.id);
+      toast.show(`Restored the snapshot from ${when}.`, { tone: 'success' });
+      onDone(v);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not restore the snapshot.'));
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      title="Restore this snapshot?"
+      description={`The computer's files go back to how they were in “${snapshotName(snap)}” (${when}). Changes made since then are lost, and browser and screen sessions on this computer stop.`}
+      onClose={onClose}
+    >
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <label className="ws-check" htmlFor={`${id}-keep`}>
+          <input
+            id={`${id}-keep`}
+            type="checkbox"
+            checked={keep}
+            onChange={(e) => setKeep(e.target.checked)}
+          />
+          Take a snapshot of the current files first
+        </label>
+        {error ? (
+          <p className="nv-field-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="nv-dialog-footer">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="danger" disabled={busy}>
+            {busy ? <Spinner /> : null} Restore
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** How this computer reaches the network: the egress proxy, under its agent's rule if any. */
+function ComputerNetwork({ computer: c, owner }: { computer: ComputerView; owner: string | null }) {
+  const api = useComputersApi();
+  const [rule, setRule] = useState<EgressScopeView | null | undefined>(undefined);
+  const agentId = c.agentId;
+  useEffect(() => {
+    if (!agentId) return;
+    let alive = true;
+    api.getEgress().then(
+      (v) => {
+        if (alive) setRule(v.scopes.find((s) => s.kind === 'agent' && s.id === agentId) ?? null);
+      },
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, agentId]);
+
+  const who = owner ?? 'its agent';
+  let summary: string | null = null;
+  if (rule === null) summary = `There is no rule for ${who}, so the rules for every sandbox apply.`;
+  else if (rule)
+    summary = [
+      `${who === 'its agent' ? 'Its agent' : who} has its own rule: ${
+        rule.mode ? MODE_TEXT[rule.mode].label.toLowerCase() : 'the same access as every sandbox'
+      }`,
+      rule.allow.length ? `, ${plural(rule.allow.length, 'more allowed host')}` : '',
+      rule.deny.length ? `, ${plural(rule.deny.length, 'blocked host')}` : '',
+      '.',
+    ].join('');
+
+  return (
+    <section className="ws-section" aria-labelledby="computer-network">
+      <h2 id="computer-network">Network</h2>
+      <p className="ws-flush">
+        {c.kind === 'local_host'
+          ? "Commands on a connected device reach the network through the device's own egress proxy."
+          : "This computer reaches the network only through Nova's egress proxy."}
+        {summary ? ` ${summary}` : ''}
+      </p>
+      <p className="ws-flush">
+        <a href={NETWORK_PATH} onClick={(e) => followLink(e, NETWORK_PATH)}>
+          Network settings and the decision log
+        </a>
+      </p>
+    </section>
+  );
+}

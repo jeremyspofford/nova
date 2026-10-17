@@ -5,6 +5,8 @@
 // read-only at the gate; a safety pause refuses turns; a self-set wake lands in the scheduler and
 // the user cancels it. The gate gets the agent's rules the way the Hub wires it: the policy set
 // of an agent's thread includes `agents.agentPolicy.forThread` (the requested gate change).
+// Proactive research may call a connector's tool the owner declared read-only (FR-082, J7 step 2:
+// a mock calendar), and is still refused an undeclared one.
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SETTINGS, type SettingKey } from '@nova/shared';
@@ -21,10 +23,11 @@ import {
   type NotificationInput,
   type ToolGate,
   type ToolSourceProvider,
+  type ToolDefinition,
   type TurnExtension,
 } from '../src/index.ts';
 import { ACCOUNT, waitFor } from './helpers.ts';
-import { makeM5Env, turnRows, type M5Env } from './loop-m5-env.ts';
+import { callStep, makeM5Env, turnRows, type M5Env } from './loop-m5-env.ts';
 
 let env: M5Env;
 let agents: AgentService;
@@ -33,6 +36,7 @@ let scheduler: ScheduleService;
 let sent: Record<string, unknown>[];
 let audit: AuditRecord[];
 let notes: NotificationInput[];
+let calendarCalls: string[];
 
 const channelSend: BuiltinTool = {
   descriptor: builtinDescriptor({
@@ -63,10 +67,37 @@ const channelSend: BuiltinTool = {
   },
 };
 
+/**
+ * A connected calendar's tools as the MCP area lists them (`mcp:<server>.<tool>`): the owner
+ * declared `list_events` read-only in Settings, so its descriptor carries `userReadOnly`.
+ */
+function calendarTool(tool: string, userReadOnly: boolean): ToolDefinition {
+  return {
+    descriptor: {
+      name: `mcp:calendar.${tool}`,
+      title: tool,
+      description: `The calendar's ${tool} tool`,
+      source: 'mcp',
+      serverId: 'srv-calendar',
+      inputSchema: { type: 'object', properties: {} },
+      loading: 'always',
+      ...(userReadOnly ? { userReadOnly: true } : {}),
+    },
+    handler: async () => {
+      calendarCalls.push(tool);
+      return ok(tool === 'list_events' ? 'Standup 10:00, design review 10:00' : 'created');
+    },
+  };
+}
+
+/** The research turn of an agent with this responsibility calls both calendar tools, then answers. */
+const CALENDAR_TASK = 'Watch the shared calendar';
+
 beforeEach(async () => {
   sent = [];
   audit = [];
   notes = [];
+  calendarCalls = [];
   let agentsRef: AgentService | null = null;
   let gateRef: PolicyGate | null = null;
   const extension: TurnExtension = {
@@ -81,11 +112,34 @@ beforeEach(async () => {
     check: (req, signal) => gateRef!.check(req, signal),
     preview: (req) => gateRef!.preview(req),
   };
+  const calendar: ToolSourceProvider = {
+    source: 'mcp',
+    list: () =>
+      Promise.resolve([calendarTool('list_events', true), calendarTool('create_event', false)]),
+  };
   env = await makeM5Env({
     gate: lazyGate,
     extensions: [extension],
     builtins: [channelSend],
-    sources: [tools],
+    sources: [tools, calendar],
+    mock: {
+      scripts: [
+        {
+          when: CALENDAR_TASK,
+          once: true,
+          steps: callStep('c1', 'mcp:calendar.list_events', {}),
+        },
+        {
+          when: CALENDAR_TASK,
+          once: true,
+          steps: callStep('c2', 'mcp:calendar.create_event', { title: 'Move the standup' }),
+        },
+        {
+          when: CALENDAR_TASK,
+          steps: [{ textChunks: ['Standup and design review overlap at 10:00\nOne must move.'] }],
+        },
+      ],
+    },
   });
   // The agent's rules join the policy set of its threads (the wiring asked of the policy area).
   class AgentAwareStore extends PolicyStore {
@@ -282,6 +336,54 @@ describe('agents in the chat loop', () => {
       }),
     });
     expect(read.effect).toBe('allow');
+  });
+
+  it('proactive research reads a connector tool the owner declared read-only, and nothing else (FR-082)', async () => {
+    const a = await agents.create(ACCOUNT, {
+      name: 'Ops',
+      responsibilities: [{ title: 'Calendar', instructions: CALENDAR_TASK }],
+    });
+    expect(await agents.researchNow(ACCOUNT, a.id)).toEqual({ started: true, reason: null });
+    await settle();
+    const research = (await agents.threadsOf(ACCOUNT, a.id)).find((x) => x.kind === 'proactive')!;
+    // The declared tool ran; the undeclared one was refused by the read-only rule and never ran.
+    expect(calendarCalls).toEqual(['list_events']);
+    const calls = env.db.raw
+      .prepare(
+        'SELECT tool_name AS name, status, decision FROM tool_call WHERE thread_id = ? ORDER BY created_at',
+      )
+      .all(research.threadId);
+    expect(calls).toEqual([
+      { name: 'mcp:calendar.list_events', status: 'ok', decision: 'allow' },
+      { name: 'mcp:calendar.create_event', status: 'denied', decision: 'deny' },
+    ]);
+    expect(hasPending()).toBe(false);
+    // Nothing asked, so the research was not stopped: its finding became a suggestion.
+    expect(audit.some((r) => r.action === 'agent.proactive.denied')).toBe(false);
+    const [s] = await agents.listSuggestions(ACCOUNT, a.id);
+    expect(s?.title).toBe('Standup and design review overlap at 10:00');
+
+    // The same preview at the gate: allowed by the read-only fallback, the other denied by rule.
+    const req = (tool: ToolDefinition): GateRequest => ({
+      accountId: ACCOUNT,
+      threadId: research.threadId,
+      turnId: '',
+      callId: 'c9',
+      projectId: null,
+      mode: 'agent',
+      tool: tool.descriptor,
+      args: {},
+      argsPreview: '{}',
+      provenance: { taint: [] },
+      profile: { id: 'read-only', hash: 'x' },
+    });
+    expect(await gate.preview(req(calendarTool('list_events', true)))).toMatchObject({
+      effect: 'allow',
+      reason: 'read-only action',
+    });
+    const denied = await gate.preview(req(calendarTool('list_events', false)));
+    expect(denied).toMatchObject({ effect: 'deny' });
+    expect(denied.reason).toContain('Proactive research only reads');
   });
 
   it('a safety pause refuses turns; the user writing to a paused agent resumes it', async () => {

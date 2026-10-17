@@ -392,7 +392,7 @@ export class CodeService {
     const projectFolderId = hubLocal
       ? this.#projectFolderFor(accountId, folder, req.projectId ?? null)
       : null;
-    const conditions = await this.#conditions();
+    const conditions = await this.#conditions({ accountId, environmentId: env.id });
     let mode: PermissionMode;
     if (req.permissionMode) {
       assertModeAvailable(req.permissionMode, conditions);
@@ -641,7 +641,7 @@ export class CodeService {
     const now = this.#iso();
     if (req.permissionMode && req.permissionMode !== s.permissionMode) {
       const to = req.permissionMode;
-      assertModeAvailable(to, await this.#conditions());
+      assertModeAvailable(to, await this.#conditions(s));
       await this.#o.db.transaction(() => {
         this.#o.db.raw
           .prepare('UPDATE code_session SET permission_mode = ?, updated_at = ? WHERE id = ?')
@@ -724,7 +724,7 @@ export class CodeService {
     forThread: async (accountId, threadId): Promise<ThreadPolicy | null> => {
       const s = this.#byThread(accountId, threadId);
       if (!s) return null;
-      const p = modePolicy(s.permissionMode, workFolder(s), await this.#conditions());
+      const p = modePolicy(s.permissionMode, workFolder(s), await this.#conditions(s));
       if (p.permissionMode !== s.permissionMode)
         this.#log.warn('code session mode unavailable; running with manual', {
           sessionId: s.id,
@@ -2262,11 +2262,23 @@ export class CodeService {
     return null;
   }
 
-  async #conditions(): Promise<PermissionModeConditions> {
+  /**
+   * What the modes need. The substrate is the one the session's commands run in: a session in
+   * another environment (SSH, WSL, a device) runs them there, unsandboxed by Nova, so Bypass is
+   * never available for it (FR-063).
+   */
+  async #conditions(
+    session: { accountId: string; environmentId: string | null } | null = null,
+  ): Promise<PermissionModeConditions> {
+    const own = session?.environmentId ? this.sandboxFor(session) : null;
     return {
       reviewerModel: await this.#o.setting('review.model'),
       allowBypass: await this.#o.setting('code.allowBypass'),
-      substrate: this.#o.sandbox?.()?.substrate ?? null,
+      // Another machine: no Nova sandbox at all. A container environment: its own. Else the Hub's.
+      substrate:
+        session && this.#remote(session)
+          ? null
+          : ((own ?? this.#o.sandbox?.() ?? null)?.substrate ?? null),
     };
   }
 

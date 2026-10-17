@@ -3,20 +3,28 @@
 // React App, Astro, Nuxt, SvelteKit, webpack), Django (`manage.py`), Rails, Go modules, and the
 // custom configurations of `.nova/launch.json`. A server starts as an exec session in the session's
 // environment sandbox (listed in the terminal pane, killed from there too), and stops alone or with
-// every server of the session. Its URL is exposed to the browser pane, which the browser area's
-// controller opens; a local dev host is reachable only with the egress proxy's dev-server grant
-// (the computers area, docs/12 §8), which is asked for through a late-bound hook when one is bound.
+// every server of the session. The sandbox has its own network namespace, so the server's port is
+// published through the dev-server bridge (tools/sandbox-publish.ts): its URL is the bridge's port
+// on the Hub's 127.0.0.1, closed with the server. The browser area reaches it only through the
+// egress proxy's dev-server grant for exactly that host and port (docs/12 §4.2, §8), asked for
+// through a late-bound hook, and the browser pane opens it (late-bound too) once it answers.
+import { request as httpRequest } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, normalize } from 'node:path';
 import { NovaError, uuidv7, type DevServerCandidateView, type DevServerView } from '@nova/shared';
 import { defaultRedactor } from '@nova/security';
 import { Logger } from '@nova/telemetry';
+import type { ExecRequestExtras } from '../tools/sandbox-process.ts';
 import type { AuditSink, ExecRequest, ExecResult, SandboxClient } from '../tools/types.ts';
 import { isCredentialRel, isProtectedRel } from '../tools/roots.ts';
 import type { CodeService, CodeSessionInfo } from './service.ts';
 
 /** How long a start waits for a server that exits at once (a broken command). */
 const START_YIELD_MS = 3_000;
+/** How long a start waits for the server to answer before the browser opens it in the background. */
+const READY_WAIT_MS = 2_000;
+/** How long the browser pane waits for a server to answer at all (a first compile). */
+const READY_TIMEOUT_MS = 120_000;
 /** Dev servers of one session at most. */
 export const MAX_DEV_SERVERS = 4;
 
@@ -55,6 +63,8 @@ interface ServerRec {
   threadId: string;
   sandbox: SandboxClient;
   revoke: (() => Promise<void>) | null;
+  /** Waiting for the server to answer before the browser pane opens it. */
+  opening: AbortController | null;
 }
 
 export interface DevServerManagerOptions {
@@ -62,6 +72,13 @@ export interface DevServerManagerOptions {
   audit: AuditSink;
   /** How long a start waits to see whether the server exits at once (default 3 s). */
   startYieldMs?: number;
+  /**
+   * How long a start waits for the server to answer before the browser pane opens it; a slower
+   * server is opened in the background once it answers (default 2 s).
+   */
+  readyWaitMs?: number;
+  /** How long the browser pane waits for a server to answer at all (default 2 min). */
+  readyTimeoutMs?: number;
   now?: () => Date;
   log?: Logger;
 }
@@ -162,22 +179,32 @@ export class DevServerManager {
       startedAt: this.#iso(),
       stoppedAt: null,
     };
-    const req2: ExecRequest & {
-      owner: { accountId: string; threadId: string; turnId: string; callId: null };
-    } = {
+    const req2: ExecRequest &
+      ExecRequestExtras & {
+        owner: { accountId: string; threadId: string; turnId: string; callId: null };
+      } = {
       cmd: command,
       cwd,
       roots: [{ path: s.folder, access: 'write', label: 'session folder' }],
-      // The server binds a local port; reaching it is the egress proxy's dev-server grant.
+      // The server binds a port on the sandbox's own loopback; the bridge publishes it on the
+      // Hub's, and reaching that is the egress proxy's dev-server grant. No network otherwise.
       network: 'off',
       env: { PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none' },
       yieldMs: this.#o.startYieldMs ?? START_YIELD_MS,
       signal: AbortSignal.timeout((this.#o.startYieldMs ?? START_YIELD_MS) + 60_000),
       turnId: `devserver:${id}`,
       owner: { accountId, threadId: s.threadId, turnId: `devserver:${id}`, callId: null },
+      publish: { port },
     };
     const r = await sandbox.exec(req2);
-    const rec: ServerRec = { view, accountId, threadId: s.threadId, sandbox, revoke: null };
+    const rec: ServerRec = {
+      view,
+      accountId,
+      threadId: s.threadId,
+      sandbox,
+      revoke: null,
+      opening: null,
+    };
     if (r.status === 'exited') {
       view.status = 'failed';
       view.exitCode = r.exitCode;
@@ -190,7 +217,10 @@ export class DevServerManager {
     }
     view.execSessionId = r.sessionId;
     view.status = 'running';
-    let url = `http://127.0.0.1:${port}/`;
+    // The bridge's port on the Hub. A sandbox that shares the Hub's network (none of the Hub's
+    // substrates; test doubles) serves the server's own port.
+    const hostPort = r.published?.hostPort ?? port;
+    let url = `http://127.0.0.1:${hostPort}/`;
     if (this.#grant) {
       try {
         const g = await this.#grant({
@@ -199,7 +229,7 @@ export class DevServerManager {
           threadId: s.threadId,
           serverId: id,
           host: '127.0.0.1',
-          port,
+          port: hostPort,
         });
         if (g) {
           rec.revoke = () => g.revoke();
@@ -219,11 +249,38 @@ export class DevServerManager {
       port,
       label: c.label,
     });
-    if (this.#opener)
-      await this.#opener({ accountId, sessionId: s.id, threadId: s.threadId, url }).catch(
-        (err: unknown) => this.#log.warn('opening the dev server failed', { err }),
-      );
+    if (this.#opener) await this.#open(rec, this.#opener, url, hostPort);
     return { ...view };
+  }
+
+  /**
+   * Open the server in the browser pane once it answers: within the start when it is quick,
+   * otherwise in the background, never after it stopped.
+   */
+  async #open(rec: ServerRec, opener: DevServerOpener, url: string, port: number): Promise<void> {
+    const ctl = new AbortController();
+    rec.opening = ctl;
+    const open = async () => {
+      if (ctl.signal.aborted || rec.view.status !== 'running') return;
+      await opener({
+        accountId: rec.accountId,
+        sessionId: rec.view.sessionId,
+        threadId: rec.threadId,
+        url,
+      }).catch((err: unknown) => this.#log.warn('opening the dev server failed', { err }));
+    };
+    const quick = this.#o.readyWaitMs ?? READY_WAIT_MS;
+    if (await answers(port, quick, ctl.signal)) {
+      if (rec.opening === ctl) rec.opening = null;
+      await open();
+      return;
+    }
+    const rest = Math.max(0, (this.#o.readyTimeoutMs ?? READY_TIMEOUT_MS) - quick);
+    void answers(port, rest, ctl.signal)
+      .then((ready) => (ready ? open() : undefined))
+      .finally(() => {
+        if (rec.opening === ctl) rec.opening = null;
+      });
   }
 
   async stop(
@@ -272,6 +329,8 @@ export class DevServerManager {
   }
 
   async #stop(rec: ServerRec): Promise<void> {
+    rec.opening?.abort();
+    rec.opening = null;
     if (rec.view.status === 'running' || rec.view.status === 'starting') {
       if (rec.view.execSessionId)
         await rec.sandbox
@@ -302,6 +361,8 @@ export class DevServerManager {
       r = { status: 'exited', exitCode: -1, output: '' };
     }
     if (r.status === 'exited') {
+      rec.opening?.abort();
+      rec.opening = null;
       rec.view.status = r.exitCode === 0 ? 'stopped' : 'failed';
       rec.view.exitCode = r.exitCode;
       rec.view.stoppedAt = this.#iso();
@@ -358,6 +419,36 @@ export class DevServerManager {
 
   #iso(): string {
     return this.#now().toISOString();
+  }
+}
+
+/** One HTTP answer from 127.0.0.1:port (any status), or false. */
+function answersOnce(port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      { host: '127.0.0.1', port, method: 'HEAD', path: '/', agent: false, timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        req.destroy();
+        resolve(true);
+      },
+    );
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+/** Whether a server answers HTTP on 127.0.0.1:port within `ms` (tried every 250 ms). */
+async function answers(port: number, ms: number, signal: AbortSignal): Promise<boolean> {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (signal.aborted) return false;
+    const left = end - Date.now();
+    if (left <= 0) return false;
+    if (await answersOnce(port, Math.min(left, 10_000))) return !signal.aborted;
+    if (end - Date.now() <= 0) return false;
+    await new Promise((r) => setTimeout(r, Math.min(250, Math.max(0, end - Date.now()))));
   }
 }
 

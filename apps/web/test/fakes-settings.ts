@@ -64,6 +64,7 @@ export function mcpServer(over: Partial<McpServerView> = {}): McpServerView {
     defaultApproval: null,
     enabledTools: null,
     disabledTools: [],
+    readOnlyTools: [],
     createdAt: at(),
     updatedAt: at(),
     ...over,

@@ -471,12 +471,13 @@ export class TriggerService {
     }
     const ts = headerOf(req.headers, 'x-nova-timestamp');
     const sig = headerOf(req.headers, 'x-nova-signature');
+    const eventId = headerOf(req.headers, 'x-nova-event-id');
     const reason =
       !ts || !sig
         ? 'unsigned'
         : !freshTimestamp(ts, this.#now().getTime())
           ? 'stale'
-          : !safeEqual(signBody(secret, ts, req.rawBody), sig)
+          : !safeEqual(signBody(secret, ts, req.rawBody, eventId), sig)
             ? 'bad_signature'
             : null;
     if (reason) {
@@ -491,9 +492,7 @@ export class TriggerService {
       // a plain-text event
     }
     const dedupeKey =
-      headerOf(req.headers, 'x-nova-event-id') ??
-      fieldAt(payload, row.dedupe_key ?? 'id') ??
-      `sha256:${sha256Hex(req.rawBody)}`;
+      eventId ?? fieldAt(payload, row.dedupe_key ?? 'id') ?? `sha256:${sha256Hex(req.rawBody)}`;
     return this.fire(row.account_id, row.id, {
       dedupeKey: dedupeKey.slice(0, 500),
       payload,

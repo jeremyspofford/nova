@@ -1132,6 +1132,16 @@ export class ChannelService implements ChannelSender {
     return this.#send(row, { conversation: row.external_ref, text }, row.thread_id);
   }
 
+  /**
+   * Notification copies (FR-060): a private binding gets them; a shared one only when the
+   * private-to-shared policy is `allow` (a notification cannot ask before each copy).
+   */
+  async mayNotify(accountId: string, bindingId: string): Promise<boolean> {
+    const row = this.#row(accountId, bindingId);
+    if (row.kind === 'inapp' || row.audience === 'private') return true;
+    return (await this.#o.setting('channels.privateToShared')) === 'allow';
+  }
+
   /** The agent a thread belongs to (the agents area's `agent_thread`), or null. */
   agentOfThread(threadId: string): string | null {
     try {

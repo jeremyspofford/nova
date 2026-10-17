@@ -90,6 +90,29 @@ describe('schedule CRUD', () => {
     ]);
   });
 
+  it("names the agent on an agent's schedule events (FR-206)", async () => {
+    h = await makeHarness('2026-05-01T08:00:00.000Z');
+    h.db.raw.exec('PRAGMA foreign_keys = OFF');
+    const s = await h.svc.createForAgent(ACCOUNT, daily({ instructions: 'Check the inbox.' }), {
+      agentId: 'agent-1',
+      origin: 'agent',
+      actor: 'agent:agent-1',
+    });
+    await h.svc.update(ACCOUNT, s.id, { title: 'Inbox' });
+    await h.svc.remove(ACCOUNT, s.id);
+    const mine = h.events.events.filter((e) =>
+      ['schedule.created', 'schedule.changed', 'schedule.cancelled'].includes(e.name),
+    );
+    expect(mine).toHaveLength(3);
+    for (const e of mine) {
+      expect(e.correlation).toMatchObject({ agentId: 'agent-1' });
+      expect(e.payload).toMatchObject({ scheduleId: s.id, agentId: 'agent-1' });
+    }
+    // A user's own schedule names no agent.
+    await h.svc.create(ACCOUNT, daily());
+    expect(h.events.events.at(-1)).toMatchObject({ payload: { agentId: null } });
+  });
+
   it('keeps other accounts out', async () => {
     h = await makeHarness('2026-05-01T08:00:00.000Z');
     const s = await h.svc.create(ACCOUNT, daily());

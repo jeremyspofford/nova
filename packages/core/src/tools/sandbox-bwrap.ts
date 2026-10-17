@@ -6,8 +6,10 @@
 // at their own paths, read-only unless the profile grants writing; credential locations inside
 // them are masked (docs/12 §7.2). The network namespace has only loopback; with `allowlist` or
 // `limited` its only route is the egress proxy's socket, bridged in by a forwarder (sandbox-
-// egress.ts). Limits: memory (RLIMIT_DATA) and CPU time (RLIMIT_CPU) inside, wall clock from the
-// broker. A missing bubblewrap, an unsupported CPU or a failed self-test fails closed.
+// egress.ts). A published port (dev servers) is bridged out the same way in reverse (sandbox-
+// publish.ts); a command with one may open IP sockets, which reach only its own loopback. Limits:
+// memory (RLIMIT_DATA) and CPU time (RLIMIT_CPU) inside, wall clock from the broker. A missing
+// bubblewrap, an unsupported CPU or a failed self-test fails closed.
 import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { NovaError } from '@nova/shared';
@@ -22,6 +24,14 @@ import {
   type SandboxEgressSession,
 } from './sandbox-egress.ts';
 import { sandboxMounts } from './sandbox-protect.ts';
+import {
+  NODE_PUBLISH_FORWARDER,
+  PUBLISH_MOUNT,
+  openPublish,
+  publishBase,
+  publishPrelude,
+  type PublishBridge,
+} from './sandbox-publish.ts';
 import {
   ProcessSandbox,
   type LaunchPlan,
@@ -268,8 +278,15 @@ export class BwrapSandbox extends ProcessSandbox {
     return args;
   }
 
-  /** The `bwrap` arguments for one command, exposed for tests. */
-  bwrapArgs(req: ExecRequest, egress: SandboxEgressSession | null = null): string[] {
+  /**
+   * The `bwrap` arguments for one command, exposed for tests: `egress` is its proxy session,
+   * `publish` its dev-server bridge (the folder and the port inside).
+   */
+  bwrapArgs(
+    req: ExecRequest,
+    egress: SandboxEgressSession | null = null,
+    publish: Pick<PublishBridge, 'dir' | 'port'> | null = null,
+  ): string[] {
     const args = [...this.#baseArgs(), '--clearenv'];
     const env: Record<string, string> = {
       PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -279,11 +296,12 @@ export class BwrapSandbox extends ProcessSandbox {
       ...(req.env ?? {}),
     };
     // Roots, then the protected paths in them (docs/12 §7.2), parents before children.
+    // Dev-server bridges are hidden like the data folder.
     const mounts = sandboxMounts({
       roots: req.roots.filter((r) => r.path !== '/' && r.path.startsWith('/')),
       cwd: req.cwd,
       gitWrite: req.gitWrite === true,
-      deniedPaths: this.deniedPaths,
+      deniedPaths: [...this.deniedPaths, publishBase()],
     });
     for (const m of mounts) {
       if (m.kind === 'root') args.push(m.writable ? '--bind' : '--ro-bind', m.path, m.path);
@@ -293,10 +311,17 @@ export class BwrapSandbox extends ProcessSandbox {
     }
     let prelude = '';
     if (egress) {
-      args.push('--bind', egress.dir, EGRESS_MOUNT, '--ro-bind', this.#nodeBin, FORWARDER_NODE);
+      args.push('--bind', egress.dir, EGRESS_MOUNT);
       Object.assign(env, proxyEnv(egress), { NOVA_EGRESS_FORWARDER: NODE_FORWARDER });
       prelude = forwarderPrelude('node', egress.socketName);
     }
+    if (publish) {
+      args.push('--bind', publish.dir, PUBLISH_MOUNT);
+      env.NOVA_PUBLISH_FORWARDER = NODE_PUBLISH_FORWARDER;
+      prelude = `${prelude}${prelude ? ' ' : ''}${publishPrelude('node', publish.port)}`;
+    }
+    // The forwarders run on the Hub's own Node, mounted read-only.
+    if (egress || publish) args.push('--ro-bind', this.#nodeBin, FORWARDER_NODE);
     for (const [k, v] of Object.entries(env)) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) args.push('--setenv', k, v);
     }
@@ -321,15 +346,30 @@ export class BwrapSandbox extends ProcessSandbox {
     if (!a.ok || !this.#arch) throw new NovaError('sandbox_unavailable', a.detail);
     if (!existsSync(req.cwd))
       throw new NovaError('validation', `the folder ${req.cwd} does not exist`);
-    // Only a proxy route needs the network; `off` gets the stricter socket filter.
+    // Only a proxy route or a published port needs IP sockets (the namespace has only loopback);
+    // anything else gets the stricter socket filter.
     const { session, note } = await openEgress(this.#egress, req);
-    const args = this.bwrapArgs(req, session);
+    let publish: PublishBridge | null = null;
+    let args: string[];
+    try {
+      if (req.publish) publish = await openPublish({ port: req.publish.port });
+      args = this.bwrapArgs(req, session, publish);
+    } catch (err) {
+      await session?.close().catch(() => undefined);
+      await publish?.close().catch(() => undefined);
+      throw err;
+    }
     const plan: LaunchPlan = {
       bin: this.#bin,
       args,
-      fd3: buildSeccompFilter(this.#arch, session ? 'proxy' : 'off'),
+      fd3: buildSeccompFilter(this.#arch, session || publish ? 'proxy' : 'off'),
     };
-    if (session) plan.cleanup = () => session.close();
+    if (session || publish)
+      plan.cleanup = async () => {
+        await session?.close().catch(() => undefined);
+        await publish?.close().catch(() => undefined);
+      };
+    if (publish) plan.published = { port: publish.port, hostPort: publish.hostPort };
     if (note) plan.note = note;
     return plan;
   }

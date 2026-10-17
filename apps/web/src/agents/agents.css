@@ -1,0 +1,282 @@
+/* Agents mode: the list, a new agent, one agent (header, conversation, sections) and the sidebar
+   rows (docs/04 §1, §1.1, §2.5). Colors, spacing and type come only from design tokens; status
+   always pairs an icon with text. */
+
+/* ---- avatars ------------------------------------------------------------------------------- */
+.agent-avatar {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.agent-avatar[data-size='sm'] {
+  width: 20px;
+  height: 20px;
+  font-size: var(--u-text-xs);
+}
+.agent-avatar[data-size='lg'] {
+  width: 64px;
+  height: 64px;
+  font-size: var(--u-text-xl);
+}
+.agent-avatar-empty {
+  border: 1px solid var(--u-border);
+  background: var(--u-surface-2);
+  color: var(--u-text);
+  font-weight: 600;
+}
+.agent-avatar-picker {
+  align-items: center;
+}
+.agent-avatar-picker > .nv-field-hint {
+  flex-basis: 100%;
+}
+
+/* ---- list ---------------------------------------------------------------------------------- */
+.agent-row > .work-row-main {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.agent-state[data-state='paused'] {
+  border-color: var(--u-warn);
+}
+.agent-state[data-state='stopped'] {
+  border-color: var(--u-danger);
+}
+.sidebar-agents .thread-link {
+  gap: var(--u-space-2);
+}
+
+/* ---- forms --------------------------------------------------------------------------------- */
+.agent-form > .panel-inset > h2 {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+.agent-resp-drafts {
+  display: grid;
+  gap: var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-resp-draft {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--u-space-2);
+}
+.agent-budget-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--u-space-3);
+}
+.agent-budget-fields > .nv-field {
+  flex: 1 1 10rem;
+}
+.agent-inline-form {
+  flex: 1;
+  min-width: 0;
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.agent-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1) var(--u-space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.agent-checks > legend {
+  float: left;
+  width: 100%;
+  margin-bottom: var(--u-space-1);
+}
+.agent-channel-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--u-space-2);
+  width: 100%;
+}
+.agent-external-form {
+  align-items: flex-end;
+}
+.agent-external-form > .nv-field {
+  flex: 1 1 12rem;
+}
+.agent-external-form > .nv-field:first-child {
+  flex: 2 1 14rem;
+}
+
+/* ---- one agent ----------------------------------------------------------------------------- */
+.agent-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.agent-header {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3) var(--u-space-4);
+  border-bottom: 1px solid var(--u-border);
+}
+.agent-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-3);
+}
+.agent-title {
+  display: grid;
+  flex: 1;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.agent-title .ws-page-header {
+  justify-content: flex-start;
+}
+.agent-title h1 {
+  font-size: var(--u-text-xl);
+}
+.agent-title p {
+  margin: 0;
+}
+.agent-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  min-height: 0;
+}
+.agent-conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--u-border);
+}
+.agent-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+/* The embedded chat fits its column instead of growing to its widest line. */
+.agent-chat > .chat {
+  min-width: 0;
+}
+.agent-chat-note {
+  margin: var(--u-space-2) var(--u-space-3) 0;
+}
+.agent-conversation-empty,
+.agent-thread-log {
+  padding: var(--u-space-3) var(--u-space-4);
+}
+.agent-thread-log {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-3);
+  overflow: auto;
+}
+.agent-thread-log h2 {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+.agent-sections {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--u-space-4) var(--u-space-4);
+  overflow: auto;
+}
+/* Twelve sections: the tabs wrap rather than scroll out of sight. */
+.agent-tabs > .nv-tablist {
+  position: sticky;
+  top: 0;
+  z-index: var(--u-z-sticky);
+  flex-wrap: wrap;
+  padding-top: var(--u-space-2);
+  background: var(--u-bg);
+}
+.agent-tabs .nv-tab {
+  white-space: nowrap;
+}
+.agent-section {
+  display: grid;
+  gap: var(--u-space-3);
+}
+.agent-section > h2,
+.agent-section .ws-section-header > h2,
+.agent-section .work-goal-head > h2 {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+.agent-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.agent-inline-link {
+  justify-self: start;
+  padding-inline: 0;
+}
+.agent-rule[data-enabled='false'] .ws-card-link {
+  color: var(--u-text-muted);
+}
+.agent-rule .ws-row-actions,
+.agent-resp .ws-row-actions,
+.agent-memory-item .ws-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+.agent-preview {
+  flex-basis: 100%;
+  padding-top: var(--u-space-2);
+  border-top: 1px solid var(--u-border);
+}
+.agent-effect[data-effect='act'] {
+  border-color: var(--u-success);
+}
+.agent-effect[data-effect='ask'],
+.agent-effect[data-effect='act_on_request'] {
+  border-color: var(--u-warn);
+}
+.agent-effect[data-effect='handoff'] {
+  border-color: var(--u-info);
+}
+.agent-memory-item[data-author='agent'] {
+  border-left: 3px solid var(--u-info);
+}
+.agent-schedule {
+  align-items: flex-start;
+}
+
+@media (max-width: 900px) {
+  .agent-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: minmax(70vh, auto);
+    overflow: auto;
+  }
+  .agent-conversation {
+    border-right: 0;
+    border-bottom: 1px solid var(--u-border);
+  }
+  .agent-sections {
+    overflow: visible;
+  }
+  .agent-resp-draft,
+  .agent-channel-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.app[data-layout='phone'] .agent-header {
+  padding: var(--u-space-3);
+}
+.app[data-layout='phone'] .agent-title-row {
+  flex-wrap: wrap;
+}

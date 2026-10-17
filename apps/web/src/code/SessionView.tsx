@@ -1,12 +1,17 @@
 // One Code session at /code/:id (FR-061..FR-066, FR-069, FR-074; docs/04 §2.4): a header with
-// the folder, branch, uncommitted state, status, pull request, symbol search, Review and Commit;
-// the session's conversation (the ordinary chat view of its `code` thread, with the permission
-// mode selector in its composer); and panes for the Diff, the Review, the Terminal and a File.
-// The diff follows `code.*` events and reloads after every turn of the session's thread.
+// the folder, branch, uncommitted state, status, environment, pull request and CI status, symbol
+// search, Review, Commit, and in M6 Branch, Push and Pull request (FR-070); the session's budget
+// (docs/09 §2); the session's conversation (the ordinary chat view of its `code` thread, with the
+// permission mode selector in its composer); and panes for the Diff, the Review, the Terminal, a
+// File, the Pull request with its CI checks, the auto-verify Checks (FR-068), Dev servers
+// (FR-097, FR-067) and the other Sessions with side questions (FR-072, Ctrl/Cmd+Alt+S). A session
+// on another machine (SSH, WSL, a device) says plainly which of these work only on the Hub. The
+// diff follows `code.*` events and reloads after every turn of the session's thread.
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type {
   CodeChangeView,
   CodeReviewView,
+  CodeSessionExtrasView,
   CodeSessionView,
   CodeSymbolView,
   DiffCommentView,
@@ -17,30 +22,63 @@ import type {
 import { Button, Icon, Spinner, StatusChip, rovingIndex, useToast } from '@nova/ui';
 import { ApiError, errorMessage } from '../api.ts';
 import { ChatView } from '../chat/ChatView.tsx';
+import { matchesBinding } from '../keys.ts';
 import { navigate } from '../router.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useInterval } from '../settings/common.ts';
+import { useCodeM6Api } from './api-m6.ts';
+import { BudgetBar } from './BudgetBar.tsx';
+import { ChecksPane } from './ChecksPane.tsx';
+import { AppLink } from './CodeNav.tsx';
 import { CommitDialog } from './CommitDialog.tsx';
+import { DevServersPane } from './DevServersPane.tsx';
 import { diffTotals, mergeChanges } from './diff.ts';
 import { DiffPane } from './DiffPane.tsx';
-import { eventSessionId, useCodeEvents, useCoalesced, useThreadBusEvents } from './events.ts';
+import {
+  EXTRAS_EVENTS,
+  eventSessionId,
+  useCodeEvents,
+  useCoalesced,
+  useThreadBusEvents,
+} from './events.ts';
 import { FilePane, type FileTarget } from './FilePane.tsx';
+import { BranchDialog, PullRequestDialog, PushDialog } from './GitDialogs.tsx';
 import { branchText, environmentLabel, sessionPath, sessionTitle } from './labels.ts';
+import {
+  CI_ICON,
+  CI_TEXT,
+  CI_TONE,
+  KIND_LABEL,
+  asCiStatus,
+  isLive,
+  isRemoteKind,
+  safeHttpUrl,
+} from './m6-format.ts';
 import { ModeSelect, useModeContext } from './ModeSelect.tsx';
 import { MODE_LABEL } from './modes.ts';
+import { Badge } from './parts.tsx';
+import { ProcessesPanel } from './ProcessesPanel.tsx';
+import { PullRequestPane } from './PullRequestPane.tsx';
 import { ReviewPane } from './ReviewPane.tsx';
+import { SessionsPane, SideQuestionDialog } from './SessionsPane.tsx';
 import { SymbolSearch } from './SymbolSearch.tsx';
 import { TerminalPane } from './TerminalPane.tsx';
 
-type PaneTab = 'diff' | 'review' | 'terminal' | 'file';
+type PaneTab = 'diff' | 'review' | 'terminal' | 'file' | 'pr' | 'checks' | 'servers' | 'sessions';
 
 /** How often a running review is checked, besides its completion event. */
 export const REVIEW_POLL_MS = 1500;
+/** The side question key (FR-072); remappable once the palette has a command for it. */
+export const SIDE_QUESTION_KEY = 'mod+alt+s';
+
+type GitDialog = 'branch' | 'push' | 'pr' | null;
 
 export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   const { api, registry } = useServices();
+  const m6 = useCodeM6Api();
   const toast = useToast();
   const announce = useAnnounce();
+  const remoteNoteId = useId();
   const [session, setSession] = useState<CodeSessionView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentView[]>([]);
@@ -53,6 +91,13 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
   const [tab, setTab] = useState<PaneTab>('diff');
   const [fileTarget, setFileTarget] = useState<FileTarget | null>(null);
   const [committing, setCommitting] = useState(false);
+  // ---- M6 ----
+  const [extras, setExtras] = useState<CodeSessionExtrasView | null>(null);
+  const [gitDialog, setGitDialog] = useState<GitDialog>(null);
+  const [asking, setAsking] = useState<CodeSessionView | null>(null);
+  const [verifyVersion, setVerifyVersion] = useState(0);
+  const [serverVersion, setServerVersion] = useState(0);
+  const [sessionsVersion, setSessionsVersion] = useState(0);
 
   // ---- loading -----------------------------------------------------------------------------------
   const loadSession = useCallback(
@@ -92,13 +137,25 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
         ),
     [api, id],
   );
+  // The M6 facts (environment, budget, pull request, last checks, dev servers). Without them
+  // (an older Hub) the M5 header stays as it was.
+  const loadExtras = useCallback(
+    () =>
+      m6.getCodeSessionExtras(id).then(
+        (x) => setExtras(x),
+        () => undefined,
+      ),
+    [id, m6],
+  );
   const reloadSession = useCoalesced(loadSession);
   const reloadChanges = useCoalesced(loadChanges);
+  const reloadExtras = useCoalesced(loadExtras);
 
   useEffect(() => {
     if (!visible) return;
     reloadSession();
     reloadChanges();
+    reloadExtras();
     let alive = true;
     api.listEnvironments().then(
       ({ items }) => alive && setEnvironments(items),
@@ -108,12 +165,22 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     return () => {
       alive = false;
     };
-  }, [api, reloadChanges, reloadSession, visible]);
+  }, [api, reloadChanges, reloadExtras, reloadSession, visible]);
 
   const threadId = session?.threadId ?? null;
   useCodeEvents(visible, (env) => {
+    // Other sessions' changes matter to the Sessions pane.
+    if (env.name.startsWith('code.session.') || env.name === 'thread.status.changed')
+      setSessionsVersion((v) => v + 1);
     const about = eventSessionId(env);
     if (about && about !== id && about !== threadId) return;
+    if (EXTRAS_EVENTS.has(env.name)) reloadExtras();
+    if (env.name.startsWith('code.verify.')) setVerifyVersion((v) => v + 1);
+    if (env.name.startsWith('code.devserver.')) setServerVersion((v) => v + 1);
+    if (env.name === 'code.pr.ci.changed') {
+      const status = asCiStatus(env.payload.status);
+      if (status) announce(`Pull request: ${CI_TEXT[status]}.`);
+    }
     switch (env.name) {
       case 'code.changes.updated':
       case 'code.change.applied':
@@ -137,6 +204,8 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     if (env.name === 'turn.completed' || env.name === 'turn.interrupted') {
       reloadChanges();
       reloadSession();
+      // Budget use is written per step; the bar catches up when a turn ends.
+      reloadExtras();
     } else if (env.name === 'tool.call.completed') reloadChanges();
   });
   useInterval(
@@ -146,6 +215,20 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
     REVIEW_POLL_MS,
     visible && review?.status === 'running',
   );
+
+  // Ctrl/Cmd+Alt+S asks a side question about this session (FR-072).
+  const mac = registry.platform.mac;
+  useEffect(() => {
+    if (!visible || !session) return;
+    const s = session;
+    const onKey = (e: KeyboardEvent) => {
+      if (!matchesBinding(e, SIDE_QUESTION_KEY, mac)) return;
+      e.preventDefault();
+      setAsking(s);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mac, session, visible]);
 
   // ---- actions -----------------------------------------------------------------------------------
   const environment = environments.find((e) => e.id === session?.environmentId) ?? null;
@@ -237,7 +320,22 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
 
   const title = sessionTitle(session);
   const totals = diffTotals(changes ?? []);
-  const prUrl = safeUrl(session.pullRequestUrl);
+  const prUrl = safeHttpUrl(session.pullRequestUrl);
+  const pr = extras?.pullRequest ?? null;
+  const prLink = pr ? safeHttpUrl(pr.url) : null;
+  const envKind = extras?.environment?.kind ?? environment?.kind ?? null;
+  const envName = extras?.environment?.label ?? environment?.label ?? null;
+  const remote = isRemoteKind(envKind);
+  const remoteText = remote
+    ? `This session runs on ${envName ?? 'another machine'} (${KIND_LABEL[envKind ?? 'device']}). The diff, review, commit, Go to symbol, branches, push, pull requests and dev servers work only for folders on the Hub; the agent and the terminal work there.`
+    : null;
+  const gitUnavailable = remote
+    ? 'Not available for a session on another machine.'
+    : !session.repo
+      ? 'This folder is not a Git repository.'
+      : null;
+  const liveServers = (extras?.devServers ?? []).filter(isLive).length;
+  const setup = extras?.setup ?? null;
 
   return (
     <section className="code-session" aria-label={`Code session: ${title}`}>
@@ -262,8 +360,38 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           <span data-dirty={session.repo?.dirty || undefined}>
             <Icon name="branch" /> {branchText(session.repo)}
           </span>
-          {environment ? <span>{environmentLabel(environment)}</span> : null}
-          {prUrl ? (
+          {environment ? (
+            <span>{environmentLabel(environment)}</span>
+          ) : envName ? (
+            <span>{envName}</span>
+          ) : null}
+          {extras?.parentSessionId ? (
+            <span>
+              {extras.role ? `Worker (${extras.role}) of ` : 'Worker of '}
+              <AppLink to={sessionPath(extras.parentSessionId)}>its parent session</AppLink>
+            </span>
+          ) : null}
+          {pr ? (
+            <span className="code-pr-chip">
+              {prLink ? (
+                <a href={prLink} target="_blank" rel="noopener noreferrer">
+                  <Icon name="external" /> Pull request #{pr.number}
+                </a>
+              ) : (
+                <span>Pull request #{pr.number}</span>
+              )}{' '}
+              <button
+                type="button"
+                className="code-chip-button"
+                onClick={() => setTab('pr')}
+                aria-label={`${CI_TEXT[pr.ci.status]}: show the checks`}
+              >
+                <Badge tone={CI_TONE[pr.ci.status]} icon={CI_ICON[pr.ci.status]}>
+                  {CI_TEXT[pr.ci.status]}
+                </Badge>
+              </button>
+            </span>
+          ) : prUrl ? (
             <a href={prUrl} target="_blank" rel="noreferrer noopener">
               <Icon name="external" /> Pull request
               {session.ciStatus ? ` (checks: ${session.ciStatus})` : ''}
@@ -271,20 +399,68 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           ) : null}
         </span>
         <span className="code-header-actions">
-          <SymbolSearch sessionId={id} onPick={openSymbol} />
-          <Button onClick={() => void runReview()} disabled={reviewStarting}>
+          {remote ? null : <SymbolSearch sessionId={id} onPick={openSymbol} />}
+          <Button
+            onClick={() => void runReview()}
+            disabled={reviewStarting || remote}
+            aria-describedby={remote ? remoteNoteId : undefined}
+          >
             <Icon name="eye" /> Review
           </Button>
           <Button
             variant="primary"
-            disabled={!session.repo}
-            title={session.repo ? undefined : 'This folder is not a Git repository.'}
+            disabled={!session.repo || remote}
+            title={gitUnavailable ?? undefined}
+            aria-describedby={remote ? remoteNoteId : undefined}
             onClick={() => setCommitting(true)}
           >
             <Icon name="save" /> Commit…
           </Button>
+          <Button
+            disabled={!!gitUnavailable}
+            title={gitUnavailable ?? undefined}
+            onClick={() => setGitDialog('branch')}
+          >
+            <Icon name="branch" /> Branch…
+          </Button>
+          <Button
+            disabled={!!gitUnavailable}
+            title={gitUnavailable ?? undefined}
+            onClick={() => setGitDialog('push')}
+          >
+            <Icon name="forward" /> Push…
+          </Button>
+          <Button
+            disabled={!!gitUnavailable}
+            title={gitUnavailable ?? undefined}
+            onClick={() => (pr && pr.state === 'open' ? setTab('pr') : setGitDialog('pr'))}
+          >
+            <Icon name="compare" /> {pr && pr.state === 'open' ? 'Pull request' : 'Pull request…'}
+          </Button>
         </span>
       </header>
+      {remoteText ? (
+        <p id={remoteNoteId} className="code-remote-note" role="note">
+          <Icon name="server" /> {remoteText}
+        </p>
+      ) : null}
+      {setup?.status === 'running' ? (
+        <p className="code-remote-note" role="status">
+          <Spinner /> Setting up the environment: the setup script is running.
+        </p>
+      ) : setup?.status === 'failed' ? (
+        <p className="code-remote-note" data-tone="danger" role="alert">
+          <Icon name="alert" /> The environment’s setup script failed
+          {setup.detail ? `: ${setup.detail}` : '.'}
+        </p>
+      ) : null}
+      {extras ? (
+        <BudgetBar
+          sessionId={id}
+          budget={extras.budget}
+          onChanged={(budget) => setExtras((x) => (x ? { ...x, budget } : x))}
+        />
+      ) : null}
       <div className="code-body">
         <div className="code-chat">
           <ChatView
@@ -312,7 +488,9 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'diff',
                 label: totals.files ? `Diff (${totals.files})` : 'Diff',
-                panel: (
+                panel: remote ? (
+                  <RemoteUnavailable what="The diff" text={remoteText} />
+                ) : (
                   <DiffPane
                     sessionId={id}
                     changes={changes}
@@ -328,7 +506,9 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'review',
                 label: 'Review',
-                panel: (
+                panel: remote ? (
+                  <RemoteUnavailable what="Review" text={remoteText} />
+                ) : (
                   <ReviewPane
                     review={review}
                     starting={reviewStarting}
@@ -341,7 +521,19 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
               {
                 id: 'terminal',
                 label: 'Terminal',
-                panel: <TerminalPane session={session} visible={visible && tab === 'terminal'} />,
+                panel: (
+                  <>
+                    <TerminalPane session={session} visible={visible && tab === 'terminal'} />
+                    {remote && extras?.environment ? (
+                      <ProcessesPanel
+                        environmentId={extras.environment.id}
+                        sessionId={id}
+                        title={`Processes on ${extras.environment.label}`}
+                        visible={visible && tab === 'terminal'}
+                      />
+                    ) : null}
+                  </>
+                ),
               },
               {
                 id: 'file',
@@ -352,6 +544,66 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
                     target={fileTarget}
                     threadId={session.threadId}
                     mac={registry.platform.mac}
+                  />
+                ),
+              },
+              {
+                id: 'pr',
+                label: 'Pull request',
+                panel: (
+                  <PullRequestPane
+                    sessionId={id}
+                    pr={pr}
+                    unavailable={
+                      gitUnavailable === 'This folder is not a Git repository.'
+                        ? gitUnavailable
+                        : remote
+                          ? 'Pushing and pull requests work only for sessions whose folder is on the Hub.'
+                          : null
+                    }
+                    onOpen={() => setGitDialog('pr')}
+                    onPush={() => setGitDialog('push')}
+                    onRefreshed={(next) => setExtras((x) => (x ? { ...x, pullRequest: next } : x))}
+                  />
+                ),
+              },
+              {
+                id: 'checks',
+                label: 'Checks',
+                panel: (
+                  <ChecksPane
+                    sessionId={id}
+                    visible={visible && tab === 'checks'}
+                    version={verifyVersion}
+                  />
+                ),
+              },
+              {
+                id: 'servers',
+                label: liveServers ? `Dev servers (${liveServers})` : 'Dev servers',
+                panel: (
+                  <DevServersPane
+                    sessionId={id}
+                    visible={visible && tab === 'servers'}
+                    version={serverVersion}
+                    onChanged={reloadExtras}
+                    unavailable={
+                      remote
+                        ? 'Dev servers run only for sessions whose folder is on the Hub.'
+                        : null
+                    }
+                  />
+                ),
+              },
+              {
+                id: 'sessions',
+                label: 'Sessions',
+                panel: (
+                  <SessionsPane
+                    session={session}
+                    visible={visible && tab === 'sessions'}
+                    version={sessionsVersion}
+                    onAsk={setAsking}
                   />
                 ),
               },
@@ -370,7 +622,56 @@ export function SessionView({ id, visible }: { id: string; visible: boolean }) {
           reloadChanges();
         }}
       />
+      <BranchDialog
+        open={gitDialog === 'branch'}
+        session={session}
+        onClose={() => setGitDialog(null)}
+        onCreated={(r) => {
+          setGitDialog(null);
+          announce(`Switched to the new branch ${r.branch}.`);
+          toast.show(`Now on ${r.branch}.`, { tone: 'success' });
+          reloadSession();
+        }}
+      />
+      <PushDialog
+        open={gitDialog === 'push'}
+        session={session}
+        onClose={() => setGitDialog(null)}
+        onPushed={(r) => {
+          announce(`Pushed ${r.branch} to ${r.remote}.`);
+          reloadExtras();
+        }}
+      />
+      <PullRequestDialog
+        open={gitDialog === 'pr'}
+        session={session}
+        onClose={() => setGitDialog(null)}
+        onNewBranch={() => setGitDialog('branch')}
+        onOpened={(next) => {
+          setGitDialog(null);
+          setExtras((x) => (x ? { ...x, pullRequest: next } : x));
+          setTab('pr');
+          announce(`Opened pull request #${next.number}.`);
+          reloadSession();
+        }}
+      />
+      <SideQuestionDialog target={asking} onClose={() => setAsking(null)} />
     </section>
+  );
+}
+
+/** What a pane says for a session on another machine (`remote_environment`). */
+function RemoteUnavailable({ what, text }: { what: string; text: string | null }) {
+  return (
+    <div className="nv-empty">
+      <span className="nv-empty-icon">
+        <Icon name="server" size="32px" />
+      </span>
+      <h3 className="nv-empty-title">{what} is not available for this session</h3>
+      <div className="nv-empty-description">
+        {text ?? 'It works only for sessions whose folder is on the Hub.'}
+      </div>
+    </div>
   );
 }
 
@@ -457,15 +758,4 @@ export function fenced(text: string): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
   const fence = '`'.repeat(longest + 1);
   return `${fence}\n${text}\n${fence}`;
-}
-
-/** Only http(s) links from the Hub become links. */
-function safeUrl(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null;
-  } catch {
-    return null;
-  }
 }

@@ -518,6 +518,29 @@ describe('network policy routes', () => {
       headers: AUTH,
     });
     expect(byHost.json().items).toHaveLength(1);
+    expect(byHost.json().nextCursor).toBeNull();
+    // Paging: one at a time, newest first, then the older one, then nothing more.
+    const page1 = (
+      await e.app.inject({ method: 'GET', url: '/api/v1/egress/decisions?limit=1', headers: AUTH })
+    ).json();
+    expect(page1.items.map((i: { host: string }) => i.host)).toEqual(['evil.test']);
+    expect(page1.nextCursor).toBe(page1.items[0].id);
+    const page2 = (
+      await e.app.inject({
+        method: 'GET',
+        url: `/api/v1/egress/decisions?limit=1&before=${page1.nextCursor as string}`,
+        headers: AUTH,
+      })
+    ).json();
+    expect(page2.items.map((i: { host: string }) => i.host)).toEqual(['api.test']);
+    const page3 = (
+      await e.app.inject({
+        method: 'GET',
+        url: `/api/v1/egress/decisions?limit=1&before=${page2.nextCursor as string}`,
+        headers: AUTH,
+      })
+    ).json();
+    expect(page3).toEqual({ items: [], nextCursor: null });
     expect(
       (
         await e.app.inject({ method: 'GET', url: '/api/v1/egress/decisions', headers: AUTH_OTHER })

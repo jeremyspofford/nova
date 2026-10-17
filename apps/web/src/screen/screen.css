@@ -1,0 +1,258 @@
+/* Computer use (FR-093, FR-207, FR-087, FR-098, FR-075; docs/04 §2.8): the screen panel, the live
+   view, the control indicator and Settings → Computer use. Colors, spacing and type come only from
+   design tokens; every state pairs an icon with text. The live view and the browser panel share
+   the trace and screenshot styles below. */
+
+/* ---- panel -------------------------------------------------------------------------------- */
+.scr-panel,
+.brw-panel {
+  display: grid;
+  gap: var(--u-space-4);
+  min-width: 0;
+}
+.scr-panel > header > h2,
+.brw-panel > header > h2 {
+  margin: 0;
+  font-size: var(--u-text-xl);
+}
+.scr-panel h3,
+.brw-panel h3 {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+/* While Nova controls the screen the panel carries an edge highlight (docs/11 §5.2). */
+.scr-panel[data-state='controlling'] {
+  padding: var(--u-space-3);
+  border: 2px solid var(--u-info);
+  border-radius: var(--u-radius-md);
+}
+.scr-who {
+  margin: 0;
+}
+
+/* ---- banners: Nova controls, control stopped, the user has control ----------------------- */
+.scr-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2) var(--u-space-3);
+  padding: var(--u-space-3) var(--u-space-4);
+  border: 1px solid var(--u-border);
+  border-left: 4px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+}
+.scr-banner > p {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+.scr-banner > .nv-icon {
+  flex: none;
+}
+.scr-banner[data-tone='active'] {
+  border-color: var(--u-info);
+}
+.scr-banner[data-tone='active'] > .nv-icon {
+  color: var(--u-info);
+}
+.scr-banner[data-tone='stopped'] {
+  border-color: var(--u-danger);
+}
+.scr-banner[data-tone='stopped'] > .nv-icon {
+  color: var(--u-danger);
+}
+.scr-banner[data-tone='user'] {
+  border-color: var(--u-warn);
+}
+.scr-banner[data-tone='user'] > .nv-icon {
+  color: var(--u-warn);
+}
+/* The big Stop button: easy to hit, never hidden. */
+.scr-stop {
+  min-height: 44px;
+  padding: 0 var(--u-space-6);
+  font-size: var(--u-text-lg);
+  font-weight: 600;
+}
+
+/* ---- live view --------------------------------------------------------------------------- */
+.scr-live {
+  display: grid;
+  gap: var(--u-space-2);
+  min-width: 0;
+}
+.scr-live-who {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.scr-live-frame {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  overflow: hidden;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+}
+.scr-live[data-control='true'] .scr-live-frame {
+  border: 2px solid var(--u-warn);
+}
+.scr-live-frame:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
+.scr-live-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  user-select: none;
+}
+.scr-live[data-control='true'] .scr-live-frame img {
+  cursor: crosshair;
+}
+.scr-live-wait,
+.scr-live-time {
+  margin: 0;
+  font-size: var(--u-text-xs);
+}
+.scr-live-controls {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.scr-live-point > summary {
+  cursor: pointer;
+  font-size: var(--u-text-sm);
+}
+
+/* ---- traces and screenshots (screen and browser actions) --------------------------------- */
+.scr-trace-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1) var(--u-space-2);
+  width: 100%;
+  padding: var(--u-space-1) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.scr-trace-step .activity-title {
+  flex: 1;
+  min-width: 160px;
+}
+.scr-trace-detail {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: var(--u-space-1) 0 var(--u-space-2) var(--u-space-4);
+}
+.scr-shots {
+  display: grid;
+  /* auto-fill: a lone screenshot keeps the width of one column instead of the whole row. */
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--u-space-2);
+}
+.scr-shots figure,
+.scr-appshot-figure {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  min-width: 0;
+}
+.scr-shots img,
+.scr-appshot-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+}
+.scr-shots figcaption {
+  font-size: var(--u-text-xs);
+  color: var(--u-text-muted);
+}
+.scr-appshot-figure {
+  flex-basis: 100%;
+}
+.scr-appshot-figure img {
+  max-height: 480px;
+  object-fit: contain;
+}
+.scr-appshots a.nv-btn {
+  text-decoration: none;
+}
+.scr-appshot-figure figcaption {
+  font-size: var(--u-text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ---- grants and apps on screen ------------------------------------------------------------ */
+.scr-apps {
+  display: grid;
+  gap: var(--u-space-2);
+}
+
+/* ---- the global control indicator -------------------------------------------------------- */
+.scr-indicators {
+  position: fixed;
+  top: var(--u-space-2);
+  left: 50%;
+  z-index: var(--u-z-toast);
+  display: grid;
+  gap: var(--u-space-1);
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--u-space-2));
+  transform: translateX(-50%);
+}
+.scr-indicator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-1) var(--u-space-1) var(--u-space-1) var(--u-space-3);
+  border: 2px solid var(--u-info);
+  border-radius: 999px;
+  background: var(--u-surface);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
+  color: var(--u-text);
+  font-size: var(--u-text-sm);
+}
+.scr-indicator > .nv-icon {
+  color: var(--u-info);
+}
+.scr-indicator-text {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .scr-indicators {
+    left: var(--u-space-2);
+    right: var(--u-space-2);
+    width: auto;
+    transform: none;
+  }
+  .scr-indicator {
+    border-radius: var(--u-radius-md);
+  }
+  .scr-indicator-text {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+}
+
+/* ---- settings ----------------------------------------------------------------------------- */
+.scr-record {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-3);
+  padding: var(--u-space-3);
+  border: 2px dashed var(--u-accent);
+  border-radius: var(--u-radius-md);
+}
+.scr-record > p {
+  margin: 0;
+}

@@ -191,4 +191,14 @@ export interface EgressProxy {
     scope: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string };
     policy: EgressPolicy;
   }): Promise<EgressSession>;
+  /**
+   * Let one scope reach a dev server on a private address (docs/12 §4.2); effective only while
+   * the scope's session policy also sets `allowLocalBinding`. Returns the revoke function.
+   */
+  grantDevServer?(input: {
+    accountId: string;
+    scope: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string };
+    host: string;
+    port: number;
+  }): () => void;
 }

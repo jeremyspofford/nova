@@ -1,13 +1,11 @@
-// One shared subscription to the Hub's global event stream for runs, goals, schedules, requests
-// and thread status (contracts/events.md; contracts/hub-api.md §5). The Work views, the sidebar
-// and every run or question card in a chat listen through it, so a page holds one connection for
-// all of them however many cards it shows. The stream opens with the first listener and closes
-// with the last.
+// Runs, goals, schedules, requests and thread status on the app's one shared event stream
+// (src/hub-events.ts; contracts/events.md). The Work views, the sidebar and every run or question
+// card in a chat listen through it, so a page holds one connection however many cards it shows.
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import type { EventEnvelope } from '@nova/shared';
-import { EVENTS_STREAM_URL } from '../notifications/Bell.tsx';
 import { useServices } from '../services.tsx';
-import { openStream, type EventSourceFactory, type StreamHandle } from '../sse.ts';
+import { subscribeHubEvents } from '../hub-events.ts';
+import type { EventSourceFactory } from '../sse.ts';
 
 export const WORK_EVENTS = [
   'run.created',
@@ -45,40 +43,9 @@ export interface WorkListener {
   onOpen?: () => void;
 }
 
-interface Shared {
-  handle: StreamHandle;
-  listeners: Set<WorkListener>;
-}
-
-const shared = new WeakMap<EventSourceFactory, Shared>();
-
+/** Work events on the app's shared stream (src/hub-events.ts). */
 export function subscribeWorkEvents(factory: EventSourceFactory, l: WorkListener): () => void {
-  let s = shared.get(factory);
-  if (!s) {
-    const listeners = new Set<WorkListener>();
-    const handle = openStream(
-      EVENTS_STREAM_URL,
-      {
-        onEvent: (env) => {
-          for (const x of [...listeners]) x.onEvent(env);
-        },
-        onOpen: () => {
-          for (const x of [...listeners]) x.onOpen?.();
-        },
-      },
-      { names: WORK_EVENTS, factory },
-    );
-    s = { handle, listeners };
-    shared.set(factory, s);
-  }
-  const mine = s;
-  mine.listeners.add(l);
-  return () => {
-    mine.listeners.delete(l);
-    if (mine.listeners.size > 0) return;
-    mine.handle.close();
-    if (shared.get(factory) === mine) shared.delete(factory);
-  };
+  return subscribeHubEvents(factory, WORK_EVENTS, l);
 }
 
 /** Follow the shared stream while mounted; the latest callbacks are always the ones called. */

@@ -1,15 +1,21 @@
-// Settings → Devices (FR-126, docs/04 §9, docs/14 §7): compute nodes that run models for this Hub.
-// "Add compute node" creates a one-use enrollment token (creating it is the approval, ADR-089) and
-// shows the command to run on the node; Revoke stops a node's credential at once. The list
-// refreshes every 5 s while the page is open.
-import { useEffect, useRef, useState } from 'react';
-import type { NodeEnrollToken, NodeView } from '@nova/shared';
-import { Button, Dialog, Icon, Spinner, useToast, type IconName } from '@nova/ui';
+// Settings → Devices (FR-126, docs/04 §9, docs/14 §7): the way into Devices (computers running
+// novad, M6) with the rules that apply to every device (wakes per hour, minimum novad versions,
+// FR-144, FR-148), then compute nodes that run models for this Hub (M2). "Add compute node"
+// creates a one-use enrollment token (creating it is the approval, ADR-089) and shows the command
+// to run on the node; Revoke stops a node's credential at once. The node list refreshes every 5 s
+// while the page is open.
+import { useEffect, useId, useRef, useState } from 'react';
+import { DEVICE_CAPABILITIES, type NodeEnrollToken, type NodeView } from '@nova/shared';
+import { Button, Dialog, Icon, Spinner, TextField, useToast, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { CAPABILITY_LABEL, DEVICES_ADD_PATH, DEVICES_PATH } from '../devices/format.ts';
+import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
+import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
-import { formatWhen, plural, useInterval } from './common.ts';
+import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
 import '../workspace.css';
+import '../devices/devices.css';
 
 export const NODE_POLL_MS = 5000;
 /** The backend a fresh node talks to; Ollama's default address on that machine. */
@@ -88,6 +94,22 @@ export function DevicesPage() {
   return (
     <div className="settings-page">
       <h2>Devices</h2>
+      <section className="settings-section" aria-labelledby="devices-novad">
+        <h3 id="devices-novad">Your devices</h3>
+        <p className="muted">
+          Computers running novad: what each one can do, its modules, power, updates, the folders it
+          shares and the agents that use it.
+        </p>
+        <div className="row">
+          <Button variant="primary" onClick={() => navigate(DEVICES_PATH)}>
+            Open Devices
+          </Button>
+          <Button onClick={() => navigate(DEVICES_ADD_PATH)}>
+            <Icon name="plus" /> Add a device
+          </Button>
+        </div>
+      </section>
+      <DeviceRules />
       <section className="settings-section" aria-labelledby="devices-nodes">
         <h3 id="devices-nodes">Compute nodes</h3>
         <p className="muted">
@@ -281,5 +303,121 @@ function AddNode({ onClose }: { onClose: () => void }) {
         </div>
       ) : null}
     </Dialog>
+  );
+}
+
+const WAKES_MIN = 1;
+const WAKES_MAX = 60;
+const VERSION_RE = /^\d+(\.\d+){0,3}$/;
+
+/** Rules for every novad device: wakes per hour (FR-144) and minimum versions (FR-148). */
+function DeviceRules() {
+  const settings = useSettings();
+  const toast = useToast();
+  const wakes = settings.get('devices.wakesPerHour');
+  const mins = settings.get('devices.minNovadVersions');
+  const fail = (err: unknown) =>
+    toast.show(`Could not save: ${errorMessage(err)}`, { tone: 'error' });
+  const [draft, setDraft] = useState<{ base: number; text: string } | null>(null);
+  // A draft belongs to the value it was typed against; a new value from the Hub discards it.
+  const text = draft && draft.base === wakes.value ? draft.text : String(wakes.value);
+  const n = Number(text);
+  const invalid = !/^\d+$/.test(text.trim()) || n < WAKES_MIN || n > WAKES_MAX;
+  const commit = () => {
+    if (invalid || n === wakes.value) return;
+    setDraft(null);
+    void settings.set('devices.wakesPerHour', n).catch(fail);
+  };
+  const setMin = (cap: (typeof DEVICE_CAPABILITIES)[number], v: string) => {
+    const next = { ...mins.value };
+    if (v) next[cap] = v;
+    else delete next[cap];
+    void settings.set('devices.minNovadVersions', next).catch(fail);
+  };
+  return (
+    <section className="settings-section" aria-labelledby="devices-rules">
+      <h3 id="devices-rules">Rules for every device</h3>
+      <TextField
+        label="Wakes per hour, per device"
+        hint={`${wakes.locked ? `${MANAGED}. ` : ''}How many Wake-on-LAN signals a device may get in an hour. ${WAKES_MIN} to ${WAKES_MAX}.`}
+        type="number"
+        className="ws-number"
+        inputMode="numeric"
+        min={WAKES_MIN}
+        max={WAKES_MAX}
+        step={1}
+        value={text}
+        disabled={wakes.locked}
+        error={invalid ? `Enter a whole number from ${WAKES_MIN} to ${WAKES_MAX}.` : undefined}
+        onChange={(e) => setDraft({ base: wakes.value, text: e.target.value })}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+        }}
+      />
+      <details className="ws-advanced">
+        <summary>Minimum novad versions</summary>
+        <p className="muted">
+          Raise the novad version a device needs for a capability. A device below it loses only that
+          capability and shows Update required. Leave blank to use the built-in minimum.
+          {mins.locked ? ` ${MANAGED}.` : ''}
+        </p>
+        <div className="devices-min-versions">
+          {DEVICE_CAPABILITIES.map((c) => (
+            <MinVersionField
+              key={`${c}:${mins.value[c] ?? ''}`}
+              label={CAPABILITY_LABEL[c]}
+              value={mins.value[c] ?? ''}
+              locked={mins.locked}
+              onSave={(v) => setMin(c, v)}
+            />
+          ))}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+/** A version saved on Enter or blur; blank removes the raise. */
+function MinVersionField({
+  label,
+  value,
+  locked,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  locked: boolean;
+  onSave: (v: string) => void;
+}) {
+  const id = useId();
+  const [text, setText] = useState(value);
+  const t = text.trim();
+  const invalid = Boolean(t) && !VERSION_RE.test(t);
+  const commit = () => {
+    if (invalid || t === value) return;
+    onSave(t);
+  };
+  return (
+    <TextField
+      id={`mv${id}`}
+      label={label}
+      value={text}
+      placeholder="Built-in"
+      className="ws-number"
+      disabled={locked}
+      error={invalid ? 'Enter a version like 0.7.0.' : undefined}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        }
+      }}
+    />
   );
 }

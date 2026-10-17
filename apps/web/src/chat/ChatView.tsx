@@ -70,6 +70,8 @@ import { threadStatus } from './status.ts';
 import { TOOL_STATUS_TEXT } from './ToolCard.tsx';
 import { ToolAppsProvider } from './tool-apps.tsx';
 import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
+import { PendingSignins } from '../browser/PendingSignins.tsx';
+import { ThreadQuestions } from '../channels/ShareAsks.tsx';
 
 const EMPTY_DRAFT: Draft = { text: '', attachments: [] };
 
@@ -139,6 +141,11 @@ export function ChatView({
   const progress = useRef({ last: 0, words: 0 });
   /** The approval card to focus, bumped when one appears or is asked for. */
   const [focusTarget, setFocusTarget] = useState<{ id: string; n: number } | null>(null);
+  // A browser sign-in the agent asked for in this chat (`?signin=<id>` from its notification).
+  const signinFocus =
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('signin');
 
   const onEvent = (env: EventEnvelope) => {
     const p = env.payload;
@@ -1066,6 +1073,8 @@ export function ChatView({
             </button>
           </p>
         ) : null}
+        {threadId ? <ThreadQuestions threadId={threadId} /> : null}
+        {signinFocus ? <PendingSignins focusId={signinFocus} /> : null}
         <Composer
           draft={draft}
           onDraftChange={(d) => {

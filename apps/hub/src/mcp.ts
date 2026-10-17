@@ -92,6 +92,11 @@ interface StoredConfig {
   toolTimeoutMs: number;
   enabledTools: string[] | null;
   disabledTools: string[];
+  /**
+   * Tools the owner declared read-only (FR-082, FR-189): their descriptors get `userReadOnly`.
+   * Only the owner sets it, here; a plugin's server never has one (its manifest is not the owner).
+   */
+  readOnlyTools: string[];
   defaultApproval: Approval | null;
   /** Grants confirmed for a bundle (mcp-config.json `policy`). */
   policy?: { network: string[]; fs: 'none' | 'read' | 'project' };
@@ -123,13 +128,21 @@ function parseJson<T>(text: string | null, fallback: T): T {
   }
 }
 
+/** A tool list without repeats, in the order given. */
+function unique(list: readonly string[]): string[] {
+  return [...new Set(list)];
+}
+
 function storedConfig(row: Row): StoredConfig {
   const c = parseJson<Partial<StoredConfig>>(row.configJson, {});
+  const readOnly = Array.isArray(c.readOnlyTools) ? c.readOnlyTools : [];
   const out: StoredConfig = {
     startupTimeoutMs: c.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
     toolTimeoutMs: c.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
     enabledTools: c.enabledTools ?? null,
     disabledTools: c.disabledTools ?? [],
+    readOnlyTools:
+      row.source === 'plugin' ? [] : readOnly.filter((t): t is string => typeof t === 'string'),
     defaultApproval: c.defaultApproval ?? null,
   };
   if (c.policy) out.policy = c.policy;
@@ -153,6 +166,7 @@ function toConfig(row: Row): McpServerConfig {
     toolTimeoutMs: c.toolTimeoutMs,
     enabledTools: c.enabledTools,
     disabledTools: c.disabledTools,
+    readOnlyTools: c.readOnlyTools,
   };
 }
 
@@ -203,6 +217,7 @@ function toView(row: Row, state: McpServerState | null, auth?: McpAuthView): Mcp
     defaultApproval: c.defaultApproval,
     enabledTools: c.enabledTools,
     disabledTools: c.disabledTools,
+    readOnlyTools: c.readOnlyTools,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     connectedAt: row.enabled ? (state?.connectedAt ?? null) : null,
@@ -594,6 +609,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           toolTimeoutMs: body.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
           enabledTools: body.enabledTools ?? null,
           disabledTools: body.disabledTools ?? [],
+          readOnlyTools: unique(body.readOnlyTools ?? []),
           defaultApproval: body.defaultApproval ?? null,
         };
         const values: Row = {
@@ -627,8 +643,13 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           throw new NovaError('conflict', `an MCP server named ${body.name} already exists`);
         throw err;
       }
-      defaults.set(id, storedConfig(row).defaultApproval);
-      await record(accountId, 'add', row, { envKeys: Object.keys(body.env ?? {}).sort() });
+      const added = storedConfig(row);
+      defaults.set(id, added.defaultApproval);
+      await record(accountId, 'add', row, {
+        envKeys: Object.keys(body.env ?? {}).sort(),
+        // Declaring tools read-only loosens what agents may do without asking: on the record.
+        ...(added.readOnlyTools.length ? { readOnlyTools: added.readOnlyTools } : {}),
+      });
       start(toConfig(row));
       void reply.status(201);
       return view(row);
@@ -660,6 +681,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
           patch.defaultApproval === undefined ? cur.defaultApproval : patch.defaultApproval,
         enabledTools: patch.enabledTools === undefined ? cur.enabledTools : patch.enabledTools,
         disabledTools: patch.disabledTools ?? cur.disabledTools,
+        readOnlyTools: patch.readOnlyTools ?? cur.readOnlyTools,
       });
       if (merged.name !== row.name) await assertNameFree(accountId, merged.name, row.id);
       // `env`, when sent, is the complete set of names (the settings UI sends it on any change).
@@ -670,6 +692,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         toolTimeoutMs: merged.toolTimeoutMs ?? cur.toolTimeoutMs,
         enabledTools: merged.enabledTools ?? null,
         disabledTools: merged.disabledTools ?? [],
+        readOnlyTools: unique(merged.readOnlyTools ?? []),
         defaultApproval: merged.defaultApproval ?? null,
         ...(cur.policy ? { policy: cur.policy } : {}),
       };
@@ -709,8 +732,17 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
       }
       defaults.set(row.id, config.defaultApproval);
       const action = next.enabled === row.enabled ? 'update' : next.enabled ? 'enable' : 'disable';
+      // Declaring tools read-only loosens what agents may do without asking: a change to the
+      // list is recorded with what was added and removed (mcp read-only tools changed).
+      const before = new Set(cur.readOnlyTools);
+      const after = new Set(config.readOnlyTools);
+      const added = config.readOnlyTools.filter((t) => !before.has(t));
+      const removed = cur.readOnlyTools.filter((t) => !after.has(t));
       await record(accountId, action, next, {
         fields: Object.keys(patch).sort(),
+        ...(added.length || removed.length
+          ? { readOnlyTools: { added, removed, now: config.readOnlyTools } }
+          : {}),
       });
       // New secret values keep their references, so a changed value needs an explicit relaunch.
       start(toConfig(next), { restart: patch.env !== undefined });
@@ -885,6 +917,7 @@ export async function setupMcp(ctx: HubContext & { audit: AuditSink }): Promise<
         toolTimeoutMs: prev?.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
         enabledTools: prev?.enabledTools ?? null,
         disabledTools: prev?.disabledTools ?? [],
+        readOnlyTools: prev?.readOnlyTools ?? [],
         // A bundle's tools ask by default (docs/08 §2.5).
         defaultApproval: prev?.defaultApproval ?? 'ask',
         policy: { network: body.permissions.network, fs: body.permissions.fs },

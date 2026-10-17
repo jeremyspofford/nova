@@ -689,6 +689,12 @@ export interface ToolDescriptor {
   timeoutMs?: number;
   /** An MCP Apps resource that renders this tool (FR-198). */
   ui?: { resourceUri: string };
+  /**
+   * Set by Nova from the owner's settings for an MCP tool the owner declared read-only (the
+   * server's `readOnlyTools`, FR-082, FR-189); never from the server's hints. The policy engine
+   * treats the tool as read-only only when nothing else it knows says the tool changes anything.
+   */
+  userReadOnly?: boolean;
 }
 
 export type PolicyEffect = 'allow' | 'ask' | 'handoff' | 'deny';
@@ -911,6 +917,12 @@ export interface McpServerView {
   defaultApproval: 'allow' | 'ask' | 'deny' | null;
   enabledTools: string[] | null;
   disabledTools: string[];
+  /**
+   * Tools the owner declared read-only (FR-082, FR-189): agents' research may use them and they
+   * are allowed without asking unless a default the owner set says otherwise. Matched like
+   * `enabledTools` (the server's name, the sanitized segment or the canonical name).
+   */
+  readOnlyTools: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -930,6 +942,8 @@ export const mcpServerSchema = z
     defaultApproval: z.enum(['allow', 'ask', 'deny']).nullable().optional(),
     enabledTools: z.array(z.string().max(200)).nullable().optional(),
     disabledTools: z.array(z.string().max(200)).optional(),
+    /** The owner's declaration, never the server's (docs/08 §1); see `McpServerView`. */
+    readOnlyTools: z.array(z.string().min(1).max(200)).max(500).optional(),
   })
   .refine((v) => (v.transport === 'stdio' ? !!v.command : !!v.url), {
     message: 'stdio needs a command; sse and http need a url',

@@ -131,7 +131,9 @@ describe('Settings → Devices (FR-126)', () => {
     });
     await renderApp({ hub, path: '/settings/general' });
     hub.state.failNext.listNodes = fail('Hub busy');
-    await userEvent.click(screen.getByRole('link', { name: 'Devices' }));
+    // The settings section (the sidebar also links to the Devices surface).
+    const sections = screen.getByRole('navigation', { name: 'Settings sections' });
+    await userEvent.click(within(sections).getByRole('link', { name: 'Devices' }));
     expect(await screen.findByText('Hub busy')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     const row = await screen.findByRole('listitem', { name: 'Desk GPU' });

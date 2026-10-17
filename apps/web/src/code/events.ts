@@ -3,9 +3,8 @@
 // burst of events (a reconnect replays them) costs one reload at a time, then one more.
 import { useCallback, useEffect, useRef } from 'react';
 import type { EventEnvelope } from '@nova/shared';
-import { EVENTS_STREAM_URL } from '../notifications/Bell.tsx';
 import { useServices } from '../services.tsx';
-import { openStream } from '../sse.ts';
+import { subscribeHubEvents } from '../hub-events.ts';
 
 /** Event names the Code views follow (contracts/events.md "code"; `code.changes.updated` M5). */
 export const CODE_EVENTS = [
@@ -21,7 +20,31 @@ export const CODE_EVENTS = [
   'code.pr.opened',
   'code.pr.ci.changed',
   'thread.status.changed',
+  // M6 (docs/10 §2, §7-§10): pushes, auto-verify, dev servers, worktree leases, environments.
+  'code.push.completed',
+  'code.verify.started',
+  'code.verify.completed',
+  'code.devserver.started',
+  'code.devserver.stopped',
+  'worktree.leased',
+  'worktree.released',
+  'environment.updated',
+  'environment.health.changed',
 ] as const;
+
+/** The M6 events that change what a session's extras show (budget, PR, checks, servers). */
+export const EXTRAS_EVENTS: ReadonlySet<string> = new Set([
+  'code.session.updated',
+  'code.pr.opened',
+  'code.pr.ci.changed',
+  'code.push.completed',
+  'code.verify.started',
+  'code.verify.completed',
+  'code.devserver.started',
+  'code.devserver.stopped',
+  'environment.updated',
+  'environment.health.changed',
+]);
 
 /** Follows the Code events on the global stream while `active`. */
 export function useCodeEvents(active: boolean, onEvent: (env: EventEnvelope) => void): void {
@@ -32,12 +55,10 @@ export function useCodeEvents(active: boolean, onEvent: (env: EventEnvelope) => 
   });
   useEffect(() => {
     if (!active) return;
-    const handle = openStream(
-      EVENTS_STREAM_URL,
-      { onEvent: (env) => handler.current(env) },
-      { names: CODE_EVENTS, factory: eventSource },
-    );
-    return () => handle.close();
+    // The app's one shared stream (src/hub-events.ts).
+    return subscribeHubEvents(eventSource, CODE_EVENTS, {
+      onEvent: (env) => handler.current(env),
+    });
   }, [active, eventSource]);
 }
 

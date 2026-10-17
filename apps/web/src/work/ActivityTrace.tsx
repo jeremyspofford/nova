@@ -1,11 +1,13 @@
 // The run's Activity trace (FR-057, docs/09 §9): turns, tool calls, approvals and policy decisions,
 // oldest first, from GET /activity. Each step opens to its recorded details. Replay walks the
 // recorded steps one at a time (by hand or playing), showing only what had happened up to that
-// step; it reads the record and never runs anything again.
+// step; it reads the record and never runs anything again. Browser and screen actions (kind
+// `computer`) show their before/after screenshots under the step (FR-098).
 import { useCallback, useEffect, useId, useState } from 'react';
 import type { ActivityItemView } from '@nova/shared';
 import { Button, Icon, Spinner, type IconName } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { Shots } from '../computers/Shots.tsx';
 import { useServices } from '../services.tsx';
 import { useInterval } from '../settings/common.ts';
 
@@ -189,6 +191,9 @@ export function ActivityTrace({
                     {timeOf(it.ts)}
                   </time>
                 </button>
+                {it.kind === 'computer' && it.shots ? (
+                  <Shots shots={it.shots} title={it.title} />
+                ) : null}
                 {expanded ? (
                   <dl className="ws-dl work-trace-detail">
                     <dt>Kind</dt>

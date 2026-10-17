@@ -49,6 +49,11 @@ export interface ToolDescriptor {
   effects?: ActionEffect[];
   pluginId?: string;
   serverId?: string;
+  /**
+   * Set by Nova for an MCP tool the owner declared read-only in Settings (the server's
+   * `readOnlyTools`); never from the server's hints. See `isReadOnly` for what it can cover.
+   */
+  userReadOnly?: boolean;
 }
 
 export type ScopeKind =

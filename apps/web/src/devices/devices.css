@@ -1,0 +1,409 @@
+/* Devices (docs/04 §9, docs/23): the device list, Add a device, and a device's page with its
+   tabs. Colors, spacing and type come only from design tokens (docs/14 §2.2). */
+
+/* ---- list ------------------------------------------------------------------------------------ */
+.devices-row {
+  align-items: flex-start;
+}
+.devices-row-main {
+  display: grid;
+  flex: 1;
+  justify-items: start;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.devices-row-head,
+.devices-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  min-width: 0;
+}
+.devices-title > h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- facts and notes -------------------------------------------------------------------------- */
+.devices-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--u-space-3) var(--u-space-4);
+  margin: 0;
+}
+.devices-facts > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.devices-facts dt {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}
+.devices-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.devices-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-warn);
+  border-radius: var(--u-radius-sm);
+}
+.devices-note[data-tone='bad'] {
+  border-color: var(--u-danger);
+}
+.devices-note > p,
+.devices-note > ul {
+  flex-basis: 100%;
+  margin: 0;
+}
+.devices-note > ul {
+  padding-left: var(--u-space-6);
+}
+.devices-unavailable {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+  margin: 0;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+}
+.devices-unavailable > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--u-warn);
+}
+.devices-page .ws-badge[data-tone='bad'] {
+  border-color: var(--u-danger);
+}
+
+/* ---- tabs ---------------------------------------------------------------------------------- */
+/* Grid items keep their content's width unless told otherwise; the tab strip scrolls instead. */
+.devices-page > * {
+  min-width: 0;
+}
+.devices-tabs .nv-tablist {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.devices-tabs .nv-tab {
+  flex: none;
+  white-space: nowrap;
+}
+.devices-tabs .nv-tabpanel > .stack > .ws-section:first-child,
+.devices-tabs .nv-tabpanel > form > .ws-section:first-child,
+.devices-tabs .nv-tabpanel > .ws-section {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* ---- capabilities -------------------------------------------------------------------------- */
+.devices-caps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.devices-caps > li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 0 var(--u-space-2);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+}
+.devices-caps > li > svg {
+  grid-row: span 2;
+  margin-top: 3px;
+  color: var(--u-warn);
+}
+.devices-caps > li[data-available] > svg {
+  color: var(--u-success);
+}
+.devices-caps > li > .muted {
+  font-size: var(--u-text-sm);
+}
+.devices-cap-name {
+  font-weight: 600;
+}
+.devices-json {
+  max-height: 360px;
+  overflow: auto;
+  font-size: var(--u-text-xs);
+}
+.devices-overrides {
+  display: grid;
+  gap: var(--u-space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.devices-override-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items: start;
+  gap: var(--u-space-3);
+}
+.devices-override-group > h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.devices-override-group .ws-number {
+  max-width: none;
+}
+.devices-narrow {
+  max-width: 320px;
+}
+.devices-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-3);
+}
+.devices-indent {
+  padding-left: var(--u-space-6);
+}
+.devices-roles,
+.devices-roles .nv-radio {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.devices-roles .nv-radio {
+  display: flex;
+}
+.devices-roles input,
+.devices-page .nv-radio input[type='checkbox'] {
+  margin-top: 4px;
+  accent-color: var(--u-accent);
+}
+
+/* ---- add a device ---------------------------------------------------------------------------- */
+.devices-waiting {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.devices-success {
+  display: grid;
+  gap: var(--u-space-3);
+}
+.devices-success > h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.devices-success > h1 > svg {
+  color: var(--u-success);
+}
+.devices-success > h1:focus {
+  outline: none;
+}
+.devices-success > h1:focus-visible {
+  outline: 2px solid var(--u-focus);
+}
+
+/* ---- power ----------------------------------------------------------------------------------- */
+.devices-wol {
+  gap: var(--u-space-2);
+}
+.devices-wol > h3 {
+  margin: var(--u-space-2) 0 0;
+  font-size: var(--u-text-sm);
+}
+
+/* ---- files ------------------------------------------------------------------------------------ */
+.devices-request > strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-1);
+  overflow-wrap: anywhere;
+}
+.devices-request {
+  border-color: var(--u-warn);
+}
+.devices-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-2);
+}
+.devices-roots .nv-btn {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.devices-folder {
+  gap: var(--u-space-2);
+}
+.devices-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+}
+.devices-crumbs li + li::before {
+  margin-right: var(--u-space-1);
+  color: var(--u-text-muted);
+  content: '/';
+}
+.devices-crumbs li {
+  overflow-wrap: anywhere;
+}
+.devices-entries {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+  list-style: none;
+}
+.devices-entries > li + li {
+  border-top: 1px solid var(--u-border);
+}
+.devices-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: var(--u-space-1) var(--u-space-3);
+  border: 0;
+  background: none;
+  color: var(--u-text);
+  font: inherit;
+  text-align: left;
+}
+button.devices-entry {
+  cursor: pointer;
+}
+button.devices-entry:hover,
+button.devices-entry[aria-pressed='true'] {
+  background: var(--u-surface-2);
+}
+.devices-entry > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.devices-entry > .muted {
+  flex: none;
+  font-size: var(--u-text-sm);
+}
+.devices-entry[data-inert] {
+  color: var(--u-text-muted);
+}
+.devices-preview {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+}
+.devices-preview h3 {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.devices-path {
+  font-family: var(--u-font-code);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+h2.devices-path {
+  margin: 0;
+  font-size: var(--u-text-md);
+}
+.devices-file,
+.devices-diff {
+  max-height: 60vh;
+  margin: 0;
+  padding: var(--u-space-2) 0;
+  overflow: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+  line-height: 1.5;
+}
+.devices-file {
+  padding: var(--u-space-2) var(--u-space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.devices-diff-wrap {
+  gap: var(--u-space-2);
+}
+.devices-diff-line {
+  display: block;
+  padding: 0 var(--u-space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.devices-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--u-success) 14%, transparent);
+}
+.devices-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--u-danger) 14%, transparent);
+}
+.devices-diff-line[data-kind='hunk'],
+.devices-diff-line[data-kind='meta'] {
+  color: var(--u-text-muted);
+}
+.devices-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+}
+.devices-segmented .nv-btn[aria-pressed='true'] {
+  background: var(--u-surface-2);
+  font-weight: 600;
+}
+.devices-tools {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+  padding-left: var(--u-space-4);
+  overflow-wrap: anywhere;
+}
+.devices-bundles {
+  margin: 0;
+  padding-left: var(--u-space-6);
+}
+
+/* ---- Settings → Devices: rules for every device ------------------------------------------------ */
+.devices-min-versions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--u-space-3);
+}
+.devices-min-versions .ws-number {
+  max-width: none;
+}
+
+/* ---- phones (docs/04 §4.3) -------------------------------------------------------------------- */
+.app[data-layout='phone'] .devices-facts {
+  grid-template-columns: 1fr 1fr;
+}
+.app[data-layout='phone'] .devices-row .nv-btn,
+.app[data-layout='phone'] .ws-page-header > .row {
+  width: 100%;
+}

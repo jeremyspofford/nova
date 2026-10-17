@@ -229,6 +229,43 @@ describe('stdio servers', () => {
     expect(h.manager.exposedTools('another-account')).toEqual([]);
   });
 
+  it('marks only the tools the owner declared read-only, never from server hints (FR-082)', async () => {
+    h = harness();
+    // echo and add carry the server's readOnlyHint; neither hint makes them read-only.
+    const cfg = stdioConfig({ name: 'cal' });
+    await h.manager.add(cfg);
+    const marked = () =>
+      h!.manager
+        .tools(cfg.id)
+        .filter((t) => t.descriptor.userReadOnly === true)
+        .map((t) => t.original);
+    expect(marked()).toEqual([]);
+    expect(h.manager.tools(cfg.id).every((t) => !('userReadOnly' in t.descriptor))).toBe(true);
+    // The owner's list matches like the tool lists: the server's name, the segment or the
+    // canonical name; a change re-lists the tools without a relaunch.
+    const changes = h.toolChanges.length;
+    const starts = h.statuses.filter((s) => s.status === 'starting').length;
+    await h.manager.update({ ...cfg, readOnlyTools: ['echo', 'mcp:cal.add', 'nope'] });
+    expect(h.toolChanges.length).toBe(changes + 1);
+    expect(h.statuses.filter((s) => s.status === 'starting').length).toBe(starts);
+    expect(marked()).toEqual(['echo', 'add']);
+    const exposed = h.manager.exposedTools(cfg.accountId);
+    expect(exposed.find((t) => t.original === 'echo')!.descriptor.userReadOnly).toBe(true);
+    expect(exposed.find((t) => t.original === 'write_note')!.descriptor.userReadOnly).toBe(
+      undefined,
+    );
+    // The same list again changes nothing; removing it clears the marks.
+    await h.manager.update({ ...cfg, readOnlyTools: ['echo', 'mcp:cal.add', 'nope'] });
+    expect(h.toolChanges.length).toBe(changes + 1);
+    await h.manager.update({ ...cfg, readOnlyTools: [] });
+    expect(h.toolChanges.length).toBe(changes + 2);
+    expect(marked()).toEqual([]);
+    // A config without the field (a plugin's server) declares nothing.
+    await h.manager.update({ ...cfg, readOnlyTools: ['echo'] });
+    await h.manager.update(stdioConfig({ id: cfg.id, name: 'cal' }));
+    expect(marked()).toEqual([]);
+  });
+
   it('restarts a crashed server with backoff', async () => {
     h = harness({ backoff: { baseMs: 50, maxMs: 1000 } });
     const cfg = stdioConfig({}, ['--test-hooks']);

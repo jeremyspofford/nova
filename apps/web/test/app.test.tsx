@@ -116,17 +116,17 @@ describe('shell and modes (FR-001, FR-002)', () => {
     await userEvent.click(screen.getByRole('link', { name: /Code/ }));
     expect(screen.getByRole('heading', { name: 'Code' })).toBeTruthy();
     await userEvent.keyboard('{Control>}4{/Control}');
-    expect(screen.getByRole('heading', { name: /Always-on agents arrive/ })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Agents', level: 1 })).toBeTruthy();
     await userEvent.keyboard('{Control>}1{/Control}');
     expect(window.location.pathname).toBe(`/chat/${t.id}`);
     expect(screen.getByLabelText<HTMLTextAreaElement>('Message').value).toBe('unsent draft');
     expect(screen.getByText('Plan a trip')).toBeTruthy();
     expect(hub.api.getThread).toHaveBeenCalledTimes(1);
 
-    // "Go to Chat" from an empty mode returns to the same chat too.
+    // The Chat link from another mode returns to the same chat too.
     await userEvent.click(screen.getByRole('link', { name: /Agents/ }));
-    // Hidden mode panes are out of the accessibility tree, so only the visible button matches.
-    await userEvent.click(screen.getByRole('button', { name: 'Go to Chat' }));
+    expect(window.location.pathname).toBe('/agents');
+    await userEvent.click(screen.getByRole('link', { name: /^Chat/ }));
     expect(window.location.pathname).toBe(`/chat/${t.id}`);
   });
 

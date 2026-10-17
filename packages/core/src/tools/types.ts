@@ -175,7 +175,13 @@ export interface ExecRequest {
 
 export type ExecResult =
   | { status: 'exited'; exitCode: number; output: string }
-  | { status: 'running'; sessionId: string; output: string };
+  | {
+      status: 'running';
+      sessionId: string;
+      output: string;
+      /** A port published with `publish` (dev servers): reachable at 127.0.0.1:hostPort. */
+      published?: { port: number; hostPort: number };
+    };
 
 export interface SandboxClient {
   readonly substrate: 'os_sandbox' | 'container' | 'micro_vm' | 'cloud' | null;

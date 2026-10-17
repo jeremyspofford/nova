@@ -1,0 +1,135 @@
+/* The agent browser (FR-086, FR-092, FR-094, FR-098): the browser panel, the private sign-in form
+   and Settings → Browser. The panel's layout, traces and screenshots come from screen.css. Colors,
+   spacing and type come only from design tokens. */
+
+/* ---- the open page ----------------------------------------------------------------------- */
+.brw-page {
+  display: grid;
+  gap: var(--u-space-1);
+  min-width: 0;
+}
+.brw-title {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.brw-url {
+  margin: 0;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+  overflow-wrap: anywhere;
+}
+.brw-page-tools {
+  display: grid;
+  gap: var(--u-space-1);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  font-size: var(--u-text-sm);
+}
+.brw-frame {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+}
+.brw-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface-2);
+}
+.brw-frame > p {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  margin: 0;
+  border: 1px dashed var(--u-border);
+  border-radius: var(--u-radius-md);
+}
+
+/* ---- private sign-in --------------------------------------------------------------------- */
+.brw-signins {
+  display: grid;
+  gap: var(--u-space-3);
+}
+.brw-signin {
+  display: grid;
+  gap: var(--u-space-2);
+  padding: var(--u-space-4);
+  border: 1px solid var(--u-warn);
+  border-left: 4px solid var(--u-warn);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.brw-signin .ws-subhead {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  overflow-wrap: anywhere;
+}
+.brw-signin-form {
+  display: grid;
+  gap: var(--u-space-3);
+  max-width: 480px;
+}
+.brw-signin-closed {
+  margin: 0;
+}
+.brw-signin-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+}
+.brw-signin-result[data-outcome='completed'] {
+  border-color: var(--u-success);
+}
+.brw-signin-result > p {
+  margin: 0;
+}
+
+/* ---- trace extras ------------------------------------------------------------------------ */
+.brw-external ul {
+  margin-top: var(--u-space-1);
+}
+.brw-downloads {
+  display: grid;
+  gap: var(--u-space-1);
+}
+
+/* ---- settings ---------------------------------------------------------------------------- */
+.brw-add-site > .nv-field:first-child {
+  min-width: 220px;
+}
+.brw-site-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2) var(--u-space-3);
+}
+.brw-dev {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-2);
+  font-size: var(--u-text-sm);
+}
+.brw-lists {
+  display: grid;
+  gap: var(--u-space-3);
+}
+.brw-lists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--u-space-3);
+}
+.brw-lists .ws-textarea {
+  min-height: 8lh;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+}

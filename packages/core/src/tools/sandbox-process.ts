@@ -2,7 +2,8 @@
 // bubblewrap): sessions per turn, yield and poll, stdin, interrupt and terminate, an output cap
 // that keeps the head and the tail, a wall-clock limit (docs/11 §8), and a one-shot run with
 // separate stdout and stderr for computers (FR-080). A substrate supplies a launch plan per
-// command; the plan's cleanup (closing the egress session) runs when the process ends.
+// command; the plan's cleanup (closing the egress session and the dev-server bridge) runs when
+// the process ends.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
@@ -25,6 +26,12 @@ export interface ExecRequestExtras {
     threadId?: string | null;
     scope?: { kind: 'run' | 'session' | 'agent' | 'sandbox'; id: string } | null;
   };
+  /**
+   * Make a server inside reachable from the Hub (dev servers, FR-097): the substrate bridges
+   * 127.0.0.1:`port` inside to a free port on the Hub's 127.0.0.1, reported in the running
+   * result's `published` (sandbox-publish.ts). The command's network is unchanged.
+   */
+  publish?: { port: number };
 }
 
 export type SandboxExecRequest = ExecRequest & ExecRequestExtras;
@@ -42,6 +49,8 @@ export interface LaunchPlan {
   cleanup?: () => Promise<void>;
   /** Shown before the command's output: why it has no network, for example. */
   note?: string;
+  /** The dev-server bridge: the port inside and its Hub-side port on 127.0.0.1. */
+  published?: { port: number; hostPort: number };
 }
 
 /** A command run to completion (computers). */
@@ -73,6 +82,7 @@ interface Session {
   exited: Promise<void>;
   onOutput: ((chunk: string) => void) | undefined;
   timer: ReturnType<typeof setTimeout> | undefined;
+  published: { port: number; hostPort: number } | undefined;
 }
 
 export abstract class ProcessSandbox implements SandboxClient {
@@ -129,6 +139,7 @@ export abstract class ProcessSandbox implements SandboxClient {
       exited: new Promise<void>((r) => (resolveExit = r)),
       onOutput: req.onOutput,
       timer: undefined,
+      published: plan.published,
     };
     if (plan.note) this.#append(s, `${plan.note}\n`);
     // One decoder per stream: a character split across two chunks is decoded whole.
@@ -338,6 +349,8 @@ export abstract class ProcessSandbox implements SandboxClient {
       this.#sessions.delete(s.id);
       return { status: 'exited', exitCode: s.exitCode, output: this.#take(s) };
     }
-    return { status: 'running', sessionId: s.id, output: this.#take(s) };
+    const running: ExecResult = { status: 'running', sessionId: s.id, output: this.#take(s) };
+    if (s.published) running.published = { ...s.published };
+    return running;
   }
 }

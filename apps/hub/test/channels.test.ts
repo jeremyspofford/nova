@@ -440,6 +440,15 @@ describe('Slack through the Hub (J7 step 3)', () => {
     });
     expect(json(rule)).toMatchObject({ category: 'error', channels: [b.id], isDefault: false });
     const notes = new NotificationService({ db, events });
+    // #general is a shared channel: by default nothing private goes there unasked, so the copy
+    // is withheld; with the private-to-shared policy at allow it is sent.
+    const before = slack.posts.length;
+    await notes.create({ accountId: ACCOUNT, kind: 'error', title: 'Held back', body: 'x' });
+    await vi.waitFor(() =>
+      expect(area.routing.deliveries(ACCOUNT).some((d) => d.status === 'failed')).toBe(true),
+    );
+    expect(slack.posts.length).toBe(before);
+    settings['channels.privateToShared'] = 'allow';
     await notes.create({
       accountId: ACCOUNT,
       kind: 'error',

@@ -230,6 +230,8 @@ export const networkDecisionQuerySchema = z.object({
   decision: z.enum(['allow', 'deny']).optional(),
   host: z.string().max(253).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
+  /** Older than this decision (a previous page's `nextCursor`). */
+  before: z.string().min(1).max(100).optional(),
 });
 
 /** One proxy decision, read from the audit log (kind `network`); no bodies or full URLs. */

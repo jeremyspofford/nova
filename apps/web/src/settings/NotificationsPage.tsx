@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { NOTIFICATION_KINDS, type NotificationKind } from '@nova/shared';
 import { Button, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { NotificationRoutingSection } from '../channels/NotificationRoutingSection.tsx';
 import { osPermission, requestOsPermission, type OsPermission } from '../notifications/os.ts';
 import { useSettings } from '../settings.tsx';
 import { SwitchField } from './controls.tsx';
@@ -97,6 +98,7 @@ export function NotificationsPage() {
           </div>
         ) : null}
       </section>
+      <NotificationRoutingSection />
     </div>
   );
 }

@@ -11,12 +11,12 @@ import { navigate } from '../router.ts';
 import { useAnnounce, useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { formatWhen } from '../settings/common.ts';
-import { openStream } from '../sse.ts';
 import { OPEN_NOTIFICATIONS_EVENT } from '../workspace-commands.ts';
 import { showOsNotification } from './os.ts';
 import '../workspace.css';
+import { subscribeHubEvents } from '../hub-events.ts';
 
-export const EVENTS_STREAM_URL = '/api/v1/events/stream';
+export { EVENTS_STREAM_URL } from '../hub-events.ts';
 
 export const KIND_TEXT: Record<NotificationKind, string> = {
   approval: 'Approval',
@@ -115,18 +115,13 @@ export function NotificationsBell() {
 
   useEffect(() => {
     refresh(false);
-    const handle = openStream(
-      EVENTS_STREAM_URL,
-      {
-        onEvent: (e) => {
-          const id = e.payload.notificationId;
-          if (e.payload.os === false && typeof id === 'string') quietIds.current.add(id);
-          refresh(true);
-        },
+    return subscribeHubEvents(eventSource, ['notification.created'], {
+      onEvent: (e) => {
+        const id = e.payload.notificationId;
+        if (e.payload.os === false && typeof id === 'string') quietIds.current.add(id);
+        refresh(true);
       },
-      { names: ['notification.created'], factory: eventSource },
-    );
-    return () => handle.close();
+    });
   }, [eventSource, refresh]);
 
   useEffect(() => {

@@ -163,19 +163,28 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
   function decisions(
     accountId: string,
     q: z.infer<typeof networkDecisionQuerySchema>,
-  ): NetworkDecisionView[] {
+  ): { items: NetworkDecisionView[]; nextCursor: string | null } {
+    // Newest first, filtered in SQL (host from the detail), paged by the audit sequence.
+    const hostFilter = q.host ? q.host.trim().toLowerCase().replace(/\.$/, '') : null;
     const rows = ctx.db.raw
       .prepare(
         `SELECT id, action, decision, result, detail_json, created_at FROM audit_event
          WHERE account_id = ? AND kind = 'network' AND action IN ('egress.request', 'egress.connect')
            AND (? IS NULL OR decision = ?)
+           AND (? IS NULL OR json_extract(detail_json, '$.host') = ?)
+           AND (? IS NULL OR seq < (SELECT seq FROM audit_event WHERE id = ? AND account_id = ?))
          ORDER BY seq DESC LIMIT ?`,
       )
       .all(
         accountId,
         q.decision ?? null,
         q.decision ?? null,
-        q.host ? 2000 : q.limit,
+        hostFilter,
+        hostFilter,
+        q.before ?? null,
+        q.before ?? null,
+        accountId,
+        q.limit,
       ) as unknown as AuditRow[];
     const out: NetworkDecisionView[] = [];
     for (const r of rows) {
@@ -186,7 +195,6 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
         d = {};
       }
       const host = typeof d.host === 'string' ? d.host : null;
-      if (q.host && host !== q.host.toLowerCase()) continue;
       const scope = d.scope as { kind?: unknown; id?: unknown } | undefined;
       out.push({
         id: r.id,
@@ -207,9 +215,9 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
         bytesIn: typeof d.bytesIn === 'number' ? d.bytesIn : 0,
         bytesOut: typeof d.bytesOut === 'number' ? d.bytesOut : 0,
       });
-      if (out.length >= q.limit) break;
     }
-    return out;
+    const last = rows.at(-1);
+    return { items: out, nextCursor: rows.length === q.limit && last ? last.id : null };
   }
 
   function register(app: FastifyInstance): void {
@@ -340,7 +348,7 @@ export async function setupComputers(ctx: HubContext & ComputersDeps): Promise<C
     app.get('/api/v1/egress/decisions', async (req) => {
       const accountId = await ctx.accountOf(req);
       const q = networkDecisionQuerySchema.parse(req.query ?? {});
-      return { items: decisions(accountId, q) };
+      return decisions(accountId, q);
     });
   }
 

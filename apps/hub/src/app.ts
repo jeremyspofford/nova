@@ -30,11 +30,14 @@ import {
   SourceService,
   ThreadService,
   MockDesktops,
+  browserDevServerGrant,
+  browserDevServerOpener,
   detectLocalServers,
   threadSandboxRouter,
   type ChatServiceOptions,
   type ModelRouter,
   type ProviderFactory,
+  type SandboxEgress,
   type ThreadPolicySource,
   type ToolRuntimeOptions,
 } from '@nova/core';
@@ -250,10 +253,13 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     approvals: policy.approvals,
   });
   const schedules = await setupSchedules(ctx, { audit: ops.audit, notifier: ops.notifier });
+  // The computers area (set up below) owns the egress proxy; container environments use it.
+  let egressRef: SandboxEgress | null = null;
   const code = await setupCode({
     ...ctx,
     audit: ops.audit,
     sandbox: () => toolsRef?.sandbox ?? null,
+    egress: () => egressRef,
   });
   const runs = await setupRuns({
     ...ctx,
@@ -265,6 +271,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   // M6: computers (the tools' sandbox is theirs: network only through the egress proxy, an
   // agent's commands on its computer), then the areas whose tools the tools area lists.
   const computers = await setupComputers({ ...ctx, audit: ops.audit });
+  egressRef = computers.egress;
   const channels = await setupChannels(ctx, { audit: ops.audit });
   const agents = await setupAgents({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const browser = await setupBrowser(ctx, {
@@ -443,6 +450,10 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     return agentId ? (await computers.service.forAgent(accountId, agentId)).id : null;
   });
   browser.useExternalAgentGuard(agents.externalAgentGuard);
+  // Dev servers of Code sessions (FR-097, FR-067): the session thread's browser may reach the
+  // dev server's bridge port on 127.0.0.1, and the browser pane opens it once it answers.
+  code.useDevServerGrant(browserDevServerGrant(browser.service));
+  code.useBrowserOpener(browserDevServerOpener(browser.service));
   // Computer use (FR-093, FR-207) and takeover (FR-087): the kill key and a takeover pause the
   // agent that uses the computer and its browser; returning control resumes what they paused.
   screen.useComputers(computers.service);
@@ -473,6 +484,22 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       const agentId = await agentOfComputer(accountId, computerId);
       if (!agentId || !pausedByScreen.delete(agentId)) return;
       await agents.service.resume(accountId, agentId);
+    },
+  });
+  // Local browser fallback (FR-209): an agent with a connected computer may continue on that
+  // computer's browser after the per-site consent. novad's browser module is not built yet, so
+  // the consent flow ends with the reason instead of a session.
+  browser.useLocalFallback({
+    open: async ({ accountId, computerId }) => {
+      const agentId = await agentOfComputer(accountId, computerId);
+      const connection = agentId
+        ? await devices.service.activeConnection(accountId, agentId)
+        : null;
+      if (!connection) return { ok: false, reason: 'the agent has no connected computer' };
+      return {
+        ok: false,
+        reason: "the connected computer's browser is not available yet (it needs novad 0.7)",
+      };
     },
   });
   spaces.useAudit(ops.audit);
@@ -540,6 +567,26 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     if (threadId && e.accountId)
       void tools.execSessions.killThread(e.accountId, threadId, 'killed').catch(() => undefined);
   });
+  // The public address inbound webhooks use (`channels.publicUrl`, docs/13 §4) is a name the Hub
+  // answers to, like the configured origins; it follows the setting.
+  const publicHosts = new Set<string>();
+  const refreshPublicHosts = async () => {
+    const url = await setting('channels.publicUrl');
+    publicHosts.clear();
+    if (!url) return;
+    try {
+      const u = new URL(url);
+      publicHosts.add(u.host.toLowerCase());
+      publicHosts.add(u.hostname.toLowerCase());
+    } catch {
+      // not a URL: nothing to add
+    }
+  };
+  await refreshPublicHosts();
+  events.bus.subscribe('settings.changed', (e) => {
+    if (e.payload.key === 'channels.publicUrl')
+      refreshPublicHosts().catch((err: unknown) => log.warn('public URL not read', { err }));
+  });
   const app = Fastify({
     logger: false,
     bodyLimit: 1024 * 1024,
@@ -587,7 +634,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), usb=()');
     reply.header('Content-Security-Policy', CSP);
-    guardHostAndOrigin(req, config);
+    guardHostAndOrigin(req, config, publicHosts);
     req.principal = await authenticate(req, auth);
   });
 
@@ -949,9 +996,14 @@ export function requireAuth(req: FastifyRequest): Principal {
  * rebinding and cross-site requests from a browser. Requests without Origin (CLI, devices) must
  * still present a token.
  */
-function guardHostAndOrigin(req: FastifyRequest, config: HubConfig): void {
+function guardHostAndOrigin(
+  req: FastifyRequest,
+  config: HubConfig,
+  extraHosts: ReadonlySet<string> = new Set(),
+): void {
   const host = (req.headers.host ?? '').toLowerCase();
   const allowedHosts = allowedHostSet(config);
+  for (const h of extraHosts) allowedHosts.add(h);
   if (!allowedHosts.has(host) && !allowedHosts.has(host.replace(/:\d+$/, ''))) {
     throw new NovaError('origin_rejected', 'unexpected Host header');
   }

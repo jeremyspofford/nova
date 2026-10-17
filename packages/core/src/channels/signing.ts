@@ -52,9 +52,19 @@ export function concat(...parts: (string | Uint8Array)[]): Buffer {
   return Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : p)));
 }
 
-/** `sha256=<hex>` over `<timestamp>.<body>`, the scheme of Nova's outbound webhooks. */
-export function signBody(secret: string, timestamp: string, body: string | Uint8Array): string {
-  return `sha256=${hmacHex(secret, concat(timestamp, '.', body))}`;
+/**
+ * `sha256=<hex>` over `<timestamp>.<body>`, the scheme of Nova's outbound webhooks; with an event
+ * id, over `<timestamp>.<event id>.<body>` (webhook triggers that send `x-nova-event-id`).
+ */
+export function signBody(
+  secret: string,
+  timestamp: string,
+  body: string | Uint8Array,
+  eventId?: string | null,
+): string {
+  // An event id used for dedupe is signed too, so a replay cannot pass as a new event.
+  const head = eventId ? `${timestamp}.${eventId}` : timestamp;
+  return `sha256=${hmacHex(secret, concat(head, '.', body))}`;
 }
 
 /** The bearer token of an Authorization header, or null. */

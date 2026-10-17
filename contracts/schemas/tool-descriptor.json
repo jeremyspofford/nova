@@ -31,6 +31,10 @@
       "default": false,
       "description": "In a tool listing for a turn: true while the tool is held behind tool.search and not in the model's tool list. Tools named in an @-mention or an active skill's allowed_tools are never deferred."
     },
+    "userReadOnly": {
+      "type": "boolean",
+      "description": "Set by Nova for an MCP tool the owner declared read-only (mcp-config.json readOnlyTools); never from the server's hints. The policy engine treats the tool as read-only only when its annotations name no write, send, delete or execute action, the server does not mark it destructive, and its declared and inferred effects are at most network (docs/08 §1)."
+    },
     "ui": {
       "type": "object",
       "additionalProperties": false,

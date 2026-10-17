@@ -553,6 +553,20 @@ describe('private to shared (docs/13 §4)', () => {
   });
 });
 
+describe('notification copies (FR-060)', () => {
+  it('go to private channels; to a shared one only when the policy allows sharing', async () => {
+    const shared = await channel();
+    const priv = await dm(shared.id);
+    expect(await env.service.mayNotify(ACCOUNT, priv.id)).toBe(true);
+    // The default policy asks, and a notification cannot ask before every copy: withheld.
+    expect(await env.service.mayNotify(ACCOUNT, shared.id)).toBe(false);
+    env.settings['channels.privateToShared'] = 'deny';
+    expect(await env.service.mayNotify(ACCOUNT, shared.id)).toBe(false);
+    env.settings['channels.privateToShared'] = 'allow';
+    expect(await env.service.mayNotify(ACCOUNT, shared.id)).toBe(true);
+  });
+});
+
 describe('approvals answered from Slack (FR-100, FR-189)', () => {
   let dir: string;
   let gate: PolicyGate;

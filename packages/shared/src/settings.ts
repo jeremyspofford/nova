@@ -413,6 +413,8 @@ export const SETTINGS = {
       })
       .strict(),
     default: { enabled: true, commands: [], timeoutSeconds: 600, feedbackTurns: 1 },
+    // It names commands Nova runs on its own after every edit: a project cannot set it.
+    security: true,
     description:
       'Auto-verify: after a turn edits files, run the project checks in the sandbox and report pass or fail (FR-068).',
   }),
@@ -733,12 +735,9 @@ export const SETTINGS = {
   }),
   'network.egressAllow': def({
     key: 'network.egressAllow',
-    schema: z.array(
-      z
-        .string()
-        .min(1)
-        .refine((h) => h !== '*', 'a bare * is not allowed'),
-    ),
+    // The proxy's own rules (FR-193): a bare `*` or a wildcard other than the leftmost label
+    // would make it refuse every session's policy, so such entries are refused here.
+    schema: z.array(hostPatternSchema).max(500),
     default: [] as string[],
     security: true,
     description: 'Hosts agents may reach without asking (FR-102).',

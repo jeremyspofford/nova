@@ -22,7 +22,7 @@ import type { McpStatus, McpTransport, ToolDescriptor } from '@nova/shared';
 import type { Logger } from '@nova/telemetry';
 import { mapBlock, mapCallError, mapCallResult, type McpToolResult } from './content.ts';
 import { LineSplitter, LogRing } from './log-ring.ts';
-import { canonicalNames, toDescriptor, toolExposed, type McpToolInfo } from './names.ts';
+import { canonicalNames, listNames, toDescriptor, toolExposed, type McpToolInfo } from './names.ts';
 
 export const MCP_CLIENT_NAME = 'nova';
 
@@ -62,6 +62,12 @@ export interface McpServerConfig {
   toolTimeoutMs: number;
   enabledTools: string[] | null;
   disabledTools: string[];
+  /**
+   * Tools the owner declared read-only in Settings (FR-082, FR-189), matched like the tool lists;
+   * their descriptors get `userReadOnly`. Absent or empty: none. Never set from the server's
+   * hints or a plugin's manifest.
+   */
+  readOnlyTools?: string[];
 }
 
 export interface BackoffOptions {
@@ -280,12 +286,15 @@ export class McpConnection {
       cfg.name,
       this.#tools.map((t) => t.name),
     );
+    const readOnly = cfg.readOnlyTools ?? [];
     return this.#tools.map((t) => {
       const canonical = names.get(t.name)!;
+      const descriptor = toDescriptor(cfg, t, canonical);
+      if (listNames(readOnly, t.name, canonical)) descriptor.userReadOnly = true;
       return {
         serverId: cfg.id,
         original: t.name,
-        descriptor: toDescriptor(cfg, t, canonical),
+        descriptor,
         exposed: toolExposed(cfg, t.name, canonical),
       };
     });
@@ -334,10 +343,15 @@ export class McpConnection {
       await this.restart();
       return;
     }
-    if (
-      JSON.stringify([prev.name, prev.enabledTools, prev.disabledTools, prev.toolTimeoutMs]) !==
-      JSON.stringify([next.name, next.enabledTools, next.disabledTools, next.toolTimeoutMs])
-    ) {
+    const listed = (c: McpServerConfig) =>
+      JSON.stringify([
+        c.name,
+        c.enabledTools,
+        c.disabledTools,
+        c.readOnlyTools ?? [],
+        c.toolTimeoutMs,
+      ]);
+    if (listed(prev) !== listed(next)) {
       this.#deps.onToolsChanged(next.id);
     }
   }

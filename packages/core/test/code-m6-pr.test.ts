@@ -186,6 +186,17 @@ describe('push guards', () => {
     );
   });
 
+  it('never sends the Git host token to an http:// remote', async () => {
+    const h = await connect();
+    const s = await sessionOnBranch('nova/plain');
+    e.git(['remote', 'add', 'plain', 'http://github.example/acme/app.git']);
+    const before = host.requests.length;
+    const err = await failure(e.prs.push(ACCOUNT, s.id, { remote: 'plain', hostId: h.id }, 'user'));
+    expect(err).toMatchObject({ code: 'policy_denied', details: { reason: 'insecure_remote' } });
+    // Refused before anything was sent.
+    expect(host.requests.length).toBe(before);
+  });
+
   it('scans the pushed commits for secrets and pushes nothing when it finds one', async () => {
     const s = await sessionOnBranch('nova/leak');
     const key = ['-----BEGIN', 'RSA PRIVATE KEY-----'].join(' ');

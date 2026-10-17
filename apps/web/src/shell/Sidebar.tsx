@@ -13,6 +13,7 @@ import { SidebarRuns } from './SidebarRuns.tsx';
 import { useWorkCommands } from '../work/commands.ts';
 import { useSidebarStatus } from './SidebarStatus.ts';
 import '../workspace.css';
+import { SidebarAgents } from '../agents/SidebarAgents.tsx';
 
 export const MODE_INFO: Record<Mode, { label: string; icon: IconName; command: string }> = {
   chat: { label: 'Chat', icon: 'chat', command: 'mode.chat' },
@@ -135,6 +136,16 @@ export function Sidebar({
                   onOpen={onNavigated}
                 />
               ) : null}
+              {m === 'agents' ? (
+                <SidebarAgents
+                  selectedId={
+                    route.name === 'mode' && route.mode === 'agents' && route.id !== 'new'
+                      ? route.id
+                      : null
+                  }
+                  onOpen={onNavigated}
+                />
+              ) : null}
             </li>
           );
         })}
@@ -234,6 +245,34 @@ export function Sidebar({
         >
           <Icon name="server" />
           <span className="mode-label">Apps</span>
+        </a>
+        <a
+          href="/computers"
+          className="mode-link"
+          aria-current={route.name === 'computers' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/computers');
+            onNavigated();
+          }}
+        >
+          <Icon name="terminal" />
+          <span className="mode-label">Computers</span>
+        </a>
+        <a
+          href="/devices"
+          className="mode-link"
+          aria-current={route.name === 'devices' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/devices');
+            onNavigated();
+          }}
+        >
+          <Icon name="server" />
+          <span className="mode-label">Devices</span>
         </a>
       </div>
       <div className="sidebar-bottom">

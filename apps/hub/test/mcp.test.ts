@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyRequest } from 'fastify';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AuditRecord } from '@nova/core';
 import { MemorySecretStore } from '@nova/secrets';
@@ -217,6 +218,35 @@ describe('MCP routes', () => {
       await db.orm.select().from(schema.mcpServer),
     ]);
     expect(everything).not.toContain(SECRET);
+  });
+
+  it('validates read-only tool names: at most 500, each 1 to 200 characters', async () => {
+    for (const readOnlyTools of [
+      ['x'.repeat(201)],
+      [''],
+      Array.from({ length: 501 }, (_, i) => `t${i}`),
+      'echo',
+      [1],
+    ]) {
+      const r = await api(
+        'POST',
+        '/api/v1/mcp/servers',
+        fixtureServer({ enabled: false, readOnlyTools }),
+      );
+      expect(r.status, JSON.stringify(readOnlyTools).slice(0, 40)).toBe(400);
+      expect(r.json.error.code).toBe('validation');
+    }
+    const ok = await api(
+      'POST',
+      '/api/v1/mcp/servers',
+      fixtureServer({ enabled: false, readOnlyTools: ['x'.repeat(200)] }),
+    );
+    expect(ok.status).toBe(201);
+    const patched = await api('PATCH', `/api/v1/mcp/servers/${ok.json.id}`, {
+      readOnlyTools: [''],
+    });
+    expect(patched.status).toBe(400);
+    expect((await view(ok.json.id)).readOnlyTools).toEqual(['x'.repeat(200)]);
   });
 
   it('refuses duplicate names and unknown ids', async () => {
@@ -515,6 +545,121 @@ describe('MCP area', () => {
       envKeys: ['KEY'],
     });
     expect(JSON.stringify(audits)).not.toContain(SECRET);
+    await app.close();
+  });
+
+  it('stores the tools the owner declared read-only, marks them and audits the change (FR-082)', async () => {
+    area = await setup();
+    const app = await routes(area);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/mcp/servers',
+      payload: fixtureServer({ name: 'cal', readOnlyTools: ['echo', 'echo'] }),
+    });
+    expect(res.statusCode).toBe(201);
+    const id = res.json().id as string;
+    expect(res.json().readOnlyTools).toEqual(['echo']);
+    expect(audits.at(-1)).toMatchObject({
+      action: 'add',
+      detail: expect.objectContaining({ readOnlyTools: ['echo'] }),
+    });
+    await waitFor(() => Promise.resolve(area!.manager.state(id)?.status === 'connected'));
+    const marked = async () =>
+      (await area!.source.list(account))
+        .filter((d) => d.descriptor.userReadOnly === true)
+        .map((d) => d.descriptor.name);
+    expect(await marked()).toEqual(['mcp:cal.echo']);
+
+    // A change re-lists the tools without a relaunch, and the audit records the list: it
+    // loosens what agents may do without asking.
+    const changed: string[] = [];
+    const off = area.onToolsChanged((sid) => changed.push(sid));
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/mcp/servers/${id}`,
+      payload: { readOnlyTools: ['echo', 'mcp:cal.add'] },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({
+      readOnlyTools: ['echo', 'mcp:cal.add'],
+      status: 'connected',
+    });
+    await waitFor(() => Promise.resolve(changed.includes(id)));
+    off();
+    expect((await marked()).sort()).toEqual(['mcp:cal.add', 'mcp:cal.echo']);
+    expect(audits.at(-1)).toMatchObject({
+      action: 'update',
+      detail: expect.objectContaining({
+        fields: ['readOnlyTools'],
+        readOnlyTools: { added: ['mcp:cal.add'], removed: [], now: ['echo', 'mcp:cal.add'] },
+      }),
+    });
+    // The settings list of the server's tools shows the marks too.
+    const listed = (await app.inject({ url: `/api/v1/mcp/servers/${id}/tools` })).json().items as {
+      name: string;
+      userReadOnly?: boolean;
+    }[];
+    expect(listed.filter((t) => t.userReadOnly).map((t) => t.name)).toEqual([
+      'mcp:cal.echo',
+      'mcp:cal.add',
+    ]);
+
+    // Other changes keep the list; an update that does not change it records no list.
+    const other = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/mcp/servers/${id}`,
+      payload: { toolTimeoutMs: 5000 },
+    });
+    expect(other.json().readOnlyTools).toEqual(['echo', 'mcp:cal.add']);
+    expect(audits.at(-1)!.detail).not.toHaveProperty('readOnlyTools');
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/mcp/servers/${id}`,
+      payload: { readOnlyTools: [] },
+    });
+    expect(cleared.json().readOnlyTools).toEqual([]);
+    expect(audits.at(-1)!.detail).toMatchObject({
+      readOnlyTools: { added: [], removed: ['echo', 'mcp:cal.add'], now: [] },
+    });
+    expect(await marked()).toEqual([]);
+    await app.close();
+  });
+
+  it('takes up to 500 read-only tool names and refuses them on a plugin server', async () => {
+    area = await setup();
+    const app = await routes(area);
+    const id = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/mcp/servers',
+        payload: fixtureServer({ enabled: false }),
+      })
+    ).json().id as string;
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/mcp/servers/${id}`,
+          payload: { readOnlyTools: Array.from({ length: 500 }, (_, i) => `t${i}`) },
+        })
+      ).json().readOnlyTools,
+    ).toHaveLength(500);
+    // A plugin's server follows its manifest: the owner's edits, this one included, are refused.
+    await db.orm
+      .update(schema.mcpServer)
+      .set({ source: 'plugin', pluginId: 'com.example.cal' })
+      .where(eq(schema.mcpServer.id, id));
+    const refused = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/mcp/servers/${id}`,
+      payload: { readOnlyTools: ['echo'] },
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe('conflict');
+    // Nor does one ever carry a declaration: only the owner's own servers do.
+    expect((await app.inject({ url: `/api/v1/mcp/servers/${id}` })).json().readOnlyTools).toEqual(
+      [],
+    );
     await app.close();
   });
 

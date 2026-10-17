@@ -20,7 +20,13 @@ import type {
   StorageState,
   BrowserTakeoverInput,
 } from './types.ts';
-import { navigationAllowed, normalizeHost, requestAllowed, type SitePermissions } from './sites.ts';
+import {
+  devServerAllowed,
+  navigationAllowed,
+  normalizeHost,
+  requestAllowed,
+  type SitePermissions,
+} from './sites.ts';
 
 /** The screenshot rate cap of the live stream (docs/11 §8: 1 per 2 s). */
 export const BROWSER_FRAME_INTERVAL_MS = 2_000;
@@ -63,9 +69,18 @@ export interface BrowserSessionOptions {
   persistCookies: boolean;
   /** The egress proxy; null means direct network (only where the service allows it). */
   egress: EgressProxy | null;
+  /**
+   * Local binding for the proxy session (`browser.allowLocalSites`); granted dev servers turn it
+   * on as well, and the proxy still needs a grant per host and port (docs/12 §8).
+   */
   allowLocalBinding: boolean;
   /** Patterns the proxy lets this browser reach, and the ones it never does. */
-  networkLists: () => Promise<{ allow: string[]; deny: string[] }>;
+  networkLists: () => Promise<{
+    allow: string[];
+    deny: string[];
+    /** The Hub's `network.egressMode` (default allowlist). */
+    mode?: 'off' | 'allowlist' | 'limited';
+  }>;
   timers: SessionTimers;
   log: Logger;
   now: () => Date;
@@ -109,6 +124,8 @@ export class BrowserSession {
   #driver: DriverSession | null = null;
   #egress: EgressSession | null = null;
   #proxyAllow: string[] = [];
+  /** Whether the current proxy session was opened with local binding. */
+  #proxyLocal = false;
   #url = 'about:blank';
   readonly #pageTools = new Map<string, PageToolRegistration>();
   #resume: { promise: Promise<void>; release: () => void } | null = null;
@@ -182,12 +199,13 @@ export class BrowserSession {
     if (!this.#o.egress) return null;
     const lists = await this.#o.networkLists();
     const allow = proxyAllow([...lists.allow, ...(this.visitHost ? [this.visitHost] : [])]);
+    const local = this.#o.allowLocalBinding || !!this.permissions.devServers?.length;
     const policy: EgressPolicy = {
-      mode: 'allowlist',
+      mode: lists.mode ?? 'allowlist',
       allow,
       deny: [...lists.deny],
       credentials: [],
-      allowLocalBinding: this.#o.allowLocalBinding,
+      allowLocalBinding: local,
     };
     const session = await this.#o.egress.open({
       accountId: this.accountId,
@@ -196,6 +214,7 @@ export class BrowserSession {
     });
     this.#egress = session;
     this.#proxyAllow = allow;
+    this.#proxyLocal = local;
     return { server: session.proxyUrl, caSpki: caSpki(session.caCertPem) };
   }
 
@@ -238,15 +257,25 @@ export class BrowserSession {
     this.state = this.paused ? 'paused' : 'running';
   }
 
-  /** The navigation guard (docs/11 §4): blocked and unknown sites never load. */
+  /**
+   * The navigation guard (docs/11 §4): blocked and unknown sites never load; a granted dev
+   * server's own host and port do (FR-097).
+   */
   allowsNavigation(url: string): boolean {
     const h = hostOf(url);
-    return h !== null && navigationAllowed(this.permissions, this.visitHost, h);
+    if (h === null) return false;
+    return (
+      devServerAllowed(this.permissions, url) ||
+      navigationAllowed(this.permissions, this.visitHost, h)
+    );
   }
 
   allowsRequest(url: string): boolean {
     const h = hostOf(url);
-    return h !== null && requestAllowed(this.permissions, this.visitHost, h);
+    if (h === null) return false;
+    return (
+      devServerAllowed(this.permissions, url) || requestAllowed(this.permissions, this.visitHost, h)
+    );
   }
 
   /**
@@ -259,6 +288,22 @@ export class BrowserSession {
       (p) => p === host || (p.startsWith('*.') && host.endsWith(p.slice(1))),
     );
     if (covered) return;
+    await this.#relaunch();
+  }
+
+  /**
+   * Whether the proxy session allows local binding for the granted dev servers (FR-097); when
+   * not, reopen it and restart the browser with the same cookies, like `ensureReachable`. Local
+   * binding opens nothing by itself: the proxy also needs a grant for the host and port.
+   */
+  async ensureLocalBinding(): Promise<void> {
+    if (!this.#o.egress || !this.#driver || this.#proxyLocal) return;
+    if (!this.permissions.devServers?.length) return;
+    await this.#relaunch();
+  }
+
+  async #relaunch(): Promise<void> {
+    if (!this.#driver) return;
     const carry = await this.#driver.storageState().catch(() => null);
     const url = this.#url;
     await this.#driver.close().catch(() => undefined);

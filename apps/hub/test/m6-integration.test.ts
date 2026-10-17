@@ -181,6 +181,22 @@ describe('M6 through the wired Hub', () => {
     expect(list.map((c) => c.id)).not.toContain(computerId);
   });
 
+  it('answers on the configured public address once it is set (channels.publicUrl)', async () => {
+    const hello = () =>
+      hub.app.inject({
+        method: 'GET',
+        url: '/api/v1/hello',
+        headers: { host: 'nova.tunnel.test' },
+      });
+    expect((await hello()).statusCode).toBe(403);
+    const set = await api('PATCH', '/api/v1/settings', {
+      key: 'channels.publicUrl',
+      value: 'https://nova.tunnel.test',
+    });
+    expect(set.status, JSON.stringify(set.json)).toBe(200);
+    await until(async () => (await hello()).statusCode === 200);
+  });
+
   it("lists an agent's wake in the Scheduled list as set by the agent (FR-206)", async () => {
     const agent = await newAgent();
     const wake = await api('POST', `/api/v1/agents/${agent.id}/schedules`, {

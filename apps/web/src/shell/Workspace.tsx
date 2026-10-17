@@ -16,7 +16,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, EmptyState, Icon, IconButton, Menu, Tabs, type MenuItem } from '@nova/ui';
+import { Button, Icon, IconButton, Menu, Tabs, type MenuItem } from '@nova/ui';
 import {
   applyAppearance,
   resolveAppearance,
@@ -51,6 +51,13 @@ import { AppsView, ThreadApps } from '../apps/AppsView.tsx';
 import { APPS_MOVED_EVENT } from '../apps/McpAppFrame.tsx';
 import { CodeView } from '../code/CodeView.tsx';
 import { WorkView } from '../work/WorkView.tsx';
+import { AgentsView } from '../agents/AgentsView.tsx';
+import { BrowserPanel } from '../browser/BrowserPanel.tsx';
+import { ComputersView } from '../computers/ComputersView.tsx';
+import { computerPath } from '../computers/format.ts';
+import { DevicesView } from '../devices/DevicesView.tsx';
+import { ControlIndicator } from '../screen/ControlIndicator.tsx';
+import { ScreenPanel } from '../screen/ScreenPanel.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
 import { PetOverlay } from '../pets/PetOverlay.tsx';
 import { SitesView } from '../spaces/SitesView.tsx';
@@ -88,14 +95,6 @@ export interface WorkspaceProps {
   onSignOut: () => void;
   announceEveryMs?: number;
 }
-
-const MODE_EMPTY: Record<'agents', { title: string; description: string }> = {
-  agents: {
-    title: 'Always-on agents arrive in a later milestone',
-    description:
-      'Agents mode will run agents with goals, schedules and channels. Until then, use Chat.',
-  },
-};
 
 export function Workspace({
   displayName,
@@ -884,7 +883,11 @@ export function Workspace({
                 ? 'Sites'
                 : route.name === 'apps'
                   ? 'Apps'
-                  : MODE_INFO[mode ?? lastMode].label;
+                  : route.name === 'computers'
+                    ? 'Computers'
+                    : route.name === 'devices'
+                      ? 'Devices'
+                      : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -1002,12 +1005,8 @@ export function Workspace({
                 ) : m === 'code' ? (
                   <CodeView id={route.name === 'mode' && route.mode === 'code' ? route.id : null} />
                 ) : (
-                  <EmptyState
-                    title={MODE_EMPTY[m].title}
-                    description={MODE_EMPTY[m].description}
-                    icon={MODE_INFO[m].icon}
-                    level={2}
-                    action={<Button onClick={() => switchMode('chat')}>Go to Chat</Button>}
+                  <AgentsView
+                    id={route.name === 'mode' && route.mode === 'agents' ? route.id : null}
                   />
                 ),
               )}
@@ -1027,6 +1026,14 @@ export function Workspace({
           ) : null}
           {route.name === 'sites' ? <SitesView siteId={route.siteId} /> : null}
           {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
+          {route.name === 'devices' ? <DevicesView deviceId={route.deviceId} /> : null}
+          {route.name === 'computers' ? (
+            <ComputersView
+              computerId={route.computerId}
+              browserPanel={(c) => <BrowserPanel computerId={c.id} />}
+              screenPanel={(c) => <ScreenPanel computerId={c.id} />}
+            />
+          ) : null}
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
           ) : null}
@@ -1125,6 +1132,8 @@ export function Workspace({
       <div ref={appsPark} className="apps-park" />
       {appsUsed ? createPortal(<ThreadApps threadId={chatThreadId} />, appsHost) : null}
       <PetOverlay />
+      {/* While Nova controls a computer: the indicator, Stop, and the kill key anywhere (FR-207). */}
+      <ControlIndicator onOpenComputer={(id) => navigate(computerPath(id))} />
     </div>
   );
 }

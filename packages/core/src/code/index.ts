@@ -56,6 +56,7 @@ export {
   type DevServerManagerOptions,
   type DevServerOpener,
 } from './devservers.ts';
+export { browserDevServerGrant, browserDevServerOpener, type DevServerBrowser } from './preview.ts';
 export {
   AutoVerifier,
   detectVerifyCommands,

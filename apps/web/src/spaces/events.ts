@@ -1,10 +1,7 @@
 // How the Spaces and Sites views stay current (FR-036, FR-037): `space.*` and `site.*` events on
 // the global stream (contracts/hub-api.md §5). Each view follows them while it is mounted.
-import { useEffect, useRef } from 'react';
 import type { EventEnvelope } from '@nova/shared';
-import { EVENTS_STREAM_URL } from '../notifications/Bell.tsx';
-import { useServices } from '../services.tsx';
-import { openStream } from '../sse.ts';
+import { useHubStream } from '../hub-events.ts';
 
 export const SPACES_EVENTS = [
   'space.created',
@@ -29,25 +26,12 @@ export const SITES_EVENTS = [
   'site.unpublished',
 ] as const;
 
-/** Follows the named events on the global stream while mounted. */
+/** Follows the named events on the app's shared stream while mounted (src/hub-events.ts). */
 export function useHubEvents(
   names: readonly string[],
   onEvent: (env: EventEnvelope) => void,
 ): void {
-  const { eventSource } = useServices();
-  const handler = useRef(onEvent);
-  useEffect(() => {
-    handler.current = onEvent;
-  });
-  const key = names.join(',');
-  useEffect(() => {
-    const handle = openStream(
-      EVENTS_STREAM_URL,
-      { onEvent: (env) => handler.current(env) },
-      { names: key.split(','), factory: eventSource },
-    );
-    return () => handle.close();
-  }, [key, eventSource]);
+  useHubStream(names, onEvent);
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);

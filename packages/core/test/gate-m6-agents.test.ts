@@ -186,3 +186,26 @@ describe('agent rules (FR-084)', () => {
     expect((await decide(req({ args: { cmd: 'rm -rf build' } }))).effect).toBe('ask');
   });
 });
+
+describe('the network deny list (FR-193)', () => {
+  const fetchTool = tool({ name: 'web.fetch', annotations: { readOnly: true } });
+
+  it("denies a tool's call to a host on network.egressDeny, not only the proxy's", async () => {
+    settings['network.egressDeny'] = ['*.evil.test'];
+    const call = (host: string) =>
+      decide(
+        req({
+          threadId: CHAT,
+          mode: 'chat',
+          tool: fetchTool,
+          args: { url: `https://${host}/` },
+          resource: { kind: 'host', value: host },
+        }),
+      );
+    expect(await call('api.evil.test')).toMatchObject({
+      effect: 'deny',
+      reason: 'api.evil.test is on the network deny list',
+    });
+    expect((await call('docs.example.com')).effect).not.toBe('deny');
+  });
+});

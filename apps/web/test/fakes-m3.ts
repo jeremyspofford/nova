@@ -410,6 +410,7 @@ export function m3Impl(
         defaultApproval: body.defaultApproval ?? null,
         enabledTools: body.enabledTools ?? null,
         disabledTools: body.disabledTools ?? [],
+        readOnlyTools: body.readOnlyTools ?? [],
         createdAt: ts(),
         updatedAt: ts(),
       };
@@ -436,6 +437,7 @@ export function m3Impl(
         ...(body.defaultApproval !== undefined ? { defaultApproval: body.defaultApproval } : {}),
         ...(body.enabledTools !== undefined ? { enabledTools: body.enabledTools } : {}),
         ...(body.disabledTools ? { disabledTools: body.disabledTools } : {}),
+        ...(body.readOnlyTools ? { readOnlyTools: body.readOnlyTools } : {}),
         updatedAt: ts(),
       };
       st.mcpServers = st.mcpServers.map((x) => (x.id === sid ? next : x));

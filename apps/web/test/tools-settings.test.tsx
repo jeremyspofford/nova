@@ -438,6 +438,69 @@ describe('Settings → Tools & MCP: servers (FR-042, FR-043)', () => {
     expect(await screen.findByText('Could not change read.file: nope')).toBeTruthy();
   });
 
+  it('lets the owner mark a tool as reading only, with what that means (FR-082)', async () => {
+    // The list may hold a tool by its canonical name too.
+    const hub = setup({
+      mcpServers: [mcpServer({ id: 's1', name: 'files', readOnlyTools: ['mcp:s1.add_event'] })],
+    });
+    hub.state.m3.mcpTools.set('s1', [
+      toolDescriptor({ name: 'mcp:s1.list_events', description: 'Lists events' }),
+      toolDescriptor({ name: 'mcp:s1.add_event', description: 'Adds an event' }),
+    ]);
+    await renderApp({ hub, path: '/settings/tools' });
+    const row = await screen.findByRole('listitem', { name: 'files' });
+    await userEvent.click(within(row).getByRole('button', { name: 'Tools' }));
+    const tools = within(row).getByRole('region', { name: 'Tools from files' });
+    const list = await within(tools).findByRole('listitem', { name: 'mcp:s1.list_events' });
+    const box = within(list).getByRole('checkbox', { name: 'Reads only' });
+    expect((box as HTMLInputElement).checked).toBe(false);
+    // The help says what it does, and the box is described by it.
+    const help = within(tools).getByText(
+      "Nova treats this tool as reading only: agents' research may use it, and it is allowed without asking. Only mark tools that never change anything.",
+    );
+    expect(box.getAttribute('aria-describedby')).toBe(help.id);
+
+    await userEvent.click(box);
+    await waitFor(() =>
+      expect(hub.api.updateMcpServer).toHaveBeenCalledWith('s1', {
+        readOnlyTools: ['mcp:s1.add_event', 'list_events'],
+      }),
+    );
+    await waitFor(() => expect((box as HTMLInputElement).checked).toBe(true));
+    expect(hub.state.m3.mcpServers[0]!.readOnlyTools).toEqual(['mcp:s1.add_event', 'list_events']);
+
+    // Unmarking removes it, whichever name the list holds it by.
+    const add = within(tools).getByRole('listitem', { name: 'mcp:s1.add_event' });
+    const addBox = within(add).getByRole('checkbox', { name: 'Reads only' });
+    expect((addBox as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(addBox);
+    await waitFor(() =>
+      expect(hub.api.updateMcpServer).toHaveBeenLastCalledWith('s1', {
+        readOnlyTools: ['list_events'],
+      }),
+    );
+    await waitFor(() => expect((addBox as HTMLInputElement).checked).toBe(false));
+    // A failure says so and leaves the box as it was.
+    hub.state.failNext.updateMcpServer = fail('Hub busy');
+    await userEvent.click(box);
+    expect(await screen.findByText('Could not change list_events: Hub busy')).toBeTruthy();
+    expect((box as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("does not offer the choice for a plugin's server: it changes only through its plugin", async () => {
+    const hub = setup({
+      mcpServers: [mcpServer({ id: 's1', name: 'files', pluginId: 'com.example.cal' })],
+    });
+    hub.state.m3.mcpTools.set('s1', [toolDescriptor({ name: 'mcp:s1.list_events' })]);
+    await renderApp({ hub, path: '/settings/tools' });
+    const row = await screen.findByRole('listitem', { name: 'files' });
+    await userEvent.click(within(row).getByRole('button', { name: 'Tools' }));
+    const list = await within(row).findByRole('listitem', { name: 'mcp:s1.list_events' });
+    expect(
+      within(list).getByRole<HTMLInputElement>('checkbox', { name: 'Reads only' }).disabled,
+    ).toBe(true);
+  });
+
   it('removes a server after confirming, and keeps it when removal fails', async () => {
     const hub = setup();
     await renderApp({ hub, path: '/settings/tools' });

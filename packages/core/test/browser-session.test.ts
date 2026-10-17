@@ -73,6 +73,18 @@ describe('availability', () => {
 });
 
 describe('the egress proxy and the profile', () => {
+  it("opens its proxy session in the Hub's network mode: off and limited bound it (FR-193)", async () => {
+    await env.close();
+    const egress = new FakeEgress();
+    egress.ca = readFileSync(join(import.meta.dirname, 'fixtures', 'egress-ca.pem'), 'utf8');
+    env = await makeBrowserEnv({ requireEgress: true, egress });
+    env.settings['network.egressMode'] = 'limited';
+    env.driver.pages.set('https://a.example/', { title: 'A', text: 'a', elements: [] });
+    await env.service.sites.put(ACCOUNT, { pattern: 'a.example', access: 'allow' });
+    await env.service.navigate(env.call(), 'https://a.example/');
+    expect(egress.opened[0]!.policy.mode).toBe('limited');
+  });
+
   it('routes through a proxy session that allows the permitted sites, and relaunches for a new one', async () => {
     await env.close();
     const egress = new FakeEgress();
