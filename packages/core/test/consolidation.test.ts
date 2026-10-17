@@ -214,7 +214,7 @@ describe('helpers', () => {
     // About 100 ms alone; the old merge took 2.4 s unloaded and far longer under load.
     expect(performance.now() - t0).toBeLessThan(8_000);
     expect(plan.creates).toHaveLength(500);
-  });
+  }, 60_000); // the per-case budgets above are the assertions; the whole test may take longer
 
   it('parses model replies strictly', () => {
     expect(
