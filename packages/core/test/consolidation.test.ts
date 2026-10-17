@@ -307,6 +307,24 @@ describe('extract phase', () => {
     expect(await items()).toEqual(['The user lives in Lisbon.', "The user's name is Ann."]);
   });
 
+  it("reads only what the user typed: never a hook's, goal's, sub-agent's, run's or schedule's text", async () => {
+    s = await setup();
+    const t = await chat('I work at Acme.');
+    for (const kind of ['goal', 'subagent', 'run', 'schedule', 'system'] as const)
+      await s.env.chat.turnStarter.startTurn({
+        accountId: ACCOUNT,
+        threadId: t.id,
+        text: `My name is ${kind}.`,
+        trigger: 'goal',
+        authority: { kind: 'none', origin: 'tool' },
+        authorKind: kind,
+      });
+    await s.env.chat.idle();
+    const r = await s.svc.run(ACCOUNT, global);
+    expect(r.extract.threadsScanned).toBe(1);
+    expect(await items()).toEqual(['The user works at Acme.']);
+  });
+
   it('never reads temporary, side, opted-out, deleted or agent threads, or deleted messages', async () => {
     s = await setup();
     await chat('My name is Temp.', { temporary: true });

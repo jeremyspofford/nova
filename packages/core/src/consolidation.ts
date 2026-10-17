@@ -612,6 +612,9 @@ export class ConsolidationService {
          FROM message m
          WHERE m.thread_id = ? AND m.deleted_at IS NULL AND m.status = 'complete'
            AND m.role IN ('user', 'assistant') AND (? IS NULL OR m.id > ?)
+           -- Only what the user typed is about the user: a hook's continuation, a goal
+           -- continuation, a sub-agent task, a run objective or a schedule fire is not (M5).
+           AND (m.role = 'assistant' OR COALESCE(m.author_kind, 'user') = 'user')
          ORDER BY m.id
          LIMIT ?`,
       )
