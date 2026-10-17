@@ -300,9 +300,12 @@ test('J8: sandboxed network requests and credentials the proxy adds', async ({
     call('exec.run', { cmd: `env | grep -F "${SECRET.slice(0, 14)}" || echo no-credential-here` }),
   );
   await decide(scout, 'exec.run', 'Allow once');
-  await expect(messages(scout)).toContainText('Tool exec.run returned: no-credential-here', {
-    timeout: 90_000,
-  });
+  // The reply carries the command's exit code, then its output.
+  await expect(messages(scout)).toContainText(
+    /Tool exec\.run returned: Exit code 0\s*no-credential-here/,
+    { timeout: 90_000 },
+  );
+  await expect(messages(scout)).not.toContainText(SECRET);
   await page.goto(`${hub.url}/settings/network`);
   const log = page.getByRole('list', { name: 'Network decisions' });
   await expect(log).toContainText('blocked.example');
