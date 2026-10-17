@@ -10,8 +10,9 @@ variables may override only in developer mode.
 app or read from a project's `.nova/` folder, cannot change these keys: sandbox and permission
 profile (FR-190), egress allowlist and proxy mode (FR-102, FR-193), whether cloud models may
 be used (`routing.allowCloud`), approval policy, permission mode defaults and "Always allow"
-rules (FR-063, FR-100), instruction root markers and the instruction budget (FR-185), and the
-hook trust list (FR-197). They resolve only from the
+rules (FR-063, FR-100), instruction root markers and the instruction budget (FR-185), the
+hook trust list (FR-197), plugin catalog sources (`plugins.catalogs`, FR-049) and whether
+Nova's own MCP server is on (`mcpServer.enabled`, FR-044). They resolve only from the
 built-in default, user global settings and managed policy. A project value for one of them is
 ignored, and Diagnostics shows a warning naming the key and the project.
 
@@ -19,11 +20,12 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 
 | Section | Keys |
 | --- | --- |
-| **General** | language, enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`general.followUp`: `steer`\|`queue`, default `queue`, FR-019), temporary-chat retention (`chat.temporaryTtlHours`, default 24, FR-027), restore-session, check-updates |
-| **Accounts** | provider accounts, active account, default model, spend caps |
+| **General** | language, enter-to-send (`enter`\|`mod+enter`), prevent-sleep, follow-up behavior (`general.followUp`: `steer`\|`queue`, default `queue`, FR-019), temporary-chat retention (`chat.temporaryTtlHours`, default 24, FR-027), suggested follow-ups ("Suggest follow-ups", `chat.suggestions`, default on, FR-028), restore-session, check-updates |
+| **Profile & usage** | display name, username, avatar (PNG, JPEG or WebP up to 2 MB, metadata stripped; FR-113), usage insights (§6, FR-114) |
+| **Accounts** | provider accounts, active account per provider kind ("Active <kind> account" when a kind has more than one, FR-115), default model, spend caps; display name moved to Profile & usage in M4 |
 | **Models** | presets from Faster to Smarter (`models.presets`; empty = generated built-ins, FR-221), local model server detection, routing order (`routing.order`, FR-127), allow cloud models (`routing.allowCloud`, security-relevant) |
 | **Devices** | compute nodes: add (one-use enrollment token), status, models, load, revoke (FR-126) |
-| **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast |
+| **Appearance** | theme, accent, background, foreground, uiFont, codeFont, fontSize, density, sidebarWidth, reducedMotion, highContrast; theme export and import with saved themes (`appearance.customThemes`, at most 50, §2.2, FR-011) |
 | **Pets** | enabled, petId, position, size, reactions, mute |
 | **Keyboard** | bindings map, reset, search |
 | **Notifications** | per-category (completion, approval, error, scheduled), OS permission, quiet hours |
@@ -32,7 +34,11 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 | **Code** | default permission mode, default environment, auto-verify, review-before-commit, dev-server auto-start, worktree cleanup, worktree include file (copy files listed in `.worktreeinclude`, on by default), worktree limit per repo (default 15) (FR-073) |
 | **Agents** | proactive research toggle/frequency, default rules, connected computer, channels, self-scheduling limits (minimum interval 5 min, horizon 30 days, max 24 self-set wakes per day, FR-206) |
 | **Memory** | use saved memories (`memory.enabled`), the item list (correct, pin, dismiss, delete, add, import; FR-032), retention, extraction on/off, embedding provider, review frequency, reference past chats (on/off; off purges derived data within 30 days, FR-205), default project memory scope (`shared` \| `project_only`), background consolidation (on/off, idle delay, summary budget 2,500 tokens, FR-204) |
-| **Tools & MCP** | server list and per-server settings (`startupTimeoutMs`, `toolTimeoutMs`, `enabledTools`/`disabledTools`, `required`, `defaultApproval`, `deferred`, `oauth`; `contracts/schemas/mcp-config.json`, `docs/08` §2.1), per-tool and per-action defaults, plugin permissions, approval rules ("Always allow" list, revocable, FR-100), hook trust list (source, event, hash, status; trust/revoke, FR-197), deferred-tool budget (default 40 tools or 8,000 schema tokens, FR-196), skill roots and shadowed skills, Nova-as-MCP-server clients (per-client scoped tokens, FR-192), import from other assistants (FR-200) |
+| **Tools & MCP** | server list and per-server settings (`startupTimeoutMs`, `toolTimeoutMs`, `enabledTools`/`disabledTools`, `required`, `defaultApproval`, `deferred`, `oauth`; `contracts/schemas/mcp-config.json`, `docs/08` §2.1), OAuth sign-in, reconnect and sign-out for remote servers (FR-047), **Install a bundle** (FR-199), per-tool and per-action defaults, approval rules ("Always allow" list, revocable, FR-100), deferred-tool budget (default 40 tools or 8,000 schema tokens, FR-196), a link to Plugins & skills for hooks |
+| **Plugins & skills** | installed plugins (status, Verified/Unverified, permissions, on/off, update, uninstall; FR-045), catalog search and catalog sources (`plugins.catalogs`: a folder on the Hub, an https URL or a Git URL; security-relevant), install from a folder or Git with the sideload confirmation (FR-049), skills (source, shadowed by, on/off, view, create and delete user and project skills; FR-046), **Hooks**: the hook trust list (id, source, event, matcher, command, hash, status, "Changed since you trusted it", last run; trust, untrust, on/off for user hooks; FR-197) |
+| **Apps & clients** | Nova's MCP server on or off (`mcpServer.enabled`, default off, security-relevant), its clients (tools, projects, chat access, read-only or run-allowed, expiry of 7, 30, 90 (default) or 365 days or never; per-client tokens shown once; revoke; FR-044, FR-192) |
+| **Import** | the import wizard and the import records (FR-200, `docs/04` §2.11) |
+| **Workspace** (no page) | `workspace.layout`: the pane layout per mode, written by the workspace and restored on start (FR-005, `docs/04` §4.3) |
 | **Network** | egress allowlist, proxy mode (`allowlist` \| `limited`, FR-193), SOCKS5 for non-HTTP clients, private-IP access, dev-server ports |
 | **Data** | retention overrides, export, delete, storage usage, backup folder, import ledger (FR-200) |
 | **Sync** | enable, devices, passphrase, history/merge log, E2EE status |
@@ -85,6 +91,13 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 
 - Built-ins: `system`, `light`, `dark`, `high-contrast-light`, `high-contrast-dark`.
 - Import/export/copy; share via `nova://theme?data=<base64>`.
+- *As shipped in M4* (ADR-091): Settings → Appearance exports the current look as a theme file or
+  a `nova://theme?data=` link, and imports a file or pasted text. An import is checked against
+  the schema; low contrast gives a warning but does not block saving. Saved themes go to
+  `appearance.customThemes`. **Use** sets the saved theme's base theme plus its background,
+  text, accent and fonts where they differ from the base, and derives the other colors, so a
+  custom palette is not yet applied token for token; a setting that applies a saved theme
+  fully (`appearance.customTheme`) comes later.
 - Themes are validated against the token schema; unknown tokens are ignored, missing tokens
   fall back to the active base theme.
 - **No hard-coded colors** in components; a lint rule enforces token usage.
@@ -161,7 +174,9 @@ ignored, and Diagnostics shows a warning naming the key and the project.
   verified; permission **diff** shown on update; failed installs roll back. Unsigned items or
   unknown signers install only through an explicit sideload confirmation and stay labelled
   **Unverified**.
-- Offline: a local catalog directory can be added in Settings → Advanced.
+- Offline: a local catalog directory can be added in Settings → Advanced. In M4 catalogs live in
+  Settings → Plugins & skills → Catalog (`plugins.catalogs`), and the built-in sample catalog
+  works offline.
 - No telemetry about installs leaves the device unless the user opts in.
 
 ## 6. Profile & usage (FR-113/114)
@@ -171,6 +186,13 @@ ignored, and Diagnostics shows a warning naming the key and the project.
   longest task, per-project breakdown, cache savings.
 - Spend caps per provider with warnings at 80% and a hard stop at 100% (configurable).
 - All insights are computed from `usage_event`; a "clear usage data" action exists.
+
+*As shipped in M4* (ADR-091): Settings → Profile & usage shows the name, a unique username and
+the avatar, then usage for the last 7, 30, 90 or 365 days: input, output and cached tokens,
+estimated cost and turns; day bars for tokens and cost (each with a table view); active days;
+the streak (consecutive UTC days with use, broken only after a whole day without use); the
+longest task, linking to its chat; and tables by model and by project. Days are UTC days. The
+public profile card, spend caps, entitlements and limits, and "clear usage data" come later.
 
 ## 7. New settings sections (added)
 

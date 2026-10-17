@@ -99,6 +99,7 @@ silently.
 | ADR-088 | M1 implementation choices | Search index, reasoning levels, cut-off replies, offline mock provider, browser-tab shortcuts |
 | ADR-089 | M2 implementation choices | Model router seam, message versions, follow-ups, memory extraction, sources, compute-node transport |
 | ADR-090 | M3 implementation choices | Tool loop and gate seams, container sandbox until M6, MCP SDK, audit chain, at-rest baseline, consolidation |
+| ADR-091 | M4 implementation choices | Plugins and skills on disk, every plugin a sideload, hooks fail closed (supersedes part of ADR-083), direct user actions, MCP Apps, Nova's MCP server, bundles, OAuth, workspace, profile, import |
 
 ## Details & rationale
 
@@ -639,6 +640,265 @@ component sources. Revisit if UI velocity suffers.
   dismissing or deleting an item clears its scope's summary so a forgotten fact never lingers.
   Past-chat retrieval is computed per turn and stores nothing, so turning it off leaves nothing
   to purge.
+
+**ADR-091 — M4 implementation choices.**
+- *Skills on disk (FR-046, ADR-067).* A skill stays a folder with `SKILL.md`; the database never
+  holds its body. `skill_state` keeps only the enabled switch and import provenance, instead of
+  the `skill` table in `docs/06`. Ids are `skill:<builtin|user|import|managed>:<name>`,
+  `skill:<pluginId>:<name>` and `skill:project:<projectId>:<name>`. User and imported skills live
+  in `<dataDir>/skills` and rank as user skills. Project skills come from `.nova/skills/` and
+  `.agents/skills/` at the top of each project folder; the first folder wins a name and `.nova`
+  beats `.agents` (nested folders down to a working directory arrive with Code sessions, M5). A
+  disabled skill drops out of precedence, so the next one with its name takes over; a disabled
+  plugin's skills are not listed. No built-in skills ship yet.
+- *Commands.* A command file's name comes from its front-matter, else its first heading, else
+  the file name. The converted skill is written under `<installDir>/.nova-plugin/commands/<name>/`;
+  a plugin may not ship that folder itself.
+- *Using skills.* The catalog joins the system prompt within the `docs/08` §4 budget; a model
+  whose window Nova does not know counts as 100,000 tokens. `/name` at the start of a message
+  loads the body (the rest of the message is the request), `@name` does too, and an unknown
+  `/name` stays plain text. The composer's `/` list matches name prefix, then name substring,
+  then description substring. `skill.load` is a read-only built-in, so the gate always allows
+  it; it is offered only while the account has a skill. A skill is active for its turn only. Its
+  body is not wrapped as untrusted data because the user invoked it, but a plugin skill marks the
+  turn as tainted. `allowed_tools` are never deferred during the turn; they do not yet narrow the
+  tool set.
+- *Plugin install (FR-045).* A preview is held in memory for 30 minutes with a digest of the
+  whole folder: a change before install answers 409, an expired preview 410 `request_expired`.
+  Installs run one at a time; an update swaps the version folder atomically and rolls back on
+  failure; an older version installs with a warning. **Every install is a sideload** until
+  publishers are verified (FR-049, M8): `POST /plugins` without `confirmSideload: true` is refused
+  with `validation` and `details.reason: 'sideload_confirmation_required'`. Choosing an item on
+  the import screen is that confirmation, and the plugin is installed disabled.
+- *Plugin MCP servers.* Each server is named by its manifest key (a taken name gets `-2`, `-3` …)
+  and keeps its id across updates. Its tools are `mcp:<server>.<tool>`, like any MCP server's
+  (`docs/08` §8 names them `plugin:<pluginId>.<tool>`); the plugin's `permissions.tools` entries
+  match them by tool name, so the plugin's permissions still apply. Literal env and header values
+  go to the vault as `secret://mcp/<id>/env/<NAME>`, and values a new version drops are deleted.
+  `plugin_install.manifest_json` keeps those values only as `secret://` references. A manifest may
+  reference only `secret://plugin/<pluginId>/…`; `deviceId` is refused and `auth` is ignored with
+  a warning. A `node` stdio server gets `NODE_PATH` set to Nova's own `node_modules`, so it can
+  load the MCP SDK Nova ships while running from the data directory. A plugin's server follows
+  its manifest and is read-only outside the plugin: `PATCH` and `DELETE /mcp/servers/:id` answer
+  409 `conflict` with `details.reason: 'plugin_owned'`; `McpServerView.pluginId` names the owner,
+  and Settings → Tools & MCP shows "From the plugin <id>; change or remove it in Plugins", without
+  Edit or Remove and with its switches disabled.
+- *Catalogs (FR-049 partial).* A folder catalog reads `catalog.json` or `nova-catalog.json`. A
+  URL catalog's index is capped at 1 MB and its archives (zip, same host, optional SHA-256) at
+  50 MB. Git catalogs accept https, ssh and git URLs only, are cloned shallow with repository
+  hooks off, and answer 400 `capability_missing` when Git is not installed. The built-in catalog
+  `nova-sample` is `examples/catalog`. Catalog sources are the security-relevant
+  `plugins.catalogs` setting.
+- *Plugin permissions in the gate.* A host the plugin did not declare is denied at step 1
+  ("<host> is not a host this plugin declared"); every http(s) and ws(s) URL in the arguments is
+  checked, nested ones included. Declared hosts need no network-allowlist entry, because the user
+  confirmed them at install. An undeclared host also turns the plugin off and sends an attention
+  notification linking to Settings → Plugins (deny + disable + notify); a preview never does. The
+  plugin's per-tool default, then its per-action default, then its server's manifest
+  `defaultApproval` apply at step 4, all below the user's own defaults (a plugin server's
+  `defaultApproval` is the plugin's, never shown as "your default"); an undeclared tool asks;
+  unreadable permissions deny.
+- *Hooks (FR-197, ADR-068).* Sources are managed policy, `<dataDir>/hooks.json`, each project
+  folder's `.nova/hooks.json` and plugins. Every dispatch re-reads and re-hashes them first, so a
+  changed hook or script waits for trust before it can run again. Ids are
+  `hook:<origin>.<hookId>`; a plugin hook is `hook:<pluginId>.<hookId>` and a project hook
+  `hook:project:<projectId>.<hookId>`, because two projects can use the same id. The hash covers
+  the canonical definition without `enabled`, plus every script the command names inside the
+  hook's folder. A registered project folder counts as a trusted project (there is no
+  project-trust step yet); each hook still needs hash trust. An unreadable hooks file keeps its
+  rows and trust, runs none of its hooks, and its guards block. Hooks fired from inside a hook
+  return nothing. stderr is dropped and output is capped at 1 MB. A hook gets network only when it
+  declares hosts and the session's network is on; plugin hooks are cut down to the plugin's
+  hosts, and an allowlist takes effect only with the egress proxy (M6). Context over 2,500 tokens
+  is written to `<dataDir>/workspace/hook-context/<thread>/`.
+- *Hooks fail closed* (supersedes the hooks bullet of ADR-083 on failures). A hook that errors,
+  times out or cannot start (no sandbox, no gate, no MCP tool) always blocks a `tool.pre` call and
+  always denies at `permission.request`, whatever `failClosed` says; `failClosed: true` also
+  blocks `prompt.submit`. Events that only observe or add context are unaffected. ADR-083 said a
+  failing hook left the decision unchanged unless `failClosed: true`; that no longer holds for
+  the two guard events. The default timeout stays 30 s and the maximum 10 min.
+- *Hook answers.* A `permission.request` hook may answer an `ask` raised by a user rule, a
+  per-tool default or plugin permissions, never one from a built-in floor, managed policy, the
+  approval policy or intent provenance (an "act when you say so" rule whose ask came from tainted
+  content included). The engine marks such an ask `answerable` and re-checks the answer
+  (`applyHookAnswer`): only managed and user hooks, and plugin hooks whose manifest sets
+  `answersAsks`, may answer; project hooks never do. A hook can tighten anything except a deny or
+  a handoff. The decision records `source: 'hook'` and the hook id.
+- *Hook trust records.* `HookView.changedSinceTrust` reports a hook whose content changed after
+  trust; it waits for re-trust, and changing it back does not silently trust it again. Trusting
+  with a stale hash answers 409 `conflict`. Managed hooks are trusted by policy; changing or
+  revoking them, and switching or deleting any non-user hook, answer 403 `policy_denied`.
+  Deleting a user hook also removes it from `hooks.json`.
+- *Hooks in the loop.* `session.start` runs on a thread's first turn and `prompt.submit` before
+  the first step; a `prompt.submit` block fails the turn with `hook_blocked`, with no model call
+  and no usage. Their context is stored on the user message, redacted and labelled with the hook
+  id, and taints the turn. `prompt.submit` is not re-run on regenerate or for steering input; an
+  edit runs it. `tool.pre` runs before the gate and `tool.post` after the tool, with the redacted
+  result. A `stop` continuation is a new turn with trigger `hook`, at most one per stop; the
+  chain shares the 200-step backstop, a cancel stops it, queued input runs after it and memory
+  extraction skips it. The continuation reaches the model labelled as coming from the hook, not
+  wrapped as untrusted data, so the model can act on it; the chat shows it labelled **Hook**, it
+  carries provenance `hook` and no user authority. Its events use actor `system`; the hook id is
+  the turn's `trigger_ref`, never the actor. `interrupt` runs in the background on cancel or
+  deny-and-stop. Calls with origin `hook` fire no hooks.
+- *Direct user actions* (refines the FR-189 fallback). A file save or other action the signed-in
+  user performs directly in a Nova client (actor `user`, their own instruction, no taint) is its
+  own confirmation: the gate allows it without a card (`source: 'user_action'`). The tier floors
+  (`confirm_at_action`, `handoff_required`), the network allowlist, rules, denies, policy changes
+  and secret access still apply. `POST /tools/:name/invoke` takes `initiator: 'user' | 'app'` and
+  defaults to `app`, which carries no user instruction, so an MCP App's tool call asks under the
+  default policy.
+- *MCP Apps (FR-198, ADR-066).* An entry point's id is the first 22 characters of the base64url
+  SHA-256 of its owner, kind and resource; entry points of servers outside plugins are `thread`
+  apps. A plugin resource is served by the plugin server that lists it, else the one named like
+  the URI authority, else the first. `GET /ui/resource` serves the HTML with
+  `sandbox allow-scripts`, `default-src 'none'`, inline script and style only, `frame-ancestors
+  'self'`, `base-uri 'none'`, `form-action 'none'`, `X-Frame-Options: SAMEORIGIN` and an ETag.
+  Declared domains are intersected with the network permission: only host sources (optional
+  http(s) or ws(s) scheme and port) survive; keywords, other schemes, paths and a bare `*` are
+  dropped, a `*` permission grants nothing, `*.x` covers subdomains but not `x`, and the default
+  scheme is https. Resource domains feed script, style, image, font and media sources; frame
+  domains feed `frame-src`. A server's network grant comes from its bundle install record and its
+  `policy.network`; without either it gets no external origin.
+- *App bridge.* The iframe is `sandbox="allow-scripts"` only, and the bridge reads only messages
+  from its own frame's window with origin `null`, answering malformed JSON-RPC with the standard
+  error codes. An app calls only its own server's tools, at most 4 at once; Nova tools a manifest
+  grants are refused for now (fail closed). Approval cards render in Nova's chrome; the
+  frame polls the pending approval every second, and a call still waiting after the Hub's 60 s
+  answers the app with an error telling it to retry. `ui/message` fills the app's own chat
+  composer and never sends; `ui/open-link` shows a link the user clicks. A second document load
+  in the frame stops the app and offers Reload. The protocol version is echoed back, defaulting
+  to `2026-01-26`; file apps get `hostContext["nova/file"]` and are view-only.
+- *App state and context.* Model context an app shares is kept in Hub memory only (16,000
+  characters per app, 8 apps per thread, 500 threads), labelled untrusted, cleared when the app
+  closes, and added to a turn as untrusted `mcp` context, at most 32,000 characters per turn.
+  **Private widget state stays in the browser:** a Nova extension, `_meta["nova/private"]` on a
+  content block or a whole update (advertised as `experimental["nova/private"]`), marks it, and
+  it is never sent to the Hub or a model. This replaces "stored on the Hub" in `docs/08` §3.1.
+- *App display.* Inline frames take the height the app reports, between 80 and 600 px.
+  Fullscreen is a dialog: focus moves to Exit, Tab stays inside and Esc returns. One app at a
+  time can be in picture-in-picture; it can be dragged, moved with the arrow keys and resized,
+  and becomes a bottom sheet on phones. A chat's apps start the first time its Apps tab opens and
+  live at shell level, so switching Inspector tabs or closing the Inspector never stops them.
+- *Nova's MCP server (FR-044, FR-192).* Settings → Apps & clients adds a client: tools, projects,
+  chat access (`none`, `read`, `read_write`), read-only or run-allowed, and an expiry (7, 30, 90
+  (default), 365 days or never). In the API `expiresInDays` is 1 to 365, `null` means the token
+  never expires, and leaving it out means 90 days. The token starts `nvm_`, is shown once and
+  stored as a hash.
+  Adding the first client turns `mcpServer.enabled` on. `/mcp` answers 404 while the server is
+  off; a missing, wrong, revoked or expired token gets 401 `token_required`; a foreign `Origin`
+  or `Host` gets 403. Tools are `projects.list`, `threads.list` and `threads.read` within the
+  client's scopes, plus the Hub tools the scopes allow with invalid characters replaced
+  (`mcp:x.y` becomes `mcp_x.y`); read-only clients get only read tools and `tool.search` is never
+  offered. The data tools pass the gate as read-only built-ins; every call passes the gate with
+  origin `mcp_client` and no user instruction, and is audited (`client.call`) with the client id.
+  Temporary chats are never shared, a client limited to some projects sees no chat outside them,
+  and `read_write` grants read only until a write tool exists. Revoking a client or turning the
+  server off ends its sessions at once; running calls are cancelled and still answered. Revoked
+  authorizations stay in the database for the audit trail and are not listed. These tool names
+  replace the `nova.*` names in `docs/08` §2.2.
+- *MCP bundles (FR-199).* Caps: 50 MB upload, 10,000 files, 500 MB unpacked, 200 MB per file,
+  with path-traversal checks before anything is inflated; previews expire after 30 minutes. The
+  trusted-publisher list is empty, so every bundle is unverified and needs `confirmSideload`.
+  Files go to `<dataDir>/mcp/bundles/<name>/<version>`; a newer version updates the server in
+  place and keeps the previous folder; deleting the server removes everything. Only sensitive
+  settings, and env values or arguments that use one, go to the vault, because the redactor hides
+  every vault value everywhere. Launch arguments may reference only the server's own vault
+  entries (`secret://mcp/<id>/…`), resolved at launch. The server name comes from the bundle
+  name; a name already used by another server answers 409 (picking another local id comes
+  later). The file permission is one choice (`none`, `read`, `project`) applied as read or write
+  to each folder or file the user entered. Tools from a bundle default to `ask`.
+- *OAuth for remote servers (FR-047).* PKCE S256. Nova registers with its client metadata
+  document (`/.well-known/nova-client.json`) when the authorization server accepts one and the
+  Hub URL is HTTPS, else by dynamic registration, and requests the resource's advertised scopes.
+  The state is single-use, expires after 10 minutes and remembers the account. The callback is a
+  Hub route, `/api/v1/mcp/oauth/callback`, which needs no session and redirects to
+  `/settings/tools?oauth=ok|error`; it stands in for the loopback listener of `docs/12` §15.
+  Tokens live only in the vault (`secret://mcp/<id>/oauth/…`), refresh within 60 s of expiry or
+  after a 401, and revoking calls the server's revocation endpoint and forgets them. The UI shows
+  sign-in only when the Hub reports OAuth for the server, and opens only https (or localhost)
+  addresses.
+- *Workspace layout (FR-005).* Each mode has its own layout tree in `workspace.layout` (`docs/04`
+  §4.3), read once at start and written 300 ms after a change; at most 12 panes and 6 levels.
+  Pane contents render into movable elements, so a layout change never reloads a chat, editor or
+  terminal. A single pane shows no pane header; the top bar has a Layout menu and a "Toggle bottom
+  panel" button. Phones show one pane at a time with a switcher. The diff and browser panes are
+  placeholders until M5 and M6.
+- *Terminals (FR-006).* A terminal is a shell in the sandbox container with the chat's roots
+  mounted, never on the Hub itself. A small Perl relay runs `script` inside it; resizes travel in
+  band as a private-use character frame that typed or pasted input cannot carry, and are applied
+  with `stty`. Without Perl it falls back to a pty without live resize, then to a plain shell.
+  Without a container runtime `POST /terminals` answers 409 `sandbox_unavailable`. Terminals live
+  in memory only, at most 4 running per account; one nobody has watched for 15 minutes is closed;
+  256K characters of scrollback are replayed on reconnect. Commands typed in a terminal are not
+  checked one by one; the sandbox and the permission profile confine them. The bottom panel and
+  terminal panes share terminals: the view that showed one last owns its screen and the other
+  offers "Show it here". While a terminal has focus only the panel toggle, the terminal toggle and
+  Ctrl+Shift+P reach the app. Opening and closing a terminal is audited as `tool_call` /
+  `terminal.open|close`.
+- *Files (FR-039).* The editor opens text files up to 5 MB, groups typing into one undo step after
+  a 600 ms pause and keeps 200 steps. A save carries the base SHA-256: a null base on an existing
+  file, or a base for a file deleted since, is a conflict whose details carry the current hash;
+  files over 256 MB are versioned by size and modification time. A save keeps the file mode and is
+  audited as `fs` / `fs.write`. Symlinks are listed only when they point inside the roots, and the
+  data directory is hidden.
+- *Project folders (FR-035).* Refused: the filesystem root, the home folder and anything
+  containing it, the Hub data directory (inside, equal or containing) and credential locations;
+  at most 20 per project. Indexing never follows symlinks and skips version-control, dependency
+  and build folders, top-level `.gitignore` patterns (no nested files or `!` negations yet),
+  protected and credential paths, binaries and files over 20 MB, and stops at 5,000 files (the
+  folder is then `ready` with a note). Each indexed file is a source whose bytes stay in the
+  folder; such sources are left out of the project's source list. The `include_globs` and
+  `exclude_globs` columns are kept but unused.
+- *Library (FR-041).* `file` means artifacts of kind `file`; `image` means image attachments.
+  Project-folder files, temporary chats and deleted chats are left out, and items link only to
+  paths inside the app.
+- *Suggestions (FR-028).* Up to three chips in an empty composer after a reply; Tab or Right
+  arrow takes the first; choosing one fills the composer and never sends. They are cached per
+  turn in memory with a 10 s timeout; with the Mock provider or on a model failure a
+  deterministic heuristic writes them. `chat.suggestions` turns them off.
+- *Profile and usage (FR-113, FR-114).* Display name, username and avatar moved from Accounts to
+  Settings → Profile & usage. Usernames are unique (a partial unique index backs the check).
+  Avatars are PNG, JPEG or WebP up to 2 MB, checked by their bytes, stripped of metadata and
+  stored as a sealed blob; a replaced avatar's blob is deleted and purge keeps avatar blobs. Usage
+  days are UTC days; a streak breaks only after a whole day without use; the longest task counts
+  completed turns in live chats; `byDay` lists only days with usage.
+- *Active provider account (FR-115).* The choice lives in a `provider_active` table keyed by
+  account and provider kind. With no row the oldest live account of the kind is active; deleting
+  the active one activates the next, wrapping round. Models the active account also offers are
+  listed for it alone, so new chats and presets use it.
+- *Import (FR-200).* Import reads folders on the Hub itself in M4 (other devices through `novad`
+  from M6). Instruction files are recognised by name pattern; a file in the home folder or one of
+  its configuration folders becomes user instructions in `<dataDir>/instructions.md`, anything
+  else the instructions of the project for its folder. Secret references: imported MCP servers
+  `secret://mcp/<id>/env/<NAME>`, plugin servers `secret://plugin/<pluginId>/<key>/<NAME>`, tokens
+  in instruction text `secret://import/<ref>/text/secret_N`; a secret in an argument or URL
+  becomes an env variable, and a placeholder such as `${X}` is stored empty, each with a note.
+  Imported memories are active items with source `import` (there is no candidate status).
+  Imported MCP servers are inserted disabled; plugins are installed disabled. Name conflicts are
+  imported under the next free name (`-2`, or `(2)` for projects) and start unticked in the
+  wizard; duplicates and unsupported items cannot be ticked. A failed item is recorded as failed
+  and never blocks a retry.
+- *Themes (FR-011).* A look is exported as a theme file or a `nova://theme?data=` link and
+  imported with a schema check; low contrast warns but does not block saving to
+  `appearance.customThemes`. "Use" on a saved theme sets its base theme plus background, text,
+  accent and fonts where they differ from the base; the other colors are derived, so a custom
+  palette is not yet applied token for token.
+- *Audit kinds.* Plugin changes are audited with kind `settings` and actions `plugin.install`,
+  `plugin.update`, `plugin.enable`, `plugin.disable` and `plugin.uninstall`; hook runs with kind
+  `policy` (action `hook.<event>`) and hook trust changes with kind `settings`.
+- *Not in M4:* imported user instructions (`<dataDir>/instructions.md`) are read by the chat from
+  M5, with instruction-file discovery (FR-185); applying a saved custom palette fully (an
+  `appearance.customTheme` setting); the public profile card; surfacing entitlements and limits
+  (FR-115); spend caps and "clear usage data" (`docs/14` §6); OIDC sign-in; the `nova mcp stdio`
+  launcher; MCP resources and prompts on Nova's own server; running bundle and other MCP servers
+  inside the sandbox (they run unsandboxed as in M3; the confirmed permissions are recorded);
+  importing hooks from other plugin layouts; plugin signatures (M8), browser-extension install,
+  catalog entries that point to other repositories and a UI for plugin secrets; passing
+  `permission.request` hook context to the turn, and hooks in approval previews; `POST /hooks`;
+  a link from a hook to its audit entries and a diff in the trust dialog; allowed domains in the
+  App frame header; layouts saved per session or project and named workspaces (`docs/04` §2.4,
+  §4.3).
 
 ## Defaults for common ambiguities
 

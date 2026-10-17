@@ -104,6 +104,11 @@ The order is configurable per user and per project.
 Hub process management is handled by a supervisor (systemd unit / launchd agent / Windows
 service) so the Hub stays running and restarts on failure.
 
+From M4 (ADR-091) the Hub also installs plugins and MCP bundles into its data directory, runs
+command hooks and terminals in its sandbox, hosts MCP Apps resources for clients, and serves
+Nova's own MCP server to external clients. Until `novad` arrives (M6), plugin folders, project
+folders, the file browser and import read only the Hub's own disk.
+
 ## 7. Compute Node responsibilities
 
 - Register capabilities with the Hub on connect (see `docs/23`).
@@ -207,6 +212,8 @@ Performance budgets are set against the supported minimum (see `docs/16`).
 | Hub ↔ Relay | WebSocket/HTTPS, outbound | Content-blind |
 | `novad` ↔ Hub | mTLS (device certificate) | Capability + management channel |
 | Native shell ↔ local `novad` | Unix socket (mode 0600) or named pipe (user-only ACL) | Token required; loopback is never authorization (FR-192) |
+| External MCP client ↔ Hub | Streamable HTTP at `/mcp` on the Hub's port | Per-client token; 404 while Nova's MCP server is off (FR-044, M4) |
+| Client ↔ Hub terminal | WebSocket `/api/v1/terminals/<id>/ws` | Session required; the shell runs in the Hub's sandbox (FR-006, M4) |
 
 Every listener requires a token or certificate (FR-192). Detailed contracts live in
 `contracts/`.

@@ -4,6 +4,14 @@ For each accepted milestone, add `M<n>.md` (demo script + expected results) and 
 `M<n>-evidence/` folder with small screenshots/traces referenced by the ledger. Keep files
 small; large recordings go in the release assets, not the repo.
 
+| Milestone | Demo |
+| --- | --- |
+| M0 | [Hub, web UI and setup](M0.md) |
+| M1 | [First chat](M1.md) |
+| M2 | [Providers, local models and memory](M2.md) |
+| M3 | [Tools and approvals](M3.md) |
+| M4 | [Plugins, skills, hooks, MCP Apps, bundles, workspace and profile](M4.md) |
+
 ## Template
 
 ```markdown

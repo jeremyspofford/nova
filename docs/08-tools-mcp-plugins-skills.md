@@ -308,6 +308,17 @@ can be revoked from the server's settings, which also calls the server's revocat
 when it has one. API-key servers store the key in the keychain the same way and reference it
 from `auth`.
 
+*As shipped in M4 (ADR-091).* The client metadata document is served at
+`/.well-known/nova-client.json` and is used when the authorization server accepts one and the Hub
+has an HTTPS URL; otherwise Nova registers dynamically. Nova requests the scopes the resource
+advertises (the API does not take `oauth` settings yet). The browser returns to the Hub route
+`/api/v1/mcp/oauth/callback`, which needs no session because the single-use `state` (10 minutes,
+bound to the account) authenticates it, then redirects to `/settings/tools?oauth=ok|error`.
+Tokens are vault entries `secret://mcp/<id>/oauth/…`, refreshed within 60 s of expiry or after a
+401. A server that refuses an unauthenticated connection reports that it needs authorization;
+its row in Settings → Tools & MCP shows **Needs sign-in** with **Sign in**, and later
+**Reconnect** and **Sign out**.
+
 **Secrets in configuration.** Every secret value in `env`, `headers` or `auth` is a
 `secret://` reference; OAuth tokens are never in the configuration at all. A secret entered
 in the UI is written to the keychain and replaced by its reference on save. Plaintext secrets
@@ -319,7 +330,7 @@ references, and the user is told which keys moved (FR-200).
 Nova can expose itself over MCP. Exposure is **off by default** and is granted **per client**
 (ADR-075):
 
-- **Adding a client** (Settings → Tools & MCP → Nova as an MCP server) names the client and
+- **Adding a client** (Settings → Apps & clients) names the client and
   sets its scope: which `nova.*` tools, which projects, which thread scope, read-only or
   run-allowed, and an optional expiry (default 90 days). Nova issues a token for that client
   only, shows it once, and stores only its hash.
@@ -336,6 +347,27 @@ Nova can expose itself over MCP. Exposure is **off by default** and is granted *
 - Every call is audited with the client id and evaluated by the policy engine as if made by a
   plugin. An `ask` reaches the user as an approval and is never auto-allowed. Requests from a
   client are never user-typed authorization (FR-189).
+
+*As shipped in M4 (ADR-091).* Clients are added in Settings → **Apps & clients**, which also has
+the `mcpServer.enabled` switch (adding the first client turns it on). A client's scope is its
+tools (all or a list), its projects (all or a list), chat access (`none`, `read`, `read_write`),
+`read_only` or `run_allowed`, and an expiry of 7, 30, 90 (default) or 365 days, or never (in
+the API, `expiresInDays: null` never expires and leaving it out means 90 days). The token starts
+`nvm_`; the page shows it once with the endpoint and a configuration snippet to copy. The endpoint is `/mcp` on the Hub (streamable HTTP):
+
+| Request | Answer |
+| --- | --- |
+| Server off | 404 |
+| Missing, wrong, revoked or expired token | 401 `token_required` |
+| `Origin` or `Host` not allowed | 403 |
+
+The tools are `projects.list`, `threads.list` and `threads.read` within the client's scopes,
+plus the Hub tools its scopes allow, with characters MCP does not accept replaced (`mcp:x.y` is
+served as `mcp_x.y`). A read-only client gets only tools whose action is a read; `tool.search`
+is never served. Temporary chats are never shared, a client limited to some projects sees no
+chat outside them, and `read_write` reads only until a write tool exists. Calls pass the gate
+with origin `mcp_client` and no user instruction, and are audited as `client.call`. Resources,
+prompts and the `nova mcp stdio` launcher come later.
 
 ### 2.3 Configuration
 
@@ -436,6 +468,20 @@ A single MCP server can be installed from an **MCP Bundle** (`.mcpb`): a zip fil
 - **Update** shows the user-config and permission diff; the previous version is kept for
   rollback.
 
+*As shipped in M4 (ADR-091).* Settings → Tools & MCP → **Install a bundle** reads a `.mcpb` or
+`.zip` file. The Hub checks paths and caps before it inflates anything: 50 MB upload, 10,000
+files, 500 MB unpacked, 200 MB per file. A preview expires after 30 minutes. No publisher key
+is trusted yet, so every bundle is **Unverified** and installs only with the sideload
+confirmation (`confirmSideload`). Files go to `<dataDir>/mcp/bundles/<name>/<version>`; an update
+replaces the server in place and keeps the previous version's folder. Only sensitive settings,
+and env values or arguments that use one, go to the vault; launch arguments may reference only
+the server's own entries (`secret://mcp/<id>/…`). The server is named after the bundle, and a
+name another server already uses is refused (409) until a local id can be chosen. The file
+permission is one choice for the folders and files the user entered: none, read, or read and
+write. **Bundle servers are not sandboxed yet:** like every MCP server they run as in M3 (FR-107,
+M6). The confirmed permissions are recorded in the install record and bound the domains of the
+server's MCP Apps, but they do not yet confine the server process.
+
 ## 3. Plugins
 
 ### 3.1 Manifest (`.nova-plugin/plugin.json`)
@@ -490,15 +536,23 @@ extensions and optional UI (FR-045). `${pluginRoot}` expands to the installed pl
 
 - `skills`: skill folders (§4), registered as `skill:<pluginId>:<name>`.
 - `commands`: Markdown command files, **converted to skills** at install (the file body becomes
-  `SKILL.md`, its first heading or file name becomes the name).
+  `SKILL.md`; the name is the front-matter `name`, else the first heading, else the file name).
+  The converted skills are written under `<installDir>/.nova-plugin/commands/<name>/`.
 - `agents`: **sub-agent role files** (Markdown with front-matter `name`, `description`,
   `tools`, optional `model_hint`; the body is the role's instructions). They become roles for
   `task.spawn`, named `<pluginId>:<role>`. A role's tools are a subset of the plugin's
   permissions and never more than the parent run's (`docs/09` §4).
 - `hooks`: a path to a hooks file, or an inline array of hooks (§4.1). Hooks install untrusted
   and run only after trust by hash.
-- `mcpServers`: servers configured as in §2.3; their tools are exposed under the plugin
-  namespace (§8).
+- `mcpServers`: servers configured as in §2.3. In M4 each becomes an MCP server named by its
+  manifest key (`-2`, `-3` … on a collision) whose tools are `mcp:<server>.<tool>`; the plugin's
+  permissions apply to them, matched by tool name (§8, ADR-091). Literal env and header values
+  move to the vault, and the stored manifest keeps only their `secret://` references. A `node`
+  server gets `NODE_PATH` pointing at Nova's own packages, so it can use the MCP SDK Nova ships.
+  A plugin's server follows its manifest and changes only through the plugin: `PATCH` and
+  `DELETE /mcp/servers/:id` answer 409 `conflict` with `details.reason: 'plugin_owned'`, its
+  `McpServerView.pluginId` names the plugin, and Settings → Tools & MCP shows "From the plugin
+  <id>; change or remove it in Plugins" with no Edit or Remove and its switches disabled.
 - `browserExtensions`: extensions are **declared**, never installed silently. Each one is
   installed only after an explicit consent naming the browser profile. The agent profile is
   the default; the user's own profile requires the extension-bridge consent (FR-096).
@@ -510,13 +564,16 @@ extensions and optional UI (FR-045). `${pluginRoot}` expands to the installed pl
 - Plugins are sandboxed; declared permissions are enforced, not trusted.
 - Plugins cannot read arbitrary files, make undeclared network calls, or access secrets they
   did not declare. An undeclared request is denied, the plugin is disabled, and the user is
-  notified (`docs/20` defaults).
+  notified (`docs/20` defaults). In M4 the gate denies a call that names a host the plugin did
+  not declare ("<host> is not a host this plugin declared"), checking every http(s) and ws(s)
+  URL in the arguments; disabling the plugin and notifying come later (ADR-091).
 - **Per-action permissions.** Every tool declares an action class (`read`, `write`, `send`,
   `delete`, `execute`). The user can set defaults per class for the plugin (for example
   "allow read, ask send") and override them per tool (FR-048).
 - A plugin hook may answer approval asks only if its manifest sets `hooks.answersAsks: true`
   and the permission preview showed this (§4.1).
-- Signatures: every catalog source is signed and verified before install (§7).
+- Signatures: every catalog source is signed and verified before install (§7). Until signing
+  lands (M8) every plugin is unverified, so every install is a sideload (§3.2).
 
 **UI: MCP Apps (FR-198, ADR-066).** Plugin and MCP-server UI follows the open MCP Apps
 extension; there is no Nova-specific panel bridge.
@@ -541,15 +598,23 @@ extension; there is no Nova-specific panel bridge.
   size requests.
 - **Policy.** Every tool call from a UI passes the policy engine (origin `ui`) as the owning
   plugin or server. A UI can call its own server's tools and only those Nova tools its manifest
-  grants. Approval cards render in Nova's own chrome, never inside the iframe.
+  grants. Approval cards render in Nova's own chrome, never inside the iframe. A UI's call
+  carries no user instruction (`initiator: 'app'`), so a call that is not read-only asks under
+  the default policy. In M4 a UI may run at most 4 calls at once, and Nova tools are refused even
+  when the manifest grants them (fail closed, ADR-091).
 - **Untrusted output.** Messages a UI posts are labelled as coming from that UI and never count
   as user-typed authorization (FR-189). They do only when the UI fills the composer and the user
-  sends. Model-context updates are untrusted content, capped at 4,000 tokens per widget.
+  sends. Model-context updates are untrusted content, capped at 4,000 tokens (16,000 characters)
+  per widget; the Hub keeps them in memory for the thread and drops them when the app closes.
 - **Widget state** is split into model-visible and private parts. **Private state is never sent
-  to the model** or to a provider; it is stored per widget instance on the Hub. Nova-specific
-  extras are namespaced extensions that a UI must feature-detect.
+  to the model** or to a provider, and it never leaves the browser: it is kept per widget
+  instance in the client and is not stored on the Hub (ADR-091). A UI marks it with the Nova
+  extension `_meta["nova/private"]`, on one content block or on a whole update; the host
+  advertises the extension as `experimental["nova/private"]`. Nova-specific extras are
+  namespaced extensions that a UI must feature-detect.
 - **Display modes:** inline (a card, or a carousel for lists), fullscreen, picture-in-picture.
-  The host chooses the final mode; mobile clients show picture-in-picture as fullscreen.
+  The host chooses the final mode; phones show picture-in-picture as a bottom sheet
+  (`docs/04` §2.9).
 - **Entry points:** `global` (a full-page app opened from the sidebar), `thread` (a side panel
   beside one conversation, which receives only that thread's context) and `file` (a viewer or
   editor for listed file extensions; edits go through `fs.write`/`fs.edit` under policy).
@@ -564,6 +629,33 @@ servers, UI resources, and hooks (pending trust) → enable → (on update) show
 diff, ask for re-trust of any hook whose hash changed, migrate → (on uninstall) remove hooks,
 roles, UI state and registrations, offer to remove browser extensions, and clean up user data
 with confirmation.
+
+**The install flow as shipped (M4, ADR-091).**
+
+1. **Source.** A catalog entry, a folder on the Hub (the folder holding
+   `.nova-plugin/plugin.json`) or a Git URL with an optional ref.
+2. **Preview** (`POST /plugins/preview`) validates the manifest, records a digest of the whole
+   folder and holds the result for 30 minutes. It writes nothing. The screen (`docs/04` §2.12)
+   shows Verified or Unverified, the permissions in plain words, the permission changes on an
+   update, the skills, the MCP servers and every hook with its event, command, timeout and full
+   hash.
+3. **Install** (`POST /plugins`) needs the preview id and, because no publisher is verified
+   yet, `confirmSideload: true`; without it the Hub answers `validation` with
+   `details.reason: 'sideload_confirmation_required'`. A folder that changed since the preview
+   answers 409; an expired preview 410 `request_expired`. The request also names the hooks to
+   trust now and whether to enable the plugin.
+4. **Place and register.** Installs run one at a time. Files are copied to
+   `<dataDir>/plugins/<id>/<version>/`; an update swaps the version folder atomically and rolls
+   back on failure. Skills (with converted commands), sub-agent roles (`agent_role`), MCP servers
+   (`mcp_server` rows with source `plugin`) and hooks are registered; the plugin's
+   `plugin_install` row keeps the manifest with secret values replaced by references.
+5. **Hooks** the user did not tick stay `needs_trust` (Settings → Plugins & skills → Hooks).
+6. **Uninstall** removes the folder, the registrations, the plugin's servers and their vault
+   entries.
+
+An imported plugin (§4.2) takes the same path: choosing it on the import screen is the sideload
+confirmation, and it is installed disabled. Signature checks, browser-extension install and a UI
+for plugin secrets come later.
 
 ## 4. Skills
 
@@ -638,6 +730,19 @@ the Skills page shows the shadowed entries. `.nova/` and `.agents/` are protecte
 skills come from the user, an install, an import (§4.2) or an approved L1 proposal (FR-170,
 FR-178); memory consolidation never writes skills (ADR-069).
 
+*As shipped in M4 (ADR-091).* Skills stay on disk; the database keeps only each skill's enabled
+switch and import provenance (`skill_state`). The user root is `<dataDir>/skills`, which also
+holds imported skills. Project skills come from `.nova/skills/` and `.agents/skills/` at the top
+of each folder bound to the project (FR-035); the first folder wins a name. Skill ids are
+`skill:<builtin|user|import|managed>:<name>`, `skill:<pluginId>:<name>` and
+`skill:project:<projectId>:<name>`. A disabled skill drops out of precedence, so the next skill
+with its name takes over. Settings → Plugins & skills → Skills lists them with their source and
+what shadows them, and creates and deletes user and project skills. `/name` at the start of a
+message loads the skill for that turn (the rest of the message is the request); `@name` does
+too. `skill.load` is read-only and always allowed, and is offered only while the account has a
+skill. A plugin skill marks the turn as tainted. `allowed_tools` are never deferred, but they do
+not yet narrow the tool set. No built-in skills ship yet.
+
 The **Build a skill/plugin** flow (FR-050) generates and validates these folders.
 
 ### 4.1 Lifecycle hooks (FR-197, ADR-068)
@@ -645,9 +750,10 @@ The **Build a skill/plugin** flow (FR-050) generates and validates these folders
 A **hook** runs code at a lifecycle event. It can tighten what the agent does or add context,
 and it never loosens built-in safety or managed policy.
 
-**Sources.** Managed policy, the user hooks file (`hooks.json` in Nova's config directory),
-the project file `.nova/hooks.json` (trusted projects only), plugins (§3.1) and SDK extensions
-(`docs/14` §4).
+**Sources.** Managed policy, the user hooks file (`hooks.json` in Nova's config directory;
+`<dataDir>/hooks.json` on the Hub), the project file `.nova/hooks.json` (trusted projects only;
+in M4, the top of each folder bound to a project, which counts as trusted), plugins (§3.1) and
+SDK extensions (`docs/14` §4). Every dispatch re-reads and re-hashes the files first.
 
 ```jsonc
 // .nova/hooks.json
@@ -700,8 +806,20 @@ source.
 **Trust.** Every hook is trusted by **content hash** before it runs. The hash is SHA-256 over
 the canonical JSON of its definition plus the bytes of the script file it runs when that file
 sits inside the plugin or project folder. A new or changed hook is listed as
-`needs_trust` (Settings → Tools & MCP → Hooks) and does not run until the user trusts it
-(`trusted`). Revoking trust (`revoked`) stops it at once. Managed hooks are trusted through the policy channel.
+`needs_trust` (Settings → Plugins & skills → Hooks) and does not run until the user trusts it
+(`trusted`). Revoking trust (`revoked`) stops it at once. Managed hooks are trusted through the
+policy channel.
+
+*As shipped in M4 (ADR-091).* Hook ids are `hook:<origin>.<hookId>`; a project hook is
+`hook:project:<projectId>.<hookId>` and a plugin hook `hook:<pluginId>.<hookId>`. The hash leaves
+out `enabled`. Plugin hooks can be trusted on the install screen. `HookView.changedSinceTrust`
+marks a hook whose content changed after it was trusted; it waits for re-trust, and changing it
+back does not trust it again. Trusting with a hash that is no longer current answers 409
+`conflict`. Changing or revoking a managed hook, and switching off or deleting a non-user hook,
+answer 403 `policy_denied`; deleting a user hook also removes it from `hooks.json`. A hooks file
+that cannot be read keeps its rows and trust, but none of its hooks run and its guards block.
+Every run emits `hook.started`, then `hook.completed`, `hook.blocked` or `hook.skipped`, and is
+audited.
 
 **Combining results.** Hooks matching one event run in parallel. Any block wins. For
 `permission.request`, any deny wins over allow, and no answer leaves the `ask` in place. Added
@@ -714,17 +832,23 @@ authorization (FR-189).
 - A hook **never** overrides built-in safety (including `handoff_required` and
   `confirm_at_action`, FR-189), managed policy, a `deny` or a `handoff`. It never rewrites tool
   arguments or results, removes the sandbox, or reads secrets.
-- A hook may answer an `ask` only when that ask came from a user custom rule or a per-tool
-  default. Only managed and user hooks may do this, plus plugin hooks whose manifest declares
-  `answersAsks` (§3.1). Project hooks never may: project settings cannot change approval
-  policy (`docs/14` §1).
+- A hook may answer an `ask` only when that ask came from a user custom rule, a per-tool
+  default or the plugin's permissions, and never one raised by a built-in floor, managed policy,
+  the approval policy or intent provenance (ADR-091). The engine marks such an ask `answerable`
+  and checks the answer again. Only managed and user hooks may do this, plus plugin hooks whose
+  manifest declares `answersAsks` (§3.1). Project hooks never may: project settings cannot
+  change approval policy (`docs/14` §1).
 - A `stop` continuation counts against the run budget and the per-turn step backstop
-  (FR-182). It is ignored once a budget is exhausted.
-- A hook that errors or times out has no effect on the decision, unless it sets
-  `failClosed: true`, in which case its tool call or prompt is blocked. Every hook run, its
+  (FR-182). It is ignored once a budget is exhausted. It starts a new turn with trigger `hook`;
+  its message is shown labelled **Hook**, carries provenance `hook` and no user authority.
+- **Hooks fail closed** (ADR-091, superseding this part of ADR-083). A hook that errors, times
+  out or cannot start (for example, no sandbox) always blocks its `tool.pre` call and always
+  denies at `permission.request`, whatever `failClosed` says. `failClosed: true` also blocks the
+  prompt at `prompt.submit`. On other events a failed hook has no effect. Every hook run, its
   result and its duration are recorded in the Activity trace and the audit log.
-- Added context over **2,500 tokens** is written to a file in the session's scratch folder;
-  the model receives the first part plus the path, readable with `fs.read`.
+- Added context over **2,500 tokens** is written to a file in the session's scratch folder (in
+  M4, `<dataDir>/workspace/hook-context/<thread>/`); the model receives the first part plus the
+  path, readable with `fs.read`.
 
 ### 4.2 Import from other assistants (FR-200)
 
@@ -773,6 +897,35 @@ modifies the sources and never writes into the other application's configuration
 5. Imported content is untrusted until the user enables it. Imported memories are candidates,
    not saved facts.
 
+*As shipped in M4 (ADR-091).* Import reads folders and files on the Hub itself
+(`POST /import/preview` and `/import/apply`); reading other devices through `novad` arrives in
+M6. It recognizes instruction files (`AGENTS.md`, `.<word>rules`, `*-instructions.md`, a
+`<NAME>.md` inside or next to a `.<name>/` folder, or any file the user names), `SKILL.md`
+folders, command files, plugin folders (Nova's layout or another `.<name>-plugin/` layout), JSON
+with an `mcpServers` map, repositories as projects, `projects.json`, memories as JSON or text,
+and chat exports as JSON or zip (message lists and message trees). Symbolic links are not
+followed and every size is capped. Where M4 differs from the mapping above:
+
+- An instruction file in the home folder or one of its configuration folders becomes the
+  user's instructions in `<dataDir>/instructions.md`; the chat reads that file from M5, with
+  instruction-file discovery (FR-185). Any other instruction file becomes the instructions of
+  the project for its folder (one imported in the same run, one bound to that folder, or a new
+  one).
+- Imported memories are saved as active items with source `import`, which Settings → Memory
+  lists for review and correction; there is no candidate state yet.
+- Chat exports become chats marked as imported, keeping their original times.
+- Imported MCP servers are inserted disabled with source `import`; imported plugins go through
+  the plugin installer disabled (choosing them is the sideload confirmation, §3.2). Hooks in
+  other plugin layouts are not imported yet; the item says so.
+- Secret references: `secret://mcp/<id>/env/<NAME>` for MCP servers,
+  `secret://plugin/<pluginId>/<key>/<NAME>` for plugin servers and
+  `secret://import/<ref>/text/secret_N` for a token found in instruction text, which is
+  replaced in place. A secret in an argument or URL becomes an env variable; a placeholder such
+  as `${X}` is stored empty. Each case adds a note to the item.
+- One `import_record` is written per item, grouped by an import id and naming its target. A
+  failed item is recorded as failed and never blocks a retry; a name in use is imported under
+  the next free name.
+
 ## 5. Browser & computer tools (summary; detail in 11)
 
 | Tool | Input | Output |
@@ -814,7 +967,16 @@ Two later stages can adjust that result, and only in the ways stated:
 The same evaluation applies whatever the call's origin: the model, an MCP Apps UI, a hook's
 `mcp_tool` handler, a nested `script.run` call, or an external MCP client. The origin is
 recorded in the audit log. A skill's `allowed_tools` narrows the tool set further; loading a
-deferred tool grants nothing.
+deferred tool grants nothing. In M4 `allowed_tools` only keeps those tools loaded; narrowing
+comes later (ADR-091).
+
+**Direct user actions** (ADR-091, refining the FR-189 fallback). When the signed-in user performs
+an action directly in a Nova client, such as saving a file in the editor, the action is its own
+confirmation: the call has actor `user`, the user's own instruction and no taint, and steps 4
+and 5 allow it without a card. Rules and denies from steps 1 to 3, the confirmation tiers, the
+network allowlist, policy changes and secret access still apply. A tool call from an MCP App is
+not such an action: `POST /tools/:name/invoke` defaults to `initiator: 'app'`, which carries no
+user instruction.
 
 ## 7. Catalog & marketplace (FR-049)
 
@@ -837,6 +999,15 @@ deferred tool grants nothing.
   and disable sideloading.
 - Permission diff shown on update; automatic rollback on failure.
 
+*As shipped in M4 (ADR-091).* Catalog sources are the `plugins.catalogs` setting (a folder on the
+Hub, an https URL or a Git URL), plus the built-in sample catalog (`nova-sample`,
+`examples/catalog`). A folder catalog reads `catalog.json` or `nova-catalog.json`; each entry
+names a plugin id, name, version, description and its folder. A URL catalog's index is capped at
+1 MB and its zip archives (same host, optional SHA-256) at 50 MB. A Git catalog is cloned
+shallow with repository hooks off; https, ssh and git URLs only; without Git the Hub answers
+400 `capability_missing`. Entries that point to other repositories, catalog signatures and the
+remote catalog come later, so every entry is **Unverified** and installs as a sideload (§3.2).
+
 ## 8. Namespacing & conflicts
 
 | Source | Canonical name | Example |
@@ -856,6 +1027,14 @@ reverse-DNS and therefore never equal `managed`, `user` or `project`; MCP server
 per Hub (a colliding install is renamed, §2.5). Skill and role names without a plugin
 namespace resolve by root precedence (§4). Display names are humanized, never used as keys.
 
+In M4 (ADR-091) a plugin's MCP server is an ordinary MCP server named by its manifest key, so its
+tools are `mcp:<server>.<tool>` (the sample plugin's are `mcp:sample.fetch_status` and
+`mcp:sample.panel_action`); the plugin's `plugin:<pluginId>.<tool>` permission entries match them
+by tool name. Skill ids carry their source: `skill:user:<name>`, `skill:project:<projectId>:<name>`
+and `skill:<pluginId>:<name>`. Project hooks are `hook:project:<projectId>.<hookId>`, because two
+projects can use the same hook id. Nova's own MCP server serves Hub tools with `:` replaced
+(`mcp:x.y` as `mcp_x.y`, §2.2).
+
 ## 9. Failure isolation
 
 - Each MCP server / plugin runs in its own process or worker with CPU/memory/time limits.
@@ -864,7 +1043,8 @@ namespace resolve by root precedence (§4). Display names are humanized, never u
   (§2.1).
 - Tool timeouts are enforced centrally (default 60 s, per-tool and per-server overridable).
   Exec sessions use yield times and are killed when the run ends (§1.1).
-- Hook timeouts are enforced per hook (§4.1); a timed-out hook has no effect unless it is
-  `failClosed`.
+- Hook timeouts are enforced per hook (§4.1); a timed-out `tool.pre` or `permission.request`
+  hook blocks or denies, a timed-out `prompt.submit` hook blocks when it is `failClosed`, and
+  any other timed-out hook has no effect.
 - A hanging tool is cancelled; the run continues with an error result unless the tool is
   required, in which case the run pauses for user input.

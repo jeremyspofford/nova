@@ -8,29 +8,43 @@ Vite with the API proxied to a local Hub.
 | Path | What it is |
 | --- | --- |
 | `src/App.tsx` | Root: Hub connection, first-run setup code, sign-in, then the workspace and its stores |
-| `src/shell/` | Workspace (sidebar, main, inspector, global commands and key handler) and Sidebar |
-| `src/chat/` | Chat view, composer, thread list, search, Markdown, attachment checks, thread state reducer |
-| `src/settings/` | Settings → General, Accounts, Appearance, Keyboard |
-| `src/onboarding/` | First-run wizard and the bundled sample document |
+| `src/shell/` | Workspace (sidebar, main, inspector, top bar with the bottom-panel toggle and Layout menu, global commands and key handler) and Sidebar |
+| `src/chat/` | Chat view, composer (slash-command list and suggested follow-ups in `slash.ts`), thread list, search, Markdown, attachment checks, thread state reducer, MCP Apps under tool cards (`tool-apps.tsx`) |
+| `src/layout/` | The pane layout tree (`model.ts`: split, move, maximize, close, reset; 12 panes, 6 levels), per-mode save and restore in `workspace.layout` (`useLayouts.ts`), and `PaneWorkspace.tsx` / `panes.tsx`, which render pane contents into movable elements so a layout change never remounts them (FR-005) |
+| `src/terminal/` | Bottom panel and terminal panes (FR-006): terminal sessions over `/terminals/:id/ws` (`input`/`resize` out, `output`/`exit`/`error` in), reconnect, tabs; xterm.js loads in its own chunk on first use |
+| `src/files/` | File browser (the Inspector's Files tab), editor (line numbers, undo, Ctrl/Cmd+S, conflict and approval handling) and preview with "Open with" for file apps (FR-039) |
+| `src/apps/` | MCP Apps (FR-198): the JSON-RPC bridge (`bridge.ts`), display modes and the one picture-in-picture slot (`display.ts`), the App frame (`McpAppFrame.tsx`) and the Apps page, the Inspector's Apps tab and file apps (`AppsView.tsx`) |
+| `src/library/` | Library (FR-041): one paged list filtered by kind and searched by title |
+| `src/projects/` | Projects, sources and local project folders with indexing status (`ProjectFolders.tsx`, FR-035) |
+| `src/settings/` | Settings pages: General, Profile & usage, Accounts, Models, Memory, Tools & MCP (with bundle install and OAuth), Plugins & skills (plugins, catalogs, install preview, skills, hooks), Apps & clients, Permissions, Notifications, Devices, Appearance (with theme export and import), Keyboard, Import, Diagnostics |
+| `src/onboarding/` | First-run wizard, the bundled sample document and a link to Import |
 | `src/providers/` | Provider connect-and-test form shared by onboarding and Settings |
-| `src/api.ts` | Typed client for every M1 Hub endpoint (`@nova/shared` api types) |
+| `src/api.ts` | Typed client for the Hub endpoints (`@nova/shared` api types) |
 | `src/sse.ts` | Typed EventSource helper: named events, de-duplication, reopen after `?after=` |
-| `src/commands.ts`, `src/keys.ts` | Command and shortcut registry (FR-003, FR-004): bindings, when-clauses, conflicts |
-| `src/router.ts` | History API routes: `/chat`, `/chat/:id`, `/work`, `/code`, `/agents`, `/settings/:section`, `/onboarding` |
+| `src/commands.ts`, `src/keys.ts`, `src/workspace-commands.ts` | Command and shortcut registry (FR-003, FR-004): bindings, when-clauses, conflicts, browser-reserved keys and their Alt variants; the navigation commands |
+| `src/router.ts` | History API routes: `/chat`, `/chat/:id`, `/work`, `/code`, `/agents`, `/projects`, `/projects/:id`, `/library`, `/apps`, `/apps/:id`, `/settings/:section`, `/onboarding`, `/open?url=` |
+| `src/deeplinks.ts` | `nova://` and `web+nova://` links mapped to routes, including `nova://theme?data=` (FR-007, FR-011) |
 | `src/settings.tsx`, `src/stores.tsx` | Mirrors of Hub settings, threads and models (the Hub stays the source of truth) |
 
 ## Behavior notes
 
 - Modes stay mounted while hidden, so switching keeps each mode's selection, scroll and drafts.
 - Key bindings are stored in `keyboard.bindings` with `mod` (Cmd on macOS, Ctrl elsewhere). In a
-  plain browser tab, keys the browser reserves (Ctrl+N, Ctrl+1..9, …) are shown as their Alt
-  variant (docs/04 §5); the installed PWA uses the defaults.
+  plain browser tab, keys the browser reserves (Ctrl+N, Ctrl+J, Ctrl+`, Ctrl+1..9, …) are shown
+  as their Alt variant (docs/04 §5); the installed PWA uses the defaults.
 - Streaming text arrives as ephemeral `chat.delta` events; the stored message is refetched after
   `chat.message.completed`. A failed send puts the text and attachments back in the composer.
 - API keys typed in onboarding or Settings go straight to `POST /providers` and are never stored
   in the browser.
+- The pane layout is read once from `workspace.layout` and written 300 ms after a change. While a
+  terminal has focus, only the panel toggle, the terminal toggle and Ctrl+Shift+P reach the app.
+- An MCP App runs in an iframe sandboxed to scripts only. Its tool calls go to the Hub with
+  `initiator: 'app'` (no user authority), approval cards render in Nova's chrome, and state the
+  app marks private (`_meta["nova/private"]`) never leaves the browser. A chat's apps live at
+  shell level, so switching Inspector tabs never stops them (ADR-091).
+- A user message started by a stop hook is labelled "Hook", never "You".
 
 ## Tests
 
-`npx vitest run` (jsdom, a fake Hub and a fake EventSource in `test/fakes.ts`; no network).
-`npx vitest run --coverage` enforces 70 % line coverage.
+`npm test` in `apps/web` (jsdom, a fake Hub, fake EventSource, WebSocket and terminal screen in
+`test/fakes*.ts`; no network). `npm test -- --coverage` enforces 70 % line coverage.

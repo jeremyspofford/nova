@@ -14,13 +14,16 @@ that schema on write.
 
 ```
 Account ──1:N── ProviderAccount ──1:N── ModelPref
+   ├──1:N── ProviderActive                   (one active account per provider kind)
    │
    ├──1:N── Project ──1:N── Thread ──1:N── Turn ──1:N── Message ──1:N── MessagePart (items)
-   │                         │              │              ├──1:N── ToolCall ──0:1── Approval
-   │                         │              │              └──1:N── Citation
-   │                         │              └──1:N── ServerRequest ──0:1── Approval
-   │                         ├──1:N── Artifact
-   │                         └──0:1── SessionHandoff
+   │           │             │              │              ├──1:N── ToolCall ──0:1── Approval
+   │           │             │              │              └──1:N── Citation
+   │           │             │              └──1:N── ServerRequest ──0:1── Approval
+   │           │             ├──1:N── Artifact
+   │           │             └──0:1── SessionHandoff
+   │           ├──1:N── Source ──1:N── SourceChunk
+   │           └──1:N── ProjectFolder ──1:N── ProjectFolderFile ──1:1── Source
    │
    ├──1:N── Run (Work) ──1:N── RunStep ──1:N── SubAgent
    │            ├──0:1── Goal (open)
@@ -44,7 +47,8 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    ├──1:N── CommandRule ──1:N── PermissionGrant
    ├──1:N── PermissionProfile / Hook
    ├──1:N── AuditEvent / Event
-   ├──1:N── Skill / PluginInstall / McpServer / Connector
+   ├──1:N── SkillState / PluginInstall / AgentRole / Connector  (skills themselves are folders, §3)
+   ├──1:N── McpServer ──0:1── McpOAuth
    ├──1:N── AppAuthorization / ImportRecord
    ├──1:N── UsageEvent
    ├──1:N── Notification
@@ -63,11 +67,13 @@ CREATE TABLE account (
   id TEXT PRIMARY KEY,            -- uuidv7
   kind TEXT NOT NULL,             -- 'local' | 'oidc'
   display_name TEXT,
-  username TEXT,
-  avatar_path TEXT,
+  username TEXT,                  -- unique among live accounts (FR-113)
+  avatar_path TEXT,               -- sealed blob (§3): PNG, JPEG or WebP ≤ 2 MB, metadata stripped
   email TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
+CREATE UNIQUE INDEX uq_account_username ON account(username)
+  WHERE username IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE provider_account (
   id TEXT PRIMARY KEY,
@@ -82,6 +88,15 @@ CREATE TABLE provider_account (
   status TEXT NOT NULL DEFAULT 'active', -- active|expired|revoked|error
   last_check_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+
+CREATE TABLE provider_active (      -- the active account of each provider kind (FR-115)
+  account_id TEXT NOT NULL REFERENCES account(id),
+  provider TEXT NOT NULL,
+  provider_account_id TEXT NOT NULL, -- without a row, or when it names a removed account, the
+                                   -- oldest live account of the kind is active
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, provider)
 );
 
 CREATE TABLE model_pref (
@@ -112,14 +127,30 @@ CREATE TABLE project (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
 
-CREATE TABLE project_folder (       -- local projects (FR-035)
+CREATE TABLE project_folder (       -- local projects (FR-035): a folder on the Hub bound to a project
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES project(id),
-  path TEXT NOT NULL,
-  include_globs TEXT, exclude_globs TEXT,
+  path TEXT NOT NULL,              -- canonical (real) path; at most 20 folders per project
+  access TEXT NOT NULL DEFAULT 'read', -- read|write; a tool root for the project's chats, capped by
+                                   -- the permission profile in force (FR-190)
+  include_globs TEXT, exclude_globs TEXT, -- reserved for per-folder rules; unused in M4
   index_status TEXT NOT NULL DEFAULT 'pending', -- pending|indexing|ready|error
-  last_indexed_at TEXT
+  file_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT,                      -- the failure, or a note when a cap stopped indexing (still ready)
+  last_indexed_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE (project_id, path)
 );
+
+CREATE TABLE project_folder_file (  -- the folder's file index: one row per indexed file
+  folder_id TEXT NOT NULL REFERENCES project_folder(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES source(id), -- the folder-backed source holding its chunks
+  size INTEGER NOT NULL, mtime_ms INTEGER NOT NULL, -- an unchanged file is skipped on re-index
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (folder_id, rel_path)
+);
+CREATE INDEX idx_project_folder_file_source ON project_folder_file(source_id);
 
 CREATE TABLE thread (
   id TEXT PRIMARY KEY,
@@ -166,6 +197,7 @@ CREATE TABLE turn (                -- one trigger and everything the runtime did
   CHECK (status = 'in_progress' OR ended_at IS NOT NULL)
 );
 CREATE INDEX idx_turn_open ON turn(thread_id) WHERE status = 'in_progress';
+CREATE INDEX idx_turn_started ON turn(started_at); -- usage insights: the longest turn (FR-114)
 
 CREATE TABLE message (
   id TEXT PRIMARY KEY,
@@ -247,7 +279,8 @@ CREATE TABLE citation (
 CREATE TABLE source (               -- project sources (FR-040); content is a blob (§3)
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES project(id),
   name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
-  sha256 TEXT NOT NULL, blob_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL, blob_path TEXT NOT NULL, -- folder-backed sources (FR-035):
+                                   -- folder:<folder id>/<rel path>; the bytes stay in the folder
   status TEXT NOT NULL DEFAULT 'pending', -- pending|indexing|ready|error
   error TEXT, chunk_count INTEGER NOT NULL DEFAULT 0, indexed_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
@@ -394,7 +427,8 @@ CREATE TABLE tool_default (         -- per-tool defaults set by the user (FR-048
 );
 
 CREATE TABLE hook (                 -- lifecycle hooks (FR-197, ADR-068); schema hook-config.json
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,             -- shown and addressed as hook:<origin>.<hook_key>
+                                   -- (hook:project:<projectId>.<hook_key> for project hooks)
   account_id TEXT NOT NULL REFERENCES account(id),
   hook_key TEXT NOT NULL,          -- hook id from its file, unique per source
   event TEXT NOT NULL,             -- session.start|session.end|prompt.submit|tool.pre|tool.post|
@@ -403,19 +437,30 @@ CREATE TABLE hook (                 -- lifecycle hooks (FR-197, ADR-068); schema
   matcher_json TEXT,               -- glob list; NULL = every occurrence
   handler_kind TEXT NOT NULL,      -- command|mcp_tool
   handler_json TEXT NOT NULL,      -- hook-config.json#/$defs/handler
-  fail_closed INTEGER NOT NULL DEFAULT 0,
-  source TEXT NOT NULL,            -- managed|user|project|plugin|extension
-  plugin_id TEXT, project_id TEXT REFERENCES project(id),
+  fail_closed INTEGER NOT NULL DEFAULT 0, -- tool.pre and permission.request fail closed regardless
+  source TEXT NOT NULL,            -- managed|user|project|plugin|extension: managed policy,
+                                   -- <dataDir>/hooks.json, a project folder's .nova/hooks.json, a plugin
+  plugin_id TEXT, project_id TEXT REFERENCES project(id) ON DELETE CASCADE,
+  definition_json TEXT NOT NULL,   -- the definition as found in its file (what is hashed, minus enabled);
+                                   -- the files stay authoritative and are re-read before each dispatch
+  base_dir TEXT,                   -- folder a command hook runs in and may reference (plugin, project)
+  limits_json TEXT,                -- plugin hooks: the plugin's limits {network, fsProject, answersAsks}
   content_hash TEXT NOT NULL,      -- SHA-256 over the canonical definition and any script it runs
+                                   -- inside base_dir
   trusted_hash TEXT,               -- hash the user trusted; NULL or different = needs_trust
   trust_state TEXT NOT NULL DEFAULT 'needs_trust', -- needs_trust|trusted|revoked
                                    -- (hook-config.json#/$defs/trustRecord)
   trusted_by TEXT, trusted_at TEXT,
   timeout_ms INTEGER NOT NULL DEFAULT 30000 CHECK (timeout_ms BETWEEN 1000 AND 600000),
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  UNIQUE (account_id, source, plugin_id, project_id, hook_key)
+  enabled INTEGER NOT NULL DEFAULT 1, -- the user's switch (user hooks) or the plugin's (plugin hooks)
+  last_run_at TEXT,
+  last_effect TEXT,                -- none|context|decision|continue|blocked|error
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+-- NULLs are distinct in a plain UNIQUE constraint, so the per-source key uses COALESCE.
+CREATE UNIQUE INDEX idx_hook_key
+  ON hook(account_id, source, COALESCE(plugin_id, ''), COALESCE(project_id, ''), hook_key);
+CREATE INDEX idx_hook_event ON hook(account_id, event);
 
 CREATE TABLE server_request (       -- Hub-to-client requests (FR-188); schema server-request.json
   id TEXT PRIMARY KEY,
@@ -444,9 +489,10 @@ CREATE TABLE audit_event (          -- append-only: triggers refuse UPDATE and D
   id TEXT PRIMARY KEY,
   seq INTEGER NOT NULL UNIQUE,     -- chain order; the hash covers every column except hash
   account_id TEXT NOT NULL REFERENCES account(id),
-  actor TEXT NOT NULL,             -- user|agent:<id>|system (run and sub-agent ids go in run_id/detail)
+  actor TEXT NOT NULL,             -- user|agent:<id>|system (run and sub-agent ids go in run_id/detail);
+                                   -- also mcp_client:<authorization id> and a hook id (M4)
   kind TEXT NOT NULL,              -- tool_call|approval|review|hook|fs|network|egress|auth|update|
-                                   -- policy|import|ambient
+                                   -- policy|import|ambient|secret|settings|mcp|node|plugin|terminal
   thread_id TEXT, turn_id TEXT, run_id TEXT, agent_id TEXT, session_id TEXT,
   action TEXT NOT NULL, resource TEXT,
   input_hash TEXT, decision TEXT, result TEXT,
@@ -469,6 +515,25 @@ CREATE TABLE event (                -- persisted events for replay (contracts/ev
 CREATE INDEX idx_event_thread ON event(thread_id, id);
 CREATE INDEX idx_event_run ON event(run_id, id);
 ```
+
+Audit actions added in M4 (`kind` / `action`; inputs are stored as a hash only):
+
+| Kind | Action | Resource | Written for |
+| --- | --- | --- | --- |
+| `auth` | `app_authorization.create`, `app_authorization.revoke` | `app_authorization:<id>` | adding or revoking a client of Nova's MCP server (FR-044) |
+| `mcp` | `client.call` | `app_authorization:<id>` | every call from an MCP client; actor `mcp_client:<id>`, detail `{clientId, clientName, tool, callId}` |
+| `mcp` | `bundle.install`, `bundle.update` | `mcp_server:<id>` | bundle installs (FR-199): version, SHA-256, signature, `sideloaded`, confirmed permissions |
+| `mcp` | `oauth.start`, `oauth.connect`, `oauth.failed`, `oauth.revoke` | `mcp_server:<id>` | OAuth for a remote server (FR-047) |
+| `settings` | `plugin.install`, `plugin.update`, `plugin.enable`, `plugin.disable`, `plugin.uninstall` | `plugin:<pluginId>` | the plugin installer (FR-045) |
+| `settings` | `hook.trust`, `hook.untrust`, `hook.delete` | hook id | the hooks trust list (FR-197) |
+| `policy` | `hook.<event>` | the tool, if any | every hook run; actor is the hook id, `decision` its effect, `result` `ok\|timeout\|error\|not_started` |
+| `fs` | `fs.write` | file path | a save from the file editor (FR-039), `detail.origin: ui` |
+| `tool_call` | `terminal.open`, `terminal.close` | the terminal's folder | terminals (FR-006) |
+| `settings` | `import.applied` | `import:<importId>` | an import run (FR-200) |
+| `secret` | `import.secret.moved` | the `secret://` reference | each secret an import moved to the vault |
+| `mcp` | `add` | `mcp_server:<id>` | an imported MCP server (`source: import`, disabled) |
+
+The `hook`, `plugin` and `terminal` kinds are reserved; M4 writes the kinds above.
 
 ### work runs, goals, schedules, triggers
 
@@ -812,6 +877,8 @@ CREATE TABLE artifact_version (     -- every version of an artifact (FR-038); th
   created_at TEXT NOT NULL,
   PRIMARY KEY (artifact_id, version)
 );
+-- The Library (FR-041) is a query over artifact, attachment and source rows, and terminals
+-- (FR-006) live only in Hub memory; neither has a table.
 
 CREATE TABLE usage_event (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
@@ -837,8 +904,12 @@ CREATE TABLE notification (
 CREATE TABLE mcp_server (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
   name TEXT NOT NULL, transport TEXT NOT NULL, -- stdio|sse|http
-  command TEXT, args_json TEXT, url TEXT, env_ref_json TEXT,
-  config_json TEXT,                -- mcp-config.json#/$defs/server (timeouts, tool lists, oauth, ...)
+  command TEXT, args_json TEXT, url TEXT,
+  env_ref_json TEXT,               -- {NAME: secret://mcp/<id>/env/<NAME>}; a bundle's non-sensitive
+                                   -- values are kept as written
+  config_json TEXT,                -- mcp-config.json#/$defs/server fields without a column (timeouts,
+                                   -- tool lists, defaultApproval, a bundle's confirmed `policy`, a
+                                   -- plugin server's manifest key); OAuth state is in mcp_oauth
   source TEXT NOT NULL DEFAULT 'user', -- user|plugin|bundle|import|managed|device
   plugin_id TEXT,
   device_id TEXT REFERENCES device(id), -- device-local stdio server exposed through novad (FR-210)
@@ -851,25 +922,66 @@ CREATE TABLE mcp_server (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
-CREATE TABLE plugin_install (
-  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  plugin_id TEXT NOT NULL, version TEXT NOT NULL, source TEXT, -- catalog|git|path|import
-  manifest_json TEXT, signature TEXT, enabled INTEGER NOT NULL DEFAULT 1,
-  installed_at TEXT, updated_at TEXT
-);
-
-CREATE TABLE skill (                -- folder format (ADR-067); the body stays in SKILL.md on disk
-  id TEXT PRIMARY KEY, account_id TEXT,
-  name TEXT NOT NULL, description TEXT NOT NULL,
-  folder_path TEXT NOT NULL,       -- skills/<skill-id>/ containing SKILL.md
-  frontmatter_json TEXT NOT NULL,  -- schema skill-frontmatter.json
-  source TEXT NOT NULL,            -- managed|project|user|plugin|builtin (collision order, FR-046)
-  plugin_id TEXT, project_id TEXT REFERENCES project(id),
-  content_hash TEXT NOT NULL,      -- SHA-256 over the folder
-  provenance_json TEXT,            -- L1 proposal, demonstration (FR-226) or import record
-  enabled INTEGER NOT NULL DEFAULT 1,
+CREATE TABLE mcp_oauth (            -- OAuth 2.1 with PKCE for one sse/http server (FR-047)
+  server_id TEXT PRIMARY KEY REFERENCES mcp_server(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  issuer TEXT NOT NULL, metadata_json TEXT NOT NULL, -- authorization server and its RFC 8414 metadata
+  resource TEXT,                   -- RFC 8707 resource indicator from the protected-resource metadata
+  client_id TEXT NOT NULL,         -- Nova's client metadata document URL or a registered client id
+  client_secret_ref TEXT,          -- vault reference, when dynamic registration returned a secret
+  registration TEXT NOT NULL,      -- metadata_document|dynamic
+  scopes_json TEXT NOT NULL DEFAULT '[]',
+  access_token_ref TEXT, refresh_token_ref TEXT, -- secret://mcp/<server id>/oauth/…; never the tokens
+  status TEXT NOT NULL DEFAULT 'needs_auth', -- needs_auth|connected|expired|error
+  expires_at TEXT, last_error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+
+CREATE TABLE plugin_install (       -- one installed plugin per account (FR-045); files on disk (§3)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  plugin_id TEXT NOT NULL,         -- manifest id (plugin-manifest.json `id`)
+  version TEXT NOT NULL,
+  source TEXT NOT NULL,            -- local|catalog|git (an import installs through local)
+  origin TEXT NOT NULL,            -- a folder, <catalogId>/<pluginId>, or a Git URL with its commit
+  manifest_json TEXT NOT NULL,     -- the validated plugin.json; `permissions` is what the user
+                                   -- confirmed; every server env and header value is stored only as
+                                   -- the secret:// reference it became
+  signature TEXT NOT NULL DEFAULT 'unverified', -- verified|unverified (signing arrives with FR-049)
+  install_path TEXT NOT NULL,
+  registrations_json TEXT NOT NULL, -- what the install registered: server ids by manifest key,
+                                   -- skills, roles, hooks with hashes, hooks trusted at install,
+                                   -- UI entry points, the previewed folder digest
+  enabled INTEGER NOT NULL DEFAULT 1, error TEXT,
+  installed_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE (account_id, plugin_id)
+);
+
+-- Skills are folders (ADR-067): SKILL.md and its files stay on disk and are discovered from the
+-- built-in, user, plugin and project skill folders; there is no `skill` table. This table keeps
+-- only what a folder cannot.
+CREATE TABLE skill_state (
+  account_id TEXT NOT NULL REFERENCES account(id),
+  skill_id TEXT NOT NULL,          -- skill:<builtin|user|import|managed>:<name>, skill:<pluginId>:<name>,
+                                   -- skill:project:<projectId>:<name>
+  enabled INTEGER NOT NULL DEFAULT 1, -- a disabled skill drops out of precedence (FR-046)
+  origin TEXT,                     -- NULL|import: a user-folder skill an import created (FR-200)
+  provenance_json TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, skill_id)
+);
+
+CREATE TABLE agent_role (           -- sub-agent roles a plugin brings (docs/08 §3.1), for task.spawn
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  role_key TEXT NOT NULL,          -- <pluginId>:<name> (the role role:<pluginId>:<name>)
+  plugin_id TEXT,
+  name TEXT NOT NULL, description TEXT NOT NULL,
+  tools_json TEXT NOT NULL,        -- never more than the plugin's permissions or the parent run's
+  model_hint TEXT, instructions TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE (account_id, role_key)
+);
+CREATE INDEX idx_agent_role_plugin ON agent_role(account_id, plugin_id);
 
 CREATE TABLE connector (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL, provider TEXT NOT NULL,
@@ -877,32 +989,43 @@ CREATE TABLE connector (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
-CREATE TABLE app_authorization (    -- per-client tokens: Nova's MCP server (FR-192), third-party apps (FR-222)
-  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  kind TEXT NOT NULL,              -- mcp_client|api_app
+CREATE TABLE app_authorization (    -- per-client tokens: Nova's MCP server (FR-044, FR-192),
+                                    -- third-party apps (FR-222)
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL,              -- mcp_client|app (M4 creates mcp_client only)
   client_name TEXT NOT NULL,
-  scopes TEXT NOT NULL,            -- JSON array, e.g. ["memory.read","ambient.search"]
-  token_hash TEXT UNIQUE,          -- SHA-256 of the bearer token; the token is shown once
-  ambient_grant_id TEXT REFERENCES ambient_grant(id), -- required for any ambient scope (FR-233)
-  status TEXT NOT NULL DEFAULT 'pending', -- pending|active|revoked
-  created_at TEXT NOT NULL, last_used_at TEXT, expires_at TEXT, revoked_at TEXT,
+  scopes TEXT NOT NULL,            -- JSON {tools: [..]|"*", projects: [..]|"*",
+                                   -- threads: none|read|read_write, mode: read_only|run_allowed};
+                                   -- unreadable scopes grant nothing
+  token_hash TEXT UNIQUE,          -- SHA-256 of the bearer token (nvm_…); the token is shown once
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|active|revoked; revoked rows stay for the audit
+                                   -- trail and are not listed
+  created_at TEXT NOT NULL, last_used_at TEXT, -- last_used_at written at most once a minute
+  expires_at TEXT, revoked_at TEXT, -- default expiry 90 days
   CHECK (status <> 'active' OR token_hash IS NOT NULL)
 );
+CREATE INDEX idx_app_authorization_account ON app_authorization(account_id, status);
+-- ambient_grant_id (required for an ambient scope, FR-233) is not in M4; it arrives with
+-- ambient grants.
 
-CREATE TABLE import_record (        -- FR-200 preview, provenance and SHA-256 dedupe
+CREATE TABLE import_record (        -- FR-200 provenance and SHA-256 dedupe; one row per applied item
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  source_kind TEXT NOT NULL,       -- instruction_file|skill_folder|plugin|mcp_config|project|
-                                   -- memory_export|chat_export
+  import_id TEXT NOT NULL,         -- groups the items of one apply (ImportResult.importId)
+  source_kind TEXT NOT NULL,       -- instruction_file|skill_folder|command_file|plugin|mcp_config|
+                                   -- project|memory_export|chat_export
   source_path TEXT NOT NULL,
   sha256 TEXT NOT NULL,            -- of the normalized item
   item_kind TEXT NOT NULL,         -- what it became: instruction|skill|plugin|mcp_server|project|memory|thread
   target_ref TEXT,                 -- id of the created row
+  target TEXT,                     -- what it became, as shown, e.g. "MCP server github (disabled)"
   status TEXT NOT NULL,            -- imported|disabled_pending_permissions|failed
   secrets_migrated INTEGER NOT NULL DEFAULT 0, -- secrets moved to the keychain as secret:// refs
   imported_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX uq_import_dedupe ON import_record(account_id, item_kind, sha256)
-  WHERE status <> 'failed';
+  WHERE status <> 'failed';           -- a failed item never blocks a retry
+CREATE INDEX idx_import_record_account ON import_record(account_id, imported_at);
+CREATE INDEX idx_import_record_import ON import_record(import_id);
 
 CREATE TABLE feature_flag (         -- ADR-082; schema feature-flag.json
   key TEXT PRIMARY KEY,            -- e.g. 'sandbox.microVm'
@@ -937,7 +1060,7 @@ CREATE TABLE sync_state (
 ├── nova.db               # SQLite
 ├── nova.db-wal
 ├── blobs/
-│   ├── attachments/<sha256>
+│   ├── attachments/<sha256>         # also the account avatar (account.avatar_path)
 │   ├── artifacts/<artifact-id>/v<N>/<file>
 │   ├── patches/<sha256>             # code changes and handoff patches (FR-213)
 │   ├── staged/<staged-write-id>     # two-phase device writes (FR-210)
@@ -945,8 +1068,14 @@ CREATE TABLE sync_state (
 │   ├── screenshots/<yyyymmdd>/<id>.png
 │   ├── ambient/<yyyy>/<mm>/<dd>/<record-id>.jpg.age # pixels when the target is the Hub (FR-228)
 │   └── voiceprints/<speaker-id>.enc  # FR-231, never leaves the Hub
-├── plugins/<plugin-id>/<version>/
-├── skills/<skill-id>/SKILL.md (+ scripts, templates)
+├── plugins/<plugin-id>/<version>/  # an update swaps the version folder (FR-045)
+├── skills/<name>/SKILL.md (+ scripts, templates)  # user and imported skills (ADR-067)
+├── mcp/<server-id>/                # an MCP server's working directory
+├── mcp/bundles/<name>/<version>/   # unpacked MCP bundles; earlier versions are kept (FR-199)
+├── hooks.json                      # the user's hooks file (FR-197)
+├── instructions.md                 # user instructions from an import (FR-200)
+├── import/<import-id>/             # staging copies of imported skills and plugins
+├── workspace/hook-context/<thread-id>/  # hook context over 2,500 tokens
 ├── themes/<theme-id>.json
 ├── logs/
 └── backups/                # pre-migration backups
@@ -1003,12 +1132,13 @@ CREATE TABLE sync_state (
 12. **Protected paths** (FR-190) are applied after every permission profile, command rule,
     grant and hook; none of them makes `.git`, `.nova`, `.agents`, the data directory,
     credential locations or shell startup files writable. No allow rule or grant removes the sandbox (ADR-059).
-13. A `hook` runs only while `trust_state = 'trusted'` and `trusted_hash = content_hash`; a
-    hook never loosens built-in safety, managed policy, a `handoff` or a `deny` (ADR-068).
+13. A `hook` runs only while `trust_state = 'trusted'` and `trusted_hash = content_hash`
+    (managed hooks are trusted by policy); a hook never loosens built-in safety, managed policy, a
+    `handoff` or a `deny` (ADR-068).
 14. A `command_rule` is stored only after all its examples pass at load; one failing example
     rejects the whole rule file (FR-191).
 15. Memory in a `project_only` project is never read outside that project (FR-205).
-    Consolidation never writes `skill` rows (ADR-069).
+    Consolidation never writes skills (ADR-069).
 16. A `feature_flag` at stage `removed` is never enabled and is rejected at load (ADR-082).
 17. An `mcp_event_delivery` row exists only for a delivery with a valid signature; replays of
     a known `delivery_id` start nothing (FR-201).

@@ -15,14 +15,16 @@
 │  ─ Work runs  │   └────────────────────────────────────┘     │  Activity     │
 │  ─ Code       │   ┌────────────────────────────────────┐     │  Permissions  │
 │  ─ Agents     │   │  Composer (preset, tools, attach)  │     │  Memory       │
-│  ─ Library    │   └────────────────────────────────────┘     │               │
+│  ─ Library    │   └────────────────────────────────────┘     │  Apps         │
+│  ─ Apps       │                                              │               │
 │  ─ Activity   │                                              │               │
 │  ─ Settings   │                                              │               │
 └───────────────┴──────────────────────────────────────────────┴───────────────┘
 ```
 
-The **Inspector** is a contextual right rail shared across modes. In Code mode the main
-workspace can split into multiple panes (chat + diff + browser + terminal + editor).
+The **Inspector** is a contextual right rail shared across modes. The main workspace of every
+mode can split into multiple panes (chat + editor + preview + terminal, and from M5 and M6 diff
+and browser), with a bottom panel for terminals (§4.3).
 
 ### Primary navigation (sidebar)
 
@@ -34,10 +36,13 @@ workspace can split into multiple panes (chat + diff + browser + terminal + edit
 5. **Code** — sessions (active, archived), grouped by project
 6. **Agents** — always-on agents
 7. **Projects** — cross-cutting containers
-8. **Library** — artifacts/files/images and installed MCP Apps (§2.9)
-9. **Activity** — global audit/notification stream
-10. **Marketplace** — plugins, skills, themes
-11. **Settings**
+8. **Library** — artifacts, files, attachments, images and project sources in one searchable
+   list (FR-041)
+9. **Apps** — global MCP Apps from plugins and MCP servers (§2.9)
+10. **Activity** — global audit/notification stream
+11. **Marketplace** — plugins, skills, themes (in M4 the plugin catalog lives in Settings →
+    Plugins & skills, §2.12)
+12. **Settings**
 
 Every thread, run, session and agent row carries a status chip (§1.1).
 
@@ -107,8 +112,14 @@ same status list:
 1. Type or dictate (§3.2); the composer expands, shows preset, tool and attachment chips.
 2. Send → optimistic user bubble → assistant bubble streams.
 3. While streaming: Stop, Steer (message queues/steers per setting), and "branch".
-4. Tool use renders as a collapsible card with status, args, and result.
-5. On completion: actions bar (copy/regenerate/branch/like), citations, artifact cards.
+4. Tool use renders as a collapsible card with status, args, and result. A tool whose
+   descriptor declares a UI shows its MCP App inline under the card (§2.9).
+5. On completion: actions bar (copy/regenerate/branch/like), citations, artifact cards, and up
+   to three suggested follow-ups in the empty composer (§3).
+
+A user message that a stop hook started (FR-197) is labelled **Hook** instead of "You". It
+carries provenance `hook`, is never shown as the user's instruction, and authorizes nothing
+(FR-189, ADR-091).
 
 #### 2.2.1 Chat escalation to Work (FR-186)
 
@@ -329,20 +340,44 @@ The first time a run needs an app, a grant prompt appears:
 
 Plugin and MCP-server UI renders in an **App frame**: a sandboxed iframe with a header showing
 the app name, its server or plugin, a Verified/Unverified badge, the allowed domains (from the
-resource's CSP metadata), mode buttons and Close.
+resource's CSP metadata), mode buttons and Close. In M4 the header does not list the allowed
+domains yet (ADR-091).
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Sample panel   Sample plugin   Unverified                        │
+│                [Inline] [Full screen] [Picture in picture]   [x] │
+├──────────────────────────────────────────────────────────────────┤
+│  (the app, in its sandboxed frame)                               │
+├──────────────────────────────────────────────────────────────────┤
+│ Approval needed: mcp:sample.panel_action          Needs input    │
+│ ▸ Shared with the model                                          │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 | Display mode | Behavior |
 | --- | --- |
-| **Inline** | Inside the transcript below its tool card; height-capped and resizable. |
-| **Fullscreen** | Fills the main workspace; Esc or Exit returns to the thread. |
-| **Picture-in-picture** | Floating, draggable and resizable; stays visible across thread switches; one at a time. On phones it becomes a bottom sheet. |
+| **Inline** | Inside the transcript below its tool card, or in the Inspector's Apps tab; the height the app reports, kept between 80 and 600 px. |
+| **Fullscreen** | A dialog over the main workspace: focus moves to **Exit full screen**, Tab stays inside, Esc or Exit returns. |
+| **Picture-in-picture** | Floating; drag the header, or use **Move** and the arrow keys; resizable; stays visible across thread switches; one at a time (a second one sends the first back inline). On phones it becomes a bottom sheet. |
 
-Entry points: **global** (Library → Apps and "Open app…" in the command palette), **thread**
-(the composer's + menu → Apps, or a tool result that declares a UI) and **file** ("Open with…"
-on a file in the Library or file browser, for apps registered for that type). Tool calls from
-an app go through the policy engine and can raise an approval card. A "Shared with the model"
-disclosure lists what the app sent as model context; widget state marked private is never
-sent.
+Entry points:
+
+- **Global:** the sidebar's **Apps** (`/apps` lists them, `/apps/<id>` shows one as a page) and
+  **Open app…** in the command palette.
+- **Thread:** the Inspector's **Apps** tab (**Open** next to each app), or a tool result whose
+  tool declares a UI. A chat's apps keep running while you switch Inspector tabs or close the
+  Inspector. The composer's + menu → Apps comes later.
+- **File:** **Open with <app>** in the file preview pane (§2.13), for apps registered for that
+  extension; file apps are view-only in M4.
+
+Tool calls from an app go through the policy engine and carry no user instruction, so under the
+default policy a call that is not read-only raises an approval card. The card renders in Nova's
+chrome below the frame, never inside it. A call still waiting after 60 s tells the app to run it
+again once you answer. A message an app posts fills that chat's composer and is never sent on
+its own; a link it asks to open is shown for you to click. A "Shared with the model" disclosure
+lists what the app sent as model context; widget state marked private stays in the browser and
+is never sent to the Hub or a model.
 
 ### 2.10 Trust a hook (FR-197)
 
@@ -362,11 +397,22 @@ A hook never runs until it is trusted by its content hash:
 ```
 
 - A changed hook shows "Changed since you trusted it" with a diff, and stays disabled until
-  re-trusted.
+  re-trusted. Changing it back does not trust it again.
 - Hooks that arrive with a plugin appear on its install and update screens and are trusted
   there; a hash change in an update appears in the permission diff (FR-167).
 - Settings → Hooks lists every hook with its state (Trusted, Needs re-trust, Disabled), last
   run, and a link to its audit entries.
+
+**In M4** (ADR-091) the list is the **Hooks** section of Settings → Plugins & skills (Tools &
+MCP links there). Each row shows the hook id (`hook:<origin>.<hookId>`), its state (**Trusted**,
+**Needs trust**, **Disabled**, **Trust revoked**), its source, event and matcher, what it runs
+with its timeout, a short hash, "Changed since you trusted it" when the content changed after
+trust, and its last run and effect. Rows offer **Trust…** or **Untrust**; user hooks also have an
+on/off switch, and managed hooks say "Trusted by your organization". The dialog above shows
+From, Event, Runs, Hash (in full), Can and Cannot, with **Trust** and **Keep disabled**. If the
+hook changed while the dialog was open, the Hub refuses the old hash: the dialog reloads, warns
+and shows the new hash, and only that hash can be trusted. **View file**, the diff and the audit
+link come later.
 
 ### 2.11 Import from another assistant (FR-200)
 
@@ -399,6 +445,88 @@ Import                                                    Step 2 of 4
    it can be filtered ("Imported on …") and reviewed or removed together; the import is
    audited.
 
+**In M4** (ADR-091) the steps are titled "Where to look", "Choose what to import", "Review before
+importing" and "Done". Sources are folders or files on the Hub, typed as paths, plus the kinds
+to look for; other devices are read through `novad` from M6. Items whose name is already in use
+start unticked and are imported under the next free name; duplicates and unsupported items
+cannot be ticked. Review lists the secrets that move to the vault (masked, with their
+`secret://` reference), the names already in use and what stays off. Nothing is written before
+the last step. Below the wizard, **Import records** lists every imported item with its kind,
+target and time. Imported memories are saved as items with source "import", which Settings →
+Memory lists for review.
+
+### 2.12 Install a plugin (FR-045, FR-049)
+
+Settings → Plugins & skills has four parts: **Installed plugins**, **Catalog**, **Install from a
+folder or Git**, then **Skills** and **Hooks** (§2.10). The catalog lists the built-in sample
+catalog and the user's own catalog sources (`plugins.catalogs`: a folder on the Hub, an https
+URL or a Git URL), with search. **Install** on a catalog entry, or **Preview** on a folder or Git
+address, opens the install screen. Nothing is installed before **Install**:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Install Sample plugin 1.0.0?                                     │
+│ Unverified  com.example.sample                                   │
+│ ! This plugin is not signed by a publisher you trust. It stays   │
+│   labelled Unverified.                                           │
+│   [ ] I trust its source; install it unverified                  │
+│ This plugin can                                                  │
+│   Reach these hosts on the network: api.example.com · …          │
+│ Skills: summarize-notes, greet                                   │
+│ MCP servers it adds: sample (command): node                      │
+│ Hooks to trust                                                   │
+│   Before tool use · matches mcp:sample.fetch_status              │
+│   Runs node hooks/check.mjs (sandboxed, timeout 10 s)            │
+│   Hash sha256:…                     [ ] Trust check-fetch now    │
+│ [x] Turn it on after installing           [Cancel]   [Install]   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- Until publishers are verified (M8) every plugin is **Unverified**, and **Install** stays
+  disabled until the sideload box is ticked. The Hub refuses an install without that
+  confirmation.
+- Permissions are listed in plain words. An update shows "Permission changes" (new and no longer)
+  and "Replaces version x".
+- Hooks are trusted here only when ticked; unticked hooks stay off until trusted under Hooks.
+- Each installed plugin shows its status, Verified or Unverified, its permissions, an on/off
+  switch, **Update to x** when a catalog has a newer version, and **Uninstall** with a
+  confirmation.
+- A plugin's MCP servers appear in Settings → Tools & MCP with "From the plugin <id>; change or
+  remove it in Plugins": they have no Edit or Remove and their switches are disabled, because
+  they follow the plugin's manifest.
+- Skills lists each skill with its source, what shadows it, an on/off switch and its body; user
+  and project skills can be created and deleted.
+
+Unsigned MCP bundles use the same pattern: Settings → Tools & MCP → **Install a bundle** shows a
+preview with the bundle's tools, a form generated from its settings (sensitive ones are password
+fields stored in the vault), the hosts and files it may use, and the sideload box.
+
+### 2.13 Panes, terminal and files (FR-005, FR-006, FR-039)
+
+- **Layout.** The top bar's **Layout** menu splits the active pane right or down, adds an
+  editor, preview, terminal, diff or browser pane, maximizes or restores the active pane, closes
+  it (never the main pane) and resets the layout. A new pane offers the same kinds. Splitters
+  resize with a drag or the arrow keys; panes reorder from the pane menu or by dragging one
+  header onto another. A single pane shows no pane header. On phones one pane shows at a time,
+  with a pane switcher. Moving panes never reloads a chat, an editor or a terminal. The layout is
+  saved per mode and restored on start (§4.3).
+- **Bottom panel and terminal.** Ctrl/Cmd+J or the top bar's **Toggle bottom panel** opens the
+  panel, starting a terminal if none is open; Ctrl+` focuses the terminal, and pressed again
+  inside it closes the panel and returns focus. Each terminal has a tab with **New terminal**
+  and Close. A terminal runs in the sandbox; without one the panel says so. While a terminal has
+  focus, only the panel toggle, the terminal toggle and Ctrl+Shift+P reach the app; every other
+  key goes to the shell. A terminal shown in another pane offers **Show it here**.
+- **Files.** The Inspector's **Files** tab browses the chat's and project's folders as a
+  keyboard tree. Text files open in the editor (line numbers, its own undo and redo, Ctrl/Cmd+S
+  to save); other files open in the preview (Markdown without raw HTML, images, PDFs, highlighted
+  code, plain text, or a download), which also offers **Open with <app>**. Saving is the user's
+  own action, so it needs no approval card unless a tier floor, a rule or the network allowlist
+  asks (ADR-091). If the file changed on disk, the editor offers **Reload and discard my
+  changes** or **Save mine anyway**; a save that waits for approval offers **Check again**.
+  Unsaved text survives closing the pane.
+- **Library** (`/library`) filters by kind (All, Artifacts, Attachments, Sources, Images,
+  Files), searches titles and pages with **Show more**; each item links to where it opens.
+
 ## 3. Composer specification
 
 - Multiline, auto-growing, Enter sends (configurable), Shift+Enter newline.
@@ -410,6 +538,13 @@ Import                                                    Step 2 of 4
 - Shows token/cost estimate on hover (opt-in).
 - Visible state for: dictating, voice session, tool approval pending, run in progress,
   computer use active, offline.
+- **Slash commands** (FR-046): typing `/` at the start of the message opens a list of skills
+  and plugin commands, matched by name prefix, then name substring, then description; choosing
+  one inserts `/name `. Sending `/name request` loads that skill for the turn.
+- **Suggested follow-ups** (FR-028): after a reply, up to three short prompts appear as chips in
+  the empty composer. Tab or Right arrow takes the first, a click takes any; a chosen prompt
+  fills the composer and is never sent on its own. A chip button, or Settings → General →
+  **Suggest follow-ups** (`chat.suggestions`), turns them off.
 
 ### 3.1 Model presets (FR-221)
 
@@ -463,7 +598,7 @@ Tooltip, Toast, Banner, Card, Badge, Avatar, Progress, Spinner, Skeleton, Divide
 CodeBlock, Markdown, Diff, Timeline, Table, ToolCard, ApprovalCard, PlanCard, RunCard,
 StatusChip, GoalHeader, BudgetMeter, PresetScale, AppFrame, TrustPrompt, GrantPrompt,
 ControlIndicator, ImportWizard, ArtifactFrame, BrowserPane, TerminalPane, EditorPane,
-EmptyState, CommandPalette, SearchInput, VirtualList, Pet.
+Splitter, PaneGroup, EmptyState, CommandPalette, SearchInput, VirtualList, Pet.
 
 Every component: typed props, keyboard support, ARIA, dark/light, RTL-aware, and a Storybook
 entry (or equivalent) with variants and a screenshot test.
@@ -473,6 +608,34 @@ entry (or equivalent) with variants and a screenshot test.
 - Minimum window 960×640; sidebar collapses below 1100px; Inspector collapses below 1280px.
 - Panes use a persisted layout tree; layouts are saveable as "workspaces".
 - Full-screen modes for focus; distraction-free composer.
+
+**The layout tree as shipped (M4, FR-005).** `workspace.layout` holds one layout per mode
+(`chat`, `work`, `code`, `agents`). It is read once when the workspace starts and written 300 ms
+after a change; a value that does not parse falls back to the default for that mode.
+
+```jsonc
+{
+  "chat": {
+    "root": {                                   // a split or a pane
+      "type": "split", "id": "s1", "direction": "row",   // row: side by side; column: stacked
+      "children": [
+        { "type": "pane", "id": "main", "kind": "main" },
+        { "type": "pane", "id": "p2", "kind": "editor",
+          "file": { "root": "/var/lib/nova/workspace", "path": "notes.txt" } }
+      ],
+      "sizes": [0.6, 0.4]                       // one share per child, summing to 1
+    },
+    "maximized": null,                          // a pane id shown alone, or null
+    "active": "main",                           // the pane commands act on, and phones show
+    "bottom": { "open": true, "size": 0.3 }     // the bottom panel (share 0.15 to 0.8)
+  }
+}
+```
+
+Pane kinds are `main` (exactly one per mode, never closed), `empty` (a new split until a kind is
+chosen), `editor`, `preview`, `terminal`, `diff` and `browser`; `file` applies to editor and
+preview panes. A layout holds at most 12 panes, 6 levels deep, and each share is at least 0.1.
+Named workspaces and layouts per session or project come later (ADR-091).
 
 ### 4.4 Accessibility
 
@@ -490,10 +653,39 @@ and matched with Alt added; the installed PWA and native shells use the keys bel
 The web UI's routes are `/chat`, `/chat/<id>` (`?m=<messageId>` jumps to a message,
 `?compare=<id>` compares two branches, `?approval=<id>` focuses an approval card),
 `/chat?temporary=1`, `/approvals/<id>` (opens the chat at that approval), `/projects`,
-`/projects/<id>`, `/settings/<section>`, `/onboarding` and `/open?url=<link>`; deep links map onto
-them (§5.1). Find in chat is Ctrl+F / ⌘F (Alt+F in a browser tab). The Inspector has Artifacts,
-Files, Sources, Activity, Side chat and Branches tabs; the top bar's bell opens the notification
-center (FR-013).
+`/projects/<id>`, `/library`, `/apps`, `/apps/<id>` (one app as a page), `/settings/<section>`,
+`/onboarding` and `/open?url=<link>`; deep links map onto them (§5.1). Settings sections are
+`general`, `profile` (Profile & usage), `accounts`, `models`, `memory`, `tools` (Tools & MCP),
+`plugins` (Plugins & skills), `clients` (Apps & clients), `permissions`, `notifications`,
+`devices`, `appearance`, `keyboard`, `import` and `diagnostics`.
+`/settings/appearance?theme=<data>` opens the theme import filled in, and
+`/settings/tools?oauth=ok|error` is where an MCP server's OAuth sign-in returns. Find in chat is
+Ctrl+F / ⌘F (Alt+F in a browser tab). The Inspector has Artifacts, Files, Sources, Activity, Side
+chat, Branches and Apps tabs; the top bar's bell opens the notification center (FR-013), and
+the top bar also has **Toggle bottom panel** and the **Layout** menu (§2.13).
+
+M4 adds these commands to the palette (the id is what `keyboard.bindings` remaps):
+
+| Command id | Title | Default key |
+| --- | --- | --- |
+| `panel.toggle` | Toggle bottom panel | Ctrl+J / ⌘J |
+| `terminal.toggle` | Toggle terminal | Ctrl+` / ⌃` |
+| `terminal.new` | New terminal | — |
+| `pane.splitRight`, `pane.splitDown` | Split pane right / down | — |
+| `pane.add.editor`, `pane.add.preview`, `pane.add.terminal` | Add an editor, preview or terminal pane | — |
+| `pane.diff`, `pane.browser` | Show the diff pane / the browser pane (placeholders until M5 and M6) | Ctrl+Shift+D / ⌘⇧D, Ctrl+Shift+B / ⌘⇧B |
+| `pane.maximize` | Maximize or restore the active pane | — |
+| `pane.close` | Close the active pane | — |
+| `pane.moveEarlier`, `pane.moveLater` | Move the active pane earlier / later | — |
+| `layout.reset` | Reset layout | — |
+| `library.open` | Go to Library | — |
+| `files.show` | Show files (the Inspector's Files tab) | — |
+| `apps.open` | Open app… (pick a global app) | — |
+| `import.open` | Import from another assistant | — |
+| `plugins.browse` | Browse and install plugins | — |
+
+In a browser tab Ctrl/Cmd+J, Ctrl+`, Ctrl+Shift+B and Ctrl+Shift+D are matched with Alt added,
+like the other keys the browser reserves.
 
 ### 5.1 Deep links (FR-007)
 
@@ -504,6 +696,7 @@ center (FR-013).
 | `projects`, `projects/<id>` (alias `project`) | the project list or one project |
 | `code`, `code/<id>` | Code mode (sessions arrive in M5) |
 | `agent/<id>`, `agents` | Agents mode (agents arrive in M6) |
+| `theme?data=<base64>` | `/settings/appearance?theme=<data>`: the theme import, filled in; nothing is kept until the user saves it (FR-011). The data is at most 44,000 characters |
 
 Ids must be 1–100 characters of letters, digits, `_` and `-` after decoding; anything else,
 other schemes and longer paths are refused and the app opens `/chat`. The installed PWA

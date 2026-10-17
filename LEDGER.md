@@ -3,8 +3,8 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M4 — Plugins, Skills, Workspaces & Profile**
-Last updated: 2026-10-17T12:00:00Z
+Current milestone: **M5 — Agent Runtime: Work & Code**
+Last updated: 2026-10-17T18:00:00Z
 
 ## Phase status
 
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T12:00:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2, M3 done |
+| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2, M3, M4 done |
 
 ## Milestone status
 
@@ -22,8 +22,8 @@ Last updated: 2026-10-17T12:00:00Z
 | M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
 | M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
 | M3 Tools/MCP/Policy | done | 2026-10-17 | 2026-10-17 | J1, J2, J3 green 3/3 in parallel (axe clean); `docs/demos/M3.md` |
-| M4 Plugins/Workspace/Profile | in_progress | 2026-10-17 | — | — |
-| M5 Agent Runtime (Work & Code) | todo | — | — | — |
+| M4 Plugins/Workspace/Profile | done | 2026-10-17 | 2026-10-17 | J1-J4 green 3/3 (axe clean); `docs/demos/M4.md` |
+| M5 Agent Runtime (Work & Code) | in_progress | 2026-10-17 | — | — |
 | M6 Agents/Computers/Channels | todo | — | — | — |
 | M6.5 Networking/Add Device | todo | — | — | — |
 | M7 Cloud/Sync/Multi-device | todo | — | — | — |
@@ -95,19 +95,19 @@ Last updated: 2026-10-17T12:00:00Z
 | T-M3-17 | M3 | FR-196 | done | aef94eb | core registry/search tests; J3 step 1 | Deferred tools + `tool.search` |
 | T-M3-18 | M3 | FR-204, FR-205 | done | aef94eb | core consolidation.test (28), history.test (7); hub consolidation.test | Memory consolidation, project-only scope, history-reference toggle |
 | T-M3-12 | M3 | — | done | aef94eb | `e2e/j3-tools-approvals.spec.ts`, 3/3 with J1 and J2 in parallel | E2E J3 |
-| T-M4-01 | M4 | FR-045 | in_progress | — | — | Plugin manifest + loader sandbox + local install |
-| T-M4-02 | M4 | FR-046 | in_progress | — | — | Skills + slash invocation + auto-selection |
-| T-M4-03 | M4 | FR-047 | in_progress | — | — | Connector framework (OAuth/PKCE, keychain) |
-| T-M4-04 | M4 | FR-005, FR-006, FR-039 | in_progress | — | — | Multi-pane layout + terminal + editor/preview |
-| T-M4-05 | M4 | FR-011, FR-028 | in_progress | — | — | Theme import/export; suggested prompts |
-| T-M4-06 | M4 | FR-035, FR-041 | in_progress | — | — | Local projects; Library view |
-| T-M4-07 | M4 | FR-113, FR-114, FR-115 | in_progress | — | — | Profile + usage insights + multiple accounts |
-| T-M4-08 | M4 | FR-044 | in_progress | — | — | Nova-as-MCP-server with consent |
-| T-M4-10 | M4 | FR-197 | in_progress | — | — | Lifecycle hooks (trust by hash, tighten-only) |
-| T-M4-11 | M4 | FR-198 | in_progress | — | — | MCP Apps UI host (sandboxed iframes, bridge, CSP) |
-| T-M4-12 | M4 | FR-199 | in_progress | — | — | MCP bundle install |
-| T-M4-13 | M4 | FR-200 | in_progress | — | — | Import from other assistants (preview, dedupe, secret migration) |
-| T-M4-09 | M4 | — | in_progress | — | — | E2E J4 |
+| T-M4-01 | M4 | FR-045 | done | 2c0fbf8 | core plugins-manifest/catalog/service tests; policy plugins-hooks.test; hub plugins.test; web plugins-settings.test | Plugin manifest + loader + local/URL/Git catalogs; every install a confirmed sideload; env in the vault |
+| T-M4-02 | M4 | FR-046 | done | 2c0fbf8 | core skills, skills-frontmatter, loop-skills tests; web chat-suggest-slash.test | Skills + slash invocation + auto-selection |
+| T-M4-03 | M4 | FR-047 | done | 2c0fbf8 | mcp oauth + oauth-service tests; hub oauth.test | Connector framework (OAuth PKCE, tokens in the vault, refresh, revoke) |
+| T-M4-04 | M4 | FR-005, FR-006, FR-039 | done | 2c0fbf8 | web layout-model, workspace-layout, terminal, files tests; ui splitter.test; core workspace-terminals/files tests | Multi-pane layout + terminal (sandbox pty relay) + editor/preview |
+| T-M4-05 | M4 | FR-011, FR-028 | done | 2c0fbf8 | web theme-share.test; core suggestions.test; web chat-suggest-slash.test | Theme import/export; suggested prompts with a Settings switch |
+| T-M4-06 | M4 | FR-035, FR-041 | done | 2c0fbf8 | core workspace-folders, workspace-library, sources-folders tests; web project-folders, library tests | Local project folders; Library view |
+| T-M4-07 | M4 | FR-113, FR-114, FR-115 | done | 2c0fbf8 | core profile, profile-accounts, usage tests; hub profile.test; web profile-settings.test | Profile + avatar + usage insights + active provider accounts |
+| T-M4-08 | M4 | FR-044 | done | 2c0fbf8 | mcp server.test; hub mcp-server.test; web clients-settings.test | Nova-as-MCP-server with per-client tokens |
+| T-M4-10 | M4 | FR-197 | done | 2c0fbf8 | core hooks, hooks-config, gate-hooks, loop-hooks tests; hub hooks.test | Lifecycle hooks (trust by hash, sandboxed, tighten-only, fail closed) |
+| T-M4-11 | M4 | FR-198 | done | 2c0fbf8 | web apps-bridge, apps-frame, apps-views, workspace-apps tests; mcp apps.test; hub mcp-apps.test | MCP Apps UI host (sandboxed iframes, bridge, CSP) |
+| T-M4-12 | M4 | FR-199 | done | 2c0fbf8 | mcp bundle.test; hub bundles.test | MCP bundle install (sideload confirmation, vault config) |
+| T-M4-13 | M4 | FR-200 | done | 2c0fbf8 | core import, import-formats tests; hub import.test; web import-settings.test | Import from other assistants (preview, dedupe, secret references) |
+| T-M4-09 | M4 | — | done | M4 docs commit | `scripts/e2e-docker.sh --repeat-each=3`: 18/18 (smoke, J1-J4) | E2E J4 |
 | T-M5-01 | M5 | FR-051 | todo | — | — | agentd worker pool + supervisor/orchestrator/executor |
 | T-M5-02 | M5 | FR-051, FR-131 | todo | — | — | Plans, autonomy levels, re-planning |
 | T-M5-03 | M5 | FR-053, FR-054 | todo | — | — | Background sub-agents + child threads |
@@ -246,25 +246,33 @@ Last updated: 2026-10-17T12:00:00Z
 - R-006: No Rust toolchain on the dev host. Mitigation: build and test `services/novad` in a `rust` container; CI runners have cargo.
 - R-007: Node built-in SQLite is still marked "active development". Mitigation: storage access goes through `packages/storage`, so the driver can be swapped (ADR-084).
 - R-008: The dev host lacks Chromium's system libraries and sudo. Mitigation: E2E runs in the official Playwright container (`scripts/e2e-docker.sh`); CI installs the libraries itself.
-- R-009: The web bundle is 202 KB gzipped after M2 (73 KB at M0). Mitigation: split routes (settings, projects, compare) with dynamic imports when M4 adds the multi-pane workspace; cold start is still under budget.
+- R-009: The web bundle's main chunk is 288 KB gzipped after M4 (202 KB after M2, 73 KB at M0); the terminal (xterm) is already a separate 83 KB chunk. Mitigation: split settings, projects, compare and the apps host into dynamic routes in M5; cold start is still under budget.
 - R-010: Provider request details (Anthropic adaptive thinking and summarized reasoning, OpenRouter reasoning options) are verified only against recorded fixtures. Mitigation: opt-in live smoke tests behind a key, before M10.
 - R-011: Tests are timing-sensitive when every package runs at once (each Vitest spawns a worker per core). Mitigation: `npm test` runs at most 4 packages at a time, async queries wait up to 5 s (`apps/web/test/setup.ts`), timing guards leave room for loaded runs, and racy fixtures were fixed at the cause; quarantine with a ledger task if one still flakes.
 - R-012: MCP stdio servers run as the Hub's user without a sandbox or egress proxy until M6 (FR-107, FR-193). Mitigation: only a signed-in owner can add one; secrets are passed by reference; every add and change is audited.
 - R-013: Effect inference for MCP and plugin tools can be over-strict (`list_orders` reads as a purchase and is never pre-approvable). Mitigation: it only ever tightens; a manifest-declared effect list arrives with plugins (M4).
 - R-014: The SQLite database is not encrypted at rest (`node:sqlite` has no encrypting storage layer). Mitigation: blobs are sealed, Diagnostics warns when the data directory is not on an encrypted volume; revisit in M9 (ADR-090).
+- R-015: Command hooks and terminals need the container sandbox; without docker or podman they fail closed (hooks block, terminals show unavailable). The Playwright container has no docker, so J4 checks hook trust states in the UI and leaves hook execution to unit tests; CI runners have docker. Mitigation: the bubblewrap sandbox in M6 (ADR-064).
 
 ## Deferrals
 
 | Requirement | Reason | Follow-up task |
 | --- | --- | --- |
 | FR-130 | Hub failover is post-v1 (ADR-035) | — |
-| FR-040 (non-text sources) | M2 indexes text types only; PDF and office documents need extraction | T-M4-04 (file previews) |
+| FR-040 (non-text sources) | Text types only; PDF and office documents need extraction (M4 previews PDFs in the file viewer but indexes neither) | T-M9 (document extraction) |
 | FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN until the Mesh (ADR-089) | T-M6.5 networking tasks |
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
 | FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
-| FR-042 (OAuth, `auth`, `deviceId`, `required`, `deferred`, `policy` server fields) | Not implemented in the M3 client | T-M4 connector tasks (FR-047), T-M6 device tasks |
-| FR-192 (per-client MCP tokens) | They belong to Nova's own MCP server | T-M4 (FR-044) |
+| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M6 device tasks |
 | FR-100 (answer from a second client, server requests) | FR-188 server-to-client requests | T-M5 |
+| FR-185 (imported user instructions) | Import writes `<dataDir>/instructions.md`; the chat reads it with instruction-file discovery | T-M5 (FR-185) |
+| FR-011 (apply a custom palette) | Themes share and import in M4; applying a saved custom palette fully is not wired | T-M8 theming tasks |
+| FR-113 (public profile card, OIDC sign-in) | Not in M4 scope | T-M7 cloud tasks |
+| FR-115 (entitlements and limits), docs/14 §6 (spend caps, clear usage) | Usage insights only in M4 | T-M8 governance tasks |
+| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M6 device tasks |
+| FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M6 (FR-107, FR-193) |
+| FR-198 (allowed domains in the App frame header; Apps in the composer's + menu; `UiEntryPointView.domains`) | The frame, bridge, CSP and entry points ship; these surfaces do not | T-M8 extensibility tasks |
+| FR-200 (hooks from other plugin layouts) | Noted on the import item; not converted | T-M8 extensibility tasks |
 
 ## Milestone summaries
 
@@ -294,3 +302,20 @@ Last updated: 2026-10-17T12:00:00Z
   request), and "Always allow" on a command preselected the whole tool. Evidence: about 1,600
   unit and integration tests across 14 packages; J1, J2 and J3 green three times in parallel.
   Risks added: R-012..R-014. Next: M4 (plugins, skills, workspaces and profile).
+- **M4** (2c0fbf8 and the M4 docs commit): plugins from local, URL and Git catalogs with skills,
+  commands, roles, hooks and MCP servers, every install an explicit sideload with env values in
+  the vault; skills by slash command and auto-selection; lifecycle hooks trusted by content hash,
+  sandboxed and fail-closed; plugin permissions in the gate (an undeclared host denies, disables
+  the plugin and notifies; the plugin's defaults rank below the user's); MCP Apps in sandboxed
+  iframes with a bridge and declared-domain CSP, inline, full screen and picture in picture;
+  Nova's own MCP server with hashed per-client tokens; MCP bundles; OAuth PKCE for remote
+  servers; panes, a terminal through the sandbox, a file editor, project folders and the Library;
+  profile, avatars, usage insights, active provider accounts; import from other assistants with
+  secret references. Found and fixed in integration: a plugin manifest's literal secrets reached
+  the database; plugin installs skipped the sideload check; hook continuation turns emitted an
+  actor the event store rejects (the test sink now validates envelopes); a plugin's server could
+  be edited or deleted around the plugin; four error statuses differed from the contract (a test
+  now compares them); switching Inspector tabs stopped an open app (state-preserving move, clean
+  restart elsewhere); an app's own tool calls showed as the model's. Evidence: 2,217 unit and
+  integration tests across 14 packages; smoke and J1-J4 green three times in a row. Risks added:
+  R-015. Next: M5 (agent runtime: Work and Code).

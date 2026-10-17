@@ -63,7 +63,7 @@ interface DecisionBase {
   ruleId?: string;
   tier: ConfirmationTier;
   source: 'builtin'|'managed'|'rule'|'grant'|'tool_default'|'approval_policy'
-        | 'fallback'|'hook'|'reviewer';
+        | 'fallback'|'plugin'|'user_action'|'hook'|'reviewer';   // plugin, user_action: ADR-091
 }
 type Decision = DecisionBase & (
   | { effect: 'allow' }
@@ -130,6 +130,23 @@ captures or other agents never does, even when it quotes or impersonates the use
 action when you say so" rule (§3) is satisfied only by a user instruction in the current run
 that asks for this action.
 
+**Direct user actions** (ADR-091, refining the fallback above). When the signed-in user performs
+an action directly in a Nova client, such as saving a file in the editor, the action is its own
+confirmation: the call has actor `user`, the user's own instruction and no taint, so the engine
+allows it at steps 4 to 6 without a card (`source: 'user_action'`). It still passes built-in
+safety, managed policy, user rules and denies, the `confirm_at_action` and `handoff_required`
+tiers and the network allowlist, and a policy change or a secret read still asks. This also
+overrides `ask_always` and the user's own "ask" defaults, because the user just acted. Nothing
+else counts as a direct action:
+
+- A tool call from an MCP App (`POST /tools/:name/invoke` defaults to `initiator: 'app'`) has no
+  user instruction, so under the default policy a call that is not read-only asks.
+- A turn started by a stop hook's continuation carries provenance `hook`, is tainted and has no
+  user instruction; the chat labels its message **Hook**. Its events use actor `system`, with the
+  hook id as the turn's `trigger_ref`.
+- Calls from an external MCP client (origin `mcp_client`) and from hooks (origin `hook`) never
+  carry a user instruction.
+
 ### 2.3 Evaluation order
 
 Steps 1–6 are deterministic: the first decisive rule wins, but `deny` and built-in safety
@@ -139,7 +156,13 @@ always win over `allow`.
 2. **Managed policy** (§10).
 3. **User custom rules**, including command prefix rules (§3.1), most specific scope first;
    then remembered grants (§4.2).
-4. **Per-tool defaults** and **per-plugin/MCP permissions**.
+4. **Per-tool defaults** and **per-plugin/MCP permissions**. Plugin permissions are enforced,
+   never trusted as a grant (FR-045, ADR-091): a call that names a host the owning plugin did
+   not declare is denied already at step 1 ("<host> is not a host this plugin declared"), and
+   every http(s) and ws(s) URL in the arguments is checked, nested ones included. Hosts the
+   plugin declared need no network-allowlist entry, because the user confirmed them at install.
+   At this step the user's own defaults come first, then the plugin's per-tool and per-action
+   defaults; a tool the plugin did not declare asks, and permissions that cannot be read deny.
 5. **Approval policy** (§2.1).
 6. **Fallback**: `deny` for unknown destructive tools; `allow` for read-only built-ins.
 
@@ -147,7 +170,14 @@ After the deterministic result:
 
 7. **Hooks** (FR-197, ADR-068). A permission-request hook can tighten any decision, and may
    resolve an `ask` that came from step 3 or 4. It never changes a result from steps 1–2, a
-   `handoff` or a `deny`.
+   `handoff` or a `deny`. In M4 (ADR-091) the engine marks an `ask` **answerable** only when it
+   came from a user rule, a per-tool default or the plugin's permissions and no built-in floor
+   (a confirmation tier, intent provenance or the network allowlist) asks as well; the approval
+   policy and managed policy are never answerable. The gate re-checks every answer: managed and
+   user hooks may answer, plugin hooks only with `hooks.answersAsks`, project hooks never. A
+   hook that errors, times out or cannot start denies (it fails closed), and a `tool.pre` hook
+   that fails blocks the call before the gate runs. The decision records `source: 'hook'` and
+   the hook id.
 8. **Review**, which can only tighten; the final decision is the strictest of the results
    (`deny` > `handoff` > `ask` > `allow`):
    - the page-action classifier (FR-095) checks every write action on an external page in
@@ -358,6 +388,21 @@ every grant.
   values, tokens, passwords) moves into the keychain and is replaced by a `secret://` reference
   before anything is written. The import preview shows how many secrets will move, with values
   masked.
+- **Extension secrets in M4** (ADR-091). Literal env and header values in a plugin's MCP servers
+  move to the vault as `secret://mcp/<id>/env/<NAME>`, and the stored plugin manifest
+  (`plugin_install.manifest_json`) keeps only the references. A plugin's servers cannot be edited
+  or removed outside the plugin (409 `plugin_owned`), so their configuration and vault entries
+  always match the manifest the user confirmed; a manifest may itself reference
+  only `secret://plugin/<pluginId>/…`. A bundle's sensitive settings (and env values or
+  arguments that use one) go to the vault; a launch argument may reference only its own server's
+  entries (`secret://mcp/<id>/…`), resolved at launch. Imported secrets use
+  `secret://mcp/<id>/env/<NAME>`, `secret://plugin/<pluginId>/<key>/<NAME>` and
+  `secret://import/<ref>/text/secret_N`.
+- **OAuth tokens** for remote MCP servers (FR-047) are vault entries
+  (`secret://mcp/<id>/oauth/…`); the database row (`mcp_oauth`) holds only the authorization
+  server, the registration and the token state. Tokens refresh within 60 s of expiry or after a
+  401, and signing out calls the server's revocation endpoint and deletes them.
+- **Client tokens** for Nova's own MCP server are stored only as a SHA-256 hash (§15).
 - **CI**: Nova's own scanner (`scripts/secret-scan.mjs`), built from the redactor's patterns plus
   private-key headers and token prefixes, fails the build on a finding; fixtures mark fake
   values with `secret-scan: fake` (ADR-090).
@@ -418,6 +463,13 @@ The reviewer's policy prompt is Nova's own and is versioned with the eval set th
 - The broker canonicalizes paths (rejecting symlinks/`..` escapes), pins DNS, limits
   resources, and caps output.
 - Failure to create the sandbox fails closed (`docs/11` §10).
+- *Through M4* (ADR-090, ADR-091) the substrate is a container. Exec tools, command hooks and
+  terminals run in it; a terminal is a shell in the container, never on the Hub, and the
+  commands typed in it are confined by the sandbox and the permission profile rather than
+  checked one by one. Without a container runtime they fail closed (`sandbox_unavailable`; a
+  failed `tool.pre` or `permission.request` hook blocks). MCP stdio servers, including those of
+  plugins and bundles, are not sandboxed yet (M6); a bundle's confirmed permissions are recorded
+  but do not yet confine its process.
 
 ### 7.1 Permission profiles (FR-190)
 
@@ -602,6 +654,13 @@ administrator can write it, or as a signed remote policy:
   decisions (§8), reviewer verdicts and overrides (§6.1), and grant creation, expiry and
   revocation (§4.2) are audited.
 - Exportable as JSONL for compliance; filterable by actor/scope/time in the Activity view.
+- M4 adds (ADR-091): plugin changes (`plugin.install`, `plugin.update`, `plugin.enable`,
+  `plugin.disable`, `plugin.uninstall`), hook runs (`hook.<event>`) and hook trust changes,
+  editor saves (`fs.write`, origin `ui`), terminals (`terminal.open`, `terminal.close`), client
+  authorizations (`app_authorization.create`, `app_authorization.revoke`) and every call from an
+  external MCP client (`client.call`, with the client id), bundle installs and updates
+  (`bundle.install`, `bundle.update`, with the signature status), OAuth (`oauth.start`,
+  `oauth.connect`, `oauth.failed`, `oauth.revoke`) and import runs (`import.applied`).
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -631,6 +690,10 @@ administrator can write it, or as a signed remote policy:
 | Unix socket created by Hub or `novad` | Mode 0600, owned by the service user |
 | Managed policy file writable by a non-admin; unsigned remote policy | Ignored with a warning; last valid policy stays |
 | Malicious plugin/MCP | Permission violation blocked; plugin disabled |
+| Plugin tool call naming a host the plugin did not declare, also inside nested arguments | Denied at step 1; the plugin is disabled and the user notified |
+| Plugin install without the sideload confirmation | Refused (`sideload_confirmation_required`) |
+| Hook edited after trust; a `tool.pre` hook that errors or times out | The edited hook waits for re-trust; the failing guard blocks the call |
+| Tool call from an MCP App | No user authority; asks under the default policy |
 | Sync tampering | Signature/MAC failure; sync refuses payload |
 | Update tampering | Signature failure; no install; rollback available |
 
@@ -676,7 +739,10 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
 - **Sockets and pipes.** Unix sockets are mode 0600 in a 0700 directory owned by the service
   user. Named pipes are ACL'd to the user and the system account and reject remote clients.
 - **One-shot callbacks.** An OAuth loopback redirect listener binds to `127.0.0.1` on a random
-  port, accepts only the expected `state`, and closes after one request or 5 minutes.
+  port, accepts only the expected `state`, and closes after one request or 5 minutes. For
+  remote MCP servers signed in from the web UI (M4, ADR-091) the redirect target is the Hub's own
+  route `/api/v1/mcp/oauth/callback`: it needs no session because the `state` authenticates it,
+  and the state is single-use, bound to the account and expires after 10 minutes.
 - **No writes into other applications.** Nova never adds itself, its keys or its skills to
   another application's configuration, skill folders or startup files. The one exception is
   the extension bridge's native-messaging host manifest (`docs/11` §4.3): Nova writes only its
@@ -685,5 +751,14 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   Integrations. It issues a per-client token scoped to named tools and resources (read-only by
   default), with an expiry; it is revocable, and every call is audited with the client id and
   passes the policy engine.
+- **Nova's MCP server as shipped** (M4, ADR-091). The section is Settings → Apps & clients, and
+  `mcpServer.enabled` (security-relevant, off by default) turns on when the first client is
+  added. The token starts `nvm_`, is shown once and stored only as a SHA-256 hash; the default
+  expiry is 90 days, and a token that never expires must be chosen explicitly
+  (`expiresInDays: null`). `/mcp` answers 404 while the server is off, 401 `token_required` for a
+  missing, wrong, revoked or expired token, and 403 for an `Origin` or `Host` that is not
+  allowed. Calls pass the gate with origin `mcp_client` and no user instruction. Revoking a
+  client or turning the server off ends its sessions at once; revoked authorizations are kept
+  for the audit trail.
 - Listeners bind only to configured interfaces. A port conflict produces a diagnostic and a
   fallback port, never a silent exit (FR-225).

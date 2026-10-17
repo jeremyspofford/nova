@@ -12,13 +12,13 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-002 | web app.test | web app.test | J1 | mode switching preserves state |
 | FR-003 | web keys.test | web app.test | J1 | command palette |
 | FR-004 | web keys.test | web settings.test | J1 | shortcut registry |
-| FR-005 | todo | todo | J4 | pane layout |
-| FR-006 | todo | todo | J4 | bottom panel + terminal |
+| FR-005 | web layout-model.test; ui splitter.test | web workspace-layout.test | J4 | pane layout |
+| FR-006 | core workspace-terminals.test | hub workspace.test; web terminal.test | J4 | bottom panel + terminal |
 | FR-007 | web deeplinks.test | web deeplinks.test (router) | — | deep links |
 | FR-008 | todo | todo | — | tray |
 | FR-009 | todo | todo | — | multi-window |
 | FR-010 | ui themes.test | web settings.test | J1 | theming tokens |
-| FR-011 | todo | todo | J4 | theme import/export |
+| FR-011 | web theme-share.test | web theme-share.test | — | theme import/export |
 | FR-012 | todo | todo | — | pets |
 | FR-013 | core notifications.test | hub ops.test; web notifications.test | — | notifications |
 | FR-014 | web onboarding.test | web onboarding.test | J1 | onboarding |
@@ -35,26 +35,26 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-025 | storage search.test; web chat-find.test | hub conversation.test | J1/J2 | find/search |
 | FR-026 | core conversation.test | web chat-panels.test | — | side chat |
 | FR-027 | core conversation.test | web chat-temporary.test | J2 | temporary chats |
-| FR-028 | todo | todo | J4 | suggested prompts |
+| FR-028 | core suggestions.test | web chat-suggest-slash.test; web settings.test | — | suggested prompts |
 | FR-029 | core tools-web.test | hub tools.test | — | web search citations |
 | FR-030 | todo | todo | J5 | image gen |
 | FR-031 | todo | todo | — | voice |
 | FR-032 | core memory.test | hub conversation.test; web memory.test | J2 | memory |
 | FR-033 | core conversation.test | web chat-panels.test | — | branch tree |
 | FR-034 | core projects.test | hub conversation.test; web projects.test | — | projects |
-| FR-035 | todo | todo | J4 | local projects |
+| FR-035 | core workspace-folders.test; core sources-folders.test | hub workspace.test; web project-folders.test | — | local projects |
 | FR-036 | todo | todo | — | space/pages |
 | FR-037 | todo | todo | — | sites |
 | FR-038 | core tools artifacts tests | hub tools.test; web chat-artifacts.test | — | artifacts |
-| FR-039 | todo | todo | J4 | file editor |
+| FR-039 | core workspace-files.test | hub workspace.test; web files.test | J4 | file editor |
 | FR-040 | core projects.test | hub conversation.test; web projects.test | — | sources |
-| FR-041 | todo | todo | J4 | library |
+| FR-041 | core workspace-library.test | hub workspace.test; web library.test | — | library |
 | FR-042 | mcp names/content tests | mcp stdio/http tests; hub mcp.test | J3 | MCP client |
 | FR-043 | mcp connection tests | hub mcp.test; web tools-settings.test | J3 | MCP health |
-| FR-044 | todo | todo | J4 | MCP server |
-| FR-045 | todo | todo | J4 | plugins |
-| FR-046 | todo | todo | J4 | skills |
-| FR-047 | todo | todo | J4 | connectors |
+| FR-044 | mcp server.test | hub mcp-server.test; web clients-settings.test | — | MCP server |
+| FR-045 | core plugins-manifest.test; core plugins-catalog.test; core plugins-service.test; policy plugins-hooks.test | hub plugins.test; hub policy-loop.test; web plugins-settings.test | J4 | plugins |
+| FR-046 | core skills.test; core skills-frontmatter.test | core loop-skills.test; web chat-suggest-slash.test | J4 | skills |
+| FR-047 | mcp oauth.test; mcp oauth-service.test | hub oauth.test | — | connectors (OAuth PKCE) |
 | FR-048 | policy engine tests | hub policy.test; web tools-settings.test | J3 | per-tool defaults |
 | FR-049 | todo | todo | J10 | marketplace |
 | FR-050 | todo | todo | — | build plugin/skill |
@@ -120,9 +120,9 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-110 | todo | todo | J9 | channel bridge |
 | FR-111 | todo | todo | J9 | mobile dispatch |
 | FR-112 | todo | todo | J9 | offline queue |
-| FR-113 | todo | todo | J4 | profile |
-| FR-114 | todo | todo | J4 | usage insights |
-| FR-115 | todo | todo | J4 | multiple accounts |
+| FR-113 | core profile.test | hub profile.test; web profile-settings.test | — | profile |
+| FR-114 | core usage.test | hub profile.test; web profile-settings.test | J4 | usage insights |
+| FR-115 | core profile-accounts.test | hub profile.test; web settings.test | — | multiple accounts |
 | FR-116 | todo | todo | J10 | spend caps |
 | FR-117 | todo | todo | J10 | extension SDK |
 | FR-118 | telemetry ring.test | hub ops.test; web diagnostics-settings.test | — | logging |
@@ -204,10 +204,10 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-194 | todo | todo | J8 | external-agent rule |
 | FR-195 | todo | todo | — | micro-VM substrate (flagged) |
 | FR-196 | core tools-registry/search tests | core loop.test | J3 | deferred tools + tool search |
-| FR-197 | todo | todo | J4 | lifecycle hooks (tighten-only) |
-| FR-198 | todo | todo | J4 | MCP Apps UI |
-| FR-199 | todo | todo | J4 | MCP bundles |
-| FR-200 | todo | todo | — | import from other assistants |
+| FR-197 | core hooks.test; core hooks-config.test; core gate-hooks.test; policy plugins-hooks.test | core loop-hooks.test; hub hooks.test; web plugins-settings.test | J4 | lifecycle hooks (tighten-only) |
+| FR-198 | web apps-bridge.test; mcp apps.test | hub mcp-apps.test; web apps-frame.test; web apps-views.test; web workspace-apps.test | J4 | MCP Apps UI |
+| FR-199 | mcp bundle.test | hub bundles.test | J4 | MCP bundles |
+| FR-200 | core import.test; core import-formats.test | hub import.test; web import-settings.test | — | import from other assistants |
 | FR-201 | todo | todo | J7 | MCP event subscriptions |
 | FR-202 | todo | todo | — | scripted tool calls (flagged) |
 | FR-203 | todo | todo | — | external agent adapters (flagged) |

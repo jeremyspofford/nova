@@ -50,3 +50,43 @@ Domain services for the Hub, independent of HTTP (`docs/05`, `docs/09` §2).
 - `ConsolidationService`, history (`src/consolidation.ts`, `src/history.ts`) — memory
   consolidation with summaries, topics and aging, and past-chat reference (FR-204, FR-205).
 
+M4 (decisions in `docs/20` ADR-091):
+
+- Extension seams (`src/extensions/`) — the interfaces between areas: `SkillCatalogProvider`,
+  `PluginPermissionSource` and the hook dispatcher (`HookInput`, `HookOutcome`, `noHooks`).
+- Plugins (`src/plugins/`) — `PluginService`, the plugin installer (FR-045): preview without side effects (held 30
+  minutes with a digest of the folder), install only with the sideload confirmation, atomic
+  update with rollback, enable, disable, uninstall, into `<dataDir>/plugins/<id>/<version>/`. It
+  converts commands to skills, registers sub-agent roles and MCP servers (secret values moved to
+  the vault, `NODE_PATH` for Node servers) and hands hooks to the hooks area. `forTool` gives the
+  gate a plugin's confirmed permissions. `PluginCatalogs` (`catalog.ts`): folders, https URLs and shallow
+  Git clones. `SkillIndex` (`skills.ts`, FR-046): skills found on disk under their roots
+  (managed, project, user, plugin, built-in) with precedence and shadowing, the context catalog,
+  `/name` and `@name`, the `skill.load` tool and slash commands; a small front-matter parser with
+  no dependency.
+- Hooks (`src/hooks/`) — `HookService` and `HookStore` (FR-197): discovery from managed policy,
+  `<dataDir>/hooks.json`, project folders and plugins, re-read and re-hashed on every dispatch;
+  trust records by content hash with `changedSinceTrust`; `command` handlers in the sandbox and
+  `mcp_tool` handlers through the gate; parallel runs where a block or deny wins; fail closed for
+  `tool.pre` and `permission.request`; context spill over 2,500 tokens; events and audit.
+- The loop (`chat.ts`, `tools/runtime.ts`, `approvals/gate.ts`) — hooks at every event: a
+  `prompt.submit` block fails the turn, `tool.pre` runs before the gate, a `stop` continuation is a
+  new turn with trigger `hook` (actor `system`, provenance `hook`, no user authority). The gate
+  takes hook answers only for `answerable` asks and applies plugin permissions; a direct action
+  by the signed-in user in a Nova client is allowed without a card (`user_action`). Skills join
+  the context; app model context is added as untrusted content. `SuggestionService` writes up to
+  three follow-up prompts per turn (FR-028), with a heuristic for the Mock provider.
+- Workspace (`src/workspace/`) — `FileService` (FR-039): browse, read and save inside the
+  thread's roots, with base-hash conflicts and the save passing the gate as `fs.write` from the
+  UI; `TerminalManager` (FR-006): shells in the sandbox container through a small pty relay with
+  live resize, at most 4 per account, scrollback for reconnects; `LibraryService` (FR-041);
+  `ProjectFolderService` (FR-035): bind folders and index their files into the project's
+  sources; `listProjectFolderRoots`, shared by the gate, the tools and the file browser.
+- Profile (`src/profile/`) — `ProfileService`: the account profile and avatar with metadata
+  stripped (FR-113); `UsageService`: usage insights by UTC day, model and project, with the
+  streak and the longest task (FR-114); `ImportService` (`import/`, FR-200): a read-only scan of
+  folders on the Hub, secrets moved to the vault and replaced by references, and apply with one
+  `import_record` per item. The active account per provider kind (FR-115, `provider_active`) is
+  kept by `ProviderRegistry`: it is listed first for its kind and alone serves the models it
+  shares with other accounts of that kind.
+
