@@ -1,7 +1,8 @@
 # 01 — Reverse-Engineering Method (REA)
 
-This document defines **how** the four source products were analyzed and how findings are
-converted into clean, original requirements. It follows the REA ("Reverse Engineer Anything")
+This document defines **how** the reference products (`APP-1`…`APP-4` and the ambient-capture
+application, `docs/external/`) were analyzed and how findings are converted into clean,
+original requirements. It follows the REA ("Reverse Engineer Anything")
 approach: *decompile → understand → recreate*, with evidence and stated limits for every
 conclusion.
 
@@ -53,7 +54,7 @@ Analysis draws on:
 Every finding is recorded as an **Evidence Record** (ER) in the ledger. Required fields:
 
 ```yaml
-id: ER-0042
+id: ER-APP1-042                  # ER-<target>-<n>; ambient-capture records use ER-SP-<n>
 target: APP-1                     # opaque target id; identities live in the private evidence ledger
 version: "0.x.y (build 1234)"      # as observed; "documented" if no binary
 date: 2026-10-16
@@ -70,7 +71,7 @@ evidence:
 confidence: high                     # high | medium | low
 limits: >
   Bypass availability depends on plan and admin policy; behavior may differ by version.
-maps_to: [FR-051, FR-052, FR-053]
+maps_to: [FR-063]
 ```
 
 Confidence levels:
@@ -104,26 +105,34 @@ No requirement may reference a reference application's internal identifier, clas
 
 ## 6. Coverage matrix
 
-Track which source areas have been analyzed. `○` not started, `◐` in progress, `●` done.
+Which areas the findings files received for Phase 0 cover (`docs/external/*-findings.md`, read
+2026-10-17). `●` covered in depth, `◐` touched or partial, `○` not covered. "Ambient" is the
+ambient-capture application (`ER-SP-*`). Each capability was then classified in
+[`docs/external/RECONCILIATION.md`](external/RECONCILIATION.md).
 
-| Area | App A | App B | App C | App D |
-| --- | --- | --- | --- | --- |
-| Conversation UX | ● | ● | ● | ● |
-| Projects/memory | ● | ● | ● | ● |
-| Agents / long-running | ● | ● | ● | ● |
-| Always-on / scheduled | ◐ | ● | ● | ● |
-| Coding / diff / PR | ● | ● | ● | ◐ |
-| Browser / computer use | ● | ● | ● | ● |
-| Permissions / approvals | ● | ● | ● | ● |
-| MCP / plugins / skills | ● | ● | ● | ● |
-| Voice / media | ○ | ● | ● | ◐ |
-| Theming / personalization | ◐ | ● | ● | ○ |
-| Sync / multi-device | ◐ | ● | ● | ● |
-| Channels (Slack/Teams) | ○ | ● | ○ | ● |
-| Cloud environments | ● | ● | ● | ● |
+| Area | APP-1 | APP-2 | APP-3 | APP-4 | Ambient |
+| --- | --- | --- | --- | --- | --- |
+| Conversation UX, modes, quick chat | ◐ | ◐ | ○ | ○ | ○ |
+| Projects / memory | ● | ◐ | ◐ | ● | ○ |
+| Agents / long-running (loop, budgets, goals, sub-agents) | ● | ● | ● | ● | ○ |
+| Always-on / scheduled / triggers | ◐ | ◐ | ◐ | ● | ◐ |
+| Coding / diff / PR / worktrees | ○ | ● | ● | ○ | ○ |
+| Browser / computer use | ● | ● | ○ | ◐ | ◐ |
+| Permissions / approvals / review | ◐ | ◐ | ● | ● | ◐ |
+| Sandboxing / egress | ○ | ● | ● | ○ | ○ |
+| MCP / plugins / skills / hooks | ● | ● | ● | ◐ | ◐ |
+| Voice / media / dictation | ◐ | ◐ | ○ | ◐ | ● |
+| Theming / personalization | ○ | ○ | ○ | ○ | ○ |
+| Sync / multi-device / remote control | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Channels (Slack/Teams/voice calls) | ○ | ○ | ○ | ● | ○ |
+| Cloud environments | ◐ | ◐ | ◐ | ● | ○ |
+| Packaging / updates / storage layout | ◐ | ● | ◐ | ◐ | ● |
+| Ambient capture | ◐ | ○ | ○ | ○ | ● |
+| Safety evaluations | ○ | ○ | ○ | ● | ◐ |
 
-Marks reflect depth of public documentation available as of 2026-10-16; the agent should
-update this matrix as it validates behavior.
+No findings covered theming or personalization; those areas rest on the original inventory
+(`docs/02`). The agent should update this matrix when new findings arrive or it validates
+behaviour during the build.
 
 ## 7. Using REA during the build
 

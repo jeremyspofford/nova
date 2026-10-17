@@ -7,11 +7,11 @@ contract wins** — fix the code or amend the contract with an ADR (`docs/20`).
 
 | File | Boundary |
 | --- | --- |
-| [`hub-api.md`](hub-api.md) | Client ↔ Hub, Hub ↔ Node, Hub ↔ `novad`, shell ↔ local `novad` |
-| [`ipc-channels.md`](ipc-channels.md) | Native-shell internal IPC (renderer ↔ shell main) |
-| [`events.md`](events.md) | Event envelope + event catalog (UI, persistence, Activity) |
-| [`rest-api.md`](rest-api.md) | Optional server APIs (relay, sync, catalog, cloud runner) |
-| [`schemas/`](schemas/) | JSON Schemas for persisted/transported objects |
+| [`hub-api.md`](hub-api.md) | Client ↔ Hub (REST, streams, server-to-client requests, `/api/v1/hello` handshake), Hub ↔ Node, Hub ↔ `novad`, shell ↔ local `novad` |
+| [`ipc-channels.md`](ipc-channels.md) | Native-shell internal IPC (renderer ↔ shell main), including native-only capture, dictation and shortcut channels |
+| [`events.md`](events.md) | Event envelope + event catalog (UI, persistence, Activity, audit) |
+| [`rest-api.md`](rest-api.md) | Optional server APIs (relay framing and pairing, sync, catalog, cloud runner) |
+| [`schemas/`](schemas/) | JSON Schemas for persisted/transported objects ([index](schemas/README.md)) |
 
 `hub-api.md` is the primary boundary in the hub-and-spoke model. `ipc-channels.md` applies only
 inside a native shell (the web UI served by the Hub is not an Electron renderer).
@@ -22,7 +22,9 @@ inside a native shell (the web UI served by the Hub is not an Electron renderer)
 - **Validation**: every payload is validated with a Zod schema generated from / kept in sync
   with the JSON Schemas here. Invalid payloads are rejected and logged, never executed.
 - **Versioning**: each contract carries a `schemaVersion`. Breaking changes bump it and
-  provide a migration or a compatibility shim for one release.
+  provide a migration or a compatibility shim for one release. Clients negotiate protocol
+  versions, server-request kinds and experimental features in `/api/v1/hello`
+  (`hub-api.md` §7, ADR-072).
 - **Errors**: a uniform error shape:
   ```json
   { "code": "rate_limited", "message": "Provider rate limit reached.",
@@ -30,7 +32,10 @@ inside a native shell (the web UI served by the Hub is not an Electron renderer)
   ```
 - **IDs**: UUIDv7 strings, sortable by time.
 - **Timestamps**: UTC ISO-8601 with milliseconds (`2026-10-16T19:49:00.123Z`).
-- **Secrets**: never appear in any contract payload; only opaque `secretRef` strings.
+- **Secrets**: never appear in any contract payload; only opaque `secretRef` strings
+  (`secret://...`). Tokens issued to clients are shown once and stored only as hashes.
+- **Listeners**: every listener requires a token or certificate; loopback is never
+  authorization (FR-192, ADR-075).
 
 ## Contract testing
 

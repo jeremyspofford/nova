@@ -6,7 +6,11 @@ capability statements. Each item is a candidate requirement refined in
 
 Legend: `[C]`, `[G]`, `[X]`, `[D]` are opaque codes for four external reference
 applications analyzed for this spec. Their identities are tracked in the private evidence
-ledger and are intentionally not named here.
+ledger and are intentionally not named here. Rows added by the Phase 0 reconciliation cite
+their source as `R: <table> #<row>`, pointing to a row of
+[`docs/external/RECONCILIATION.md`](external/RECONCILIATION.md), where the table is `APP-1`…`APP-4`
+(opaque IDs, `docs/19` §1.3) or `AMB` (the ambient-capture findings). Each reconciliation row
+names the `FR-*` it maps to.
 
 ---
 
@@ -29,6 +33,8 @@ ledger and are intentionally not named here.
 | INV-A13 | Font size increase/decrease/reset; full-screen; zoom | G |
 | INV-A14 | Notifications for completion, attention, approvals; per-event toggles | G, X, D |
 | INV-A15 | Onboarding wizard: provider connect, name/avatar, tool connection, first task | C, G, D |
+| INV-A16 | One thread status vocabulary (Running / Needs input / Ready / Blocked) across sidebar, tray and notifications (FR-215) | R: APP-1 #10 |
+| INV-A17 | Global shortcut that attaches the frontmost window (screenshot + accessibility text) to a chat (FR-214) | R: APP-1 #9; APP-2 #24 |
 
 ## B. Conversation (Chat mode)
 
@@ -49,6 +55,13 @@ ledger and are intentionally not named here.
 | INV-B13 | Image generation and editing from the composer | G, X |
 | INV-B14 | Web search with citations | G, X |
 | INV-B15 | Memory: user-editable, per-chat toggles, import from other assistants | G, D |
+| INV-B16 | Dictation into the composer, local by default, audio not stored (FR-216) | R: APP-1 #11; APP-2 #24 |
+| INV-B17 | Simple model preset control from Faster to Smarter with an advanced panel (FR-221) | R: APP-1 #21 |
+| INV-B18 | A chat request that needs multi-step work becomes an inline Work run (FR-186) | R: APP-2 #7 |
+| INV-B19 | Background memory consolidation into a categorized, steerable summary (FR-204) | R: APP-1 #6; APP-3 #22 |
+| INV-B20 | "Reference past chats" toggle separate from saved memories (FR-205) | R: APP-1 #5 |
+| INV-B21 | Shared threads for several users of one Hub, personal memory excluded (FR-217) | R: APP-1 #20 |
+| INV-B22 | Voice that starts, checks and steers runs; one voice session at a time (FR-031) | R: APP-1 #11 |
 
 ## C. Projects, Spaces & Library
 
@@ -62,6 +75,8 @@ ledger and are intentionally not named here.
 | INV-C06 | File browser + editor + preview (HTML/PDF/image/video) | C, X |
 | INV-C07 | Source management: upload, connect, re-index, remove | G |
 | INV-C08 | Project-level instructions and memory scope | G, C |
+| INV-C09 | Project-only memory scope, forced for shared projects (FR-205) | R: APP-1 #7 |
+| INV-C10 | Document outputs: generate and read DOCX, PPTX, XLSX, PDF with previews (FR-219) | R: APP-2 #27 |
 
 ## D. Tools, MCP, plugins, skills
 
@@ -77,6 +92,16 @@ ledger and are intentionally not named here.
 | INV-D08 | Plugin browser in CLI and GUI; install/update/uninstall | G, X |
 | INV-D09 | Skill authoring from conversation ("build a plugin") | G, X |
 | INV-D10 | Desktop-only plugins gated by app capability flags | G |
+| INV-D11 | Lifecycle hooks trusted by content hash, tighten-only (FR-197) | R: APP-1 #12; APP-3 #21 |
+| INV-D12 | Plugin and MCP-server UI via the open MCP Apps standard (FR-198) | R: APP-1 #13; APP-2 #28 |
+| INV-D13 | MCP bundles: one server per zip with typed config and declared permissions (FR-199) | R: APP-2 #29 |
+| INV-D14 | MCP event subscriptions as triggers (FR-201) | R: APP-1 #14 |
+| INV-D15 | Deferred tools with tool search for large catalogs (FR-196) | R: APP-3 #9 |
+| INV-D16 | Import instructions, skills, plugins, MCP servers, projects, memories and chats from other assistants (FR-200) | R: APP-1 #1; APP-3 #24 |
+| INV-D17 | Skills as folders with `SKILL.md`; catalog-only injection (FR-046) | R: APP-3 #19 |
+| INV-D18 | Scripted tool calls in an isolated engine, every nested call policy-checked (FR-202) | R: APP-3 #8 |
+| INV-D19 | External coding agents through a policy-routed adapter (FR-203) | R: AMB #31 |
+| INV-D20 | Scoped, revocable Hub API access for third-party apps (FR-222) | R: APP-1 #23 |
 
 ## E. Work mode (delegated agentic tasks)
 
@@ -92,6 +117,14 @@ ledger and are intentionally not named here.
 | INV-E08 | Approvals and hand-offs for consequential actions | C, D |
 | INV-E09 | Delegation between the work runtime and the coding agent, in both directions | G, D, X |
 | INV-E10 | Notifications routing (chat, OS, channel) based on rules | G, D |
+| INV-E11 | Goals with statuses and optional budgets; idle continuation (FR-181) | R: APP-3 #23; APP-1 #19 |
+| INV-E12 | Runs bounded by time, token and cost budgets instead of a step cap (FR-182) | R: APP-3 #6; APP-4 #6 |
+| INV-E13 | Deep research run with sub-agents and a cited report (FR-220) | R: APP-1 #20 |
+| INV-E14 | Jobs succeed only when their output is verified (FR-187) | R: AMB #16 |
+| INV-E15 | RRULE schedules and one catch-up run for missed fires (FR-055) | R: APP-2 #19; APP-3 #26 |
+| INV-E16 | Approvals and questions answerable from any connected client (FR-188) | R: APP-3 #3 |
+| INV-E17 | Context compaction before, during and after a turn (FR-183) | R: APP-3 #7 |
+| INV-E18 | Interactive exec sessions with yield time and stdin (FR-184) | R: APP-3 #9 |
 
 ## F. Code mode (software engineering agent)
 
@@ -115,6 +148,11 @@ ledger and are intentionally not named here.
 | INV-F16 | Mobile: start/approve/review coding tasks | X |
 | INV-F17 | SSH session persists while disconnected (subject to auth) | C |
 | INV-F18 | iOS simulator pane (macOS only) | C |
+| INV-F19 | Best-of-N attempts in separate worktrees (FR-212) | R: APP-3 #26 |
+| INV-F20 | Hand a session to another device with its Git state (FR-213) | R: APP-1 #4; APP-2 #16 |
+| INV-F21 | Worktree include files and leases; hook-free app Git operations (FR-073, FR-211) | R: APP-2 #16 |
+| INV-F22 | Instruction-file discovery from root to cwd within a budget (FR-185) | R: APP-3 #18 |
+| INV-F23 | Any device running `novad` as an environment, including over SSH (FR-062) | R: APP-2 #15 |
 
 ## G. Always-on agents
 
@@ -134,6 +172,11 @@ ledger and are intentionally not named here.
 | INV-G12 | Notes-to-self and memory between sessions; user controls | D |
 | INV-G13 | Activity view incl. background work; redirect | D, G |
 | INV-G14 | Pause/stop work; monitoring can pause for safety | D |
+| INV-G15 | Agents schedule their own next wake-up, visibly and within bounds (FR-206) | R: APP-4 #7 |
+| INV-G16 | Per-channel threads with shared agent memory (FR-088) | R: APP-4 #9 |
+| INV-G17 | Voice-call channel to an agent (FR-218) | R: APP-4 #11 |
+| INV-G18 | Local browser fallback on the connected computer (FR-209) | R: APP-4 #3 |
+| INV-G19 | Idle-driven read-only proactive research (FR-082) | R: APP-4 #8 |
 
 ## H. Computer & browser automation
 
@@ -147,6 +190,10 @@ ledger and are intentionally not named here.
 | INV-H06 | Separate clean browser profile vs user's logged-in profile | C |
 | INV-H07 | Chrome/Edge/Brave/Opera/Vivaldi extension support | G |
 | INV-H08 | Local dev server management (start/stop/stop-all) | C |
+| INV-H09 | Computer-use control tiers per app class, per-app grants with TTL, kill key (FR-207) | R: APP-2 #20; APP-2 #18 |
+| INV-H10 | Page-registered tools, top frame only, policy-gated (FR-208) | R: APP-1 #16 |
+| INV-H11 | Skill proposals from a recorded demonstration (FR-226) | R: APP-1 #17; APP-2 #21 |
+| INV-H12 | Per-site levels (Always ask / Auto approve / Always allow) and per-host extension grants (FR-094, FR-096) | R: APP-1 #15 |
 
 ## I. Permissions, security, privacy
 
@@ -160,6 +207,19 @@ ledger and are intentionally not named here.
 | INV-I06 | Data controls: training opt-outs, retention, delete/export | D, G |
 | INV-I07 | Workspace/admin policy overrides (managed settings) | C, D |
 | INV-I08 | Sandboxing of execution environments | C |
+| INV-I09 | Confirmation tiers and intent provenance (FR-189) | R: APP-1 #18 |
+| INV-I10 | Permission profiles and protected paths (FR-190) | R: APP-3 #13; APP-2 #11 |
+| INV-I11 | Command prefix rules with load-time examples (FR-191) | R: APP-3 #15 |
+| INV-I12 | Expanded approval decisions (FR-100) | R: APP-3 #14 |
+| INV-I13 | Fail-closed model auto-reviewer that only tightens (FR-085) | R: APP-3 #17; APP-4 #14 |
+| INV-I14 | Egress proxy modes and credential injection at the proxy (FR-193) | R: APP-2 #12; APP-3 #16 |
+| INV-I15 | Windows sandbox with restricted tokens and capability SIDs (FR-107) | R: APP-3 #11; APP-3 #12 |
+| INV-I16 | Optional per-session micro-VM substrate (FR-195) | R: APP-2 #10 |
+| INV-I17 | Listener and integration hygiene: tokens everywhere, no writes into other apps (FR-192) | R: APP-3 #2; AMB #27; AMB #33 |
+| INV-I18 | External-agent rule (FR-194) | R: APP-4 #14 |
+| INV-I19 | Persistence safety evals and reviewer metrics (FR-224) | R: APP-4 #16; APP-4 #17; APP-4 #18 |
+| INV-I20 | Managed policy from OS-protected channels (FR-106) | R: APP-2 #32 |
+| INV-I21 | Opt-in OTLP export to the user's collector (FR-223) | R: APP-2 #3 |
 
 ## J. Sync, cloud, channels, multi-device
 
@@ -172,6 +232,8 @@ ledger and are intentionally not named here.
 | INV-J05 | Push notifications and deep links to a task | D |
 | INV-J06 | Offline queue and graceful degradation | (derived) |
 | INV-J07 | Opt-in E2E-encrypted sync (derived requirement) | (derived) |
+| INV-J08 | Relay framing: streams, sequences, segmenting, acks, pairing, revoke, inside E2E envelopes (FR-137) | R: APP-3 #5 |
+| INV-J09 | Device operations through `novad`: staged writes, folder-access requests, local MCP pass-through (FR-210) | R: APP-2 #9 |
 
 ## K. Account, profile, usage
 
@@ -192,12 +254,27 @@ ledger and are intentionally not named here.
 | INV-L03 | Localization-ready strings; RTL layout support | (derived) |
 | INV-L04 | Crash reporting (opt-in), error surfaces, troubleshooting page | G, X |
 | INV-L05 | Diagnostics/health view for provider, MCP, and sandbox status | (derived) |
+| INV-L06 | Install robustness: explicit data directories, port-conflict fallback, download verification (FR-225) | R: APP-2 #35; AMB #26; APP-4 #20 |
+| INV-L07 | Optional MSIX packaging and a stated update-check cadence (`docs/15`) | R: APP-2 #4; APP-2 #5 |
+
+## M. Ambient capture (track N1)
+
+| ID | Capability | Source |
+| --- | --- | --- |
+| INV-M01 | Event-driven, accessibility-first, text-first screen capture (FR-151, FR-152) | R: AMB #1; AMB #2 |
+| INV-M02 | Redaction release gate before any read (FR-227) | R: AMB #7; AMB #36 |
+| INV-M03 | Capture split: networkless helper on the device, recall on the Hub (FR-228) | R: AMB owner context |
+| INV-M04 | Model-free activity summary (FR-229) | R: AMB #13 |
+| INV-M05 | Meeting detection by microphone holder (FR-230) | R: AMB #10 |
+| INV-M06 | Speaker identity across meetings with abstention (FR-231) | R: AMB #9 |
+| INV-M07 | Capture provenance checks on replies and tool calls (FR-232) | R: AMB owner context |
+| INV-M08 | Hub-enforced scoped grants for readers of ambient data (FR-233) | R: AMB #16 |
 
 ---
 
 ## Vendor-neutral synthesis
 
-The four products share a common spine that becomes Nova's core:
+The reference products share a common spine that becomes Nova's core:
 
 1. **A conversation engine** with streaming, tools, and artifacts.
 2. **A context layer** (projects, memory, files, connectors).

@@ -2,9 +2,10 @@
 
 ## 1. Vision
 
-**Nova** is a single, customizable desktop workspace where a person talks to AI,
-delegates long-running work, runs an always-on personal agent, and drives a software
-coding agent — with any model provider, any tool, and any theme, all on their own machine.
+**Nova** is a single, customizable workspace where a person talks to AI, delegates
+long-running work, runs an always-on personal agent, and drives a software coding agent —
+with any model provider, any tool, and any theme. It is served by a Hub on hardware the user
+owns and reached from every device they use.
 
 Four capability sets, usually split across separate products, are unified here:
 
@@ -16,6 +17,11 @@ Four capability sets, usually split across separate products, are unified here:
   computer/browser verification.
 - **Delegated, ongoing responsibility** — always-on agents with their own computer, proactive
   research, schedulers, custom rules, and multi-channel presence.
+
+Long and always-on work is bounded by the user, not by a fixed step count: a run or agent can
+hold a **goal** and works toward it within **budgets** for time, tokens and cost. At a bound it
+pauses with a progress summary and asks to extend; it never keeps going silently (FR-181,
+FR-182).
 
 Nova unifies these on one shared core so the user learns one product, keeps one memory, and
 connects one set of tools.
@@ -36,10 +42,11 @@ connects one set of tools.
    one memory, one tool registry, and one permissions model.
 2. **Provider-agnostic.** Anthropic, OpenAI, Google, Mistral, OpenRouter, and local
    (llama.cpp/Ollama) models are first-class. No lock-in; user brings keys or OAuth.
-3. **Local-first, cloud-optional.** Data lives in a local SQLite store; sync and cloud
-   execution are opt-in and end-to-end encrypted.
+3. **Local-first, cloud-optional.** Data lives in the Hub's SQLite store on hardware the user
+   owns; sync and cloud execution are opt-in and end-to-end encrypted.
 4. **Human in control.** Every consequential action passes a policy engine. Defaults are
-   conservative; autonomy is granted explicitly and revocably.
+   conservative; autonomy is granted explicitly and revocably, and every run is bounded by
+   budgets the user can see and extend.
 5. **Evidence over vibes.** Agent claims link to the exact tool call, file, diff, browser
    action, or source. The Activity view shows the full trace.
 6. **Extensible by design.** MCP servers, plugins, skills, themes, and an extension SDK.
@@ -94,9 +101,11 @@ connects one set of tools.
 - **Thread** — a conversation; may belong to a Project.
 - **Project** — a container of threads, instruction, sources, and (optionally) local folders.
 - **Agent** — a configured actor with instructions, tools, permissions, and a runtime.
-- **Work run** — a delegated, multi-step agentic task.
+- **Work run** — a delegated, multi-step agentic task, bounded by budgets.
 - **Code session** — a coding task bound to an environment + folder/repo.
-- **Agent** — an always-on agent with its own computer, schedules, channels, and memory.
+- **Always-on agent** — an agent with its own computer, schedules, channels, and memory.
+- **Goal / budget** — what a run or agent works toward, and the time, token and cost bounds it
+  works within.
 - **Computer** — an execution environment for agents: cloud sandbox, local container/VM, or
   the user's own machine.
 - **Tool** — a callable capability (built-in, MCP, or plugin-provided).
@@ -108,6 +117,8 @@ connects one set of tools.
 - **Policy rule** — a declarative statement controlling when an action is allowed, asked,
   handed off, or blocked.
 - **Approval** — a user decision required before a gated action.
+
+The full set of terms is in `docs/28`.
 
 ## 7. Constraints
 
@@ -123,7 +134,10 @@ connects one set of tools.
 | --- | --- |
 | Scope is very large | Strict milestone gating; feature flags; ship vertical slices |
 | Provider API churn | Adapter interface in `contracts/`; mocks + contract tests |
-| Sandboxing complexity across OSes | Start with Linux (bubblewrap) + container; macOS seatbelt; Windows AppContainer behind a flag |
+| Sandboxing complexity across OSes | Start with Linux (bubblewrap) + container; macOS seatbelt; Windows restricted tokens (ADR-064); micro-VMs only behind a flag (ADR-065) |
 | Prompt-injection via tools | Egress control, taint tracking, action review, deny-by-default |
+| External agents and injected instructions via channels | Only user-typed instructions authorize (FR-189); other agents' content is untrusted and they cannot assign tasks or receive data unless the user names them (FR-194); per-channel threads (ADR-070); consequential messages are confirmed at action time |
+| Capture sensitivity (ambient and attach window) | Off by default with a visible indicator; text-first; exclusions; redaction release gate (FR-227); scoped grants for readers (FR-233); captures can never trigger actions (ADR-074) |
+| Unbounded autonomous work and cost | Budgets with a hard backstop (ADR-058); spend caps; pause and ask at every bound |
 | Legal/IP | Clean-room rules, no asset copying, permissive deps only |
 | Cloud costs | Local-first defaults; user-supplied keys; spend caps and usage accounting |

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/feature-flag.json",
+  "title": "FeatureFlag",
+  "description": "A local feature flag with a lifecycle stage (ADR-082, amends ADR-028). experimental: off and hidden; beta: off and visible in Advanced; stable: on; deprecated: on with a warning; removed: rejected at load. Flags are never fetched remotely (ADR-080).",
+  "type": "object",
+  "required": ["key", "stage", "enabled"],
+  "additionalProperties": false,
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)+$",
+      "examples": ["sandbox.microVm", "tools.scriptRun"]
+    },
+    "stage": { "enum": ["experimental", "beta", "stable", "deprecated", "removed"] },
+    "enabled": { "type": "boolean" },
+    "description": { "type": "string", "maxLength": 500 },
+    "requirement": { "type": "string", "pattern": "^FR-\\d{3}$" },
+    "source": { "enum": ["default", "user", "managed"], "default": "default" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "if": { "properties": { "stage": { "const": "removed" } }, "required": ["stage"] },
+  "then": { "properties": { "enabled": { "const": false } } }
+}

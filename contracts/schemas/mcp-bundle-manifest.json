@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/mcp-bundle-manifest.json",
+  "title": "McpBundleManifest",
+  "description": "The fields Nova reads from manifest.json at the root of an MCP bundle in the open bundle format (FR-199, docs/08 §2.5). Unknown fields are preserved and ignored. A bundle declares no permissions: Nova proposes them at install and stores them in the install record (bundlePermissions below). Unsigned bundles need an explicit sideload confirmation and are labelled Unverified.",
+  "type": "object",
+  "required": ["manifest_version", "name", "version", "description", "author", "server"],
+  "additionalProperties": true,
+  "if": {
+    "properties": {
+      "server": { "type": "object", "properties": { "type": { "const": "uv" } }, "required": ["type"] }
+    },
+    "required": ["server"]
+  },
+  "then": { "properties": { "manifest_version": { "const": "0.4" } } },
+  "properties": {
+    "manifest_version": { "enum": ["0.2", "0.3", "0.4"] },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "display_name": { "type": "string", "maxLength": 100 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
+    "description": { "type": "string", "maxLength": 2000 },
+    "author": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "icon": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "repository": {},
+    "license": { "type": "string" },
+    "server": {
+      "type": "object",
+      "required": ["type", "entry_point", "mcp_config"],
+      "properties": {
+        "type": {
+          "enum": ["node", "python", "uv", "binary"],
+          "description": "uv (manifest 0.4 only): a Python server whose environment is built with the uv tool from the bundle's project file."
+        },
+        "entry_point": { "type": "string" },
+        "mcp_config": {
+          "type": "object",
+          "required": ["command"],
+          "properties": {
+            "command": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "platform_overrides": {
+              "type": "object",
+              "propertyNames": { "enum": ["darwin", "linux", "win32"] },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "command": { "type": "string" },
+                  "args": { "type": "array", "items": { "type": "string" } },
+                  "env": { "type": "object", "additionalProperties": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "user_config": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "title"],
+        "properties": {
+          "type": { "enum": ["string", "number", "boolean", "directory", "file"] },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "required": { "type": "boolean", "default": false },
+          "sensitive": {
+            "type": "boolean",
+            "default": false,
+            "description": "Stored in the keychain; passed to the server through env as a secret:// reference."
+          },
+          "default": {},
+          "multiple": { "type": "boolean", "default": false },
+          "min": { "type": "number" },
+          "max": { "type": "number" }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "properties": {
+        "platforms": { "type": "array", "items": { "enum": ["darwin", "linux", "win32"] } },
+        "runtimes": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "Advisory listing for the install preview; the live list comes from tools/list.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "description": { "type": "string" } }
+      }
+    },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" } }
+      }
+    },
+    "privacy_policies": { "type": "array", "items": { "type": "string", "format": "uri" } }
+  },
+  "$defs": {
+    "bundlePermissions": {
+      "description": "Permissions Nova proposes and the user confirms at install; the server runs sandboxed with exactly these grants.",
+      "type": "object",
+      "required": ["network", "fs"],
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed hosts; empty = none."
+        },
+        "fs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "access"],
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "A path the user entered in a directory or file field."
+              },
+              "access": { "enum": ["read", "write"] }
+            }
+          }
+        },
+        "secrets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "secret:// refs for sensitive fields only."
+        }
+      }
+    },
+    "installRecord": {
+      "type": "object",
+      "required": ["serverId", "sha256", "source", "signature", "permissions"],
+      "additionalProperties": false,
+      "properties": {
+        "serverId": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source": { "enum": ["catalog", "registry", "file"] },
+        "signature": { "enum": ["verified", "unverified"] },
+        "permissions": { "$ref": "#/$defs/bundlePermissions" },
+        "userConfig": {
+          "type": "object",
+          "description": "Non-sensitive values; sensitive ones as secret:// refs."
+        },
+        "installedAt": { "type": "string", "format": "date-time" },
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

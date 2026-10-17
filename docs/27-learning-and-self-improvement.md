@@ -8,7 +8,7 @@ dangerous, so the design is explicit about what may change automatically and wha
 | Level | What changes | Autonomy |
 | --- | --- | --- |
 | **L0 — Memory** | Facts, preferences, entities, retrieval weights | Automatic, user-reviewable |
-| **L1 — Skills** | New/refined skill instructions from repeated workflows | Proposed, user approves |
+| **L1 — Skills** | New/refined skills from repeated workflows or a recorded demonstration | Proposed, user approves |
 | **L2 — Workflows** | Automation/prompt/tool-selection optimizations | Proposed with eval evidence, user approves |
 | **L3 — Config** | Nova settings, routing, retrieval/index tuning | Automatic within safe bounds; rollback available |
 | **L4 — Code** | Nova's own source/plugins/config code | Sandboxed, tested, versioned, **explicit approval** |
@@ -20,16 +20,36 @@ default**; an administrator can turn it off in Advanced settings, with a strong 
 audit entry. Even when allowed, a change still follows the full L4 approval and rollback
 process. Toggling the guardrail itself is always a human action, never initiated by an agent.
 
+Hooks (FR-197), skill scripts, automation scripts and scripted tool calls (FR-202) are no way
+around this: they run sandboxed, can only tighten a policy decision, and cannot modify,
+disable or bypass the guardrail, the policy engine, the audit log or the self-improvement
+gates. An attempt is denied and logged high-severity (§9).
+
 ## 2. L0 — Memory & preference learning
 
 - Extract durable facts/preferences from conversations and corrections (`docs/09` §5).
+- **Consolidation** (FR-204, ADR-069): a background job extracts candidate memories from idle
+  threads (secrets redacted), consolidates them into categorized `memory_item` rows and a
+  summary of at most 2,500 tokens, and ages items as facts change (a plan becomes a past event
+  once its date passes). The user steers it per topic ("remember more/less about this topic")
+  and corrects or dismisses items on the Memory page (`docs/04` §2.7).
+- **Consolidation never writes skills.** It cannot create, install or edit a skill; skill
+  creation stays an L1 proposal that needs approval.
+- Scopes (FR-205): saved memories and "reference past chats" are separate toggles (turning
+  the latter off purges derived data within 30 days); project-only memory is never read
+  outside its project.
 - Learn retrieval weights from which results the user uses (ranking, not content).
 - Per-item review, edit, pin, revoke; temporary/incognito excludes learning.
 - Never infer sensitive attributes; never train on user data.
 
 ## 3. L1 — Skill synthesis
 
-- Detect repeated successful  orkflows; propose a skill (instructions + allowed tools).
+- Detect repeated successful workflows; propose a skill (a `SKILL.md` folder with
+  instructions and allowed tools, ADR-067).
+- **From a demonstration** (FR-226, P2): the user records a demonstration (screen actions plus
+  optional narration) and Nova proposes a skill from it through the same approval flow. The
+  recording stays local and is deleted after the proposal unless the user keeps it; captured
+  content in it is untrusted input, not instructions.
 - The user reviews the generated skill, tests it, and installs it.
 - Skills carry provenance and can be versioned/rolled back.
 
@@ -81,14 +101,15 @@ Rules:
 ## 8. Evaluation & regression gates
 
 - A maintained **eval suite**: task success, tool correctness, policy compliance, injection
-  resistance, cost, and latency.
+  resistance, persistence safety (FR-224, `docs/16` §5.1), cost, and latency.
 - Any learning/self-improvement change must not regress the suite beyond a tolerance.
 - Regressions auto-revert and notify; results are stored for trend tracking.
 
 ## 9. Safety, ethics & control
 
-- **Immutable guardrails**: the agent cannot weaken its own safety policy; attempts are denied,
-  logged as high-severity, and surfaced to the user.
+- **Immutable guardrails**: the agent cannot weaken its own safety policy, directly or through
+  hooks, skills, scripts or memory; attempts are denied, logged as high-severity, and surfaced
+  to the user.
 - **Human in the loop** for L1–L5 changes that affect behavior; L0/L3 are transparent and
   reversible.
 - **Kill switch**: stop all self-improvement activity instantly; freeze at the current version.
@@ -99,7 +120,8 @@ Rules:
 
 ## 10. Requirements (see `docs/03` §R)
 
-- L0 memory learning with review; L1 skill proposals; L2 evaluated optimizations.
+- L0 memory learning with review and background consolidation (FR-169, FR-204); L1 skill
+  proposals, including from a demonstration (FR-170, FR-226); L2 evaluated optimizations.
 - L3 bounded self-tuning with drift detection.
 - L4 gated, tested, staged, reversible code self-modification with immutable guardrails.
 - L5 optional, gated, evaluated local fine-tuning.

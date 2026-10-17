@@ -11,8 +11,22 @@
     "integration": { "enum": ["ha", "mqtt", "matter", "vendor"] },
     "externalId": { "type": "string" },
     "type": {
-      "enum": ["light", "switch", "sensor", "binary_sensor", "climate", "lock", "cover",
-               "media_player", "camera", "vacuum", "fan", "number", "select", "button"]
+      "enum": [
+        "light",
+        "switch",
+        "sensor",
+        "binary_sensor",
+        "climate",
+        "lock",
+        "cover",
+        "media_player",
+        "camera",
+        "vacuum",
+        "fan",
+        "number",
+        "select",
+        "button"
+      ]
     },
     "areaId": { "type": "string" },
     "name": { "type": "string" },

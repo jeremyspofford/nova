@@ -9,4 +9,3 @@ contracts/*.md
 *.md
 LICENSE
 package-lock.json
-contracts

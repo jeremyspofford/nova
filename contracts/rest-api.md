@@ -43,17 +43,50 @@ public key is registered at link time.
 
 ## 3. Relay (channels, mobile, notifications)
 
+The Relay forwards sealed envelopes between the Hub and paired clients that both connect **out**
+to it (FR-137, ADR-071, `docs/22` §3). It sees routing ids, frame kinds, sequence numbers and
+sizes, never content, and it stores nothing beyond routing registrations and queued
+ciphertext awaiting delivery.
+
+### 3.1 Endpoints
+
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/v1/relay/connect` | WebSocket upgrade with a route token; every frame is a [`RelayEnvelope`](schemas/relay-envelope.json) |
+| `POST` | `/v1/relay/hubs` | A Hub registers and receives its routing id and route token |
+| `POST` | `/v1/relay/pairings` | The Hub opens a pairing slot `{codeHash, expiresAt}` (single use, 5 min TTL); returns a pairing id for the QR payload |
+| `POST` | `/v1/relay/pairings/:id/claim` | A client presents the code and a sealed blob with its public key; the Relay forwards the blob to the Hub and returns a pending client routing id and route token |
+| `POST` | `/v1/relay/pairings/:id/confirm` | The Hub confirms after the user approves (matching codes on both screens); the client route becomes active |
+| `GET` | `/v1/relay/routes` | The Hub lists its client routes: routing id, created, last seen, connected (no names) |
+| `DELETE` | `/v1/relay/routes/:routeId` | The Hub revokes a client route: open connections close with `revoked`, reconnects are refused |
 | `POST` | `/v1/relay/messages` | Inbound channel message (webhook target) `{bindingId, externalRef, ciphertext}` |
-| `GET` | `/v1/relay/outbox?since=` | Agent outbound messages to deliver |
-| `POST` | `/v1/relay/approvals` | Deliver an approval request to a device |
-| `POST` | `/v1/relay/approvals/:id/decision` | Phone answers an approval |
-| `POST` | `/v1/relay/push/register` | Register a push token for a device |
+| `GET` | `/v1/relay/outbox?since=` | Agent outbound channel messages to deliver |
+| `POST` | `/v1/relay/push/register` | Register a push token (APNs/FCM) for a client route |
 | `GET` | `/v1/relay/health` | Liveness |
 
-- The relay routes ciphertext + routing metadata only.
-- Approval decisions are signed by the device key and verified before being honored.
+Approvals, questions and other server-to-client requests travel as ordinary sealed streams
+(`contracts/hub-api.md` §5); push notifications carry only ids and redacted titles. The Hub's
+own list and revoke of paired clients is `GET /api/v1/relay/clients` and
+`POST /api/v1/relay/clients/:id/revoke`, which call `GET /v1/relay/routes` and
+`DELETE /v1/relay/routes/:routeId`.
+
+### 3.2 Framing
+
+| Rule | Value |
+| --- | --- |
+| Envelope fields | `v`, `kind` (`data`, `ack`, `ping`, `pong`, `close`), `to`, `from`, `client`, `stream`, `seq`, `seg {i, n}`, `ack`, `ct` |
+| Sealing | XChaCha20-Poly1305 to the recipient's device key; `client`, `stream`, `seq`, `seg` bound as associated data |
+| Streams | One `stream` id per logical channel (thread stream, request, transfer); `seq` starts at 1 per stream |
+| Segment size | 64 KiB plaintext; at most 256 segments (16 MiB per message); an incomplete message is discarded after 60 s |
+| Acks | Cumulative per stream (highest contiguous `seq` received); may ride on data frames |
+| Retransmit | Unacked window of 256 segments; resend after 5 s without an ack; on reconnect resume from the last acked `seq` |
+| Duplicates | Dropped by `(client, stream, seq, seg.i)`; `seq` outside the window is dropped |
+| Keepalive | `ping` every 25 s; 3 missed `pong`s close the connection, which reopens with backoff |
+| Limits | Frames above the size limit are refused with `close {reason: too_large}`; unknown routes with `unknown_route` |
+
+- Route tokens authenticate connections to the Relay only; they never authorize anything on
+  the Hub. The Hub authenticates the client inside the seal with its device key and token.
+- Every pairing, confirmation and revocation is audited on the Hub.
 
 ## 4. Catalog
 

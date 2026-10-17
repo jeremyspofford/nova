@@ -8,16 +8,16 @@ management, power/boot, and (optionally) firmware/BIOS management. Mobile device
 ## 1. Architecture: supervisor + modules (hybrid)
 
 ```
-                 ┌───────────────────────────────┐
+                 ┌────────────────────────────────┐
                  │            novad               │  small, auditable supervisor
                  │  install · update · register   │  (root/admin, minimal surface)
                  │  capabilities · policy broker  │
-                 └───────┬───────────────────────┘
-        ┌───────────┬────┴──────┬───────────┬─────────────┐
-        ▼           ▼           ▼           ▼             ▼
-   management   compute     browser     screen       storage      (signed modules,
-   (power/boot/  (inference) (automation) (input)     (files)       sandboxed, optional)
-    services/BIOS)
+                 └───────┬────────────────────────┘
+        ┌───────────┬────┴──────┬───────────┬─────────────┬────────────┐
+        ▼           ▼           ▼           ▼             ▼            ▼
+   management   compute     browser     screen       storage       capture     (signed modules,
+   (power/boot/  (inference) (automation) (input)     (files, MCP)  (ambient,    sandboxed, optional)
+    services/BIOS)                                                  no network)
 ```
 
 - The **supervisor** is the only component that needs elevated privileges continuously.
@@ -48,7 +48,8 @@ for DA7 (timezone/locale, energy/quiet hours, routing weight, egress limits).
 {
   "schemaVersion": 1,
   "deviceId": "…",
-  "roles": ["client", "compute"],            // modules this device accepts
+  "roles": ["client", "compute"],            // roles this device takes
+  "modules": ["management", "compute", "storage"], // modules installed (§4)
   "hardware": {
     "arch": "x86_64", "cores": 8, "ramBytes": 17179869184,
     "disks": [{ "mount": "/", "freeBytes": 500000000000 }],
@@ -57,7 +58,7 @@ for DA7 (timezone/locale, energy/quiet hours, routing weight, egress limits).
     "firmware": { "type": "uefi", "vendor": "dell", "oob": { "amt": false, "ipmi": false, "redfish": false } }
   },
   "os": { "family": "linux", "version": "…", "init": "systemd", "packageManager": "apt",
-          "sandbox": { "bubblewrap": true, "container": "podman" } },
+          "sandbox": { "bubblewrap": true, "podman": true } },
   "services": {
     "computeBackends": ["llama.cpp", "vllm"],
     "listeningPorts": [8000],
@@ -92,12 +93,44 @@ capability registry used for routing.
 | --- | --- | --- | --- |
 | **management** | Power state, boot configuration, services, updates, (opt) BIOS/OOB | High | On for Hub/desktop |
 | **compute** | Run inference/embeddings/media backends; manage models | Medium | On for Compute Nodes |
-| **browser** | Headless browser automation for agents | Low | Optional |
-| **screen** | Observe and control the desktop (computer use) | Medium | Optional |
-| **storage** | Expose/mount folders; model storage; snapshots | Medium | Optional |
+| **browser** | Headless browser automation for agents; the local browser fallback (FR-209); the native-messaging host for the extension bridge, which talks only to this `novad` (FR-096) | Low | Optional |
+| **screen** | Observe and control the desktop (computer use): per-app control tiers and grants, the kill key, the control indicator and edge highlight (FR-207); attach-window capture (FR-214) | Medium | Optional |
+| **storage** | Device file operations for Hub sessions (§4.1); local MCP pass-through; model storage; snapshots | Medium | Optional |
+| **capture** | Ambient capture helper with no network access (§4.2, FR-228) | Medium | Off |
 
 Modules are sandboxed; the supervisor applies per-module policy (filesystem, network, CPU/RAM,
 wall clock).
+
+### 4.1 Device file operations (FR-210)
+
+Hub sessions (Work runs, Code sessions, agents with a connected computer) reach a device's
+files only through `novad`; there is no other path:
+
+- **List and read** within the folders the device has granted to that session or agent.
+- **Folder-access request**: to reach a new folder, the session asks; the request is approved
+  on the device or on the Hub, and the grant is recorded and revocable.
+- **Staged writes**: a write is first **staged** (content stored in a `novad` staging area
+  with the target path, the SHA-256 of the current file and of the new content), the Hub shows
+  the diff and runs the policy check, and only then is it **committed** (atomic replace). If the
+  target changed since staging (hash mismatch), the commit fails as a conflict and nothing is
+  written. Abandoned stages are discarded after 24 h. Protected paths (FR-190) can never be
+  staged.
+- **Local MCP pass-through**: `novad` can expose the device's local stdio MCP servers to Hub
+  sessions under the device's grants. The servers run sandboxed under `novad`; every tool call
+  goes through the Hub's policy engine and audit; their output is untrusted.
+
+### 4.2 Ambient capture helper (FR-228)
+
+- A separate capture helper process, launched and supervised by `novad`, reads the
+  accessibility tree (and OCR when needed) for the focused window. It has **no network
+  access** (enforced by the OS sandbox), runs as the logged-in user, and talks only to `novad`
+  over a local socket.
+- It applies exclusions and redaction before handing text and metadata to `novad`, which
+  signs, queues and sends records to the Hub. Pixels, when enabled, are encrypted to a
+  Hub-held key before upload; the local copy is deleted only after a read-back check of size
+  and SHA-256 at the target.
+- `novad` restarts the helper on crash with backoff, pauses it with the global pause and the
+  resource governor (FR-156), and records any gap.
 
 ## 5. Boot & power
 
@@ -173,6 +206,11 @@ Secure Boot / TPM state · fan/thermal profile.
 ## 8. Updates
 
 - The Hub serves signed module bundles; `novad` verifies signature + version pinning.
+- **Minimum version per capability** (FR-148): the Hub keeps a table of the minimum `novad`
+  and module versions for each capability (for example computer use, staged writes, capture).
+  A device below the minimum is refused that capability, keeps its others, and shows "Update
+  required" in Devices with the update offered. Agent connections (FR-081) check the same
+  table.
 - Update flow: download → verify → stage → health check → commit; on failure, roll back to the
   previous module version.
 - Channels: stable / beta / nightly, set per device (default stable).
@@ -181,6 +219,16 @@ Secure Boot / TPM state · fan/thermal profile.
 ## 9. Security model
 
 - **Elevated supervisor, unprivileged modules.** Modules run as a restricted user in a sandbox.
+  The exceptions are modules that must act in the signed-in user's desktop session (the
+  `screen` module and the `capture` helper): they run as that user, without elevation, under
+  their own OS sandbox, and the capture helper has no network access (§4.2, `docs/24` §4.1).
+- **Process hardening** (FR-141): the supervisor and every helper disable core dumps, refuse
+  debugger attachment (Linux not-dumpable, macOS deny-attach, equivalent Windows mitigation
+  policies), and strip loader environment variables (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `DYLD_*`) before starting children. On Windows, children run in kill-on-close job objects.
+- **Local socket** (FR-192): the native shell reaches `novad` over a Unix socket of mode 0600
+  in a `novad`-owned directory, or a named pipe whose ACL admits only the user; each connection
+  presents a local token. Loopback or same-machine access is never treated as authorization.
 - **Signed everything**: binaries, modules, update bundles, and capability profiles.
 - **mTLS** between `novad` and the Hub, using the device certificate.
 - **Least privilege per module**, enforced by the supervisor and OS sandbox.

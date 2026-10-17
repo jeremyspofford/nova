@@ -14,7 +14,11 @@
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
         "stdin": { "type": "string" },
-        "network": { "enum": ["none", "allowlist"], "default": "none" }
+        "network": {
+          "enum": ["off", "limited", "allowlist"],
+          "default": "off",
+          "description": "Narrows the permission profile's network block, never widens it (FR-190): off = no network (the profile mode off); limited = the allowlist with GET, HEAD and OPTIONS only, uninspectable HTTPS blocked (docs/12 §8, FR-193); allowlist = the profile's allowlist."
+        }
       }
     },
     "result": {

@@ -91,6 +91,11 @@ silently.
 | ADR-080 | Rejected capabilities | Recorded list of capabilities Nova will not adopt |
 | ADR-081 | M0 target | Hub + web UI first; the native shell is a later client |
 | ADR-082 | Feature-flag lifecycle | Flags carry a stage: experimental, beta, stable, deprecated, removed |
+| ADR-083 | Phase 1 defaults | Open choices settled while finishing the spec (voice, channels, budgets, hooks, memory, relay, ambient, install) |
+| ADR-084 | SQLite driver | **Node's built-in `node:sqlite`** through Drizzle's proxy driver |
+| ADR-085 | Running TypeScript | **Node type stripping** for server code; Vite bundles only the web UI |
+| ADR-086 | CI Node version | **Node 24 LTS** (supersedes the Node 22 part of ADR-025) |
+| ADR-087 | Styling | **Token CSS + component classes**, no utility framework (supersedes ADR-004) |
 
 ## Details & rationale
 
@@ -313,7 +318,7 @@ and enabled only when an eval shows a recall gain.
 
 **ADR-074 — Captured instructions.** An owner design session for an earlier codebase chose to
 mark and audit instructions found in captured text rather than gate them. That conflicts with
-the policy and security invariants (`docs/24` §5, `docs/12` §6), which win under the conflict
+the policy and security invariants (`docs/24` §2.7 and §8.4, `docs/12` §6), which win under the conflict
 precedence. Captured content can never directly trigger a consequential action. Marking and
 auditing are adopted in addition (FR-232).
 
@@ -358,6 +363,103 @@ arrives with the client work in M7 and is packaged in M10.
 `experimental` (off, hidden), `beta` (off, visible in Advanced), `stable` (on), `deprecated`,
 `removed`. Diagnostics shows each flag's stage; removed flags are rejected at load.
 
+### Phase 1 and M0 decisions (added 2026-10-17)
+
+**ADR-083 — Defaults settled while finishing the spec.** Writing the topic documents required
+choices the FRs left open. Each is recorded here so the build does not re-decide it:
+
+- *Voice and authorization.* Speech from the signed-in user's own voice session counts as the
+  user's instruction for intent provenance (FR-189), like typed text. Approvals are never granted
+  by voice: answering an approval card always needs an explicit tap, click or key.
+- *Owner messages in channels.* A message from the owner's verified identity in a private,
+  one-to-one channel binding counts as user instruction. Messages in shared channels never do.
+  `handoff_required` and `confirm_at_action` requests are answered only on an authenticated Nova
+  client.
+- *Budgets.* Time spent waiting for an approval or for user input does not count against a run's
+  time budget. Child runs count against their parent. Plain chat turns get only the 200-step
+  backstop. A goal waits 5 s before continuing on its own.
+- *Stop-hook continuation* starts a new turn with trigger `hook`; it is not an extra step inside
+  the stopping turn.
+- *Hooks.* Project hooks never answer approval asks; plugin hooks may only if their manifest
+  declares `hooks.answersAsks`. A hook that errors or times out leaves the decision unchanged
+  unless it sets `failClosed: true`. Default timeout 30 s, maximum 10 min.
+- *Memory.* A thread must be idle 30 min before consolidation reads it. Consolidation never
+  rewrites an item the user pinned or edited. Items record whether they came from a private
+  thread; replying with private-thread content in a shared channel defaults to `ask`.
+- *Instruction files.* `.nova/instructions.md` takes precedence over `AGENTS.md` in the same
+  directory. A project is trusted once the user confirms it on first open or managed policy lists
+  it.
+- *Git and protected `.git`.* `.git` stays read-only to ordinary tools. Git writes go only
+  through the `git.*` tools, which run one at a time and may write inside `.git` except
+  `.git/hooks` and `.git/config`.
+- *Managed policy merge.* When several managed sources apply, the most restrictive value wins. A
+  malformed policy in a trusted location fails closed: agent tools are denied until it is fixed.
+- *Extension bridge.* Registering the browser's native-messaging manifest is the one write into
+  another application's configuration that Nova performs, and only when the user turns the
+  bridge on (an exception to ADR-075).
+- *Per-site levels.* "Always allow" runs only the page-action classifier; "Auto approve" runs the
+  classifier and the auto-reviewer; "Always ask" asks every time.
+- *Command rules* live in their own store (`command_rule`, `contracts/schemas/command-rule.json`),
+  not inside policy rules.
+- *Relay framing.* Client, stream and sequence ids are outer envelope metadata bound to the
+  ciphertext as associated data; the Relay sees them, the route id and the length, never content.
+  Defaults: 64 KiB segments, 16 MiB maximum message, 60 s reassembly timeout, 256-segment window,
+  5 s retransmit, 25 s keepalive, close after 3 missed pongs.
+- *Session handoff.* Commits not yet on a remote travel as a Git bundle; the target confirms HEAD
+  and the diff hash before the session continues there.
+- *Ambient capture.* Coverage is recorded as status records with Hub-derived gap reasons. After a
+  policy change, records whose stamp already covers the new categories are re-stamped without
+  re-running the model. No keyboard hooks: typing is inferred from accessibility text changes and
+  OS idle time. URL query strings and fragments are stripped by default. Built-in exclusions,
+  including private browsing, cannot be removed. Capture cannot be enabled unless the Hub
+  encrypts ambient data at rest. Raw audio is deleted once transcribed and redacted, unless the
+  user opts in to keep it for 48 h. Redaction may opt in to run on the Hub for weak devices, with
+  raw text held in a quarantine area until certified. `ambient.screenshot` and
+  `ambient.summarize` are dropped: the image moves into `ambient.frame_context`, and summaries
+  are written by the calling agent.
+- *Contract details settled in the consistency pass.* Private-address access needs both the
+  profile's `allowLocalBinding` flag and a dev-server grant. An always-on agent acting on its own
+  needs an ambient grant to read captures. Memory items default to `origin_audience = 'private'`,
+  and an item merged from several sources is private if any source is. Remote MCP OAuth uses
+  client metadata documents or dynamic registration only; a user-supplied client id needs a schema
+  amendment first. `uv` bundles use the device's own `uv` tool. Shell startup files are protected
+  paths. Tool descriptors carry `effects` so the confirmation tiers never rely on server hints.
+- *Other numbers.* MCP client tokens expire after 90 days. The exec yield time is capped at
+  120 s. Git catalogs publish `nova-catalog.json`. Abandoned staged writes are discarded after
+  24 h. Resolved server requests are kept 30 days. Budget meters update at most once a second.
+  Three model presets ship (Faster, Balanced, Smarter). Auto-reviewer CI gates: fail if recall in
+  any threat category drops more than 2 points, or the benign denial rate exceeds 5 %.
+- *Install.* Data directory order: `--data-dir`, then `NOVA_DATA_DIR`, then the platform default
+  (Hub services use `/var/lib/nova`). A taken port falls back to the next 10 ports unless
+  `--strict-port` is set.
+- *Bootstrap download.* `GET /api/v1/agent/dist/:file` requires the pairing code as a query
+  parameter, so FR-192 holds without a session (the binary is also signature-checked).
+- *Shortcuts.* Overlay Ctrl+Alt+N, attach window Ctrl+Alt+A, dictation Ctrl+Shift+Space; the
+  computer-use kill key can be remapped but never unbound. OS notifications offer quick actions
+  only for `pre_approvable` approvals.
+
+**ADR-084 — SQLite through Node's built-in `node:sqlite`.** The Hub uses Node's bundled SQLite
+(3.53, with FTS5) instead of a native module, accessed through Drizzle's proxy driver.
+*Why:* no native compilation per platform or Node version, and one less supply-chain dependency.
+*Risk:* the module is still marked "active development" (R-007); all access goes through
+`packages/storage`, so the driver can be swapped without touching callers. ADR-002 (SQLite with
+Drizzle) is unchanged.
+
+**ADR-085 — Run TypeScript directly with Node's type stripping.** Server packages (`apps/hub`,
+`packages/*`) are executed as `.ts` by Node (≥ 24) with erasable-only syntax enforced by
+`erasableSyntaxOnly`; `tsc` only type-checks. Only the web UI is bundled (Vite). *Why:* no
+build step or source maps for the server, faster tests, and identical code in dev and production.
+
+**ADR-086 — Node 24 LTS in CI** (supersedes the Node 22 part of ADR-025). `node:sqlite` and
+type stripping both need Node ≥ 24. The dev host runs Node 26; CI and the E2E container run
+Node 24 LTS. Electron is pinned when the desktop shell is built (M7/M10).
+
+**ADR-087 — Styling with tokens and plain CSS** (supersedes ADR-004). Components are styled
+with CSS that reads only the design tokens (`packages/ui/src/tokens.css`) plus small component
+classes; no utility-CSS framework. *Why:* the token layer already gives theming, the UI stays
+small (the M0 shell is 73 KB gzipped), and a test can enforce "no hard-coded colors" by scanning
+component sources. Revisit if UI velocity suffers.
+
 ## Defaults for common ambiguities
 
 | Situation | Default |
@@ -367,7 +469,7 @@ arrives with the client work in M7 and is packaged in M10.
 | Tool needs network but policy is silent | `ask` |
 | Tool is read-only and local | `allow` |
 | Tool is destructive/external | `ask` |
-| Approval decision times out | Pause the run (24 h), then cancel with a checkpoint |
+| Approval decision times out | Record `timeout` (FR-100) and keep the run paused at a checkpoint until the user decides or cancels |
 | Context over budget | Summarize older turns; keep pinned memory + system + tools |
 | Ambiguous user intent with a risky action | Ask one concise clarifying question |
 | Two rules conflict | Higher `priority`, then more specific scope wins |

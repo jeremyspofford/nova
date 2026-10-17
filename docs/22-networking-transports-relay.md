@@ -60,14 +60,56 @@ A Relay is a small always-reachable server that the Hub and Clients each connect
 It forwards sealed messages between them when no direct path exists.
 
 - **Purpose**: off-LAN reach, NAT traversal, and **push** wake-up on mobile.
-- **Content-blind**: carries ciphertext + routing metadata only; stores nothing.
+- **Content-blind**: carries ciphertext + routing metadata only; it stores nothing beyond
+  routing registrations and queued ciphertext awaiting delivery (`contracts/rest-api.md` §3).
 - **Protocol**: persistent outbound WebSocket/HTTPS; messages are
   XChaCha20-Poly1305 sealed to the recipient's device key.
 - **Deployment**: self-hostable (a small VPS or container) and optionally offered as a hosted
   service. The user chooses in Hub settings.
 - **Push**: integrates APNs (iOS) and FCM (Android) for wake-up and notifications.
+- **Rejected design**: relays run by a vendor that can read content (they decrypt, terminate
+  TLS on plaintext, or hold the keys) are not used, even as an option (ADR-071, ADR-080). Nova's
+  Relay only ever sees ciphertext and routing metadata.
 
-### 3.1 Per-platform reachability
+### 3.1 Framing (FR-137, ADR-071)
+
+Every message crosses the Relay as a **sealed envelope**. The outer fields are the only
+metadata the Relay sees:
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Envelope version |
+| `to` / `from` | Opaque routing ids issued at pairing (never device names) |
+| `client` | The paired client's id |
+| `stream` | Stream id: one per logical channel (a thread stream, an approval request, a file transfer) |
+| `seq` | Per-stream sequence number, starting at 1 |
+| `seg` | Segment index and count for a segmented message |
+| `ack` | Cumulative ack: the highest contiguous `seq` received on this stream in the other direction |
+| `kind` | `data`, `ack`, `ping`, `pong` or `close` |
+| `ct` | Ciphertext |
+| `reason` | `close` frames only: `normal`, `revoked`, `unknown_route`, `too_large` or `idle` |
+
+- **Sealing**: the payload is XChaCha20-Poly1305-sealed to the recipient's device key, with
+  `client`, `stream`, `seq` and `seg` bound as associated data, so the Relay cannot reorder,
+  splice or replay envelopes without detection. Receivers drop duplicates and sequence numbers
+  outside the window.
+- **Segmenting**: payloads above 64 KiB are split into segments; the largest message is 16 MiB;
+  an incomplete message is discarded after 60 s.
+- **Acks and retransmit**: acks are cumulative per stream (and may ride on data envelopes). The
+  sender keeps unacked segments in a bounded window (default 256), retransmits after 5 s
+  without an ack, and on reconnect resumes from the last acked `seq`.
+- **Keepalive**: `ping` every 25 s; after 3 missed pongs the connection is closed and re-opened
+  with backoff.
+- **Pairing**: a client pairs by QR or short code shown by the Hub (single use, 5 min TTL, as
+  in §4). The client and the Hub exchange public keys and confirm a matching code on both
+  screens; the Relay learns only the routing ids.
+- **Paired clients**: Hub → Network → Relay lists every paired client: its device (name and
+  platform), relay client id and last seen (`GET /api/v1/relay/clients`, `contracts/hub-api.md`
+  §1). **Revoke** removes its routing registration at the Relay,
+  blacklists its key, and makes the Hub reject further envelopes from it. Pairing and revocation
+  are audited.
+
+### 3.2 Per-platform reachability
 
 | Platform | Interactive path | Background wake |
 | --- | --- | --- |
@@ -136,7 +178,8 @@ d=$(mktemp -d) && \
 ```
 
 Enhancements over the prototype: **signature verification** (not just SHA-256), Hub TLS
-pinning/fingerprint check, and a scripted `--role`/`--scope` selection.
+pinning/fingerprint check, and a scripted `--role`/`--scope` selection. The manual
+verification procedure for any official download is in `docs/15` §3.1 (FR-225).
 
 ### 4.4 Mobile behavior
 
@@ -204,7 +247,7 @@ Wake-on-LAN magic packets only cross a single LAN segment. To wake a sleeping de
     "directPublic": { "enabled": false }
   },
   "trust": { "mode": "local-ca", "meshCerts": true, "pinNativeShells": true },
-  "egress": { "allow": ["*.corp.example"], "deny": ["*"] },
+  "egress": { "mode": "allowlist", "allow": ["*.corp.example"] }, // unlisted hosts are denied (docs/12 §8)
   "wakeHelpers": ["device:<id>"]
 }
 ```
@@ -220,6 +263,14 @@ Managed policy can restrict transports, require a specific provider, or force th
 5. Transport changes are audited and reversible.
 6. A compromised transport (e.g., revoked mesh key) can be disabled without data loss.
 7. The Hub never advertises an endpoint that fails its own reachability test.
+8. **Listener hygiene** (FR-192): every Hub and `novad` listener (HTTP, WebSocket, Unix
+   socket, named pipe) requires a token or certificate; a request from loopback or the LAN is
+   not trusted for being local. WebSocket upgrades whose `Origin` or `Host` is not on the
+   allowlist are refused. Unix sockets are mode 0600. mDNS advertisements carry no secrets.
+9. Relay envelopes from a revoked or unknown client id are dropped and logged; sequence
+   numbers are authenticated, so replays fail (§3.1).
+10. When the configured port is taken, the Hub reports it and falls back to another port
+    rather than exiting silently (`docs/15` §5.1).
 
 ## 10. Failure & degradation
 

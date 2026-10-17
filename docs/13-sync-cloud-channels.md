@@ -27,9 +27,11 @@ not plaintext user content. Self-hosting the runner/relay/sync is P2 using the s
 
 - **Entities synced**: settings, themes, keybindings, projects (metadata + instructions),
   threads + messages, memory items, artifacts (metadata + small blobs), schedules, rules,
-  grants, skill/plugin installs, device list.
+  grants, device list.
 - **Not synced by default**: secrets (device-local), audit logs (device-local), local file
   blobs (unless opted in), temporary chats, tool result caches.
+- **Skills and plugins are not synced**: they are installed on the Hub, which is canonical, and
+  clients read them through the Hub API. No client runs a skills or plugins sync loop (FR-049).
 - **Crypto**: per-account master key derived from the user's passphrase (Argon2id) or a
   device-generated key wrapped to the keychain. Payloads encrypted with XChaCha20-Poly1305.
   Each device has an Ed25519 keypair; devices are added via a signed device-linking flow
@@ -59,41 +61,98 @@ not plaintext user content. Self-hosting the runner/relay/sync is P2 using the s
 - Resource metering and spend reporting; a hard stop at the configured cap (FR-116).
 - Artifacts and diffs are streamed back and integrated into the local session.
 
-## 4. Channels (FR-110)
+## 4. Channels (FR-088, FR-110)
 
-A channel maps an external conversation to a Nova thread (usually a Agent's thread).
+A **channel binding** maps one external conversation (a Slack DM, a Slack channel, a Teams
+chat, an email address, a webhook) to one Nova thread of an agent.
 
 | Channel | Inbound | Outbound | Auth |
 | --- | --- | --- | --- |
 | **In-app** | user messages | agent replies | local |
-| **Slack** | mentions/DMs/channel messages | replies, threads, files | OAuth (bot + user) |
+| **Slack** | mentions/DMs in bound conversations | replies, threads, files | OAuth (bot + user) |
 | **Microsoft Teams** | messages | replies | OAuth (Azure app) |
 | **Telegram** | bot messages | replies, files | bot token |
 | **Email** | IMAP watch / forward address | SMTP send | credentials in keychain |
 | **Webhook** | HTTP POST | configurable callback | signed token |
+| **Voice call** (P2, FR-218) | in-app call or telephony connector | streaming speech | per connector |
 | **SMS/Texting** | P2 | P2 | provider |
 
 Design rules:
 
-- **Context is shared**: a message from any channel lands in the same thread, so the Agent keeps
-  full context.
+- **Per-channel threads** (ADR-070): each channel binding keeps its own thread. The agent's
+  identity and memory (notes and memory items) are shared across all its channels, so
+  continuity comes from memory, not from mirrored history.
+- **Owner's private channels**: the in-app channel and the owner's own DMs can be set to share
+  one thread.
+- **Private to shared**: memory items record whether they came from a private or a shared
+  thread. A reply in a shared channel that would use content from a private thread or a
+  private-origin memory item passes a policy check first (default `ask` the owner).
+- **No implicit watching**: being added to a channel lets the agent answer when addressed;
+  it never creates a trigger. Watching a channel needs an explicit event trigger (FR-056,
+  `docs/09` §7).
 - **Identity mapping**: each external user maps to a Nova identity/permission scope; unknown
   users are ignored unless explicitly allowed.
-- **Approvals** can be delivered and answered from a channel with the same four options;
-  sensitive approvals require the desktop app.
-- **Untrusted**: all channel content is treated as untrusted input (FR-103).
+- **Approvals** can be delivered and answered from a channel with the same decisions (FR-100);
+  `handoff_required` and `confirm_at_action` requests (FR-189) must be answered on an
+  authenticated Nova client.
+- **Untrusted**: all channel content is treated as untrusted input (FR-103) and never counts as
+  user authorization, even when it quotes the user (FR-189).
 - **Rate limits and loop prevention**: per-channel caps; agent replies do not re-trigger
   themselves.
 - **Privacy**: channels are opt-in per Agent; a channel can be disconnected instantly.
+- **Voice calls** (P2, FR-218): users can call an agent in-app or through a telephony
+  connector, with streaming speech both ways. Calls started by an agent are out of scope for
+  v1.
+- **Shared threads** (P2, FR-217): several authenticated users of one Hub can share a thread.
+  No user's personal memory or private connectors are injected into it; each action runs under
+  the acting user's permissions.
 
-## 5. Mobile dispatch & notifications (FR-111)
+## 5. Remote control, mobile dispatch & notifications (FR-111, FR-137)
 
+- **Every client drives every session through the Hub.** A phone or a second computer never
+  controls another device directly; it talks to the Hub, which runs the session wherever it
+  executes. There is no device-to-device remote-control path.
+- From a phone: start a task, steer it, answer approvals and questions (FR-188), view a diff
+  summary; full editing is on desktop or web.
+- **Session handoff** (FR-213): a Code session or chat can move to another device or
+  environment with its Git state and continue there (`docs/10` §15).
 - The relay exposes a minimal authenticated endpoint + push notifications (APNs/FCM) for
   status, approvals, and results.
-- From a phone: start a task, answer an approval, view a diff summary; full editing is desktop.
 - Deep links: `nova://run/<id>`, `nova://code/<id>`, `nova://approval/<id>` open the
   desktop app, or a read-only web view when the desktop is unavailable.
 - The relay never sees plaintext content; notifications carry only ids and redacted titles.
+
+### 5.1 Relay framing (FR-137, ADR-071)
+
+Relay traffic consists of sealed envelopes (`contracts/schemas/relay-envelope.json`; full rules
+in `docs/22` §3.1 and `contracts/rest-api.md` §3.2). The payload `ct` is XChaCha20-Poly1305
+ciphertext sealed end to end to the recipient's device key.
+
+- **What the Relay sees** (outer fields): the envelope version `v`, the frame `kind` (`data`,
+  `ack`, `ping`, `pong`, `close`), the opaque routing ids `to` and `from` (never device names),
+  the client id `client`, the stream id `stream`, the sequence number `seq`, the segment index
+  and count `seg`, the cumulative `ack`, the `close` reason, and frame sizes and timing.
+- **What the Relay cannot see or change**: the content. `client`, `stream`, `seq` and `seg`
+  are outer metadata, but they are bound to the ciphertext as associated data, so the Relay
+  cannot reorder, splice or replay envelopes without the receiver detecting it. The Hub
+  authenticates the client inside the seal with its device key and token; route tokens only
+  authenticate connections to the Relay.
+- **Streams**: each paired client has a client id; each logical stream (a thread stream, a
+  server request, a file transfer) has a stream id; `seq` starts at 1 and increases per stream.
+- **Segmenting**: payloads above 64 KiB of plaintext are split into at most 256 numbered
+  segments (16 MiB per message); the receiver reassembles them and discards an incomplete
+  message after 60 s.
+- **Acks**: cumulative per stream (ack *n* confirms every envelope up to *n*) and may ride on
+  data envelopes. Unacked segments (window 256) are resent after 5 s without an ack and after a
+  reconnect; duplicates are dropped by `(client, stream, seq, seg.i)`.
+- **Keepalive**: `ping` every 25 s; a connection that misses 3 `pong`s is closed and reopened
+  with backoff, resuming from the last ack.
+- **Pairing**: by QR code or short code (`docs/22` §4), single use with a 5-minute lifetime,
+  approved on the Hub with matching codes on both screens; it yields a device key and a scoped
+  token. The Relay learns only the routing ids.
+- **Paired clients**: the Hub lists them (device name and platform, relay client id, last
+  seen; `GET /api/v1/relay/clients`) and can revoke any; revocation drops its relay routes at
+  once.
 
 ## 6. Push notification pipeline
 
@@ -128,9 +187,11 @@ user can choose more or less detail; secrets and file contents are never include
 | --- | --- |
 | Sync service down | Local continues; queue grows; status shows "pending"; retries |
 | Relay down | Channels queue inbound; outbound retries; desktop unaffected |
+| Relay connection drops | Client reconnects and resends unacked envelopes; duplicates dropped |
 | Cloud runner down | Runs queue or fall back to local with a warning |
 | Push unavailable | In-app notifications still work; polling fallback |
 | Device key revoked | Other devices stop decrypting that device's payloads; re-link required |
+| Paired client revoked | Its relay routes drop at once; reconnects are refused until it pairs again |
 
 ## 10. Domain, catalog & hosted services
 

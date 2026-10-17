@@ -15,6 +15,7 @@ evidence behind them. After Phase 0, `RECONCILIATION.md` lives here too.
 | `app3-findings.md` | APP-3: open-source coding-agent engine | ER-APP3-* |
 | `app4-findings.md` | APP-4: always-on agent product | ER-APP4-* |
 | `screenpipe-findings.md` | screenpipe, ambient screen and audio memory (named openly) | ER-SP-* |
+| `RECONCILIATION.md` | Phase 0 output: keep / modify / add / replace / reject for every capability above, with the resulting FRs (`FR-181`…`FR-233`) and ADRs (`ADR-056`…`ADR-082`) | — |
 
 Reference applications are tracked by opaque IDs (`docs/19` §1.3). Evidence refs in the
 `app*-findings.md` files are opaque too (`APPn/doc/…`, `APPn/src/…`, `APPn/bin/…`,

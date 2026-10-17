@@ -40,7 +40,9 @@
       "type": "object",
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["smarthome", "agent_run", "tool", "message", "script", "notify", "webhook"] },
+        "kind": {
+          "enum": ["smarthome", "agent_run", "tool", "message", "script", "notify", "webhook"]
+        },
         "service": { "type": "string" },
         "target": { "type": "string" },
         "objective": { "type": "string" },

@@ -8,7 +8,10 @@
       "required": ["transport"],
       "additionalProperties": false,
       "properties": {
-        "transport": { "enum": ["stdio", "sse", "http"] },
+        "transport": {
+          "enum": ["stdio", "sse", "http"],
+          "description": "http = streamable HTTP (FR-042)."
+        },
         "command": { "type": "string" },
         "args": { "type": "array", "items": { "type": "string" } },
         "env": {
@@ -17,7 +20,71 @@
           "description": "Values may be secret references (secret://...)."
         },
         "url": { "type": "string", "format": "uri" },
-        "auth": { "type": "string", "description": "secret:// reference" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "HTTP headers for sse/http; secret values are secret:// references."
+        },
+        "auth": {
+          "type": "string",
+          "description": "secret:// reference to an API key or bearer token."
+        },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "OAuth 2 with PKCE (FR-047). Use a client metadata document or dynamic client registration when the server offers them.",
+          "properties": {
+            "clientMetadataUrl": { "type": "string", "format": "uri" },
+            "dynamicRegistration": { "type": "boolean", "default": false },
+            "scopes": { "type": "array", "items": { "type": "string" } }
+          },
+          "not": {
+            "required": ["clientMetadataUrl", "dynamicRegistration"],
+            "properties": { "dynamicRegistration": { "const": true } }
+          }
+        },
+        "deviceId": {
+          "type": "string",
+          "description": "Run this stdio server on a device and reach it through novad (FR-210)."
+        },
+        "startupTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 120000,
+          "default": 30000
+        },
+        "toolTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "default": 60000
+        },
+        "enabledTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "If present, only these tools are exposed."
+        },
+        "disabledTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Applied after enabledTools."
+        },
+        "required": {
+          "type": "boolean",
+          "default": false,
+          "description": "A session that depends on this server fails to start when the server does not start."
+        },
+        "defaultApproval": {
+          "enum": ["allow", "ask", "deny"],
+          "default": "ask",
+          "description": "Per-tool default for the policy engine; never overrides built-in safety (FR-099)."
+        },
+        "deferred": {
+          "type": "boolean",
+          "description": "Force tools behind tool.search (true) or always load them (false); absent = automatic (FR-196)."
+        },
         "policy": {
           "type": "object",
           "additionalProperties": false,
@@ -29,8 +96,14 @@
         "enabled": { "type": "boolean", "default": true }
       },
       "allOf": [
-        { "if": { "properties": { "transport": { "const": "stdio" } } }, "then": { "required": ["command"] } },
-        { "if": { "properties": { "transport": { "enum": ["sse", "http"] } } }, "then": { "required": ["url"] } }
+        {
+          "if": { "properties": { "transport": { "const": "stdio" } } },
+          "then": { "required": ["command"] }
+        },
+        {
+          "if": { "properties": { "transport": { "enum": ["sse", "http"] } } },
+          "then": { "required": ["url"], "not": { "required": ["deviceId"] } }
+        }
       ]
     }
   },

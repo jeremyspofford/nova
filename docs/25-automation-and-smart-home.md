@@ -27,11 +27,21 @@ scheduler and event bus, able to call any Nova tool (including agents).
 | Kind | Examples |
 | --- | --- |
 | **Time** | cron, interval, sunrise/sunset, timezone-aware |
-| **Event** | webhook, Slack/Teams/email, file change, connector event, run/agent event |
+| **Event** | webhook, Slack/Teams/email, file change, connector event, MCP event subscription (FR-201), run/agent event |
 | **Device state** | smart-home entity changes (door opens, motion, temperature) |
-| **Ambient** | on-screen event, spoken phrase, app/window change (`docs/24`) |
+| **Ambient** | on-screen event, spoken phrase, app/window change (`docs/24`); needs a scoped ambient grant (§3, FR-233) |
 | **Location** | arrive/leave geofence (from a mobile client, with consent) |
 | **Manual** | button, voice, deep link, dashboard |
+
+- Only sources that declare events can trigger an automation; joining or connecting a channel
+  never creates a trigger by itself (FR-056).
+- **MCP event subscriptions** (FR-201): for an MCP server that advertises events, the trigger
+  subscribes with a Hub webhook URL and secret, refreshes before expiry and unsubscribes when
+  the automation is removed. A delivery must carry a valid signature and be under 256 KiB; it
+  is deduplicated by id.
+- Trigger payloads (webhook bodies, messages, MCP events, captured text) are **untrusted
+  data**. They fill the automation's inputs but can never add actions or count as the user's
+  authorization (FR-189).
 
 ### 1.2 Action kinds
 
@@ -53,6 +63,18 @@ scheduler and event bus, able to call any Nova tool (including agents).
 - Versioning with diff and rollback; disabling is instant.
 - **Approvals**: physical-world or consequential actions require approval unless the user
   grants a scoped standing rule (`docs/12` §3).
+- **Confirmation tiers** (FR-189): every action is classified by built-in safety. A
+  `pre_approvable` action may run under the automation's standing rules. A `confirm_at_action`
+  action (purchases and payments; creating accounts, permissions, API keys or OAuth grants;
+  installing software; deleting data outside the automation's scope; messages and posts to
+  third parties unless a user-created standing rule names that recipient or channel) is asked
+  each time it runs and cannot be pre-approved by enabling the automation. A
+  `handoff_required` action is never automated: the run stops at that step and hands it to
+  the user.
+- **Verified outcomes** (FR-187): a run succeeds only when each declared output is verified:
+  an entity's state is read back after a command, a message has a provider receipt, a file is
+  written and hashed, an artifact is saved. Otherwise the run ends `output_missing` with the
+  trace linked. "Accepted by the transport" is never reported as done.
 - Rate limits and loop prevention (an automation's action cannot re-trigger itself).
 
 ## 2. Smart home
@@ -119,6 +141,11 @@ direct Google/Alexa cloud skills.
   history is retained per policy.
 - Automations never expose camera/microphone content to a model unless the user opts in for
   that automation and source.
+- **Scoped ambient grants** (FR-233): an automation that reads ambient data gets a
+  Hub-enforced grant naming the apps, windows, content types and time window it may read,
+  plus limits on concurrent queries and per-query time. Requests outside the grant are denied
+  and audited; the prompt cannot widen it. Grants are shown in the editor, reviewed when the
+  automation is enabled, and revocable. Captured content stays untrusted input (FR-155).
 - Managed policy can disable automation, restrict entity classes, or require approval for
   all physical actions.
 
@@ -142,5 +169,6 @@ Schedules ┘                       │  (policy-gated)
 - Trigger/condition/action model as above.
 - Home Assistant + MQTT + at least one vendor connector in v1 of this track.
 - Normalized entity model + area/scene management.
-- Approval and audit for physical actions.
+- Approval and audit for physical actions; confirmation tiers (FR-189); verified outcomes
+  (FR-187); scoped ambient grants (FR-233); MCP event triggers (FR-201).
 - Agent + automation interoperability (agents can create/modify automations with approval).

@@ -19,6 +19,12 @@ This directory is **not the application**. It is the *complete, self-contained s
 that another autonomous coding agent can execute continuously, milestone by milestone,
 without further human intervention.
 
+**Status (2026-10-17):** the Phase 0 reconciliation of external findings is complete
+([`docs/external/RECONCILIATION.md`](docs/external/RECONCILIATION.md): 141 capabilities
+classified). The spec defines `FR-001`…`FR-233` and decisions `ADR-001`…`ADR-082`; every FR is
+placed in exactly one milestone and has a row in [`tests/manifest.md`](tests/manifest.md). M0
+starts with the Hub and its web UI (ADR-081). Progress is tracked in [`LEDGER.md`](LEDGER.md).
+
 ---
 
 ## How to use this bundle
@@ -39,7 +45,7 @@ new decisions in an ADR and continue.
 | # | Document | Contents |
 | --- | --- | --- |
 | 00 | [`00-product-brief.md`](docs/00-product-brief.md) | Vision, personas, principles, non-goals, success metrics |
-| 01 | [`01-reverse-engineering-method.md`](docs/01-reverse-engineering-method.md) | REA methodology, clean-room rules, evidence format |
+| 01 | [`01-reverse-engineering-method.md`](docs/01-reverse-engineering-method.md) | REA methodology, clean-room rules, evidence format, coverage matrix |
 | 02 | [`02-feature-inventory.md`](docs/02-feature-inventory.md) | Inventory of target capabilities, translated into requirements |
 | 03 | [`03-functional-requirements.md`](docs/03-functional-requirements.md) | Numbered, testable requirements (FR-*) |
 | 04 | [`04-ux-ia-and-design-system.md`](docs/04-ux-ia-and-design-system.md) | Information architecture, navigation, design system |
@@ -69,6 +75,10 @@ new decisions in an ADR and continue.
 | 28 | [`28-glossary.md`](docs/28-glossary.md) | Canonical terms and naming rules |
 | 29 | [`29-task-breakdown.md`](docs/29-task-breakdown.md) | Starter task list per milestone |
 | — | [`contracts/`](contracts/README.md) | Hub API, IPC, events, REST API, JSON schemas |
+| — | [`docs/adr/`](docs/adr/README.md) | One file per decision that supersedes or amends an entry in `docs/20` |
+| — | [`docs/external/RECONCILIATION.md`](docs/external/RECONCILIATION.md) | Phase 0: keep / modify / add / replace / reject for every external finding, with the resulting FRs and ADRs |
+| — | [`docs/external/`](docs/external/README.md) | Evidence inputs (findings by opaque ID); exempt from the name check |
+| — | [`tests/manifest.md`](tests/manifest.md) | One test row per `FR-*` |
 
 ## Repository conventions
 
@@ -76,10 +86,20 @@ The spec lives at the repository root. The application is built under `apps/`, `
 and `services/` (see [`docs/05-system-architecture.md`](docs/05-system-architecture.md)).
 `build/` is scratch/output space and is git-ignored.
 
+## Validating the spec
+
+Run `node scripts/check-spec.mjs` (or `npm run check:spec`) from the repository root. It checks
+that every `FR-*` in `docs/03` appears exactly once in the milestone index of `docs/17` and
+once in `tests/manifest.md`, that every JSON schema in `contracts/schemas` parses, that internal
+Markdown links resolve, and that no reference-app name appears outside `docs/external/`
+(ADR-056). CI runs it on every push (`docs/16` §9).
+
 ## Legal note
 
 This project is a **clean-room reimplementation of functionality and user experience**,
 informed by publicly documented product behavior and lawful analysis. It must not copy
 proprietary source code, assets, trademarks, or trade dress. See
-[`docs/19-legal-and-ethics.md`](docs/19-legal-and-ethics.md). Product names above are used
-only to identify the sources of inspiration.
+[`docs/19-legal-and-ethics.md`](docs/19-legal-and-ethics.md). Nova is not affiliated with any
+third-party product. Reference products are identified only by opaque IDs (ADR-056); the
+integration targets and model providers named in the spec are named because Nova talks to
+them.

@@ -1,5 +1,12 @@
 # IPC Channels (Renderer ↔ Main)
 
+**Scope: native desktop shell only** (ADR-031, ADR-081: the shell arrives in M7). The web UI
+served by the Hub talks to `contracts/hub-api.md` directly and never sees these channels.
+Inside the shell, domain channels (chat, runs, goals, approvals, requests, settings, ...) are
+thin proxies for Hub API endpoints with the same payloads; the Hub API stays the source of
+truth for them. **Native-only** channels (window capture, dictation, global shortcuts, local
+`novad` access) have no Hub equivalent and are marked below.
+
 The renderer runs with `contextIsolation: true`, `sandbox: true`, and **no Node integration**.
 It talks to the main process through a `contextBridge` surface generated from this contract.
 
@@ -65,7 +72,9 @@ interface NovaAPI {
 | `mcp.restart` | `{id}` | `McpServer` |
 | `mcp.status` | `{id}` | `McpStatus` |
 | `approval.list` | `{status?,scope?}` | `Approval[]` |
-| `approval.decide` | `{id, decision, scope?}` | `Approval` |
+| `approval.decide` | `ApprovalDecision` (`schemas/approval-decision.json`; not `timeout`) | `Approval` |
+| `request.list` | `{status?:'pending'}` | `ServerRequest[]` (`schemas/server-request.json`, FR-188) |
+| `request.respond` | `{requestId, result}` | `{status:'resolved'\|'conflict'\|'expired'}` |
 
 ### runs, schedules, activity
 
@@ -78,6 +87,11 @@ interface NovaAPI {
 | `run.resume` | `{id}` | `Run` |
 | `run.redirect` | `{id,instruction}` | `Run` |
 | `run.cancel` | `{id}` | `Run` |
+| `run.extendBudget` | `{id,timeSeconds?,tokens?,costUsd?}` | `Run` (FR-182) |
+| `goal.get` | `{runId?,agentId?}` | `Goal \| null` (`schemas/goal.json`, FR-181) |
+| `goal.set` | `{runId?,agentId?,objective,budgets?}` | `Goal` |
+| `goal.update` | `{id,objective?,budgets?}` | `Goal` (applies at the next turn) |
+| `goal.pause` / `.resume` / `.complete` / `.clear` | `{id}` | `Goal` |
 | `schedule.list` | `{agentId?}` | `Schedule[]` |
 | `schedule.upsert` | `ScheduleInput` | `Schedule` |
 | `schedule.cancel` | `{id}` | `{ok:true}` |
@@ -98,9 +112,17 @@ interface NovaAPI {
 | `code.review` | `{id}` | `ReviewResult` |
 | `code.commit` | `{id,message,branch?}` | `{sha}` |
 | `code.openPr` | `{id,title,body,base?}` | `{url,number}` |
-| `exec.run` (stream) | `{sessionId,cmd,args,cwd?,env?}` | stream of `ExecChunk` |
+| `exec.run` (stream) | `{sessionId,cmd,args?,cwd?,env?,tty?,yieldMs?,maxOutputTokens?}` | `ExecYield` after the yield time: `{status:'exited',exitCode,output}` or `{status:'running',execSessionId,output}`; the full redacted output streams on `exec.stream` (FR-184) |
+| `exec.write` | `{execSessionId,text?,closeStdin?,signal?:'interrupt'\|'terminate'}` | `{ok:true}`; each line sent to a shell or interpreter session is evaluated as a new command under the command rules (FR-191) |
+| `exec.poll` | `{execSessionId,yieldMs?}` | `ExecYield`: output produced since the last read, and `exitCode` once the process ended |
 | `devserver.list` | `{sessionId}` | `DevServer[]` |
 | `devserver.start`/`.stop`/`.stopAll` | `{sessionId,id?}` | `DevServer` |
+
+Exec sessions follow `docs/08` §1.1 (the `exec.*` tools, where the exec session id is the
+tool's `sessionId`; here `sessionId` is the code session): `yieldMs` defaults to 10,000 and is
+at most 120,000; `output` is redacted (FR-101) and capped at `maxOutputTokens` (default
+10,000), keeping the head and tail with an omission marker; a run holds at most 8 open exec
+sessions, which are killed when the run is cancelled or ends.
 
 ### agents, computers, channels
 
@@ -132,6 +154,18 @@ interface NovaAPI {
 | `extension.load` / `.reload` / `.unload` | — | `ExtensionInfo` |
 | `diagnostics.snapshot` | `{}` | `DiagnosticBundle` |
 
+### capture, dictation & shortcuts (native-only)
+
+| Channel | Payload | Result |
+| --- | --- | --- |
+| `window.capture` | `{mode:'frontmost'\|'pick'}` | `WindowCaptureDraft` `{draftId, appName, windowTitle, previewPath, textChars, redactions[]}` via `local.window.capture` (FR-214) |
+| `window.capture.attach` | `{draftId, threadId?, newThread?:boolean}` | `{attachmentId, threadId}` (uploads to the Hub as an attachment with origin `window_capture`) |
+| `window.capture.discard` | `{draftId}` | `{ok:true}` |
+| `dictation.start` | `{engine?, language?}` | `StreamHandle` (stream: `dictation.stream`, FR-216) |
+| `dictation.stop` | `{}` | `{text}` |
+| `dictation.dictionary.get` / `.set` | `{}` / `{entries:[{term, replacement?}]}` | `DictionaryEntry[]` |
+| `shortcut.global.list` / `.set` | `{}` / `{action:'attachWindow'\|'dictate'\|'quickChat'\|'focusApp', accelerator}` | `GlobalShortcut[]` |
+
 ### security & data
 
 | Channel | Payload | Result |
@@ -149,9 +183,10 @@ interface NovaAPI {
 | --- | --- | --- |
 | `chat.stream` | `StreamEvent` (docs/07) | `{messageId, status}` |
 | `run.stream` | `RunEvent` (docs/09) | `{runId, status}` |
-| `exec.stream` | `{chunkType:'stdout'\|'stderr'\|'exit', data, exitCode?}` | `{exitCode}` |
+| `exec.stream` | `{execSessionId, chunkType:'stdout'\|'stderr'\|'exit', data, exitCode?}` (redacted) | `{exitCode}` |
 | `browser.stream` | `{type:'screenshot'\|'navigate'\|'action', data}` | `{ok}` |
 | `index.stream` | `{kind:'project'\|'code', progress}` | `{ok}` |
+| `dictation.stream` | `{type:'partial'\|'final', text}` | `{text}` |
 
 ## Security rules for IPC
 
@@ -161,3 +196,10 @@ interface NovaAPI {
 4. Renderer may not pass arbitrary file paths to privileged operations without policy checks
    (paths are resolved and canonicalized in main/sandboxd).
 5. Every mutating channel writes an audit event where relevant.
+6. `window.capture` and `dictation.start` run only after a user gesture in the shell or the
+   global shortcut; the renderer cannot start them on its own. A capture draft is attached
+   only when the user confirms it; dictation audio is never stored (FR-214, FR-216).
+7. Main talks to the local `novad` only over its 0600 socket or user-only named pipe with the
+   local token (`contracts/hub-api.md` §4); the renderer never sees that token.
+8. Approval answers for `handoff_required` and `confirm_at_action` actions come only from a
+   user action in the shell's own UI, never from page content (FR-189).

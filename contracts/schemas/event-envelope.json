@@ -7,20 +7,29 @@
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "minLength": 1 },
-    "name": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$" },
+    "name": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9][A-Za-z0-9_]*)+$" },
     "schemaVersion": { "type": "integer", "minimum": 1 },
     "ts": { "type": "string", "format": "date-time" },
     "accountId": { "type": "string" },
-    "actor": { "type": "string", "pattern": "^(user|system|agent:.+|agent:.+)$" },
+    "actor": {
+      "type": "string",
+      "pattern": "^(user|system|agent:[^\\s]+)$",
+      "description": "Who caused the event. Run, turn and sub-agent ids belong in correlation, not in actor."
+    },
     "correlation": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "threadId": { "type": "string" },
+        "turnId": { "type": "string" },
         "runId": { "type": "string" },
+        "subagentId": { "type": "string" },
         "sessionId": { "type": "string" },
         "agentId": { "type": "string" },
-        "callId": { "type": "string" }
+        "goalId": { "type": "string" },
+        "requestId": { "type": "string" },
+        "callId": { "type": "string" },
+        "deviceId": { "type": "string" }
       }
     },
     "payload": { "type": "object" }

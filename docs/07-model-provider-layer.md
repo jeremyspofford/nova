@@ -46,6 +46,7 @@ export interface ProviderCapabilities {
   promptCache: 'none' | 'short' | 'long' | 'both';
   structuredOutput: boolean;
   imageGeneration: boolean;
+  fastTier: boolean;                       // a faster serving tier can be requested
   maxContextTokens: number;
   maxOutputTokens: number;
 }
@@ -86,7 +87,12 @@ generic adapter are P1; local is P1 (bundled `llama.cpp` server optional; Ollama
 - **API key**: collected in a secure input, stored via keychain (`secret_ref`), never shown
   again; a "rotate" action replaces it.
 - **OAuth**: PKCE (desktop) with a loopback redirect; or device-code flow. Tokens refreshed
-  automatically; failures surface a re-auth card.
+  automatically; failures surface a re-auth card. OAuth is offered only where the provider
+  publishes a flow for third-party applications, using a client id registered to Nova (or one
+  the user registers for a self-hosted Hub).
+- **No borrowed clients** (ADR-080, `docs/19` §5): Nova never reuses another application's
+  OAuth client id, never presents itself as another client, and never offers sign-in with a
+  subscription plan through another application's client or credentials.
 - **Local**: no auth; detect a running server at configured URL; health check.
 - Credentials are only accessed in the main/core process. The renderer receives status only.
 
@@ -102,6 +108,7 @@ interface ChatRequest {
   toolChoice?: 'auto' | 'none' | 'required' | { name: string };
   temperature?: number; topP?: number; maxTokens?: number;
   reasoning?: { level: 'off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max' } | { budgetTokens: number };
+  speed?: 'standard' | 'fast'; // 'fast' only when capabilities.fastTier is true
   responseFormat?: { type: 'text' } | { type: 'json_schema'; schema: unknown };
   cacheHints?: { system?: boolean; tools?: boolean; history?: boolean };
   metadata?: Record<string, string>;
@@ -156,6 +163,32 @@ Strategies:
 
 Virtual models appear in the picker alongside native models and are fully local.
 
+### 8.1 Model presets (FR-221)
+
+The simple model control is an ordered scale of presets from **Faster** to **Smarter**
+(default three: Faster, Balanced, Smarter; Balanced selected). Each preset is a virtual model
+whose target fixes provider, model, reasoning level and speed:
+
+```json
+{
+  "alias": "preset:smarter",
+  "strategy": "fallback",
+  "preset": { "rank": 3, "label": "Smarter" },
+  "targets": [
+    { "provider": "anthropic", "model": "<configured-model-id>", "reasoning": "high", "speed": "standard" },
+    { "provider": "local", "model": "<installed-local-model>", "reasoning": "medium" }
+  ]
+}
+```
+
+- Presets are generated at setup from the configured providers and are editable. An advanced
+  panel shows and edits each preset's underlying choices.
+- A preset whose targets are all unavailable is disabled with a tooltip; it never silently
+  falls back to a different preset.
+- Each assistant turn stores the preset and the resolved model and reasoning level (FR-023).
+- **Presets never spawn sub-agents.** Delegation stays an explicit, visible tool call
+  (`docs/09` §4).
+
 ## 9. Routing, retries, and limits
 
 - **Circuit breaker** per provider account: open after N consecutive failures; half-open probe.
@@ -164,6 +197,11 @@ Virtual models appear in the picker alongside native models and are fully local.
 - **Concurrency**: global semaphore + per-provider limit; queue with visible status.
 - **Rate limit/over budget**: surface a non-destructive banner; offer to switch model or wait.
 - **Cancellation**: `AbortSignal` propagates; partial output retained and marked incomplete.
+- **Transport** (adapter-internal): where a provider offers a persistent socket transport, an
+  adapter may open it lazily on a turn's first request, reuse it for that turn's later steps
+  (sending incremental requests that reference the previous response), and fall back to HTTP
+  streaming when the socket fails. The normalized event stream is identical either way, and the
+  conformance suite (§15) runs both paths.
 
 ## 10. Prompt caching
 
@@ -191,8 +229,18 @@ Virtual models appear in the picker alongside native models and are fully local.
 
 - **Image input**: downscale/convert as needed; strip EXIF location by default (privacy).
 - **Image generation**: provider-dependent; saved as artifacts with prompt metadata.
-- **Voice**: realtime adapter for providers offering it; otherwise STT → chat → TTS pipeline.
+- **Voice** (FR-031): realtime adapter for providers offering it; otherwise STT → chat → TTS
+  pipeline. Push-to-talk and hands-free, streaming transcription, barge-in and voice selection.
   Audio buffers are never persisted unless the user opts in.
+  - **Voice as controller**: voice can start, check and steer runs and sessions in any mode. It
+    uses the same Hub API calls as the UI (start, steer per FR-019, status), and its transcript
+    appears in the thread. Spoken requests pass the policy engine like typed ones. Approvals
+    are never granted by voice alone: the approval card is answered on a client screen.
+  - **One session per user**: a user has at most one active voice session. Starting one on
+    another device ends the previous session, which is told why.
+- **Dictation** (FR-216): speech-to-text into the composer with punctuation cleanup and a user
+  dictionary. Local STT engines are the default; audio is not stored. The text stays editable
+  in the composer and is sent only when the user sends it.
 
 ## 14. Errors
 

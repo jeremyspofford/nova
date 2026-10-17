@@ -15,7 +15,16 @@ lawful and ethical, and that the build agent must follow.
    identity of any third-party product for our product or in any way that implies
    affiliation. The app name "Nova" is a working title and is not affiliated with any
    third party. Reference applications are tracked by opaque IDs (`APP-1`…) in the private
-   evidence ledger, never by name in the shipped spec.
+   evidence ledger, never by name in the shipped spec (ADR-056):
+   - Their identities and the mapping of opaque evidence refs to real sources live only in
+     `docs/external/private/` (gitignored: `IDENTITIES.md`, `appN-refs.md`, research notes).
+   - `docs/external/` is the evidence zone; the committed findings there use opaque IDs, and
+     the reconciliation (`docs/external/RECONCILIATION.md`) cites them only by ID.
+   - `scripts/check-spec.mjs` runs in CI and fails when a reference-app name appears in any
+     Markdown file outside `docs/external/`; the name list is read from the private ledger, so
+     the names themselves are never committed.
+   - Integration targets (chat services, smart-home platforms, mesh control planes, Git
+     hosts, model providers), protocols and dependencies may be named: Nova talks to them.
 4. **Behavior is not copyrightable; expression is.** Matching functional behavior (e.g.,
    "permission modes include Manual/Accept edits/Plan/Auto/Bypass") is fine. Copying the exact
    text of dialogs, docs, or marketing is not.
@@ -57,6 +66,10 @@ distributable by a single party under permissive terms.
 - **No training on user data**, ever. The product states this plainly.
 - **Local-first**: content stays on the device unless the user enables a cloud/sync feature.
 - **Telemetry off by default**; opt-in only, with a local preview of exactly what is sent.
+  OTLP export to a user-named collector is a separate opt-in (FR-223). Apart from the
+  update-metadata check (every 6 h, metadata only, can be turned off; `docs/15` §4), Nova
+  contacts providers, catalogs, relays and sync services only when the user configures or uses
+  them.
 - **Data subject rights**: export, correct, delete (with recovery window), and restrict
   processing are all supported locally.
 - **Regulatory posture**: designed for GDPR/CCPA compliance. A data map lists every data
@@ -70,7 +83,12 @@ distributable by a single party under permissive terms.
 - Respect provider rate limits and content policies; surface provider errors verbatim.
 - Do not proxy requests in a way that hides end users from providers.
 - Do not resell provider access.
-- Route requests to the endpoints the user configured; no undisclosed middleboxes.
+- Route requests to the endpoints the user configured; no undisclosed middleboxes and no vendor
+  AI gateway in front of providers (ADR-080).
+- Never reuse another application's OAuth client id, and never offer sign-in to a
+  subscription plan issued for another application. Nova authenticates with its own registered
+  OAuth client where a provider offers one, or with the user's API key; impersonating another
+  client breaks provider terms (ADR-080).
 
 ## 6. Responsible agent behavior
 
@@ -99,12 +117,14 @@ distributable by a single party under permissive terms.
 
 - `THIRD_PARTY_NOTICES.md` lists every dependency with its license text.
 - Bundled fonts, icons, and models include their licenses.
-- The README states that the product is unaffiliated with the named source products.
+- The README states that the product is unaffiliated with any third-party product; reference
+  products are never named there.
 
 ## 10. Agent checklist before merging a feature
 
 - [ ] Implemented from the spec, not from copied source/assets.
-- [ ] No vendor trademarks/logos/copy introduced.
+- [ ] No vendor trademarks/logos/copy introduced; `node scripts/check-spec.mjs` passes (no
+      reference-app names).
 - [ ] New dependencies are permissively licensed and added to notices.
 - [ ] No secrets committed; CI secret scan green.
 - [ ] Data flows documented if new (update `docs/13` data map).

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/approval-decision.json",
+  "title": "ApprovalDecision",
+  "description": "A decision on an approval (FR-100, ADR-060). timeout is recorded by the system when expiresAt passes and is never sent by a client. Tier limits (FR-189): confirm_at_action never accepts allow_session or allow_always; handoff_required accepts only handoff, deny_continue or deny_stop.",
+  "type": "object",
+  "required": ["approvalId", "decision"],
+  "additionalProperties": false,
+  "properties": {
+    "approvalId": { "type": "string" },
+    "decision": {
+      "enum": [
+        "allow_once",
+        "allow_session",
+        "allow_always",
+        "deny_continue",
+        "deny_stop",
+        "handoff",
+        "timeout"
+      ]
+    },
+    "alwaysScope": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["tool", "prefix_rule", "host"] },
+        "tool": { "type": "string" },
+        "rule": {
+          "type": "object",
+          "required": ["pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "$ref": "command-rule.json#/properties/pattern" },
+            "matchExamples": { "$ref": "command-rule.json#/$defs/examples" },
+            "notMatchExamples": { "$ref": "command-rule.json#/$defs/examples" }
+          },
+          "description": "Appended as a command rule; the approved command is added as a match example."
+        },
+        "host": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "tool" } } },
+          "then": { "required": ["tool"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "prefix_rule" } } },
+          "then": { "required": ["rule"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "host" } } },
+          "then": { "required": ["host"] }
+        }
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "deny_continue: returned to the agent."
+    },
+    "override": {
+      "type": "boolean",
+      "default": false,
+      "description": "The user overrides an auto-review deny; only with allow_once, audited with the verdict (FR-085)."
+    },
+    "decidedBy": { "type": "string", "pattern": "^(user|system|hook:[^\\s]+)$" },
+    "deviceId": { "type": "string" },
+    "decidedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "decision": { "const": "allow_always" } }, "required": ["decision"] },
+      "then": { "required": ["alwaysScope"] },
+      "else": { "not": { "required": ["alwaysScope"] } }
+    },
+    {
+      "if": { "properties": { "decision": { "const": "timeout" } }, "required": ["decision"] },
+      "then": { "properties": { "decidedBy": { "const": "system" } } }
+    },
+    {
+      "if": { "properties": { "override": { "const": true } }, "required": ["override"] },
+      "then": { "properties": { "decision": { "const": "allow_once" } } }
+    }
+  ]
+}

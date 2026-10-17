@@ -2,40 +2,303 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arialabs.ai/schemas/ambient-record.json",
   "title": "AmbientRecord",
+  "description": "Normalized ambient record sent by novad to the Hub (docs/24 §7). A capture record carries redacted content and a redaction stamp; a status record carries capture state only.",
   "type": "object",
-  "required": ["id", "accountId", "ts", "source"],
+  "required": ["id", "accountId", "deviceId", "kind", "ts", "source"],
   "additionalProperties": false,
   "properties": {
-    "id": { "type": "string" },
-    "accountId": { "type": "string" },
-    "deviceId": { "type": "string" },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 (docs/06), time-sortable; generated on the device"
+    },
+    "accountId": { "type": "string", "minLength": 1 },
+    "deviceId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["capture", "status"] },
     "ts": { "type": "string", "format": "date-time" },
     "durationMs": { "type": "integer", "minimum": 0 },
     "source": { "enum": ["screen", "mic", "system-audio"] },
+    "trigger": { "$ref": "#/$defs/trigger" },
+    "monitor": { "type": "integer", "minimum": 0 },
+    "focused": { "type": "boolean" },
     "app": {
       "type": "object",
-      "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Platform app id: bundle id, AUMID, executable or desktop-file id"
+        },
+        "name": { "type": "string" }
+      }
     },
     "window": {
       "type": "object",
-      "properties": { "title": { "type": "string" }, "url": { "type": "string" } }
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "Scheme, host and path; userinfo always removed, query and fragment removed by default"
+        },
+        "documentPath": { "type": ["string", "null"] }
+      }
     },
-    "monitor": { "type": "integer" },
-    "text": { "type": "string" },
-    "segments": {
-      "type": "array",
-      "items": {
-        "type": "object",
+    "textSource": { "enum": ["accessibility", "ocr", "hybrid"] },
+    "text": {
+      "type": "string",
+      "description": "Redacted text; omitted on a forced write whose content is unchanged"
+    },
+    "contentHash": { "$ref": "#/$defs/contentHash" },
+    "elements": { "type": "array", "items": { "$ref": "#/$defs/element" } },
+    "segments": { "type": "array", "items": { "$ref": "#/$defs/segment" } },
+    "meetingId": { "type": "string", "minLength": 1 },
+    "media": { "type": "array", "items": { "$ref": "#/$defs/media" } },
+    "redaction": { "$ref": "#/$defs/redactionStamp" },
+    "coverage": { "$ref": "#/$defs/recordCoverage" },
+    "status": { "$ref": "#/$defs/status" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "capture" } }, "required": ["kind"] },
+      "then": {
+        "required": ["contentHash", "redaction", "coverage"],
+        "properties": { "status": false }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "status" } }, "required": ["kind"] },
+      "then": {
+        "required": ["status"],
         "properties": {
-          "startMs": { "type": "integer" },
-          "endMs": { "type": "integer" },
-          "text": { "type": "string" },
-          "speaker": { "type": "string" }
+          "trigger": false,
+          "app": false,
+          "window": false,
+          "textSource": false,
+          "text": false,
+          "contentHash": false,
+          "elements": false,
+          "segments": false,
+          "meetingId": false,
+          "media": false,
+          "redaction": false,
+          "coverage": false
         }
       }
     },
-    "blobRef": { "type": "string" },
-    "encrypted": { "type": "boolean", "default": true },
-    "redactions": { "type": "array", "items": { "type": "string" } }
+    {
+      "if": {
+        "properties": { "kind": { "const": "capture" }, "source": { "const": "screen" } },
+        "required": ["kind", "source"]
+      },
+      "then": {
+        "required": ["trigger", "focused", "app"],
+        "dependentRequired": { "text": ["textSource"], "elements": ["textSource"] },
+        "properties": { "segments": false, "meetingId": false }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": { "const": "capture" },
+          "source": { "enum": ["mic", "system-audio"] }
+        },
+        "required": ["kind", "source"]
+      },
+      "then": {
+        "required": ["durationMs", "segments"],
+        "properties": { "trigger": false, "textSource": false, "elements": false }
+      }
+    }
+  ],
+  "$defs": {
+    "trigger": {
+      "enum": [
+        "app_switch",
+        "window_focus",
+        "click",
+        "typing_pause",
+        "scroll_stop",
+        "visual_change",
+        "idle",
+        "manual"
+      ]
+    },
+    "contentHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 of the redacted, normalized text (NFC, whitespace collapsed)"
+    },
+    "bounds": {
+      "type": "object",
+      "description": "Normalized 0-1, top-left origin, relative to the captured region (the focused window)",
+      "required": ["x", "y", "w", "h"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "minimum": 0, "maximum": 1 },
+        "h": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": ["role", "text", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Normalized role, for example heading, text, link, button, cell, line or word"
+        },
+        "text": { "type": "string" },
+        "source": { "enum": ["accessibility", "ocr"] },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "OCR confidence; null when the engine reports none or the element came from the tree"
+        }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "required": ["startMs", "endMs", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "startMs": { "type": "integer", "minimum": 0 },
+        "endMs": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "speakerId": { "type": "string", "minLength": 1 },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "media": {
+      "type": "object",
+      "required": ["kind", "target", "ref", "sha256", "bytes", "encrypted", "keyId"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["image", "thumbnail", "audio"] },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Configured storage target id; \"hub\" is the default"
+        },
+        "ref": { "type": "string", "minLength": 1, "description": "Object key at the target" },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Of the ciphertext, verified by read-back before the local copy is deleted"
+        },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "encrypted": { "const": true },
+        "keyId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hub key the object is encrypted to"
+        },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "redactionCategory": {
+      "enum": [
+        "secrets",
+        "government_ids",
+        "financial",
+        "account_numbers",
+        "names",
+        "emails",
+        "phones",
+        "addresses",
+        "dates_of_birth"
+      ]
+    },
+    "redactionStamp": {
+      "type": "object",
+      "required": ["policyVersion", "categories", "model", "where", "certifiedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "policyVersion": { "type": "integer", "minimum": 1 },
+        "categories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/redactionCategory" },
+          "uniqueItems": true,
+          "contains": { "const": "secrets" },
+          "description": "Categories the redaction covered; secrets is always present"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Redaction model id and version; a stamp without a model is invalid (regex alone never certifies)"
+        },
+        "where": { "enum": ["device", "hub", "remote"] },
+        "certifiedAt": { "type": "string", "format": "date-time" },
+        "spans": { "type": "integer", "minimum": 0, "description": "Number of spans redacted" }
+      }
+    },
+    "recordCoverage": {
+      "type": "object",
+      "required": ["complete"],
+      "additionalProperties": false,
+      "properties": {
+        "complete": { "type": "boolean" },
+        "limits": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tree_truncated",
+              "tree_throttled",
+              "ocr_unavailable",
+              "masked_regions",
+              "image_dropped",
+              "metadata_partial"
+            ]
+          }
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["running", "paused", "off"] },
+        "reason": {
+          "enum": [
+            "user_pause",
+            "monitor_pause",
+            "schedule",
+            "lock_screen",
+            "excluded",
+            "private_browsing",
+            "secure_input",
+            "drm",
+            "fullscreen_media",
+            "unknown_focus",
+            "rules_invalid",
+            "permission_missing",
+            "battery",
+            "disk_low",
+            "spool_full",
+            "queue_full",
+            "redaction_unavailable",
+            "isolation_failed",
+            "helper_restart",
+            "managed_policy",
+            "error"
+          ]
+        },
+        "profile": { "enum": ["performance", "balanced", "saver", "audio-paused", "full-pause"] },
+        "heartbeatMs": { "type": "integer", "minimum": 1000 }
+      },
+      "if": { "properties": { "state": { "const": "paused" } }, "required": ["state"] },
+      "then": { "required": ["reason"] }
+    }
   }
 }

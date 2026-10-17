@@ -11,6 +11,10 @@ classified against the spec as it stood before this pass (commit `73c9370`):
 | **Replace** | The finding is the better design; the old section is superseded by an ADR. |
 | **Reject** | Not appropriate for Nova; the reason is recorded. |
 
+The **Current coverage** column cites the spec at that commit, so its section numbers (for
+example the draft `docs/24` §3–§9) may have moved since. The **Rationale** and **Resulting
+change** columns, and the owner design-session table, cite the current spec.
+
 Conflict precedence (`PROMPT.md` §2.5): Nova's hard invariants win (hub-and-spoke, policy
 engine and permissions, security model, self-improvement guardrails). Otherwise the
 better-specified version is adopted and an ADR records the choice.
@@ -196,20 +200,20 @@ What changed, in short:
 
 | # | External finding | Current coverage | Decision | Rationale | Resulting change |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Event-driven capture on UI events with a 30 s idle heartbeat; fixed-rate capture retired (ER-SP-001..004) | `docs/24` §3 ("1 frame / 2 s") | Replace | Event-driven capture records what changed for a fraction of the cost. | FR-151 revised; ADR-073; `docs/24` §3. |
+| 1 | Event-driven capture on UI events with a 30 s idle heartbeat; fixed-rate capture retired (ER-SP-001..004) | `docs/24` §3 ("1 frame / 2 s") | Replace | Event-driven capture records what changed for a fraction of the cost. | FR-151 revised; ADR-073; `docs/24` §3.1. |
 | 2 | Accessibility-tree text first; OCR only when the tree is thin, empty, a terminal buffer or a canvas app (ER-SP-005..007) | `docs/24` §3 (OCR only) | Replace | Tree text is exact, cheap and carries structure; OCR fills the gaps. | FR-152 revised. |
-| 3 | Per-OS frame grabbing and OCR engines; OCR on a crop of the focused window, cached by region hash (ER-SP-008, 009) | `docs/24` §3 | Modify | Specific engines and the crop-and-cache rule are adopted. | `docs/24` §3. |
-| 4 | Three separate dedup decisions: whether to capture, whether to store, whether to OCR (ER-SP-010) | `docs/24` §3 ("keyframe dedupe") | Modify | Separating the three decisions avoids losing scroll changes while saving work. | `docs/24` §3. |
-| 5 | One JPEG per capture, later packed into video; a text-only mode (ER-SP-011) | `docs/24` §4 | Modify | Text-only is the default for the first phase; pixels are optional and go to a configured location. | `docs/24` §4; FR-228. |
-| 6 | Privacy filters: app/title patterns, URL rules on domain boundaries, allowlist mode, built-in exclusions, password fields never read, incognito detection, DRM pause, work-hours schedule, malformed rules fail closed (ER-SP-012..015) | `docs/24` §7, FR-154 | Modify | Concrete, testable exclusion rules. Gaps found in the target (row ER-SP-014) become test cases. | FR-154 revised; `docs/24` §7. |
+| 3 | Per-OS frame grabbing and OCR engines; OCR on a crop of the focused window, cached by region hash (ER-SP-008, 009) | `docs/24` §3 | Modify | Specific engines and the crop-and-cache rule are adopted. | `docs/24` §3.2. |
+| 4 | Three separate dedup decisions: whether to capture, whether to store, whether to OCR (ER-SP-010) | `docs/24` §3 ("keyframe dedupe") | Modify | Separating the three decisions avoids losing scroll changes while saving work. | `docs/24` §3.3. |
+| 5 | One JPEG per capture, later packed into video; a text-only mode (ER-SP-011) | `docs/24` §4 | Modify | Text-only is the default for the first phase; pixels are optional and go to a configured location. | `docs/24` §4.3; FR-228. |
+| 6 | Privacy filters: app/title patterns, URL rules on domain boundaries, allowlist mode, built-in exclusions, password fields never read, incognito detection, DRM pause, work-hours schedule, malformed rules fail closed (ER-SP-012..015) | `docs/24` §7, FR-154 | Modify | Concrete, testable exclusion rules. Gaps found in the target (row ER-SP-014) become test cases. | FR-154 revised; `docs/24` §9 (test cases §9.7). |
 | 7 | Release gate: reads see only rows certified by model-based redaction; regex alone cannot certify; policy changes revoke certification (ER-SP-016, 017) | `docs/24` §7 ("redaction pass") | Add | Mechanical enforcement beats a best-effort pass (`docs/12` §1: zero trust). | FR-227. |
-| 8 | Audio: 30 s chunks persisted before transcription, VAD, local STT with hallucination and echo defences, cross-device dedup (ER-SP-018..022) | `docs/24` §3, FR-152 | Modify | Adopted for the audio phase of the track. | `docs/24` §3.3. |
+| 8 | Audio: 30 s chunks persisted before transcription, VAD, local STT with hallucination and echo defences, cross-device dedup (ER-SP-018..022) | `docs/24` §3, FR-152 | Modify | Adopted for the audio phase of the track. | `docs/24` §3.4. |
 | 9 | Speaker identity across sessions with abstention margins (ER-SP-023) | `docs/24` §3 ("speaker labels") | Add (P2) | Useful for meetings; depends on audio. | FR-231. |
 | 10 | Meeting detection by which process holds the microphone (ER-SP-024) | None | Add (P2) | Second outcome in the owner's order (recall, then meetings). | FR-230. |
 | 11 | One SQLite file, FTS5 with external content, a write-coalescing queue (ER-SP-025, 026) | `docs/24` §4, `docs/06` §8 | Keep | Same approach as Nova; external-content FTS is noted for the ambient tables. | `docs/06` §8. |
 | 12 | Search ordered by time; no embeddings over captured text (ER-SP-027, 028) | `docs/24` §4 (vector index) | Modify | The vector index becomes optional, enabled only when an eval shows it helps recall. | FR-153 revised. |
 | 13 | Activity summary computed in SQL from frame gaps, with no model (ER-SP-029) | None | Add | A cheap, exact answer to "what did I do today", and the right first tool for agents. | FR-229. |
-| 14 | Local HTTP API and a read-only raw SQL route (ER-SP-030) | `docs/24` §5 | Modify + Reject | Typed tools only. Raw SQL is rejected: it exposes everything and its schema drifted from the prompt that described it (ER-SP-032). | `docs/24` §5. |
+| 14 | Local HTTP API and a read-only raw SQL route (ER-SP-030) | `docs/24` §5 | Modify + Reject | Typed tools only. Raw SQL is rejected: it exposes everything and its schema drifted from the prompt that described it (ER-SP-032). | `docs/24` §8.1, §8.6. |
 | 15 | MCP tools ranked broad to narrow (summary, then search, then elements, then frame context) (ER-SP-031, 032) | `docs/24` §5 | Modify | The ladder is adopted for Nova's ambient tools. | FR-155 revised. |
 | 16 | Scheduled and evented prompts with server-enforced data scopes and per-run query limits (ER-SP-033, 034) | `docs/09` | Add | Automations that read ambient data must be scoped by the Hub, not by the prompt. | FR-233; FR-187 (verified outcomes). |
 | 17 | Retention modes, compaction, disk guard (stop below 5 GiB, resume above 10 GiB) (ER-SP-035) | `docs/24` §4, §7 | Modify | Adopted with Nova's defaults (text 30 days, pixels 48 h). | FR-154, FR-156 revised. |
@@ -230,7 +234,7 @@ What changed, in short:
 | 32 | Hybrid storage: bulky text in immutable Parquet files, SQLite keeps metadata and contentless FTS (ER-SP-051) | `docs/24` §4 | Reject (v1) | Adds custom readers and bypasses the release gate on direct file reads. Revisit only if measured volume demands it. | None. |
 | 33 | A second local server on a fixed port with no token (ER-SP-052) | `docs/12` | Reject + Add | Loopback is not an authorization boundary. Every Nova listener requires a token. | FR-192. |
 | 34 | App-owned agent browser with opt-in import of login state from the user's browsers (ER-SP-053) | `docs/11` §4 | Reject (session import) | Copying cookies out of the user's browsers bypasses per-site consent. The extension bridge covers real sessions. | None. |
-| 35 | Conflicting resource claims; observed install footprint (ER-SP-054) | `docs/24` §8 | Modify | Nova sets its own budgets and measures on reference hardware. | `docs/24` §8; `docs/16` §6. |
+| 35 | Conflicting resource claims; observed install footprint (ER-SP-054) | `docs/24` §8 | Modify | Nova sets its own budgets and measures on reference hardware. | `docs/24` §10.3; `docs/16` §6. |
 | 36 | Async AI redaction on device or in a hosted enclave; overwrites stored source columns and black-boxes image regions in place (ER-SP-055) | `docs/24` §7 | Modify | Local redaction by default; remote redaction only by explicit opt-in, logged. Raw secrets are overwritten after redaction. | FR-227. |
 
 ### Owner design-session context (ambient capture)
@@ -241,7 +245,7 @@ decisions; this table shows how each was handled.
 | Owner preference | Handling |
 | --- | --- |
 | Outcomes in order: recall, meetings, live context, digests | `docs/24` §11 phases the track in that order. |
-| The Windows desktop is captured first | `docs/24` §8: Windows first, then macOS, then Linux. |
+| The Windows desktop is captured first | `docs/24` §10.4: Windows first, then macOS, then Linux. |
 | Screen text lives on the Hub; recall works while the device sleeps | FR-228. |
 | Pixels captured on the device, then uploaded to a configured location | FR-228. |
 | The screen reader is a helper with no network access, supervised by `novad` | FR-228. |
@@ -254,9 +258,9 @@ decisions; this table shows how each was handled.
 | Tool calls that copy long verbatim runs of captured text are tagged, with a notice on the reply | FR-232. |
 | Images get solid boxes over redacted text; an image is dropped when a redacted span has no position | FR-227. |
 | Images are encrypted to a Hub-held key before upload; the local copy is deleted only after a verified read-back | FR-228. |
-| Text first, foreground window only; no keystrokes, clipboard or audio in the first phase | `docs/24` §11 phase 1. |
+| Text first, foreground window only; no keystrokes, clipboard or audio in the first phase | `docs/24` §11.1 (phase 1). |
 | Redaction at capture that cannot be disabled | FR-227: the secrets category cannot be switched off. |
-| Retention: thumbnails 48 h, text 30 days | `docs/24` §4 defaults. |
+| Retention: thumbnails 48 h, text 30 days | `docs/24` §6.3 defaults. |
 | Captured text reaches models only in an untrusted wrapper and can never satisfy an "act when told" rule | FR-155, FR-189. |
 
 ## Validation

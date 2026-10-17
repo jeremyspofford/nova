@@ -2,47 +2,108 @@
 
 The Hub is the only canonical service. Everything speaks to it. This file summarizes the
 boundaries; the generated OpenAPI document (from the shared Zod schemas) is authoritative.
+The shape stays REST plus WebSocket/SSE (ADR-072), with server-to-client requests over the
+stream (§5) and a capability handshake (§7).
 
 ## 1. Client ↔ Hub
 
 Transport: HTTPS (REST) plus WebSocket/SSE for streams. Authentication: device certificate
 + scoped bearer token issued at Add Device. All requests are authorized by the policy engine.
+Every listener requires a token or certificate; loopback is never treated as authorization
+(FR-192, ADR-075). The only exceptions authenticate another way and say so below: Add Device
+(pairing code), the MCP event webhook (signature) and the `novad` download route (static,
+signed artifacts only).
+
+### Handshake
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/hello` | Capability handshake: client declares capabilities; Hub returns versions and features (§7) |
 
 ### Auth & devices
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/devices/add/start` | Create an Add Device request; returns QR payload + short code + TTL |
-| `POST` | `/api/v1/devices/add/complete` | Device submits public key + code; Hub returns a pending approval |
+| `POST` | `/api/v1/devices/add/start` | Create an Add Device request; returns QR payload + short code + TTL (direct or via Relay) |
+| `POST` | `/api/v1/devices/add/complete` | Device submits public key + code (authenticated by the code); Hub returns a pending approval |
 | `POST` | `/api/v1/devices/add/approve` | Hub-side human approves; issues device cert + scoped token |
-| `GET` | `/api/v1/devices` | List devices with role, scopes, health, reachability |
+| `GET` | `/api/v1/agent/dist/:file` | Signed per-arch `novad` binaries and checksums for the bootstrap command (`docs/22` §4.3); serves nothing else |
+| `GET` | `/api/v1/devices` | List devices with role, scopes, health, reachability, `novad` version |
 | `PATCH` | `/api/v1/devices/:id` | Edit scopes/capabilities/overrides |
 | `POST` | `/api/v1/devices/:id/wake` | Request WoL via a Wake Helper |
-| `POST` | `/api/v1/devices/:id/revoke` | Revoke certificate and stop modules |
+| `POST` | `/api/v1/devices/:id/revoke` | Revoke certificate, stop modules and stop relay routing |
+| `GET` | `/api/v1/relay/clients` | Paired clients reachable through the Relay: device, relay client id, last seen (FR-137, ADR-071) |
+| `POST` | `/api/v1/relay/clients/:id/revoke` | Revoke a paired client: drops its key and tells the Relay to stop routing it |
 
 ### Chat, projects, files
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/v1/projects` | List/create projects |
+| `GET/POST` | `/api/v1/projects` | List/create projects (`memoryScope: shared\|project_only`, fixed at creation, FR-205) |
 | `GET/POST` | `/api/v1/threads` | List/create conversations |
-| `POST` | `/api/v1/threads/:id/messages` | Send a message; response is a stream |
-| `GET` | `/api/v1/threads/:id/stream` | WebSocket/SSE stream of events |
-| `POST` | `/api/v1/threads/:id/cancel` | Cancel generation |
-| `GET/POST` | `/api/v1/files` | List/upload files (projects, artifacts) |
+| `POST` | `/api/v1/threads/:id/messages` | Send a message; steers or queues per the thread setting while a turn runs (FR-019); response is a stream |
+| `GET` | `/api/v1/threads/:id/turns` | Turns with their items (`docs/06` §2), paged |
+| `GET` | `/api/v1/threads/:id/stream` | WebSocket/SSE stream of events and server requests (§5) |
+| `POST` | `/api/v1/threads/:id/cancel` | Cancel generation; the turn ends `interrupted` |
+| `POST` | `/api/v1/threads/:id/handoff` | Move a chat to another device or environment (FR-213) |
+| `GET/POST` | `/api/v1/files` | List/upload files (projects, artifacts, window-capture attachments, FR-214) |
 | `GET` | `/api/v1/search?q=` | Hybrid search (FTS + vector) |
 
-### Tasks, agents, approvals
+### Tasks, goals, agents, approvals, requests
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/v1/runs` | List/create work runs |
+| `GET/POST` | `/api/v1/runs` | List/create work runs (with optional budgets and goal) |
 | `POST` | `/api/v1/runs/:id/{pause,resume,redirect,cancel}` | Control a run |
-| `GET/POST` | `/api/v1/schedules` | Recurring tasks |
+| `POST` | `/api/v1/runs/:id/budget` | Extend a budget after a pause `{timeSeconds?,tokens?,costUsd?}` (FR-182) |
+| `GET/PUT/DELETE` | `/api/v1/runs/:id/goal` | Read, set or clear the run's goal ([`goal.json`](schemas/goal.json)) |
+| `GET/PUT/DELETE` | `/api/v1/agents/:id/goal` | Read, set or clear the agent's goal |
+| `GET` | `/api/v1/goals?status=` | List goals across runs and agents (FR-181) |
+| `GET/PATCH` | `/api/v1/goals/:id` | Read; edit objective or budgets (applies at the next turn) |
+| `POST` | `/api/v1/goals/:id/{pause,resume,complete}` | User status changes; `usage_limited`/`budget_limited` are never settable here |
+| `GET/POST` | `/api/v1/schedules` | Recurring tasks, agent schedules and self-set wakes ([`schedule.json`](schemas/schedule.json)) |
+| `PATCH/DELETE` | `/api/v1/schedules/:id` | Edit a schedule (`enabled: false` pauses it) or cancel it; proxied by the shell's `schedule.upsert` / `schedule.cancel` |
 | `GET/POST` | `/api/v1/agents` | Always-on agents |
-| `GET/POST` | `/api/v1/approvals` | List/decide approvals |
+| `GET/POST` | `/api/v1/approvals` | List/decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) |
+| `GET` | `/api/v1/requests?status=pending` | Pending server-to-client requests for this client ([`server-request.json`](schemas/server-request.json)) |
+| `POST` | `/api/v1/requests/:id/respond` | Answer a request; first valid answer wins (§5) |
 | `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent |
 | `GET` | `/api/v1/audit/export` | Audit log export (JSONL) |
+
+### Permissions, rules & hooks
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET/POST` | `/api/v1/policy/rules` | Tool/resource rules ([`policy-rule.json`](schemas/policy-rule.json)) |
+| `PATCH/DELETE` | `/api/v1/policy/rules/:id` | Edit/delete a rule |
+| `POST` | `/api/v1/policy/evaluate` | Preview the decision for a hypothetical action (FR-084 preview); no side effects |
+| `GET/POST` | `/api/v1/permission-profiles` | Permission profiles ([`permission-profile.json`](schemas/permission-profile.json), FR-190) |
+| `GET/PATCH/DELETE` | `/api/v1/permission-profiles/:id` | Built-in and managed profiles are read-only |
+| `GET/POST` | `/api/v1/command-rules` | Command prefix rules ([`command-rule.json`](schemas/command-rule.json), FR-191); a rule whose examples fail is rejected with `validation` |
+| `PATCH/DELETE` | `/api/v1/command-rules/:id` | Edit/delete a rule (examples re-checked) |
+| `POST` | `/api/v1/command-rules/test` | Match a command against the rules in a scope; returns the decision and the matching rule |
+| `GET` | `/api/v1/permission-grants` | Remembered session and always grants |
+| `DELETE` | `/api/v1/permission-grants/:id` | Revoke a grant |
+| `GET/POST` | `/api/v1/hooks` | Hooks from every source with trust state ([`hook-config.json`](schemas/hook-config.json), FR-197) |
+| `PATCH/DELETE` | `/api/v1/hooks/:id` | Enable/disable or delete a user hook |
+| `POST` | `/api/v1/hooks/:id/trust` | Trust `{contentHash}`: must equal the current hash, else `conflict`; managed hooks are trusted by policy |
+| `POST` | `/api/v1/hooks/:id/untrust` | Revoke trust; the hook stops at once |
+
+### Memory & import
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/memory/items?scope=&category=` | Memory items grouped by category (FR-032, FR-204) |
+| `PATCH/DELETE` | `/api/v1/memory/items/:id` | Correct, pin, dismiss or delete an item |
+| `GET` | `/api/v1/memory/summary?scope=` | The current injected summary (≤ 2,500 tokens) and its source run |
+| `POST` | `/api/v1/memory/consolidate` | Start a consolidation run now `{scope}` |
+| `GET` | `/api/v1/memory/consolidations` | Consolidation run history |
+| `PATCH` | `/api/v1/memory/topics` | "Remember more / less about this topic" `{topic, preference: more\|less\|default}` |
+| `POST` | `/api/v1/import/preview` | Scan sources `{deviceId, paths[], kinds[]}` through `novad`; returns items, targets, conflicts, masked secrets, duplicates (FR-200) |
+| `POST` | `/api/v1/import/apply` | Import selected preview items `{previewId, items[]}`; plugins and MCP servers stay disabled |
+| `GET` | `/api/v1/import/records` | Import ledger (source, kind, SHA-256, target, time) |
+
+The "reference past chats" toggle (FR-205) is the setting `memory.referencePastChats`.
 
 ### Code, tools, extensions
 
@@ -51,21 +112,57 @@ Transport: HTTPS (REST) plus WebSocket/SSE for streams. Authentication: device c
 | `GET/POST` | `/api/v1/code/sessions` | Code sessions |
 | `GET` | `/api/v1/code/sessions/:id/changes` | Diffs |
 | `POST` | `/api/v1/code/sessions/:id/{review,commit,pr}` | Review/commit/PR |
-| `GET/POST` | `/api/v1/mcp/servers` | MCP servers |
+| `POST` | `/api/v1/code/sessions/:id/handoff` | Move a session with its Git state to another device or environment `{to}` (FR-213) |
+| `GET` | `/api/v1/handoffs/:id` | Handoff status |
+| `GET` | `/api/v1/code/worktrees?deviceId=&repo=` | Worktree registry with leases (FR-073) |
+| `POST` | `/api/v1/code/worktrees` | Create a worktree and lease it to a session (max 15 per repo, else `conflict`) |
+| `POST` | `/api/v1/code/worktrees/:id/{renew,release}` | Renew or release the lease |
+| `DELETE` | `/api/v1/code/worktrees/:id` | Remove the worktree (Git hooks disabled, FR-211) |
+| `GET/POST` | `/api/v1/mcp/servers` | MCP servers ([`mcp-config.json`](schemas/mcp-config.json)); `PATCH /:id` sets tool lists and defaults |
+| `POST` | `/api/v1/mcp/bundles/preview` | Upload a bundle; returns manifest, signature state and proposed permissions (FR-199) |
+| `POST` | `/api/v1/mcp/bundles/install` | Install `{previewId, permissions, userConfig, confirmSideload?}`; unsigned without `confirmSideload: true` is refused |
+| `GET/POST` | `/api/v1/mcp/subscriptions` | MCP event subscriptions bound to triggers (FR-201) |
+| `DELETE` | `/api/v1/mcp/subscriptions/:id` | Unsubscribe; the webhook URL then answers 410 |
+| `POST` | `/api/v1/mcp/events/:subscriptionId` | **Webhook receiver.** No bearer token: a valid signature is required (HMAC-SHA256 over id, timestamp and raw body; timestamp within 5 min); bodies over 256 KiB → 413; duplicates by delivery id → 2xx without effect; bad signature → 401 |
 | `GET/POST` | `/api/v1/plugins` | Plugins |
 | `GET/POST` | `/api/v1/skills` | Skills |
 | `POST` | `/api/v1/tools/:name/invoke` | Invoke a tool (policy-gated) |
+| `GET/POST` | `/api/v1/app-authorizations` | Per-client tokens: MCP clients of Nova's MCP server (FR-192) and third-party apps (FR-222). Create returns the token once |
+| `DELETE` | `/api/v1/app-authorizations/:id` | Revoke; open sessions close at once |
+| `POST` | `/api/v1/app-authorizations/requests` | A third-party app requests scopes; returns a user code and verification URL (FR-222) |
+| `POST` | `/api/v1/app-authorizations/requests/:id/{approve,deny}` | The user decides in a Nova client |
+| `POST` | `/api/v1/app-authorizations/token` | The app exchanges an approved request for its token |
+| `POST/GET/DELETE` | `/mcp` | **Nova's MCP server** for external MCP clients (streamable HTTP: `POST` carries JSON-RPC messages, `GET` opens the server stream, `DELETE` ends the session). Off until the user adds a client; `Authorization: Bearer` with that client's token from `/api/v1/app-authorizations`, which scopes its tools, projects, thread scope, read-only or run-allowed, and expiry. Missing, wrong, expired or revoked token → 401 `token_required`; non-allowlisted `Origin`/`Host` → 403 `origin_rejected`. Every call is audited with the client id and passes the policy engine; the `nova mcp stdio` launcher proxies to this endpoint with a token from an environment variable or file (FR-044, FR-192, ADR-075, `docs/08` §2.2) |
+
+### Ambient (`docs/24`)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/ambient/summary?from=&to=` | Activity summary (FR-229) |
+| `GET` | `/api/v1/ambient/search?q=&from=&to=` | Full-text search, time-ordered (FR-153) |
+| `GET` | `/api/v1/ambient/elements?q=&from=&to=` | Element matches with bounds |
+| `GET` | `/api/v1/ambient/records/:id/context` | One record with its neighbours and, when pixels exist, a short-lived image handle |
+| `GET` | `/api/v1/ambient/timeline?from=&to=` | Records and status changes in order |
+| `GET` | `/api/v1/ambient/coverage?from=&to=` | Captured, paused, excluded and gap intervals (FR-155) |
+| `GET/POST` | `/api/v1/ambient/grants` | Scoped grants for schedules, automations, agents and apps (FR-233) |
+| `DELETE` | `/api/v1/ambient/grants/:id` | Revoke a grant |
+| `POST` | `/api/v1/ambient/forget` | Delete the last N minutes `{minutes, sources?}` (FR-154) |
+
+Ambient reads return certified rows only (FR-227) and always state the window covered and its
+gaps. Calls on behalf of a schedule, automation, agent or app are checked against its grant.
 
 ### Settings, network, diagnostics
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET/PATCH` | `/api/v1/settings` | Read/update settings |
+| `GET` | `/api/v1/flags` | Feature flags with stage ([`feature-flag.json`](schemas/feature-flag.json), ADR-082) |
+| `PATCH` | `/api/v1/flags/:key` | Toggle a `beta` or `experimental` flag; `removed` flags and managed locks are refused |
 | `GET/PATCH` | `/api/v1/network` | Transports, trust, egress, wake helpers |
 | `POST` | `/api/v1/network/setup` | Run the Network Setup assistant step |
 | `POST` | `/api/v1/network/test` | Reachability test (LAN/Mesh/Relay) |
 | `POST` | `/api/v1/network/rollback` | Revert the last network change |
-| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, sandboxes, devices) |
+| `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, sandboxes, devices, flags) |
 
 ## 2. Hub ↔ Compute Node
 
@@ -84,13 +181,14 @@ initiate to clients.
 
 ## 3. Hub ↔ `novad` (management channel)
 
-mTLS using the device certificate. Every privileged action is policy-gated and audited.
+mTLS using the device certificate. Every privileged action is policy-gated and audited. Calls
+go Hub → `novad` unless marked (novad → Hub).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/agent/v1/register` | Register device + capability document |
-| `POST` | `/agent/v1/capabilities` | Update capabilities (hardware/OS/services/models) |
-| `POST` | `/agent/v1/heartbeat` | Liveness + metrics |
+| `POST` | `/agent/v1/register` | (novad → Hub) Register device + capability document + `novad` version |
+| `POST` | `/agent/v1/capabilities` | (novad → Hub) Update capabilities (hardware/OS/services/models) |
+| `POST` | `/agent/v1/heartbeat` | (novad → Hub) Liveness + metrics |
 | `POST` | `/agent/v1/modules/:name/{start,stop}` | Start/stop a module |
 | `POST` | `/agent/v1/power` | Sleep, restart, shutdown, wake |
 | `POST` | `/agent/v1/boot/profile` | Set/inspect the next boot profile |
@@ -100,21 +198,42 @@ mTLS using the device certificate. Every privileged action is policy-gated and a
 | `POST` | `/agent/v1/firmware/rollback` | Restore a snapshot |
 | `POST` | `/agent/v1/oob/:action` | Out-of-band action (IPMI/Redfish/AMT), off by default |
 | `POST` | `/agent/v1/update` | Apply a signed module/binary update |
+| `POST` | `/agent/v1/fs/list` | List a directory inside the device's granted scopes (FR-210) |
+| `POST` | `/agent/v1/fs/read` | Read a file inside granted scopes (size-capped) |
+| `POST` | `/agent/v1/fs/request-access` | Ask for a new folder; approved on the device or the Hub, then added to `device.scopes` |
+| `POST` | `/agent/v1/fs/stage` | Stage a write `{path, baseSha256?, content}`; returns a staged-write id and diff |
+| `POST` | `/agent/v1/fs/commit` | Commit a staged write after policy allows; fails with `conflict` if the file changed since staging |
+| `POST` | `/agent/v1/mcp/list` | List the device's local stdio MCP servers and tools exposed to Hub sessions |
+| `POST` | `/agent/v1/mcp/call` | Call a device-local MCP tool under the device's grants |
+| `POST` | `/agent/v1/ambient/records` | (novad → Hub) Signed batch of capture and status records ([`ambient-record.json`](schemas/ambient-record.json)); the Hub acks each record id or refuses it with `redaction_policy_stale`, `redaction_categories_insufficient`, `redaction_model_missing`, `redaction_model_rejected` or `forgotten_window` (FR-227, FR-228) |
+| `GET` | `/agent/v1/ambient/policy` | (novad → Hub) Current redaction policy version and categories, capture rules, accepted models and profile settings |
+| `POST` | `/agent/v1/ambient/forget` | Delete a window from the device spool, queue and pixel targets; also novad → Hub to forward a forget made while offline (FR-154) |
 
 `/agent/v1/firmware/*` returns `403` unless the global "Allow BIOS/firmware changes" toggle
 is enabled **and** the specific change has an approval record. `/agent/v1/oob/*` returns
-`403` unless the out-of-band module is enabled (off by default).
+`403` unless the out-of-band module is enabled (off by default). `/agent/v1/fs/*` never
+reaches protected paths (FR-190), whatever the grant.
 
 ## 4. Native shell ↔ local `novad`
 
 Desktop shells talk to the local `novad` over a Unix domain socket (macOS/Linux) or named pipe
-(Windows), authenticated by a local token:
+(Windows). The socket is mode **0600** in the user's runtime directory; the named pipe's ACL
+allows only the signed-in user. Every request carries the local token, which `novad` writes to
+a user-only file and rotates when it restarts; a connection without a valid token is closed
+(FR-192). Loopback TCP is not offered.
 
 | Method | Purpose |
 | --- | --- |
 | `local.capabilities` | Read this device's capabilities |
 | `local.exec` | Run a local command in the sandbox (agent tools) |
-| `local.fs` | Scoped file access |
+| `local.fs.list` | List a directory inside granted scopes (FR-210) |
+| `local.fs.read` | Read a file inside granted scopes |
+| `local.fs.requestAccess` | Ask the user to grant a folder; returns the grant or a denial |
+| `local.fs.stage` | Stage a write and return its diff |
+| `local.fs.commit` | Commit a staged write after the diff is shown and policy allows |
+| `local.mcp.list` | List local stdio MCP servers and their tools |
+| `local.mcp.call` | Call a local MCP tool under the device's grants |
+| `local.window.capture` | Capture the frontmost (or picked) window: screenshot + accessibility text, redacted, excluded apps and password fields never captured (FR-214) |
 | `local.screen` | Computer-use operations |
 | `local.browser` | Local browser automation |
 
@@ -125,7 +244,51 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
 - Streams use SSE or WebSocket; events follow `contracts/events.md`.
 - High-frequency deltas are coalesced (≤ 60/s); screenshots ≤ 1 per 2 s.
 - Slow clients drop ephemeral deltas but never persisted events.
-- Reconnect resumes from the last event id; the Hub replays missed persisted events.
+- Reconnect resumes from the last event id; the Hub replays missed persisted events and
+  re-sends every request that is still `pending`.
+- **Notification opt-out**: a client lists event names it does not want in `/api/v1/hello`
+  (`suppressEvents`); the Hub omits them from that client's streams. `request.*` events
+  cannot be suppressed.
+
+### WebSocket upgrade checks
+
+- The upgrade needs the client's token or certificate (browsers: the Hub session cookie,
+  `SameSite=Strict`); otherwise `401 token_required`.
+- `Host` must be one of the Hub's configured hostnames. When `Origin` is present it must be
+  on the allowlist (the Hub's own web origins plus any the owner adds); otherwise
+  `403 origin_rejected`. Native clients that send no `Origin` are accepted on token alone.
+
+### Server-to-client requests (FR-188)
+
+The Hub asks connected clients questions over the stream they already hold: approvals,
+user input, MCP elicitations, client-side tools and credential refreshes
+([`server-request.json`](schemas/server-request.json)).
+
+WebSocket frames:
+
+```json
+{ "type": "event",   "event": { "...": "EventEnvelope" } }
+{ "type": "request", "request": { "id": "req_…", "kind": "approval", "payload": { }, "expiresAt": "…" } }
+{ "type": "respond", "requestId": "req_…", "result": { "approvalId": "…", "decision": "allow_once" } }
+{ "type": "respond.ack", "requestId": "req_…", "status": "resolved | conflict | expired" }
+```
+
+Over SSE, requests arrive as `request.created` events and are answered with
+`POST /api/v1/requests/:id/respond {result}`.
+
+Rules:
+
+1. A request goes only to clients that declared its kind in `/api/v1/hello`; a `client_tool`
+   request goes only to its `targetDeviceId`.
+2. Each request has exactly one resolution. The first valid answer wins and every other
+   client receives `request.resolved`; a later answer gets `409 conflict` with the winning
+   resolution, and an answer after `expiresAt` gets `410 request_expired`.
+3. Answers are validated: approval results must be an `ApprovalDecision` allowed for the
+   tier (FR-189); `handoff_required` and `confirm_at_action` requests can be answered only
+   from an authenticated Nova client, never from a channel.
+4. When no capable client is connected, or the request is unanswered, the Hub sends a
+   notification (FR-060). At `expiresAt` the request becomes `expired` (`request.expired`);
+   an approval records the decision `timeout` and the run pauses (default 24 h).
 
 ## 6. Error shape
 
@@ -135,12 +298,67 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
   "requestId": "req_…" }
 ```
 
-Codes: `auth_missing`, `auth_expired`, `policy_denied`, `approval_required`, `rate_limited`,
-`over_budget`, `capability_missing`, `node_unavailable`, `firmware_disabled`, `oob_disabled`,
-`validation`, `conflict`, `not_found`, `server_error`.
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `auth_missing` | 401 | No credentials |
+| `auth_expired` | 401 | Token or certificate expired |
+| `token_required` | 401 | A listener or stream upgrade without a valid token or certificate (FR-192) |
+| `origin_rejected` | 403 | WebSocket or MCP request with a non-allowlisted `Origin` or `Host` |
+| `policy_denied` | 403 | The policy engine denied the action |
+| `approval_required` | 409 | An approval is pending; `details.approvalId` |
+| `hook_untrusted` | 409 | The hook's content hash changed or was never trusted |
+| `rate_limited` | 429 | Retry after `details.retryAfter` |
+| `over_budget` | 402 | Account or provider spend cap reached (FR-116) |
+| `budget_exhausted` | 409 | A run or goal budget, or the 200-step backstop, was reached; `details.bound` (FR-182) |
+| `goal_blocked` | 409 | The goal is `blocked`; `details.blocker` (FR-181) |
+| `request_expired` | 410 | The server request expired before this answer |
+| `capability_missing` | 400 | Feature, request kind or experimental field not negotiated (§7) |
+| `sandbox_unavailable` | 503 | No sandbox could be created; fails closed, read-only mode offered |
+| `node_unavailable` | 503 | No node can take the job |
+| `firmware_disabled` | 403 | Firmware changes are off |
+| `oob_disabled` | 403 | Out-of-band module is off |
+| `validation` | 400 | Payload failed its schema or rule examples |
+| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap) |
+| `not_found` | 404 | No such resource |
+| `server_error` | 500 | Unexpected failure |
 
 ## 7. Versioning
 
 - Path prefix `/api/v1`, `/node/v1`, `/agent/v1`.
 - Breaking changes bump the major version; one compatibility shim is supported for one release.
-- The Hub advertises supported protocol versions in `/api/v1/hello`; clients/nodes negotiate.
+- **Capability handshake** (ADR-072). A client calls `POST /api/v1/hello` after
+  authenticating, before opening streams:
+
+```json
+{ "client": { "name": "nova-web", "version": "0.5.0", "platform": "web" },
+  "protocolVersions": [1],
+  "capabilities": {
+    "experimental": false,
+    "serverRequests": ["approval", "user_input", "elicitation", "credential_refresh"],
+    "clientTools": [],
+    "suppressEvents": ["chat.search.indexed"],
+    "mcpApps": true,
+    "streams": ["ws", "sse"]
+  } }
+```
+
+  The Hub answers with what was agreed:
+
+```json
+{ "hub": { "id": "…", "version": "0.5.0" },
+  "protocolVersion": 1,
+  "apiVersions": { "api": ["v1"], "node": ["v1"], "agent": ["v1"] },
+  "features": { "goals": "stable", "sandbox.microVm": "beta" },
+  "serverRequests": ["approval", "user_input", "elicitation", "credential_refresh"],
+  "limits": { "eventsPerSecond": 60, "maxUploadBytes": 104857600 },
+  "clientSessionId": "…" }
+```
+
+- The Hub picks the highest common protocol version; with none in common it answers
+  `capability_missing` naming both sides' versions.
+- `features` lists feature flags with their stage (ADR-082). Experimental methods and fields
+  are rejected with `capability_missing` unless the client set `experimental: true`;
+  experimental flags appear only for such clients.
+- Nodes and `novad` negotiate the same way in the body of `/node/v1/register` and
+  `/agent/v1/register`; the Hub refuses a `novad` below the minimum version for a requested
+  capability (FR-081).

@@ -61,12 +61,21 @@ the node directly.
 ```
 1. Client sends message → Hub /api/chat
 2. Hub resolves policy, thread context, and model
-3. Hub selects a compute node (routing order, §5)
+3. Hub selects a compute node and execution location (routing order, §5); both are fixed
+   for this turn
 4. Hub streams the request to the node over the internal protocol
 5. Node streams tokens back to the Hub
 6. Hub persists the assistant turn, emits events, forwards tokens to the client
 7. Hub writes usage + audit records
 ```
+
+- **Execution location is fixed per turn** (FR-127). The Hub resolves the node, device or
+  environment when a turn starts and keeps it for every step, so no turn is half local and
+  half remote. If the location is lost mid-turn, the turn ends `interrupted` (resumable); the
+  next turn may route elsewhere (`docs/09` §2).
+- **Hooks run where the turn executes** (FR-197). The Hub resolves the turn's hook set at turn
+  start, and every hook runs at the execution location inside that location's sandbox. A hook
+  that cannot run there is recorded in the trace as failed, never silently skipped.
 
 ## 5. Routing order (default)
 
@@ -108,7 +117,15 @@ service) so the Hub stays running and restarts on failure.
 
 - Present the Hub-served UI (PWA or native shell).
 - Capture local input: microphone, camera, files, screen (with consent).
-- Show notifications and approvals.
+- **Attach window** (FR-214): on desktop clients, the native shell's global shortcut asks the
+  local `novad` to capture the frontmost window (screenshot plus accessibility text). Exclusions
+  and redaction run on the device; the user previews the attachment before it is uploaded to
+  the Hub. A plain browser tab cannot offer the global shortcut.
+- **Dictation** (FR-216): speech-to-text into the composer, on the device when it has a local
+  engine, otherwise on a local compute node through the Hub. Audio is streamed and discarded,
+  never stored.
+- Show notifications and approvals, with the thread status model (FR-215), and answer
+  server-to-client requests over their stream (FR-188).
 - Optionally host a **local fallback runtime** + local models via `novad` when the Hub is
   unreachable and the Hub has granted that capability to the device.
 - Maintain an **encrypted local replica** only if the Hub grants that capability (Q1).
@@ -144,9 +161,21 @@ Until then, the Hub's supervisor restarts it on crash, and clients fall back loc
 Nova is explicitly both:
 
 - **Reactive** — answers requests; responds to events (webhook, Slack/Teams message, file
-  change, email, connector event) via triggers (`docs/09` §7).
-- **Proactive** — schedules recurring work; performs read-only proactive research; watches
-  for conditions and surfaces findings; can initiate action subject to policy and approvals.
+  change, email, connector event, MCP event subscription per FR-201) via triggers
+  (`docs/09` §7). Only sources that declare events can trigger; joining a channel never creates
+  a trigger by itself (FR-056).
+- **Proactive** — schedules recurring work; watches for conditions and surfaces findings; can
+  initiate action subject to policy and approvals. In particular:
+  - **Idle-driven research** (FR-082): when an agent has no turn in progress and nothing
+    pending, at most hourly by default and never in quiet hours, it reads connected sources
+    with read-only tools, records findings in its notes and brings suggestions to the user.
+    Findings are untrusted and never count as user intent (FR-189).
+  - **Self-scheduled wakes** (FR-206): an agent may set its own next wake-up with
+    `schedule.wake` (minimum interval 5 min, horizon at most 30 days, at most 24 per day by
+    default). Wakes appear in the Scheduled list, are editable and cancellable by the user,
+    respect quiet hours, and are audited.
+  - **Goal continuation** (FR-181): while a goal is active and its thread is idle, the runtime
+    starts a continuation turn within budgets and quiet hours.
 
 Proactive work always runs on the Hub (the always-on piece), using compute nodes for heavy
 steps. Safety defaults: proactive actions that affect the outside world require approval.
@@ -171,8 +200,10 @@ Performance budgets are set against the supported minimum (see `docs/16`).
 | Hub ↔ Compute Node | Internal gRPC/HTTP over LAN or Mesh | Hub-authorized |
 | Hub ↔ Relay | WebSocket/HTTPS, outbound | Content-blind |
 | `novad` ↔ Hub | mTLS (device certificate) | Capability + management channel |
+| Native shell ↔ local `novad` | Unix socket (mode 0600) or named pipe (user-only ACL) | Token required; loopback is never authorization (FR-192) |
 
-Detailed contracts live in `contracts/`.
+Every listener requires a token or certificate (FR-192). Detailed contracts live in
+`contracts/`.
 
 ## 14. Non-goals
 

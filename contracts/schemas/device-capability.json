@@ -16,7 +16,10 @@
     },
     "modules": {
       "type": "array",
-      "items": { "enum": ["management", "compute", "browser", "screen", "storage", "firmware"] },
+      "items": {
+        "enum": ["management", "compute", "browser", "screen", "storage", "capture", "firmware"]
+      },
+      "description": "Installed modules (docs/23 §4); capture is the networkless ambient capture helper (FR-228).",
       "uniqueItems": true
     },
     "hardware": {

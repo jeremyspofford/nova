@@ -10,7 +10,10 @@
     "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
     "name": { "type": "string", "maxLength": 100 },
     "variant": { "enum": ["light", "dark", "system"] },
-    "extends": { "type": "string", "description": "Optional built-in theme id to inherit tokens from." },
+    "extends": {
+      "type": "string",
+      "description": "Optional built-in theme id to inherit tokens from."
+    },
     "tokens": {
       "type": "object",
       "additionalProperties": { "type": "string" },
