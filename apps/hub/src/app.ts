@@ -51,7 +51,14 @@ import { setupMcpServer } from './mcp-server.ts';
 import { setupPlugins } from './plugins.ts';
 import { setupProfile } from './profile.ts';
 import { setupWorkspace } from './workspace.ts';
+import { setupAgents } from './agents.ts';
+import { setupBrowser } from './browser.ts';
+import { setupChannels } from './channels.ts';
 import { setupCode } from './code.ts';
+import { setupComputers } from './computers.ts';
+import { setupDevices } from './devices.ts';
+import { setupScreen } from './screen.ts';
+import { setupSpaces } from './spaces.ts';
 import { setupRequests } from './requests.ts';
 import { setupRuns } from './runs.ts';
 import { setupSchedules } from './schedules.ts';
@@ -324,7 +331,22 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     memory,
     projects,
   });
+  // M6: agents, channels, computers, browser, screen, devices and spaces (wired by their areas).
+  const computers = await setupComputers(ctx);
+  const browser = await setupBrowser(ctx);
+  const screen = await setupScreen(ctx);
+  const channels = await setupChannels(ctx);
+  const agents = await setupAgents(ctx);
+  const devices = await setupDevices(ctx);
+  const spaces = await setupSpaces(ctx);
   const areas = [
+    spaces,
+    devices,
+    agents,
+    channels,
+    screen,
+    browser,
+    computers,
     code,
     schedules,
     runs,
