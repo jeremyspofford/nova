@@ -309,7 +309,8 @@ describe('stdio servers', () => {
     // A manual restart forgets the earlier restarts and tries again.
     await h.manager.restart(cfg.id);
     expect(h.statuses.filter((x) => x.status === 'starting').length).toBeGreaterThan(6);
-  });
+    // Six server processes start and exit: slower than 5 s on a busy CI runner.
+  }, 30_000);
 
   it('refuses a server that speaks an older protocol, naming both versions', async () => {
     h = harness({ backoff: { baseMs: 5000, maxMs: 5000 } });

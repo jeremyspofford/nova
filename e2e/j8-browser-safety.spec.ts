@@ -260,6 +260,22 @@ test('J8: sandboxed network requests and credentials the proxy adds', async ({
   expect(await listed.text()).not.toContain(SECRET);
   await expectNoSeriousA11yIssues(page, 'settings/network');
 
+  // Commands have no network by default (docs/11 §2): the owner's permission profile gives them
+  // network through the egress proxy, still allowing no host.
+  const profile = await page.request.post(`${hub.url}/api/v1/permission-profiles`, {
+    data: {
+      name: 'online',
+      extends: 'workspace',
+      filesystem: [],
+      network: { mode: 'allowlist', allow: [] },
+    },
+  });
+  expect(profile.status(), await profile.text()).toBe(201);
+  const useProfile = await page.request.patch(`${hub.url}/api/v1/settings`, {
+    data: { key: 'tools.permissionProfile', value: 'online' },
+  });
+  expect(useProfile.status(), await useProfile.text()).toBe(200);
+
   // 2 and 4 inside the sandbox: a request to an unlisted host gets the proxy's 403 with its
   // cause, and the sandbox's environment holds no credential. Without a sandbox the command
   // fails closed.
