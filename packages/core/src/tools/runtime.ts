@@ -258,10 +258,17 @@ export class ToolRuntime {
     return this.#scope({ accountId, threadId, projectId });
   }
 
-  /** Tools for one turn: snapshot the catalog, hide what policy denies outright. */
+  /**
+   * Tools for one turn: snapshot the catalog, hide what policy denies outright. The listing is
+   * scoped to the turn's thread and mode, so mode tools (runs, code, requests) are offered only
+   * in their threads (M5).
+   */
   async beginTurn(input: TurnInput): Promise<TurnTools> {
     const scope = await this.scopeFor(input.accountId, input.threadId, input.projectId);
-    const all = await this.registry.list(input.accountId);
+    const all = await this.registry.list(input.accountId, {
+      threadId: input.threadId,
+      mode: input.mode,
+    });
     const hidden = await this.#deniedOutright(input, scope, all);
     return new TurnTools(this, input, scope, all, hidden);
   }
@@ -418,7 +425,11 @@ export class ToolRuntime {
   ): Promise<ResolvedMention[]> {
     if (!mentions.length) return [];
     const scope = await this.scopeFor(accountId, threadId, projectId);
-    const tools = await this.registry.list(accountId);
+    // A turn's mentions resolve against the tools its thread is offered (M5 scoped listing).
+    const tools = await this.registry.list(accountId, {
+      threadId,
+      mode: this.#thread(accountId, threadId).mode,
+    });
     return resolveMentions(mentions, scope.roots, tools, this.#pathsFor(scope));
   }
 
@@ -747,12 +758,17 @@ export class ToolRuntime {
         { decision: outcome, startedAt, resource, hooks },
       );
     }
+    // A built-in that waited for the user in vain (an unanswered user.ask, FR-188) ends the
+    // turn like an approval that timed out.
+    const unanswered =
+      !result.ok && result.error.code === 'approval_timeout' && def.descriptor.source === 'builtin';
     return finish(result.ok ? 'ok' : 'error', result, {
       decision: outcome,
       startedAt,
       resource,
       hooks,
       post: this.#hooks !== undefined && x.origin !== 'hook',
+      ...(unanswered ? { stop: 'approval_timeout' as const } : {}),
     });
   }
 

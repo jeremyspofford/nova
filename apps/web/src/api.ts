@@ -90,6 +90,7 @@ import type {
   CommitResult,
   DiffCommentView,
   EnvironmentView,
+  ExecSessionView,
   GoalView,
   RunView,
   ScheduleFireView,
@@ -642,6 +643,15 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
       call<CodeReviewView>('GET', `${V1}/code/sessions/${enc(id)}/reviews/${enc(reviewId)}`),
     commit: (id: string, body: z.input<typeof commitSchema>) =>
       call<CommitResult>('POST', `${V1}/code/sessions/${enc(id)}/commit`, body),
+    /** A terminal in the session's folder (FR-066). */
+    createSessionTerminal: (
+      id: string,
+      size: { cols: number; rows: number } = { cols: 80, rows: 24 },
+    ) => call<TerminalView>('POST', `${V1}/code/sessions/${enc(id)}/terminal`, size),
+    /** The agent's interactive exec sessions of a thread (FR-184). */
+    listExecSessions: (threadId: string) =>
+      call<{ items: ExecSessionView[] }>('GET', `${V1}/exec/sessions${query({ threadId })}`),
+    killExecSession: (id: string) => call<{ ok: true }>('DELETE', `${V1}/exec/sessions/${enc(id)}`),
     codeSymbols: (id: string, q: string) =>
       call<{ items: CodeSymbolView[] }>(
         'GET',

@@ -213,7 +213,8 @@ export class ThreadService {
       const cs = citesBy.get(m.id);
       if (cs?.length) v.citations = cs.map(toCitationView);
       if (m.role === 'user') {
-        v.provenance = m.authorKind === 'hook' ? 'hook' : (m.delivery ?? 'typed');
+        const label = provenanceOf(m);
+        if (label) v.provenance = label;
         const mentions = mentionsOf(byMessage.get(m.id) ?? []);
         if (mentions.length) v.mentions = mentions;
       }
@@ -693,9 +694,63 @@ export function toPartView(p: PartRow): PartView | null {
         title: typeof a?.title === 'string' ? a.title : null,
       };
     }
+    case 'compaction': {
+      // A compaction item (FR-183): its summary and how much it stands for.
+      const c = parseJson(p.content) as {
+        trigger?: unknown;
+        summary?: unknown;
+        tokensBefore?: unknown;
+        tokensAfter?: unknown;
+        covered?: unknown;
+        method?: unknown;
+      } | null;
+      if (typeof c?.summary !== 'string' || !c.summary) return null;
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      const trigger = ['pre_turn', 'mid_turn', 'post_turn', 'manual'].includes(String(c.trigger))
+        ? (c.trigger as 'pre_turn' | 'mid_turn' | 'post_turn' | 'manual')
+        : 'manual';
+      return {
+        type: 'compaction',
+        trigger,
+        summary: c.summary,
+        tokensBefore: num(c.tokensBefore),
+        tokensAfter: num(c.tokensAfter),
+        covered: num(c.covered),
+        method: c.method === 'model' ? 'model' : 'extractive',
+      };
+    }
+    case 'notice': {
+      const n = parseJson(p.content) as { code?: unknown; message?: unknown } | null;
+      return typeof n?.message === 'string' && n.message
+        ? {
+            type: 'notice',
+            code: typeof n.code === 'string' ? n.code : 'notice',
+            message: n.message,
+          }
+        : null;
+    }
     default:
       // tool_result and context parts feed the model only.
       return null;
+  }
+}
+
+/**
+ * How a user message entered its turn, as the thread labels it: typed, a steer or a queued send
+ * (FR-019), a hook's continuation (FR-197), or M5's run objective, schedule fire, goal
+ * continuation and sub-agent task (TurnStarter), or a message Nova itself started (`system`).
+ */
+function provenanceOf(m: MessageRow): MessageView['provenance'] | null {
+  switch (m.authorKind) {
+    case 'hook':
+    case 'run':
+    case 'schedule':
+    case 'goal':
+    case 'subagent':
+    case 'system':
+      return m.authorKind;
+    default:
+      return m.delivery ?? 'typed';
   }
 }
 

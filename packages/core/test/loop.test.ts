@@ -334,12 +334,9 @@ describe('tool loop: approvals (FR-100)', () => {
     expect((await toolCards(env, t.id))[0]).toMatchObject({ status: 'awaiting_approval' });
     expect(callRows(t.id)[0]).toMatchObject({ status: 'awaiting_approval' });
     expect((await env.threads.view(ACCOUNT, t.id)).state).toBe('waiting_approval');
-    const waiting = env.events.events.find((e) => e.name === 'thread.status.changed')!;
-    expect(waiting.payload).toEqual({
-      ref: { kind: 'thread', id: t.id },
-      from: 'running',
-      status: 'needs_input',
-    });
+    // M5: `thread.status.changed` is the ThreadStatusService's (FR-215); the loop only sets the
+    // thread's state.
+    expect(env.events.names()).not.toContain('thread.status.changed');
     expect(existsSync(join(env.workspace, 'plan.md'))).toBe(false);
 
     answer.resolve({
@@ -353,8 +350,6 @@ describe('tool loop: approvals (FR-100)', () => {
     expect((await toolCards(env, t.id))[0]).toMatchObject({ status: 'ok', approvalId: 'appr-1' });
     expect(callRows(t.id)[0]).toMatchObject({ approval_id: 'appr-1', decision: 'allow' });
     expect(threadState(t.id)).toBe('idle');
-    const changes = env.events.events.filter((e) => e.name === 'thread.status.changed');
-    expect(changes.map((e) => e.payload.status)).toEqual(['needs_input', 'running']);
   });
 
   it('deny and continue: the denial goes back to the model and the turn goes on', async () => {

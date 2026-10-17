@@ -1,6 +1,7 @@
 // Sidebar (FR-001, docs/04 §1): New chat, Search, the four modes (Chat lists its threads),
 // Projects with the most recent few (FR-034), and Settings. It is a landmark with a logical tab
-// order; the thread list is one roving tab stop.
+// order; the thread list is one roving tab stop. M5: each chat's status chip follows the shared
+// event stream, Needs input sorts first, and active Work runs list under Work (FR-215).
 import { Icon, IconButton, Kbd, type IconName } from '@nova/ui';
 import { ThreadList } from '../chat/ThreadList.tsx';
 import { SearchPanel } from '../chat/SearchPanel.tsx';
@@ -8,6 +9,9 @@ import { formatBinding } from '../keys.ts';
 import { useRecentProjects } from '../projects/events.ts';
 import { navigate, projectPath, useRoute, type Mode } from '../router.ts';
 import { useServices } from '../services.tsx';
+import { SidebarRuns } from './SidebarRuns.tsx';
+import { useWorkCommands } from '../work/commands.ts';
+import { useSidebarStatus } from './SidebarStatus.ts';
 import '../workspace.css';
 
 export const MODE_INFO: Record<Mode, { label: string; icon: IconName; command: string }> = {
@@ -47,6 +51,9 @@ export function Sidebar({
 }: SidebarProps) {
   const { registry } = useServices();
   const route = useRoute();
+  // Chips stay live for every chat, and Ctrl/Cmd+Alt+A jumps to what needs input (FR-215).
+  useSidebarStatus();
+  useWorkCommands();
   const recentProjects = useRecentProjects();
   const openProjectId = route.name === 'projects' ? route.projectId : null;
   const mac = registry.platform.mac;
@@ -119,6 +126,12 @@ export function Sidebar({
                 <ThreadList
                   selectedId={mode === 'chat' && !settingsOpen ? selectedThreadId : null}
                   streamingId={streamingThreadId}
+                  onOpen={onNavigated}
+                />
+              ) : null}
+              {m === 'work' ? (
+                <SidebarRuns
+                  selectedId={route.name === 'mode' && route.mode === 'work' ? route.id : null}
                   onOpen={onNavigated}
                 />
               ) : null}

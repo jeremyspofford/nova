@@ -26,3 +26,4 @@ export * from './runs/index.ts';
 export * from './scheduler/index.ts';
 export * from './code/index.ts';
 export * from './requests/index.ts';
+export * from './documents/index.ts';

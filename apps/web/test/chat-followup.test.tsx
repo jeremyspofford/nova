@@ -220,4 +220,63 @@ describe('follow-ups while a reply streams (FR-019)', () => {
     expect(within(fromHook).getByText('Run the tests')).toBeTruthy();
     expect(screen.getByRole('article', { name: 'You' })).toBeTruthy();
   });
+
+  it('labels messages a run, schedule, goal or sub-agent started (M5)', async () => {
+    await openChat(
+      {},
+      {
+        messages: (tid) => [
+          message(tid, {
+            parts: [{ type: 'text', text: 'Summarize the report' }],
+            provenance: 'run',
+          }),
+          message(tid, { parts: [{ type: 'text', text: 'Daily check' }], provenance: 'schedule' }),
+          message(tid, { parts: [{ type: 'text', text: 'Keep going' }], provenance: 'goal' }),
+          message(tid, { parts: [{ type: 'text', text: 'Find sources' }], provenance: 'subagent' }),
+        ],
+      },
+    );
+    for (const [name, text] of [
+      ['Run objective', 'Summarize the report'],
+      ['Schedule', 'Daily check'],
+      ['Goal', 'Keep going'],
+      ['Task', 'Find sources'],
+    ] as const)
+      expect(within(await screen.findByRole('article', { name })).getByText(text)).toBeTruthy();
+  });
+
+  it('shows a compaction as a collapsed summary and a notice under its reply (FR-183, FR-185)', async () => {
+    await openChat(
+      {},
+      {
+        messages: (tid) => [
+          message(tid, {
+            role: 'summary',
+            parts: [
+              {
+                type: 'compaction',
+                trigger: 'pre_turn',
+                summary: 'We planned the garden.',
+                tokensBefore: 9000,
+                tokensAfter: 1200,
+                covered: 14,
+                method: 'extractive',
+              },
+            ],
+          }),
+          message(tid, {
+            role: 'assistant',
+            parts: [
+              { type: 'text', text: 'Done' },
+              { type: 'notice', code: 'instructions_truncated', message: 'AGENTS.md was cut.' },
+            ],
+          }),
+        ],
+      },
+    );
+    const summary = await screen.findByRole('article', { name: 'Context summary' });
+    expect(within(summary).getByText(/14 messages, 9000 → 1200 tokens/)).toBeTruthy();
+    expect(within(summary).getByText('We planned the garden.')).toBeTruthy();
+    expect(screen.getByRole('note').textContent).toContain('AGENTS.md was cut.');
+  });
 });

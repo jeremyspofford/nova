@@ -42,12 +42,15 @@ export async function start(
   if (opened.warning) log.warn(opened.warning);
   if (opened.migrated) log.info('moved secrets into the OS keychain', { count: opened.migrated });
   const secrets = opened.store;
-  const { app, auth, chat, registry, sources } = await buildHub({ config, db, log, secrets });
+  const { app, auth, chat, registry, sources, runs } = await buildHub({ config, db, log, secrets });
   // A crash may have left replies mid-stream: keep their text, mark them incomplete (FR-018).
   // Queued follow-ups then start (FR-019), unfinished source indexing resumes (FR-040), and
   // temporary chats past their TTL are purged (FR-027).
   const recovered = await chat.recoverOnStartup();
   if (recovered.messages || recovered.turns) log.warn('recovered interrupted turns', recovered);
+  // Work runs a restart interrupted continue from their last committed state (FR-052).
+  const resumed = await runs.recover();
+  if (resumed) log.info('resuming work runs', { runs: resumed });
   const reindexing = await sources.recover();
   if (reindexing) log.info('resuming source indexing', { sources: reindexing });
   const purged = await chat.sweepTemporary();

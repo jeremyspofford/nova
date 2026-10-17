@@ -11,6 +11,7 @@ import { PluginsPage } from './PluginsPage.tsx';
 import { ProfilePage } from './ProfilePage.tsx';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { PermissionsPage } from './PermissionsPage.tsx';
+import { CodePage } from './CodePage.tsx';
 import { ToolsPage } from './ToolsPage.tsx';
 import { KeyboardPage } from './KeyboardPage.tsx';
 import { MemoryPage } from './MemoryPage.tsx';
@@ -23,6 +24,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   models: 'Models',
   memory: 'Memory',
   tools: 'Tools & MCP',
+  code: 'Code',
   plugins: 'Plugins & skills',
   clients: 'Apps & clients',
   permissions: 'Permissions',
@@ -71,6 +73,7 @@ export function SettingsView({
         {section === 'memory' ? <MemoryPage /> : null}
         {section === 'profile' ? <ProfilePage onDisplayName={onDisplayName} /> : null}
         {section === 'tools' ? <ToolsPage /> : null}
+        {section === 'code' ? <CodePage /> : null}
         {section === 'plugins' ? <PluginsPage /> : null}
         {section === 'clients' ? <ClientsPage /> : null}
         {section === 'import' ? <ImportPage /> : null}

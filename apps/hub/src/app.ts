@@ -60,7 +60,7 @@ import { setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
 import { setupOps } from './ops.ts';
 import { setupPolicy } from './policy.ts';
-import { setupTools } from './tools.ts';
+import { setupTools, type ToolsArea } from './tools.ts';
 import { registerProjectRoutes } from './project-routes.ts';
 
 export const SESSION_COOKIE = 'nova_session';
@@ -109,6 +109,8 @@ export interface Hub {
   projects: ProjectService;
   sources: SourceService;
   memory: MemoryService;
+  /** Work runs (M5): `recover()` continues runs a restart interrupted (FR-052). */
+  runs: { recover(): Promise<number> };
 }
 
 const CSP = [
@@ -229,12 +231,39 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   policy.usePluginViolations((accountId, pluginId) =>
     plugins.service.setEnabled(accountId, pluginId, false),
   );
+  // M5: requests, schedules, Code sessions and runs come before the tools, whose sources include
+  // their tools; what they need from the tools and the chat loop is bound late.
+  let toolsRef: ToolsArea | null = null;
+  const requests = await setupRequests(ctx, {
+    notifier: ops.notifier,
+    approvals: policy.approvals,
+  });
+  const schedules = await setupSchedules(ctx, { audit: ops.audit, notifier: ops.notifier });
+  const code = await setupCode({
+    ...ctx,
+    audit: ops.audit,
+    sandbox: () => toolsRef?.sandbox ?? null,
+  });
+  const runs = await setupRuns({
+    ...ctx,
+    audit: ops.audit,
+    notifier: ops.notifier,
+    roots: async (accountId, threadId, projectId) =>
+      toolsRef ? (await toolsRef.runtime.scopeFor(accountId, threadId, projectId)).roots : [],
+  });
   // The apps area exists after the tools; the chat loop reads its model context late-bound.
   let mcpApps: Awaited<ReturnType<typeof setupMcpApps>> | null = null;
   const tools = await setupTools({
     ...ctx,
     gate: policy.gate,
-    sources: [mcp.source, plugins.skills.tools],
+    sources: [
+      mcp.source,
+      plugins.skills.tools,
+      runs.tools,
+      code.tools,
+      requests.tools,
+      schedules.reportTools,
+    ],
     audit: ops.audit,
     notifier: ops.notifier,
     hooks: hooks.dispatcher,
@@ -243,6 +272,22 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     appContext: (accountId, threadId) =>
       Promise.resolve(mcpApps ? mcpApps.modelContext(accountId, threadId) : null),
   });
+  toolsRef = tools;
+  // A Code session's permission mode and a run's autonomy set the gate's approval policy and the
+  // tools' profile and roots for their threads (FR-063, docs/09 §10); both read the same sources.
+  for (const source of [code.policy, runs.policy]) {
+    policy.useThreadPolicy(source);
+    tools.useThreadPolicy(source);
+  }
+  requests.useStatusSources(runs.status, code.status);
+  runs.useStatus((accountId, ids) => requests.status.statusOf(accountId, ids));
+  runs.useReviewReset((key) => policy.gate.resetReviewBreaker(key));
+  schedules.useRuns(runs.starter);
+  runs.useDelivery(async ({ accountId, runId, summary }) => {
+    const r = await schedules.verifyMessageOutput(accountId, runId, summary);
+    return r.verified ? { ok: true, evidence: r.evidence } : { ok: false, reason: r.evidence };
+  });
+  ops.useDiagnosticTests({ mcp: mcp.manager, sandbox: () => tools.sandbox });
   // The gate previews and classifies with the tools' own descriptors and the sandbox in use.
   policy.useToolCatalog(tools.catalog);
   policy.useSubstrate(() => tools.substrate());
@@ -269,6 +314,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     sandbox: () => tools.sandbox,
     scope,
   });
+  code.useTerminals(workspace.terminals);
   const profile = await setupProfile({
     ...ctx,
     audit: ops.audit,
@@ -278,11 +324,6 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     memory,
     projects,
   });
-  // M5: requests, runs, schedules and Code sessions (wired to the chat loop below).
-  const requests = await setupRequests(ctx);
-  const runs = await setupRuns(ctx);
-  const schedules = await setupSchedules(ctx);
-  const code = await setupCode(ctx);
   const areas = [
     code,
     schedules,
@@ -315,7 +356,27 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       temporaryTtlHours: () => setting('chat.temporaryTtlHours'),
     },
     ...tools.chatOptions,
+    ...tools.loopOptions,
+    // Runs and Code sessions shape each turn on their threads (docs/09 §2, §11).
+    extensions: [runs.extension, code.extension],
     ...deps.chat,
+  });
+  // Runs, Code sessions and schedules start turns through the same loop (ADR-076).
+  runs.useTurns(chat.turnStarter);
+  code.useTurns(chat.turnStarter);
+  // Time spent waiting for the user's answer does not count against a run's time budget.
+  events.bus.subscribe('request.*', (e) => {
+    const threadId = e.correlation?.threadId;
+    if (!threadId) return;
+    if (e.name === 'request.created') chat.awaitingUser(threadId, true);
+    else if (e.name === 'request.resolved' || e.name === 'request.expired')
+      chat.awaitingUser(threadId, false);
+  });
+  // A run's interactive exec sessions end with it (FR-184).
+  events.bus.subscribe('run.completed', (e) => {
+    const threadId = e.correlation?.threadId;
+    if (threadId && e.accountId)
+      void tools.execSessions.killThread(e.accountId, threadId, 'killed').catch(() => undefined);
   });
   const app = Fastify({
     logger: false,
@@ -413,6 +474,28 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     features: [],
     setupRequired: (await auth.ownerAccount()) === null,
   }));
+
+  // The authenticated handshake (contracts/hub-api.md §1, §5): the server-request kinds this
+  // client takes and the `clientSessionId` its socket names (FR-188).
+  const helloBody = z
+    .object({
+      capabilities: z.object({ serverRequests: z.unknown() }).partial().optional(),
+    })
+    .passthrough();
+  app.post('/api/v1/hello', async (req) => {
+    const accountId = await accountOf(req);
+    const body = helloBody.parse(req.body ?? {});
+    return {
+      name: 'nova-hub',
+      version: config.version,
+      apiVersions: ['v1'],
+      ...requests.hello({
+        accountId,
+        deviceId: req.principal?.tokenId ?? null,
+        serverRequests: body.capabilities?.serverRequests,
+      }),
+    };
+  });
 
   app.get('/api/v1/health', () => ({ status: 'ok', version: config.version }));
 
@@ -542,6 +625,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
 
   app.get('/api/v1/events/stream', async (req, reply) => {
     requireAuth(req);
+    const accountId = await accountOf(req);
     const lastId =
       (req.headers['last-event-id'] as string | undefined) ??
       (req.query as { after?: string }).after ??
@@ -550,7 +634,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       req,
       reply,
       { events, trackStream },
-      () => true,
+      // Only this account's events (and account-less system events) reach the client.
+      (e) => !e.accountId || e.accountId === accountId,
       // Like the thread stream: replay only after a cursor; without one, live events only
       // (contracts/hub-api.md §5), so a fresh client never receives old history.
       async (send) => {
@@ -577,6 +662,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     chat,
     accountOf,
     trackStream,
+    status: (accountId, ids) => requests.status.statusOf(accountId, ids),
   });
   registerProjectRoutes(app, { projects, sources, accountOf });
   registerMemoryRoutes(app, { memory, accountOf });
@@ -598,31 +684,42 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       return Promise.resolve();
     };
     scoped.get('/api/v1/ws', { websocket: true, preValidation: sessionFirst }, (socket, req) => {
-      if (!req.principal) {
+      const principal = req.principal;
+      const accountId = principal?.accountId;
+      if (!principal || !accountId) {
         socket.close(4401, 'token_required');
         return;
       }
       socket.send(JSON.stringify({ type: 'hello', version: config.version }));
-      const off = events.bus.subscribe('*', (e) =>
-        socket.send(JSON.stringify({ type: 'event', event: e })),
-      );
+      const send = (frame: Record<string, unknown>) => socket.send(JSON.stringify(frame));
+      // Only this account's events (and account-less system events) reach the socket.
+      const off = events.bus.subscribe('*', (e) => {
+        if (!e.accountId || e.accountId === accountId) send({ type: 'event', event: e });
+      });
+      // Server-to-client requests for the kinds the client declared (FR-188).
+      const q = req.query as { clientSessionId?: string };
+      const conn = requests.attachClient({
+        accountId,
+        deviceId: principal.tokenId,
+        clientSessionId: q.clientSessionId ?? null,
+        send,
+      });
       socket.on('message', (raw: Buffer) => {
         let msg: unknown;
         try {
           msg = JSON.parse(raw.toString('utf8'));
         } catch {
-          socket.send(
-            JSON.stringify({
-              type: 'error',
-              error: { code: 'validation', message: 'invalid JSON' },
-            }),
-          );
+          send({ type: 'error', error: { code: 'validation', message: 'invalid JSON' } });
           return;
         }
-        if ((msg as { type?: string }).type === 'ping')
-          socket.send(JSON.stringify({ type: 'pong' }));
+        void conn.handle(msg).then((handled) => {
+          if (!handled && (msg as { type?: string }).type === 'ping') send({ type: 'pong' });
+        });
       });
-      socket.on('close', off);
+      socket.on('close', () => {
+        off();
+        conn.detach();
+      });
     });
     done();
   });
@@ -663,6 +760,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     projects,
     sources,
     memory,
+    runs,
   };
 }
 

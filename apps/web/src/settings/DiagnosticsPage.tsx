@@ -1,7 +1,8 @@
-// Settings → Diagnostics (FR-118, FR-043, FR-104 partial; docs/16 §1): a health snapshot of the
-// Hub and its parts, the redacted log viewer with level and module filters, and the audit log
-// with an integrity check of its hash chain. Exports are redacted by the Hub.
-import { useEffect, useState, type ReactNode } from 'react';
+// Settings → Diagnostics (FR-118, FR-119, FR-043, FR-104; docs/16 §1): a health snapshot of the
+// Hub and its parts, each with a Test action (providers, MCP servers, the sandbox, storage,
+// updates), the redacted log viewer with level and module filters, and the audit log with an
+// integrity check of its hash chain. Exports are redacted by the Hub.
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type {
   AuditEntryView,
   AuditVerifyResult,
@@ -9,7 +10,7 @@ import type {
   LogEntryView,
 } from '@nova/shared';
 import { Button, Icon, SelectField, Spinner, useToast } from '@nova/ui';
-import { errorMessage } from '../api.ts';
+import { ApiError, errorMessage, type ApiErrorBody } from '../api.ts';
 import { useServices } from '../services.tsx';
 import { formatWhen, plural, useInterval } from './common.ts';
 import { SwitchField } from './controls.tsx';
@@ -29,6 +30,158 @@ export function formatUptime(seconds: number): string {
   if (h) return `${h} h ${m} min`;
   if (m) return `${m} min`;
   return `${s} s`;
+}
+
+// ---- component tests (FR-119) -------------------------------------------------------------------
+
+export type DiagnosticComponent = 'provider' | 'mcp' | 'sandbox' | 'storage' | 'update';
+export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'unavailable';
+
+/** POST /api/v1/diagnostics/test (apps/hub/src/ops.ts); proposed for @nova/shared. */
+export interface DiagnosticTestResult {
+  component: DiagnosticComponent;
+  ref: string | null;
+  status: DiagnosticStatus;
+  detail: string;
+  checks: { name: string; ref: string | null; status: DiagnosticStatus; detail: string }[];
+  durationMs: number;
+  testedAt: string;
+}
+
+/**
+ * Run one component's test. The Hub client has no method for this route yet, so the page calls
+ * it the way the client does (same-origin session cookie, JSON in and out).
+ */
+export async function postDiagnosticTest(body: {
+  component: DiagnosticComponent;
+  ref?: string;
+}): Promise<DiagnosticTestResult> {
+  const res = await fetch('/api/v1/diagnostics/test', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: ApiErrorBody };
+  if (!res.ok)
+    throw new ApiError(
+      res.status,
+      data.error ?? { code: 'server_error', message: res.statusText, retryable: true },
+    );
+  return data as DiagnosticTestResult;
+}
+
+export const TEST_STATUS_TEXT: Record<DiagnosticStatus, string> = {
+  ok: 'Passed',
+  warning: 'Warning',
+  error: 'Failed',
+  unavailable: 'Not available',
+};
+
+interface TestState {
+  running: boolean;
+  result: DiagnosticTestResult | null;
+  error: string | null;
+}
+
+type RunTest = (component: DiagnosticComponent, ref?: string) => Promise<void>;
+
+function useDiagnosticTests(onDone: (component: DiagnosticComponent) => void) {
+  const [tests, setTests] = useState<Record<string, TestState>>({});
+  const run: RunTest = useCallback(
+    async (component, ref) => {
+      const key = `${component}:${ref ?? ''}`;
+      setTests((t) => ({
+        ...t,
+        [key]: { running: true, result: t[key]?.result ?? null, error: null },
+      }));
+      try {
+        const result = await postDiagnosticTest(ref ? { component, ref } : { component });
+        setTests((t) => ({ ...t, [key]: { running: false, result, error: null } }));
+        onDone(component);
+      } catch (err) {
+        setTests((t) => ({
+          ...t,
+          [key]: {
+            running: false,
+            result: null,
+            error: errorMessage(err, 'The test could not run.'),
+          },
+        }));
+      }
+    },
+    [onDone],
+  );
+  const state = (component: DiagnosticComponent, ref?: string): TestState =>
+    tests[`${component}:${ref ?? ''}`] ?? { running: false, result: null, error: null };
+  return { run, state };
+}
+
+function TestResult({ state }: { state: TestState }) {
+  const r = state.result;
+  return (
+    <div role="status" className="ws-diag-result">
+      {state.error ? (
+        <p className="ws-warning ws-flush">
+          <Icon name="alert" /> {state.error}
+        </p>
+      ) : r ? (
+        <>
+          <p
+            className={
+              r.status === 'ok'
+                ? 'ws-ok ws-flush'
+                : r.status === 'unavailable'
+                  ? 'muted ws-flush'
+                  : 'ws-warning ws-flush'
+            }
+            data-status={r.status}
+          >
+            <Icon name={r.status === 'ok' ? 'check' : 'alert'} />{' '}
+            <span>
+              <strong>{TEST_STATUS_TEXT[r.status]}:</strong> {r.detail}
+            </span>
+          </p>
+          {r.checks.length > 1 ? (
+            <ul className="ws-plain-list" aria-label="Checks">
+              {r.checks.map((c) => (
+                <li key={`${c.name}-${c.ref ?? ''}`}>
+                  {c.name}: {TEST_STATUS_TEXT[c.status]}. {c.detail}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function TestControl({
+  label,
+  component,
+  refId,
+  tests,
+}: {
+  label: string;
+  component: DiagnosticComponent;
+  refId?: string;
+  tests: ReturnType<typeof useDiagnosticTests>;
+}) {
+  const state = tests.state(component, refId);
+  return (
+    <div className="ws-diag-test">
+      <Button
+        variant="ghost"
+        aria-label={`Test ${label}`}
+        disabled={state.running}
+        onClick={() => void tests.run(component, refId)}
+      >
+        {state.running ? <Spinner /> : <Icon name="refresh" />} Test
+      </Button>
+      <TestResult state={state} />
+    </div>
+  );
 }
 
 export function DiagnosticsPage() {
@@ -59,6 +212,11 @@ function SnapshotSection() {
   const [snap, setSnap] = useState<DiagnosticsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  // A provider test refreshes the account's status, so the snapshot reloads after one.
+  const refreshAfter = useCallback((component: DiagnosticComponent) => {
+    if (component === 'provider') setVersion((v) => v + 1);
+  }, []);
+  const tests = useDiagnosticTests(refreshAfter);
 
   useEffect(() => {
     let alive = true;
@@ -149,11 +307,25 @@ function SnapshotSection() {
                   : 'Not available'}
               </p>
               <p className="muted ws-flush">{snap.sandbox.detail}</p>
+              <TestControl label="the sandbox" component="sandbox" tests={tests} />
+            </Card>
+            <Card title="Storage">
+              <p className="muted ws-flush">
+                Writes, reads and deletes a test file in the data folder and checks the database.
+              </p>
+              <TestControl label="storage" component="storage" tests={tests} />
+            </Card>
+            <Card title="Updates">
+              <p className="ws-flush">Version {snap.hub.version}</p>
+              <TestControl label="updates" component="update" tests={tests} />
             </Card>
             <Card title="Providers">
               <NamedStatuses
                 items={snap.providers.map((p) => ({ id: p.id, name: p.label, status: p.status }))}
                 empty="No providers connected."
+                action={(i) => (
+                  <TestControl label={i.name} component="provider" refId={i.id} tests={tests} />
+                )}
               />
             </Card>
             <Card title="Compute nodes">
@@ -168,6 +340,9 @@ function SnapshotSection() {
                   detail: m.lastError,
                 }))}
                 empty="No MCP servers."
+                action={(i) => (
+                  <TestControl label={i.name} component="mcp" refId={i.id} tests={tests} />
+                )}
               />
             </Card>
           </div>
@@ -177,12 +352,22 @@ function SnapshotSection() {
   );
 }
 
+interface NamedStatus {
+  id: string;
+  name: string;
+  status: string;
+  detail?: string | null;
+}
+
 function NamedStatuses({
   items,
   empty,
+  action,
 }: {
-  items: { id: string; name: string; status: string; detail?: string | null }[];
+  items: NamedStatus[];
   empty: string;
+  /** A control under each item (the Test action, FR-119). */
+  action?: (item: NamedStatus) => ReactNode;
 }) {
   if (!items.length) return <p className="muted ws-flush">{empty}</p>;
   return (
@@ -191,6 +376,7 @@ function NamedStatuses({
         <li key={i.id}>
           <strong>{i.name}</strong>: {i.status}
           {i.detail ? <span className="muted"> ({i.detail})</span> : null}
+          {action?.(i)}
         </li>
       ))}
     </ul>

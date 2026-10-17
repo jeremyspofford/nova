@@ -17,6 +17,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import {
@@ -125,6 +126,10 @@ export interface ComposerProps {
   suggestions?: string[];
   /** Turns suggestions off (the `chat.suggestions` setting). */
   onTurnOffSuggestions?: () => void;
+  /** M5: an extra control before Stop and Send, e.g. a Code session's permission mode. */
+  accessory?: ReactNode;
+  /** M5: prefix of the box's element ids, so an embedded chat does not reuse the main one's. */
+  idBase?: string;
 }
 
 export function Composer({
@@ -155,6 +160,8 @@ export function Composer({
   slashSource,
   suggestions = [],
   onTurnOffSuggestions,
+  accessory,
+  idBase = 'composer',
 }: ComposerProps) {
   const own = useRef<HTMLTextAreaElement>(null);
   const textarea = inputRef ?? own;
@@ -325,17 +332,17 @@ export function Composer({
       ) : null}
       {mention.popover}
       {slash.popover}
-      <label htmlFor="composer-input" className="nv-vh">
+      <label htmlFor={`${idBase}-input`} className="nv-vh">
         Message
       </label>
       <textarea
-        id="composer-input"
+        id={`${idBase}-input`}
         ref={textarea}
         className="composer-input"
         rows={1}
         value={draft.text}
         placeholder={noModelHint ?? 'Message Nova'}
-        aria-describedby="composer-help"
+        aria-describedby={`${idBase}-help`}
         onChange={(e) => {
           onDraftChange({ ...draft, text: e.target.value });
           mention.track(e.target.value, e.target.selectionStart);
@@ -380,7 +387,7 @@ export function Composer({
           }
         }}
       />
-      <span id="composer-help" className="nv-vh">
+      <span id={`${idBase}-help`} className="nv-vh">
         {enterToSend === 'enter'
           ? 'Enter sends, Shift+Enter adds a line.'
           : `${sendKey} sends, Enter adds a line.`}{' '}
@@ -471,6 +478,7 @@ export function Composer({
             options={REASONING_LEVELS.map((l) => ({ value: l, label: `Reasoning: ${l}` }))}
           />
         ) : null}
+        {accessory}
         {streaming ? (
           <Button
             variant="default"

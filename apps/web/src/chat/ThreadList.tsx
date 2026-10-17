@@ -17,7 +17,7 @@ import {
 import { errorMessage } from '../api.ts';
 import { chatPath, navigate } from '../router.ts';
 import { useThreads } from '../stores.tsx';
-import { threadStatus } from './status.ts';
+import { sortByThreadStatus, threadStatus, threadStatusReason } from './status.ts';
 
 export function threadTitle(t: Pick<ThreadView, 'title'>): string {
   return t.title?.trim() || 'Untitled chat';
@@ -45,8 +45,17 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
   const listRef = useRef<HTMLDivElement>(null);
 
   const rows = showArchived ? (store.archived ?? []) : store.threads;
-  const pinned = showArchived ? [] : rows.filter((t) => t.pinned);
-  const recent = showArchived ? rows : rows.filter((t) => !t.pinned);
+  // Needs input first, then Blocked, Running and Ready, within each group (FR-215).
+  const pinned = showArchived
+    ? []
+    : sortByThreadStatus(
+        rows.filter((t) => t.pinned),
+        streamingId,
+      );
+  const recent = sortByThreadStatus(
+    showArchived ? rows : rows.filter((t) => !t.pinned),
+    streamingId,
+  );
   const ordered = [...pinned, ...recent];
   const current =
     ordered.find((t) => t.id === focusId) ?? ordered.find((t) => t.id === selectedId) ?? ordered[0];
@@ -186,7 +195,9 @@ export function ThreadList({ selectedId, onOpen, streamingId }: ThreadListProps)
             {t.pinned ? <VisuallyHidden>, pinned</VisuallyHidden> : null}
             {t.parentThreadId && !t.side ? <VisuallyHidden>, branch</VisuallyHidden> : null}
             {t.temporary ? <VisuallyHidden>, temporary</VisuallyHidden> : null}
-            {status !== 'ready' ? <StatusChip status={status} compact /> : null}
+            {status !== 'ready' ? (
+              <StatusChip status={status} reason={threadStatusReason(t)} compact />
+            ) : null}
           </a>
         )}
         <Menu

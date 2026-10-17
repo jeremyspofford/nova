@@ -13,6 +13,7 @@ export const SETTINGS_SECTIONS = [
   'models',
   'memory',
   'tools',
+  'code',
   'plugins',
   'clients',
   'permissions',

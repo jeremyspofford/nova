@@ -110,9 +110,14 @@ export interface ContextBlock {
    * approved plan, the environment). Untrusted ones are wrapped as untrusted data.
    */
   trusted: boolean;
+  /** Where an untrusted block came from; it taints the turn with this origin (default `tool`). */
+  origin?: Origin;
 }
 
 export interface TurnAddition {
+  /** The run (and goal) the turn belongs to: recorded on the turn and its usage (docs/06). */
+  runId?: string | null;
+  goalId?: string | null;
   context?: ContextBlock[];
   bounds?: TurnBounds;
   /** Called once when the turn ends (after its hook continuations). */
@@ -210,7 +215,9 @@ export interface ReviewInput {
 
 /** Runs after the deterministic engine and can only tighten (FR-085). Fails closed to deny. */
 export interface Reviewer {
-  review(input: ReviewInput): Promise<ReviewVerdict & { attempts: number; failed: boolean }>;
+  review(
+    input: ReviewInput,
+  ): Promise<ReviewVerdict & { attempts: number; failed: boolean; model?: string | null }>;
 }
 
 // ---- server-to-client requests (FR-188) ----------------------------------------------------------

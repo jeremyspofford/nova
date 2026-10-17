@@ -9,7 +9,7 @@ import { execTools } from './exec.ts';
 import { fsTools } from './fs.ts';
 import type { PathPolicy } from './roots.ts';
 import { toolSearchTool } from './search.ts';
-import type { ToolDefinition, ToolSourceProvider } from './types.ts';
+import type { ToolDefinition, ToolSourceProvider, ToolListScope } from './types.ts';
 import { webTools, type WebToolOptions } from './web.ts';
 
 /** Canonical names (contracts/schemas/tool-descriptor.json). */
@@ -71,13 +71,13 @@ export class ToolRegistry {
   }
 
   /** Every tool available to the account now; the first source wins a name collision. */
-  async list(accountId: string): Promise<ToolDefinition[]> {
+  async list(accountId: string, scope?: ToolListScope): Promise<ToolDefinition[]> {
     const out: ToolDefinition[] = [];
     const seen = new Set<string>();
     for (const s of this.#sources) {
       let tools: ToolDefinition[];
       try {
-        tools = await s.list(accountId);
+        tools = await s.list(accountId, scope);
       } catch (err) {
         // A source must never throw; one that does lists nothing (docs/08 §9).
         this.#log.warn('tool source failed to list', { err, source: s.source });

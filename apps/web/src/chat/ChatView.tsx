@@ -11,7 +11,15 @@
 // up to three suggested follow-ups from the Hub wait in the empty composer unless
 // `chat.suggestions` is off (FR-028), `/` completes slash commands (FR-046), and a tool that
 // declares a UI shows its MCP App under its card (FR-198).
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type {
   EventEnvelope,
   InputMode,
@@ -85,6 +93,12 @@ export interface ChatViewProps {
   approvalId?: string | null;
   /** Opens an artifact in the Inspector (FR-038). */
   onOpenArtifact?: (artifactId: string) => void;
+  /** M5: shown inside a view with its own header (a Code session): the chat header is left out
+   *  and the composer's element ids are its own. */
+  embedded?: boolean;
+  /** M5: a control for the composer's right cluster, e.g. a Code session's permission mode
+   *  (docs/04 §3). */
+  composerAccessory?: ReactNode;
 }
 
 export interface ChatControls {
@@ -109,6 +123,8 @@ export function ChatView({
   onOpenPanel,
   approvalId = null,
   onOpenArtifact,
+  embedded = false,
+  composerAccessory,
 }: ChatViewProps) {
   const { api, registry, memory, bus } = useServices();
   const threads = useThreads();
@@ -896,7 +912,7 @@ export function ChatView({
           void intake.addFiles(files);
         }}
       >
-        <header className="chat-header">
+        <header className="chat-header" hidden={embedded}>
           <h1 className="chat-title">{title}</h1>
           {status ? <StatusChip status={status} /> : null}
           {thread?.parentThreadId && !thread.side ? (
@@ -1080,6 +1096,8 @@ export function ChatView({
           mentionSource={mentionSource}
           slashSource={slashSource}
           suggestions={suggestions}
+          accessory={composerAccessory}
+          idBase={embedded ? `composer-${threadId ?? 'new'}` : undefined}
           onTurnOffSuggestions={() => {
             settings.set('chat.suggestions', false).then(
               () => announce('Suggested follow-ups are off. Turn them on in Settings → General.'),

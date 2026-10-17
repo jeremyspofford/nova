@@ -7,7 +7,7 @@
 // Inspector (FR-038). Web sources show their title and host and open in a new tab (FR-029).
 // M4: a tool that declares a UI shows its MCP App under its card (FR-198).
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { CitationView, ToolCallStatus } from '@nova/shared';
+import type { CitationView, MessageView, ToolCallStatus } from '@nova/shared';
 import {
   Button,
   Icon,
@@ -22,6 +22,8 @@ import {
 import { ArtifactCard } from './Artifacts.tsx';
 import { Highlighted } from './find.tsx';
 import { Markdown } from './Markdown.tsx';
+import { isRunCall, RunCard } from './RunCard.tsx';
+import { isAskCall, UserAskCard } from './UserAskCard.tsx';
 import {
   messageSegments,
   messageText,
@@ -80,6 +82,15 @@ export interface MessageItemProps {
 
 const BUSY_HINT = 'Wait for the reply to finish';
 
+const AUTHOR_LABELS: Partial<Record<NonNullable<MessageView['provenance']>, string>> = {
+  hook: 'Hook',
+  run: 'Run objective',
+  schedule: 'Schedule',
+  goal: 'Goal',
+  subagent: 'Task',
+  system: 'Nova',
+};
+
 export function MessageItem({
   message: m,
   streamed,
@@ -107,14 +118,28 @@ export function MessageItem({
   const thinking = reasoning ?? storedReasoning;
   const files = m.parts.filter((p) => p.type === 'file');
   const errors = m.parts.filter((p) => p.type === 'error');
-  const fromHook = m.role === 'user' && m.provenance === 'hook';
-  const who = fromHook
-    ? 'Hook'
-    : m.role === 'user'
-      ? 'You'
-      : m.role === 'assistant'
-        ? 'Assistant'
-        : m.role;
+  const notices = m.parts.filter((p) => p.type === 'notice');
+  // A compaction item (FR-183) stands for earlier messages; it renders as a collapsed summary.
+  const compaction = m.parts.find((p) => p.type === 'compaction');
+  if (compaction?.type === 'compaction')
+    return (
+      <article
+        id={`${idPrefix}${m.id}`}
+        className="msg msg-compaction"
+        aria-label="Context summary"
+      >
+        <details>
+          <summary>
+            Earlier messages were summarized to save context ({compaction.covered} messages,{' '}
+            {compaction.tokensBefore} → {compaction.tokensAfter} tokens)
+          </summary>
+          <p className="msg-compaction-text">{compaction.summary}</p>
+        </details>
+      </article>
+    );
+  // A user-role message the user did not type in the composer says who wrote it (FR-197, M5).
+  const label = m.role === 'user' && m.provenance ? AUTHOR_LABELS[m.provenance] : undefined;
+  const who = label ?? (m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Assistant' : m.role);
   const steering = m.provenance === 'steer' || m.expect === 'steer';
   const siblings = m.siblingIds && m.siblingIds.length > 1 ? m.siblingIds : null;
   const settled = !m.id.startsWith('local-') && m.status !== 'streaming';
@@ -182,6 +207,14 @@ export function MessageItem({
               />
             );
           const approval = approvalFor?.(seg.call) ?? null;
+          // M5: a chat's inline Work run (FR-186) and a question to the user (FR-188) have their
+          // own cards; while the call waits on an approval it keeps the tool card that holds it.
+          if (!approval && isRunCall(seg.call))
+            return (
+              <RunCard key={`call-${seg.call.callId}`} call={seg.call} chatThreadId={m.threadId} />
+            );
+          if (!approval && isAskCall(seg.call))
+            return <UserAskCard key={`call-${seg.call.callId}`} call={seg.call} />;
           return (
             <Fragment key={`call-${seg.call.callId}`}>
               <ToolCard call={seg.call} status={approval?.status} approval={approval?.node} />
@@ -213,6 +246,13 @@ export function MessageItem({
         </ul>
       ) : null}
       {m.citations?.length ? <Citations items={m.citations} /> : null}
+      {notices.map((n, i) =>
+        n.type === 'notice' ? (
+          <p key={`n${i}`} className="msg-notice muted" role="note">
+            <Icon name="alert" /> {n.message}
+          </p>
+        ) : null,
+      )}
       {errors.map((e, i) =>
         e.type === 'error' ? (
           <div key={i} className="msg-error" role="alert">

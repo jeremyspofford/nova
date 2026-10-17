@@ -7,22 +7,30 @@
 // `prompt.submit`, `stop`, `interrupt` in the ChatService) and the skills catalog reach the
 // ChatService through `chatOptions` (FR-046, FR-197); a project's folders are tool roots for its
 // chats (FR-035); GET /threads/:id/suggestions serves follow-up prompts (FR-028).
+//
+// M5: the runtime's sandbox is wrapped in ExecSessions, which lists the running exec sessions for
+// the terminal pane (GET/DELETE /exec/sessions) and gives exec tools the `exec.sessions` yield
+// time and output cap (FR-184); `context.remaining` / `context.fresh` share a tracker with the
+// chat loop, which also gets the compaction and instruction-file settings (FR-183, FR-185).
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { idSchema, type ToolDescriptor } from '@nova/shared';
+import { NovaError, idSchema, type ToolDescriptor } from '@nova/shared';
 import {
   type HookDispatcher,
   type PluginPermissionSource,
   type ProjectFolderSource,
   type SkillCatalogProvider,
   ArtifactService,
+  ExecSessions,
   SuggestionService,
   ToolRegistry,
   ToolRuntime,
+  TurnContextTracker,
   builtinSource,
   builtinTools,
+  contextTools,
   detectSandbox,
   loadPermissionProfile,
   projectFolderSource,
@@ -38,12 +46,25 @@ import {
   type ToolScope,
   type ToolSourceProvider,
   type WebToolOptions,
+  documentTools,
+  imageToolSource,
+  pluginScaffoldTool,
+  providerImageGenerator,
+  artifactDocumentPreview,
+  type ThreadPolicy,
+  type ThreadPolicySource,
 } from '@nova/core';
 import type { HubArea, HubContext } from './hub-context.ts';
 
 export interface ToolsArea extends HubArea {
   /** Options merged into the ChatService (the tool loop hooks in here). */
   chatOptions: Partial<ChatServiceOptions>;
+  /**
+   * M5 loop options, merged into the ChatService next to `chatOptions`: the audit of turns
+   * started without the user typing (FR-189), and compaction and instruction files with the
+   * tracker the context tools share (FR-183, FR-185).
+   */
+  loopOptions: Pick<ChatServiceOptions, 'audit' | 'context'>;
   runtime: ToolRuntime;
   artifacts: ArtifactService;
   /** A registered tool's descriptor (for the policy area's POST /policy/evaluate). */
@@ -52,6 +73,8 @@ export interface ToolsArea extends HubArea {
   substrate: () => SandboxClient['substrate'];
   /** The sandbox itself, shared with hooks and terminals (M4). */
   sandbox: SandboxClient;
+  /** Exec sessions of the agent tools (FR-184): list, kill; a run's end kills its thread's. */
+  execSessions: ExecSessions;
   /** Follow-up prompts (FR-028). */
   suggestions: SuggestionService;
   /**
@@ -60,6 +83,8 @@ export interface ToolsArea extends HubArea {
    * agree. Defaults to the `project_folder` table.
    */
   useProjectFolders(source: ProjectFolderSource): void;
+  /** A mode's per-thread profile and roots (Code sessions, runs); the gate reads the same. */
+  useThreadPolicy(source: ThreadPolicySource): void;
 }
 
 export interface ToolsDeps {
@@ -119,6 +144,7 @@ const invokeBody = z.object({
   initiator: z.enum(['user', 'app']).optional(),
 });
 const threadParams = z.object({ id: idSchema });
+const execSessionsQuery = z.object({ threadId: idSchema.optional() });
 
 export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   const log = ctx.log.child('tools');
@@ -141,25 +167,58 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   // The data folder holds the database, the vault and blobs: no tool touches it, except the
   // workspace inside it (docs/12 §7.2).
   const paths: PathPolicy = { denied: [ctx.dataDir], allowed: [workspace] };
-  const builtins = builtinTools({
-    artifacts,
-    searxngUrl,
-    paths,
-    ...(ctx.web ? { web: ctx.web } : {}),
+  // The loop and the context tools share what each running turn's context holds (FR-183).
+  const turnContext = new TurnContextTracker();
+  const builtins = [
+    ...builtinTools({
+      artifacts,
+      searxngUrl,
+      paths,
+      ...(ctx.web ? { web: ctx.web } : {}),
+    }),
+    ...contextTools(turnContext),
+    // M5: document outputs (FR-219) and plugin drafts (FR-050).
+    ...documentTools({ artifacts, paths }),
+    pluginScaffoldTool({ dataDir: ctx.dataDir, novaVersion: ctx.config.version }),
+  ];
+  // Agent commands run through ExecSessions; hooks and terminals keep the bare sandbox.
+  const execSessions = new ExecSessions(sandbox, {
+    settings: () => ctx.setting('exec.sessions'),
+    events: ctx.events,
+    audit: ctx.audit,
   });
   const registry = new ToolRegistry({
-    sources: [builtinSource(builtins, searxngUrl), ...ctx.sources],
+    sources: [
+      builtinSource(builtins, searxngUrl),
+      // Image generation (FR-030) is listed only while a provider can make images.
+      imageToolSource({
+        artifacts,
+        generator: providerImageGenerator({
+          registry: ctx.registry,
+          allowCloud: () => ctx.setting('routing.allowCloud'),
+        }),
+      }),
+      ...ctx.sources,
+    ],
     log,
   });
   let folders: ProjectFolderSource = ctx.projectFolders ?? projectFolderSource(ctx.db);
+  const threadPolicies: ThreadPolicySource[] = [];
   const runtime = new ToolRuntime({
     db: ctx.db,
     events: ctx.events,
     gate: ctx.gate,
     registry,
-    sandbox,
+    sandbox: execSessions,
     audit: ctx.audit,
-    scope: ctx.scope ?? settingsScope(ctx, workspace, (projectId) => folders(projectId)),
+    scope:
+      ctx.scope ??
+      settingsScope(
+        ctx,
+        workspace,
+        (projectId) => folders(projectId),
+        () => threadPolicies,
+      ),
     deferBudget: (projectId) => ctx.setting('tools.deferBudget', projectId),
     paths,
     log,
@@ -173,20 +232,35 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   });
   const waitMs = ctx.invokeWaitMs ?? 60_000;
   const chatOptions: Partial<ChatServiceOptions> = { tools: runtime };
+  const loopOptions: ToolsArea['loopOptions'] = {
+    audit: ctx.audit,
+    context: {
+      tracker: turnContext,
+      compactThreshold: (projectId) => ctx.setting('context.compactThreshold', projectId),
+      // Security-relevant: user or managed settings only, never a project's (FR-185).
+      instructionFiles: () => ctx.setting('instructions.files'),
+      projectFolders: (projectId) => folderRoots(folders, projectId),
+    },
+  };
   if (ctx.hooks) chatOptions.hooks = ctx.hooks;
   if (ctx.skills) chatOptions.skills = ctx.skills;
   if (ctx.appContext) chatOptions.appContext = ctx.appContext;
 
   return Promise.resolve({
     chatOptions,
+    loopOptions,
     runtime,
     artifacts,
     catalog: async (accountId, name) => (await registry.find(accountId, name))?.descriptor ?? null,
     substrate: () => sandbox.substrate,
     sandbox,
+    execSessions,
     suggestions,
     useProjectFolders: (source) => {
       folders = source;
+    },
+    useThreadPolicy: (source) => {
+      threadPolicies.push(source);
     },
     register(app: FastifyInstance) {
       app.get('/api/v1/tools', async (req) => {
@@ -241,6 +315,14 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         return artifacts.get(accountId, id);
       });
 
+      // A document artifact's text, headings, tables and slides, extracted on the Hub (FR-219).
+      app.get('/api/v1/artifacts/:id/preview', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = params.parse(req.params);
+        const q = contentQuery.parse(req.query);
+        return artifactDocumentPreview(artifacts, accountId, id, q.version);
+      });
+
       app.get('/api/v1/artifacts/:id/content', async (req, reply) => {
         const accountId = await ctx.accountOf(req);
         const { id } = params.parse(req.params);
@@ -272,6 +354,23 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         const { id } = threadParams.parse(req.params);
         return { items: await suggestions.forThread(accountId, id) };
       });
+
+      // Running exec sessions of the agent's commands, for the terminal pane (FR-184).
+      app.get('/api/v1/exec/sessions', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const q = execSessionsQuery.parse(req.query);
+        if (q.threadId) await ctx.threads.row(accountId, q.threadId);
+        return { items: execSessions.list(accountId, q.threadId) };
+      });
+
+      // Kill one (the pane's stop button); another account's session is not found.
+      app.delete('/api/v1/exec/sessions/:id', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = params.parse(req.params);
+        if (!(await execSessions.kill(accountId, id)))
+          throw new NovaError('not_found', 'no running command with this session id');
+        return { ok: true };
+      });
     },
     close: async () => {
       suggestions.close();
@@ -291,12 +390,21 @@ export function settingsScope(
   ctx: HubContext,
   workspace: string,
   folders: ProjectFolderSource = projectFolderSource(ctx.db),
+  threadPolicies: () => readonly ThreadPolicySource[] = () => [],
 ): ToolRuntimeOptions['scope'] {
-  return async ({ accountId, projectId }): Promise<ToolScope> => {
-    const id = await ctx.setting('tools.permissionProfile', projectId);
+  return async ({ accountId, threadId, projectId }): Promise<ToolScope> => {
+    // A Code session's (or run's) permission mode sets the profile and roots of its thread,
+    // exactly as the gate reads them (FR-063, FR-190); a source that throws fails the turn.
+    let policy: ThreadPolicy | null = null;
+    if (threadId)
+      for (const source of threadPolicies()) {
+        policy = await source.forThread(accountId, threadId);
+        if (policy) break;
+      }
+    const id = policy?.profileId ?? (await ctx.setting('tools.permissionProfile', projectId));
     const { profile } = await loadPermissionProfile(ctx.db, accountId, id);
     // A project's folders are roots for its chats (FR-035), exactly as the gate adds them.
-    const extra = [
+    const extra = policy?.roots ?? [
       ...(await ctx.setting('tools.roots')),
       ...(await folderRoots(folders, projectId)),
     ];

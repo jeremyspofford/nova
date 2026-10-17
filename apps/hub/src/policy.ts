@@ -6,6 +6,11 @@
 // M4: the gate runs the `permission.request` hooks (FR-197, docs/12 §2.3 step 7), enforces the
 // confirmed permissions of plugins (FR-045) and adds a project's folders to its roots (FR-035);
 // the lead wires each with `useHooks`, `usePluginPermissions` and `useProjectFolders`.
+//
+// M5: a thread's mode sets the gate's approval policy, profile and roots (`useThreadPolicy`, a
+// Code session's permission mode, FR-063), and the `review` policy goes through the model
+// auto-reviewer (FR-085), wired here with `review.model` through the router; `useReviewer`
+// replaces it. `approvals` is the approvals flow for the requests area's `approval` mirror.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -19,16 +24,20 @@ import {
   type ToolSource,
 } from '@nova/shared';
 import {
+  ModelReviewer,
   PolicyGate,
   PolicyStore,
   RULE_EFFECT_CLASSES,
   projectFolderSource,
+  type ApprovalRequests,
   type AuditSink,
   type HookDispatcher,
   type Notifier,
   type PluginPermissionSource,
   type ProjectFolderSource,
+  type Reviewer,
   type ServerDefaults,
+  type ThreadPolicySource,
 } from '@nova/core';
 import type { Scope, Substrate } from '@nova/policy';
 import { schema } from '@nova/storage';
@@ -55,12 +64,20 @@ export interface PolicyAreaFull extends PolicyArea {
   usePluginViolations(fn: (accountId: string, pluginId: string) => Promise<unknown>): void;
   /** A project's folders (FR-035); the tools area must use the same source. */
   useProjectFolders(source: ProjectFolderSource): void;
+  /** Per-thread policy: a Code session's permission mode, a run's autonomy (FR-063). */
+  useThreadPolicy(source: ThreadPolicySource): void;
+  /** Replace the auto-reviewer (default: the `review.model` model reviewer, FR-085). */
+  useReviewer(reviewer: Reviewer): void;
+  /** The approvals flow as the requests area lists and answers it (FR-188). */
+  approvals: ApprovalRequests;
 }
 
 export interface PolicyOptions {
   /** Override `policy.approvalTimeoutMinutes` (tests). */
   approvalTimeoutMs?: () => number;
   home?: string;
+  /** The auto-reviewer; default a ModelReviewer on `review.model` (tests replace it). */
+  reviewer?: Reviewer;
 }
 
 const params = z.object({ id: idSchema });
@@ -187,6 +204,21 @@ export async function setupPolicy(
     ...(opts.home ? { home: opts.home } : {}),
     ...(opts.approvalTimeoutMs ? { approvalTimeoutMs: opts.approvalTimeoutMs } : {}),
   });
+  // Auto-review (FR-085): without `review.model` the `review` policy denies, with a clear reason.
+  gate.useReviewer(
+    opts.reviewer ??
+      new ModelReviewer({
+        router: ctx.router,
+        model: () => ctx.setting('review.model'),
+        log: log.child('review'),
+      }),
+  );
+  const approvals: ApprovalRequests = {
+    pending: (accountId, threadId) =>
+      store.listApprovals(accountId, { status: 'pending', ...(threadId ? { threadId } : {}) }),
+    get: (accountId, id) => store.getApproval(accountId, id),
+    decide: (accountId, body, decidedBy) => gate.decide(accountId, body, decidedBy),
+  };
   let catalog: ToolCatalog | null = null;
 
   // Nobody waits for an approval left pending by a crash (docs/06 invariant 10).
@@ -386,6 +418,9 @@ export async function setupPolicy(
     usePluginPermissions: (source) => gate.usePluginPermissions(source),
     usePluginViolations: (fn) => gate.usePluginViolations(fn),
     useProjectFolders: (source) => gate.useProjectFolders(source),
+    useThreadPolicy: (source) => gate.useThreadPolicy(source),
+    useReviewer: (reviewer) => gate.useReviewer(reviewer),
+    approvals,
     register,
     close: () => gate.close(),
   };

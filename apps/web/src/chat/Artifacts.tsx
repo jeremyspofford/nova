@@ -4,6 +4,9 @@
 // cannot reach the app or its session), SVG and images load as images (no script runs in an
 // <img>), PDFs open in the browser's viewer, and anything else is offered as a download. Live and
 // edited artifacts re-render on `artifact.created|updated`.
+//
+// Documents (FR-219): DOCX, PPTX and XLSX files and PDFs show a text and table preview the Hub
+// extracts (GET /artifacts/:id/preview), so a large file is never parsed in the browser.
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { ArtifactKind, ArtifactView, EventEnvelope } from '@nova/shared';
 import { Button, CodeBlock, Icon, Spinner } from '@nova/ui';
@@ -12,6 +15,7 @@ import { useServices } from '../services.tsx';
 import { formatBytes } from './attachments.ts';
 import { Markdown } from './Markdown.tsx';
 import type { ArtifactPart } from './thread-state.ts';
+import '../workspace.css';
 
 export const ARTIFACT_KIND_TEXT: Record<ArtifactKind, string> = {
   markdown: 'Document',
@@ -27,6 +31,45 @@ export const ARTIFACT_KIND_TEXT: Record<ArtifactKind, string> = {
 /** Text artifacts larger than this are offered as a download instead of a preview. */
 export const TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
 
+export type DocumentFormat = 'docx' | 'pptx' | 'xlsx' | 'pdf';
+
+const DOCUMENT_MIMES: Record<string, DocumentFormat> = {
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
+
+export const DOCUMENT_KIND_TEXT: Record<DocumentFormat, string> = {
+  docx: 'Document (DOCX)',
+  pptx: 'Presentation (PPTX)',
+  xlsx: 'Spreadsheet (XLSX)',
+  pdf: 'PDF',
+};
+
+/** The document format of an artifact (FR-219): a PDF, or a file with an Office media type or name. */
+export function documentFormatOf(a: {
+  kind: ArtifactKind;
+  mime?: string | null;
+  title: string | null;
+}): DocumentFormat | null {
+  if (a.kind === 'pdf') return 'pdf';
+  if (a.kind !== 'file') return null;
+  const byMime = DOCUMENT_MIMES[a.mime?.split(';')[0]?.trim().toLowerCase() ?? ''];
+  if (byMime) return byMime;
+  const ext = /\.(docx|pptx|xlsx)$/i.exec(a.title ?? '')?.[1]?.toLowerCase();
+  return (ext as DocumentFormat | undefined) ?? null;
+}
+
+/** What kind of artifact this is, in words. */
+export function artifactKindText(a: {
+  kind: ArtifactKind;
+  mime?: string | null;
+  title: string | null;
+}): string {
+  const f = documentFormatOf(a);
+  return f ? DOCUMENT_KIND_TEXT[f] : ARTIFACT_KIND_TEXT[a.kind];
+}
+
 const artifactTitle = (a: { title: string | null; kind: ArtifactKind }) =>
   a.title?.trim() || ARTIFACT_KIND_TEXT[a.kind];
 
@@ -39,7 +82,7 @@ export function ArtifactCard({
   onOpen?: (artifactId: string) => void;
 }) {
   const title = artifactTitle(part);
-  const kind = ARTIFACT_KIND_TEXT[part.kind];
+  const kind = artifactKindText(part);
   const body = (
     <>
       <Icon name="artifact" />
@@ -192,7 +235,7 @@ export function ArtifactsPanel({ threadId, selectedId, onSelect }: ArtifactsPane
                 <Icon name="artifact" />
                 <span className="artifact-row-title">{artifactTitle(a)}</span>
                 <span className="muted">
-                  {ARTIFACT_KIND_TEXT[a.kind]}
+                  {artifactKindText(a)}
                   {a.version > 1 ? `, version ${a.version}` : ''}
                 </span>
               </button>
@@ -211,6 +254,9 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
   const title = artifactTitle(a);
   const url = `${api.artifactContentUrl(a.id)}?v=${a.version}.${rev}`;
   const download = api.artifactContentUrl(a.id);
+  const format = documentFormatOf(a);
+  // The preview route sits next to the content route (apps/hub tools.ts).
+  const previewUrl = `${download.replace(/\/content$/, '/preview')}?v=${a.version}.${rev}`;
   let body: ReactNode;
   switch (a.kind) {
     case 'markdown':
@@ -259,18 +305,25 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
       break;
     case 'pdf':
       body = (
-        <object className="artifact-frame" data={url} type="application/pdf" aria-label={title}>
-          <p>
-            This browser cannot show the PDF here.{' '}
-            <a href={download} target="_blank" rel="noopener noreferrer">
-              Open the PDF
-            </a>
-          </p>
-        </object>
+        <>
+          <object className="artifact-frame" data={url} type="application/pdf" aria-label={title}>
+            <p>
+              This browser cannot show the PDF here.{' '}
+              <a href={download} target="_blank" rel="noopener noreferrer">
+                Open the PDF
+              </a>
+            </p>
+          </object>
+          <PdfText url={previewUrl} title={title} />
+        </>
       );
       break;
     case 'file':
-      body = <p className="muted">This file cannot be previewed. Download it to open it.</p>;
+      body = format ? (
+        <DocumentPreview url={previewUrl} title={title} />
+      ) : (
+        <p className="muted">This file cannot be previewed. Download it to open it.</p>
+      );
       break;
   }
   return (
@@ -279,7 +332,7 @@ export function ArtifactViewer({ artifact: a, rev = 0 }: { artifact: ArtifactVie
         {title}
       </h3>
       <p className="muted artifact-meta">
-        {ARTIFACT_KIND_TEXT[a.kind]}
+        {artifactKindText(a)}
         {a.language && a.kind === 'code' ? `, ${a.language}` : ''}, version {a.version},{' '}
         {formatBytes(a.size)}
         {a.live ? ', live' : ''}
@@ -356,4 +409,209 @@ function TextContent({
       </p>
     );
   return <>{render(state.text)}</>;
+}
+
+// ---- document previews (FR-219) ---------------------------------------------------------------
+
+/** GET /artifacts/:id/preview: the text and tables the Hub extracted (core ExtractedDocument). */
+export interface DocumentPreviewView {
+  format: DocumentFormat;
+  title: string | null;
+  blocks?: (
+    | { type: 'heading'; level: number; text: string }
+    | { type: 'paragraph'; text: string }
+    | { type: 'list'; ordered: boolean; items: string[] }
+    | { type: 'table'; rows: string[][] }
+  )[];
+  slides?: {
+    index: number;
+    title: string | null;
+    paragraphs: { text: string; level: number }[];
+    notes: string | null;
+  }[];
+  sheets?: { name: string; rows: string[][]; truncated: boolean }[];
+  pages?: { index: number; text: string }[];
+  readable: boolean;
+  note: string | null;
+  truncated: boolean;
+}
+
+function Rows({ rows, label }: { rows: string[][]; label: string }) {
+  const [head, ...rest] = rows;
+  if (!head) return <p className="muted">Empty.</p>;
+  const cols = Math.max(...rows.map((r) => r.length));
+  const cells = (r: string[]) => Array.from({ length: cols }, (_, i) => r[i] ?? '');
+  return (
+    // A wide table scrolls inside its own focusable region.
+    <div className="md-table" role="region" aria-label={label} tabIndex={0}>
+      <table>
+        <thead>
+          <tr>
+            {cells(head).map((c, i) => (
+              <th key={i} scope="col">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rest.map((r, i) => (
+            <tr key={i}>
+              {cells(r).map((c, j) => (
+                <td key={j}>{c}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DocumentBody({ doc, title }: { doc: DocumentPreviewView; title: string }) {
+  // Headings inside the preview sit below the viewer's own h3.
+  const H = ({ level, children }: { level: number; children: ReactNode }) => {
+    const n = Math.min(6, 3 + level);
+    return n === 4 ? <h4>{children}</h4> : n === 5 ? <h5>{children}</h5> : <h6>{children}</h6>;
+  };
+  return (
+    <div className="md artifact-document">
+      {doc.note ? <p className="muted">{doc.note}</p> : null}
+      {doc.blocks?.map((b, i) => {
+        switch (b.type) {
+          case 'heading':
+            return (
+              <H key={i} level={b.level}>
+                {b.text}
+              </H>
+            );
+          case 'paragraph':
+            return (
+              <p key={i} className="ws-summary">
+                {b.text}
+              </p>
+            );
+          case 'list': {
+            const items = b.items.map((t, j) => <li key={j}>{t}</li>);
+            return b.ordered ? <ol key={i}>{items}</ol> : <ul key={i}>{items}</ul>;
+          }
+          case 'table':
+            return <Rows key={i} rows={b.rows} label={`Table ${i + 1} of ${title}`} />;
+        }
+      })}
+      {doc.slides?.length ? (
+        <ol aria-label="Slides">
+          {doc.slides.map((sl) => (
+            <li key={sl.index}>
+              <strong>{sl.title ?? `Slide ${sl.index}`}</strong>
+              {sl.paragraphs.length ? (
+                <ul>
+                  {sl.paragraphs.map((p, j) => (
+                    <li key={j} data-level={p.level}>
+                      {p.text}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {sl.notes ? <p className="muted ws-summary">Notes: {sl.notes}</p> : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {doc.sheets?.map((sh) => (
+        <section key={sh.name} aria-label={`Sheet ${sh.name}`}>
+          <h4>{sh.name}</h4>
+          <Rows rows={sh.rows} label={`Cells of ${sh.name}`} />
+          {sh.truncated ? (
+            <p className="muted">Only the first rows and columns are shown.</p>
+          ) : null}
+        </section>
+      ))}
+      {doc.pages?.map((pg) => (
+        <section key={pg.index} aria-label={`Page ${pg.index}`}>
+          <h4>Page {pg.index}</h4>
+          <p className="ws-summary">{pg.text || '(no text)'}</p>
+        </section>
+      ))}
+      {doc.truncated ? (
+        <p className="muted">This preview shows the start only. Download the file for all of it.</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Fetches the Hub's extracted preview of a document artifact and renders it. */
+function DocumentPreview({ url, title }: { url: string; title: string }) {
+  const [state, setState] = useState<{
+    url: string;
+    doc?: DocumentPreviewView;
+    error?: string;
+  } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (res) => {
+        const text = await res.text();
+        if (!res.ok) {
+          let message = res.status === 404 ? 'The artifact is gone.' : res.statusText;
+          try {
+            const body = JSON.parse(text) as { error?: { message?: unknown } };
+            if (res.status !== 404 && typeof body.error?.message === 'string')
+              message = body.error.message;
+          } catch {
+            // not JSON: keep the status text
+          }
+          throw new Error(message || 'Could not load the preview.');
+        }
+        return JSON.parse(text) as DocumentPreviewView;
+      })
+      .then(
+        (doc) => {
+          if (alive) setState({ url, doc });
+        },
+        (err: unknown) => {
+          if (alive) setState({ url, error: errorMessage(err, 'Could not load the preview.') });
+        },
+      );
+    return () => {
+      alive = false;
+    };
+  }, [url, attempt]);
+  if (state?.error && state.url === url)
+    return (
+      <div className="artifacts-error" role="alert">
+        <p>The preview could not be loaded: {state.error}</p>
+        <Button
+          onClick={() => {
+            setState(null);
+            setAttempt((n) => n + 1);
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  if (!state?.doc)
+    return (
+      <p className="muted">
+        <Spinner label="Loading the preview" /> Loading…
+      </p>
+    );
+  return <DocumentBody doc={state.doc} title={title} />;
+}
+
+/** A PDF's extracted text, on request: for screen readers and browsers without a PDF viewer. */
+function PdfText({ url, title }: { url: string; title: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <p className="artifact-actions">
+        <Button variant="ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          {open ? 'Hide the text' : 'Show the text'}
+        </Button>
+      </p>
+      {open ? <DocumentPreview url={url} title={title} /> : null}
+    </>
+  );
 }

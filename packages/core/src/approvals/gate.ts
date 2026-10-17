@@ -9,6 +9,13 @@
 // hooks run (FR-197, docs/12 §2.3 step 7): they may tighten the decision, and may answer an
 // `ask` the engine marked answerable when the hook is a user or managed hook, or a plugin hook
 // whose plugin declares `permissions.hooks.answersAsks`.
+//
+// M5: a thread's mode sets the approval policy, the profile and the roots (a Code session's
+// permission mode, FR-063, docs/12 §2.1) through `useThreadPolicy`; the mode name is recorded
+// with each decision. Under the `review` policy an allowed consequential call then goes to the
+// auto-reviewer (`useReviewer`, FR-085, docs/12 §6.1) after the hooks: its verdict can only
+// tighten, every verdict is audited, and repeated denials trip a circuit breaker that stops the
+// run (`review.breaker.tripped`). Sensitive tiers never reach the reviewer.
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
@@ -19,6 +26,7 @@ import {
   type ConfirmationTier,
   type DecideApprovalRequest,
   type PolicyPreview,
+  type ReviewVerdict,
   type SettingKey,
   type SettingValue,
 } from '@nova/shared';
@@ -29,7 +37,9 @@ import {
   suggestPrefixRule,
   tighten,
   urlHosts,
+  type ApprovalPolicy,
   type Decision,
+  type DecisionSource,
   type DefaultEffect,
   type FsContext,
   type PluginPolicy,
@@ -49,9 +59,29 @@ import type {
   PluginPermissionSource,
   PluginPermissions,
 } from '../extensions/types.ts';
-import type { AuditSink, GateOutcome, GateRequest, Notifier, ToolGate } from '../tools/types.ts';
+import type { Reviewer, ThreadPolicy, ThreadPolicySource } from '../runtime/types.ts';
+import type {
+  AuditRecord,
+  AuditSink,
+  GateOutcome,
+  GateRequest,
+  Notifier,
+  ToolGate,
+} from '../tools/types.ts';
+import { BREAKER_CONSECUTIVE, ReviewBreaker } from './reviewer-breaker.ts';
+import { loadReviewContext, reviewVerdictSchema } from './reviewer.ts';
 import { loadPermissionProfile, resolveToolRoots, type ProjectFolderSource } from './roots.ts';
 import type { ApprovalRow, GrantMatch, GrantRow, PolicyStore } from './store.ts';
+
+// The auto-reviewer and its breaker are part of the gate's public surface (approvals/index.ts).
+export * from './reviewer.ts';
+export * from './reviewer-breaker.ts';
+
+/**
+ * The audit kind of reviewer verdicts and overrides. docs/06 lists `review`; it becomes that
+ * once AuditRecord['kind'] (tools/types.ts, lead-owned) has it. The action names are final.
+ */
+const REVIEW_AUDIT_KIND: AuditRecord['kind'] = 'policy';
 
 export type SettingReader = <K extends SettingKey>(
   key: K,
@@ -89,7 +119,15 @@ export interface PolicyGateOptions {
   /** The sandbox substrate exec runs in (null: none or unknown, so `full` is refused). */
   substrate?: () => Substrate | null;
   hooks?: GateExtension[];
+  /**
+   * A verdict function under the `review` policy (tests; the page-action classifier later).
+   * The M5 model reviewer is `autoReviewer`, which takes precedence when both are set.
+   */
   reviewer?: GateExtension;
+  /** The auto-reviewer (FR-085); also wired later with `useReviewer`. */
+  autoReviewer?: Reviewer;
+  /** A thread's mode policy (Code sessions, FR-063); also `useThreadPolicy`. */
+  threadPolicy?: ThreadPolicySource;
   /** `permission.request` hooks (FR-197); also wired later with `useHooks`. */
   permissionHooks?: HookDispatcher;
   /** The confirmed permissions of plugins (FR-045); also `usePluginPermissions`. */
@@ -117,7 +155,16 @@ interface Built {
   argsHash: string;
   profileHash: string;
   /** Set when the call cannot be evaluated safely (fail closed): its deny reason. */
-  blocked: string | null;
+  blocked: { reason: string; source: DecisionSource } | null;
+  /** What the thread's mode set (a Code session's permission mode), if anything. */
+  policy: ThreadPolicy | null;
+}
+
+/** What the auto-reviewer changed: the decision, the verdict for the card, and a breaker stop. */
+interface Reviewed {
+  decision: Decision;
+  verdict: ReviewVerdict;
+  stop: boolean;
 }
 
 interface Waiter {
@@ -169,6 +216,9 @@ export class PolicyGate implements ToolGate {
   #plugins: PluginPermissionSource | undefined;
   #onViolation: ((accountId: string, pluginId: string) => Promise<unknown>) | undefined;
   #folders: ProjectFolderSource | undefined;
+  #autoReviewer: Reviewer | undefined;
+  readonly #threadPolicies: ThreadPolicySource[] = [];
+  readonly #breaker = new ReviewBreaker();
 
   constructor(opts: PolicyGateOptions) {
     this.#o = opts;
@@ -179,6 +229,27 @@ export class PolicyGate implements ToolGate {
     this.#hooks = opts.permissionHooks;
     this.#plugins = opts.pluginPermissions;
     this.#folders = opts.projectFolders;
+    this.#autoReviewer = opts.autoReviewer;
+    if (opts.threadPolicy) this.#threadPolicies.push(opts.threadPolicy);
+  }
+
+  /**
+   * Add a source of per-thread policy (a Code session's permission mode; Work run autonomy).
+   * For a thread a source knows, its approval policy, profile and roots replace the settings;
+   * the first source with a policy for the thread wins. A source that fails denies (FR-063).
+   */
+  useThreadPolicy(source: ThreadPolicySource): void {
+    this.#threadPolicies.push(source);
+  }
+
+  /** Wire the auto-reviewer of the `review` approval policy (FR-085, ADR-061). */
+  useReviewer(reviewer: Reviewer): void {
+    this.#autoReviewer = reviewer;
+  }
+
+  /** Forget the reviewer denials counted for a run or thread (the user resumed it). */
+  resetReviewBreaker(key: string): void {
+    this.#breaker.reset(key);
   }
 
   /** Wire the `permission.request` hooks (FR-197, docs/12 §2.3 step 7). */
@@ -226,13 +297,29 @@ export class PolicyGate implements ToolGate {
 
   async #build(req: PreviewRequest): Promise<Built> {
     const { store, setting } = this.#o;
-    const { profile, fallback } = await loadPermissionProfile(
-      store.db,
-      req.accountId,
-      req.profile.id,
-    );
+    const threadId = req.threadId || null;
+    let blocked: Built['blocked'] = null;
+    let policy: ThreadPolicy | null = null;
+    try {
+      policy = threadId ? await this.#threadPolicy(req.accountId, threadId) : null;
+    } catch (err) {
+      // Without the session's mode the gate cannot know what it allows: deny (fail closed).
+      this.#o.log?.warn('thread policy unavailable', { err, threadId });
+      blocked = {
+        reason: "the session's permission mode could not be read, so the call was not allowed",
+        source: 'builtin',
+      };
+    }
+    // The session's profile governs its calls; the tool scope should carry the same id.
+    const profileId = policy?.profileId ?? req.profile.id;
+    if (policy?.profileId && policy.profileId !== req.profile.id)
+      this.#o.log?.warn('tool scope profile differs from the thread policy', {
+        scope: req.profile.id,
+        thread: policy.profileId,
+      });
+    const { profile, fallback } = await loadPermissionProfile(store.db, req.accountId, profileId);
     if (fallback) this.#o.log?.warn('permission profile fell back to read-only', { fallback });
-    const [rootSetting, egressAllow, approvalPolicy, folders] = await Promise.all([
+    const [rootSetting, egressAllow, approvalSetting, folders] = await Promise.all([
       setting('tools.roots'),
       setting('network.egressAllow'),
       setting('tools.approvalPolicy', req.projectId),
@@ -240,10 +327,13 @@ export class PolicyGate implements ToolGate {
     ]);
     const resolved = resolveToolRoots({
       profile,
-      roots: [...rootSetting, ...folders],
+      // A session's folder (and worktree) replaces the settings' roots (ThreadPolicy.roots).
+      roots: policy?.roots ?? [...rootSetting, ...folders],
       workspaceDir: this.#workspace,
       home: this.#home,
     });
+    const approvalPolicy: ApprovalPolicy = { kind: policy?.approvalPolicy ?? approvalSetting };
+    if (policy?.autoAcceptEdits) approvalPolicy.autoAccept = ['file_edit'];
     const fs: FsContext = {
       entries: [
         ...resolved.roots.map((r) => ({ path: r.path, access: r.access })),
@@ -253,7 +343,6 @@ export class PolicyGate implements ToolGate {
       dataDirAllow: [realpathLenient(this.#workspace)],
       home: realpathLenient(this.#home),
     };
-    const threadId = req.threadId || null;
     const set = await store.policySet(req.accountId, { threadId, home: this.#home });
     const owner = req.tool.serverId ?? req.tool.pluginId;
     if (owner && this.#serverDefaults) {
@@ -275,7 +364,7 @@ export class PolicyGate implements ToolGate {
       actor: origin === 'ui' ? { kind: 'user' } : { kind: 'agent', id: req.mode },
       scopes,
       mode: req.mode,
-      approvalPolicy: { kind: approvalPolicy },
+      approvalPolicy,
       permissionProfile: {
         id: profile.id,
         hash: resolved.profile.hash,
@@ -292,10 +381,11 @@ export class PolicyGate implements ToolGate {
         deny: resolved.network.deny ?? [],
       },
     };
+    // The mode name is a label for display and audit only (docs/12 §2.1).
+    if (policy?.permissionMode) ctx.preset = { permissionMode: policy.permissionMode };
     if (command !== undefined) ctx.command = command;
     const resource = this.#canonicalResource(req.resource);
     if (resource) ctx.resource = resource;
-    let blocked: string | null = null;
     try {
       const plugin = await this.#pluginPolicy(req);
       if (plugin) {
@@ -307,9 +397,34 @@ export class PolicyGate implements ToolGate {
     } catch (err) {
       // Its declared permissions cannot be read: the call is not allowed (fail closed).
       this.#o.log?.warn('plugin permissions unavailable', { err, tool: req.tool.name });
-      blocked = "the plugin's permissions could not be read, so the call was not allowed";
+      blocked ??= {
+        reason: "the plugin's permissions could not be read, so the call was not allowed",
+        source: 'plugin',
+      };
     }
-    return { ctx, set, command, argsHash, profileHash: resolved.profile.hash, blocked };
+    return { ctx, set, command, argsHash, profileHash: resolved.profile.hash, blocked, policy };
+  }
+
+  /** The first source's policy for the thread; null when no source knows it. Throws on failure. */
+  async #threadPolicy(accountId: string, threadId: string): Promise<ThreadPolicy | null> {
+    for (const source of this.#threadPolicies) {
+      const p = await source.forThread(accountId, threadId);
+      if (p) return p;
+    }
+    return null;
+  }
+
+  /** The run a turn belongs to (turn.run_id), for the reviewer, the breaker and approvals. */
+  #runOf(turnId: string): string | null {
+    if (!turnId) return null;
+    try {
+      const row = this.#o.store.db.raw
+        .prepare('SELECT run_id FROM turn WHERE id = ?')
+        .get(turnId) as { run_id: string | null } | undefined;
+      return row?.run_id ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async #projectFolders(projectId: string | null) {
@@ -346,9 +461,10 @@ export class PolicyGate implements ToolGate {
     const out: Decision = {
       ...d,
       effect: 'deny',
-      reason: b.blocked,
-      source: 'plugin',
+      reason: b.blocked.reason,
+      source: b.blocked.source,
       persistable: false,
+      review: false,
     };
     delete out.answerable;
     return out;
@@ -383,6 +499,9 @@ export class PolicyGate implements ToolGate {
       if (call) d = await this.#permissionHooks(req, d, call);
     }
     if (d.effect === 'allow' && d.review) {
+      // The auto-reviewer runs in `check`, after these hooks (docs/12 §2.3 step 8); a preview
+      // shows the engine's allow.
+      if (this.#autoReviewer) return d;
       const reviewer = this.#o.reviewer;
       if (!reviewer) {
         // `review` without a reviewer fails closed: the user decides (docs/12 §2.1).
@@ -520,6 +639,17 @@ export class PolicyGate implements ToolGate {
       signal,
     });
     const threadId = req.threadId || null;
+    const runId = this.#runOf(req.turnId);
+    let verdict: ReviewVerdict | null = null;
+    let breakerStop = false;
+    // Step 8: the auto-reviewer, only for a consequential call the engine allowed under the
+    // `review` policy; sensitive tiers ask or hand off before ever getting here.
+    if (d.effect === 'allow' && d.review && d.tier === 'pre_approvable' && this.#autoReviewer) {
+      const r = await this.#autoReview(this.#autoReviewer, req, b, d, runId, signal);
+      d = r.decision;
+      verdict = r.verdict;
+      breakerStop = r.stop;
+    }
     const correlation = this.#correlation(req);
     await this.#o.events.emit({
       name: 'policy.tier',
@@ -547,7 +677,7 @@ export class PolicyGate implements ToolGate {
             : 'you denied this identical call earlier',
         };
     }
-    await this.#auditDecision(req, b, d);
+    await this.#auditDecision(req, b, d, runId);
     if (d.effect === 'allow') return { effect: 'allow', reason: d.reason, tier: d.tier };
     if (d.effect === 'deny') {
       const payload: Record<string, unknown> = {
@@ -564,9 +694,226 @@ export class PolicyGate implements ToolGate {
         payload,
       });
       if (d.violation && b.ctx.plugin) await this.#pluginViolation(req, b.ctx.plugin.pluginId, d);
-      return { effect: 'deny', reason: d.reason, tier: d.tier, stop: false };
+      return { effect: 'deny', reason: d.reason, tier: d.tier, stop: breakerStop };
     }
-    return this.#ask(req, b, d, signal);
+    return this.#ask(req, b, d, signal, { verdict, runId });
+  }
+
+  // ---- auto-review (FR-085, ADR-061, docs/12 §6.1) -------------------------------------------
+
+  /**
+   * Ask the reviewer about an allowed call and apply its verdict, which can only tighten: allow
+   * stays allow, ask becomes a card that says the reviewer asked, handoff hands off, and deny
+   * denies with the rationale and an instruction to avoid similar actions. Anything the reviewer
+   * returns outside the verdict schema, and any failure, is a deny. Repeated denials of one run
+   * (or thread) trip the breaker: a deny with `stop` that interrupts the run.
+   */
+  async #autoReview(
+    reviewer: Reviewer,
+    req: GateRequest,
+    b: Built,
+    d: Decision,
+    runId: string | null,
+    signal: AbortSignal,
+  ): Promise<Reviewed> {
+    const reviewId = uuidv7();
+    const threadId = req.threadId || null;
+    const correlation: Record<string, string> = { ...this.#correlation(req) };
+    if (runId) correlation.runId = runId;
+    await this.#o.events.emit({
+      name: 'review.started',
+      accountId: req.accountId,
+      actor: 'system',
+      correlation,
+      payload: { reviewId, callId: req.callId, attempt: 1 },
+    });
+    let context: { instructions: string[]; summary: string } = { instructions: [], summary: '' };
+    try {
+      context = loadReviewContext(this.#o.store.db, {
+        threadId: req.threadId,
+        turnId: req.turnId,
+      });
+    } catch (err) {
+      // The reviewer then sees no instructions, which only makes it stricter.
+      this.#o.log?.warn('review context unavailable', { err, threadId });
+    }
+    const started = Date.now();
+    let raw: Awaited<ReturnType<Reviewer['review']>> & { model?: unknown };
+    try {
+      raw = await reviewer.review({
+        accountId: req.accountId,
+        threadId: req.threadId,
+        runId,
+        tool: req.tool,
+        args: defaultRedactor.redact(req.args ?? null),
+        decision: { reason: d.reason, tier: d.tier, effects: [...d.effects] },
+        instructions: context.instructions,
+        summary: context.summary,
+        signal,
+      });
+    } catch (err) {
+      this.#o.log?.warn('auto-reviewer failed', { err, tool: req.tool.name });
+      raw = {
+        outcome: 'deny',
+        risk: 'high',
+        userAuthorization: 'unknown',
+        rationale: 'The auto-reviewer failed, so this action was denied.',
+        attempts: 0,
+        failed: true,
+      };
+    }
+    const checked = reviewVerdictSchema.safeParse({
+      outcome: raw.outcome,
+      risk: raw.risk,
+      userAuthorization: raw.userAuthorization,
+      rationale: raw.rationale,
+    });
+    const failed = !checked.success || raw.failed;
+    const verdict: ReviewVerdict = checked.success
+      ? { ...checked.data, rationale: clip(redact(checked.data.rationale), 1000) }
+      : {
+          outcome: 'deny',
+          risk: 'high',
+          userAuthorization: 'unknown',
+          rationale: 'The auto-reviewer answered outside its schema, so this action was denied.',
+        };
+    const model = typeof raw.model === 'string' ? raw.model : null;
+    const durationMs = Date.now() - started;
+    await this.#o.events.emit({
+      name: 'review.completed',
+      accountId: req.accountId,
+      actor: 'system',
+      correlation,
+      payload: {
+        reviewId,
+        callId: req.callId,
+        verdict,
+        attempts: raw.attempts,
+        durationMs,
+        failedClosed: failed,
+      },
+    });
+    await this.#o.audit.append({
+      accountId: req.accountId,
+      actor: 'system',
+      kind: REVIEW_AUDIT_KIND,
+      action: 'review.verdict',
+      resource: b.ctx.resource?.value ?? null,
+      inputHash: b.argsHash,
+      decision: verdict.outcome,
+      threadId,
+      turnId: req.turnId || null,
+      detail: {
+        reviewId,
+        callId: req.callId,
+        tool: req.tool.name,
+        runId,
+        risk: verdict.risk,
+        userAuthorization: verdict.userAuthorization,
+        rationale: verdict.rationale,
+        attempts: raw.attempts,
+        failedClosed: failed,
+        latencyMs: durationMs,
+        model,
+        tier: d.tier,
+        permissionMode: b.policy?.permissionMode ?? null,
+      },
+    });
+
+    const key = runId ?? threadId ?? `account:${req.accountId}`;
+    const trip = this.#breaker.record(key, verdict.outcome === 'deny');
+    if (trip) {
+      await this.#breakerTripped(req, runId, trip);
+      return {
+        verdict,
+        stop: true,
+        decision: tighten(d, {
+          effect: 'deny',
+          reason:
+            `the auto-reviewer denied this (${verdict.rationale}) and has now denied too many ` +
+            'actions in this work, so it stopped until you look at it',
+          source: 'reviewer',
+        }),
+      };
+    }
+    const why = verdict.rationale;
+    switch (verdict.outcome) {
+      case 'allow':
+        return { verdict, stop: false, decision: { ...d, review: false } };
+      case 'ask':
+        return {
+          verdict,
+          stop: false,
+          decision: tighten(d, {
+            effect: 'ask',
+            reason: `the auto-reviewer asked for your approval: ${why}`,
+            source: 'reviewer',
+          }),
+        };
+      case 'handoff':
+        return {
+          verdict,
+          stop: false,
+          decision: tighten(d, {
+            effect: 'handoff',
+            reason: `the auto-reviewer asked you to do this step yourself: ${why}`,
+            source: 'reviewer',
+          }),
+        };
+      case 'deny':
+        return {
+          verdict,
+          stop: false,
+          decision: tighten(d, {
+            effect: 'deny',
+            reason:
+              `the auto-reviewer denied this: ${why} Do not retry this action or a substantively ` +
+              'similar one; continue another way or tell the user what you need',
+            source: 'reviewer',
+          }),
+        };
+    }
+  }
+
+  /** The breaker interrupts the run: an event the runs area pauses on, an audit entry, a note. */
+  async #breakerTripped(
+    req: GateRequest,
+    runId: string | null,
+    trip: { consecutiveDenials: number; recentDenials: number; window: number },
+  ): Promise<void> {
+    const threadId = req.threadId || null;
+    const correlation: Record<string, string> = { ...this.#correlation(req) };
+    if (runId) correlation.runId = runId;
+    await this.#o.events.emit({
+      name: 'review.breaker.tripped',
+      accountId: req.accountId,
+      actor: 'system',
+      correlation,
+      payload: { runId, threadId, ...trip },
+    });
+    await this.#o.audit.append({
+      accountId: req.accountId,
+      actor: 'system',
+      kind: REVIEW_AUDIT_KIND,
+      action: 'review.breaker',
+      decision: 'deny',
+      threadId,
+      turnId: req.turnId || null,
+      detail: { runId, callId: req.callId, ...trip },
+    });
+    await this.#o.notifier
+      .notify({
+        accountId: req.accountId,
+        kind: 'attention',
+        title: 'Auto-review stopped this work',
+        body:
+          trip.consecutiveDenials >= BREAKER_CONSECUTIVE
+            ? `It denied ${trip.consecutiveDenials} actions in a row. Review the work before it continues.`
+            : `It denied ${trip.recentDenials} of the last ${trip.window} actions. Review the work before it continues.`,
+        href: threadId ? `/chat/${threadId}` : '/approvals',
+        dedupeKey: `review-breaker:${runId ?? threadId ?? req.accountId}`,
+      })
+      .catch((err: unknown) => this.#o.log?.warn('review breaker notification failed', { err }));
   }
 
   /** Deny, disable, notify (docs/20 defaults): a plugin that oversteps is turned off. */
@@ -608,7 +955,12 @@ export class PolicyGate implements ToolGate {
     return origin === 'ui' ? 'user' : `agent:${req.mode}`;
   }
 
-  async #auditDecision(req: GateRequest, b: Built, d: Decision): Promise<void> {
+  async #auditDecision(
+    req: GateRequest,
+    b: Built,
+    d: Decision,
+    runId: string | null,
+  ): Promise<void> {
     await this.#o.audit.append({
       accountId: req.accountId,
       actor: this.#actor(req),
@@ -630,8 +982,13 @@ export class PolicyGate implements ToolGate {
         authorization: d.authorization,
         taint: [...new Set(req.provenance.taint)],
         effects: d.effects,
-        profileId: req.profile.id,
+        profileId: b.policy?.profileId ?? req.profile.id,
         profileHash: b.profileHash,
+        // The approval policy evaluated and the preset it came from (docs/12 §2.1, FR-063).
+        approvalPolicy: b.ctx.approvalPolicy.kind,
+        autoAccept: b.ctx.approvalPolicy.autoAccept ?? [],
+        permissionMode: b.ctx.preset?.permissionMode ?? null,
+        runId,
       },
     });
   }
@@ -686,7 +1043,13 @@ export class PolicyGate implements ToolGate {
     };
   }
 
-  async #ask(req: GateRequest, b: Built, d: Decision, signal: AbortSignal): Promise<GateOutcome> {
+  async #ask(
+    req: GateRequest,
+    b: Built,
+    d: Decision,
+    signal: AbortSignal,
+    extra: { verdict: ReviewVerdict | null; runId: string | null },
+  ): Promise<GateOutcome> {
     const { store, setting } = this.#o;
     const persistent = await setting('policy.allowPersistentGrants');
     const scopes = d.persistable && persistent ? this.#suggest(req, b) : [];
@@ -702,7 +1065,7 @@ export class PolicyGate implements ToolGate {
       toolCallId: req.callId || null,
       threadId,
       turnId: req.turnId || null,
-      runId: null,
+      runId: extra.runId,
       agentId: null,
       toolName: req.tool.name,
       requestedAction: actionLabel(req, b),
@@ -719,7 +1082,8 @@ export class PolicyGate implements ToolGate {
       userAsked: d.authorization === 'user_typed' && req.provenance.taint.length === 0,
       optionsJson: JSON.stringify(options),
       alwaysScopesJson: JSON.stringify(options.includes('allow_always') ? scopes : []),
-      reviewJson: null,
+      // The reviewer's verdict for the card (docs/12 §4.1); an Allow once over it is an override.
+      reviewJson: extra.verdict ? JSON.stringify(extra.verdict) : null,
       status: 'pending',
       decision: null,
       alwaysScope: null,
@@ -879,6 +1243,13 @@ export class PolicyGate implements ToolGate {
       throw new NovaError('validation', 'alwaysScope goes only with allow_always');
     if (body.override && !row.reviewJson)
       throw new NovaError('validation', 'there is no reviewer verdict to override');
+    if (body.override && body.decision !== 'allow_once')
+      throw new NovaError(
+        'validation',
+        'a reviewer verdict can be overridden with Allow once only',
+      );
+    // Allowing an action the auto-reviewer asked about overrides its verdict (docs/12 §6.1).
+    const override = row.reviewJson !== null && body.decision === 'allow_once';
     const waiter = this.#waiters.get(row.id);
     const writes = this.#plan(accountId, row, body, waiter);
     const now = this.#now().toISOString();
@@ -902,7 +1273,7 @@ export class PolicyGate implements ToolGate {
           body.alwaysScope?.kind ?? null,
           writes.alwaysRef ?? null,
           denyReason,
-          body.override ? 1 : 0,
+          override ? 1 : 0,
           row.id,
         );
       if (Number(res.changes) === 0) throw answered({ ...row, decision: body.decision });
@@ -913,7 +1284,7 @@ export class PolicyGate implements ToolGate {
       approvalId: row.id,
       decision: body.decision,
       decidedBy,
-      override: body.override === true,
+      override,
     };
     if (body.alwaysScope) payload.alwaysScope = body.alwaysScope;
     await this.#o.events.emit({
@@ -943,9 +1314,27 @@ export class PolicyGate implements ToolGate {
         alwaysScope: body.alwaysScope?.kind ?? null,
         alwaysRef: writes.alwaysRef ?? null,
         grantId: writes.grant?.id ?? null,
-        override: body.override === true,
+        override,
       },
     });
+    if (override)
+      // The override is audited together with the verdict it overrode (docs/12 §4.1, §6.1).
+      await this.#o.audit.append({
+        accountId,
+        actor: decidedBy === 'user' ? 'user' : decidedBy,
+        kind: REVIEW_AUDIT_KIND,
+        action: 'review.override',
+        resource: row.toolName,
+        inputHash: row.argsHash,
+        decision: body.decision,
+        threadId: row.threadId,
+        turnId: row.turnId,
+        detail: {
+          approvalId: row.id,
+          runId: row.runId,
+          verdict: JSON.parse(row.reviewJson ?? 'null') as unknown,
+        },
+      });
     if (waiter) {
       const tier = row.tier ?? 'pre_approvable';
       switch (body.decision) {

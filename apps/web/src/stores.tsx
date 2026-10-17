@@ -92,7 +92,9 @@ export function ThreadsProvider({ api, children }: { api: Api; children: ReactNo
   }, [refresh]);
 
   const upsertLocal = useCallback((view: Partial<ThreadView> & { id: string }) => {
+    // Side chats, Work runs and Code sessions live in their own lists, never in Recent.
     if (view.side) return;
+    if (view.mode && view.mode !== 'chat') return;
     setThreads((list) => {
       const i = list.findIndex((t) => t.id === view.id);
       if (i < 0) {

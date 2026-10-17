@@ -69,10 +69,20 @@ export interface ToolDefinition {
 }
 
 /** A provider of tools other than the built-ins: MCP servers (FR-042), plugins (M4). */
+/** The thread a listing is for (M5): run, code and request tools belong to some modes only. */
+export interface ToolListScope {
+  threadId: string | null;
+  mode: 'chat' | 'work' | 'code' | 'agent';
+}
+
 export interface ToolSourceProvider {
   readonly source: ToolSource;
-  /** Tools available to this account now; never throws (an unhealthy server lists nothing). */
-  list(accountId: string): Promise<ToolDefinition[]>;
+  /**
+   * Tools available to this account now; never throws (an unhealthy server lists nothing).
+   * With `scope`, the listing is for one turn of that thread: a source may leave out tools
+   * that do not apply there. Without it (catalogs, direct invocation), list them all.
+   */
+  list(accountId: string, scope?: ToolListScope): Promise<ToolDefinition[]>;
 }
 
 // ---- the policy gate (FR-099, FR-100, FR-189) --------------------------------------------------
@@ -194,7 +204,12 @@ export interface AuditRecord {
     | 'network'
     | 'hook'
     | 'plugin'
-    | 'terminal';
+    | 'terminal'
+    | 'run'
+    | 'schedule'
+    | 'review'
+    | 'request'
+    | 'code';
   action: string;
   resource?: string | null;
   /** SHA-256 of the canonical inputs; inputs themselves are never stored here. */
@@ -215,6 +230,8 @@ export const noopAudit: AuditSink = { append: () => Promise.resolve() };
 export interface NotificationInput {
   accountId: string;
   kind: 'approval' | 'completion' | 'error' | 'attention' | 'system';
+  /** Also show it as an OS notification when a client can (a schedule's `os` target). */
+  os?: boolean;
   title: string;
   body?: string;
   href?: string;

@@ -57,6 +57,15 @@ afterEach(() => {
 });
 
 const bell = () => screen.getByRole('button', { name: /^Notifications/ });
+/** The bell's own stream: the Work surfaces hold a second one on the same URL (M5). */
+const bellStream = () => {
+  const s = FakeEventSource.all.find(
+    (x) =>
+      !x.closed && x.url.includes(EVENTS_STREAM_URL) && x.listeners.has('notification.created'),
+  );
+  if (!s) throw new Error('no notification stream');
+  return s;
+};
 
 describe('notification helpers (FR-013)', () => {
   it('follows only same-origin app paths', () => {
@@ -226,7 +235,7 @@ describe('notification center (FR-013)', () => {
     const hub = hubWith();
     await renderApp({ hub });
     await waitFor(() => expect(bell().getAttribute('aria-label')).toBe('Notifications, 2 unread'));
-    const es = FakeEventSource.for(EVENTS_STREAM_URL);
+    const es = bellStream();
     expect(hub.api.listNotifications).toHaveBeenCalledTimes(1);
 
     // Visible page: the bell updates and the change is announced, but no OS notification.
@@ -277,7 +286,7 @@ describe('notification center (FR-013)', () => {
       notification({ id: 'n6', kind: 'error', title: 'Another failure' }),
       ...hub.state.m3.notifications,
     ];
-    FakeEventSource.for(EVENTS_STREAM_URL).emit('notification.created', {
+    bellStream().emit('notification.created', {
       notificationId: 'n6',
       kind: 'error',
       title: 'x',

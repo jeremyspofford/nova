@@ -1,6 +1,7 @@
 // Settings → General (docs/14 §1.1): which key sends, what a message sent during a reply does
 // (FR-019), how long temporary chats are kept (FR-027), the default model for new chats (FR-023),
-// follow-up suggestions (FR-028) and the setup guide (FR-014).
+// follow-up suggestions (FR-028), the setup guide (FR-014), and M5's Work runs: default budgets
+// (FR-182), autonomy (docs/09 §3) and turning chat requests into runs (FR-186).
 import { useState } from 'react';
 import { Button, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -10,9 +11,11 @@ import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
+import { AUTONOMY_TEXT } from '../work/format.ts';
 import { MANAGED } from './common.ts';
 import { SwitchField } from './controls.tsx';
 import '../workspace.css';
+import '../work/work.css';
 
 export function GeneralPage() {
   const { registry } = useServices();
@@ -102,6 +105,7 @@ export function GeneralPage() {
           onChange={(v) => void settings.set('chat.suggestions', v).catch(fail)}
         />
       </section>
+      <WorkRunsSection onError={fail} />
       <section className="settings-section">
         <h3>Setup guide</h3>
         <p className="muted">Walk through connecting a provider and running a sample task again.</p>
@@ -144,6 +148,159 @@ function TemporaryRetention({ onError }: { onError: (err: unknown) => void }) {
       disabled={ttl.locked}
       error={invalid ? `Enter a whole number from ${TTL_MIN} to ${TTL_MAX}.` : undefined}
       onChange={(e) => setDraft({ base: ttl.value, text: e.target.value })}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        }
+      }}
+    />
+  );
+}
+
+const MAX_MINUTES = 7 * 24 * 60;
+
+/** Work runs (FR-182, FR-186, docs/09 §3): defaults for new runs and chat escalation. */
+function WorkRunsSection({ onError }: { onError: (err: unknown) => void }) {
+  const settings = useSettings();
+  const budgets = settings.get('runs.defaultBudgets');
+  const autonomy = settings.get('runs.autonomy');
+  const escalation = settings.get('chat.escalation');
+  const b = budgets.value;
+  const save = (patch: Partial<typeof b>) =>
+    void settings.set('runs.defaultBudgets', { ...b, ...patch }).catch(onError);
+  return (
+    <section className="settings-section" aria-labelledby="work-runs-heading">
+      <h3 id="work-runs-heading">Work runs</h3>
+      <p className="muted">
+        Defaults for new runs. A run pauses at a budget and asks before going further.
+      </p>
+      <div className="work-budget-fields">
+        <NumberSetting
+          label="Time budget (minutes)"
+          value={Math.round(b.timeSeconds / 60)}
+          min={1}
+          max={MAX_MINUTES}
+          locked={budgets.locked}
+          onSave={(n) => save({ timeSeconds: n * 60 })}
+        />
+        <NumberSetting
+          label="Token budget"
+          value={b.tokens}
+          min={1_000}
+          max={100_000_000}
+          locked={budgets.locked}
+          onSave={(n) => save({ tokens: n })}
+        />
+        <NumberSetting
+          label="Cost limit (US dollars)"
+          value={b.costUsd}
+          min={0}
+          max={100_000}
+          decimals
+          locked={budgets.locked}
+          hint="Blank uses the provider spend cap."
+          onSave={(n) => save({ costUsd: n })}
+        />
+      </div>
+      <RadioGroup
+        legend="Autonomy of new runs"
+        name="runs-autonomy"
+        value={autonomy.value}
+        locked={autonomy.locked}
+        onChange={(v) =>
+          void settings
+            .set('runs.autonomy', v as 'ask_first' | 'standard' | 'autonomous')
+            .catch(onError)
+        }
+        options={(['ask_first', 'standard', 'autonomous'] as const).map((a) => ({
+          value: a,
+          label: AUTONOMY_TEXT[a].label,
+          description: AUTONOMY_TEXT[a].description,
+        }))}
+      />
+      <RadioGroup
+        legend="Turn multi-step chat requests into runs"
+        name="chat-escalation"
+        value={escalation.value}
+        locked={escalation.locked}
+        onChange={(v) =>
+          void settings.set('chat.escalation', v as 'propose' | 'auto' | 'off').catch(onError)
+        }
+        options={[
+          {
+            value: 'propose',
+            label: 'Propose a run',
+            description: 'Show the plan and budget in the chat; the run starts when you accept it.',
+          },
+          {
+            value: 'auto',
+            label: 'Start the run',
+            description: 'Start at once in the chat, with Stop always visible.',
+          },
+          { value: 'off', label: 'Never', description: 'Answer in the chat without a run.' },
+        ]}
+      />
+    </section>
+  );
+}
+
+/**
+ * A number saved on Enter or blur. With `decimals`, blank saves null (the cost limit falls back to
+ * the provider spend cap); otherwise whole numbers only.
+ */
+function NumberSetting<N extends number | null>({
+  label,
+  value,
+  min,
+  max,
+  decimals,
+  locked,
+  hint,
+  onSave,
+}: {
+  label: string;
+  value: N;
+  min: number;
+  max: number;
+  decimals?: boolean;
+  locked: boolean;
+  hint?: string;
+  onSave: (n: N) => void;
+}) {
+  const shown = value === null ? '' : String(value);
+  const [draft, setDraft] = useState<{ base: string; text: string } | null>(null);
+  // A draft belongs to the value it was typed against; a new value from the Hub discards it.
+  const text = draft && draft.base === shown ? draft.text : shown;
+  const blank = text.trim() === '';
+  const n = Number(text);
+  const invalid = blank
+    ? !decimals
+    : !Number.isFinite(n) || n < min || n > max || (!decimals && !Number.isInteger(n));
+  const commit = () => {
+    if (invalid || text === shown) return;
+    setDraft(null);
+    onSave((blank ? null : n) as N);
+  };
+  return (
+    <TextField
+      label={label}
+      type="number"
+      inputMode={decimals ? 'decimal' : 'numeric'}
+      className="ws-number"
+      min={min}
+      max={max}
+      step={decimals ? 0.01 : 1}
+      value={text}
+      disabled={locked}
+      hint={`${locked ? `${MANAGED}. ` : ''}${hint ?? ''}` || undefined}
+      error={
+        invalid
+          ? `Enter ${decimals ? 'a number' : 'a whole number'} from ${min.toLocaleString('en-US')} to ${max.toLocaleString('en-US')}.`
+          : undefined
+      }
+      onChange={(e) => setDraft({ base: shown, text: e.target.value })}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {

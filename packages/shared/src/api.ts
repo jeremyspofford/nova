@@ -228,7 +228,19 @@ export type PartView =
   | { type: 'error'; code: string; message: string }
   | { type: 'file'; attachmentId: string; name: string; mime: string; size: number }
   | ToolCallPartView
-  | { type: 'artifact'; artifactId: string; kind: ArtifactKind; title: string | null };
+  | { type: 'artifact'; artifactId: string; kind: ArtifactKind; title: string | null }
+  /** A context compaction (FR-183): the summary that stands for earlier messages. */
+  | {
+      type: 'compaction';
+      trigger: 'pre_turn' | 'mid_turn' | 'post_turn' | 'manual';
+      summary: string;
+      tokensBefore: number;
+      tokensAfter: number;
+      covered: number;
+      method: 'model' | 'extractive';
+    }
+  /** Something Nova tells the user about the turn, e.g. instruction files were cut (FR-185). */
+  | { type: 'notice'; code: string; message: string };
 
 /** A tool call inside an assistant message (M3, FR-099, FR-100; contracts/events.md tools). */
 export interface ToolCallPartView {
@@ -272,7 +284,8 @@ export interface MessageView {
    * M5: a Work run's objective (`run`), a schedule's instructions (`schedule`), a goal
    * continuation (`goal`) or a sub-agent's task (`subagent`), each labelled in the thread.
    */
-  provenance?: 'typed' | 'steer' | 'queued' | 'hook' | 'run' | 'schedule' | 'goal' | 'subagent';
+  provenance?:
+    'typed' | 'steer' | 'queued' | 'hook' | 'run' | 'schedule' | 'goal' | 'subagent' | 'system';
   /** The `@`-mentions sent with a user message (FR-022). */
   mentions?: { kind: MentionKind; ref: string; label: string }[];
 }
@@ -1890,7 +1903,15 @@ export const scheduleSchema = z
   })
   .strict();
 export type ScheduleRequest = z.input<typeof scheduleSchema>;
+// Built without defaults: a PATCH changes only what it sends (a pause must not reset targets).
 export const updateScheduleSchema = scheduleSchema
+  .extend({
+    deliveryTargets: z
+      .array(
+        z.object({ kind: z.enum(DELIVERY_KINDS), ref: z.string().max(500).optional() }).strict(),
+      )
+      .max(10),
+  })
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 
@@ -1953,7 +1974,14 @@ export interface CodeSessionView {
   /** The folder the session works in (a project folder or a path on the Hub). */
   folder: { path: string; projectFolderId: string | null };
   /** Set when the folder is a Git repository. */
-  repo: { root: string; branch: string | null; head: string | null; dirty: boolean } | null;
+  repo: {
+    root: string;
+    branch: string | null;
+    head: string | null;
+    dirty: boolean;
+    /** The repository's default branch (commits never land on it without a new branch). */
+    defaultBranch?: string | null;
+  } | null;
   worktreeId: string | null;
   permissionMode: PermissionMode;
   model: ModelRef | null;
@@ -2037,6 +2065,11 @@ export interface DiffCommentView {
   side: 'old' | 'new';
   body: string;
   resolved: boolean;
+  /** `review`: a finding of `/review` (FR-069), shown once with its review; `user`: typed. */
+  author?: 'user' | 'review';
+  reviewId?: string | null;
+  /** When a user comment was sent to the agent (null while still in the batch). */
+  submittedAt?: string | null;
   createdAt: string;
 }
 
@@ -2076,7 +2109,16 @@ export interface CodeReviewView {
   sessionId: string;
   status: 'running' | 'done' | 'failed';
   findings: ReviewFindingView[];
+  model?: string | null;
+  error?: string | null;
   createdAt: string;
+}
+
+/** A reference to a symbol: a line that names it (FR-074). */
+export interface CodeRefView {
+  path: string;
+  line: number;
+  text: string;
 }
 
 export const commitSchema = z
@@ -2093,6 +2135,24 @@ export interface CommitResult {
   sha: string;
   branch: string;
   files: number;
+  /** False when the repository's hooks could not run (no sandbox; FR-211), with a note why. */
+  hooksRan?: boolean;
+  hooksNote?: string | null;
+}
+
+/** An interactive exec session of the agent (FR-184), listed in the terminal pane. */
+export interface ExecSessionView {
+  id: string;
+  threadId: string;
+  turnId: string;
+  /** The tool call that started it: the pane's "agent" chip links to it (docs/10 §6). */
+  callId: string | null;
+  /** Redacted, at most 500 characters. */
+  cmd: string;
+  cwd: string;
+  startedAt: string;
+  /** True once its turn ended and the run kept it. */
+  retained: boolean;
 }
 
 export interface CodeSymbolView {

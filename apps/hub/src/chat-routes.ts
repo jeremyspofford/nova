@@ -21,6 +21,8 @@ import {
   updateThreadSchema,
   NovaError,
   type EventEnvelope,
+  type StatusView,
+  type ThreadView,
 } from '@nova/shared';
 import {
   readAttachmentBlob,
@@ -44,6 +46,8 @@ export interface ChatRouteDeps {
   accountOf: (req: FastifyRequest) => Promise<string>;
   /** Register an open stream so shutdown can end it. */
   trackStream: (end: () => void) => () => void;
+  /** The derived status of threads (FR-215), filled into ThreadView.derived when given. */
+  status?: (accountId: string, threadIds: readonly string[]) => Promise<Map<string, StatusView>>;
 }
 
 /** Message posts carry base64 attachments (FR-021: 10 × 20 MB raw would be too much; ~30 MB). */
@@ -125,9 +129,28 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
   }));
 
   // ---- threads ----------------------------------------------------------------------------
+  // ThreadView.derived: Needs input, Blocked, Running or Ready (FR-215); without a status
+  // source, or when it fails, the views go out as they are.
+  const withStatus = async (accountId: string, views: ThreadView[]): Promise<ThreadView[]> => {
+    if (!deps.status || !views.length) return views;
+    try {
+      const status = await deps.status(
+        accountId,
+        views.map((v) => v.id),
+      );
+      return views.map((v) => {
+        const d = status.get(v.id);
+        return d ? { ...v, derived: d } : v;
+      });
+    } catch {
+      return views;
+    }
+  };
+
   app.get('/api/v1/threads', async (req) => {
     const accountId = await accountOf(req);
-    return threads.list(accountId, listThreadsQuerySchema.parse(req.query));
+    const page = await threads.list(accountId, listThreadsQuerySchema.parse(req.query));
+    return { ...page, items: await withStatus(accountId, page.items) };
   });
 
   app.post('/api/v1/threads', async (req, reply) => {
@@ -139,7 +162,9 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
 
   app.get('/api/v1/threads/:id', async (req) => {
     const accountId = await accountOf(req);
-    return threads.detail(accountId, params.parse(req.params).id);
+    const detail = await threads.detail(accountId, params.parse(req.params).id);
+    const [thread] = await withStatus(accountId, [detail.thread]);
+    return { ...detail, thread: thread ?? detail.thread };
   });
 
   app.patch('/api/v1/threads/:id', async (req) => {

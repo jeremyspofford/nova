@@ -2,6 +2,13 @@
 // status or a session id; exec.poll reads new output; exec.write sends input or a signal. Output
 // returned to the model is redacted and capped, keeping head and tail. Without a sandbox every
 // exec tool fails closed with `sandbox_unavailable`; nothing ever runs outside it (docs/12 §7).
+//
+// M5: in the Hub the sandbox is an ExecSessions, which supplies the `exec.sessions` yield time
+// and output cap and lists sessions for the terminal pane. A session can be driven from the turn
+// that started it, or from a later turn of the same thread once a run kept it; a session of
+// another thread is refused. exec.write passes the policy gate on every call like any tool call,
+// and the gate matches its text against the command rules (FR-191): writing to stdin never
+// skips them.
 import { isNovaError } from '@nova/shared';
 import { defaultRedactor, type Redactor } from '@nova/security';
 import {
@@ -16,29 +23,53 @@ import {
 } from './builtin.ts';
 import { withDeny } from './fs.ts';
 import { PathDenied, resolveInRoots, type PathPolicy } from './roots.ts';
-import type { ExecRequestExtras } from './sandbox.ts';
-import { CHARS_PER_TOKEN, DEFAULT_OUTPUT_TOKENS, capHeadTail } from './text.ts';
-import type { ExecRequest, ExecResult, ToolContext, ToolResult } from './types.ts';
+import {
+  DEFAULT_EXEC_SESSION_SETTINGS,
+  ExecSessions,
+  type ExecSessionSettings,
+  type OwnedExecRequest,
+} from './exec-sessions.ts';
+import { CHARS_PER_TOKEN, capHeadTail } from './text.ts';
+import type { ExecResult, ToolContext, ToolResult } from './types.ts';
 
-export const DEFAULT_YIELD_MS = 10_000;
+export * from './exec-sessions.ts';
+
+export const DEFAULT_YIELD_MS = DEFAULT_EXEC_SESSION_SETTINGS.yieldMs;
 export const MAX_YIELD_MS = 120_000;
+/** The highest output cap the `exec.sessions` setting allows (tokens). */
+const MAX_OUTPUT_TOKENS = 50_000;
 
 export interface ExecToolOptions {
   redactor?: Redactor;
   paths?: PathPolicy;
 }
 
+interface Owner {
+  accountId: string;
+  threadId: string;
+  turnId: string;
+}
+
 export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
   const redactor = opts.redactor ?? defaultRedactor;
-  // Sessions belong to the turn that started them; another turn cannot read or drive them.
-  const owners = new Map<string, string>();
+  // Sessions belong to the turn that started them; a later turn of the same thread may drive
+  // one a run kept (ExecSessions.retainTurn); another thread never can.
+  const owners = new Map<string, Owner>();
 
   const unavailable = async (ctx: ToolContext): Promise<ToolResult | null> => {
     const a = await ctx.sandbox.available();
     return a.ok ? null : fail('sandbox_unavailable', a.detail);
   };
+  /** `exec.sessions` from the Hub's ExecSessions; the defaults elsewhere (tests, headless). */
+  const settings = (ctx: ToolContext): Promise<ExecSessionSettings> =>
+    ctx.sandbox instanceof ExecSessions
+      ? ctx.sandbox.config()
+      : Promise.resolve(DEFAULT_EXEC_SESSION_SETTINGS);
+  /** The model may lower the output cap per call, never raise it above the setting (FR-184). */
+  const cap = (requested: number | undefined, conf: ExecSessionSettings): number =>
+    Math.min(requested ?? conf.outputTokens, conf.outputTokens);
   const format = (r: ExecResult, maxTokens: number, ctx: ToolContext): ToolResult => {
-    const max = Math.max(100, Math.min(maxTokens, 20_000)) * CHARS_PER_TOKEN;
+    const max = Math.max(100, Math.min(maxTokens, MAX_OUTPUT_TOKENS)) * CHARS_PER_TOKEN;
     const out = capHeadTail(redactor.redactString(r.output), max);
     if (r.status === 'exited') {
       return ok(`Exit code ${r.exitCode}\n${out.text}`, {
@@ -47,7 +78,11 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
         truncated: out.truncated,
       });
     }
-    owners.set(r.sessionId, ctx.turnId);
+    owners.set(r.sessionId, {
+      accountId: ctx.accountId,
+      threadId: ctx.threadId,
+      turnId: ctx.turnId,
+    });
     // Sessions of ended turns were killed; forget the oldest owners past a bound.
     for (const id of owners.keys()) {
       if (owners.size <= 1_000) break;
@@ -58,8 +93,19 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
       { status: 'running', sessionId: r.sessionId, truncated: out.truncated },
     );
   };
-  const owned = (ctx: ToolContext, sessionId: string): boolean =>
-    owners.get(sessionId) === ctx.turnId;
+  /** Null when the call may drive the session, else the refusal. */
+  const refused = (ctx: ToolContext, sessionId: string): ToolResult | null => {
+    const o = owners.get(sessionId);
+    const missing = fail('not_found', `no running command with session id ${sessionId}`);
+    if (o?.accountId !== ctx.accountId) return missing;
+    // Fail closed: a thread never reads or drives another thread's command.
+    if (o.threadId !== ctx.threadId)
+      return fail('session_denied', `session ${sessionId} belongs to another conversation`);
+    if (o.turnId === ctx.turnId) return null;
+    // A later turn of the same thread: only while the run kept the session.
+    const kept = ctx.sandbox instanceof ExecSessions ? ctx.sandbox.owner(sessionId) : null;
+    return kept?.retained && kept.threadId === ctx.threadId ? null : missing;
+  };
   const onError = (err: unknown): ToolResult => {
     if (err instanceof PathDenied) return fail('path_denied', err.message);
     if (isNovaError(err)) {
@@ -84,7 +130,7 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
             cmd: { type: 'string', minLength: 1, maxLength: 20_000 },
             cwd: { type: 'string', maxLength: 4096 },
             yieldMs: { type: 'integer', minimum: 0, maximum: MAX_YIELD_MS },
-            maxOutputTokens: { type: 'integer', minimum: 100, maximum: 20_000 },
+            maxOutputTokens: { type: 'integer', minimum: 100, maximum: MAX_OUTPUT_TOKENS },
             tty: { type: 'boolean' },
           },
           required: ['cmd'],
@@ -117,18 +163,25 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
             'read',
             withDeny(opts.paths ?? {}, ctx),
           ).path;
-          const req: ExecRequest & ExecRequestExtras = {
+          const conf = await settings(ctx);
+          const req: OwnedExecRequest = {
             cmd: str(a.cmd) ?? '',
             cwd,
             roots: ctx.roots,
             network: extrasOf(ctx)?.network ?? 'off',
-            yieldMs: Math.min(num(a.yieldMs) ?? DEFAULT_YIELD_MS, MAX_YIELD_MS),
+            yieldMs: Math.min(num(a.yieldMs) ?? conf.yieldMs, MAX_YIELD_MS),
             signal: ctx.signal,
             turnId: ctx.turnId,
             onOutput: progress(ctx),
+            owner: {
+              accountId: ctx.accountId,
+              threadId: ctx.threadId,
+              turnId: ctx.turnId,
+              callId: ctx.callId,
+            },
           };
           const r = await ctx.sandbox.exec(req);
-          return format(r, num(a.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKENS, ctx);
+          return format(r, cap(num(a.maxOutputTokens), conf), ctx);
         } catch (err) {
           return onError(err);
         }
@@ -145,7 +198,7 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
           properties: {
             sessionId: { type: 'string', minLength: 1, maxLength: 100 },
             yieldMs: { type: 'integer', minimum: 0, maximum: MAX_YIELD_MS },
-            maxOutputTokens: { type: 'integer', minimum: 100, maximum: 20_000 },
+            maxOutputTokens: { type: 'integer', minimum: 100, maximum: MAX_OUTPUT_TOKENS },
           },
           required: ['sessionId'],
           additionalProperties: false,
@@ -159,15 +212,17 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
         if (down) return down;
         const a = argsOf(args);
         const id = str(a.sessionId) ?? '';
-        if (!owned(ctx, id)) return fail('not_found', `no running command with session id ${id}`);
+        const no = refused(ctx, id);
+        if (no) return no;
         try {
+          const conf = await settings(ctx);
           const r = await ctx.sandbox.poll(
             id,
-            Math.min(num(a.yieldMs) ?? DEFAULT_YIELD_MS, MAX_YIELD_MS),
+            Math.min(num(a.yieldMs) ?? conf.yieldMs, MAX_YIELD_MS),
             ctx.signal,
           );
           if (r.status === 'exited') owners.delete(id);
-          return format(r, num(a.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKENS, ctx);
+          return format(r, cap(num(a.maxOutputTokens), conf), ctx);
         } catch (err) {
           owners.delete(id);
           return onError(err);
@@ -201,7 +256,8 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
         if (down) return down;
         const a = argsOf(args);
         const id = str(a.sessionId) ?? '';
-        if (!owned(ctx, id)) return fail('not_found', `no running command with session id ${id}`);
+        const no = refused(ctx, id);
+        if (no) return no;
         try {
           const input: { text?: string; closeStdin?: boolean; signal?: 'interrupt' | 'terminate' } =
             {};
@@ -216,7 +272,7 @@ export function execTools(opts: ExecToolOptions = {}): BuiltinTool[] {
           }
           const r = await ctx.sandbox.poll(id, 500, ctx.signal);
           if (r.status === 'exited') owners.delete(id);
-          return format(r, DEFAULT_OUTPUT_TOKENS, ctx);
+          return format(r, (await settings(ctx)).outputTokens, ctx);
         } catch (err) {
           owners.delete(id);
           return onError(err);
