@@ -3,11 +3,17 @@ import { navigate, SETTINGS_SECTIONS, type SettingsSection } from '../router.ts'
 import { AccountsPage } from './AccountsPage.tsx';
 import { AppearancePage } from './AppearancePage.tsx';
 import { GeneralPage } from './GeneralPage.tsx';
+import { DevicesPage } from './DevicesPage.tsx';
 import { KeyboardPage } from './KeyboardPage.tsx';
+import { MemoryPage } from './MemoryPage.tsx';
+import { ModelsPage } from './ModelsPage.tsx';
 
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   accounts: 'Accounts',
+  models: 'Models',
+  memory: 'Memory',
+  devices: 'Devices',
   appearance: 'Appearance',
   keyboard: 'Keyboard',
 };
@@ -47,6 +53,9 @@ export function SettingsView({
         {section === 'accounts' ? (
           <AccountsPage displayName={displayName} onDisplayName={onDisplayName} />
         ) : null}
+        {section === 'models' ? <ModelsPage /> : null}
+        {section === 'memory' ? <MemoryPage /> : null}
+        {section === 'devices' ? <DevicesPage /> : null}
         {section === 'appearance' ? <AppearancePage /> : null}
         {section === 'keyboard' ? <KeyboardPage /> : null}
       </div>

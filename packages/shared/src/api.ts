@@ -229,11 +229,32 @@ export interface MessageView {
   model: ModelRef | null;
   usage: { inputTokens: number; outputTokens: number; costUsd: number } | null;
   createdAt: string;
+  /** The message this one answers or follows on the active path (M2 message tree, FR-020). */
+  parentId?: string | null;
+  /** Versions at this point (this message and its edited/regenerated siblings, oldest first);
+   *  present only when there is more than one (FR-020). */
+  siblingIds?: string[];
+  /** Sources used in this answer (FR-040). */
+  citations?: CitationView[];
+  /** How a user message entered the turn: typed, a steer of a running turn, or a queued send. */
+  provenance?: 'typed' | 'steer' | 'queued';
 }
 
 export interface ThreadDetail {
   thread: ThreadView;
+  /** The active path, oldest first; a branch's inherited messages keep their own threadId. */
   messages: MessageView[];
+  /** Messages waiting for the running turn to finish (FR-019). */
+  queue?: QueuedInputView[];
+}
+
+export interface QueuedInputView {
+  id: string;
+  threadId: string;
+  text: string;
+  attachmentCount: number;
+  position: number;
+  createdAt: string;
 }
 
 /** Attachment limits (FR-021). */
@@ -313,6 +334,8 @@ export interface SearchHit {
   threadTitle: string | null;
   snippet: string;
   createdAt: string;
+  role?: MessageRole;
+  projectId?: string | null;
 }
 
 // ---- stream payloads (contracts/events.md "chat & turns") --------------------------------------
@@ -331,24 +354,29 @@ export interface ChatMessageCompletedPayload {
 
 // ==== M2: branches, side chats, projects, sources, memory, presets, nodes ====================
 
-// ---- branches, edits, regenerate, tree (FR-020, FR-026, FR-033) -------------------------------
+// ---- message versions, branches, tree (FR-020, FR-026, FR-033) -------------------------------
 
-export const branchSchema = z.object({ fromMessageId: idSchema });
-
-/** Edit a user message: forks a branch before it and sends the edited text there (FR-020). */
+/** Edit a user message: adds an edited sibling version and runs it; prior turns are kept. */
 export const editMessageSchema = z.object({
   text: z.string().min(1).max(200_000),
   model: z.string().max(300).optional(),
+  reasoningLevel: reasoningLevelSchema.optional(),
 });
 
-/** Regenerate an assistant reply: forks a branch before it and re-runs the turn (FR-020). */
-export const regenerateSchema = z.object({ model: z.string().max(300).optional() });
+/** Regenerate an assistant reply: adds a sibling reply to the same user message. */
+export const regenerateSchema = z.object({
+  model: z.string().max(300).optional(),
+  reasoningLevel: reasoningLevelSchema.optional(),
+});
 
-export interface BranchResponse {
-  thread: ThreadView;
-  /** Present when the branch also started a turn (edit, regenerate). */
-  send?: SendMessageResponse;
-}
+/** Switch the active path to the one through this message version. */
+export const selectVersionSchema = z.object({ messageId: idSchema });
+
+/** Branch from here: a new thread that continues from this message (FR-020, FR-033). */
+export const branchSchema = z.object({
+  fromMessageId: idSchema,
+  title: z.string().max(300).optional(),
+});
 
 export interface ThreadTreeNode {
   threadId: string;
@@ -357,6 +385,7 @@ export interface ThreadTreeNode {
   title: string | null;
   side: boolean;
   createdAt: string;
+  updatedAt: string;
   messageCount: number;
 }
 
@@ -365,7 +394,7 @@ export interface ThreadTree {
   nodes: ThreadTreeNode[];
 }
 
-/** Side chat: a temporary child thread that sees the parent's context (FR-026). */
+/** Side chat: a child thread that reads the parent's context and adds no turns to it (FR-026). */
 export const sideChatSchema = z.object({
   text: z.string().min(1).max(200_000),
   model: z.string().max(300).optional(),
@@ -500,7 +529,7 @@ export const presetSchema = z.object({
   /** Ordered model refs; `single` uses the first, `fallback` tries them in order. */
   targets: z.array(z.string().max(300)).min(1).max(8),
   reasoningLevel: reasoningLevelSchema.optional(),
-  speed: z.enum(['normal', 'fast']).optional(),
+  speed: z.enum(['standard', 'fast']).optional(),
   /** Position on the Faster ↔ Smarter control; lower is faster. */
   rank: z.number().int().min(0).max(100),
 });

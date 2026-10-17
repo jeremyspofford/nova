@@ -11,12 +11,14 @@ import {
   type MessageView,
   type ModelView,
   type ProviderAccountView,
+  type QueuedInputView,
   type SearchHit,
   type ThreadView,
 } from '@nova/shared';
 import { ApiError, type Api } from '../src/api.ts';
 import { CommandRegistry } from '../src/commands.ts';
 import type { EventSourceLike } from '../src/sse.ts';
+import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
 let seq = 0;
 const id = (p: string) => `${p}${(++seq).toString().padStart(4, '0')}`;
@@ -95,6 +97,10 @@ export interface HubState {
   /** Make the next call to a method fail. */
   failNext: Partial<Record<keyof Api, ApiError | Error>>;
   testResult: { ok: boolean; detail?: string; models?: number };
+  /** Queued follow-ups per thread (FR-019). */
+  queues: Map<string, QueuedInputView[]>;
+  /** Projects, sources, memory, presets and nodes (test/fakes-workspace.ts). */
+  workspace: WorkspaceState;
 }
 
 export const DONE_ONBOARDING = { step: 'done', completed: true, skipped: false };
@@ -111,6 +117,8 @@ export function createHub(init: Partial<HubState> = {}) {
     searchHits: [],
     failNext: {},
     testResult: { ok: true, models: 2 },
+    queues: new Map(),
+    workspace: workspaceState(),
     ...init,
   };
 
@@ -252,6 +260,151 @@ export function createHub(init: Partial<HubState> = {}) {
       maybeFail('search');
       return { items: state.searchHits };
     },
+    listQueue: async (tid) => {
+      maybeFail('listQueue');
+      return { items: state.queues.get(tid) ?? [] };
+    },
+    cancelQueued: async (tid, qid) => {
+      maybeFail('cancelQueued');
+      state.queues.set(
+        tid,
+        (state.queues.get(tid) ?? []).filter((q) => q.id !== qid),
+      );
+      return { ok: true } as const;
+    },
+    editMessage: async (tid, mid, body) => {
+      maybeFail('editMessage');
+      find(tid);
+      const turnId = id('turn');
+      const msgs = state.messages.get(tid) ?? [];
+      const at = msgs.findIndex((m) => m.id === mid);
+      if (at < 0) throw notFound();
+      const original = msgs[at]!;
+      const user = message(tid, {
+        role: 'user',
+        turnId,
+        parentId: original.parentId ?? null,
+        parts: [{ type: 'text', text: body.text }],
+      });
+      const assistant = message(tid, {
+        role: 'assistant',
+        turnId,
+        parentId: user.id,
+        status: 'streaming',
+        parts: [],
+      });
+      state.messages.set(tid, [...msgs.slice(0, at), user, assistant]);
+      return {
+        disposition: 'started' as const,
+        turnId,
+        userMessageId: user.id,
+        assistantMessageId: assistant.id,
+      };
+    },
+    regenerate: async (tid, mid) => {
+      maybeFail('regenerate');
+      find(tid);
+      const turnId = id('turn');
+      const msgs = state.messages.get(tid) ?? [];
+      const at = msgs.findIndex((m) => m.id === mid);
+      if (at < 0) throw notFound();
+      const parent = msgs[at]!.parentId ?? msgs[at - 1]?.id ?? null;
+      const assistant = message(tid, {
+        role: 'assistant',
+        turnId,
+        parentId: parent,
+        status: 'streaming',
+        parts: [],
+      });
+      state.messages.set(tid, [...msgs.slice(0, at), assistant]);
+      return {
+        disposition: 'started' as const,
+        turnId,
+        userMessageId: parent ?? '',
+        assistantMessageId: assistant.id,
+      };
+    },
+    selectVersion: async (tid) => {
+      maybeFail('selectVersion');
+      return { thread: { ...find(tid) }, messages: [...(state.messages.get(tid) ?? [])] };
+    },
+    deleteMessage: async (tid, mid) => {
+      maybeFail('deleteMessage');
+      state.messages.set(
+        tid,
+        (state.messages.get(tid) ?? []).filter((m) => m.id !== mid),
+      );
+      return { ok: true } as const;
+    },
+    branch: async (tid, fromMessageId, title) => {
+      maybeFail('branch');
+      const parent = find(tid);
+      const t = thread({
+        title: title ?? `Branch of ${parent.title ?? 'chat'}`,
+        parentThreadId: tid,
+        branchFromMessageId: fromMessageId,
+        model: parent.model,
+      });
+      state.threads = [t, ...state.threads];
+      const msgs = state.messages.get(tid) ?? [];
+      const at = msgs.findIndex((m) => m.id === fromMessageId);
+      state.messages.set(t.id, at < 0 ? [] : msgs.slice(0, at + 1));
+      return t;
+    },
+    threadTree: async (tid) => {
+      maybeFail('threadTree');
+      let root = find(tid);
+      while (root.parentThreadId) root = find(root.parentThreadId);
+      const inTree = (t: ThreadView): boolean =>
+        t.id === root.id || (!!t.parentThreadId && inTree(find(t.parentThreadId)));
+      return {
+        rootThreadId: root.id,
+        nodes: state.threads.filter(inTree).map((t) => ({
+          threadId: t.id,
+          parentThreadId: t.parentThreadId,
+          branchFromMessageId: t.branchFromMessageId,
+          title: t.title,
+          side: t.side,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+          messageCount: (state.messages.get(t.id) ?? []).length,
+        })),
+      };
+    },
+    sideChat: async (tid, body) => {
+      maybeFail('sideChat');
+      const parent = find(tid);
+      const t = thread({
+        title: body.text.slice(0, 60),
+        parentThreadId: tid,
+        side: true,
+        model: body.model ?? parent.model,
+      });
+      state.threads = [t, ...state.threads];
+      const turnId = id('turn');
+      const user = message(t.id, {
+        role: 'user',
+        turnId,
+        parts: [{ type: 'text', text: body.text }],
+      });
+      const assistant = message(t.id, {
+        role: 'assistant',
+        turnId,
+        status: 'streaming',
+        parts: [],
+      });
+      state.messages.set(t.id, [user, assistant]);
+      return {
+        thread: t,
+        send: {
+          disposition: 'started' as const,
+          turnId,
+          userMessageId: user.id,
+          assistantMessageId: assistant.id,
+        },
+      };
+    },
+    ...workspaceImpl(state.workspace, { id, ts: () => ts(), maybeFail }),
     attachmentUrl: (aid) => `/api/v1/attachments/${aid}`,
     fetchAttachment: async () => new Blob(['file-bytes'], { type: 'text/plain' }),
     threadStreamUrl: (tid) => `/api/v1/threads/${tid}/stream`,

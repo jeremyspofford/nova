@@ -24,6 +24,8 @@ import {
   useRoute,
   type Mode,
 } from '../router.ts';
+import { deepLinkPath } from '../deeplinks.ts';
+import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { SECTION_LABELS, SettingsView } from '../settings/SettingsView.tsx';
@@ -157,6 +159,13 @@ export function Workspace({
     if (!onboarding.completed && !onboarding.skipped && route.name !== 'onboarding')
       navigate('/onboarding', { replace: true });
   }, [onboarding.completed, onboarding.skipped, route.name]);
+
+  // ---- deep links (FR-007): /open?url=<link> replaces itself with the route the link names --------
+  const openTarget = route.name === 'open' ? route.target : null;
+  useEffect(() => {
+    if (openTarget === null) return;
+    navigate(deepLinkPath(openTarget) ?? '/chat', { replace: true });
+  }, [openTarget]);
 
   // ---- commands (FR-003) ---------------------------------------------------------------------------
   const switchMode = useCallback(
@@ -345,7 +354,9 @@ export function Workspace({
       ? 'Settings'
       : route.name === 'onboarding'
         ? 'Setup'
-        : MODE_INFO[mode ?? lastMode].label;
+        : route.name === 'projects'
+          ? 'Projects'
+          : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -444,6 +455,7 @@ export function Workspace({
               onDisplayName={onDisplayName}
             />
           ) : null}
+          {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
           ) : null}

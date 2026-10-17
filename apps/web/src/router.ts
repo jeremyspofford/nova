@@ -1,18 +1,28 @@
 // Client-side routes over the History API. The Hub serves index.html for unknown paths, so every
-// route below is a real, shareable URL: /chat, /chat/:id, /work, /code, /agents,
-// /settings/:section and /onboarding.
+// route below is a real, shareable URL: /chat, /chat/:id, /work, /code, /agents, /projects,
+// /projects/:id, /settings/:section, /onboarding and /open?url=… (deep links, FR-007).
 import { useMemo, useSyncExternalStore } from 'react';
 
 export const MODES = ['chat', 'work', 'code', 'agents'] as const;
 export type Mode = (typeof MODES)[number];
 
-export const SETTINGS_SECTIONS = ['general', 'accounts', 'appearance', 'keyboard'] as const;
+export const SETTINGS_SECTIONS = [
+  'general',
+  'accounts',
+  'models',
+  'memory',
+  'devices',
+  'appearance',
+  'keyboard',
+] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export type Route =
   | { name: 'chat'; threadId: string | null; messageId: string | null }
   | { name: 'mode'; mode: Exclude<Mode, 'chat'> }
   | { name: 'settings'; section: SettingsSection }
+  | { name: 'projects'; projectId: string | null }
+  | { name: 'open'; target: string }
   | { name: 'onboarding' };
 
 export function parseRoute(pathname: string, search = ''): Route {
@@ -26,6 +36,9 @@ export function parseRoute(pathname: string, search = ''): Route {
     return { name: 'settings', section };
   }
   if (head === 'onboarding') return { name: 'onboarding' };
+  if (head === 'projects') return { name: 'projects', projectId: arg ?? null };
+  if (head === 'open')
+    return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };
   const messageId = new URLSearchParams(search).get('m');
   if (head === 'chat' && arg) return { name: 'chat', threadId: arg, messageId };
   return { name: 'chat', threadId: null, messageId: null };
@@ -41,6 +54,10 @@ export function chatPath(threadId: string | null, messageId?: string): string {
   if (!threadId) return '/chat';
   const base = `/chat/${encodeURIComponent(threadId)}`;
   return messageId ? `${base}?m=${encodeURIComponent(messageId)}` : base;
+}
+
+export function projectPath(projectId: string | null): string {
+  return projectId ? `/projects/${encodeURIComponent(projectId)}` : '/projects';
 }
 
 const NAV_EVENT = 'nova:navigate';

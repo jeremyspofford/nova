@@ -1,10 +1,28 @@
 // Thin client for the Hub API (contracts/hub-api.md; M1 shapes in @nova/shared api.ts). The
 // session lives in an HttpOnly cookie, so the UI never sees or stores a credential (FR-125).
+import type { z } from 'zod';
 import type {
+  addSourceSchema,
+  createMemorySchema,
+  createProjectSchema,
   CreateProviderRequest,
   CreateThreadRequest,
+  DetectedServer,
+  importMemorySchema,
+  MemoryImportResult,
+  MemoryItemView,
   ModelView,
+  NodeEnrollToken,
+  NodeView,
   Page,
+  Preset,
+  ProjectView,
+  QueuedInputView,
+  SideChatResponse,
+  SourceView,
+  ThreadTree,
+  updateMemorySchema,
+  updateProjectSchema,
   ProviderAccountView,
   ProviderTestResult,
   SearchHit,
@@ -15,6 +33,20 @@ import type {
   ThreadView,
   UpdateThreadRequest,
 } from '@nova/shared';
+
+export type CreateProjectRequest = z.input<typeof createProjectSchema>;
+export type UpdateProjectRequest = z.input<typeof updateProjectSchema>;
+export type AddSourceRequest = z.input<typeof addSourceSchema>;
+export type CreateMemoryRequest = z.input<typeof createMemorySchema>;
+export type UpdateMemoryRequest = z.input<typeof updateMemorySchema>;
+export type ImportMemoryRequest = z.input<typeof importMemorySchema>;
+
+export interface ListMemoryQuery {
+  scopeKind?: 'global' | 'project';
+  scopeRef?: string;
+  q?: string;
+  status?: 'active' | 'dismissed';
+}
 
 export interface ApiErrorBody {
   code: string;
@@ -135,6 +167,71 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
       call<{ ok: true; cancelled: boolean }>('POST', `${V1}/threads/${enc(id)}/cancel`),
     search: (q: string, limit = 20) =>
       call<{ items: SearchHit[] }>('GET', `${V1}/search${query({ q, limit })}`),
+
+    // M2 conversation: follow-ups, versions, branches, side chats (FR-019, FR-020, FR-026, FR-033)
+    listQueue: (id: string) =>
+      call<{ items: QueuedInputView[] }>('GET', `${V1}/threads/${enc(id)}/queue`),
+    cancelQueued: (id: string, queuedId: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/threads/${enc(id)}/queue/${enc(queuedId)}`),
+    editMessage: (id: string, messageId: string, body: { text: string; model?: string }) =>
+      call<SendMessageResponse>(
+        'POST',
+        `${V1}/threads/${enc(id)}/messages/${enc(messageId)}/edit`,
+        body,
+      ),
+    regenerate: (id: string, messageId: string, body: { model?: string } = {}) =>
+      call<SendMessageResponse>(
+        'POST',
+        `${V1}/threads/${enc(id)}/messages/${enc(messageId)}/regenerate`,
+        body,
+      ),
+    selectVersion: (id: string, messageId: string) =>
+      call<ThreadDetail>('POST', `${V1}/threads/${enc(id)}/active`, { messageId }),
+    deleteMessage: (id: string, messageId: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/threads/${enc(id)}/messages/${enc(messageId)}`),
+    branch: (id: string, fromMessageId: string, title?: string) =>
+      call<ThreadView>(
+        'POST',
+        `${V1}/threads/${enc(id)}/branch`,
+        title ? { fromMessageId, title } : { fromMessageId },
+      ),
+    threadTree: (id: string) => call<ThreadTree>('GET', `${V1}/threads/${enc(id)}/tree`),
+    sideChat: (id: string, body: { text: string; model?: string }) =>
+      call<SideChatResponse>('POST', `${V1}/threads/${enc(id)}/side`, body),
+
+    // projects & sources (FR-034, FR-040)
+    listProjects: () => call<{ items: ProjectView[] }>('GET', `${V1}/projects`),
+    createProject: (body: CreateProjectRequest) =>
+      call<ProjectView>('POST', `${V1}/projects`, body),
+    getProject: (id: string) => call<ProjectView>('GET', `${V1}/projects/${enc(id)}`),
+    updateProject: (id: string, body: UpdateProjectRequest) =>
+      call<ProjectView>('PATCH', `${V1}/projects/${enc(id)}`, body),
+    deleteProject: (id: string) => call<{ ok: true }>('DELETE', `${V1}/projects/${enc(id)}`),
+    listSources: (projectId: string) =>
+      call<{ items: SourceView[] }>('GET', `${V1}/projects/${enc(projectId)}/sources`),
+    addSource: (projectId: string, body: AddSourceRequest) =>
+      call<SourceView>('POST', `${V1}/projects/${enc(projectId)}/sources`, body),
+    reindexSource: (id: string) => call<SourceView>('POST', `${V1}/sources/${enc(id)}/reindex`),
+    deleteSource: (id: string) => call<{ ok: true }>('DELETE', `${V1}/sources/${enc(id)}`),
+
+    // memory (FR-032)
+    listMemory: (q: ListMemoryQuery = {}) =>
+      call<{ items: MemoryItemView[] }>('GET', `${V1}/memory${query({ ...q })}`),
+    createMemory: (body: CreateMemoryRequest) => call<MemoryItemView>('POST', `${V1}/memory`, body),
+    updateMemory: (id: string, body: UpdateMemoryRequest) =>
+      call<MemoryItemView>('PATCH', `${V1}/memory/${enc(id)}`, body),
+    deleteMemory: (id: string) => call<{ ok: true }>('DELETE', `${V1}/memory/${enc(id)}`),
+    importMemory: (body: ImportMemoryRequest) =>
+      call<MemoryImportResult>('POST', `${V1}/memory/import`, body),
+
+    // presets, local servers, compute nodes (FR-221, docs/07 §12, FR-126)
+    listPresets: () => call<{ items: Preset[]; builtIn: boolean }>('GET', `${V1}/presets`),
+    savePresets: (items: Preset[]) =>
+      call<{ items: Preset[]; builtIn: boolean }>('PUT', `${V1}/presets`, { items }),
+    detectServers: () => call<{ items: DetectedServer[] }>('GET', `${V1}/providers/detect`),
+    listNodes: () => call<{ items: NodeView[] }>('GET', `${V1}/nodes`),
+    createNodeEnrollToken: () => call<NodeEnrollToken>('POST', `${V1}/nodes/enroll-token`),
+    revokeNode: (id: string) => call<{ ok: true }>('DELETE', `${V1}/nodes/${enc(id)}`),
 
     // attachments (FR-021)
     attachmentUrl: (id: string) => `${V1}/attachments/${enc(id)}`,

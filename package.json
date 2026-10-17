@@ -10,7 +10,8 @@
   },
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "services/compute"
   ],
   "scripts": {
     "lint": "eslint . && prettier --check .",

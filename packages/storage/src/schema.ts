@@ -3,3 +3,5 @@
 // Add a domain by creating schema/<domain>.ts and one export line here.
 export * from './schema/core.ts';
 export * from './schema/chat.ts';
+export * from './schema/conversation.ts';
+export * from './schema/nodes.ts';
