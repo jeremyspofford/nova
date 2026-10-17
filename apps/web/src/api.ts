@@ -83,6 +83,31 @@ import type {
   ThreadMode,
   ThreadView,
   UpdateThreadRequest,
+  CodeChangeView,
+  CodeReviewView,
+  CodeSessionView,
+  CodeSymbolView,
+  CommitResult,
+  DiffCommentView,
+  EnvironmentView,
+  GoalView,
+  RunView,
+  ScheduleFireView,
+  ScheduleView,
+  ServerRequestView,
+  SubagentView,
+  commitSchema,
+  createCodeSessionSchema,
+  createRunSchema,
+  diffCommentsSchema,
+  extendBudgetSchema,
+  hunkDecisionSchema,
+  scheduleSchema,
+  setGoalSchema,
+  updateCodeSessionSchema,
+  updateGoalSchema,
+  updatePlanSchema,
+  updateScheduleSchema,
 } from '@nova/shared';
 
 export type CreateProjectRequest = z.input<typeof createProjectSchema>;
@@ -538,6 +563,96 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
         });
       return res.blob();
     },
+
+    // ---- M5: Work runs, goals, schedules (FR-051..FR-058, FR-181, FR-182, FR-055) ----------
+    listRuns: (q: { status?: 'active' | 'all'; projectId?: string; cursor?: string } = {}) =>
+      call<Page<RunView>>('GET', `${V1}/runs${query({ ...q })}`),
+    createRun: (body: z.input<typeof createRunSchema>) => call<RunView>('POST', `${V1}/runs`, body),
+    getRun: (id: string) => call<RunView>('GET', `${V1}/runs/${enc(id)}`),
+    /** pause, resume, cancel; redirect takes `{text}` (FR-019). */
+    controlRun: (id: string, action: 'pause' | 'resume' | 'redirect' | 'cancel', text?: string) =>
+      call<RunView>('POST', `${V1}/runs/${enc(id)}/${action}`, text ? { text } : {}),
+    extendRunBudget: (id: string, body: z.input<typeof extendBudgetSchema>) =>
+      call<RunView>('POST', `${V1}/runs/${enc(id)}/budget`, body),
+    /** Edit the plan before or during the run (docs/09 §3). */
+    updateRunPlan: (id: string, body: z.input<typeof updatePlanSchema>) =>
+      call<RunView>('PUT', `${V1}/runs/${enc(id)}/plan`, body),
+    /** Approve the plan of an `ask_first` run, or start a proposed run (FR-186). */
+    startRun: (id: string) => call<RunView>('POST', `${V1}/runs/${enc(id)}/start`, {}),
+    listSubagents: (runId: string) =>
+      call<{ items: SubagentView[] }>('GET', `${V1}/runs/${enc(runId)}/subagents`),
+    getRunGoal: (runId: string) => call<GoalView | null>('GET', `${V1}/runs/${enc(runId)}/goal`),
+    setRunGoal: (runId: string, body: z.input<typeof setGoalSchema>) =>
+      call<GoalView>('PUT', `${V1}/runs/${enc(runId)}/goal`, body),
+    clearRunGoal: (runId: string) => call<{ ok: true }>('DELETE', `${V1}/runs/${enc(runId)}/goal`),
+    listGoals: (status?: GoalView['status']) =>
+      call<{ items: GoalView[] }>('GET', `${V1}/goals${query({ status })}`),
+    updateGoal: (id: string, body: z.input<typeof updateGoalSchema>) =>
+      call<GoalView>('PATCH', `${V1}/goals/${enc(id)}`, body),
+    goalAction: (id: string, action: 'pause' | 'resume' | 'complete') =>
+      call<GoalView>('POST', `${V1}/goals/${enc(id)}/${action}`, {}),
+    listSchedules: () => call<{ items: ScheduleView[] }>('GET', `${V1}/schedules`),
+    createSchedule: (body: z.input<typeof scheduleSchema>) =>
+      call<ScheduleView>('POST', `${V1}/schedules`, body),
+    updateSchedule: (id: string, body: z.input<typeof updateScheduleSchema>) =>
+      call<ScheduleView>('PATCH', `${V1}/schedules/${enc(id)}`, body),
+    deleteSchedule: (id: string) => call<{ ok: true }>('DELETE', `${V1}/schedules/${enc(id)}`),
+    scheduleHistory: (id: string) =>
+      call<{ items: ScheduleFireView[] }>('GET', `${V1}/schedules/${enc(id)}/fires`),
+    /** Fire a schedule now, outside its rule (a test run). */
+    runScheduleNow: (id: string) =>
+      call<{ runId: string }>('POST', `${V1}/schedules/${enc(id)}/run`, {}),
+
+    // ---- M5: Code sessions (FR-061..FR-066, FR-069, FR-074) ---------------------------------
+    listEnvironments: () => call<{ items: EnvironmentView[] }>('GET', `${V1}/environments`),
+    listCodeSessions: () => call<{ items: CodeSessionView[] }>('GET', `${V1}/code/sessions`),
+    createCodeSession: (body: z.input<typeof createCodeSessionSchema>) =>
+      call<CodeSessionView>('POST', `${V1}/code/sessions`, body),
+    getCodeSession: (id: string) => call<CodeSessionView>('GET', `${V1}/code/sessions/${enc(id)}`),
+    updateCodeSession: (id: string, body: z.input<typeof updateCodeSessionSchema>) =>
+      call<CodeSessionView>('PATCH', `${V1}/code/sessions/${enc(id)}`, body),
+    listChanges: (id: string) =>
+      call<{ items: CodeChangeView[] }>('GET', `${V1}/code/sessions/${enc(id)}/changes`),
+    decideHunks: (id: string, changeId: string, body: z.input<typeof hunkDecisionSchema>) =>
+      call<CodeChangeView>(
+        'POST',
+        `${V1}/code/sessions/${enc(id)}/changes/${enc(changeId)}/hunks`,
+        body,
+      ),
+    /** Accept or reject every pending hunk (of the given changes, or all). */
+    decideAll: (id: string, accept: boolean, changeIds?: string[]) =>
+      call<{ items: CodeChangeView[] }>(
+        'POST',
+        `${V1}/code/sessions/${enc(id)}/changes/${accept ? 'accept' : 'reject'}`,
+        changeIds ? { changeIds } : {},
+      ),
+    listComments: (id: string) =>
+      call<{ items: DiffCommentView[] }>('GET', `${V1}/code/sessions/${enc(id)}/comments`),
+    addComments: (id: string, body: z.input<typeof diffCommentsSchema>) =>
+      call<{ items: DiffCommentView[] }>('POST', `${V1}/code/sessions/${enc(id)}/comments`, body),
+    resolveComment: (id: string, commentId: string) =>
+      call<DiffCommentView>(
+        'POST',
+        `${V1}/code/sessions/${enc(id)}/comments/${enc(commentId)}/resolve`,
+        {},
+      ),
+    startReview: (id: string) =>
+      call<CodeReviewView>('POST', `${V1}/code/sessions/${enc(id)}/review`, {}),
+    getReview: (id: string, reviewId: string) =>
+      call<CodeReviewView>('GET', `${V1}/code/sessions/${enc(id)}/reviews/${enc(reviewId)}`),
+    commit: (id: string, body: z.input<typeof commitSchema>) =>
+      call<CommitResult>('POST', `${V1}/code/sessions/${enc(id)}/commit`, body),
+    codeSymbols: (id: string, q: string) =>
+      call<{ items: CodeSymbolView[] }>(
+        'GET',
+        `${V1}/code/sessions/${enc(id)}/symbols${query({ q })}`,
+      ),
+
+    // ---- M5: server-to-client requests (FR-188) ------------------------------------------------
+    listRequests: (status: 'pending' | 'all' = 'pending') =>
+      call<{ items: ServerRequestView[] }>('GET', `${V1}/requests${query({ status })}`),
+    respondRequest: (id: string, result: unknown) =>
+      call<ServerRequestView>('POST', `${V1}/requests/${enc(id)}/respond`, { result }),
 
     // streams (contracts/hub-api.md §5)
     threadStreamUrl: (id: string) => `${V1}/threads/${enc(id)}/stream`,

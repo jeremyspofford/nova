@@ -171,6 +171,11 @@ export interface ThreadView {
   side: boolean;
   /** True when this chat is excluded from memory extraction (FR-032). */
   memoryOptOut: boolean;
+  /** The shared status (FR-215), counting its child threads; the sidebar sorts Needs input first. */
+  derived?: StatusView;
+  /** The Work run or Code session this thread belongs to (M5). */
+  runId?: string | null;
+  codeSessionId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -264,8 +269,10 @@ export interface MessageView {
   /**
    * How a user message entered the turn: typed, a steer of a running turn, a queued send, or a
    * lifecycle hook's continuation (FR-197), which is not the user's and carries no authority.
+   * M5: a Work run's objective (`run`), a schedule's instructions (`schedule`), a goal
+   * continuation (`goal`) or a sub-agent's task (`subagent`), each labelled in the thread.
    */
-  provenance?: 'typed' | 'steer' | 'queued' | 'hook';
+  provenance?: 'typed' | 'steer' | 'queued' | 'hook' | 'run' | 'schedule' | 'goal' | 'subagent';
   /** The `@`-mentions sent with a user message (FR-022). */
   mentions?: { kind: MentionKind; ref: string; label: string }[];
 }
@@ -1578,4 +1585,559 @@ export interface ImportRecordView {
   sha256: string;
   target: string;
   createdAt: string;
+}
+
+// ==== M5: agent runtime, Work runs, schedules, Code sessions, requests ==========================
+
+// ---- thread status (FR-215, docs/09 §9) -------------------------------------------------------
+
+/** One status per thread, run, code session and agent, derived from runtime state. */
+export type DerivedStatus = 'needs_input' | 'blocked' | 'running' | 'ready';
+
+export interface StatusView {
+  status: DerivedStatus;
+  /** Why it is blocked or needs input, in a few words ("Budget reached", "Approval needed"). */
+  reason: string | null;
+}
+
+// ---- work runs, plans, sub-agents (FR-051..FR-054, FR-057, FR-182, FR-187) --------------------
+
+export const RUN_STATUSES = [
+  'planning',
+  'running',
+  'waiting_approval',
+  'paused',
+  'done',
+  'output_missing',
+  'failed',
+  'cancelled',
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+export type RunPauseReason =
+  | 'user'
+  | 'budget_time'
+  | 'budget_tokens'
+  | 'budget_cost'
+  | 'backstop'
+  | 'usage_limit'
+  | 'approval_timeout'
+  | 'review_breaker'
+  | 'safety'
+  | 'error';
+
+export const RUN_AUTONOMY = ['ask_first', 'standard', 'autonomous'] as const;
+export type RunAutonomy = (typeof RUN_AUTONOMY)[number];
+
+export type RunOrigin = 'user' | 'schedule' | 'trigger' | 'chat_escalation' | 'delegation' | 'goal';
+
+/** Amounts of a budget or of its use (goal.json `amounts`). */
+export interface BudgetAmounts {
+  timeSeconds?: number;
+  tokens?: number;
+  costUsd?: number;
+}
+
+/** A declared output that must be verified before a job succeeds (FR-187). */
+export const expectedOutputSchema = z
+  .object({
+    kind: z.enum(['artifact', 'message', 'file']),
+    ref: z.string().max(1000).optional(),
+  })
+  .strict();
+export type ExpectedOutput = z.infer<typeof expectedOutputSchema>;
+
+export interface RunPlanStep {
+  idx: number;
+  title: string;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  detail: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+export interface RunView {
+  id: string;
+  title: string;
+  objective: string;
+  threadId: string;
+  projectId: string | null;
+  parentRunId: string | null;
+  origin: RunOrigin;
+  /** The chat a run escalated from (FR-186) or the schedule that fired it. */
+  originRef: string | null;
+  status: RunStatus;
+  pauseReason: RunPauseReason | null;
+  autonomy: RunAutonomy;
+  /** The plan, once proposed; `ask_first` runs wait in `planning` until it is approved. */
+  plan: RunPlanStep[] | null;
+  planApproved: boolean;
+  budgets: { timeSeconds: number; tokens: number; costUsd: number | null };
+  /** Consumption, child runs included (docs/09 §2); time counts only while a turn runs. */
+  used: { timeSeconds: number; tokens: number; costUsd: number };
+  expectedOutput: ExpectedOutput | null;
+  outputVerifiedAt: string | null;
+  /** The structured result (FR-051): summary, artifacts, evidence. */
+  result: { summary: string; artifactIds: string[]; evidence: string[] } | null;
+  goalId: string | null;
+  /** The shared status (FR-215): Needs input, Blocked, Running or Ready. */
+  derived: StatusView;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+}
+
+export const createRunSchema = z
+  .object({
+    objective: z.string().trim().min(1).max(8000),
+    title: z.string().trim().min(1).max(200).optional(),
+    projectId: idSchema.optional(),
+    autonomy: z.enum(RUN_AUTONOMY).optional(),
+    budgets: z
+      .object({
+        timeSeconds: z
+          .number()
+          .int()
+          .min(60)
+          .max(7 * 86_400)
+          .optional(),
+        tokens: z.number().int().min(1_000).max(100_000_000).optional(),
+        costUsd: z.number().min(0).max(100_000).nullable().optional(),
+      })
+      .strict()
+      .optional(),
+    /** Set a goal for the run at once (FR-181). */
+    goal: z
+      .object({
+        objective: z.string().trim().min(1).max(4000),
+        budgets: z
+          .object({
+            timeSeconds: z.number().int().min(60).optional(),
+            tokens: z.number().int().min(1_000).optional(),
+            costUsd: z.number().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    expectedOutput: expectedOutputSchema.optional(),
+    model: z.string().max(200).optional(),
+    attachmentIds: z.array(idSchema).max(20).optional(),
+  })
+  .strict();
+export type CreateRunRequest = z.infer<typeof createRunSchema>;
+
+export const runControlSchema = z.object({
+  /** `redirect`: new instructions that steer the running supervisor (FR-019). */
+  text: z.string().trim().min(1).max(8000).optional(),
+});
+
+export const extendBudgetSchema = z
+  .object({
+    timeSeconds: z
+      .number()
+      .int()
+      .min(60)
+      .max(7 * 86_400)
+      .optional(),
+    tokens: z.number().int().min(1_000).max(100_000_000).optional(),
+    costUsd: z.number().min(0).max(100_000).optional(),
+    /** The 200-step per-turn backstop: allow one more turn of steps. */
+    steps: z.literal(true).optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to extend');
+
+export const updatePlanSchema = z
+  .object({
+    steps: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(1).max(500),
+            detail: z.string().max(2000).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict();
+
+export interface SubagentView {
+  id: string;
+  runId: string;
+  threadId: string | null;
+  role: string;
+  objective: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+  result: string | null;
+  createdAt: string;
+  endedAt: string | null;
+}
+
+// ---- goals (FR-181) ----------------------------------------------------------------------------
+
+export const GOAL_STATUSES = [
+  'active',
+  'paused',
+  'blocked',
+  'usage_limited',
+  'budget_limited',
+  'complete',
+] as const;
+export type GoalStatus = (typeof GOAL_STATUSES)[number];
+
+export interface GoalView {
+  id: string;
+  runId: string | null;
+  agentId: string | null;
+  threadId: string | null;
+  objective: string;
+  status: GoalStatus;
+  statusSetBy: 'user' | 'agent' | 'system';
+  statusReason: string | null;
+  progressNote: string | null;
+  completionSummary: string | null;
+  budgets: BudgetAmounts;
+  usage: BudgetAmounts;
+  blocker: { key: string; description: string | null; count: number } | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export const setGoalSchema = z
+  .object({
+    objective: z.string().trim().min(1).max(4000),
+    budgets: z
+      .object({
+        timeSeconds: z.number().int().min(60).optional(),
+        tokens: z.number().int().min(1_000).optional(),
+        costUsd: z.number().min(0).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const updateGoalSchema = setGoalSchema.partial().refine((v) => Object.keys(v).length > 0, {
+  message: 'nothing to update',
+});
+
+// ---- schedules (FR-055, FR-187, ADR-079; contracts/schemas/schedule.json) -------------------
+
+export const DELIVERY_KINDS = ['inapp', 'os', 'slack', 'teams', 'email', 'webhook'] as const;
+
+export const scheduleWhenSchema = z.union([
+  z.object({ cron: z.string().trim().min(1).max(200) }).strict(),
+  z
+    .object({
+      rrule: z
+        .string()
+        .trim()
+        .regex(/^(RRULE:)?FREQ=/)
+        .max(1000),
+    })
+    .strict(),
+  z
+    .object({
+      intervalSeconds: z
+        .number()
+        .int()
+        .min(60)
+        .max(366 * 86_400),
+    })
+    .strict(),
+  z.object({ at: z.string().datetime({ offset: true }) }).strict(),
+]);
+export type ScheduleWhen = z.infer<typeof scheduleWhenSchema>;
+
+export const scheduleSchema = z
+  .object({
+    when: scheduleWhenSchema,
+    timezone: z.string().min(1).max(100),
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    endsAt: z.string().datetime({ offset: true }).optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    instructions: z.string().trim().min(1).max(8000),
+    notifyCondition: z.string().trim().max(1000).optional(),
+    deliveryTargets: z
+      .array(
+        z.object({ kind: z.enum(DELIVERY_KINDS), ref: z.string().max(500).optional() }).strict(),
+      )
+      .max(10)
+      .default([{ kind: 'inapp' }]),
+    output: expectedOutputSchema.optional(),
+    catchUp: z
+      .object({
+        policy: z.enum(['once', 'skip']).optional(),
+        lookbackSeconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(366 * 86_400)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    projectId: idSchema.optional(),
+    autonomy: z.enum(RUN_AUTONOMY).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+export type ScheduleRequest = z.input<typeof scheduleSchema>;
+export const updateScheduleSchema = scheduleSchema
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+
+export type ScheduleOutcome = 'done' | 'output_missing' | 'failed' | 'cancelled' | 'no_news';
+
+export interface ScheduleView {
+  id: string;
+  title: string;
+  when: ScheduleWhen;
+  timezone: string;
+  startsAt: string | null;
+  endsAt: string | null;
+  instructions: string;
+  notifyCondition: string | null;
+  deliveryTargets: { kind: (typeof DELIVERY_KINDS)[number]; ref?: string }[];
+  output: ExpectedOutput | null;
+  catchUp: { policy: 'once' | 'skip'; lookbackSeconds: number };
+  origin: 'user' | 'agent' | 'agent_self';
+  projectId: string | null;
+  autonomy: RunAutonomy;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastOutcome: ScheduleOutcome | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One entry of a schedule's history: a fire, a catch-up or a recorded skip (ADR-079). */
+export interface ScheduleFireView {
+  id: string;
+  scheduleId: string;
+  kind: 'fire' | 'catch_up' | 'skipped';
+  /** For catch-up and skipped entries: the missed window. */
+  window: { first: string; last: string; count: number } | null;
+  runId: string | null;
+  outcome: ScheduleOutcome | null;
+  firedAt: string;
+}
+
+// ---- code sessions, diffs, review (FR-061..FR-066, FR-069, FR-074, FR-211) -------------------
+
+export const PERMISSION_MODES = ['manual', 'accept_edits', 'plan', 'auto', 'bypass'] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export interface EnvironmentView {
+  id: string;
+  kind: 'local' | 'cloud' | 'ssh' | 'wsl' | 'container' | 'vm' | 'device';
+  label: string;
+  status: 'ok' | 'degraded' | 'down' | 'unknown';
+  detail: string | null;
+  checkedAt: string | null;
+}
+
+export interface CodeSessionView {
+  id: string;
+  threadId: string;
+  title: string | null;
+  environmentId: string | null;
+  /** The folder the session works in (a project folder or a path on the Hub). */
+  folder: { path: string; projectFolderId: string | null };
+  /** Set when the folder is a Git repository. */
+  repo: { root: string; branch: string | null; head: string | null; dirty: boolean } | null;
+  worktreeId: string | null;
+  permissionMode: PermissionMode;
+  model: ModelRef | null;
+  pullRequestUrl: string | null;
+  ciStatus: string | null;
+  /** The shared status (FR-215): Needs input, Blocked, Running or Ready. */
+  derived: StatusView;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const createCodeSessionSchema = z
+  .object({
+    folder: z.string().trim().min(1).max(1000),
+    projectId: idSchema.optional(),
+    environmentId: idSchema.optional(),
+    permissionMode: z.enum(PERMISSION_MODES).optional(),
+    model: z.string().max(200).optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    /** Work in a new Git worktree on branch `nova/<slug>` (FR-073). */
+    worktree: z.boolean().optional(),
+  })
+  .strict();
+
+export const updateCodeSessionSchema = z
+  .object({
+    permissionMode: z.enum(PERMISSION_MODES).optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    model: z.string().max(200).optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+
+export interface DiffHunkView {
+  /** Stable within the change: `<oldStart>-<newStart>`. */
+  id: string;
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: {
+    kind: 'context' | 'add' | 'del';
+    text: string;
+    oldNo: number | null;
+    newNo: number | null;
+  }[];
+  state: 'pending' | 'accepted' | 'rejected';
+}
+
+export interface CodeChangeView {
+  id: string;
+  sessionId: string;
+  path: string;
+  kind: 'add' | 'modify' | 'delete' | 'rename';
+  oldPath: string | null;
+  additions: number;
+  deletions: number;
+  /** The tool call that made it, when the agent did. */
+  callId: string | null;
+  state: 'pending' | 'accepted' | 'rejected' | 'partial';
+  hunks: DiffHunkView[];
+  binary: boolean;
+  createdAt: string;
+}
+
+export const hunkDecisionSchema = z
+  .object({
+    decisions: z
+      .array(z.object({ hunkId: z.string().min(1).max(50), accept: z.boolean() }).strict())
+      .min(1)
+      .max(1000),
+  })
+  .strict();
+
+export interface DiffCommentView {
+  id: string;
+  changeId: string;
+  path: string;
+  line: number;
+  side: 'old' | 'new';
+  body: string;
+  resolved: boolean;
+  createdAt: string;
+}
+
+export const diffCommentsSchema = z
+  .object({
+    comments: z
+      .array(
+        z
+          .object({
+            changeId: idSchema,
+            line: z.number().int().min(1),
+            side: z.enum(['old', 'new']),
+            body: z.string().trim().min(1).max(8000),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(200),
+    /** Send the batch to the agent, which revises the diff (FR-065). */
+    submit: z.boolean().optional(),
+  })
+  .strict();
+
+export interface ReviewFindingView {
+  id: string;
+  path: string;
+  line: number | null;
+  severity: 'info' | 'warn' | 'error';
+  title: string;
+  reasoning: string;
+  /** A suggested replacement the user can apply. */
+  fix: string | null;
+}
+
+export interface CodeReviewView {
+  id: string;
+  sessionId: string;
+  status: 'running' | 'done' | 'failed';
+  findings: ReviewFindingView[];
+  createdAt: string;
+}
+
+export const commitSchema = z
+  .object({
+    message: z.string().trim().min(1).max(5000),
+    /** Create and switch to `nova/<slug>` first when on the default branch. */
+    branch: z.string().trim().max(200).optional(),
+    /** Changes still pending are accepted first; rejected ones are left out. */
+    acceptPending: z.boolean().optional(),
+  })
+  .strict();
+
+export interface CommitResult {
+  sha: string;
+  branch: string;
+  files: number;
+}
+
+export interface CodeSymbolView {
+  name: string;
+  kind: string;
+  path: string;
+  line: number;
+  container: string | null;
+}
+
+// ---- server-to-client requests (FR-188; contracts/schemas/server-request.json) -------------
+
+export const REQUEST_KINDS = [
+  'approval',
+  'user_input',
+  'elicitation',
+  'client_tool',
+  'credential_refresh',
+] as const;
+export type ServerRequestKind = (typeof REQUEST_KINDS)[number];
+
+export interface ServerRequestView {
+  id: string;
+  kind: ServerRequestKind;
+  correlation: {
+    threadId?: string;
+    turnId?: string;
+    runId?: string;
+    callId?: string;
+    approvalId?: string;
+  };
+  targetDeviceId: string | null;
+  status: 'pending' | 'resolved' | 'expired';
+  /** user_input: `{question, choices?, multiline?}`; elicitation: `{message, schema}`. */
+  payload: Record<string, unknown>;
+  resolution: { by: string; at: string; result: unknown } | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export const respondRequestSchema = z.object({ result: z.unknown() }).strict();
+
+// ---- auto-review (FR-085; contracts/schemas/auto-review-verdict.json) ------------------------
+
+export interface ReviewVerdict {
+  outcome: 'allow' | 'ask' | 'handoff' | 'deny';
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  userAuthorization: 'unknown' | 'low' | 'medium' | 'high';
+  rationale: string;
 }

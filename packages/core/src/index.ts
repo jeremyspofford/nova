@@ -21,3 +21,8 @@ export * from './plugins/index.ts';
 export * from './hooks/index.ts';
 export * from './workspace/index.ts';
 export * from './profile/index.ts';
+export * from './runtime/index.ts';
+export * from './runs/index.ts';
+export * from './scheduler/index.ts';
+export * from './code/index.ts';
+export * from './requests/index.ts';

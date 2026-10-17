@@ -15,3 +15,7 @@ export * from './schema/hooks.ts';
 export * from './schema/apps.ts';
 export * from './schema/workspace.ts';
 export * from './schema/profile.ts';
+export * from './schema/runs.ts';
+export * from './schema/schedules.ts';
+export * from './schema/code.ts';
+export * from './schema/requests.ts';

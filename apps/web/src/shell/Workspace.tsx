@@ -49,6 +49,8 @@ import { deepLinkPath } from '../deeplinks.ts';
 import { NotificationsBell } from '../notifications/Bell.tsx';
 import { AppsView, ThreadApps } from '../apps/AppsView.tsx';
 import { APPS_MOVED_EVENT } from '../apps/McpAppFrame.tsx';
+import { CodeView } from '../code/CodeView.tsx';
+import { WorkView } from '../work/WorkView.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
@@ -84,17 +86,7 @@ export interface WorkspaceProps {
   announceEveryMs?: number;
 }
 
-const MODE_EMPTY: Record<Exclude<Mode, 'chat'>, { title: string; description: string }> = {
-  work: {
-    title: 'Work runs arrive in a later milestone',
-    description:
-      'Work mode will delegate multi-step tasks with a plan, budgets and approvals. Until then, use Chat.',
-  },
-  code: {
-    title: 'Code sessions arrive in a later milestone',
-    description:
-      'Code mode will pair a coding agent with diffs, a terminal and a browser. Until then, use Chat.',
-  },
+const MODE_EMPTY: Record<'agents', { title: string; description: string }> = {
   agents: {
     title: 'Always-on agents arrive in a later milestone',
     description:
@@ -998,13 +990,19 @@ export function Workspace({
             <div key={m} className="mode-pane" hidden={visibleMode !== m} data-mode={m}>
               {workspaceFor(
                 m,
-                <EmptyState
-                  title={MODE_EMPTY[m].title}
-                  description={MODE_EMPTY[m].description}
-                  icon={MODE_INFO[m].icon}
-                  level={2}
-                  action={<Button onClick={() => switchMode('chat')}>Go to Chat</Button>}
-                />,
+                m === 'work' ? (
+                  <WorkView id={route.name === 'mode' && route.mode === 'work' ? route.id : null} />
+                ) : m === 'code' ? (
+                  <CodeView id={route.name === 'mode' && route.mode === 'code' ? route.id : null} />
+                ) : (
+                  <EmptyState
+                    title={MODE_EMPTY[m].title}
+                    description={MODE_EMPTY[m].description}
+                    icon={MODE_INFO[m].icon}
+                    level={2}
+                    action={<Button onClick={() => switchMode('chat')}>Go to Chat</Button>}
+                  />
+                ),
               )}
             </div>
           ))}

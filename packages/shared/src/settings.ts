@@ -292,6 +292,110 @@ export const SETTINGS = {
     description:
       "Nova's own MCP server for external clients; off until a client is added (FR-044).",
   }),
+  // ---- M5: runs, schedules, code sessions, auto-review, context ------------------------------
+  'runs.defaultBudgets': def({
+    key: 'runs.defaultBudgets',
+    schema: z
+      .object({
+        timeSeconds: z
+          .number()
+          .int()
+          .min(60)
+          .max(7 * 86_400),
+        tokens: z.number().int().min(1_000).max(100_000_000),
+        costUsd: z.number().min(0).max(100_000).nullable(),
+      })
+      .strict(),
+    default: { timeSeconds: 3_600, tokens: 2_000_000, costUsd: null },
+    description:
+      'Budgets of a new Work run: time, tokens and cost (null: the provider spend cap) (FR-182).',
+  }),
+  'runs.autonomy': def({
+    key: 'runs.autonomy',
+    schema: z.enum(['ask_first', 'standard', 'autonomous']),
+    default: 'standard',
+    description:
+      'Autonomy of a new Work run: approve the plan first, show it, or skip it (docs/09 §3).',
+  }),
+  'runs.subagents': def({
+    key: 'runs.subagents',
+    schema: z
+      .object({
+        maxChildren: z.number().int().min(0).max(20),
+        maxConcurrent: z.number().int().min(1).max(10),
+      })
+      .strict(),
+    default: { maxChildren: 6, maxConcurrent: 4 },
+    security: true,
+    description: 'Sub-agents per run and how many run at once; children cannot spawn (FR-053).',
+  }),
+  'chat.escalation': def({
+    key: 'chat.escalation',
+    schema: z.enum(['propose', 'auto', 'off']),
+    default: 'propose',
+    description:
+      'When a chat request needs multi-step tool work: propose a Work run, start it, or never (FR-186).',
+  }),
+  'code.permissionMode': def({
+    key: 'code.permissionMode',
+    schema: z.enum(['manual', 'accept_edits', 'auto', 'bypass']),
+    default: 'manual',
+    description:
+      'Permission mode of a new Code session; the last one used per folder wins (FR-063).',
+  }),
+  'code.folderModes': def({
+    key: 'code.folderModes',
+    schema: z.record(z.string().max(1000), z.enum(['manual', 'accept_edits', 'auto', 'bypass'])),
+    default: {},
+    description: 'The permission mode last used in each folder (Plan is never remembered, FR-063).',
+  }),
+  'code.allowBypass': def({
+    key: 'code.allowBypass',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description: 'Allow the Bypass permission mode (only on a VM or container substrate, FR-195).',
+  }),
+  'review.model': def({
+    key: 'review.model',
+    schema: z.string().max(200).nullable(),
+    default: null,
+    security: true,
+    description:
+      'The reviewer model of auto-review (FR-085); Auto mode needs one. It should differ from the acting model.',
+  }),
+  'context.compactThreshold': def({
+    key: 'context.compactThreshold',
+    schema: z.number().min(0.3).max(0.95),
+    default: 0.8,
+    description: 'Compact a turn when its context passes this share of the model limit (FR-183).',
+  }),
+  'instructions.files': def({
+    key: 'instructions.files',
+    schema: z
+      .object({
+        rootMarkers: z.array(z.string().regex(/^[^/\\:]{1,100}$/)).max(10),
+        fallbackNames: z.array(z.string().regex(/^[^/\\:]{1,100}$/)).max(10),
+        budgetBytes: z.number().int().min(1_024).max(262_144),
+      })
+      .strict(),
+    default: { rootMarkers: ['.git'], fallbackNames: [], budgetBytes: 32_768 },
+    security: true,
+    description:
+      'Instruction-file discovery: root markers, fallback names (plain file names) and the shared budget (FR-185).',
+  }),
+  'exec.sessions': def({
+    key: 'exec.sessions',
+    schema: z
+      .object({
+        yieldMs: z.number().int().min(100).max(60_000),
+        outputTokens: z.number().int().min(500).max(50_000),
+      })
+      .strict(),
+    default: { yieldMs: 10_000, outputTokens: 10_000 },
+    description:
+      'Interactive exec: how long exec.run waits before returning a session, and the output cap (FR-184).',
+  }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',
     schema: z.boolean(),

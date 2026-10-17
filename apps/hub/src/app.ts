@@ -51,6 +51,10 @@ import { setupMcpServer } from './mcp-server.ts';
 import { setupPlugins } from './plugins.ts';
 import { setupProfile } from './profile.ts';
 import { setupWorkspace } from './workspace.ts';
+import { setupCode } from './code.ts';
+import { setupRequests } from './requests.ts';
+import { setupRuns } from './runs.ts';
+import { setupSchedules } from './schedules.ts';
 import { DiagnosticsRegistry, type HubContext } from './hub-context.ts';
 import { setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
@@ -274,7 +278,16 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     memory,
     projects,
   });
+  // M5: requests, runs, schedules and Code sessions (wired to the chat loop below).
+  const requests = await setupRequests(ctx);
+  const runs = await setupRuns(ctx);
+  const schedules = await setupSchedules(ctx);
+  const code = await setupCode(ctx);
   const areas = [
+    code,
+    schedules,
+    runs,
+    requests,
     profile,
     workspace,
     apps,

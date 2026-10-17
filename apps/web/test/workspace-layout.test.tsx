@@ -226,7 +226,7 @@ describe('multi-pane layout (FR-005)', () => {
     await chooseLayout('Add preview pane');
     expect(titles()).toEqual(['Chat', 'Preview']);
     await userEvent.click(screen.getByRole('link', { name: /Code/ }));
-    expect(screen.getByRole('heading', { name: /Code sessions arrive/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Code' })).toBeTruthy();
     expect(titles()).toEqual([]);
     await chooseLayout('Add editor pane');
     const code = screen.getByRole('region', { name: 'Code workspace' });

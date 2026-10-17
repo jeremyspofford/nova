@@ -21,6 +21,8 @@ import type { EventSourceLike } from '../src/sse.ts';
 import type { SocketLike, TerminalScreen } from '../src/terminal/session.ts';
 import { m3Impl, m3State, type M3State } from './fakes-m3.ts';
 import { m4Impl, m4State, type M4State } from './fakes-m4.ts';
+import { m5CodeImpl, m5CodeState, type M5CodeState } from './fakes-m5-code.ts';
+import { m5WorkImpl, m5WorkState, type M5WorkState } from './fakes-m5-work.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
 let seq = 0;
@@ -110,6 +112,10 @@ export interface HubState {
   m3: M3State;
   /** Plugins, skills, hooks, clients, workspace, profile and import (test/fakes-m4.ts). */
   m4: M4State;
+  /** Work runs, goals, schedules and requests (test/fakes-m5-work.ts). */
+  m5work: M5WorkState;
+  /** Code sessions, changes, comments and reviews (test/fakes-m5-code.ts). */
+  m5code: M5CodeState;
 }
 
 export const DONE_ONBOARDING = { step: 'done', completed: true, skipped: false };
@@ -131,6 +137,8 @@ export function createHub(init: Partial<HubState> = {}) {
     workspace: workspaceState(),
     m3: m3State(),
     m4: m4State(),
+    m5work: m5WorkState(),
+    m5code: m5CodeState(),
     ...init,
   };
 
@@ -487,6 +495,8 @@ export function createHub(init: Partial<HubState> = {}) {
       },
       mcpServers: () => state.m3.mcpServers,
     }),
+    ...m5WorkImpl(state.m5work, { id, ts: () => ts(), maybeFail }),
+    ...m5CodeImpl(state.m5code, { id, ts: () => ts(), maybeFail }),
     attachmentUrl: (aid) => `/api/v1/attachments/${aid}`,
     fetchAttachment: async () => new Blob(['file-bytes'], { type: 'text/plain' }),
     threadStreamUrl: (tid) => `/api/v1/threads/${tid}/stream`,

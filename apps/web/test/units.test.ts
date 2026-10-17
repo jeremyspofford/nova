@@ -298,7 +298,9 @@ describe('routes', () => {
       threadId: 't 1',
       messageId: 'm1',
     });
-    expect(parseRoute('/work')).toEqual({ name: 'mode', mode: 'work' });
+    expect(parseRoute('/work')).toEqual({ name: 'mode', mode: 'work', id: null });
+    expect(parseRoute('/work/r1')).toEqual({ name: 'mode', mode: 'work', id: 'r1' });
+    expect(parseRoute('/code/s1')).toEqual({ name: 'mode', mode: 'code', id: 's1' });
     expect(parseRoute('/settings/keyboard')).toEqual({ name: 'settings', section: 'keyboard' });
     expect(parseRoute('/settings/nope')).toEqual({ name: 'settings', section: 'general' });
     expect(parseRoute('/onboarding')).toEqual({ name: 'onboarding' });

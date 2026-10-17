@@ -112,11 +112,9 @@ describe('shell and modes (FR-001, FR-002)', () => {
     await userEvent.type(screen.getByLabelText('Message'), 'unsent draft');
     await userEvent.keyboard('{Control>}2{/Control}');
     expect(window.location.pathname).toBe('/work');
-    expect(
-      screen.getByRole('heading', { name: 'Work runs arrive in a later milestone' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Work' })).toBeTruthy();
     await userEvent.click(screen.getByRole('link', { name: /Code/ }));
-    expect(screen.getByRole('heading', { name: /Code sessions arrive/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Code' })).toBeTruthy();
     await userEvent.keyboard('{Control>}4{/Control}');
     expect(screen.getByRole('heading', { name: /Always-on agents arrive/ })).toBeTruthy();
     await userEvent.keyboard('{Control>}1{/Control}');

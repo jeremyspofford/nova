@@ -27,7 +27,8 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export type Route =
   | { name: 'chat'; threadId: string | null; messageId: string | null }
-  | { name: 'mode'; mode: Exclude<Mode, 'chat'> }
+  /** /work, /work/:runId, /work/scheduled; /code, /code/:sessionId; /agents (M6). */
+  | { name: 'mode'; mode: Exclude<Mode, 'chat'>; id: string | null }
   | { name: 'settings'; section: SettingsSection }
   | { name: 'projects'; projectId: string | null }
   | { name: 'library' }
@@ -38,7 +39,8 @@ export type Route =
 export function parseRoute(pathname: string, search = ''): Route {
   const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent);
   const [head, arg] = parts;
-  if (head === 'work' || head === 'code' || head === 'agents') return { name: 'mode', mode: head };
+  if (head === 'work' || head === 'code' || head === 'agents')
+    return { name: 'mode', mode: head, id: arg ?? null };
   if (head === 'settings') {
     const section = (SETTINGS_SECTIONS as readonly string[]).includes(arg ?? '')
       ? (arg as SettingsSection)
