@@ -1,0 +1,164 @@
+<!doctype html>
+<!--
+  The sample plugin's MCP App (FR-198, docs/18 J4), served as ui://sample/panel. It runs in a
+  sandboxed frame with no network access and talks to Nova only through the MCP Apps bridge
+  (JSON-RPC 2.0 over postMessage): it initializes, styles itself with the theme tokens Nova sends,
+  reports its height, and calls its own server's panel_action tool. Nova checks that call with
+  its policy engine first, so it may wait for an approval in Nova's window.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sample panel</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        padding: var(--u-space-3, 12px);
+        background: var(--u-bg, Canvas);
+        color: var(--u-text, CanvasText);
+        font: var(--u-text-md, 14px) / 1.45 var(--u-font-ui, system-ui, sans-serif);
+      }
+      h1 {
+        margin: 0 0 var(--u-space-2, 8px);
+        font-size: var(--u-text-lg, 16px);
+      }
+      p {
+        margin: 0 0 var(--u-space-3, 12px);
+      }
+      .muted {
+        color: var(--u-text-muted, GrayText);
+      }
+      button {
+        padding: var(--u-space-1, 4px) var(--u-space-3, 12px);
+        border: 1px solid var(--u-border, ButtonBorder);
+        border-radius: var(--u-radius-sm, 6px);
+        background: var(--u-accent, ButtonFace);
+        color: var(--u-accent-contrast, ButtonText);
+        font: inherit;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      output {
+        display: block;
+        margin-top: var(--u-space-3, 12px);
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sample panel</h1>
+    <p class="muted">
+      An MCP App from the sample plugin. The button asks the plugin's server to run
+      <code>panel_action</code>; Nova checks the call first and may ask you to approve it.
+    </p>
+    <button id="run" type="button" disabled>Run panel action</button>
+    <output id="result" aria-live="polite">Connecting to Nova…</output>
+    <script>
+      (() => {
+        'use strict';
+        const run = document.getElementById('run');
+        const out = document.getElementById('result');
+        const pending = new Map();
+        let nextId = 1;
+        let count = 0;
+
+        // The host is the parent window; this frame's origin is opaque, so the target is '*'.
+        const send = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+        const notify = (method, params = {}) => send({ method, params });
+        const request = (method, params = {}) =>
+          new Promise((resolve, reject) => {
+            const id = nextId++;
+            pending.set(id, { resolve, reject });
+            send({ id, method, params });
+          });
+
+        function applyContext(context) {
+          if (!context) return;
+          const vars = context.styles && context.styles.variables;
+          if (vars) {
+            for (const [name, value] of Object.entries(vars)) {
+              if (name.startsWith('--u-') && typeof value === 'string')
+                document.documentElement.style.setProperty(name, value);
+            }
+          }
+          if (context.theme === 'light' || context.theme === 'dark')
+            document.documentElement.style.colorScheme = context.theme;
+        }
+
+        const reportSize = () =>
+          notify('ui/notifications/size-changed', {
+            height: Math.ceil(document.documentElement.getBoundingClientRect().height),
+          });
+
+        window.addEventListener('message', (event) => {
+          if (event.source !== window.parent) return;
+          const msg = event.data;
+          if (!msg || msg.jsonrpc !== '2.0') return;
+          if (!('method' in msg)) {
+            const waiting = pending.get(msg.id);
+            if (!waiting) return;
+            pending.delete(msg.id);
+            if (msg.error) waiting.reject(new Error(msg.error.message));
+            else waiting.resolve(msg.result);
+            return;
+          }
+          if (msg.method === 'ui/notifications/host-context-changed') applyContext(msg.params);
+          if (msg.method === 'ui/resource-teardown' && 'id' in msg)
+            send({ id: msg.id, result: {} });
+        });
+
+        const textOf = (result) =>
+          (Array.isArray(result && result.content) ? result.content : [])
+            .filter((block) => block && block.type === 'text')
+            .map((block) => block.text)
+            .join('\n');
+
+        run.addEventListener('click', () => {
+          count += 1;
+          run.disabled = true;
+          out.textContent = 'Waiting for Nova…';
+          request('tools/call', {
+            name: 'panel_action',
+            arguments: { value: `Button press ${count} from the sample panel` },
+          })
+            .then((result) => {
+              const text = textOf(result) || '(no text)';
+              out.textContent = result && result.isError ? `Not done: ${text}` : `Result: ${text}`;
+            })
+            .catch((err) => {
+              out.textContent = `The call failed: ${err.message}`;
+            })
+            .finally(() => {
+              run.disabled = false;
+              reportSize();
+            });
+        });
+
+        request('ui/initialize', {
+          protocolVersion: '2026-01-26',
+          appInfo: { name: 'nova-sample-panel', version: '1.0.0' },
+          appCapabilities: {},
+        })
+          .then((result) => {
+            applyContext(result && result.hostContext);
+            notify('ui/notifications/initialized');
+            run.disabled = false;
+            out.textContent = '';
+            reportSize();
+          })
+          .catch((err) => {
+            out.textContent = `Could not connect to Nova: ${err.message}`;
+          });
+
+        if (typeof ResizeObserver === 'function')
+          new ResizeObserver(reportSize).observe(document.body);
+      })();
+    </script>
+  </body>
+</html>

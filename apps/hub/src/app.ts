@@ -33,6 +33,7 @@ import {
   type ChatServiceOptions,
   type ModelRouter,
   type ProviderFactory,
+  type ToolRuntimeOptions,
 } from '@nova/core';
 import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
@@ -45,7 +46,7 @@ import { registerMemoryRoutes } from './memory-routes.ts';
 import { registerModelRoutes } from './model-routes.ts';
 import { setupConsolidation } from './consolidation.ts';
 import { setupHooks } from './hooks.ts';
-import { setupMcpApps } from './mcp-apps.ts';
+import { pluginUiFromManifest, setupMcpApps } from './mcp-apps.ts';
 import { setupMcpServer } from './mcp-server.ts';
 import { setupPlugins } from './plugins.ts';
 import { setupProfile } from './profile.ts';
@@ -204,12 +205,28 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   const ops = await setupOps(ctx);
   const policy = await setupPolicy({ ...ctx, audit: ops.audit, notifier: ops.notifier });
   const mcp = await setupMcp({ ...ctx, audit: ops.audit });
-  // Each MCP server's default approval feeds the gate's per-server defaults (FR-048).
-  policy.useServerDefaults((_accountId, serverId) => Promise.resolve(mcp.serverDefault(serverId)));
   // M4: plugins (skills, their MCP servers and permissions) and hooks come before the tools,
   // whose chat loop uses them.
   const plugins = await setupPlugins({ ...ctx, audit: ops.audit, mcp });
-  const hooks = await setupHooks({ ...ctx, audit: ops.audit });
+  // Each MCP server's default approval feeds the gate's per-server defaults (FR-048); a plugin
+  // server falls back to its manifest's `defaultApproval`.
+  policy.useServerDefaults(
+    async (accountId, serverId) =>
+      mcp.serverDefault(serverId) ?? (await plugins.serverDefault(accountId, serverId)),
+  );
+  const hooks = await setupHooks({
+    ...ctx,
+    audit: ops.audit,
+    gate: policy.gate,
+    managedHooks: () => deps.managedSettings?.()['hooks'],
+  });
+  // Plugin hooks come from the plugins area, which shows how many wait for trust.
+  hooks.usePluginHooks(plugins.hooks);
+  plugins.useHookTrust((accountId, pluginId) => hooks.untrustedPluginHooks(accountId, pluginId));
+  policy.useHooks(hooks.dispatcher);
+  policy.usePluginPermissions(plugins.permissions);
+  // The apps area exists after the tools; the chat loop reads its model context late-bound.
+  let mcpApps: Awaited<ReturnType<typeof setupMcpApps>> | null = null;
   const tools = await setupTools({
     ...ctx,
     gate: policy.gate,
@@ -219,26 +236,48 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     hooks: hooks.dispatcher,
     skills: plugins.skills,
     pluginPermissions: plugins.permissions,
+    appContext: (accountId, threadId) =>
+      Promise.resolve(mcpApps ? mcpApps.modelContext(accountId, threadId) : null),
   });
   // The gate previews and classifies with the tools' own descriptors and the sandbox in use.
   policy.useToolCatalog(tools.catalog);
   policy.useSubstrate(() => tools.substrate());
   hooks.useSandbox(tools.sandbox);
   hooks.useMcp(mcp.manager);
+  const scope: ToolRuntimeOptions['scope'] = (input) =>
+    tools.runtime.scopeFor(input.accountId, input.threadId, input.projectId);
+  hooks.useScope(scope);
   const consolidation = await setupConsolidation({ ...ctx, memory });
   const mcpServer = await setupMcpServer({ ...ctx, audit: ops.audit, gate: policy.gate, tools });
-  const mcpApps = await setupMcpApps({ ...ctx, mcp });
+  const apps = await setupMcpApps({ ...ctx, mcp });
+  mcpApps = apps;
+  apps.usePlugins({
+    list: async (accountId) =>
+      (await plugins.enabledManifests(accountId)).flatMap((p) => {
+        const ui = pluginUiFromManifest(p.manifest);
+        return ui ? [ui] : [];
+      }),
+  });
   const workspace = await setupWorkspace({
     ...ctx,
     audit: ops.audit,
     gate: policy.gate,
     sandbox: () => tools.sandbox,
+    scope,
   });
-  const profile = await setupProfile({ ...ctx, audit: ops.audit, mcp, plugins });
+  const profile = await setupProfile({
+    ...ctx,
+    audit: ops.audit,
+    mcp,
+    plugins,
+    folders: workspace.folders,
+    memory,
+    projects,
+  });
   const areas = [
     profile,
     workspace,
-    mcpApps,
+    apps,
     mcpServer,
     tools,
     hooks,

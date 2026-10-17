@@ -112,6 +112,7 @@ type M4Api = Pick<
   | 'slashCommands'
   | 'listHooks'
   | 'updateHook'
+  | 'deleteHook'
   | 'trustHook'
   | 'untrustHook'
   | 'listAppAuthorizations'
@@ -123,6 +124,7 @@ type M4Api = Pick<
   | 'revokeMcpOAuth'
   | 'uiEntryPoints'
   | 'uiResourceUrl'
+  | 'setUiContext'
   | 'fileRoots'
   | 'listFiles'
   | 'readFile'
@@ -135,6 +137,7 @@ type M4Api = Pick<
   | 'library'
   | 'listProjectFolders'
   | 'addProjectFolder'
+  | 'reindexProjectFolder'
   | 'removeProjectFolder'
   | 'getAccount'
   | 'updateProfile'
@@ -297,6 +300,11 @@ export function m4Impl(
       st.hooks = st.hooks.map((x) => (x.id === hid ? next : x));
       return next;
     },
+    deleteHook: async (hid) => {
+      maybeFail('deleteHook');
+      st.hooks = st.hooks.filter((x) => x.id !== hid);
+      return { ok: true } as const;
+    },
     trustHook: async (hid, contentHash) => {
       maybeFail('trustHook');
       const h = st.hooks.find((x) => x.id === hid);
@@ -380,6 +388,10 @@ export function m4Impl(
       return { items: st.entryPoints.filter((e) => !kind || e.kind === kind) };
     },
     uiResourceUrl: (entryId) => `/api/v1/ui/resource?entry=${entryId}`,
+    setUiContext: async () => {
+      maybeFail('setUiContext');
+      return { ok: true } as const;
+    },
     fileRoots: async () => {
       maybeFail('fileRoots');
       return { items: st.roots };
@@ -443,12 +455,13 @@ export function m4Impl(
     library: async (q = {}) => {
       maybeFail('library');
       const n = (q.q ?? '').toLowerCase();
-      return {
-        items: st.library.filter(
-          (i) => (!q.kind || i.kind === q.kind) && (!n || i.title.toLowerCase().includes(n)),
-        ),
-        nextCursor: null,
-      };
+      const all = st.library.filter(
+        (i) => (!q.kind || i.kind === q.kind) && (!n || i.title.toLowerCase().includes(n)),
+      );
+      // The cursor is the offset of the next page (the Hub's is opaque).
+      const start = q.cursor ? Number(q.cursor) : 0;
+      const end = start + (q.limit ?? 50);
+      return { items: all.slice(start, end), nextCursor: end < all.length ? String(end) : null };
     },
     listProjectFolders: async (pid) => {
       maybeFail('listProjectFolders');
@@ -468,6 +481,14 @@ export function m4Impl(
       };
       st.folders = [...st.folders, f];
       return f;
+    },
+    reindexProjectFolder: async (_pid, fid) => {
+      maybeFail('reindexProjectFolder');
+      const f = st.folders.find((x) => x.id === fid);
+      if (!f) throw notFound();
+      const next: ProjectFolderView = { ...f, status: 'indexing' };
+      st.folders = st.folders.map((x) => (x.id === fid ? next : x));
+      return next;
     },
     removeProjectFolder: async (_pid, fid) => {
       maybeFail('removeProjectFolder');
@@ -509,14 +530,29 @@ export function m4Impl(
       if (!st.importPreview) throw notFound();
       return st.importPreview;
     },
-    importApply: async (_previewId, items) => {
+    importApply: async (previewId, items) => {
       maybeFail('importApply');
+      const p = st.importPreview;
+      if (!p || p.previewId !== previewId) throw notFound();
+      // Records what the Hub's import ledger keeps per item (FR-200).
+      const chosen = p.items.filter((i) => items.includes(i.id) && i.status !== 'duplicate');
+      st.importRecords = [
+        ...st.importRecords,
+        ...chosen.map((i) => ({
+          id: id('rec'),
+          kind: i.kind,
+          sourcePath: i.sourcePath,
+          sha256: i.sha256,
+          target: i.target,
+          createdAt: ts(),
+        })),
+      ];
       return {
         importId: id('imp'),
-        imported: items.length,
-        duplicates: 0,
-        disabled: 0,
-        secretsMigrated: 0,
+        imported: chosen.length,
+        duplicates: items.length - chosen.length,
+        disabled: chosen.filter((i) => i.kind === 'plugins' || i.kind === 'mcp_servers').length,
+        secretsMigrated: chosen.reduce((n, i) => n + i.maskedSecrets.length, 0),
       };
     },
     importRecords: async () => {

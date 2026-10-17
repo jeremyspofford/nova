@@ -17,6 +17,8 @@ import { SettingsProvider } from './settings.tsx';
 import { browserEventSource, type EventSourceFactory } from './sse.ts';
 import { ModelsProvider, ThreadsProvider } from './stores.tsx';
 import { Workspace } from './shell/Workspace.tsx';
+import type { TerminalScreenFactory, WebSocketFactory } from './terminal/session.ts';
+import { TerminalsProvider } from './terminal/TerminalPanel.tsx';
 
 type State =
   | { kind: 'loading' }
@@ -32,6 +34,9 @@ export interface AppProps {
   takeSetupCode?: () => string | null;
   /** Minimum gap between streaming announcements (tests shorten it). */
   announceEveryMs?: number;
+  /** Terminal socket and screen (FR-006); the browser's WebSocket and xterm.js by default. */
+  webSocket?: WebSocketFactory;
+  terminalScreen?: TerminalScreenFactory;
 }
 
 export function takeSetupCodeFromLocation(): string | null {
@@ -47,6 +52,8 @@ export function App({
   eventSource = browserEventSource,
   takeSetupCode = takeSetupCodeFromLocation,
   announceEveryMs,
+  webSocket,
+  terminalScreen,
 }: AppProps) {
   const registry = useMemo(() => given ?? new CommandRegistry(), [given]);
   const [state, setState] = useState<State>({ kind: 'loading' });
@@ -92,18 +99,26 @@ export function App({
 
   if (state.kind === 'ready') {
     return (
-      <ServicesProvider api={api} eventSource={eventSource} registry={registry}>
+      <ServicesProvider
+        api={api}
+        eventSource={eventSource}
+        registry={registry}
+        webSocket={webSocket}
+        terminalScreen={terminalScreen}
+      >
         <SettingsProvider api={api} initial={state.settings}>
           <ToastProvider>
             <AnnouncerProvider>
               <ThreadsProvider api={api}>
                 <ModelsProvider api={api}>
-                  <Workspace
-                    displayName={displayName}
-                    onDisplayName={setDisplayName}
-                    onSignOut={signOut}
-                    announceEveryMs={announceEveryMs}
-                  />
+                  <TerminalsProvider>
+                    <Workspace
+                      displayName={displayName}
+                      onDisplayName={setDisplayName}
+                      onSignOut={signOut}
+                      announceEveryMs={announceEveryMs}
+                    />
+                  </TerminalsProvider>
                 </ModelsProvider>
               </ThreadsProvider>
             </AnnouncerProvider>

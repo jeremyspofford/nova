@@ -101,6 +101,8 @@ describe('Settings → Keyboard (FR-004)', () => {
   it('rebinds by capturing keys, persists the map, and runs the command on the new keys', async () => {
     const { hub } = await renderApp({ path: '/settings/keyboard' });
     const row = () => screen.getByRole('row', { name: /Toggle sidebar/ });
+    // The page renders once its settings load, which can lag under a busy runner.
+    await screen.findByRole('row', { name: /Toggle sidebar/ });
     expect(within(row()).getByLabelText('Ctrl plus B')).toBeTruthy();
     await userEvent.click(
       within(row()).getByRole('button', { name: 'Change shortcut for Toggle sidebar' }),
@@ -207,17 +209,10 @@ describe('Settings → General and Accounts', () => {
     expect(window.location.pathname).toBe('/settings/accounts');
   });
 
-  it('saves the display name and adds, tests and removes providers', async () => {
+  // The display name moved to Profile & usage in M4 (FR-113); test/profile-settings.test.tsx.
+  it('adds, tests and removes providers', async () => {
     const { hub } = await renderApp({ path: '/settings/accounts' });
     expect(await screen.findByText('No providers connected yet.')).toBeTruthy();
-    const name = screen.getByRole('textbox', { name: 'Display name' });
-    await userEvent.clear(name);
-    await userEvent.type(name, 'Robin');
-    await userEvent.click(screen.getByRole('button', { name: 'Save name' }));
-    await waitFor(() =>
-      expect(hub.api.updateAccount).toHaveBeenCalledWith({ displayName: 'Robin' }),
-    );
-    expect(await screen.findByRole('button', { name: 'Account: Robin' })).toBeTruthy();
 
     await userEvent.click(screen.getByRole('button', { name: 'Add a provider' }));
     await userEvent.click(screen.getByRole('radio', { name: 'OpenAI' }));
@@ -276,6 +271,12 @@ describe('Settings → General: follow-ups and temporary chats (FR-019, FR-027)'
     await userEvent.type(hours, '48{Enter}');
     await waitFor(() => expect(hub.state.settings['chat.temporaryTtlHours']).toBe(48));
     expect(hours.value).toBe('48');
+
+    // Follow-up suggestions (FR-028) are on by default and can be turned off here.
+    const suggest = screen.getByRole('switch', { name: 'Suggest follow-ups' });
+    expect(suggest.getAttribute('aria-checked')).toBe('true');
+    await userEvent.click(suggest);
+    await waitFor(() => expect(hub.state.settings['chat.suggestions']).toBe(false));
   });
 
   it('disables managed follow-up and retention settings', async () => {

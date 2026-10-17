@@ -216,9 +216,15 @@ export function ariaKeyShortcut(binding: string, mac: boolean): string {
 }
 
 // Keys a browser tab cannot intercept (docs/04 §5): new window/tab, close, tab switching, and
-// the browser's own find (Find in chat, FR-025).
+// the browser's own find (Find in chat, FR-025), downloads and bookmarks (the bottom panel,
+// terminal, browser and diff pane keys, FR-005, FR-006).
 const BROWSER_RESERVED = new Set([
   'mod+f',
+  'mod+j',
+  'mod+`',
+  'ctrl+`',
+  'mod+shift+b',
+  'mod+shift+d',
   'mod+n',
   'mod+shift+n',
   'mod+t',

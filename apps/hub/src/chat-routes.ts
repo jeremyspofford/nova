@@ -1,8 +1,9 @@
-// Chat Hub API: providers, models, account profile, threads, messages, the per-thread event
-// stream, search and attachments (M1: FR-017, FR-018, FR-021, FR-023, FR-125), plus follow-up
-// queues, message versions, branches, side chats and the thread tree (M2: FR-019, FR-020,
-// FR-025, FR-026, FR-027, FR-033). Every route requires authentication and validates its input
-// with the shared zod schemas (contracts/hub-api.md §1); services live in @nova/core.
+// Chat Hub API: providers (with the active account per kind, FR-115), models, threads, messages,
+// the per-thread event stream, search and attachments (M1: FR-017, FR-018, FR-021, FR-023,
+// FR-125), plus follow-up queues, message versions, branches, side chats and the thread tree
+// (M2: FR-019, FR-020, FR-025, FR-026, FR-027, FR-033). The account profile moved to the profile
+// area (profile.ts, FR-113). Every route requires authentication and validates its input with the
+// shared zod schemas (contracts/hub-api.md §1); services live in @nova/core.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -20,7 +21,6 @@ import {
   updateThreadSchema,
   NovaError,
   type EventEnvelope,
-  updateAccountSchema,
 } from '@nova/shared';
 import {
   readAttachmentBlob,
@@ -53,7 +53,8 @@ const params = z.object({ id: idSchema });
 const messageParams = z.object({ id: idSchema, mid: idSchema });
 const queueParams = z.object({ id: idSchema, queuedId: idSchema });
 
-// PATCH /account (contracts/hub-api.md §1). `avatar: null` clears the avatar; uploads are M2.
+/** Switching accounts (FR-115): only `{active: true}`; a kind always has one active account. */
+const updateProviderSchema = z.object({ active: z.literal(true) }).strict();
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(200),
@@ -99,6 +100,21 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     return { ok: true };
   });
 
+  // The account becomes its kind's active one; new chats and the built-in presets prefer it.
+  app.patch('/api/v1/providers/:id', async (req) => {
+    const accountId = await accountOf(req);
+    const { id } = params.parse(req.params);
+    updateProviderSchema.parse(req.body);
+    const view = await registry.setActive(accountId, id);
+    await events.emit({
+      name: 'provider.account.activated',
+      actor: 'user',
+      accountId,
+      payload: { providerAccountId: id, provider: view.provider },
+    });
+    return view;
+  });
+
   app.post('/api/v1/providers/:id/test', async (req) => {
     const accountId = await accountOf(req);
     return registry.test(accountId, params.parse(req.params).id);
@@ -107,26 +123,6 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
   app.get('/api/v1/models', async (req) => ({
     items: await router.listModels(await accountOf(req)),
   }));
-
-  // ---- account --------------------------------------------------------------------------
-  app.patch('/api/v1/account', async (req) => {
-    const accountId = await accountOf(req);
-    const body = updateAccountSchema.parse(req.body);
-    const set: Partial<typeof schema.account.$inferInsert> = {
-      updatedAt: new Date().toISOString(),
-    };
-    if (body.displayName !== undefined) set.displayName = body.displayName.trim() || null;
-    if (body.avatar === null) set.avatarPath = null;
-    await db.transaction(() =>
-      db.orm.update(schema.account).set(set).where(eq(schema.account.id, accountId)),
-    );
-    const rows = await db.orm
-      .select({ displayName: schema.account.displayName })
-      .from(schema.account)
-      .where(eq(schema.account.id, accountId))
-      .limit(1);
-    return { accountId, displayName: rows[0]?.displayName ?? null };
-  });
 
   // ---- threads ----------------------------------------------------------------------------
   app.get('/api/v1/threads', async (req) => {

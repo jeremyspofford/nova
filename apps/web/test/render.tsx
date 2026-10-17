@@ -1,7 +1,16 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { App } from '../src/App.tsx';
 import type { CommandRegistry } from '../src/commands.ts';
-import { FakeEventSource, createHub, fakeEventSource, testRegistry } from './fakes.ts';
+import {
+  FakeEventSource,
+  FakeScreen,
+  FakeSocket,
+  createHub,
+  fakeEventSource,
+  fakeTerminalScreen,
+  fakeWebSocket,
+  testRegistry,
+} from './fakes.ts';
 
 export interface RenderOptions {
   hub?: ReturnType<typeof createHub>;
@@ -23,15 +32,25 @@ export async function renderApp(opts: RenderOptions = {}) {
       eventSource={fakeEventSource}
       takeSetupCode={() => null}
       announceEveryMs={opts.announceEveryMs ?? 0}
+      webSocket={fakeWebSocket}
+      terminalScreen={fakeTerminalScreen}
     />,
   );
-  if (opts.ready !== false) await screen.findByRole('navigation', { name: 'Sidebar' });
+  if (opts.ready !== false) {
+    await screen.findByRole('navigation', { name: 'Sidebar' });
+    // The shell's commands register in an effect that can run after the sidebar is in the DOM.
+    await waitFor(() => {
+      if (!registry.get('view.toggleTheme')) throw new Error('shell commands not registered yet');
+    });
+  }
   return { hub, registry, ...utils };
 }
 
 export function resetDom() {
   cleanup();
   FakeEventSource.reset();
+  FakeSocket.reset();
+  FakeScreen.reset();
   document.documentElement.removeAttribute('style');
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.removeAttribute('data-motion');

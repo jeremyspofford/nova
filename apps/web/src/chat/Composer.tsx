@@ -6,7 +6,10 @@
 // strip above the box until their turn starts. Typing `@` (or the mention button) opens a fuzzy,
 // grouped popover of files, folders, MCP servers and tools (FR-022); a choice becomes a removable
 // chip that goes out with the message. The box is an ARIA combobox while the popover is open:
-// arrows move, Enter or Tab chooses, Escape closes.
+// arrows move, Enter or Tab chooses, Escape closes. M4: `/` at the start opens the same kind of
+// list for skills and plugin commands and a choice inserts `/name ` (FR-046); after a reply, up to
+// three suggested follow-ups sit above an empty box, and Tab or Right arrow takes the first
+// (FR-028).
 import {
   useCallback,
   useEffect,
@@ -21,6 +24,7 @@ import {
   type InputMode,
   type MentionCandidate,
   type ModelView,
+  type SlashCommandView,
 } from '@nova/shared';
 import { Button, Icon, IconButton, PresetScale, SelectField, Spinner } from '@nova/ui';
 import { useAnnounce, type Draft, type MentionChip } from '../services.tsx';
@@ -36,6 +40,7 @@ import {
   rankMentions,
 } from './mentions.ts';
 import { modelGroups, type PresetStop } from './models.ts';
+import { applySlash, filterSlash, slashAt } from './slash.ts';
 
 /** A follow-up waiting for the running turn; `pending` until the Hub confirms it. */
 export interface QueueItem {
@@ -114,6 +119,12 @@ export interface ComposerProps {
   noModelHint?: string;
   /** Looks up `@`-mention candidates (FR-022); without it, `@` is plain text. */
   mentionSource?: (query: string) => Promise<MentionCandidate[]>;
+  /** Lists the slash commands (FR-046); without it, `/` is plain text. */
+  slashSource?: () => Promise<SlashCommandView[]>;
+  /** Suggested follow-ups for an empty box after a reply (FR-028). */
+  suggestions?: string[];
+  /** Turns suggestions off (the `chat.suggestions` setting). */
+  onTurnOffSuggestions?: () => void;
 }
 
 export function Composer({
@@ -141,6 +152,9 @@ export function Composer({
   inputRef,
   noModelHint,
   mentionSource,
+  slashSource,
+  suggestions = [],
+  onTurnOffSuggestions,
 }: ComposerProps) {
   const own = useRef<HTMLTextAreaElement>(null);
   const textarea = inputRef ?? own;
@@ -157,6 +171,18 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
   }, [draft.text, textarea]);
   const mention = useMentions(draft, onDraftChange, textarea, mentionSource);
+  const slash = useSlash(draft, onDraftChange, textarea, slashSource);
+  const empty = !draft.text && draft.attachments.length === 0 && mentions.length === 0;
+  const suggested = empty && !streaming ? suggestions.slice(0, 3) : [];
+  const accept = (text: string) => {
+    onDraftChange({ ...draft, text });
+    queueMicrotask(() => {
+      const el = textarea.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  };
 
   const send = (alternate = false) => {
     if (!canSend) return;
@@ -274,7 +300,31 @@ export function Composer({
           ))}
         </ul>
       ) : null}
+      {suggested.length ? (
+        <div className="composer-suggestions">
+          <ul className="suggestions" aria-label="Suggested follow-ups">
+            {suggested.map((t, i) => (
+              <li key={`${i}-${t}`}>
+                <button type="button" className="suggestion" title={t} onClick={() => accept(t)}>
+                  {t}
+                </button>
+              </li>
+            ))}
+            {onTurnOffSuggestions ? (
+              <li>
+                <IconButton
+                  label="Turn off suggested follow-ups"
+                  icon={<Icon name="close" />}
+                  variant="ghost"
+                  onClick={onTurnOffSuggestions}
+                />
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
       {mention.popover}
+      {slash.popover}
       <label htmlFor="composer-input" className="nv-vh">
         Message
       </label>
@@ -289,13 +339,31 @@ export function Composer({
         onChange={(e) => {
           onDraftChange({ ...draft, text: e.target.value });
           mention.track(e.target.value, e.target.selectionStart);
+          slash.track(e.target.value, e.target.selectionStart);
         }}
-        onSelect={(e) => mention.track(e.currentTarget.value, e.currentTarget.selectionStart)}
-        onFocus={() => mention.setFocused(true)}
-        onBlur={() => mention.setFocused(false)}
-        {...mention.inputProps}
+        onSelect={(e) => {
+          mention.track(e.currentTarget.value, e.currentTarget.selectionStart);
+          slash.track(e.currentTarget.value, e.currentTarget.selectionStart);
+        }}
+        onFocus={() => {
+          mention.setFocused(true);
+          slash.setFocused(true);
+        }}
+        onBlur={() => {
+          mention.setFocused(false);
+          slash.setFocused(false);
+        }}
+        {...(slash.open ? slash.inputProps : mention.inputProps)}
         onKeyDown={(e) => {
+          if (slash.onKeyDown(e)) return;
           if (mention.onKeyDown(e)) return;
+          const plain = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
+          const first = suggested[0];
+          if (first && plain && (e.key === 'Tab' || e.key === 'ArrowRight')) {
+            e.preventDefault();
+            accept(first);
+            return;
+          }
           if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
           const mod = mac ? e.metaKey : e.ctrlKey;
           const sends = enterToSend === 'enter' ? !e.shiftKey && !mod : mod;
@@ -317,6 +385,7 @@ export function Composer({
           ? 'Enter sends, Shift+Enter adds a line.'
           : `${sendKey} sends, Enter adds a line.`}{' '}
         Escape stops a reply.
+        {suggested.length ? ' Tab or Right arrow takes the first suggested follow-up.' : ''}
         {streaming
           ? ` While the reply runs, ${sendKey} ${followUp === 'queue' ? 'queues your message' : 'steers the reply'} and ${altKey} ${followUp === 'queue' ? 'steers the reply' : 'queues your message'}.`
           : ''}
@@ -346,6 +415,14 @@ export function Composer({
             icon={<Icon name="at" />}
             variant="ghost"
             onClick={mention.insertAt}
+          />
+        ) : null}
+        {slashSource ? (
+          <IconButton
+            label="Use a slash command"
+            icon={<Icon name="slash" />}
+            variant="ghost"
+            onClick={slash.insertSlash}
           />
         ) : null}
         <span className="composer-spacer" />
@@ -616,4 +693,161 @@ function useMentions(
   ) : null;
 
   return { track, setFocused, onKeyDown, inputProps, popover, insertAt };
+}
+
+// ---- slash commands (FR-046) ---------------------------------------------------------------------
+
+interface SlashResults {
+  items: SlashCommandView[];
+  failed: boolean;
+}
+
+function useSlash(
+  draft: Draft,
+  onDraftChange: (d: Draft) => void,
+  textarea: RefObject<HTMLTextAreaElement | null>,
+  source: (() => Promise<SlashCommandView[]>) | undefined,
+) {
+  const listId = useId();
+  const announce = useAnnounce();
+  const [caret, setCaret] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [active, setActive] = useState(0);
+  const [results, setResults] = useState<SlashResults | null>(null);
+
+  const token = source && focused && caret !== null ? slashAt(draft.text, caret) : null;
+  const open = !!token && !dismissed;
+
+  // The list is fetched each time the popover opens, so new skills show up without a reload.
+  useEffect(() => {
+    if (!open || !source) return;
+    let alive = true;
+    source().then(
+      (items) => {
+        if (alive) setResults({ items, failed: false });
+      },
+      () => {
+        if (alive) setResults({ items: [], failed: true });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [open, source]);
+
+  const options = open && results ? filterSlash(results.items, token.query) : [];
+  const current = options.length ? Math.min(active, options.length - 1) : -1;
+  const optionId = (i: number) => `${listId}-opt-${i}`;
+
+  const track = (text: string, at: number | null) => {
+    setCaret(at);
+    const next = at === null ? null : slashAt(text, at);
+    if (!next || next.query !== token?.query) setActive(0);
+    if (!next) setDismissed(false);
+  };
+
+  const place = (at: number) => {
+    setCaret(at);
+    queueMicrotask(() => {
+      const el = textarea.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(at, at);
+    });
+  };
+
+  const choose = (c: SlashCommandView) => {
+    if (!token) return;
+    const r = applySlash(draft.text, c.name, token.end);
+    onDraftChange({ ...draft, text: r.text });
+    place(r.caret);
+    announce(`Command /${c.name}.`);
+  };
+
+  const insertSlash = () => {
+    const text = draft.text.startsWith('/') ? draft.text : `/${draft.text}`;
+    if (text !== draft.text) onDraftChange({ ...draft, text });
+    setDismissed(false);
+    setActive(0);
+    setFocused(true);
+    place(1);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!open || !token) return false;
+    if (e.key === 'Escape') {
+      // Escape closes the list only; it must not also stop a running reply.
+      e.preventDefault();
+      e.stopPropagation();
+      setDismissed(true);
+      return true;
+    }
+    if (!results) {
+      // While the list loads, Enter waits for it instead of sending a half-typed command.
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        return true;
+      }
+      return false;
+    }
+    if (!options.length) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const by = e.key === 'ArrowDown' ? 1 : -1;
+      setActive((current + by + options.length) % options.length);
+      return true;
+    }
+    if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      const c = options[current];
+      if (c) choose(c);
+      return true;
+    }
+    return false;
+  };
+
+  const inputProps = open
+    ? {
+        role: 'combobox',
+        'aria-autocomplete': 'list' as const,
+        'aria-expanded': true,
+        'aria-controls': listId,
+        'aria-activedescendant': current >= 0 ? optionId(current) : undefined,
+      }
+    : {};
+
+  const popover = open ? (
+    <div className="mention-popover">
+      <div id={listId} role="listbox" aria-label="Slash commands" className="mention-list">
+        {options.map((c, i) => (
+          <div
+            key={c.skillId}
+            id={optionId(i)}
+            role="option"
+            aria-selected={i === current}
+            className="mention-option"
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseEnter={() => setActive(i)}
+            onClick={() => choose(c)}
+          >
+            <Icon name="slash" />
+            <span className="mention-label slash-name">/{c.name}</span>
+            <span className="muted mention-detail">{c.description}</span>
+          </div>
+        ))}
+      </div>
+      <p className="muted mention-status" role="status">
+        {!results
+          ? 'Loading commands…'
+          : results.failed
+            ? 'Commands are unavailable right now.'
+            : options.length
+              ? `${options.length} ${options.length === 1 ? 'command' : 'commands'}`
+              : 'No matching commands'}
+      </p>
+    </div>
+  ) : null;
+
+  return { open, track, setFocused, onKeyDown, inputProps, popover, insertSlash };
 }

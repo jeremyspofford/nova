@@ -1,6 +1,7 @@
 // The MCP client manager (FR-042, FR-043): one supervised connection per configured server,
 // their status, logs and tools, and tool calls routed to the right server.
 import { join } from 'node:path';
+import type { AuthProvider } from '@modelcontextprotocol/client';
 import type { McpLogLine } from '@nova/shared';
 import { defaultRedactor, type Redactor } from '@nova/security';
 import type { Logger } from '@nova/telemetry';
@@ -10,6 +11,7 @@ import {
   type BackoffOptions,
   type CallOptions,
   type McpPromptInfo,
+  type McpResourceContents,
   type McpResourceInfo,
   type McpServerConfig,
   type McpServerState,
@@ -30,6 +32,8 @@ export interface McpManagerOptions {
   /** Debounce for list-changed refreshes (default 300 ms). */
   listChangedDebounceMs?: number;
   createTransport?: TransportFactory;
+  /** Bearer tokens for sse/http servers authorized with OAuth (FR-047), asked before each request. */
+  authFor?: (config: McpServerConfig) => AuthProvider | null;
   onStatus?: (state: McpServerState) => void;
   /** A server's tool list (or what its lists expose) changed; rebuild tool indexes. */
   onToolsChanged?: (serverId: string) => void;
@@ -64,6 +68,7 @@ export class McpManager {
       backoff: this.#backoff,
       listChangedDebounceMs: this.#opts.listChangedDebounceMs ?? 300,
       ...(this.#opts.createTransport ? { createTransport: this.#opts.createTransport } : {}),
+      ...(this.#opts.authFor ? { authFor: this.#opts.authFor } : {}),
       // Removed servers and a closing manager report nothing more.
       onStatus: (s) => {
         if (!this.#closed && this.#conns.get(s.id) === conn) this.#opts.onStatus?.(s);
@@ -171,6 +176,22 @@ export class McpManager {
       });
     }
     return conn.readResource(uri, signal);
+  }
+
+  /** Raw resource contents with MIME type and `_meta` (MCP Apps, FR-198). */
+  readResourceContents(
+    serverId: string,
+    uri: string,
+    signal?: AbortSignal,
+  ): Promise<McpResourceContents> {
+    const conn = this.#conns.get(serverId);
+    if (!conn) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'mcp.unavailable', message: 'the MCP server was removed' },
+      });
+    }
+    return conn.readResourceContents(uri, signal);
   }
 
   /** Stop every server (Hub shutdown). */

@@ -2,6 +2,11 @@
 // tool routes (FR-022, FR-029, FR-038, FR-196; contracts/hub-api.md). The ChatService gets the
 // runtime through `chatOptions`, so every model tool call passes the policy gate the policy
 // area provides; POST /tools/:name/invoke passes the same gate with origin `ui`.
+//
+// M4: the loop's lifecycle hooks (`tool.pre`/`tool.post` in the runtime; `session.start`,
+// `prompt.submit`, `stop`, `interrupt` in the ChatService) and the skills catalog reach the
+// ChatService through `chatOptions` (FR-046, FR-197); a project's folders are tool roots for its
+// chats (FR-035); GET /threads/:id/suggestions serves follow-up prompts (FR-028).
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -10,14 +15,17 @@ import { idSchema, type ToolDescriptor } from '@nova/shared';
 import {
   type HookDispatcher,
   type PluginPermissionSource,
+  type ProjectFolderSource,
   type SkillCatalogProvider,
   ArtifactService,
+  SuggestionService,
   ToolRegistry,
   ToolRuntime,
   builtinSource,
   builtinTools,
   detectSandbox,
   loadPermissionProfile,
+  projectFolderSource,
   resolveToolRoots,
   type AuditSink,
   type ChatServiceOptions,
@@ -44,6 +52,14 @@ export interface ToolsArea extends HubArea {
   substrate: () => SandboxClient['substrate'];
   /** The sandbox itself, shared with hooks and terminals (M4). */
   sandbox: SandboxClient;
+  /** Follow-up prompts (FR-028). */
+  suggestions: SuggestionService;
+  /**
+   * Replace where a project's folders come from (FR-035); the policy area must use the same
+   * source (`policy.useProjectFolders`), so the roots tools get and the roots the gate checks
+   * agree. Defaults to the `project_folder` table.
+   */
+  useProjectFolders(source: ProjectFolderSource): void;
 }
 
 export interface ToolsDeps {
@@ -62,7 +78,12 @@ export interface ToolsDeps {
   /** M4: lifecycle hooks, the skill catalog and plugin permissions (wired by the loop). */
   hooks?: HookDispatcher;
   skills?: SkillCatalogProvider;
+  /** Enforced by the gate (`policy.usePluginPermissions`); accepted here for symmetry. */
   pluginPermissions?: PluginPermissionSource;
+  /** A project's folders (FR-035); defaults to the `project_folder` table. */
+  projectFolders?: ProjectFolderSource;
+  /** MCP Apps' model context for a thread (FR-198), from the apps area. */
+  appContext?: ChatServiceOptions['appContext'];
 }
 
 /** Content endpoint policy: nothing loads or runs, even when opened directly (FR-038). */
@@ -90,7 +111,14 @@ const mentionsQuery = z.object({
   q: z.string().max(200).default(''),
   threadId: idSchema.optional(),
 });
-const invokeBody = z.object({ args: z.unknown().optional(), threadId: idSchema.optional() });
+// `initiator: 'user'` only when the user clicked in a Nova client; an MCP App's own call is the
+// default and carries no user instruction (FR-189, FR-198).
+const invokeBody = z.object({
+  args: z.unknown().optional(),
+  threadId: idSchema.optional(),
+  initiator: z.enum(['user', 'app']).optional(),
+});
+const threadParams = z.object({ id: idSchema });
 
 export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
   const log = ctx.log.child('tools');
@@ -123,6 +151,7 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
     sources: [builtinSource(builtins, searxngUrl), ...ctx.sources],
     log,
   });
+  let folders: ProjectFolderSource = ctx.projectFolders ?? projectFolderSource(ctx.db);
   const runtime = new ToolRuntime({
     db: ctx.db,
     events: ctx.events,
@@ -130,20 +159,35 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
     registry,
     sandbox,
     audit: ctx.audit,
-    scope: ctx.scope ?? settingsScope(ctx, workspace),
+    scope: ctx.scope ?? settingsScope(ctx, workspace, (projectId) => folders(projectId)),
     deferBudget: (projectId) => ctx.setting('tools.deferBudget', projectId),
     paths,
     log,
+    ...(ctx.hooks ? { hooks: ctx.hooks } : {}),
+  });
+  const suggestions = new SuggestionService({
+    db: ctx.db,
+    router: ctx.router,
+    enabled: async (projectId) => (await ctx.setting('chat.suggestions', projectId)) === true,
+    log: log.child('suggestions'),
   });
   const waitMs = ctx.invokeWaitMs ?? 60_000;
+  const chatOptions: Partial<ChatServiceOptions> = { tools: runtime };
+  if (ctx.hooks) chatOptions.hooks = ctx.hooks;
+  if (ctx.skills) chatOptions.skills = ctx.skills;
+  if (ctx.appContext) chatOptions.appContext = ctx.appContext;
 
   return Promise.resolve({
-    chatOptions: { tools: runtime },
+    chatOptions,
     runtime,
     artifacts,
     catalog: async (accountId, name) => (await registry.find(accountId, name))?.descriptor ?? null,
     substrate: () => sandbox.substrate,
     sandbox,
+    suggestions,
+    useProjectFolders: (source) => {
+      folders = source;
+    },
     register(app: FastifyInstance) {
       app.get('/api/v1/tools', async (req) => {
         const accountId = await ctx.accountOf(req);
@@ -162,6 +206,7 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
           name,
           args: body.args ?? {},
           threadId: body.threadId ?? null,
+          initiator: body.initiator ?? 'app',
         });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const waited = await Promise.race([
@@ -220,8 +265,18 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
         const q = mentionsQuery.parse(req.query);
         return { items: await runtime.mentionCandidates(accountId, q.q, q.threadId ?? null) };
       });
+
+      // Follow-up prompts for an idle thread (FR-028): empty when off, temporary or waiting.
+      app.get('/api/v1/threads/:id/suggestions', async (req) => {
+        const accountId = await ctx.accountOf(req);
+        const { id } = threadParams.parse(req.params);
+        return { items: await suggestions.forThread(accountId, id) };
+      });
     },
-    close: () => runtime.close(),
+    close: async () => {
+      suggestions.close();
+      await runtime.close();
+    },
   });
 }
 
@@ -232,18 +287,26 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
  * never a tool root: the `full` profile's "whole filesystem" is the sandbox guest's (docs/12
  * §7.1); on the Hub it falls back to the project roots, writable.
  */
-export function settingsScope(ctx: HubContext, workspace: string): ToolRuntimeOptions['scope'] {
+export function settingsScope(
+  ctx: HubContext,
+  workspace: string,
+  folders: ProjectFolderSource = projectFolderSource(ctx.db),
+): ToolRuntimeOptions['scope'] {
   return async ({ accountId, projectId }): Promise<ToolScope> => {
     const id = await ctx.setting('tools.permissionProfile', projectId);
     const { profile } = await loadPermissionProfile(ctx.db, accountId, id);
+    // A project's folders are roots for its chats (FR-035), exactly as the gate adds them.
+    const extra = [
+      ...(await ctx.setting('tools.roots')),
+      ...(await folderRoots(folders, projectId)),
+    ];
     const resolved = resolveToolRoots({
       profile,
-      roots: await ctx.setting('tools.roots'),
+      roots: extra,
       workspaceDir: workspace,
     });
     let roots: ToolRoot[] = resolved.roots.filter((r) => dirname(r.path) !== r.path);
     if (!roots.length && resolved.roots.length) {
-      const extra = await ctx.setting('tools.roots');
       roots = [
         { path: workspace, access: 'write', label: 'Workspace' },
         ...extra.map((r) => ({
@@ -260,6 +323,16 @@ export function settingsScope(ctx: HubContext, workspace: string): ToolRuntimeOp
       deny: resolved.deny,
     };
   };
+}
+
+async function folderRoots(folders: ProjectFolderSource, projectId: string | null) {
+  if (!projectId) return [];
+  try {
+    return await folders(projectId);
+  } catch {
+    // Without them the folders are not roots: less access, never more.
+    return [];
+  }
 }
 
 function safeName(title: string, kind: string): string {

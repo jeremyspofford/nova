@@ -2,6 +2,10 @@
 // FR-189, FR-190, FR-191; contracts/hub-api.md "Tasks, goals, agents, approvals, requests").
 // Every route needs a session and validates its input with zod. Managed rules are read-only; a
 // second answer to an approval is `conflict`.
+//
+// M4: the gate runs the `permission.request` hooks (FR-197, docs/12 §2.3 step 7), enforces the
+// confirmed permissions of plugins (FR-045) and adds a project's folders to its roots (FR-035);
+// the lead wires each with `useHooks`, `usePluginPermissions` and `useProjectFolders`.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -18,8 +22,12 @@ import {
   PolicyGate,
   PolicyStore,
   RULE_EFFECT_CLASSES,
+  projectFolderSource,
   type AuditSink,
+  type HookDispatcher,
   type Notifier,
+  type PluginPermissionSource,
+  type ProjectFolderSource,
   type ServerDefaults,
 } from '@nova/core';
 import type { Scope, Substrate } from '@nova/policy';
@@ -39,6 +47,12 @@ export interface PolicyAreaFull extends PolicyArea {
   useToolCatalog(fn: ToolCatalog): void;
   /** The sandbox substrate (the `full` profile needs a VM or container). */
   useSubstrate(fn: () => Substrate | null): void;
+  /** `permission.request` hooks, from the hooks area (FR-197). */
+  useHooks(dispatcher: HookDispatcher): void;
+  /** Confirmed plugin permissions, from the plugins area (FR-045). */
+  usePluginPermissions(source: PluginPermissionSource): void;
+  /** A project's folders (FR-035); the tools area must use the same source. */
+  useProjectFolders(source: ProjectFolderSource): void;
 }
 
 export interface PolicyOptions {
@@ -167,6 +181,7 @@ export async function setupPolicy(
     setting: ctx.setting,
     dataDir: ctx.dataDir,
     log,
+    projectFolders: projectFolderSource(ctx.db),
     ...(opts.home ? { home: opts.home } : {}),
     ...(opts.approvalTimeoutMs ? { approvalTimeoutMs: opts.approvalTimeoutMs } : {}),
   });
@@ -365,6 +380,9 @@ export async function setupPolicy(
       catalog = fn;
     },
     useSubstrate: (fn) => gate.useSubstrate(fn),
+    useHooks: (dispatcher) => gate.useHooks(dispatcher),
+    usePluginPermissions: (source) => gate.usePluginPermissions(source),
+    useProjectFolders: (source) => gate.useProjectFolders(source),
     register,
     close: () => gate.close(),
   };

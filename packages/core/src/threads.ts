@@ -213,7 +213,7 @@ export class ThreadService {
       const cs = citesBy.get(m.id);
       if (cs?.length) v.citations = cs.map(toCitationView);
       if (m.role === 'user') {
-        v.provenance = m.delivery ?? 'typed';
+        v.provenance = m.authorKind === 'hook' ? 'hook' : (m.delivery ?? 'typed');
         const mentions = mentionsOf(byMessage.get(m.id) ?? []);
         if (mentions.length) v.mentions = mentions;
       }
@@ -699,7 +699,10 @@ export function toPartView(p: PartRow): PartView | null {
   }
 }
 
-/** The `@`-mentions sent with a user message, from its `context` parts (FR-022). */
+/**
+ * The `@`-mentions sent with a user message, from its `context` parts (FR-022). A skill loaded
+ * by a `/name` (FR-046) and hook context (FR-197) are context too, but not mentions.
+ */
 function mentionsOf(parts: PartRow[]): NonNullable<MessageView['mentions']> {
   return parts.flatMap((p) => {
     if (p.type !== 'context') return [];
@@ -708,9 +711,11 @@ function mentionsOf(parts: PartRow[]): NonNullable<MessageView['mentions']> {
       mention?: unknown;
       ref?: unknown;
       label?: unknown;
+      via?: unknown;
     } | null;
     if (c?.kind !== 'mention' || typeof c.ref !== 'string' || typeof c.mention !== 'string')
       return [];
+    if (c.via === 'slash') return [];
     return [
       {
         kind: c.mention as MentionKind,

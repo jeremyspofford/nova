@@ -4,6 +4,11 @@
 // with its timeout, persist the `tool_call` row and the message parts, publish the tool events
 // and audit the call (input hash only, FR-104). The conversation engine drives it once per call
 // through a TurnTools; the Hub's POST /tools/:name/invoke drives it with origin `ui`.
+//
+// M4 lifecycle hooks (FR-197, docs/08 §4.1): `tool.pre` runs before the gate and may refuse the
+// call (the card shows it denied, with the hook's reason); `tool.post` runs after the handler.
+// Context either adds travels with the result, each part in its own untrusted envelope labelled
+// with the hook. Calls made by hooks (origin `hook`) fire no hooks.
 import { eq } from 'drizzle-orm';
 import {
   NovaError,
@@ -21,6 +26,7 @@ import { defaultRedactor, type Redactor } from '@nova/security';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
+import type { HookDispatcher, HookInput, HookOutcome } from '../extensions/types.ts';
 import {
   isBuiltinTool,
   type BuiltinContext,
@@ -105,6 +111,8 @@ export interface ToolRuntimeOptions {
   redactor?: Redactor;
   log?: Logger;
   now?: () => Date;
+  /** `tool.pre` and `tool.post` hooks (FR-197); none by default. */
+  hooks?: HookDispatcher;
 }
 
 export interface TurnInput {
@@ -155,6 +163,14 @@ export interface StoredResult {
   origin: Origin | null;
   isError: boolean;
   content: ContentPart[];
+  /** Context `tool.pre` and `tool.post` hooks added (FR-197), redacted. */
+  hooks?: HookContext[];
+}
+
+/** Context a hook added, labelled with the hook as its origin (FR-197, FR-189). */
+export interface HookContext {
+  hookId: string;
+  text: string;
 }
 
 interface ExecInput {
@@ -190,6 +206,17 @@ interface ExecOutput {
 
 const ABORTED = Symbol('aborted');
 
+interface FinishExtra {
+  decision?: GateOutcome | null;
+  startedAt?: number | null;
+  stop?: CallOutcome['stop'];
+  resource?: GateRequest['resource'];
+  /** Context from tool.pre hooks. */
+  hooks?: HookContext[];
+  /** The handler ran: run the tool.post hooks. */
+  post?: boolean;
+}
+
 export class ToolRuntime {
   readonly registry: ToolRegistry;
   readonly sandbox: SandboxClient;
@@ -204,6 +231,7 @@ export class ToolRuntime {
   readonly #redactor: Redactor;
   readonly #log: Logger;
   readonly #now: () => Date;
+  readonly #hooks: HookDispatcher | undefined;
   /** Tools loaded by tool.search per thread, oldest first (docs/08 §1.4). */
   readonly #loaded = new Map<string, string[]>();
   readonly #stop = new AbortController();
@@ -223,6 +251,7 @@ export class ToolRuntime {
     this.#redactor = opts.redactor ?? defaultRedactor;
     this.#log = opts.log ?? new Logger({ module: 'core.tools', sinks: [] });
     this.#now = opts.now ?? (() => new Date());
+    this.#hooks = opts.hooks;
   }
 
   scopeFor(accountId: string, threadId: string | null, projectId: string | null) {
@@ -294,13 +323,17 @@ export class ToolRuntime {
 
   /**
    * Run a tool for the UI (POST /tools/:name/invoke): it passes the gate exactly like a model
-   * call. Returns at once; `done` settles when the call finishes.
+   * call. Returns at once; `done` settles when the call finishes. Only a call the signed-in
+   * user made themselves (`initiator: 'user'`, a click in a Nova client) carries their
+   * instruction; a call an MCP App makes on its own is MCP content and authorizes nothing
+   * (FR-189, FR-198), so it is the default.
    */
   async invoke(input: {
     accountId: string;
     name: string;
     args: unknown;
     threadId?: string | null;
+    initiator?: 'user' | 'app';
   }): Promise<{ callId: string; done: Promise<InvokeResult> }> {
     const threadId = input.threadId ?? null;
     const t = threadId ? this.#thread(input.accountId, threadId) : null;
@@ -322,11 +355,14 @@ export class ToolRuntime {
       modelCallId: null,
       messageId: null,
       partIdx: 0,
-      // The authenticated user asked for this call in a Nova client (FR-189).
-      provenance: {
-        userInstruction: { messageId: `ui:${callId}`, accountId: input.accountId },
-        taint: [],
-      },
+      provenance:
+        input.initiator === 'user'
+          ? // The authenticated user asked for this call in a Nova client (FR-189).
+            {
+              userInstruction: { messageId: `ui:${callId}`, accountId: input.accountId },
+              taint: [],
+            }
+          : { taint: ['mcp'] },
       scope,
       signal: this.#stop.signal,
       extras: {
@@ -531,16 +567,8 @@ export class ToolRuntime {
       },
     });
 
-    const finish = (
-      status: ToolCallStatus,
-      result: ToolResult,
-      extra: {
-        decision?: GateOutcome | null;
-        startedAt?: number | null;
-        stop?: CallOutcome['stop'];
-        resource?: GateRequest['resource'];
-      } = {},
-    ) => this.#finish(x, callId, view, status, result, extra);
+    const finish = (status: ToolCallStatus, result: ToolResult, extra: FinishExtra = {}) =>
+      this.#finish(x, callId, view, status, result, extra);
 
     const def = x.def;
     if (!def)
@@ -586,6 +614,25 @@ export class ToolRuntime {
     };
     if (resource) req.resource = resource;
 
+    // tool.pre hooks (FR-197): a block refuses the call before anything is asked or run.
+    let hooks: HookContext[] = [];
+    if (this.#hooks && x.origin !== 'hook') {
+      const pre = await this.#hook('tool.pre', x, callId, def);
+      hooks = this.#hookContext(pre);
+      if (pre.block) {
+        const reason = this.#redactor.redactString(pre.block.reason);
+        return finish(
+          'denied',
+          { ok: false, error: { code: 'denied', message: `A hook blocked this call: ${reason}` } },
+          {
+            decision: { effect: 'deny', reason, tier: 'pre_approvable', stop: false },
+            resource,
+            hooks,
+          },
+        );
+      }
+    }
+
     // The gate itself waits for an approval; a preview tells whether the thread will wait.
     let waiting: boolean;
     try {
@@ -606,7 +653,7 @@ export class ToolRuntime {
         return await finish(
           'cancelled',
           { ok: false, error: { code: 'cancelled', message: 'The call was cancelled.' } },
-          { resource },
+          { resource, hooks },
         );
       outcome = r;
     } catch (err) {
@@ -634,12 +681,12 @@ export class ToolRuntime {
               message: 'Nobody answered the approval in time, so the call did not run.',
             },
           },
-          { decision: outcome, stop: 'approval_timeout', resource },
+          { decision: outcome, stop: 'approval_timeout', resource, hooks },
         );
       return finish(
         'denied',
         { ok: false, error: { code: 'denied', message: `Denied: ${outcome.reason}` } },
-        { decision: outcome, stop: outcome.stop ? 'deny_stop' : null, resource },
+        { decision: outcome, stop: outcome.stop ? 'deny_stop' : null, resource, hooks },
       );
     }
     if (outcome.effect === 'handoff') {
@@ -650,7 +697,7 @@ export class ToolRuntime {
           ok: true,
           content: [{ type: 'text', text: `The user did this step themselves.${note}` }],
         },
-        { decision: outcome, resource },
+        { decision: outcome, resource, hooks },
       );
     }
 
@@ -689,7 +736,7 @@ export class ToolRuntime {
         return finish(
           'cancelled',
           { ok: false, error: { code: 'cancelled', message: 'The call was cancelled.' } },
-          { decision: outcome, startedAt, resource },
+          { decision: outcome, startedAt, resource, hooks },
         );
       return finish(
         'timeout',
@@ -697,10 +744,55 @@ export class ToolRuntime {
           ok: false,
           error: { code: 'timeout', message: `The tool did not finish within ${timeoutMs} ms.` },
         },
-        { decision: outcome, startedAt, resource },
+        { decision: outcome, startedAt, resource, hooks },
       );
     }
-    return finish(result.ok ? 'ok' : 'error', result, { decision: outcome, startedAt, resource });
+    return finish(result.ok ? 'ok' : 'error', result, {
+      decision: outcome,
+      startedAt,
+      resource,
+      hooks,
+      post: this.#hooks !== undefined && x.origin !== 'hook',
+    });
+  }
+
+  /** Run a tool hook event; a dispatcher that fails blocks `tool.pre` (fail closed). */
+  async #hook(
+    event: 'tool.pre' | 'tool.post',
+    x: ExecInput,
+    callId: string,
+    def: ToolDefinition,
+    result?: string,
+  ): Promise<HookOutcome> {
+    // The call's id, and its first root as the hook's working directory.
+    const input: HookInput = {
+      accountId: x.accountId,
+      threadId: x.threadId ?? '',
+      turnId: x.turnId,
+      projectId: x.projectId,
+      tool: def.descriptor,
+      args: this.#redactor.redact(x.args ?? null),
+      callId,
+    };
+    const cwd = x.scope.roots[0]?.path;
+    if (cwd) input.cwd = cwd;
+    if (result !== undefined) input.result = result;
+    try {
+      return await this.#hooks!.dispatch(event, input, x.signal);
+    } catch (err) {
+      this.#log.warn('tool hooks failed', { err, event, tool: x.name });
+      if (event === 'tool.post') return { context: [] };
+      return { context: [], block: { reason: 'the tool hooks could not run', hookId: 'hooks' } };
+    }
+  }
+
+  #hookContext(out: HookOutcome): HookContext[] {
+    return out.context
+      .filter((c) => c.text.trim())
+      .map((c) => ({
+        hookId: c.hookId,
+        text: clip(this.#redactor.redactString(c.text), MAX_RESULT_CHARS),
+      }));
   }
 
   async #finish(
@@ -709,17 +801,16 @@ export class ToolRuntime {
     view: ToolCallPartView,
     status: ToolCallStatus,
     result: ToolResult,
-    extra: {
-      decision?: GateOutcome | null;
-      startedAt?: number | null;
-      stop?: CallOutcome['stop'];
-      resource?: GateRequest['resource'];
-    },
+    extra: FinishExtra,
   ): Promise<ExecOutput> {
     const ended = Date.now();
     const durationMs = extra.startedAt ? ended - extra.startedAt : null;
     const content = this.#resultContent(result);
     const text = contentText(content);
+    const hooks = [...(extra.hooks ?? [])];
+    // tool.post hooks see the redacted, capped result the model gets (FR-197).
+    if (extra.post && x.def && !x.signal.aborted)
+      hooks.push(...this.#hookContext(await this.#hook('tool.post', x, callId, x.def, text)));
     const error = result.ok ? null : { code: result.error.code, message: result.error.message };
     const origin = result.ok || status === 'error' ? this.#originOf(x) : null;
     view.status = status;
@@ -735,6 +826,7 @@ export class ToolRuntime {
       isError: !result.ok,
       content,
     };
+    if (hooks.length) stored.hooks = hooks;
     const artifact = result.ok
       ? (result.meta?.artifact as Record<string, unknown> | undefined)
       : undefined;

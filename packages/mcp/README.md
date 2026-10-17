@@ -25,3 +25,31 @@ Nova's MCP client (FR-042, FR-043; docs/08 §2.1, §8, §9), built on the offici
 `test/fixtures/test-server.mjs` is a stdio MCP server for tests and the J3 journey
 (`node packages/mcp/test/fixtures/test-server.mjs [--tools N] [--test-hooks]`); see its header for
 the tools and options.
+
+M4 adds:
+
+- **Nova's own MCP server** (FR-044): `NovaMcpServer` hosts streamable HTTP sessions for external
+  clients on the SDK's web-standard transport. The caller authenticates each request and names
+  the client; the server lists and calls that client's `ServedTool`s, keeps each session bound to
+  the client that opened it, caps sessions per client, and `closeClient()` ends a client's
+  sessions at once (running calls are cancelled and still answered).
+- **MCP bundles** (FR-199): `readBundle()` validates a bundle without extracting it (path checks,
+  file-count and size caps before anything is inflated, manifest validated field by field against
+  `mcp-bundle-manifest.json`, a trailing signature split off); `bundleSignature()` verifies only
+  against trusted publishers (none yet, so bundles are unverified); `extractBundle()` writes into a
+  fresh folder; `resolveUserConfig()` checks the user's settings; `bundleLaunch()` builds the argv
+  (templates expanded without a shell, platform overrides, `node` on the Hub's runtime, `uv` only
+  when it is installed) and reports which arguments and variables hold sensitive settings.
+- **OAuth for remote servers** (FR-047): discovery, registration (a client metadata document when
+  the authorization server accepts one and the Hub has an HTTPS URL, else dynamic registration),
+  PKCE, refresh and revocation (`oauth.ts`), and `McpOAuthService`, which keeps the single-use
+  state, stores tokens through a vault interface, refreshes before expiry or after a 401, and
+  gives each connection an `AuthProvider` (`McpManagerOptions.authFor`).
+- Launch arguments that reference the server's own vault entries (`secret://mcp/<id>/…`) are
+  resolved at launch and redacted; any other reference is passed through as text.
+- MCP Apps (FR-198): the client advertises the `io.modelcontextprotocol/ui` extension, a tool's
+  `_meta.ui.resourceUri` becomes `descriptor.ui`, and `readResourceContents()` returns resources
+  raw with their MIME type and `_meta`.
+
+`test/oauth-fixture.ts` is an in-process authorization server with a protected MCP endpoint, and
+`test/bundle-fixture.ts` builds bundle archives from `examples/bundles/hello` in memory.

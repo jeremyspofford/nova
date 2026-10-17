@@ -1,6 +1,12 @@
 // Provider accounts and the models they offer (docs/07, FR-014, FR-023, FR-101). Credentials
 // go to the SecretStore; the database row holds only a `secret://` reference, and the key is
 // resolved per request inside the adapter, never returned by the API.
+//
+// One account per provider kind is active (FR-115): the one the user picked, else the oldest.
+// The active account takes its kind's first place in every list, and models it also offers are
+// served by it alone, so new chats and the built-in presets use the active account while an
+// inactive one keeps only the models nobody else of its kind has. Threads that name an inactive
+// account's model keep resolving it.
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import {
   NovaError,
@@ -29,9 +35,14 @@ import { secretRef, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import { Logger } from '@nova/telemetry';
 
-const { providerAccount, modelPref } = schema;
+const { providerAccount, modelPref, providerActive } = schema;
 
 export type ProviderAccountRow = typeof providerAccount.$inferSelect;
+
+/** A provider account as listed: whether it is its kind's active account (FR-115). */
+export interface ProviderAccountListItem extends ProviderAccountView {
+  active: boolean;
+}
 
 export interface ProviderFactoryInput {
   row: ProviderAccountRow;
@@ -78,6 +89,8 @@ export interface AccountModel {
   info: ModelInfo;
   account: ProviderAccountRow;
   local: boolean;
+  /** The account is its provider kind's active one (FR-115). */
+  active: boolean;
 }
 
 export const MOCK_PROVIDER_LABEL = 'Mock (offline)';
@@ -160,13 +173,61 @@ export class ProviderRegistry {
     this.#adapterRetries = opts.adapterRetries ?? 0;
   }
 
-  async list(accountId: string): Promise<ProviderAccountView[]> {
-    const rows = await this.#db.orm
-      .select()
-      .from(providerAccount)
-      .where(and(eq(providerAccount.accountId, accountId), isNull(providerAccount.deletedAt)))
-      .orderBy(asc(providerAccount.createdAt), asc(providerAccount.id));
-    return rows.map(toView);
+  async list(accountId: string): Promise<ProviderAccountListItem[]> {
+    const { rows, active } = await this.#ordered(accountId);
+    return rows.map((r) => toView(r, active.has(r.id)));
+  }
+
+  /** The view of one account, with its active flag. */
+  async view(accountId: string, id: string): Promise<ProviderAccountListItem> {
+    const row = await this.account(accountId, id);
+    const { active } = await this.#ordered(accountId);
+    return toView(row, active.has(row.id));
+  }
+
+  /**
+   * Make an account its kind's active one (FR-115); the previous one stays, inactive. Returns
+   * the account's view.
+   */
+  async setActive(accountId: string, id: string): Promise<ProviderAccountListItem> {
+    const row = await this.account(accountId, id);
+    const now = this.#now().toISOString();
+    await this.#db.transaction(() =>
+      this.#db.orm
+        .insert(providerActive)
+        .values({ accountId, provider: row.provider, providerAccountId: id, updatedAt: now })
+        .onConflictDoUpdate({
+          target: [providerActive.accountId, providerActive.provider],
+          set: { providerAccountId: id, updatedAt: now },
+        }),
+    );
+    return toView(row, true);
+  }
+
+  /**
+   * Live accounts in list order and the ids of the active ones. Accounts keep their creation
+   * order, except that each kind's active account takes the place of that kind's first one.
+   */
+  async #ordered(accountId: string): Promise<{ rows: ProviderAccountRow[]; active: Set<string> }> {
+    const rows = await this.#activeRows(accountId);
+    const chosen = new Map(
+      (
+        await this.#db.orm
+          .select({ provider: providerActive.provider, id: providerActive.providerAccountId })
+          .from(providerActive)
+          .where(eq(providerActive.accountId, accountId))
+      ).map((r) => [r.provider, r.id]),
+    );
+    const byKind = new Map<string, ProviderAccountRow[]>();
+    for (const r of rows) byKind.set(r.provider, [...(byKind.get(r.provider) ?? []), r]);
+    const active = new Set<string>();
+    const queues = new Map<string, ProviderAccountRow[]>();
+    for (const [kind, list] of byKind) {
+      const pick = list.find((r) => r.id === chosen.get(kind)) ?? list[0]!;
+      active.add(pick.id);
+      queues.set(kind, [pick, ...list.filter((r) => r !== pick)]);
+    }
+    return { rows: rows.map((r) => queues.get(r.provider)!.shift()!), active };
   }
 
   async account(accountId: string, id: string): Promise<ProviderAccountRow> {
@@ -233,19 +294,40 @@ export class ProviderRegistry {
       if (ref) await this.#secrets.delete(ref).catch(() => false);
       throw err;
     }
-    return toView(row);
+    return this.view(accountId, id);
   }
 
-  /** Soft-delete the account and delete its credential from the vault. */
+  /**
+   * Soft-delete the account and delete its credential from the vault. When it was its kind's
+   * active account, the next one of that kind (in creation order, wrapping) becomes active.
+   */
   async remove(accountId: string, id: string): Promise<void> {
     const row = await this.account(accountId, id);
+    const { active } = await this.#ordered(accountId);
     const now = this.#now().toISOString();
-    await this.#db.transaction(() =>
-      this.#db.orm
+    const sameKind = (await this.#activeRows(accountId)).filter((r) => r.provider === row.provider);
+    const at = sameKind.findIndex((r) => r.id === id);
+    const next = sameKind.length > 1 ? sameKind[(at + 1) % sameKind.length] : undefined;
+    await this.#db.transaction(async () => {
+      await this.#db.orm
         .update(providerAccount)
         .set({ deletedAt: now, updatedAt: now, secretRef: null })
-        .where(eq(providerAccount.id, id)),
-    );
+        .where(eq(providerAccount.id, id));
+      if (!active.has(id)) return;
+      const where = and(
+        eq(providerActive.accountId, accountId),
+        eq(providerActive.provider, row.provider),
+      );
+      if (next)
+        await this.#db.orm
+          .insert(providerActive)
+          .values({ accountId, provider: row.provider, providerAccountId: next.id, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [providerActive.accountId, providerActive.provider],
+            set: { providerAccountId: next.id, updatedAt: now },
+          });
+      else await this.#db.orm.delete(providerActive).where(where);
+    });
     if (row.secretRef) await this.#secrets.delete(row.secretRef);
     this.#instances.delete(id);
     this.#models.delete(id);
@@ -294,9 +376,13 @@ export class ProviderRegistry {
     return (await this.accountModels(accountId)).map((m) => m.view);
   }
 
-  /** Account models with their reported capabilities, in account then model order. */
+  /**
+   * Account models with their reported capabilities, in account then model order. A model that
+   * its kind's active account offers is listed for that account only (FR-115).
+   */
   async accountModels(accountId: string): Promise<AccountModel[]> {
-    const rows = (await this.#activeRows(accountId)).filter((r) => r.status !== 'revoked');
+    const ordered = await this.#ordered(accountId);
+    const rows = ordered.rows.filter((r) => r.status !== 'revoked');
     const lists = await Promise.all(
       rows.map(async (row) => {
         try {
@@ -315,6 +401,7 @@ export class ProviderRegistry {
             info: m,
             account: row,
             local,
+            active: ordered.active.has(row.id),
           }));
         } catch (err) {
           this.#log.warn('provider model list failed', {
@@ -328,7 +415,15 @@ export class ProviderRegistry {
         }
       }),
     );
-    return lists.flat();
+    const served = new Map<string, Set<string>>();
+    for (const list of lists)
+      for (const m of list)
+        if (m.active)
+          served.set(
+            m.account.provider,
+            (served.get(m.account.provider) ?? new Set()).add(m.info.id),
+          );
+    return lists.flat().filter((m) => m.active || !served.get(m.account.provider)?.has(m.info.id));
   }
 
   /**
@@ -482,7 +577,7 @@ export class ProviderRegistry {
   }
 }
 
-function toView(r: ProviderAccountRow): ProviderAccountView {
+function toView(r: ProviderAccountRow, active: boolean): ProviderAccountListItem {
   return {
     id: r.id,
     provider: r.provider as ProviderKind,
@@ -493,5 +588,6 @@ function toView(r: ProviderAccountRow): ProviderAccountView {
     hasSecret: r.secretRef !== null,
     lastCheckAt: r.lastCheckAt,
     createdAt: r.createdAt,
+    active,
   };
 }

@@ -9,6 +9,8 @@
 //   --tools <N> | NOVA_TEST_MCP_TOOLS=N   also register N harmless tools extra_001 … (deferral tests)
 //   --test-hooks                           add test-only tools: fail, crash, add_tool, remove_tool,
 //                                          media, progress
+//   --apps                                 add an MCP Apps tool (show_note, `ui://notes/view`) and
+//                                          client_caps (the capabilities the client sent)
 //   --print-env <NAME>                     write `env NAME=<value>` to stderr at start (redaction tests)
 //   --exit-on-start <code>                 exit before serving (startup failure tests)
 //   --protocol <version>                   only speak this protocol version (mismatch tests)
@@ -162,7 +164,42 @@ export function createTestServer(options = {}) {
   );
 
   if (options.testHooks) addTestHooks(server, log);
+  if (options.apps) addApps(server);
   return server;
+}
+
+/** An MCP Apps tool and its `ui://` resource (FR-198 tests). */
+function addApps(server) {
+  server.registerTool(
+    'show_note',
+    {
+      title: 'Show note',
+      description: 'Show a note in an app view',
+      inputSchema: object({ name: { type: 'string' } }),
+      _meta: { ui: { resourceUri: 'ui://notes/view' } },
+    },
+    ({ name }) => text(`note ${name}`),
+  );
+  server.registerTool(
+    'client_caps',
+    { description: 'Return the capabilities the client sent at initialize' },
+    () => text(JSON.stringify(server.server.getClientCapabilities() ?? {})),
+  );
+  server.registerResource(
+    'note-view',
+    'ui://notes/view',
+    { title: 'Note view', mimeType: 'text/html;profile=mcp-app' },
+    (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'text/html;profile=mcp-app',
+          text: '<!doctype html><title>Note</title><p>note</p>',
+          _meta: { ui: { csp: { connectDomains: ['https://api.example.com'] } } },
+        },
+      ],
+    }),
+  );
 }
 
 function addTestHooks(server, log) {
@@ -272,6 +309,7 @@ async function main() {
   const server = createTestServer({
     extraTools: Number(flag('--tools') ?? env.NOVA_TEST_MCP_TOOLS ?? 0) || 0,
     testHooks: flag('--test-hooks') !== undefined,
+    apps: flag('--apps') !== undefined,
     ...(protocol ? { protocolVersions: [protocol] } : {}),
   });
   await server.connect(new StdioServerTransport());

@@ -1,6 +1,6 @@
-// Settings → Appearance (FR-010, docs/14 §2): theme, accent, background and text colors, fonts,
-// size and motion. Every change applies at once and is saved to the Hub; managed values are
-// shown disabled with the reason.
+// Settings → Appearance (FR-010, FR-011, docs/14 §2): theme, accent, background and text colors,
+// fonts, size and motion, and theme import and export. Every change applies at once and is saved
+// to the Hub; managed values are shown disabled with the reason.
 import { useEffect, useRef, useState } from 'react';
 import { ColorField, Icon, RadioGroup, TextField, resolveTheme, useToast } from '@nova/ui';
 import type { ThemeChoice } from '@nova/ui';
@@ -10,6 +10,7 @@ import { contrastWarnings, resolveAppearance } from '../appearance.ts';
 import { useMediaQuery } from '../hooks.ts';
 import { useSettings, type SettingValue } from '../settings.tsx';
 import { MANAGED } from './common.ts';
+import { ThemeShare } from './ThemeShare.tsx';
 
 const THEMES: { value: ThemeChoice; label: string; description?: string }[] = [
   { value: 'system', label: 'System', description: 'Follows your device’s light or dark setting.' },
@@ -41,7 +42,8 @@ export function AppearancePage() {
     });
   };
 
-  const base = resolveTheme(theme.value, prefersDark).tokens;
+  const baseTheme = resolveTheme(theme.value, prefersDark);
+  const base = baseTheme.tokens;
   const effective = resolveAppearance(
     {
       theme: theme.value,
@@ -161,6 +163,8 @@ export function AppearancePage() {
           ]}
         />
       </section>
+
+      <ThemeShare effective={effective} baseId={baseTheme.id} prefersDark={prefersDark} />
     </div>
   );
 }

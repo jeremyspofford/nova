@@ -36,11 +36,11 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
 
 export function SettingsView({
   section,
-  displayName,
   onDisplayName,
 }: {
   section: SettingsSection;
-  displayName: string | null;
+  /** The shell passes it; Profile & usage loads the full profile itself. */
+  displayName?: string | null;
   onDisplayName: (name: string | null) => void;
 }) {
   return (
@@ -66,12 +66,10 @@ export function SettingsView({
       </nav>
       <div className="settings-body">
         {section === 'general' ? <GeneralPage /> : null}
-        {section === 'accounts' ? (
-          <AccountsPage displayName={displayName} onDisplayName={onDisplayName} />
-        ) : null}
+        {section === 'accounts' ? <AccountsPage /> : null}
         {section === 'models' ? <ModelsPage /> : null}
         {section === 'memory' ? <MemoryPage /> : null}
-        {section === 'profile' ? <ProfilePage /> : null}
+        {section === 'profile' ? <ProfilePage onDisplayName={onDisplayName} /> : null}
         {section === 'tools' ? <ToolsPage /> : null}
         {section === 'plugins' ? <PluginsPage /> : null}
         {section === 'clients' ? <ClientsPage /> : null}

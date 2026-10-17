@@ -1,0 +1,194 @@
+/* MCP Apps (FR-198, docs/04 §2.9): the app lists and the App frame in its display modes. Tokens
+   only (docs/14 §2.2). */
+.apps-view {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-3);
+  min-height: 0;
+  padding: var(--u-space-4);
+  overflow: auto;
+}
+.apps-view[data-page] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.apps-title {
+  margin: 0;
+  font-size: var(--u-text-lg);
+}
+.apps-list {
+  display: grid;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.apps-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+  padding: var(--u-space-2);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  overflow-wrap: anywhere;
+}
+.apps-entry-owner {
+  margin-left: var(--u-space-2);
+  font-size: var(--u-text-xs);
+}
+.thread-apps {
+  display: grid;
+  gap: var(--u-space-3);
+}
+
+.app-frame {
+  display: flex;
+  flex-direction: column;
+  gap: var(--u-space-2);
+  min-width: 0;
+  padding: var(--u-space-2);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-md);
+  background: var(--u-surface);
+}
+.app-frame[hidden] {
+  display: none;
+}
+.app-frame-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.app-frame-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--u-space-2);
+  min-width: 0;
+}
+.app-frame-title {
+  margin: 0;
+  font-size: var(--u-text-md);
+  overflow-wrap: anywhere;
+}
+.app-frame-owner {
+  font-size: var(--u-text-xs);
+}
+.app-frame-badge {
+  padding: 0 var(--u-space-1);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}
+.app-frame-badge[data-verified='true'] {
+  border-color: var(--u-success);
+  color: var(--u-success);
+}
+.app-frame-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1);
+}
+.app-frame-actions .nv-btn[aria-pressed='true'] {
+  border-color: var(--u-accent);
+}
+.app-frame-body {
+  display: flex;
+  min-height: 80px;
+  max-height: 600px;
+  overflow: hidden;
+  resize: vertical;
+}
+.app-frame-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-bg);
+}
+.app-frame-stopped {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-4);
+  text-align: center;
+}
+.app-frame-notice,
+.app-frame-shared {
+  margin: 0;
+  font-size: var(--u-text-sm);
+  overflow-wrap: anywhere;
+}
+.app-frame-shared pre {
+  max-height: 160px;
+  overflow: auto;
+  font-size: var(--u-text-xs);
+  white-space: pre-wrap;
+}
+.app-frame-approvals {
+  display: grid;
+  gap: var(--u-space-2);
+}
+
+/* Fullscreen: a dialog over the whole workspace. */
+.app-frame[data-mode='fullscreen'] {
+  position: fixed;
+  inset: 0;
+  z-index: var(--u-z-modal);
+  padding: var(--u-space-3);
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--u-bg);
+}
+.app-frame[data-mode='fullscreen'] .app-frame-body,
+.app-frame[data-mode='pip'] .app-frame-body,
+.app-frame[data-mode='page'] .app-frame-body {
+  flex: 1;
+  min-height: 160px;
+  max-height: none;
+  resize: none;
+}
+
+/* Picture-in-picture: floating, draggable by its header and resizable from its corner. */
+.app-frame[data-mode='pip'] {
+  position: fixed;
+  z-index: var(--u-z-overlay);
+  width: 380px;
+  height: 360px;
+  min-width: 240px;
+  min-height: 200px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  resize: both;
+}
+.app-frame[data-mode='pip'] .app-frame-head {
+  cursor: move;
+  touch-action: none;
+}
+
+/* A whole page at /apps/<id>. */
+.app-frame[data-mode='page'] {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Phones: picture-in-picture becomes a bottom sheet. */
+@media (max-width: 640px) {
+  .app-frame[data-mode='pip'] {
+    inset: auto 0 0 0 !important;
+    width: auto;
+    height: 60vh;
+    max-width: none;
+    resize: none;
+    border-radius: var(--u-radius-lg) var(--u-radius-lg) 0 0;
+  }
+}

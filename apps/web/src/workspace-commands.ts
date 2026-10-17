@@ -1,6 +1,7 @@
-// Navigation commands for projects (FR-003, FR-034) and the notification center (FR-013). Memory,
-// Models, Devices, Tools & MCP, Permissions, Notifications and Diagnostics are settings sections,
-// reached by the shell's "Open … settings" commands. The shell registers these once.
+// Navigation commands for projects (FR-003, FR-034), the notification center (FR-013), the import
+// wizard (FR-200, docs/04 §2.11) and plugins (FR-045). Memory, Models, Devices, Tools & MCP,
+// Permissions, Notifications and Diagnostics are settings sections, reached by the shell's
+// "Open … settings" commands. The shell registers these once.
 import type { Command, CommandRegistry } from './commands.ts';
 import { navigate as routerNavigate, projectPath } from './router.ts';
 
@@ -36,6 +37,18 @@ export function workspaceCommands(deps: WorkspaceCommandDeps = {}): Command[] {
       title: 'New project',
       category: 'Projects',
       run: () => go(NEW_PROJECT_PATH),
+    },
+    {
+      id: 'import.open',
+      title: 'Import from another assistant',
+      category: 'General',
+      run: () => go('/settings/import'),
+    },
+    {
+      id: 'plugins.browse',
+      title: 'Browse and install plugins',
+      category: 'Settings',
+      run: () => go('/settings/plugins'),
     },
     {
       id: 'notifications.open',

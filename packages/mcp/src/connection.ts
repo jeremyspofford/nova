@@ -9,6 +9,8 @@ import {
   SdkError,
   SdkErrorCode,
   StreamableHTTPClientTransport,
+  UnauthorizedError,
+  type AuthProvider,
   type ListChangedHandlers,
   type Prompt,
   type Resource,
@@ -29,6 +31,13 @@ export const MIN_PROTOCOL_VERSION = '2025-11-25';
 export const PROTOCOL_VERSIONS = SUPPORTED_PROTOCOL_VERSIONS.filter(
   (v) => v >= MIN_PROTOCOL_VERSION,
 );
+
+/** The MCP Apps UI extension (FR-198): Nova renders `ui://` resources of this MIME type. */
+export const MCP_APPS_EXTENSION = 'io.modelcontextprotocol/ui';
+export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
+const CLIENT_CAPABILITIES = {
+  extensions: { [MCP_APPS_EXTENSION]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
+};
 
 /** A server as the manager runs it. Secret values are `secret://` references until launch. */
 export interface McpServerConfig {
@@ -100,6 +109,20 @@ export interface McpPromptInfo {
   arguments?: { name: string; description?: string; required?: boolean }[];
 }
 
+/** One item of `resources/read` as the server sent it. */
+export interface McpResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  /** Base64. */
+  blob?: string;
+  _meta?: Record<string, unknown>;
+}
+
+export type McpResourceContents =
+  | { ok: true; contents: McpResourceContent[] }
+  | { ok: false; error: { code: string; message: string; details?: unknown } };
+
 export interface McpToolEntry {
   serverId: string;
   /** The server's own tool name (what is sent in `tools/call`). */
@@ -131,6 +154,8 @@ export interface ConnectionDeps {
   backoff: BackoffOptions;
   listChangedDebounceMs: number;
   createTransport?: TransportFactory;
+  /** Bearer tokens for sse/http servers authorized with OAuth (FR-047); null for none. */
+  authFor?: (config: McpServerConfig) => AuthProvider | null;
   onStatus: (state: McpServerState) => void;
   onToolsChanged: (serverId: string) => void;
   now: () => number;
@@ -168,6 +193,7 @@ function toolInfo(t: Tool): McpToolInfo {
   if (t.description !== undefined) info.description = t.description;
   if (t.outputSchema !== undefined) info.outputSchema = t.outputSchema;
   if (t.annotations) info.annotations = { ...t.annotations };
+  if (isPlainObject(t._meta)) info._meta = { ...t._meta };
   return info;
 }
 
@@ -389,6 +415,51 @@ export class McpConnection {
     }
   }
 
+  /**
+   * A resource's contents as the server sent them (text or base64 blob, MIME type and `_meta`),
+   * for MCP Apps, which need the declared CSP and the exact HTML. The content is untrusted.
+   */
+  async readResourceContents(uri: string, signal?: AbortSignal): Promise<McpResourceContents> {
+    const client = this.#client;
+    if (!client) {
+      return {
+        ok: false,
+        error: {
+          code: 'mcp.unavailable',
+          message: `MCP server ${this.#config.name} is ${this.#status}`,
+        },
+      };
+    }
+    const timeoutMs = this.#config.toolTimeoutMs;
+    try {
+      const res = await client.readResource(
+        { uri },
+        { timeout: timeoutMs, ...(signal ? { signal } : {}) },
+      );
+      return {
+        ok: true,
+        contents: res.contents.map((c) => {
+          const raw = c as Record<string, unknown>;
+          const item: McpResourceContent = { uri: typeof raw.uri === 'string' ? raw.uri : uri };
+          if (typeof raw.mimeType === 'string') item.mimeType = raw.mimeType;
+          if (typeof raw.text === 'string') item.text = raw.text;
+          if (typeof raw.blob === 'string') item.blob = raw.blob;
+          if (isPlainObject(raw._meta)) item._meta = { ...raw._meta };
+          return item;
+        }),
+      };
+    } catch (err) {
+      const mapped = mapCallError(err, {
+        tool: uri,
+        timeoutMs,
+        cancelled: signal?.aborted ?? false,
+      });
+      return mapped.ok
+        ? { ok: false, error: { code: 'mcp.protocol_error', message: 'unexpected result' } }
+        : mapped;
+    }
+  }
+
   // ---- lifecycle -------------------------------------------------------------------------
 
   #begin(): Promise<void> {
@@ -430,7 +501,7 @@ export class McpConnection {
       const c = new Client(
         { name: MCP_CLIENT_NAME, version: this.#deps.clientVersion },
         {
-          capabilities: {},
+          capabilities: CLIENT_CAPABILITIES,
           supportedProtocolVersions: [...PROTOCOL_VERSIONS],
           listChanged: this.#listChanged(gen),
         },
@@ -593,17 +664,20 @@ export class McpConnection {
       cfg.transport === 'stdio'
         ? await this.#resolve(cfg.headers, 'header')
         : { ...envHeaders(env), ...(await this.#resolve(cfg.headers, 'header')) };
+    const args = await this.#resolveArgs(cfg);
     const cwd = cfg.transport === 'stdio' && this.#deps.workDir ? this.#deps.workDir(cfg.id) : null;
     if (cwd) mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const custom = this.#deps.createTransport?.(cfg, { env, headers, cwd });
     if (custom) return custom;
+    const authProvider = cfg.transport === 'stdio' ? null : (this.#deps.authFor?.(cfg) ?? null);
+    const remote = { requestInit: { headers }, ...(authProvider ? { authProvider } : {}) };
     switch (cfg.transport) {
       case 'stdio': {
         if (!cfg.command) throw new StartError('a stdio server needs a command');
         // Spawned without a shell, with only a minimal inherited environment plus its own.
         const t = new StdioClientTransport({
           command: cfg.command,
-          args: cfg.args,
+          args,
           env,
           stderr: 'pipe',
           ...(cwd ? { cwd } : {}),
@@ -614,10 +688,32 @@ export class McpConnection {
         return t;
       }
       case 'http':
-        return new StreamableHTTPClientTransport(this.#url(cfg), { requestInit: { headers } });
+        return new StreamableHTTPClientTransport(this.#url(cfg), remote);
       case 'sse':
-        return new SSEClientTransport(this.#url(cfg), { requestInit: { headers } });
+        return new SSEClientTransport(this.#url(cfg), remote);
     }
+  }
+
+  /**
+   * Arguments that are references into this server's own part of the vault
+   * (`secret://mcp/<id>/…`, e.g. a bundle's sensitive setting on its command line) are resolved
+   * at launch. Any other value is passed as written, so an argument can never pull another
+   * secret out of the vault.
+   */
+  async #resolveArgs(cfg: McpServerConfig): Promise<string[]> {
+    const own = `secret://mcp/${cfg.id}/`;
+    const out: string[] = [];
+    for (const [i, a] of cfg.args.entries()) {
+      if (!a.startsWith(own)) {
+        out.push(a);
+        continue;
+      }
+      const v = await this.#deps.resolveSecret(a);
+      if (v === null) throw new StartError(`the secret for argument ${i + 1} is missing`);
+      if (v.length >= 4) this.#secrets.add(v);
+      out.push(v);
+    }
+    return out;
   }
 
   #url(cfg: McpServerConfig): URL {
@@ -661,6 +757,12 @@ export class McpConnection {
       return `command not found: ${this.#config.command ?? ''}`;
     if (err instanceof SdkError && err.code === SdkErrorCode.ConnectionClosed)
       return 'the server exited before it was ready';
+    // HTTP refusals say what happened; 401 is how settings know to offer authorization (FR-047).
+    const status = (err as { data?: { status?: unknown } }).data?.status;
+    if (err instanceof UnauthorizedError || status === 401)
+      return 'the server needs authorization (HTTP 401)';
+    if (status === 403) return 'the server refused access (HTTP 403)';
+    if (typeof status === 'number') return `the server answered HTTP ${status}`;
     return this.#redact(msg);
   }
 }

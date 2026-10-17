@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "Nova sample catalog",
+  "plugins": [
+    {
+      "id": "com.example.sample",
+      "name": "Sample plugin",
+      "version": "1.0.0",
+      "description": "A skill, a slash command, a hook, an MCP server and an MCP App panel.",
+      "path": "sample-plugin"
+    }
+  ]
+}

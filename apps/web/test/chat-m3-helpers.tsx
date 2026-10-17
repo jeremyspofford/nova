@@ -125,6 +125,8 @@ export interface OpenSetup {
   m3?: (tid: string) => Partial<M3State>;
   path?: (tid: string) => string;
   hub?: Partial<HubState>;
+  /** Adjust the fake Hub before the app renders (for example, stub one API call). */
+  before?: (hub: ReturnType<typeof createHub>, tid: string) => void;
 }
 
 /** Open one chat on a fake Hub whose M3 state is built for that chat's id. */
@@ -132,10 +134,17 @@ export async function openWith(setup: OpenSetup = {}) {
   const t = thread({ title: 'Billing questions', ...setup.thread });
   const hub = createHub({ ...setup.hub, threads: [t], m3: m3State(setup.m3?.(t.id)) });
   hub.state.messages.set(t.id, setup.messages?.(t.id) ?? []);
+  setup.before?.(hub, t.id);
   const r = await renderApp({ hub, path: setup.path?.(t.id) ?? `/chat/${t.id}` });
   await waitFor(() => expect(hub.api.getThread).toHaveBeenCalled());
-  const es = FakeEventSource.for(`/threads/${t.id}/stream`);
-  return { ...r, t, es };
+  // Looked up when read: a test that navigates away at once never needs the stream.
+  return {
+    ...r,
+    t,
+    get es() {
+      return FakeEventSource.for(`/threads/${t.id}/stream`);
+    },
+  };
 }
 
 export const inspector = () => screen.getByRole('complementary', { name: 'Inspector' });

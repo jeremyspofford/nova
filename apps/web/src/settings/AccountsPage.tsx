@@ -1,30 +1,59 @@
-// Settings → Accounts (docs/14 §1.1): your display name and model providers. Providers can be
-// added, tested and removed here as well as in onboarding (FR-014).
+// Settings → Accounts (docs/14 §1.1): model providers. Providers can be added, tested and removed
+// here as well as in onboarding (FR-014). With more than one account of a kind, one is active:
+// new chats and the built-in presets prefer it (FR-115). Name, username and avatar moved to
+// Profile & usage (FR-113).
 import { useEffect, useState } from 'react';
-import type { ProviderAccountView } from '@nova/shared';
-import { Button, Dialog, Spinner, TextField, useToast } from '@nova/ui';
+import type { ProviderAccountView, ProviderKind } from '@nova/shared';
+import { Button, Dialog, RadioGroup, Spinner, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
 import { PROVIDER_NAMES } from '../providers/names.ts';
 import { ProviderSetup } from '../providers/ProviderSetup.tsx';
+import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useModels } from '../stores.tsx';
 
-export function AccountsPage({
-  displayName,
-  onDisplayName,
-}: {
-  displayName: string | null;
-  onDisplayName: (name: string | null) => void;
-}) {
+/** `active` arrives with M4 (PATCH /providers/:id); older Hubs leave it out. */
+type Account = ProviderAccountView;
+
+/** Provider kinds with more than one account, each with the account that is active. */
+export function activeGroups(
+  list: readonly Account[],
+): { provider: ProviderKind; accounts: Account[]; activeId: string | null }[] {
+  const by = new Map<ProviderKind, Account[]>();
+  for (const p of list) by.set(p.provider, [...(by.get(p.provider) ?? []), p]);
+  return [...by.entries()]
+    .filter(([, accounts]) => accounts.length > 1)
+    .map(([provider, accounts]) => ({
+      provider,
+      accounts,
+      activeId: accounts.find((a) => a.active === true)?.id ?? null,
+    }));
+}
+
+function SettingsLink({ section, children }: { section: string; children: string }) {
+  return (
+    <a
+      href={`/settings/${section}`}
+      onClick={(e) => {
+        e.preventDefault();
+        navigate(`/settings/${section}`);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+export function AccountsPage() {
   const { api } = useServices();
   const toast = useToast();
   const models = useModels();
-  const [providers, setProviders] = useState<ProviderAccountView[] | null>(null);
+  const [providers, setProviders] = useState<Account[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ProviderAccountView | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
-  const [name, setName] = useState(displayName ?? '');
+  const [switching, setSwitching] = useState<ProviderKind | null>(null);
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -61,39 +90,32 @@ export function AccountsPage({
     }
   };
 
-  const saveName = async () => {
+  const makeActive = async (kind: ProviderKind, id: string) => {
+    const target = providers?.find((p) => p.id === id);
+    if (!target) return;
+    setSwitching(kind);
     try {
-      const res = await api.updateAccount({ displayName: name.trim() });
-      onDisplayName(res.displayName);
-      toast.show('Name saved.', { tone: 'success' });
+      await api.setActiveProvider(id);
+      toast.show(`${target.label} is now the active ${PROVIDER_NAMES[kind] ?? kind} account.`, {
+        tone: 'success',
+      });
     } catch (err) {
-      toast.show(`Could not save your name: ${errorMessage(err)}`, { tone: 'error' });
+      toast.show(`Could not switch accounts: ${errorMessage(err)}`, { tone: 'error' });
+    } finally {
+      setSwitching(null);
+      reload();
     }
   };
+
+  const groups = activeGroups(providers ?? []);
 
   return (
     <div className="settings-page">
       <h2>Accounts</h2>
-      <section className="settings-section" aria-labelledby="acct-profile">
-        <h3 id="acct-profile">Profile</h3>
-        <form
-          className="row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void saveName();
-          }}
-        >
-          <TextField
-            label="Display name"
-            value={name}
-            maxLength={100}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <Button type="submit" disabled={name.trim() === (displayName ?? '')}>
-            Save name
-          </Button>
-        </form>
-      </section>
+      <p className="muted">
+        Your name, username and avatar are in{' '}
+        <SettingsLink section="profile">Profile &amp; usage</SettingsLink>.
+      </p>
       <section className="settings-section" aria-labelledby="acct-providers">
         <h3 id="acct-providers">Model providers</h3>
         {error ? <p role="alert">{error}</p> : null}
@@ -109,7 +131,12 @@ export function AccountsPage({
                     {PROVIDER_NAMES[p.provider] ?? p.provider}
                     {p.baseUrl ? ` · ${p.baseUrl}` : ''} · {STATUS_TEXT[p.status]}
                     {p.hasSecret ? ' · key stored' : ''}
-                  </span>
+                  </span>{' '}
+                  {p.active === true && groups.some((g) => g.provider === p.provider) ? (
+                    <span className="ws-badge" data-tone="ok">
+                      Active
+                    </span>
+                  ) : null}
                 </div>
                 <div className="row">
                   <Button onClick={() => void test(p)} disabled={testing === p.id}>
@@ -145,9 +172,42 @@ export function AccountsPage({
           </Button>
         )}
       </section>
+      {groups.length ? (
+        <section className="settings-section" aria-labelledby="acct-active">
+          <h3 id="acct-active">Active accounts</h3>
+          <p className="muted">
+            When you have more than one account with a provider, new chats and the built-in presets
+            use the active one. Chats that already picked an account keep it.
+          </p>
+          {groups.map((g) => {
+            const kind = PROVIDER_NAMES[g.provider] ?? g.provider;
+            return (
+              <RadioGroup
+                key={g.provider}
+                legend={`Active ${kind} account`}
+                name={`active-${g.provider}`}
+                value={g.activeId ?? ''}
+                locked={switching === g.provider}
+                hint={
+                  g.activeId ? undefined : 'None is chosen yet; Nova uses the first that works.'
+                }
+                onChange={(id) => void makeActive(g.provider, id)}
+                options={g.accounts.map((a) => ({
+                  value: a.id,
+                  label: a.label,
+                  description: [a.baseUrl, STATUS_TEXT[a.status]].filter(Boolean).join(' · '),
+                }))}
+              />
+            );
+          })}
+        </section>
+      ) : null}
       <section className="settings-section">
         <h3>Tools</h3>
-        <p className="muted">Connecting tools and MCP servers arrives in a later milestone.</p>
+        <p className="muted">
+          MCP servers and tool defaults are in{' '}
+          <SettingsLink section="tools">Tools &amp; MCP</SettingsLink>.
+        </p>
       </section>
       <Dialog
         open={removing !== null}

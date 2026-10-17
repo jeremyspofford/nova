@@ -23,6 +23,9 @@ const PUBLIC: Record<string, string> = {
   'POST /node/v1/register': 'one-use enrollment token in the body',
   'POST /node/v1/heartbeat': 'node credential',
   'POST /node/v1/models/sync': 'node credential',
+  // A cross-site redirect carries no session; the single-use state from the start call is the
+  // credential, and the route only ever redirects back to settings (FR-047).
+  'GET /api/v1/mcp/oauth/callback': 'single-use OAuth state in the query',
 };
 
 let dir: string;
@@ -134,11 +137,18 @@ describe('HTTP routes', () => {
     }
   });
 
-  it('serves only the web shell as static content', () => {
+  it('serves only the web shell as static content', async () => {
+    // `/mcp` is Nova's MCP server (FR-044): it needs a client token of its own, and is off until
+    // a client exists (mcp-server.test.ts covers it).
     const statics = routes().filter(
-      (r) => !r.path.startsWith('/api/') && !r.path.startsWith('/node/'),
+      (r) => !r.path.startsWith('/api/') && !r.path.startsWith('/node/') && r.path !== '/mcp',
     );
     for (const r of statics) expect(r.method, r.path).toBe('GET');
+    for (const method of ['GET', 'POST', 'DELETE']) {
+      const res = await call(method, '/mcp');
+      expect(res.status, `${method} /mcp`).toBeGreaterThanOrEqual(400);
+      expect(res.status, `${method} /mcp`).toBeLessThan(500);
+    }
   });
 });
 

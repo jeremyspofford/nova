@@ -1,13 +1,20 @@
 // App-wide services handed down by context: the Hub client, the stream factory, the command
 // registry, a screen-reader announcer, per-session chat memory (drafts, scroll positions and
-// messages queued for a chat that was just created), and a bus that hands the open chat's events
-// to the inspector panels (artifacts, activity) without a second stream.
+// messages queued for a chat that was just created), a bus that hands the open chat's events
+// to the inspector panels (artifacts, activity) without a second stream, and the socket and
+// screen factories terminals use (FR-006), which tests replace with fakes.
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { EventEnvelope, MentionKind, SendMessageRequest } from '@nova/shared';
 import { VisuallyHidden } from '@nova/ui';
 import type { Api } from './api.ts';
 import type { CommandRegistry } from './commands.ts';
 import type { EventSourceFactory } from './sse.ts';
+import {
+  browserWebSocket,
+  xtermScreen,
+  type TerminalScreenFactory,
+  type WebSocketFactory,
+} from './terminal/session.ts';
 
 export interface PendingAttachment {
   id: string;
@@ -68,6 +75,8 @@ export interface Services {
   registry: CommandRegistry;
   memory: ChatMemory;
   bus: ThreadBus;
+  webSocket: WebSocketFactory;
+  terminalScreen: TerminalScreenFactory;
 }
 
 const ServicesCtx = createContext<Services | null>(null);
@@ -76,8 +85,11 @@ export function ServicesProvider({
   api,
   eventSource,
   registry,
+  webSocket = browserWebSocket,
+  terminalScreen = xtermScreen,
   children,
-}: Omit<Services, 'memory' | 'bus'> & { children: ReactNode }) {
+}: Omit<Services, 'memory' | 'bus' | 'webSocket' | 'terminalScreen'> &
+  Partial<Pick<Services, 'webSocket' | 'terminalScreen'>> & { children: ReactNode }) {
   const [mem] = useState<ChatMemory>(() => ({
     drafts: new Map(),
     scroll: new Map(),
@@ -85,8 +97,8 @@ export function ServicesProvider({
   }));
   const [bus] = useState(createThreadBus);
   const value = useMemo(
-    () => ({ api, eventSource, registry, memory: mem, bus }),
-    [api, eventSource, registry, mem, bus],
+    () => ({ api, eventSource, registry, memory: mem, bus, webSocket, terminalScreen }),
+    [api, eventSource, registry, mem, bus, webSocket, terminalScreen],
   );
   return <ServicesCtx.Provider value={value}>{children}</ServicesCtx.Provider>;
 }

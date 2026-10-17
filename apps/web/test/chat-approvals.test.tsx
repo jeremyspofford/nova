@@ -1,7 +1,7 @@
 // Approval cards in chat (docs/04 §2.6, docs/12 §4.1, FR-100, FR-189, FR-215): every decision
 // path, the scope chooser, deny reason, hand-off, a 409 from another client, API failure,
 // focus and announcements, the `?approval=` link, and Needs input in the header and list.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { ApiError } from '../src/api.ts';
@@ -414,9 +414,10 @@ describe('approval links (?approval=)', () => {
   it('fetches a linked approval the list did not return, and opens the right chat', async () => {
     const { hub, t } = await openWith({
       path: (tid) => `/chat/${tid}?approval=ap9`,
-      m3: () => ({ approvals: [] }),
+      m3: () => ({ approvals: [approvalView('other-thread', { id: 'ap9' })] }),
+      // The listings never return it; only the fetch by id finds it.
+      before: (h) => vi.mocked(h.api.listApprovals).mockResolvedValue({ items: [] }),
     });
-    hub.state.m3.approvals = [approvalView('other-thread', { id: 'ap9' })];
     await waitFor(() => expect(hub.api.getApproval).toHaveBeenCalledWith('ap9'));
     await waitFor(() => expect(window.location.pathname).toBe('/chat/other-thread'));
     expect(window.location.search).toBe('?approval=ap9');
@@ -441,11 +442,15 @@ describe('approval links (?approval=)', () => {
   });
 
   it('shows a linked pending approval fetched by id', async () => {
-    const { hub, t } = await openWith({ path: (tid) => `/chat/${tid}?approval=ap5` });
-    // Not in the first listing (created after it), but pending when fetched.
-    hub.state.m3.approvals = [approvalView(t.id, { id: 'ap5', callId: null })];
+    // Not in the listings (created after them), but pending when fetched.
+    const { hub } = await openWith({
+      path: (tid) => `/chat/${tid}?approval=ap5`,
+      m3: (tid) => ({ approvals: [approvalView(tid, { id: 'ap5', callId: null })] }),
+      before: (h) => vi.mocked(h.api.listApprovals).mockResolvedValue({ items: [] }),
+    });
     const heading = await screen.findByRole('heading', { name: 'Approval needed' });
     await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(hub.api.getApproval).toHaveBeenCalledWith('ap5');
   });
 
   it('resolves /approvals/<id> to the chat that waits on it', async () => {

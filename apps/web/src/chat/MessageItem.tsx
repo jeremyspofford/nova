@@ -5,7 +5,8 @@
 // M3: a reply shows its tool calls as cards between the text written before and after them, with
 // any approval inside the card (FR-099, FR-100), and its artifacts as cards that open the
 // Inspector (FR-038). Web sources show their title and host and open in a new tab (FR-029).
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+// M4: a tool that declares a UI shows its MCP App under its card (FR-198).
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { CitationView, ToolCallStatus } from '@nova/shared';
 import {
   Button,
@@ -28,6 +29,7 @@ import {
   type DisplayCall,
   type LiveCall,
 } from './thread-state.ts';
+import { ToolCallApp } from './tool-apps.tsx';
 import { ToolCard } from './ToolCard.tsx';
 
 /** What a tool call's card shows about its approval: the card or outcome, and its status. */
@@ -105,7 +107,14 @@ export function MessageItem({
   const thinking = reasoning ?? storedReasoning;
   const files = m.parts.filter((p) => p.type === 'file');
   const errors = m.parts.filter((p) => p.type === 'error');
-  const who = m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Assistant' : m.role;
+  const fromHook = m.role === 'user' && m.provenance === 'hook';
+  const who = fromHook
+    ? 'Hook'
+    : m.role === 'user'
+      ? 'You'
+      : m.role === 'assistant'
+        ? 'Assistant'
+        : m.role;
   const steering = m.provenance === 'steer' || m.expect === 'steer';
   const siblings = m.siblingIds && m.siblingIds.length > 1 ? m.siblingIds : null;
   const settled = !m.id.startsWith('local-') && m.status !== 'streaming';
@@ -174,12 +183,10 @@ export function MessageItem({
             );
           const approval = approvalFor?.(seg.call) ?? null;
           return (
-            <ToolCard
-              key={`call-${seg.call.callId}`}
-              call={seg.call}
-              status={approval?.status}
-              approval={approval?.node}
-            />
+            <Fragment key={`call-${seg.call.callId}`}>
+              <ToolCard call={seg.call} status={approval?.status} approval={approval?.node} />
+              <ToolCallApp call={seg.call} threadId={m.threadId} />
+            </Fragment>
           );
         })
       ) : text ? (

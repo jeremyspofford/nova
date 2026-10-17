@@ -451,6 +451,7 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     listHooks: () => call<{ items: HookView[] }>('GET', `${V1}/hooks`),
     updateHook: (id: string, body: { enabled: boolean }) =>
       call<HookView>('PATCH', `${V1}/hooks/${enc(id)}`, body),
+    deleteHook: (id: string) => call<{ ok: true }>('DELETE', `${V1}/hooks/${enc(id)}`),
     trustHook: (id: string, contentHash: string) =>
       call<HookView>('POST', `${V1}/hooks/${enc(id)}/trust`, { contentHash }),
     untrustHook: (id: string) => call<HookView>('POST', `${V1}/hooks/${enc(id)}/untrust`),
@@ -471,6 +472,13 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     uiEntryPoints: (kind?: UiEntryPointView['kind']) =>
       call<{ items: UiEntryPointView[] }>('GET', `${V1}/ui/entry-points${query({ kind })}`),
     uiResourceUrl: (entryId: string) => `${V1}/ui/resource${query({ entry: entryId })}`,
+    /** Model-visible context an MCP App shares for its thread (FR-198; private entries never sent). */
+    setUiContext: (body: {
+      threadId: string;
+      entryId: string;
+      instanceId: string;
+      text: string | null;
+    }) => call<{ ok: true }>('PUT', `${V1}/ui/context`, body),
     fileRoots: (q: { threadId?: string; projectId?: string } = {}) =>
       call<{ items: { path: string; label: string; access: 'read' | 'write' }[] }>(
         'GET',
@@ -481,8 +489,9 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
     readFile: (root: string, path: string) =>
       call<FileContentView>('GET', `${V1}/files/content${query({ root, path })}`),
     rawFileUrl: (root: string, path: string) => `${V1}/files/raw${query({ root, path })}`,
+    /** The saved file, or the approval a save waits for (202). */
     saveFile: (body: { root: string; path: string; text: string; baseSha256: string | null }) =>
-      call<FileContentView>('PUT', `${V1}/files/content`, body),
+      call<FileContentView | { approvalId: string }>('PUT', `${V1}/files/content`, body),
     createTerminal: (body: CreateTerminalRequest = {}) =>
       call<TerminalView>('POST', `${V1}/terminals`, body),
     listTerminals: () => call<{ items: TerminalView[] }>('GET', `${V1}/terminals`),
@@ -494,6 +503,11 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
       call<{ items: ProjectFolderView[] }>('GET', `${V1}/projects/${enc(projectId)}/folders`),
     addProjectFolder: (projectId: string, body: { path: string; access?: 'read' | 'write' }) =>
       call<ProjectFolderView>('POST', `${V1}/projects/${enc(projectId)}/folders`, body),
+    reindexProjectFolder: (projectId: string, folderId: string) =>
+      call<ProjectFolderView>(
+        'POST',
+        `${V1}/projects/${enc(projectId)}/folders/${enc(folderId)}/reindex`,
+      ),
     removeProjectFolder: (projectId: string, folderId: string) =>
       call<{ ok: true }>('DELETE', `${V1}/projects/${enc(projectId)}/folders/${enc(folderId)}`),
     getAccount: () => call<AccountView>('GET', `${V1}/account`),

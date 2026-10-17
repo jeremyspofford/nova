@@ -661,3 +661,51 @@
 .nv-tok-attr {
   color: color-mix(in srgb, var(--u-danger) 55%, var(--u-text));
 }
+
+/* Splitter and pane group (docs/04 §4.2, FR-005). The hit area is wider than the visible line. */
+.nv-panes {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.nv-panes[data-direction='row'] {
+  flex-direction: row;
+}
+.nv-panes[data-direction='column'] {
+  flex-direction: column;
+}
+.nv-pane-cell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.nv-splitter {
+  position: relative;
+  flex: none;
+  background: var(--u-border);
+  touch-action: none;
+}
+.nv-splitter[data-orientation='vertical'] {
+  width: 1px;
+  cursor: col-resize;
+}
+.nv-splitter[data-orientation='horizontal'] {
+  height: 1px;
+  cursor: row-resize;
+}
+.nv-splitter::before {
+  position: absolute;
+  inset: -4px;
+  z-index: var(--u-z-sticky);
+  content: '';
+}
+.nv-splitter:hover,
+.nv-splitter:focus-visible {
+  background: var(--u-accent);
+}
+.nv-splitter:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 1px;
+}

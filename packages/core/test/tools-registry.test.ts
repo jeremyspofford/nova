@@ -553,10 +553,20 @@ describe('ToolRuntime (UI side)', () => {
       accountId: ACCOUNT,
       name: 'fs.read',
       args: { path: 'n.txt' },
+      initiator: 'user',
     });
     const r = await done;
     expect(r).toEqual({ callId, ok: true, text: 'note' });
     expect(seen).toEqual(['fs.read:true']);
+    // A call an MCP App makes on its own (the default) carries no user instruction (FR-189).
+    const app = await env.runtime.invoke({
+      accountId: ACCOUNT,
+      name: 'fs.read',
+      args: { path: 'n.txt' },
+    });
+    await app.done;
+    expect(seen).toEqual(['fs.read:true', 'fs.read:undefined']);
+    seen.splice(0);
     const row = env.db.raw.prepare('SELECT * FROM tool_call WHERE id = ?').get(callId) as Record<
       string,
       unknown

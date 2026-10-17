@@ -71,6 +71,13 @@ export interface HookInput {
   prompt?: string;
   /** stop: the final reply text. */
   reply?: string;
+  /** The tool call a tool event is about. */
+  callId?: string;
+  /** What the event is about: the start reason, the compaction trigger or a sub-agent role. */
+  subject?: string;
+  runId?: string;
+  /** The working directory: the turn's first root. */
+  cwd?: string;
 }
 
 export interface HookOutcome {

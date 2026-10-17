@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.sample",
+  "name": "Sample plugin",
+  "version": "1.0.0",
+  "description": "Shows each part of a Nova plugin: a skill, a slash command, a tool.pre hook, an MCP server with two tools and an MCP App panel.",
+  "author": { "name": "Nova examples" },
+  "license": "MIT",
+  "permissions": {
+    "network": ["api.example.com"],
+    "tools": {
+      "plugin:com.example.sample.fetch_status": { "action": "read" },
+      "plugin:com.example.sample.panel_action": { "action": "write", "default": "ask" }
+    },
+    "actionDefaults": {
+      "read": "allow",
+      "write": "ask",
+      "send": "ask",
+      "delete": "deny",
+      "execute": "ask"
+    },
+    "hooks": { "answersAsks": false },
+    "ui": { "connectDomains": ["api.example.com"] }
+  },
+  "skills": ["skills/summarize-notes"],
+  "commands": ["commands/greet.md"],
+  "hooks": "hooks/hooks.json",
+  "mcpServers": {
+    "sample": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["${pluginRoot}/server/server.mjs"],
+      "startupTimeoutMs": 20000,
+      "defaultApproval": "ask"
+    }
+  },
+  "ui": {
+    "entryPoints": [
+      { "kind": "global", "resource": "ui://sample/panel", "title": "Sample panel" },
+      { "kind": "thread", "resource": "ui://sample/panel", "title": "Sample panel" }
+    ]
+  }
+}

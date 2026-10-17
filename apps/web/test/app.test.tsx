@@ -162,7 +162,9 @@ describe('shell and modes (FR-001, FR-002)', () => {
     await userEvent.click(inspector);
     const aside = screen.getByRole('complementary', { name: 'Inspector' });
     await userEvent.click(within(aside).getByRole('tab', { name: 'Files' }));
-    expect(within(aside).getByRole('tabpanel').textContent).toMatch(/Files for the open item/);
+    expect(
+      await within(within(aside).getByRole('tabpanel')).findByText('This folder is empty.'),
+    ).toBeTruthy();
   });
 
   it('collapses the sidebar below 1100 px and closes it after a choice', async () => {
@@ -315,7 +317,7 @@ describe('keyboard-only navigation (FR-015)', () => {
     // Skip link first, then the topbar, then the sidebar.
     await userEvent.tab();
     expect(document.activeElement?.textContent).toBe('Skip to content');
-    for (let i = 0; i < 6 && document.activeElement?.textContent?.trim() !== 'New chat'; i++)
+    for (let i = 0; i < 10 && document.activeElement?.textContent?.trim() !== 'New chat'; i++)
       await userEvent.tab();
     expect(document.activeElement?.textContent?.trim()).toBe('New chat');
     await userEvent.tab();

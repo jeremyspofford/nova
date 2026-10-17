@@ -18,6 +18,7 @@ import {
 import { ApiError, type Api } from '../src/api.ts';
 import { CommandRegistry } from '../src/commands.ts';
 import type { EventSourceLike } from '../src/sse.ts';
+import type { SocketLike, TerminalScreen } from '../src/terminal/session.ts';
 import { m3Impl, m3State, type M3State } from './fakes-m3.ts';
 import { m4Impl, m4State, type M4State } from './fakes-m4.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
@@ -625,3 +626,138 @@ export function streamReply(
     es.emit(end === 'incomplete' ? 'turn.interrupted' : 'turn.completed', { threadId: tid }, tid);
   }
 }
+
+// ---- terminals (FR-006): a scriptable WebSocket and a screen that records what it draws ----------
+
+export class FakeSocket implements SocketLike {
+  static all: FakeSocket[] = [];
+  readyState = 0;
+  onopen: SocketLike['onopen'] = null;
+  onmessage: SocketLike['onmessage'] = null;
+  onclose: SocketLike['onclose'] = null;
+  onerror: SocketLike['onerror'] = null;
+  readonly url: string;
+  readonly sent: unknown[] = [];
+  closed = false;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeSocket.all.push(this);
+  }
+
+  static reset() {
+    FakeSocket.all = [];
+  }
+
+  /** The newest socket whose URL contains `part`. */
+  static for(part: string): FakeSocket {
+    const s = [...FakeSocket.all].reverse().find((x) => x.url.includes(part));
+    if (!s) throw new Error(`no socket for ${part}`);
+    return s;
+  }
+
+  send(data: string) {
+    this.sent.push(JSON.parse(data));
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.readyState = 3;
+  }
+
+  open() {
+    act(() => {
+      this.readyState = 1;
+      this.onopen?.(new Event('open'));
+    });
+  }
+
+  frame(f: Record<string, unknown>) {
+    act(() => {
+      this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f) }));
+    });
+  }
+
+  raw(data: unknown) {
+    act(() => {
+      this.onmessage?.(new MessageEvent('message', { data }));
+    });
+  }
+
+  /** The Hub (or the network) closed the connection. */
+  drop() {
+    act(() => {
+      this.closed = true;
+      this.readyState = 3;
+      this.onclose?.(new CloseEvent('close'));
+    });
+  }
+}
+
+export const fakeWebSocket = (url: string) => new FakeSocket(url);
+
+export class FakeScreen implements TerminalScreen {
+  static all: FakeScreen[] = [];
+  cols = 80;
+  rows = 24;
+  written = '';
+  parent: HTMLElement | null = null;
+  focused = 0;
+  cleared = 0;
+  disposed = false;
+  keyFilter: ((e: KeyboardEvent) => boolean) | null = null;
+  #data: ((d: string) => void) | null = null;
+
+  constructor() {
+    FakeScreen.all.push(this);
+  }
+
+  static reset() {
+    FakeScreen.all = [];
+  }
+
+  open(parent: HTMLElement) {
+    this.parent = parent;
+    const input = document.createElement('textarea');
+    input.setAttribute('aria-label', 'Terminal input');
+    input.className = 'fake-terminal-input';
+    parent.appendChild(input);
+  }
+
+  write(data: string) {
+    this.written += data;
+  }
+
+  onData(fn: (d: string) => void) {
+    this.#data = fn;
+  }
+
+  /** The user typed into the terminal. */
+  type(data: string) {
+    act(() => this.#data?.(data));
+  }
+
+  fit() {
+    // Sizes change only when a test sets cols/rows.
+  }
+
+  focus() {
+    this.focused++;
+    this.parent?.querySelector<HTMLElement>('.fake-terminal-input')?.focus();
+  }
+
+  clear() {
+    this.cleared++;
+  }
+
+  setKeyFilter(fn: (e: KeyboardEvent) => boolean) {
+    this.keyFilter = fn;
+  }
+
+  dispose() {
+    this.disposed = true;
+  }
+}
+
+export const fakeTerminalScreen = () => Promise.resolve(new FakeScreen());

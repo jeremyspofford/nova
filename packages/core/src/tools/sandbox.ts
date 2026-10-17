@@ -10,6 +10,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { NovaError, uuidv7 } from '@nova/shared';
 import type { ExecRequest, ExecResult, SandboxClient } from './types.ts';
 
@@ -212,9 +213,18 @@ export class ContainerSandbox implements SandboxClient {
       exited: new Promise<void>((r) => (resolveExit = r)),
       onOutput: req.onOutput,
     };
-    const onData = (b: Buffer) => this.#append(s, b.toString('utf8'));
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
+    // One decoder per stream: a character split across two chunks is decoded whole.
+    for (const stream of [child.stdout, child.stderr]) {
+      const decoder = new StringDecoder('utf8');
+      stream.on('data', (b: Buffer) => {
+        const text = decoder.write(b);
+        if (text) this.#append(s, text);
+      });
+      stream.on('end', () => {
+        const rest = decoder.end();
+        if (rest) this.#append(s, rest);
+      });
+    }
     child.stdin.on('error', () => undefined);
     child.on('error', (err) => {
       this.#append(s, `${err.message}\n`);

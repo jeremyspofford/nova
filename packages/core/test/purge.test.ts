@@ -54,4 +54,19 @@ describe('purge (FR-027) and shared blobs', () => {
     expect(removeUnreferencedBlobs(env.db, dataDir, second)).toBe(1);
     expect(existsSync(join(dataDir, blob.blobPath))).toBe(false);
   });
+
+  it("keeps a blob the account's avatar uses", async () => {
+    env = await makeEnv();
+    const dataDir = join(env.dir, 'data');
+    const t = await env.threads.create(ACCOUNT, {});
+    const blob = writeAttachmentBlob(dataDir, Buffer.from('avatar'));
+    addArtifact(env, t.id, blob.blobPath, blob.sha256);
+    env.db.raw
+      .prepare('UPDATE account SET avatar_path = ? WHERE id = ?')
+      .run(blob.blobPath, ACCOUNT);
+
+    const paths = await env.db.transaction(() => purgeThreadRows(env!.db, [t.id]));
+    expect(removeUnreferencedBlobs(env.db, dataDir, paths)).toBe(0);
+    expect(existsSync(join(dataDir, blob.blobPath))).toBe(true);
+  });
 });

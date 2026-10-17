@@ -1,6 +1,6 @@
 // One project (FR-034): rename it, edit the instructions every chat in it receives, open or start
-// its chats, manage its sources (FR-040), and delete it. Deleting keeps the chats; they leave the
-// project.
+// its chats, manage its sources (FR-040) and its folders on the Hub (FR-035), and delete it.
+// Deleting keeps the chats; they leave the project.
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectView, ThreadView } from '@nova/shared';
 import { Button, Dialog, EmptyState, Icon, Spinner, TextField, useToast } from '@nova/ui';
@@ -12,6 +12,7 @@ import { formatWhen, plural } from '../settings/common.ts';
 import { useThreads } from '../stores.tsx';
 import { projectsChanged } from './events.ts';
 import { MEMORY_SCOPE_TEXT } from './NewProjectDialog.tsx';
+import { ProjectFolders } from './ProjectFolders.tsx';
 import { SourcesPanel } from './SourcesPanel.tsx';
 
 type Load =
@@ -167,6 +168,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       </section>
 
       <SourcesPanel projectId={project.id} onChanged={projectsChanged} />
+
+      <ProjectFolders projectId={project.id} onChanged={projectsChanged} />
 
       <section className="ws-section" aria-labelledby="project-delete">
         <h2 id="project-delete">Delete project</h2>

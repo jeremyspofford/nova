@@ -116,7 +116,8 @@ export class ProjectService {
       .prepare(
         `SELECT
            (SELECT count(*) FROM thread WHERE project_id = ? AND deleted_at IS NULL AND side = 0) AS threads,
-           (SELECT count(*) FROM source WHERE project_id = ? AND deleted_at IS NULL) AS sources`,
+           (SELECT count(*) FROM source s WHERE s.project_id = ? AND s.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM project_folder_file f WHERE f.source_id = s.id)) AS sources`,
       )
       .get(r.id, r.id) as { threads: number; sources: number };
     return {

@@ -1,6 +1,6 @@
 // Settings → General (docs/14 §1.1): which key sends, what a message sent during a reply does
 // (FR-019), how long temporary chats are kept (FR-027), the default model for new chats (FR-023),
-// and the setup guide (FR-014).
+// follow-up suggestions (FR-028) and the setup guide (FR-014).
 import { useState } from 'react';
 import { Button, RadioGroup, SelectField, TextField, useToast } from '@nova/ui';
 import { errorMessage } from '../api.ts';
@@ -11,6 +11,7 @@ import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
 import { useModels } from '../stores.tsx';
 import { MANAGED } from './common.ts';
+import { SwitchField } from './controls.tsx';
 import '../workspace.css';
 
 export function GeneralPage() {
@@ -21,6 +22,7 @@ export function GeneralPage() {
   const enter = settings.get('general.enterToSend');
   const model = settings.get('chat.defaultModel');
   const followUp = settings.get('general.followUp');
+  const suggestions = settings.get('chat.suggestions');
   const mac = registry.platform.mac;
 
   const fail = (err: unknown) =>
@@ -89,6 +91,15 @@ export function GeneralPage() {
               ? 'You can still pick another model in each chat.'
               : 'No models yet. Connect a provider in Accounts.'
           }
+        />
+      </section>
+      <section className="settings-section">
+        <SwitchField
+          label="Suggest follow-ups"
+          description="After a reply, offer a few short prompts to continue with."
+          checked={suggestions.value}
+          locked={suggestions.locked}
+          onChange={(v) => void settings.set('chat.suggestions', v).catch(fail)}
         />
       </section>
       <section className="settings-section">

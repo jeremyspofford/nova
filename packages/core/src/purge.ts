@@ -104,6 +104,7 @@ export function removeUnreferencedBlobs(
       db.raw.prepare('SELECT 1 AS x FROM source WHERE blob_path = ? LIMIT 1').get(p) ??
       db.raw.prepare('SELECT 1 AS x FROM artifact WHERE blob_path = ? LIMIT 1').get(p) ??
       db.raw.prepare('SELECT 1 AS x FROM artifact_version WHERE blob_path = ? LIMIT 1').get(p) ??
+      db.raw.prepare('SELECT 1 AS x FROM account WHERE avatar_path = ? LIMIT 1').get(p) ??
       db.raw
         .prepare(
           "SELECT 1 AS x FROM queued_input WHERE status = 'pending' AND instr(attachments, ?) > 0 LIMIT 1",

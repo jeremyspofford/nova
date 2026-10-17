@@ -17,6 +17,7 @@ import {
 import { realpathLenient } from '@nova/security';
 import { schema, type NovaDatabase } from '@nova/storage';
 import type { ToolRoot } from '../tools/types.ts';
+import { listProjectFolderRoots } from '../workspace/roots.ts';
 
 export interface ToolRootsInput {
   /** A flattened profile (see `loadPermissionProfile`). */
@@ -87,6 +88,27 @@ export function resolveToolRoots(input: ToolRootsInput): ResolvedToolRoots {
     profile: { id: input.profile.id, hash },
     network: input.profile.network,
     requiresSubstrate: input.profile.requiresSubstrate ?? null,
+  };
+}
+
+/** A project's folders as project roots (FR-035): what `tools.roots` entries look like. */
+export type ProjectFolderSource = (
+  projectId: string,
+) => Promise<{ path: string; access: 'read' | 'write'; label?: string }[]>;
+
+/**
+ * The folders of a project (FR-035), from the workspace module's `listProjectFolderRoots`. The
+ * tool runtime and the policy gate both read them through this, so a project's chats get the
+ * same roots in both. A failed read (no table yet, a locked database) means no folder roots:
+ * less access, never more.
+ */
+export function projectFolderSource(db: NovaDatabase): ProjectFolderSource {
+  return async (projectId) => {
+    try {
+      return await listProjectFolderRoots(db, projectId);
+    } catch {
+      return [];
+    }
   };
 }
 

@@ -3,7 +3,7 @@
 // → ready (chunks in FTS5) or error. Text types only in M2. Chats in the project retrieve the
 // best-matching chunks for the user's message; the excerpts used become citations.
 import { extname } from 'node:path';
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import {
   ATTACHMENT_LIMITS,
@@ -71,12 +71,19 @@ export class SourceService {
     this.#now = opts.now ?? (() => new Date());
   }
 
+  /** Uploaded and pasted sources; files indexed from project folders are listed with the folder. */
   async list(accountId: string, projectId: string): Promise<SourceView[]> {
     await this.#project(accountId, projectId);
     const rows = await this.#db.orm
       .select()
       .from(source)
-      .where(and(eq(source.projectId, projectId), isNull(source.deletedAt)))
+      .where(
+        and(
+          eq(source.projectId, projectId),
+          isNull(source.deletedAt),
+          sql`NOT EXISTS (SELECT 1 FROM project_folder_file f WHERE f.source_id = ${source.id})`,
+        ),
+      )
       .orderBy(asc(source.createdAt), asc(source.id));
     return rows.map(toSourceView);
   }
@@ -130,6 +137,7 @@ export class SourceService {
 
   async reindex(accountId: string, id: string): Promise<SourceView> {
     const row = await this.#row(accountId, id);
+    this.#refuseFolderFile(id);
     const now = this.#now().toISOString();
     await this.#db.transaction(() =>
       this.#db.orm
@@ -145,6 +153,7 @@ export class SourceService {
   /** Soft delete; its chunks leave retrieval at once. */
   async remove(accountId: string, id: string): Promise<void> {
     await this.#row(accountId, id);
+    this.#refuseFolderFile(id);
     const now = this.#now().toISOString();
     await this.#db.transaction(() => {
       this.#db.raw.prepare('DELETE FROM source_chunk WHERE source_id = ?').run(id);
@@ -328,6 +337,19 @@ export class SourceService {
       )
       .limit(1);
     if (!rows[0]) throw new NovaError('not_found', 'project not found');
+  }
+
+  /** A file indexed from a project folder is managed through its folder (FR-035). */
+  #refuseFolderFile(id: string): void {
+    const inFolder = this.#db.raw
+      .prepare('SELECT 1 AS x FROM project_folder_file WHERE source_id = ? LIMIT 1')
+      .get(id);
+    if (inFolder)
+      throw new NovaError(
+        'validation',
+        'This file comes from a project folder; re-index or remove the folder instead',
+        { details: { reason: 'folder_file' } },
+      );
   }
 
   async #row(accountId: string, id: string): Promise<SourceRow> {

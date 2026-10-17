@@ -204,4 +204,20 @@ describe('follow-ups while a reply streams (FR-019)', () => {
     expect(box().value).toBe('Later');
     expect(within(region).getByText('Queued: 1')).toBeTruthy();
   });
+
+  it("labels a hook's continuation as the hook's, not the user's (FR-197)", async () => {
+    await openChat(
+      {},
+      {
+        messages: (tid) => [
+          message(tid, { parts: [{ type: 'text', text: 'Start' }], provenance: 'typed' }),
+          message(tid, { role: 'assistant', parts: [{ type: 'text', text: 'Done' }] }),
+          message(tid, { parts: [{ type: 'text', text: 'Run the tests' }], provenance: 'hook' }),
+        ],
+      },
+    );
+    const fromHook = await screen.findByRole('article', { name: 'Hook' });
+    expect(within(fromHook).getByText('Run the tests')).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'You' })).toBeTruthy();
+  });
 });

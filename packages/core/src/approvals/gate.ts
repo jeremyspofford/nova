@@ -3,6 +3,12 @@
 // `approval.requested` on the thread's stream, a notification, and a wait for the user's answer,
 // the timeout (recorded as `timeout`, never an allow) or the abort signal (`cancelled`). Every
 // decision is audited with the input hash and the permission profile hash, never raw arguments.
+//
+// M4: the owning plugin's confirmed permissions join the engine's context (FR-045), a project's
+// folders join the roots (FR-035), and after the deterministic result the `permission.request`
+// hooks run (FR-197, docs/12 §2.3 step 7): they may tighten the decision, and may answer an
+// `ask` the engine marked answerable when the hook is a user or managed hook, or a plugin hook
+// whose plugin declares `permissions.hooks.answersAsks`.
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
@@ -17,13 +23,16 @@ import {
   type SettingValue,
 } from '@nova/shared';
 import {
+  applyHookAnswer,
   evaluate,
   stableHash,
   suggestPrefixRule,
   tighten,
+  urlHosts,
   type Decision,
   type DefaultEffect,
   type FsContext,
+  type PluginPolicy,
   type PolicyContext,
   type PolicySet,
   type PolicyVerdict,
@@ -33,8 +42,15 @@ import {
 import { defaultRedactor, realpathLenient } from '@nova/security';
 import type { Logger } from '@nova/telemetry';
 import type { EventSink } from '../events.ts';
+import type {
+  HookDispatcher,
+  HookInput,
+  HookOutcome,
+  PluginPermissionSource,
+  PluginPermissions,
+} from '../extensions/types.ts';
 import type { AuditSink, GateOutcome, GateRequest, Notifier, ToolGate } from '../tools/types.ts';
-import { loadPermissionProfile, resolveToolRoots } from './roots.ts';
+import { loadPermissionProfile, resolveToolRoots, type ProjectFolderSource } from './roots.ts';
 import type { ApprovalRow, GrantMatch, GrantRow, PolicyStore } from './store.ts';
 
 export type SettingReader = <K extends SettingKey>(
@@ -74,6 +90,12 @@ export interface PolicyGateOptions {
   substrate?: () => Substrate | null;
   hooks?: GateExtension[];
   reviewer?: GateExtension;
+  /** `permission.request` hooks (FR-197); also wired later with `useHooks`. */
+  permissionHooks?: HookDispatcher;
+  /** The confirmed permissions of plugins (FR-045); also `usePluginPermissions`. */
+  pluginPermissions?: PluginPermissionSource;
+  /** A project's folders, roots for its chats (FR-035); also `useProjectFolders`. */
+  projectFolders?: ProjectFolderSource;
   /** Override `policy.approvalTimeoutMinutes` (tests). */
   approvalTimeoutMs?: () => number;
   now?: () => Date;
@@ -81,12 +103,21 @@ export interface PolicyGateOptions {
 
 type AlwaysScope = ApprovalView['alwaysScopes'][number];
 
+/** The call a `permission.request` dispatch is about. */
+interface HookCall {
+  turnId: string;
+  callId: string;
+  signal: AbortSignal;
+}
+
 interface Built {
   ctx: PolicyContext;
   set: PolicySet;
   command: string | undefined;
   argsHash: string;
   profileHash: string;
+  /** Set when the call cannot be evaluated safely (fail closed): its deny reason. */
+  blocked: string | null;
 }
 
 interface Waiter {
@@ -134,6 +165,9 @@ export class PolicyGate implements ToolGate {
   readonly #waitingThreads = new Map<string, number>();
   #serverDefaults: ServerDefaults | undefined;
   #substrate: () => Substrate | null;
+  #hooks: HookDispatcher | undefined;
+  #plugins: PluginPermissionSource | undefined;
+  #folders: ProjectFolderSource | undefined;
 
   constructor(opts: PolicyGateOptions) {
     this.#o = opts;
@@ -141,6 +175,24 @@ export class PolicyGate implements ToolGate {
     this.#home = opts.home ?? homedir();
     this.#serverDefaults = opts.serverDefaults;
     this.#substrate = opts.substrate ?? (() => null);
+    this.#hooks = opts.permissionHooks;
+    this.#plugins = opts.pluginPermissions;
+    this.#folders = opts.projectFolders;
+  }
+
+  /** Wire the `permission.request` hooks (FR-197, docs/12 §2.3 step 7). */
+  useHooks(dispatcher: HookDispatcher): void {
+    this.#hooks = dispatcher;
+  }
+
+  /** Wire the confirmed plugin permissions (FR-045). */
+  usePluginPermissions(source: PluginPermissionSource): void {
+    this.#plugins = source;
+  }
+
+  /** Wire a project's folders as tool roots (FR-035); the tools area must use the same. */
+  useProjectFolders(source: ProjectFolderSource): void {
+    this.#folders = source;
   }
 
   /** Wire per-MCP-server and per-plugin defaults (FR-048). */
@@ -171,14 +223,15 @@ export class PolicyGate implements ToolGate {
       req.profile.id,
     );
     if (fallback) this.#o.log?.warn('permission profile fell back to read-only', { fallback });
-    const [rootSetting, egressAllow, approvalPolicy] = await Promise.all([
+    const [rootSetting, egressAllow, approvalPolicy, folders] = await Promise.all([
       setting('tools.roots'),
       setting('network.egressAllow'),
       setting('tools.approvalPolicy', req.projectId),
+      this.#projectFolders(req.projectId),
     ]);
     const resolved = resolveToolRoots({
       profile,
-      roots: rootSetting,
+      roots: [...rootSetting, ...folders],
       workspaceDir: this.#workspace,
       home: this.#home,
     });
@@ -233,7 +286,62 @@ export class PolicyGate implements ToolGate {
     if (command !== undefined) ctx.command = command;
     const resource = this.#canonicalResource(req.resource);
     if (resource) ctx.resource = resource;
-    return { ctx, set, command, argsHash, profileHash: resolved.profile.hash };
+    let blocked: string | null = null;
+    try {
+      const plugin = await this.#pluginPolicy(req);
+      if (plugin) {
+        ctx.plugin = plugin;
+        // A plugin tool's URL argument is the call's network resource (cards, site rules).
+        const host = urlHosts(req.args)[0];
+        if (!ctx.resource && host) ctx.resource = { kind: 'host', value: host };
+      }
+    } catch (err) {
+      // Its declared permissions cannot be read: the call is not allowed (fail closed).
+      this.#o.log?.warn('plugin permissions unavailable', { err, tool: req.tool.name });
+      blocked = "the plugin's permissions could not be read, so the call was not allowed";
+    }
+    return { ctx, set, command, argsHash, profileHash: resolved.profile.hash, blocked };
+  }
+
+  async #projectFolders(projectId: string | null) {
+    if (!projectId || !this.#folders) return [];
+    try {
+      return await this.#folders(projectId);
+    } catch (err) {
+      // Without them the project's folders are simply not roots (less access, never more).
+      this.#o.log?.warn('project folders unavailable', { err, projectId });
+      return [];
+    }
+  }
+
+  /** The confirmed permissions of the plugin that owns the tool, as the engine reads them. */
+  async #pluginPolicy(req: PreviewRequest): Promise<PluginPolicy | null> {
+    // Nova's own tools belong to no plugin; MCP and plugin tools may (docs/08 §8).
+    const t = req.tool;
+    if (!this.#plugins || (t.source === 'builtin' && !t.pluginId && !t.serverId)) return null;
+    const p = await this.#plugins.forTool(req.accountId, req.tool);
+    if (!p) return null;
+    return {
+      pluginId: p.pluginId,
+      network: [...p.network],
+      tools: { ...p.tools },
+      actionDefaults: { ...p.actionDefaults },
+    };
+  }
+
+  /** The engine's decision, or a fail-closed deny when the call could not be evaluated. */
+  #evaluate(b: Built): Decision {
+    const d = evaluate(b.ctx, b.set);
+    if (!b.blocked || d.effect === 'deny') return d;
+    const out: Decision = {
+      ...d,
+      effect: 'deny',
+      reason: b.blocked,
+      source: 'plugin',
+      persistable: false,
+    };
+    delete out.answerable;
+    return out;
   }
 
   #canonicalResource(r: GateRequest['resource']): GateRequest['resource'] {
@@ -242,8 +350,16 @@ export class PolicyGate implements ToolGate {
     return { kind: 'path', value: realpathLenient(resolve(abs)) };
   }
 
-  /** Hooks and the reviewer, which can only tighten (docs/12 §2.3 steps 7-8). */
-  async #extend(req: PreviewRequest, decision: Decision, preview: boolean): Promise<Decision> {
+  /**
+   * Hooks and the reviewer (docs/12 §2.3 steps 7-8): extensions and the reviewer can only
+   * tighten; `permission.request` hooks may also answer an eligible ask.
+   */
+  async #extend(
+    req: PreviewRequest,
+    decision: Decision,
+    preview: boolean,
+    call?: HookCall,
+  ): Promise<Decision> {
     let d = decision;
     if (!preview) {
       for (const hook of this.#o.hooks ?? []) {
@@ -254,6 +370,7 @@ export class PolicyGate implements ToolGate {
         }));
         if (v) d = tighten(d, v);
       }
+      if (call) d = await this.#permissionHooks(req, d, call);
     }
     if (d.effect === 'allow' && d.review) {
       const reviewer = this.#o.reviewer;
@@ -279,11 +396,95 @@ export class PolicyGate implements ToolGate {
     return d;
   }
 
+  /**
+   * Run the `permission.request` hooks (FR-197). Calls made by hooks fire no hooks, and nothing
+   * changes a deny. A hook that blocks, or a dispatcher that fails, denies (fail closed).
+   */
+  async #permissionHooks(req: PreviewRequest, d: Decision, call: HookCall): Promise<Decision> {
+    const hooks = this.#hooks;
+    const origin = (req as PreviewRequest & { origin?: string }).origin;
+    if (!hooks || origin === 'hook' || d.effect === 'deny') return d;
+    // The call's id, and the first root it runs with as the hook's working directory.
+    const input: HookInput = {
+      accountId: req.accountId,
+      threadId: req.threadId,
+      turnId: call.turnId || null,
+      projectId: req.projectId,
+      tool: req.tool,
+      args: defaultRedactor.redact(req.args ?? null),
+      decision: { effect: d.effect, reason: d.reason, source: d.source },
+    };
+    if (call.callId) input.callId = call.callId;
+    const cwd = req.roots?.[0]?.path;
+    if (cwd) input.cwd = cwd;
+    let out: HookOutcome;
+    try {
+      out = await hooks.dispatch('permission.request', input, call.signal);
+    } catch (err) {
+      this.#o.log?.warn('permission hooks failed', { err, tool: req.tool.name });
+      return tighten(d, {
+        effect: 'deny',
+        reason: 'the permission hooks could not run, so the call was not allowed',
+        source: 'hook',
+      });
+    }
+    if (out.block)
+      d = applyHookAnswer(d, {
+        effect: 'deny',
+        reason: out.block.reason,
+        hookId: out.block.hookId,
+        mayAnswer: false,
+      });
+    if (out.decision) {
+      const mayAnswer =
+        out.decision.effect === 'allow' &&
+        d.answerable === true &&
+        (await this.#hookMayAnswer(req.accountId, out.decision));
+      d = applyHookAnswer(d, {
+        effect: out.decision.effect,
+        reason: out.decision.reason,
+        hookId: out.decision.hookId,
+        mayAnswer,
+      });
+    }
+    return d;
+  }
+
+  /**
+   * Whether the hook may answer an ask (docs/08 §4.1): managed and user hooks may, plugin hooks
+   * only when their plugin declares `permissions.hooks.answersAsks`, project and extension hooks
+   * never. The dispatcher reports `allow` only for hooks that may answer (the HookDispatcher
+   * contract); a hook whose origin the gate can tell is checked again here.
+   */
+  async #hookMayAnswer(
+    accountId: string,
+    decision: NonNullable<HookOutcome['decision']>,
+  ): Promise<boolean> {
+    const origin = hookOrigin(decision);
+    if (!origin) return true;
+    if (origin.source === 'user' || origin.source === 'managed') return true;
+    if (origin.source !== 'plugin' || !origin.pluginId || !this.#plugins) return false;
+    let perms: PluginPermissions | null;
+    try {
+      perms = await this.#plugins.forTool(accountId, {
+        name: `plugin:${origin.pluginId}.hook`,
+        title: 'hook',
+        description: '',
+        source: 'plugin',
+        pluginId: origin.pluginId,
+        inputSchema: {},
+      });
+    } catch {
+      return false;
+    }
+    return perms?.pluginId === origin.pluginId && perms.hooksAnswerAsks;
+  }
+
   async preview(
     req: PreviewRequest,
   ): Promise<PolicyPreview & { userDefault: DefaultEffect | null }> {
     const b = await this.#build(req);
-    const d = await this.#extend(req, evaluate(b.ctx, b.set), true);
+    const d = await this.#extend(req, this.#evaluate(b), true);
     return {
       effect: d.effect,
       tier: d.tier,
@@ -303,7 +504,11 @@ export class PolicyGate implements ToolGate {
         stop: true,
       };
     const b = await this.#build(req);
-    let d = await this.#extend(req, evaluate(b.ctx, b.set), false);
+    let d = await this.#extend(req, this.#evaluate(b), false, {
+      turnId: req.turnId,
+      callId: req.callId,
+      signal,
+    });
     const threadId = req.threadId || null;
     const correlation = this.#correlation(req);
     await this.#o.events.emit({
@@ -383,6 +588,7 @@ export class PolicyGate implements ToolGate {
         source: d.source,
         ruleId: d.ruleId ?? null,
         grantId: d.grantId ?? null,
+        hookId: d.hookId ?? null,
         reason: d.reason,
         authorization: d.authorization,
         taint: [...new Set(req.provenance.taint)],
@@ -1051,4 +1257,30 @@ function actionLabel(req: GateRequest, b: Built): string {
   if (b.command !== undefined) return `Run \`${clip(redact(b.command), 160)}\``;
   if (req.resource) return `${title}: ${clip(redact(req.resource.value), 160)}`;
   return title;
+}
+
+const HOOK_SOURCES = new Set(['managed', 'user', 'project', 'plugin', 'extension']);
+
+/**
+ * Where a hook comes from: the dispatcher's own `source`/`pluginId` when it reports them, else
+ * the canonical id `hook:<origin>.<hookId>` (docs/08 §8; origin `managed`, `user`, `project`, a
+ * plugin id or an extension id); null when the id says neither.
+ */
+export function hookOrigin(
+  decision: { hookId: string } & { source?: unknown; pluginId?: unknown },
+): { source: string; pluginId: string | null } | null {
+  if (typeof decision.source === 'string' && HOOK_SOURCES.has(decision.source))
+    return {
+      source: decision.source,
+      pluginId: typeof decision.pluginId === 'string' ? decision.pluginId : null,
+    };
+  const m = /^hook:(.+)\.([a-z0-9][a-z0-9-]*)$/.exec(decision.hookId);
+  if (!m) return null;
+  const origin = m[1]!;
+  if (origin === 'managed' || origin === 'user' || origin === 'project')
+    return { source: origin, pluginId: null };
+  // Plugin ids are reverse-DNS; an extension id that looks like one has no plugin permissions.
+  return /^[a-z0-9]+(\.[a-z0-9-]+)+$/.test(origin)
+    ? { source: 'plugin', pluginId: origin }
+    : { source: 'extension', pluginId: null };
 }

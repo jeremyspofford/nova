@@ -1564,6 +1564,544 @@ button.artifact-card:hover {
   color: var(--u-text-muted);
 }
 
+/* ---- workspace M4: panes, bottom panel, terminals, files, library (FR-005…FR-041) ---------- */
+.workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-panes {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  outline: 0 solid transparent;
+}
+.pane[data-active='true'] > .pane-head {
+  box-shadow: inset 0 -2px 0 var(--u-accent);
+}
+.pane[data-drop='true'] {
+  outline: 2px dashed var(--u-accent);
+  outline-offset: -2px;
+}
+.pane-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--u-space-1);
+  min-height: 32px;
+  padding: 0 var(--u-space-2);
+  border-bottom: 1px solid var(--u-border);
+  background: var(--u-surface);
+  font-size: var(--u-text-sm);
+}
+.pane-head .nv-btn[data-size='icon'] {
+  min-width: 28px;
+  min-height: 28px;
+}
+.pane-grip {
+  display: inline-flex;
+  color: var(--u-text-muted);
+  cursor: grab;
+}
+.pane-title {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--u-text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-title:focus-visible {
+  outline: 2px solid var(--u-focus);
+}
+.pane-head-spacer {
+  flex: 1;
+}
+.pane-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pane-host {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.pane-note {
+  padding: var(--u-space-4);
+}
+.pane-chooser {
+  display: grid;
+  gap: var(--u-space-3);
+  place-content: center;
+  padding: var(--u-space-4);
+  flex: 1;
+}
+.pane-chooser-title {
+  margin: 0;
+  color: var(--u-text-muted);
+  text-align: center;
+}
+.pane-chooser-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pane-switcher {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-bottom: 1px solid var(--u-border);
+  background: var(--u-surface);
+}
+.pane-switcher-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+}
+.pane-switcher-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--u-text-muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pane-switcher-tab[aria-selected='true'] {
+  border-bottom-color: var(--u-accent);
+  color: var(--u-text);
+}
+.pane-switcher-tab:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: -2px;
+}
+.bottom-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--u-surface);
+}
+.bottom-panel-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--u-space-2);
+  min-height: 32px;
+  padding: 0 var(--u-space-2);
+  border-bottom: 1px solid var(--u-border);
+  font-size: var(--u-text-sm);
+}
+.bottom-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  font-weight: 600;
+}
+.bottom-panel-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Terminals (FR-006). */
+.terminal-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.terminal-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: 0 var(--u-space-2);
+  border-bottom: 1px solid var(--u-border);
+}
+.terminal-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+}
+.terminal-tab[data-selected='true'] {
+  border-bottom-color: var(--u-accent);
+}
+.terminal-tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+  padding: var(--u-space-1) var(--u-space-2);
+  border: 0;
+  background: none;
+  color: var(--u-text);
+  font: inherit;
+  font-size: var(--u-text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.terminal-tab-button:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: -2px;
+}
+.terminal-none {
+  font-size: var(--u-text-sm);
+}
+.terminal-bar-spacer {
+  flex: 1;
+}
+.terminal-body,
+.terminal-screen-wrap {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.terminal-screen {
+  flex: 1;
+  min-height: 80px;
+  padding: var(--u-space-1) var(--u-space-2);
+  overflow: hidden;
+}
+.terminal-host {
+  height: 100%;
+}
+.terminal-status {
+  margin: 0;
+  padding: 0 var(--u-space-2);
+  font-size: var(--u-text-xs);
+}
+.terminal-status:empty {
+  display: none;
+}
+.terminal-note,
+.terminal-empty,
+.terminal-elsewhere {
+  display: grid;
+  gap: var(--u-space-2);
+  justify-items: start;
+  margin: 0;
+  padding: var(--u-space-3);
+}
+.terminal-note {
+  display: flex;
+  align-items: flex-start;
+  color: var(--u-text);
+}
+
+/* Files, editor and preview (FR-039). */
+.file-browser {
+  display: grid;
+  gap: var(--u-space-2);
+}
+.file-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.file-root {
+  flex: 1;
+}
+.file-root-label {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--u-space-1);
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-access {
+  font-size: var(--u-text-xs);
+}
+.file-tree .nv-tree-label .nv-icon {
+  color: var(--u-text-muted);
+}
+.files-error {
+  display: grid;
+  gap: var(--u-space-2);
+  justify-items: start;
+}
+.editor,
+.preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.editor-bar,
+.preview-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  padding: var(--u-space-1) var(--u-space-3);
+  border-bottom: 1px solid var(--u-border);
+  font-size: var(--u-text-sm);
+}
+.editor-file,
+.preview-file {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-dirty {
+  color: var(--u-warn);
+  font-weight: 400;
+}
+.editor-spacer {
+  flex: 1;
+}
+.editor-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: var(--u-space-2) var(--u-space-3);
+  border-bottom: 1px solid var(--u-border);
+  background: var(--u-surface-2);
+}
+.editor-alert p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+  line-height: 1.5;
+}
+.editor-gutter {
+  flex: none;
+  min-width: 3ch;
+  padding: var(--u-space-2) var(--u-space-2) var(--u-space-2) var(--u-space-3);
+  overflow: hidden;
+  border-right: 1px solid var(--u-border);
+  color: var(--u-text-muted);
+  text-align: right;
+  user-select: none;
+}
+.editor-text {
+  flex: 1;
+  min-width: 0;
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 0;
+  background: var(--u-bg);
+  color: var(--u-text);
+  font: inherit;
+  line-height: inherit;
+  white-space: pre;
+  resize: none;
+  tab-size: 2;
+}
+.editor-text:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: -2px;
+}
+.editor-status {
+  margin: 0;
+  padding: 0 var(--u-space-3);
+  font-size: var(--u-text-xs);
+}
+.editor-status:empty {
+  display: none;
+}
+.preview-download {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u-space-1);
+}
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--u-space-3);
+  overflow: auto;
+}
+.preview-doc {
+  max-width: 760px;
+}
+.preview-image {
+  max-width: 100%;
+  height: auto;
+}
+.preview-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
+  border: 0;
+}
+.preview-text {
+  margin: 0;
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-sm);
+  white-space: pre-wrap;
+}
+
+/* Library (FR-041). */
+.library {
+  display: grid;
+  align-content: start;
+  gap: var(--u-space-4);
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: var(--u-space-6) var(--u-space-4);
+  overflow: auto;
+}
+.library-title {
+  margin: 0;
+}
+.library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--u-space-3);
+}
+.library-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1);
+}
+.library-kind {
+  padding: var(--u-space-1) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--u-text);
+  font: inherit;
+  font-size: var(--u-text-sm);
+  cursor: pointer;
+}
+.library-kind[aria-checked='true'] {
+  border-color: var(--u-accent);
+  background: color-mix(in srgb, var(--u-accent) 20%, transparent);
+}
+.library-kind:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
+.library-search {
+  flex: 1;
+  min-width: 200px;
+}
+.library-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.library-item {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-3);
+  padding: var(--u-space-2) var(--u-space-3);
+  border-bottom: 1px solid var(--u-border);
+}
+.library-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-item-meta {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+  white-space: nowrap;
+}
+.library-more {
+  justify-self: center;
+}
+
+/* The open chat's MCP Apps wait here while the Apps tab is closed (FR-198): inline apps are out
+   of sight and out of the tab order; a picture-in-picture app is fixed to the viewport, so it
+   escapes the clip and stays visible. */
+.apps-park {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+.apps-park .app-frame[data-mode='pip'] {
+  visibility: visible;
+}
+
+/* Suggested follow-ups (FR-028) and slash commands (FR-046) in the composer. */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.suggestion {
+  max-width: 100%;
+  padding: var(--u-space-1) var(--u-space-3);
+  overflow: hidden;
+  border: 1px solid var(--u-border);
+  border-radius: 999px;
+  background: var(--u-surface-2);
+  color: var(--u-text);
+  font: inherit;
+  font-size: var(--u-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.suggestion:hover {
+  border-color: var(--u-accent);
+}
+.suggestion:focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}
+.slash-name {
+  font-family: var(--u-font-code);
+}
+.app[data-layout='phone'] .pane-head .pane-grip {
+  display: none;
+}
+
 /* ---- responsive (docs/04 §4.3) ------------------------------------------------------------ */
 /* Below 1100 px the sidebar collapses and opens over the content. */
 .app[data-layout='compact'] .sidebar {

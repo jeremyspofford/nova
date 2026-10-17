@@ -270,7 +270,7 @@ function ProfileStep({
     >
       <TextField
         label="Display name"
-        hint="Shown in Nova on your devices. Avatars arrive in a later milestone."
+        hint="Shown in Nova on your devices. Add a username and avatar later in Settings, Profile & usage."
         value={name}
         maxLength={100}
         autoComplete="name"
@@ -322,6 +322,19 @@ function ToolStep({ onDone, nav }: { onDone: () => void; nav: React.ReactNode })
         </div>
       )}
       <p className="muted">You can connect tools later in Settings, Tools &amp; MCP.</p>
+      <p className="muted">
+        Coming from another assistant?{' '}
+        <a
+          href="/settings/import"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate('/settings/import');
+          }}
+        >
+          Import its skills, servers, memories and chats
+        </a>
+        .
+      </p>
       {nav}
     </div>
   );

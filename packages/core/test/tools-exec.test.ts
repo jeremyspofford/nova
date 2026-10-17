@@ -262,6 +262,20 @@ describe('ContainerSandbox (through a stand-in docker CLI)', () => {
     ...extra,
   });
 
+  it('decodes a character split across output chunks whole, on stdout and stderr', async () => {
+    const sb = new ContainerSandbox({ bin });
+    const r = await sb.exec(
+      req(
+        "printf '\\342\\202'; sleep 0.2; printf '\\254\\n'; printf '\\303' >&2; sleep 0.2; printf '\\251\\n' >&2",
+        5_000,
+      ),
+    );
+    expect(r).toEqual({ status: 'exited', exitCode: 0, output: '€\né\n' });
+    // A truncated sequence at the very end is flushed, not lost.
+    const cut = await sb.exec(req("printf 'ok\\342\\202'", 5_000));
+    expect(cut).toEqual({ status: 'exited', exitCode: 0, output: 'ok\uFFFD' });
+  });
+
   it('reports whether the engine answers', async () => {
     const sb = new ContainerSandbox({ bin });
     expect(await sb.available()).toEqual({

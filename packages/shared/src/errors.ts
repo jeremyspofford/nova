@@ -60,7 +60,7 @@ export const HTTP_STATUS: Record<HubErrorCode, number> = {
   node_unavailable: 503,
   firmware_disabled: 403,
   oob_disabled: 403,
-  sandbox_unavailable: 503,
+  sandbox_unavailable: 409,
   hook_untrusted: 403,
   request_expired: 410,
   validation: 400,

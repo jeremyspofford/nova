@@ -1,6 +1,8 @@
 // Tree view (docs/04 §4.2, WAI-ARIA tree pattern). One tab stop: Up/Down, Home/End move;
 // Right expands or enters a branch, Left collapses or goes to the parent; Enter (or a click)
-// activates; Space toggles selection when the tree is multiselectable.
+// activates; Space toggles selection when the tree is multiselectable. A branch whose children
+// load on demand is `expandable`; with `expanded` the owner controls which branches are open
+// (a file tree starts closed and loads a folder when it opens, FR-039).
 import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './Icon.tsx';
 
@@ -11,6 +13,8 @@ export interface TreeNode {
   label: ReactNode;
   /** Shown after the label, e.g. a count. */
   detail?: ReactNode;
+  /** A branch even before its children are known (they load when it opens). */
+  expandable?: boolean;
 }
 
 export interface TreeProps {
@@ -24,6 +28,10 @@ export interface TreeProps {
   /** Multi-select (Space, or the check box) for actions on several nodes. */
   selected?: readonly string[];
   onToggleSelect?: (id: string) => void;
+  /** Open branches, when the owner controls them; otherwise branches start open. */
+  expanded?: ReadonlySet<string>;
+  /** Called when a branch opens or closes (required with `expanded`). */
+  onExpandedChange?: (id: string, open: boolean) => void;
   className?: string;
 }
 
@@ -34,6 +42,8 @@ export function Tree({
   currentId,
   selected,
   onToggleSelect,
+  expanded,
+  onExpandedChange,
   className,
 }: TreeProps) {
   const base = useId();
@@ -42,12 +52,16 @@ export function Tree({
   const [focusId, setFocusId] = useState<string | null>(null);
   const multi = selected !== undefined && onToggleSelect !== undefined;
 
-  const { roots, children, parentOf } = useMemo(() => {
+  const isOpen = (id: string) => (expanded ? expanded.has(id) : !collapsed.has(id));
+
+  const { roots, children, parentOf, expandable } = useMemo(() => {
     const ids = new Set(nodes.map((n) => n.id));
     const kids = new Map<string, TreeNode[]>();
     const tops: TreeNode[] = [];
     const parents = new Map<string, string>();
+    const lazy = new Set<string>();
     for (const n of nodes) {
+      if (n.expandable) lazy.add(n.id);
       if (n.parentId && ids.has(n.parentId) && n.parentId !== n.id) {
         const list = kids.get(n.parentId) ?? [];
         list.push(n);
@@ -55,8 +69,9 @@ export function Tree({
         parents.set(n.id, n.parentId);
       } else tops.push(n);
     }
-    return { roots: tops, children: kids, parentOf: parents };
+    return { roots: tops, children: kids, parentOf: parents, expandable: lazy };
   }, [nodes]);
+  const isBranch = (id: string) => (children.get(id)?.length ?? 0) > 0 || expandable.has(id);
 
   // Visible nodes in order, so the arrow keys follow what is on screen.
   const visible = useMemo(() => {
@@ -66,12 +81,13 @@ export function Tree({
         if (seen.has(n.id)) continue;
         seen.add(n.id);
         out.push(n.id);
-        if (!collapsed.has(n.id)) walk(children.get(n.id) ?? [], seen);
+        if (expanded ? expanded.has(n.id) : !collapsed.has(n.id))
+          walk(children.get(n.id) ?? [], seen);
       }
     };
     walk(roots, new Set());
     return out;
-  }, [roots, children, collapsed]);
+  }, [roots, children, collapsed, expanded]);
 
   const active =
     (focusId && visible.includes(focusId) ? focusId : null) ??
@@ -86,19 +102,25 @@ export function Tree({
       for (const el of items) if (el.dataset.nodeId === id) el.focus();
     });
   };
-  const setOpen = (id: string, open: boolean) =>
+  const setOpen = (id: string, open: boolean) => {
+    if (expanded) {
+      onExpandedChange?.(id, open);
+      return;
+    }
     setCollapsed((s) => {
       const next = new Set(s);
       if (open) next.delete(id);
       else next.add(id);
       return next;
     });
+    onExpandedChange?.(id, open);
+  };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!active) return;
     const i = visible.indexOf(active);
-    const hasKids = (children.get(active)?.length ?? 0) > 0;
-    const open = hasKids && !collapsed.has(active);
+    const hasKids = isBranch(active);
+    const open = hasKids && isOpen(active);
     let handled = true;
     if (e.key === 'ArrowDown') {
       const next = visible[i + 1];
@@ -138,7 +160,8 @@ export function Tree({
     if (seen.has(n.id)) return null;
     seen.add(n.id);
     const kids = children.get(n.id) ?? [];
-    const open = !collapsed.has(n.id);
+    const branch = kids.length > 0 || expandable.has(n.id);
+    const open = isOpen(n.id);
     const isSelected = multi ? selected.includes(n.id) : undefined;
     const labelId = `${base}-${n.id}`;
     return (
@@ -148,7 +171,7 @@ export function Tree({
         data-node-id={n.id}
         aria-level={level}
         aria-labelledby={labelId}
-        aria-expanded={kids.length ? open : undefined}
+        aria-expanded={branch ? open : undefined}
         aria-selected={isSelected}
         aria-current={n.id === currentId ? 'page' : undefined}
         tabIndex={n.id === active ? 0 : -1}
@@ -163,7 +186,7 @@ export function Tree({
         }}
       >
         <span className="nv-tree-row" style={{ paddingInlineStart: `${(level - 1) * 16}px` }}>
-          {kids.length ? (
+          {branch ? (
             <span
               className="nv-tree-toggle"
               aria-hidden="true"

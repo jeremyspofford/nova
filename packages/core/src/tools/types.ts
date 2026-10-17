@@ -191,7 +191,10 @@ export interface AuditRecord {
     | 'mcp'
     | 'node'
     | 'fs'
-    | 'network';
+    | 'network'
+    | 'hook'
+    | 'plugin'
+    | 'terminal';
   action: string;
   resource?: string | null;
   /** SHA-256 of the canonical inputs; inputs themselves are never stored here. */

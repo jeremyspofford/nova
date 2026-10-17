@@ -7,22 +7,30 @@
 //   2. Managed policy rules, then 3. user rules (policy and command prefix rules, most specific
 //      scope first, then priority), then remembered grants. Any matching deny wins outright.
 //   4. Per-tool and per-server defaults the user set, 5. the approval policy, 6. the fallback
-//      (read-only actions allow, everything else asks).
+//      (read-only actions allow, everything else asks). An action the signed-in user takes
+//      directly in a Nova client (actor `user`, their own instruction, no taint) needs no card
+//      at steps 4-6: their click is the confirmation; floors, rules and denies still apply.
 // Intent provenance: only a typed user instruction authorizes. Without one, a consequential
 // action asks unless a standing rule or grant covers it; any taint stops "act on request" rules.
-// Hooks (M4) and the reviewer (M5) come after, through `tighten`, which can only tighten.
+// Plugin permissions (FR-045): a host the owning plugin did not declare is denied at step 1; its
+// per-tool and per-action defaults apply at step 4, below the user's own; an undeclared tool asks.
+// Hooks (M4) and the reviewer (M5) come after: `tighten` can only tighten, and `applyHookAnswer`
+// may also answer an `ask` the engine marked `answerable` (FR-197, docs/12 §2.3 step 7).
 import { effectiveEffects, isReadOnly, writesPath } from './classify.ts';
 import { commandCoveredBy, evaluateCommand } from './command.ts';
-import { globMatch, hostMatch, isWithinPath } from './match.ts';
+import { globMatch, hostMatch, hostPattern, isWithinPath, urlHosts } from './match.ts';
 import { isProtectedAncestor, pathAccess, type PathCheck } from './paths.ts';
 import { isolatedSubstrate } from './profiles.ts';
 import type {
+  ActionClass,
   ActionEffect,
   CommandRule,
   ConfirmationTier,
   Decision,
   DefaultEffect,
   Effect,
+  HookAnswer,
+  PluginPolicy,
   PolicyContext,
   PolicyGrant,
   PolicyRule,
@@ -57,7 +65,12 @@ type Step = Pick<Decision, 'effect' | 'reason' | 'source'> & {
   userSet?: boolean;
   /** The rule or grant names the call's host (it satisfies the network allowlist). */
   namesHost?: boolean;
+  /** An `ask` from intent provenance (an "act on request" rule), which no hook may answer. */
+  provenance?: boolean;
 };
+
+/** Sources of an `ask` a permission hook may answer: steps 3 and 4 (docs/12 §2.3). */
+const ANSWERABLE: ReadonlySet<Decision['source']> = new Set(['rule', 'tool_default', 'plugin']);
 
 interface Candidate extends Step {
   layer: 'managed' | 'user';
@@ -70,7 +83,8 @@ interface Candidate extends Step {
 }
 
 export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
-  const effects = effectiveEffects(ctx.tool);
+  const entry = ctx.plugin ? pluginEntry(ctx.plugin, ctx.tool.name) : null;
+  const effects = effectiveEffects(ctx.tool, entry?.action);
   const readOnly = isReadOnly(ctx.tool, effects);
   const authorization = ctx.provenance.userInstruction ? 'user_typed' : 'none';
   const scope: Scope = ctx.scopes[0] ?? { kind: 'global' };
@@ -94,9 +108,18 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
     review: false,
   } as const;
 
-  // 1. Built-in safety: hard denies.
+  // 1. Built-in safety: hard denies, then hosts the owning plugin did not declare (FR-045).
   const hard = hardDeny(ctx, effects, readOnly, path);
   if (hard) return { ...base, effect: 'deny', reason: hard, source: 'builtin', persistable: false };
+  const undeclared = ctx.plugin ? undeclaredHost(ctx, ctx.plugin) : null;
+  if (undeclared)
+    return {
+      ...base,
+      effect: 'deny',
+      reason: `${undeclared} is not a host this plugin declared`,
+      source: 'plugin',
+      persistable: false,
+    };
 
   // 2-6. Layers.
   const deny = candidates.find((c) => c.effect === 'deny');
@@ -106,7 +129,7 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
     candidates.find((c) => c.layer === 'managed') ??
     candidates.find((c) => c.layer === 'user') ??
     (grant ? grantDecision(grant, ctx) : null) ??
-    defaults(ctx, set, effects, readOnly, path);
+    defaults(ctx, set, effects, readOnly, path, entry);
 
   // Floors: the tier is locked; provenance and the network allowlist yield to standing
   // authorization (an allow from a rule or grant; for hosts, one that names the host).
@@ -126,12 +149,14 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
     });
   }
   const host = ctx.resource?.kind === 'host' ? ctx.resource.value : null;
+  // Hosts a plugin declared were confirmed by the user at install: they need no allowlist entry.
   if (
     !readOnly &&
     host &&
     ctx.tool.annotations?.requiresNetwork === true &&
     !(ctx.egress?.allow ?? []).some((p) => hostMatch(p, host)) &&
-    !(standing && decision.namesHost === true)
+    !(standing && decision.namesHost === true) &&
+    !(ctx.plugin && declaresHost(ctx.plugin, host))
   ) {
     floors.push({ effect: 'ask', reason: `${host} is not on the network allowlist` });
   }
@@ -157,6 +182,14 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
   if (final.ruleId) out.ruleId = final.ruleId;
   if (final.grantId) out.grantId = final.grantId;
   if (final.userSet) out.userSet = true;
+  // Only an ask from steps 3-4 with no built-in floor behind it may be answered by a hook.
+  if (
+    final.effect === 'ask' &&
+    ANSWERABLE.has(final.source) &&
+    floors.length === 0 &&
+    final.provenance !== true
+  )
+    out.answerable = true;
   return out;
 }
 
@@ -166,7 +199,7 @@ export function evaluate(ctx: PolicyContext, set: PolicySet = {}): Decision {
  */
 export function tighten(decision: Decision, verdict: PolicyVerdict): Decision {
   if (SEVERITY[verdict.effect] <= SEVERITY[decision.effect]) return decision;
-  return {
+  const out: Decision = {
     ...decision,
     effect: verdict.effect,
     reason: verdict.reason,
@@ -174,6 +207,36 @@ export function tighten(decision: Decision, verdict: PolicyVerdict): Decision {
     review: false,
     persistable: false,
   };
+  delete out.answerable;
+  return out;
+}
+
+/**
+ * Apply a `permission.request` hook's answer (FR-197, docs/12 §2.3 step 7). A deny or a handoff
+ * stays as it is. A stricter effect applies to anything else. `allow` answers an `ask` only when
+ * the engine marked it answerable (a user rule, a per-tool default or plugin permissions, with no
+ * built-in floor) and the hook may answer asks; otherwise it changes nothing. The hook is
+ * recorded as the decision source.
+ */
+export function applyHookAnswer(decision: Decision, answer: HookAnswer): Decision {
+  if (decision.effect === 'deny' || decision.effect === 'handoff') return decision;
+  const loosens =
+    answer.effect === 'allow' &&
+    decision.effect === 'ask' &&
+    decision.answerable === true &&
+    answer.mayAnswer;
+  if (!loosens && SEVERITY[answer.effect] <= SEVERITY[decision.effect]) return decision;
+  const out: Decision = {
+    ...decision,
+    effect: answer.effect,
+    reason: answer.reason,
+    source: 'hook',
+    hookId: answer.hookId,
+    review: false,
+    persistable: false,
+  };
+  delete out.answerable;
+  return out;
 }
 
 function tierFor(
@@ -272,6 +335,7 @@ function policyCandidates(
       let reason = rule.label
         ? `rule "${rule.label}"`
         : `${layer === 'managed' ? 'managed' : 'your'} rule`;
+      const provenance = rule.effect === 'act_on_request' && !actOk;
       if (rule.effect === 'act_on_request') {
         effect = actOk ? 'allow' : 'ask';
         if (!actOk) reason = `${reason} acts only when you ask for it`;
@@ -290,6 +354,7 @@ function policyCandidates(
         specificity: SCOPE_SPECIFICITY[rule.scope.kind],
         priority: rule.priority ?? 100,
         id: rule.id,
+        ...(provenance ? { provenance: true } : {}),
         namesRecipient:
           layer === 'user' && (rule.source ?? 'user') === 'user' && namesRecipient(rule),
         namesHost:
@@ -440,21 +505,38 @@ function userDefault(
   return null;
 }
 
-/** Steps 4-6: user defaults, the approval policy (docs/12 §2.1) and the fallback. */
+/**
+ * Steps 4-6: user defaults, then the owning plugin's defaults (FR-045), the approval policy
+ * (docs/12 §2.1) and the fallback. The user's own default wins over the plugin's.
+ */
 function defaults(
   ctx: PolicyContext,
   set: PolicySet,
   effects: readonly ActionEffect[],
   readOnly: boolean,
   path: PathCheck | null,
+  entry: PluginEntry | null,
 ): Step {
   const user = userDefault(ctx, set);
   const fromUser: Step | null = user
     ? { effect: user.effect, reason: user.reason, source: 'tool_default', userSet: true }
     : null;
   if (fromUser?.effect === 'deny') return fromUser;
+  const declared = fromUser ?? (ctx.plugin ? pluginDefault(ctx, entry) : null);
+  if (declared?.effect === 'deny') return declared;
   if (readOnly)
-    return fromUser ?? { effect: 'allow', reason: 'read-only action', source: 'fallback' };
+    return declared ?? { effect: 'allow', reason: 'read-only action', source: 'fallback' };
+  // The user did this themselves in Nova (an editor save, a button they clicked): acting is the
+  // confirmation. The tier floors still ask (confirm_at_action, handoff_required), and so does
+  // the network allowlist; rules and denies were applied before this step. Changing policy and
+  // reading secrets keep their card, whoever asks.
+  if (
+    ctx.actor.kind === 'user' &&
+    ctx.provenance.userInstruction !== undefined &&
+    ctx.provenance.taint.length === 0 &&
+    !effects.some((e) => e === 'policy_change' || e === 'secret_access')
+  )
+    return { effect: 'allow', reason: 'you did this yourself in Nova', source: 'user_action' };
   const builtin: Step = {
     effect: 'ask',
     reason: `the default for ${ctx.tool.name} is to ask`,
@@ -469,7 +551,7 @@ function defaults(
         userSet: true,
       };
     case 'defaults': {
-      if (fromUser) return fromUser;
+      if (declared) return declared;
       const edit =
         effects.length > 0 &&
         effects.every((e) => e === 'file_write') &&
@@ -485,7 +567,7 @@ function defaults(
     }
     case 'review':
       return (
-        fromUser ?? {
+        declared ?? {
           effect: 'allow',
           reason: 'allowed under auto-review',
           source: 'approval_policy',
@@ -493,11 +575,70 @@ function defaults(
       );
     case 'never_ask':
       return (
-        fromUser ?? {
+        declared ?? {
           effect: 'allow',
           reason: 'your approval policy does not ask for this',
           source: 'approval_policy',
         }
       );
   }
+}
+
+interface PluginEntry {
+  action: ActionClass;
+  default?: DefaultEffect;
+}
+
+/** A tool's local name: without `plugin:<id>.`, `mcp:<server>.` or `page:<host>.`. */
+function localToolName(name: string): string {
+  if (name.startsWith('mcp:')) return name.slice(name.indexOf('.') + 1);
+  if (name.startsWith('plugin:') || name.startsWith('page:'))
+    return name.slice(name.lastIndexOf('.') + 1);
+  return name;
+}
+
+/** The manifest's entry for a tool: by canonical name, else by its local name. */
+function pluginEntry(p: PluginPolicy, name: string): PluginEntry | null {
+  const exact = Object.hasOwn(p.tools, name) ? p.tools[name] : undefined;
+  if (exact) return exact;
+  const local = localToolName(name);
+  const key = Object.keys(p.tools)
+    .filter((k) => localToolName(k) === local)
+    .sort()[0];
+  return key ? p.tools[key]! : null;
+}
+
+function declaresHost(p: PluginPolicy, host: string): boolean {
+  return p.network.some((d) => hostMatch(hostPattern(d), host));
+}
+
+/** The first host the call names (its resource or a URL argument) that the plugin did not declare. */
+function undeclaredHost(ctx: PolicyContext, p: PluginPolicy): string | null {
+  const hosts = urlHosts(ctx.args);
+  if (ctx.resource?.kind === 'host') hosts.unshift(ctx.resource.value.toLowerCase());
+  return hosts.find((h) => !declaresHost(p, h)) ?? null;
+}
+
+/** Step 4 for a plugin's tool: its per-tool default, its per-action default, or ask if undeclared. */
+function pluginDefault(ctx: PolicyContext, entry: PluginEntry | null): Step | null {
+  if (!entry)
+    return {
+      effect: 'ask',
+      reason: `${ctx.tool.name} is not a tool its plugin declared`,
+      source: 'plugin',
+    };
+  if (entry.default)
+    return {
+      effect: entry.default,
+      reason: `the plugin's default for ${ctx.tool.name}`,
+      source: 'plugin',
+    };
+  const byClass = ctx.plugin?.actionDefaults[entry.action];
+  if (byClass)
+    return {
+      effect: byClass,
+      reason: `the plugin's default for ${entry.action} actions`,
+      source: 'plugin',
+    };
+  return null;
 }

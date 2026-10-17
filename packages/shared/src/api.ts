@@ -42,6 +42,8 @@ export interface ProviderAccountView {
   hasSecret: boolean;
   lastCheckAt: string | null;
   createdAt: string;
+  /** The active account of its provider kind (FR-115); the others stay configured. */
+  active?: boolean;
 }
 
 export const createProviderSchema = z.object({
@@ -259,8 +261,11 @@ export interface MessageView {
   siblingIds?: string[];
   /** Sources used in this answer (FR-040). */
   citations?: CitationView[];
-  /** How a user message entered the turn: typed, a steer of a running turn, or a queued send. */
-  provenance?: 'typed' | 'steer' | 'queued';
+  /**
+   * How a user message entered the turn: typed, a steer of a running turn, a queued send, or a
+   * lifecycle hook's continuation (FR-197), which is not the user's and carries no authority.
+   */
+  provenance?: 'typed' | 'steer' | 'queued' | 'hook';
   /** The `@`-mentions sent with a user message (FR-022). */
   mentions?: { kind: MentionKind; ref: string; label: string }[];
 }
@@ -662,6 +667,8 @@ export interface ToolDescriptor {
   };
   effects?: ActionEffectClass[];
   timeoutMs?: number;
+  /** An MCP Apps resource that renders this tool (FR-198). */
+  ui?: { resourceUri: string };
 }
 
 export type PolicyEffect = 'allow' | 'ask' | 'handoff' | 'deny';
@@ -1142,6 +1149,8 @@ export const pluginSourceSchema = z.discriminatedUnion('kind', [
 
 export const installPluginSchema = z.object({
   previewId: idSchema,
+  /** Required to install a plugin that is not verified (every plugin until signing lands, M8). */
+  confirmSideload: z.boolean().optional(),
   enable: z.boolean().default(true),
   /** Hooks to trust now, by id with the hash shown in the preview (FR-197). */
   trustHooks: z
@@ -1244,6 +1253,10 @@ export interface HookView {
     at: string;
     effect: 'none' | 'context' | 'decision' | 'continue' | 'blocked' | 'error';
   } | null;
+  /** A project hook's project. */
+  projectId?: string | null;
+  /** The content changed after it was trusted, so it waits for re-trust (docs/04 §2.10). */
+  changedSinceTrust?: boolean;
 }
 
 export const trustHookSchema = z.object({ contentHash: z.string().min(1).max(200) });
@@ -1346,6 +1359,8 @@ export interface UiEntryPointView {
   resource: string;
   /** File extensions, for file entry points. */
   extensions: string[];
+  /** The external hosts the app may reach (resource CSP domains ∩ its permissions). */
+  domains?: string[];
 }
 
 // ---- workspace: files, terminal, layout, library (FR-005, FR-006, FR-039, FR-041) ------------

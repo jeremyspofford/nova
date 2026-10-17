@@ -525,3 +525,177 @@
   left: var(--u-space-2);
   width: auto;
 }
+
+/* ---- M4 settings: plugins, hooks, clients, bundles, profile, import, themes --------------- */
+.ws-badge[data-tone='ok'] {
+  border-color: var(--u-success);
+}
+.ws-badge[data-tone='warn'] {
+  border-color: var(--u-warn);
+}
+.ws-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--u-space-2);
+  padding: var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-left: 4px solid var(--u-warn);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+}
+.ws-callout > .nv-icon,
+.ws-callout > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--u-warn);
+}
+.ws-callout p {
+  margin: 0;
+}
+.nv-dialog.ws-wide-dialog {
+  width: min(680px, 100%);
+}
+.ws-subhead {
+  margin: 0 0 var(--u-space-1);
+  font-size: var(--u-text-md);
+}
+.ws-link code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* profile & usage (FR-113, FR-114) */
+.ws-avatar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--u-space-3);
+}
+.ws-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.ws-avatar-empty {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--u-border);
+  background: var(--u-surface-2);
+  font-size: var(--u-text-xl);
+  font-weight: 600;
+}
+.ws-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--u-space-2);
+  margin: 0;
+}
+.ws-stats > div {
+  padding: var(--u-space-2) var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+}
+.ws-stats dt {
+  color: var(--u-text-muted);
+  font-size: var(--u-text-xs);
+}
+.ws-stats dd {
+  margin: 0;
+  font-size: var(--u-text-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ws-chart {
+  display: grid;
+  gap: var(--u-space-1);
+  margin: 0;
+}
+.ws-chart-title {
+  font-weight: 600;
+}
+.ws-chart-summary {
+  margin: 0;
+  font-size: var(--u-text-sm);
+}
+.ws-bars {
+  width: 100%;
+  height: 120px;
+}
+.ws-bars rect {
+  fill: var(--u-accent);
+}
+.ws-bars rect:hover {
+  fill: var(--u-text);
+}
+.ws-bars-axis {
+  stroke: var(--u-border);
+  stroke-width: 1;
+}
+.ws-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--u-text-xs);
+}
+.ws-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--u-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ws-table caption {
+  padding: var(--u-space-1) 0;
+  font-weight: 600;
+  text-align: left;
+}
+.ws-table th,
+.ws-table td {
+  padding: var(--u-space-1) var(--u-space-2);
+  border-bottom: 1px solid var(--u-border);
+  text-align: left;
+}
+.ws-table thead th {
+  color: var(--u-text-muted);
+  font-weight: 500;
+}
+
+/* import wizard (FR-200) */
+.ws-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--u-space-1) var(--u-space-3);
+  margin: 0;
+  padding: 0;
+  color: var(--u-text-muted);
+  font-size: var(--u-text-sm);
+  list-style: none;
+  counter-reset: step;
+}
+.ws-steps li {
+  counter-increment: step;
+}
+.ws-steps li::before {
+  content: counter(step) '. ';
+}
+.ws-steps li[aria-current='step'] {
+  color: var(--u-text);
+  font-weight: 600;
+}
+.ws-wizard h3:focus {
+  outline: none;
+}
+.ws-import-item {
+  align-items: flex-start;
+}
+
+/* themes (FR-011) */
+.ws-swatches {
+  display: inline-flex;
+  gap: 2px;
+}
+.ws-swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+}

@@ -77,6 +77,17 @@ export interface McpToolInfo {
     idempotentHint?: boolean;
     openWorldHint?: boolean;
   };
+  /** The tool's `_meta` (MCP Apps put the tool's `ui://` resource here, FR-198). */
+  _meta?: Record<string, unknown>;
+}
+
+/** The MCP Apps resource of a tool: `_meta.ui.resourceUri` (or the older `ui/resourceUri`). */
+export function uiResourceOf(meta: Record<string, unknown> | undefined): string | null {
+  if (!meta) return null;
+  const ui = meta.ui;
+  const uri =
+    isObject(ui) && typeof ui.resourceUri === 'string' ? ui.resourceUri : meta['ui/resourceUri'];
+  return typeof uri === 'string' && uri.startsWith('ui://') && uri.length <= 2000 ? uri : null;
 }
 
 function clip(text: string, max: number): string {
@@ -112,6 +123,8 @@ export function toDescriptor(
   };
   if (isObject(tool.outputSchema)) d.outputSchema = tool.outputSchema;
   if (Object.keys(annotations).length) d.annotations = annotations;
+  const resourceUri = uiResourceOf(tool._meta);
+  if (resourceUri) d.ui = { resourceUri };
   return d;
 }
 

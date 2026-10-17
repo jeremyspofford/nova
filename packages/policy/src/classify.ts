@@ -2,7 +2,7 @@
 // MCP, plugin, page and device tools carry no trusted effect classes, so the engine also infers
 // classes from the tool's name and description; inference only ever adds classes (stricter), and
 // "if classification fails for an action with an external effect, the stricter tier applies".
-import type { ActionEffect, ToolDescriptor, ToolSource } from './types.ts';
+import type { ActionClass, ActionEffect, ToolDescriptor, ToolSource } from './types.ts';
 
 /** Sources whose descriptors Nova itself defines; their annotations are trusted. */
 export const TRUSTED_SOURCES: ReadonlySet<ToolSource> = new Set(['builtin', 'browser', 'computer']);
@@ -106,23 +106,32 @@ export function inferEffects(tool: ToolDescriptor): ActionEffect[] {
   return INFERENCE.filter(([, re]) => re.test(text)).map(([effect]) => effect);
 }
 
-/** Declared effects, the action class (FR-045) and inferred effects, without duplicates. */
-export function effectiveEffects(tool: ToolDescriptor): ActionEffect[] {
-  const out = new Set<ActionEffect>(tool.effects ?? []);
-  switch (tool.annotations?.action) {
+/** The effect class an action class implies (FR-045): send, delete and execute have one. */
+export function actionEffect(action: ActionClass | undefined): ActionEffect | null {
+  switch (action) {
     case 'send':
-      out.add('external_communication');
-      break;
+      return 'external_communication';
     case 'delete':
-      out.add('data_delete');
-      break;
+      return 'data_delete';
     case 'execute':
-      out.add('exec');
-      break;
+      return 'exec';
     case 'read':
     case 'write':
     case undefined:
-      break;
+      return null;
+  }
+}
+
+/**
+ * Declared effects, the action class (FR-045) and inferred effects, without duplicates. A
+ * plugin's confirmed action class for the tool (`extra`) adds its effect too, so the stricter of
+ * the descriptor and the manifest applies.
+ */
+export function effectiveEffects(tool: ToolDescriptor, extra?: ActionClass): ActionEffect[] {
+  const out = new Set<ActionEffect>(tool.effects ?? []);
+  for (const a of [tool.annotations?.action, extra]) {
+    const e = actionEffect(a);
+    if (e) out.add(e);
   }
   for (const e of inferEffects(tool)) out.add(e);
   return [...out];

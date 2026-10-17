@@ -7,13 +7,17 @@
 // M3: replies show tool cards that update live and approval cards inline at the call that waits
 // (FR-100); focus moves to a new approval and the announcer says so, and `?approval=<id>` scrolls
 // to one. While an approval waits the chat shows Needs input (FR-215). Artifact cards open the
-// Inspector (FR-038), and `@`-mentions go out with the message (FR-022).
+// Inspector (FR-038), and `@`-mentions go out with the message (FR-022). M4: once a reply is done,
+// up to three suggested follow-ups from the Hub wait in the empty composer unless
+// `chat.suggestions` is off (FR-028), `/` completes slash commands (FR-046), and a tool that
+// declares a UI shows its MCP App under its card (FR-198).
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
   EventEnvelope,
   InputMode,
   MentionCandidate,
   REASONING_LEVELS,
+  SlashCommandView,
   ThreadDetail,
 } from '@nova/shared';
 import {
@@ -56,12 +60,13 @@ import {
 } from './thread-state.ts';
 import { threadStatus } from './status.ts';
 import { TOOL_STATUS_TEXT } from './ToolCard.tsx';
+import { ToolAppsProvider } from './tool-apps.tsx';
 import { threadStateOf, useThreadFeed } from './useThreadFeed.ts';
 
 const EMPTY_DRAFT: Draft = { text: '', attachments: [] };
 
 /** Inspector panels a chat can ask the workspace to open. */
-export type ChatPanel = 'side' | 'branches' | 'artifacts' | 'activity';
+export type ChatPanel = 'side' | 'branches' | 'artifacts' | 'activity' | 'files';
 
 export interface ChatViewProps {
   threadId: string | null;
@@ -318,6 +323,41 @@ export function ChatView({
       api.mentions(q, threadId ?? undefined).then((r) => r.items),
     [api, threadId],
   );
+
+  const projectId = thread?.projectId ?? null;
+  const slashSource = useCallback(
+    (): Promise<SlashCommandView[]> =>
+      api.slashCommands(projectId ? { projectId } : {}).then((r) => r.items),
+    [api, projectId],
+  );
+
+  // ---- suggested follow-ups (FR-028) ---------------------------------------------------------------
+  const suggestionsOn = useSetting('chat.suggestions').value;
+  const lastMessage = state.messages.at(-1);
+  const replyDone =
+    state.status === 'ready' &&
+    !streaming &&
+    !!lastMessage &&
+    lastMessage.role === 'assistant' &&
+    lastMessage.status === 'complete' &&
+    !lastMessage.local;
+  const suggestKey =
+    suggestionsOn && threadId && replyDone && lastMessage ? `${threadId}:${lastMessage.id}` : null;
+  const [suggested, setSuggested] = useState<{ key: string; items: string[] } | null>(null);
+  useEffect(() => {
+    if (!suggestKey || !threadId) return;
+    let alive = true;
+    api.suggestions(threadId).then(
+      ({ items }) => {
+        if (alive) setSuggested({ key: suggestKey, items: items.slice(0, 3) });
+      },
+      () => undefined, // suggestions are optional; the composer works without them
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, suggestKey, threadId]);
+  const suggestions = suggested && suggested.key === suggestKey ? suggested.items : [];
 
   const send = async (d: Draft, mode?: InputMode) => {
     setSendError(null);
@@ -840,245 +880,258 @@ export function ChatView({
     : [];
 
   return (
-    <section
-      className="chat"
-      aria-label={title}
-      data-chat-view
-      data-temporary={isTemporary || undefined}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes('Files')) e.preventDefault();
-      }}
-      onDrop={(e) => {
-        const files = [...e.dataTransfer.files];
-        if (!files.length) return;
-        e.preventDefault();
-        void intake.addFiles(files);
-      }}
-    >
-      <header className="chat-header">
-        <h1 className="chat-title">{title}</h1>
-        {status ? <StatusChip status={status} /> : null}
-        {thread?.parentThreadId && !thread.side ? (
-          <span className="chat-flag">
-            <Icon name="branch" /> Branch
-          </span>
-        ) : null}
-        {thread?.memoryOptOut && !thread.temporary ? (
-          <span className="chat-flag">Not used for memory</span>
-        ) : null}
-        <span className="chat-header-spacer" />
-        {thread?.model ? (
-          <span className="muted chat-model">{modelLabel(models, thread.model)}</span>
-        ) : null}
-        {!threadId ? (
-          <span className="chat-temp-toggle">
-            <Switch
-              id="temporary-switch"
-              label="Temporary chat"
-              checked={temporary}
-              onChange={(on) => navigate(on ? '/chat?temporary=1' : '/chat')}
-            />
-            <label htmlFor="temporary-switch">Temporary</label>
-          </span>
-        ) : null}
-        {menu.length ? (
-          <Menu label="Chat options" trigger={<Icon name="more" />} items={menu} />
-        ) : null}
-      </header>
-      {isTemporary ? (
-        <p className="temp-banner" role="note">
-          <Icon name="clock" /> Temporary chat: not saved to memory or search, deleted when you
-          leave
-        </p>
-      ) : null}
-      {find.open ? (
-        <FindBar
-          query={find.query}
-          onQuery={(q) => setFind((f) => ({ ...f, query: q, index: 0 }))}
-          count={findCount}
-          index={Math.min(find.index, Math.max(0, findCount - 1))}
-          onNext={() => step(1)}
-          onPrevious={() => step(-1)}
-          onClose={closeFind}
-          inputRef={findInput}
-        />
-      ) : null}
-      <div
-        ref={log}
-        className="chat-log"
-        role="log"
-        aria-label="Messages"
-        aria-live="off"
-        tabIndex={0}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          memory.scroll.set(scrollKey, el.scrollTop);
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    <ToolAppsProvider>
+      <section
+        className="chat"
+        aria-label={title}
+        data-chat-view
+        data-temporary={isTemporary || undefined}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (!files.length) return;
+          e.preventDefault();
+          void intake.addFiles(files);
         }}
       >
-        {state.status === 'loading' ? (
-          <p className="muted chat-loading">
-            <Spinner label="Loading messages" /> Loading messages…
+        <header className="chat-header">
+          <h1 className="chat-title">{title}</h1>
+          {status ? <StatusChip status={status} /> : null}
+          {thread?.parentThreadId && !thread.side ? (
+            <span className="chat-flag">
+              <Icon name="branch" /> Branch
+            </span>
+          ) : null}
+          {thread?.memoryOptOut && !thread.temporary ? (
+            <span className="chat-flag">Not used for memory</span>
+          ) : null}
+          <span className="chat-header-spacer" />
+          {thread?.model ? (
+            <span className="muted chat-model">{modelLabel(models, thread.model)}</span>
+          ) : null}
+          {!threadId ? (
+            <span className="chat-temp-toggle">
+              <Switch
+                id="temporary-switch"
+                label="Temporary chat"
+                checked={temporary}
+                onChange={(on) => navigate(on ? '/chat?temporary=1' : '/chat')}
+              />
+              <label htmlFor="temporary-switch">Temporary</label>
+            </span>
+          ) : null}
+          {menu.length ? (
+            <Menu label="Chat options" trigger={<Icon name="more" />} items={menu} />
+          ) : null}
+        </header>
+        {isTemporary ? (
+          <p className="temp-banner" role="note">
+            <Icon name="clock" /> Temporary chat: not saved to memory or search, deleted when you
+            leave
           </p>
         ) : null}
-        {state.status === 'error' ? (
-          <div className="chat-error" role="alert">
-            <p>{state.loadError}</p>
-            <Button onClick={() => navigate(chatPath(null))}>Start a new chat</Button>
-          </div>
-        ) : null}
-        {state.status === 'ready' && shown.length === 0 ? (
-          <EmptyState
-            title={threadId ? 'No messages yet' : 'Start a conversation'}
-            description={
-              noModel
-                ? 'Connect a model provider in Settings → Accounts to start chatting.'
-                : 'Ask a question, paste text to work on, or attach a file.'
-            }
-            icon="chat"
-            action={
-              noModel ? (
-                <Button onClick={() => navigate('/settings/accounts')}>Connect a provider</Button>
-              ) : undefined
-            }
+        {find.open ? (
+          <FindBar
+            query={find.query}
+            onQuery={(q) => setFind((f) => ({ ...f, query: q, index: 0 }))}
+            count={findCount}
+            index={Math.min(find.index, Math.max(0, findCount - 1))}
+            onNext={() => step(1)}
+            onPrevious={() => step(-1)}
+            onClose={closeFind}
+            inputRef={findInput}
           />
         ) : null}
-        {shown.map((m, i) => {
-          const inherited = !!thread && !m.local && m.threadId !== thread.id;
-          const prev = shown[i - 1];
-          const prevInherited = !!prev && !!thread && !prev.local && prev.threadId !== thread.id;
-          return (
-            <Fragment key={m.id}>
-              {inherited && (!prev || prev.threadId !== m.threadId) ? (
-                <p className="msg-divider">
-                  <Icon name="branch" /> From{' '}
-                  <a
-                    href={chatPath(m.threadId, m.id)}
-                    onClick={(e) => {
-                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                      e.preventDefault();
-                      navigate(chatPath(m.threadId, m.id));
-                    }}
-                  >
-                    {titleOf(m.threadId)}
-                  </a>
-                  <span className="muted"> (read-only here)</span>
-                </p>
-              ) : null}
-              {!inherited && prevInherited ? (
-                <p className="msg-divider">This branch continues here</p>
-              ) : null}
-              <MessageItem
-                message={m}
-                streamed={state.streamed[m.id]}
-                reasoning={state.reasoning[m.id]}
-                highlighted={highlight === m.id}
-                attachmentUrl={api.attachmentUrl}
-                onRetry={inherited ? undefined : () => void retry(m)}
-                retryDisabled={streaming}
-                modelName={m.model ? modelLabel(models, m.model) : null}
-                find={findQuery}
-                actions={actionsFor(m, inherited)}
-                busy={streaming}
-                liveCalls={liveByMessage.get(m.id)}
-                approvalFor={approvalFor}
-                onOpenArtifact={onOpenArtifact}
-              />
-            </Fragment>
-          );
-        })}
-        {orphans.length ? (
-          <div className="approval-orphans">{orphans.map(approvalCard)}</div>
-        ) : null}
-      </div>
-      {needsInput ? (
-        <p className="approval-pending" role="note">
-          <Icon name="hand" />{' '}
-          {pending.length === 1
-            ? 'An approval is waiting for you.'
-            : `${pending.length} approvals are waiting for you.`}{' '}
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              const first = pending[0];
-              if (first) setFocusTarget((f) => ({ id: first.id, n: (f?.n ?? 0) + 1 }));
-            }}
-          >
-            Go to {pending.length === 1 ? 'it' : 'the first'}
-          </button>
-        </p>
-      ) : null}
-      <Composer
-        draft={draft}
-        onDraftChange={(d) => {
-          setDraft(d);
-          if (sendError) setSendError(null);
-        }}
-        onSend={(d, mode) => void send(d, mode)}
-        onStop={stop}
-        streaming={streaming}
-        stopping={stopping}
-        followUp={followUp}
-        queue={queue}
-        onCancelQueued={cancelQueued}
-        presets={stops}
-        enterToSend={enterToSend}
-        mac={registry.platform.mac}
-        sendError={sendError}
-        attachmentErrors={intake.errors}
-        onAddFiles={(f) => void intake.addFiles(f)}
-        onDismissAttachmentErrors={intake.clearErrors}
-        models={models}
-        model={model}
-        onModelChange={changeModel}
-        reasoningLevel={reasoningLevel}
-        onReasoningChange={changeReasoning}
-        inputRef={input}
-        noModelHint={noModel ? 'Connect a model provider to start' : undefined}
-        mentionSource={mentionSource}
-      />
-      {!threadId && defaultModel === null && auto && model === auto.ref ? (
-        <p className="muted composer-note">
-          Using {auto.label}.{' '}
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              settings.set('chat.defaultModel', auto.ref).catch(() => undefined);
-            }}
-          >
-            Make it the default
-          </button>
-        </p>
-      ) : null}
-      <Dialog
-        open={confirmDelete !== null}
-        title="Delete this message?"
-        description={
-          confirmDelete?.role === 'user'
-            ? 'The message and the reply to it leave this chat, the model’s context and search.'
-            : 'The reply leaves this chat, the model’s context and search.'
-        }
-        onClose={() => setConfirmDelete(null)}
-        fallbackFocus={() => input.current}
-        footer={
-          <>
-            <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
-            <Button
-              variant="danger"
+        <div
+          ref={log}
+          className="chat-log"
+          role="log"
+          aria-label="Messages"
+          aria-live="off"
+          tabIndex={0}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            memory.scroll.set(scrollKey, el.scrollTop);
+            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          }}
+        >
+          {state.status === 'loading' ? (
+            <p className="muted chat-loading">
+              <Spinner label="Loading messages" /> Loading messages…
+            </p>
+          ) : null}
+          {state.status === 'error' ? (
+            <div className="chat-error" role="alert">
+              <p>{state.loadError}</p>
+              <Button onClick={() => navigate(chatPath(null))}>Start a new chat</Button>
+            </div>
+          ) : null}
+          {state.status === 'ready' && shown.length === 0 ? (
+            <EmptyState
+              title={threadId ? 'No messages yet' : 'Start a conversation'}
+              description={
+                noModel
+                  ? 'Connect a model provider in Settings → Accounts to start chatting.'
+                  : 'Ask a question, paste text to work on, or attach a file.'
+              }
+              icon="chat"
+              action={
+                noModel ? (
+                  <Button onClick={() => navigate('/settings/accounts')}>Connect a provider</Button>
+                ) : undefined
+              }
+            />
+          ) : null}
+          {shown.map((m, i) => {
+            const inherited = !!thread && !m.local && m.threadId !== thread.id;
+            const prev = shown[i - 1];
+            const prevInherited = !!prev && !!thread && !prev.local && prev.threadId !== thread.id;
+            return (
+              <Fragment key={m.id}>
+                {inherited && (!prev || prev.threadId !== m.threadId) ? (
+                  <p className="msg-divider">
+                    <Icon name="branch" /> From{' '}
+                    <a
+                      href={chatPath(m.threadId, m.id)}
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                        e.preventDefault();
+                        navigate(chatPath(m.threadId, m.id));
+                      }}
+                    >
+                      {titleOf(m.threadId)}
+                    </a>
+                    <span className="muted"> (read-only here)</span>
+                  </p>
+                ) : null}
+                {!inherited && prevInherited ? (
+                  <p className="msg-divider">This branch continues here</p>
+                ) : null}
+                <MessageItem
+                  message={m}
+                  streamed={state.streamed[m.id]}
+                  reasoning={state.reasoning[m.id]}
+                  highlighted={highlight === m.id}
+                  attachmentUrl={api.attachmentUrl}
+                  onRetry={inherited ? undefined : () => void retry(m)}
+                  retryDisabled={streaming}
+                  modelName={m.model ? modelLabel(models, m.model) : null}
+                  find={findQuery}
+                  actions={actionsFor(m, inherited)}
+                  busy={streaming}
+                  liveCalls={liveByMessage.get(m.id)}
+                  approvalFor={approvalFor}
+                  onOpenArtifact={onOpenArtifact}
+                />
+              </Fragment>
+            );
+          })}
+          {orphans.length ? (
+            <div className="approval-orphans">{orphans.map(approvalCard)}</div>
+          ) : null}
+        </div>
+        {needsInput ? (
+          <p className="approval-pending" role="note">
+            <Icon name="hand" />{' '}
+            {pending.length === 1
+              ? 'An approval is waiting for you.'
+              : `${pending.length} approvals are waiting for you.`}{' '}
+            <button
+              type="button"
+              className="link"
               onClick={() => {
-                const m = confirmDelete;
-                setConfirmDelete(null);
-                if (m) void remove(m);
+                const first = pending[0];
+                if (first) setFocusTarget((f) => ({ id: first.id, n: (f?.n ?? 0) + 1 }));
               }}
             >
-              Delete
-            </Button>
-          </>
-        }
-      />
-    </section>
+              Go to {pending.length === 1 ? 'it' : 'the first'}
+            </button>
+          </p>
+        ) : null}
+        <Composer
+          draft={draft}
+          onDraftChange={(d) => {
+            setDraft(d);
+            if (sendError) setSendError(null);
+          }}
+          onSend={(d, mode) => void send(d, mode)}
+          onStop={stop}
+          streaming={streaming}
+          stopping={stopping}
+          followUp={followUp}
+          queue={queue}
+          onCancelQueued={cancelQueued}
+          presets={stops}
+          enterToSend={enterToSend}
+          mac={registry.platform.mac}
+          sendError={sendError}
+          attachmentErrors={intake.errors}
+          onAddFiles={(f) => void intake.addFiles(f)}
+          onDismissAttachmentErrors={intake.clearErrors}
+          models={models}
+          model={model}
+          onModelChange={changeModel}
+          reasoningLevel={reasoningLevel}
+          onReasoningChange={changeReasoning}
+          inputRef={input}
+          noModelHint={noModel ? 'Connect a model provider to start' : undefined}
+          mentionSource={mentionSource}
+          slashSource={slashSource}
+          suggestions={suggestions}
+          onTurnOffSuggestions={() => {
+            settings.set('chat.suggestions', false).then(
+              () => announce('Suggested follow-ups are off. Turn them on in Settings → General.'),
+              (err: unknown) =>
+                toast.show(`Could not turn off suggestions: ${errorMessage(err)}`, {
+                  tone: 'error',
+                }),
+            );
+          }}
+        />
+        {!threadId && defaultModel === null && auto && model === auto.ref ? (
+          <p className="muted composer-note">
+            Using {auto.label}.{' '}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                settings.set('chat.defaultModel', auto.ref).catch(() => undefined);
+              }}
+            >
+              Make it the default
+            </button>
+          </p>
+        ) : null}
+        <Dialog
+          open={confirmDelete !== null}
+          title="Delete this message?"
+          description={
+            confirmDelete?.role === 'user'
+              ? 'The message and the reply to it leave this chat, the model’s context and search.'
+              : 'The reply leaves this chat, the model’s context and search.'
+          }
+          onClose={() => setConfirmDelete(null)}
+          fallbackFocus={() => input.current}
+          footer={
+            <>
+              <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  const m = confirmDelete;
+                  setConfirmDelete(null);
+                  if (m) void remove(m);
+                }}
+              >
+                Delete
+              </Button>
+            </>
+          }
+        />
+      </section>
+    </ToolAppsProvider>
   );
 }
 

@@ -22,7 +22,7 @@ Last updated: 2026-10-17T12:00:00Z
 | M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
 | M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
 | M3 Tools/MCP/Policy | done | 2026-10-17 | 2026-10-17 | J1, J2, J3 green 3/3 in parallel (axe clean); `docs/demos/M3.md` |
-| M4 Plugins/Workspace/Profile | todo | — | — | — |
+| M4 Plugins/Workspace/Profile | in_progress | 2026-10-17 | — | — |
 | M5 Agent Runtime (Work & Code) | todo | — | — | — |
 | M6 Agents/Computers/Channels | todo | — | — | — |
 | M6.5 Networking/Add Device | todo | — | — | — |
@@ -95,19 +95,19 @@ Last updated: 2026-10-17T12:00:00Z
 | T-M3-17 | M3 | FR-196 | done | aef94eb | core registry/search tests; J3 step 1 | Deferred tools + `tool.search` |
 | T-M3-18 | M3 | FR-204, FR-205 | done | aef94eb | core consolidation.test (28), history.test (7); hub consolidation.test | Memory consolidation, project-only scope, history-reference toggle |
 | T-M3-12 | M3 | — | done | aef94eb | `e2e/j3-tools-approvals.spec.ts`, 3/3 with J1 and J2 in parallel | E2E J3 |
-| T-M4-01 | M4 | FR-045 | todo | — | — | Plugin manifest + loader sandbox + local install |
-| T-M4-02 | M4 | FR-046 | todo | — | — | Skills + slash invocation + auto-selection |
-| T-M4-03 | M4 | FR-047 | todo | — | — | Connector framework (OAuth/PKCE, keychain) |
-| T-M4-04 | M4 | FR-005, FR-006, FR-039 | todo | — | — | Multi-pane layout + terminal + editor/preview |
-| T-M4-05 | M4 | FR-011, FR-028 | todo | — | — | Theme import/export; suggested prompts |
-| T-M4-06 | M4 | FR-035, FR-041 | todo | — | — | Local projects; Library view |
-| T-M4-07 | M4 | FR-113, FR-114, FR-115 | todo | — | — | Profile + usage insights + multiple accounts |
-| T-M4-08 | M4 | FR-044 | todo | — | — | Nova-as-MCP-server with consent |
-| T-M4-10 | M4 | FR-197 | todo | — | — | Lifecycle hooks (trust by hash, tighten-only) |
-| T-M4-11 | M4 | FR-198 | todo | — | — | MCP Apps UI host (sandboxed iframes, bridge, CSP) |
-| T-M4-12 | M4 | FR-199 | todo | — | — | MCP bundle install |
-| T-M4-13 | M4 | FR-200 | todo | — | — | Import from other assistants (preview, dedupe, secret migration) |
-| T-M4-09 | M4 | — | todo | — | — | E2E J4 |
+| T-M4-01 | M4 | FR-045 | in_progress | — | — | Plugin manifest + loader sandbox + local install |
+| T-M4-02 | M4 | FR-046 | in_progress | — | — | Skills + slash invocation + auto-selection |
+| T-M4-03 | M4 | FR-047 | in_progress | — | — | Connector framework (OAuth/PKCE, keychain) |
+| T-M4-04 | M4 | FR-005, FR-006, FR-039 | in_progress | — | — | Multi-pane layout + terminal + editor/preview |
+| T-M4-05 | M4 | FR-011, FR-028 | in_progress | — | — | Theme import/export; suggested prompts |
+| T-M4-06 | M4 | FR-035, FR-041 | in_progress | — | — | Local projects; Library view |
+| T-M4-07 | M4 | FR-113, FR-114, FR-115 | in_progress | — | — | Profile + usage insights + multiple accounts |
+| T-M4-08 | M4 | FR-044 | in_progress | — | — | Nova-as-MCP-server with consent |
+| T-M4-10 | M4 | FR-197 | in_progress | — | — | Lifecycle hooks (trust by hash, tighten-only) |
+| T-M4-11 | M4 | FR-198 | in_progress | — | — | MCP Apps UI host (sandboxed iframes, bridge, CSP) |
+| T-M4-12 | M4 | FR-199 | in_progress | — | — | MCP bundle install |
+| T-M4-13 | M4 | FR-200 | in_progress | — | — | Import from other assistants (preview, dedupe, secret migration) |
+| T-M4-09 | M4 | — | in_progress | — | — | E2E J4 |
 | T-M5-01 | M5 | FR-051 | todo | — | — | agentd worker pool + supervisor/orchestrator/executor |
 | T-M5-02 | M5 | FR-051, FR-131 | todo | — | — | Plans, autonomy levels, re-planning |
 | T-M5-03 | M5 | FR-053, FR-054 | todo | — | — | Background sub-agents + child threads |

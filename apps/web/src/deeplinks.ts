@@ -6,6 +6,7 @@
 //   nova://code[/<id>]            → /code   (sessions arrive in M4)
 //   nova://agent[/<id>]           → /agents (agents arrive in M5)
 //   nova://projects[/<id>]        → /projects, /projects/<id>
+//   nova://theme?data=<base64url> → /settings/appearance?theme=<data> (import prefilled, FR-011)
 //
 // Anything else is not a Nova link and yields null. The result is always a same-origin path
 // built from validated parts, so a link can never navigate off the app or smuggle a scheme.
@@ -14,6 +15,9 @@ import { SETTINGS_SECTIONS, chatPath, projectPath, type SettingsSection } from '
 const SCHEMES = new Set(['nova', 'web+nova']);
 // Ids are UUIDv7 in the Hub (docs/06); allow the URL-safe set so test and imported ids work too.
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+// Theme link data is base64 (url-safe or standard; a `+` may arrive as a space). The theme itself
+// is validated on the Appearance page before anything is kept.
+const THEME_DATA = /^[A-Za-z0-9_\-+/=]{1,44000}$/;
 
 function decodeId(raw: string): string | null {
   let id: string;
@@ -69,6 +73,11 @@ export function deepLinkPath(url: string): string | null {
     case 'project':
     case 'projects':
       return projectPath(arg);
+    case 'theme': {
+      const data = (params.get('data') ?? '').replace(/ /g, '+');
+      if (rawArg !== undefined || !THEME_DATA.test(data)) return null;
+      return `/settings/appearance?theme=${encodeURIComponent(data)}`;
+    }
     default:
       return null;
   }

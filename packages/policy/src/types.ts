@@ -32,8 +32,11 @@ export interface ToolAnnotations {
   requiresUser?: boolean;
   costClass?: 'free' | 'metered';
   /** Per-action permission class (FR-045). */
-  action?: 'read' | 'write' | 'send' | 'delete' | 'execute';
+  action?: ActionClass;
 }
+
+/** The per-action permission classes of plugin tools (FR-045, docs/08 §3.1). */
+export type ActionClass = 'read' | 'write' | 'send' | 'delete' | 'execute';
 
 /** The parts of a tool descriptor the engine reads. */
 export interface ToolDescriptor {
@@ -144,6 +147,24 @@ export interface PolicyContext {
   fs: FsContext;
   /** Hosts reachable without asking and hosts always denied (FR-102). */
   egress?: { allow?: string[]; deny?: string[] };
+  /** The confirmed permissions of the plugin that owns the tool (FR-045). */
+  plugin?: PluginPolicy;
+}
+
+/**
+ * A plugin's permissions as the user confirmed them at install (FR-045, docs/08 §3.1,
+ * contracts/schemas/plugin-manifest.json `permissions`). Declared permissions are enforced: a
+ * host the plugin did not declare is denied, an undeclared tool asks, and the per-tool and
+ * per-action defaults apply at step 4, below the user's own defaults.
+ */
+export interface PluginPolicy {
+  pluginId: string;
+  /** Hosts its tools may reach (exact or `*.example.com`); any other host is denied. */
+  network: readonly string[];
+  /** Per-tool action class and default, keyed by canonical (or bare) tool name. */
+  tools: Readonly<Record<string, { action: ActionClass; default?: DefaultEffect }>>;
+  /** Defaults per action class; a per-tool default overrides them. */
+  actionDefaults: Partial<Record<ActionClass, DefaultEffect>>;
 }
 
 /** A policy rule effect; `act_on_request` is "take action when you say so" (docs/12 §3). */
@@ -238,6 +259,8 @@ export type DecisionSource =
   | 'tool_default'
   | 'approval_policy'
   | 'fallback'
+  | 'plugin'
+  | 'user_action'
   | 'hook'
   | 'reviewer';
 
@@ -261,6 +284,14 @@ export interface Decision {
   effects: ActionEffect[];
   /** Set when an `ask` came from a user-set default or rule, which approval policies keep. */
   userSet?: boolean;
+  /**
+   * A permission hook may answer this `ask` with allow (FR-197, docs/12 §2.3 step 7): it came
+   * from a user rule, a per-tool default or plugin permissions (steps 3-4), and no built-in
+   * floor (tier, intent provenance, network allowlist) asks as well.
+   */
+  answerable?: boolean;
+  /** The hook that decided, when `source` is `hook`. */
+  hookId?: string;
 }
 
 /** A hook (M4) or reviewer (M5) verdict; it can only tighten a decision (docs/12 §2.3). */
@@ -268,4 +299,16 @@ export interface PolicyVerdict {
   effect: Effect;
   reason: string;
   source: 'hook' | 'reviewer';
+}
+
+/** What a `permission.request` hook answered (FR-197); see `applyHookAnswer`. */
+export interface HookAnswer {
+  effect: Effect;
+  reason: string;
+  hookId: string;
+  /**
+   * The hook may answer asks: user and managed hooks, and plugin hooks whose plugin declares
+   * `permissions.hooks.answersAsks`. Project hooks never may (docs/08 §4.1).
+   */
+  mayAnswer: boolean;
 }

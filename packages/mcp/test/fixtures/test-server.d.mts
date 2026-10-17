@@ -4,6 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/server';
 export interface TestServerOptions {
   extraTools?: number;
   testHooks?: boolean;
+  /** Add an MCP Apps tool with a `ui://` resource and `client_caps`. */
+  apps?: boolean;
   protocolVersions?: string[];
   log?: (line: string) => void;
 }

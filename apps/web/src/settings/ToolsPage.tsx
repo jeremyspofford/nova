@@ -2,6 +2,8 @@
 // servers with their health, logs and tools; every tool Nova can call with its per-tool default
 // and the decision the policy engine would make now (a preview, no side effects); and the
 // SearXNG instance behind web search. The server list refreshes every 5 s while the page is open.
+// M4 adds installing a server from a bundle (FR-199) and OAuth sign-in for remote servers
+// (FR-047).
 import { useEffect, useState } from 'react';
 import type { McpLogLine, McpServerView, ToolDescriptor, ToolView } from '@nova/shared';
 import {
@@ -16,9 +18,13 @@ import {
   useToast,
 } from '@nova/ui';
 import { errorMessage } from '../api.ts';
+import { navigate } from '../router.ts';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
-import { MANAGED, plural, useInterval } from './common.ts';
+import { VerifiedBadge } from './badges.tsx';
+import { BundleInstallButton } from './BundleInstall.tsx';
+import { MANAGED, formatWhen, plural, useInterval } from './common.ts';
+import { McpAuthControls, useOAuthReturn } from './McpAuth.tsx';
 import { McpServerForm, envToHeader } from './McpServerForm.tsx';
 import { EFFECT_TEXT, EFFECT_TONE, MCP_STATUS, SOURCE_TEXT, TIER_TEXT } from './policy-text.ts';
 import '../workspace.css';
@@ -32,6 +38,7 @@ export function ToolsPage() {
   const [version, setVersion] = useState(0);
   // Bumped after a server change so the tool list (which includes MCP tools) reloads.
   const [toolsVersion, setToolsVersion] = useState(0);
+  useOAuthReturn();
 
   useEffect(() => {
     let alive = true;
@@ -132,7 +139,26 @@ function McpServersSection({
         <Button variant="primary" onClick={() => setAdding(true)}>
           <Icon name="plus" /> Add server
         </Button>
+        <BundleInstallButton
+          onInstalled={(s) => {
+            onSaved(s);
+            toast.show(`${s.name} installed. It connects in the background.`, { tone: 'success' });
+          }}
+        />
       </div>
+      <p className="muted">
+        Hooks and plugins are in{' '}
+        <a
+          href="/settings/plugins"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate('/settings/plugins');
+          }}
+        >
+          Plugins &amp; skills
+        </a>
+        .
+      </p>
       {error ? (
         <div role="alert" className="ws-error">
           <p>{error}</p>
@@ -254,6 +280,14 @@ function ServerRow({
           <span className="ws-badge">
             {s.transport === 'stdio' ? 'Command' : s.transport.toUpperCase()}
           </span>
+          {s.bundle ? (
+            <>
+              <VerifiedBadge verified={s.bundle.signature === 'verified'} />
+              <span className="muted">
+                bundle {s.bundle.name} {s.bundle.version}
+              </span>
+            </>
+          ) : null}
         </span>
         {target ? <code className="ws-code-inline">{target}</code> : null}
         {secretNames.length ? (
@@ -270,7 +304,12 @@ function ServerRow({
           {plural(s.counts.tools, 'tool')} · {plural(s.counts.resources, 'resource')} ·{' '}
           {plural(s.counts.prompts, 'prompt')}
           {s.serverInfo ? ` · ${s.serverInfo.name} ${s.serverInfo.version}` : ''}
+          {s.status === 'connected' && s.connectedAt
+            ? ` · connected ${formatWhen(s.connectedAt)}`
+            : ''}
+          {s.restarts ? ` · restarted ${plural(s.restarts, 'time')} in the last 10 minutes` : ''}
         </span>
+        <McpAuthControls server={s} onSaved={onSaved} />
         {s.lastError ? (
           <p className="ws-warning ws-mcp-error">
             <Icon name="alert" /> <span>Last error: {s.lastError}</span>
