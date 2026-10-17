@@ -41,6 +41,7 @@ export interface MockSlack {
   stop(): Promise<void>;
 }
 
+// secret-scan: fake (the mock Slack server's token)
 export const SLACK_BOT_TOKEN = 'xoxb-e2e-bot-token';
 export const SLACK_SIGNING_SECRET = 'e2e-signing-secret-0123456789';
 
