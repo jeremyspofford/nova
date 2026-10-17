@@ -100,6 +100,7 @@ silently.
 | ADR-089 | M2 implementation choices | Model router seam, message versions, follow-ups, memory extraction, sources, compute-node transport |
 | ADR-090 | M3 implementation choices | Tool loop and gate seams, container sandbox until M6, MCP SDK, audit chain, at-rest baseline, consolidation |
 | ADR-091 | M4 implementation choices | Plugins and skills on disk, every plugin a sideload, hooks fail closed (supersedes part of ADR-083), direct user actions, MCP Apps, Nova's MCP server, bundles, OAuth, workspace, profile, import |
+| ADR-092 | M5 implementation choices | One runtime through turn seams, per-thread policy and tool scope, runs, goals, sub-agents, schedules, Code sessions, auto-review denies without a reviewer model (supersedes part of ADR-090), requests, compaction, documents in-process |
 
 ## Details & rationale
 
@@ -899,6 +900,282 @@ component sources. Revisit if UI velocity suffers.
   a link from a hook to its audit entries and a diff in the trust dialog; allowed domains in the
   App frame header; layouts saved per session or project and named workspaces (`docs/04` §2.4,
   §4.3).
+
+**ADR-092 — M5 implementation choices** (supersedes part of ADR-090; see
+`docs/adr/0092-m5-implementation-choices.md`).
+- *One runtime through turn seams (ADR-076).* Work runs, schedules, goals, sub-agents and Code
+  sessions start turns through the chat loop's `TurnStarter` (`ChatService.turnStarter`) and
+  shape each turn on their threads with a `TurnExtension` (`ChatService.useExtension`). An
+  extension adds context blocks, bounds checked before every model step, usage recorded after
+  each step, and an `onEnd` called once per turn chain. Trusted blocks join the system context as
+  `## <label>` sections; untrusted ones go in an envelope after the user's turn and taint it. A
+  throwing extension or bound fails the turn closed (`extension_failed`). A started turn stores
+  its text as a user-role message labelled with its author (`run`, `schedule`, `goal`,
+  `subagent`, `system`). Only a run objective, schedule instructions or a redirect the user typed
+  carry the user's authority; goal continuations, sub-agent tasks and Nova's own text never do,
+  and they taint the turn. Sub-agent turns use trigger `user` with the run id as `trigger_ref`,
+  because the trigger list has no sub-agent value. Turn starts are audited (`turn.start`, kind
+  `run`, `schedule` or `policy`). Turns that `startTurn` queues behind a running turn wait in
+  memory only: `queued_input` has no authority column, so a persisted one could replay as
+  user-typed; after a restart each area recovers its own state. A turn's time is now active
+  time: approval waits and waits for the user's answer are left out.
+- *Tool listings carry the thread scope.* The runtime lists tools with `ToolListScope {threadId,
+  mode}`. Run tools (`plan.set`, `plan.update`, `run.complete`, `goal.*`, `task.*`) are offered
+  only in a run's thread, and a sub-agent's thread gets only `run.complete`; `work.start` only in
+  chats while `chat.escalation` is not `off`; Code tools (`git.status`, `git.diff`, `git.log`,
+  `test.run`, `code.symbols`, `code.refs`) only in Code threads; `ask_user` is meant for Work and
+  Code threads. Every handler still refuses a call outside its threads. Run tools change only
+  Nova's own run state, so the gate treats them as read-only; every action a run or sub-agent then
+  takes passes the gate. `ask_user` is listed only in Work and Code threads, and `schedule.report`
+  only in the thread of a run a schedule fired; both still refuse elsewhere.
+- *Per-thread policy (FR-063, `docs/09` §10).* Two sources set a thread's policy: Code sessions
+  (the permission mode) and runs (autonomy: `ask_first` → `ask_always`, `standard` →
+  `defaults`, `autonomous` → `review`). The first source that knows the thread wins. Its approval
+  policy replaces `tools.approvalPolicy` (Accept edits adds `autoAccept: ['file_edit']`), its
+  profile replaces the request's, and its roots replace the settings' roots, the project folders
+  and the Nova workspace: a Code session's folder (or worktree) is its only root, so relative
+  paths, `exec.run`'s working folder and instruction-file discovery all start there. The gate
+  resolves a relative path in that first root too, so a protected path is denied as protected.
+  The gate and the tool runtime read the same sources, so the roots the tools get are the roots
+  the gate checks. A source that throws denies every call. The permission mode and the run id go
+  into the policy context and the audit detail. A sub-agent whose tool list holds only reading
+  tools gets the `read-only` profile.
+- *Event streams.* The global event stream and the WebSocket deliver only the signed-in account's
+  events and account-less system events. Nova is single-owner today; this is defense in depth.
+- *Handshake.* `GET /api/v1/hello` stays public. An authenticated `POST /api/v1/hello` takes
+  `capabilities.serverRequests` and returns the agreed request kinds and a `clientSessionId`,
+  which the WebSocket names as `?clientSessionId=`.
+- *Runs (FR-051, FR-052).* `ask_first` runs one planning turn that only proposes a plan, then
+  waits in `planning` until Start; a run proposed in a chat waits there too, shown as Needs input.
+  A turn that ends normally finishes the run, with the `run.complete` result or else the final
+  reply as the summary. Two exceptions: an open goal is continued, and a run whose sub-agents are
+  still working waits for them, then starts a turn to collect their results. An error pauses the
+  run; three failed turns in a row fail it. `rate_limited` or `over_budget` pauses it with
+  `usage_limit` and retries after 15 minutes. A lost execution location pauses it. Typing in a run
+  the user paused resumes it. Runs continue after a Hub restart: `main.ts` calls `runs.recover()`
+  after the chat loop recovers; paused runs stay paused. Controls, plan edits and goals are
+  audited with kind `run`; an ephemeral `run.updated` carries the whole `RunView` on every
+  change. Storage departs from `docs/06`: usage time is in milliseconds (`time_used_ms`), the plan
+  lives in `run_step` (no `plan_json`), and run, goal and sub-agent rows gain columns for
+  authority, pending input, the error count, the progress note, the template and a sub-agent's
+  objective, tools and inbox.
+- *Authority of run text (FR-189).* Start on a proposed run gives its objective the user's
+  authority. Auto-escalated runs, sub-agent tasks and goal continuations carry none. Resume,
+  restart and "children finished" continuations keep the authority the run already has, so a
+  resume never turns a model-written objective into the user's.
+- *Budgets (FR-182, ADR-058).* Bounds are checked before every model step. Extending adds to the
+  bound: `{timeSeconds: 1800}` is 30 more minutes. Extending cost does nothing while the run has
+  no cost cap; `steps: true` allows one more turn after the 200-step backstop; resuming a run
+  still over budget answers 409 `budget_exhausted`. A child's active time and usage count against
+  its parent. Time spent waiting for an approval or for the user's answer to `ask_user` does not
+  count. A budget pause moves the run's goal to `budget_limited`; the backstop does not. A run's
+  exec sessions are killed when it ends.
+- *Goals (FR-181).* The blocked rule needs the same blocker on 3 consecutive goal turns; idle
+  continuation waits 5 s. `goal.set` needs the user's authority. The agent may set `complete`
+  (with a progress note), `blocked` (from the third report) and `paused` (only when the user
+  asked). A blocked goal leaves the run `running` and idle, shown as Blocked "Goal blocked";
+  goals have no pause reason. Clearing a goal deletes its row.
+- *Sub-agents (FR-053, FR-054).* Depth is fixed at 1. `runs.subagents` allows 6 children per run
+  (finished ones count) and 4 running at once; extra spawns queue. Children pause and cancel with
+  their parent. `task.wait` waits 30 s by default, between 10 s and 1 h. A child's tool list is
+  stored but enforced only through the read-only profile.
+- *Chat escalation (FR-186, ADR-077).* `work.start {objective, title?, plan?}` in a chat creates
+  the run with no authority and answers `{runId, threadId, status}`. With `propose` the run waits
+  for **Start run** on the chat's run card; with `auto` it starts at once. The run has its own Work
+  thread; the chat's last 10 messages reach it as an untrusted "From the chat" block.
+- *Deep research (FR-220).* A run template. Its prompt plans 3 to 6 sub-questions with `plan.set`,
+  spawns one researcher per sub-question with `web.search`, `web.fetch` and the file read tools (a
+  child limited to reading tools runs under the read-only profile), waits for them and writes a
+  cited Markdown report artifact. The run expects an artifact, so it succeeds only when the report
+  is saved.
+- *Verified outcomes (FR-187).* An artifact output must be saved, a file output written and
+  hashed, and a message output delivered with a receipt from the scheduler's delivery; a
+  scheduled run that expects a message and has no checker ends `output_missing`.
+- *Schedules (FR-055, ADR-079).* Time zones use `Intl`; no new dependency. A local time that does
+  not exist fires at the end of the gap; a repeated one fires on its first occurrence. Hourly and
+  minutely rules step in local wall-clock time. RRULE `DTSTART` counts only when it matches the
+  rule, and a date-only `UNTIL` runs through the end of that local day; `BYSETPOS`, `BYYEARDAY`,
+  `BYWEEKNO` and `SECONDLY` are refused. No rule may fire more than once a minute, a rule must have
+  a future fire, and the search looks at most 12 years ahead. The loop checks every minute; a fire
+  handled more than 2 minutes after its time counts as missed, and a lookback of 0 still fires on
+  time. A fire that comes due while the schedule's previous run is still going is recorded as
+  skipped; **Run now** always starts. Resuming a paused schedule does not catch up the paused
+  period. A crash between claiming a fire and starting its run ends that fire `failed`, and it
+  never fires again. Deleting a schedule removes its history and webhook secret; a run in
+  progress continues. The API creates only the user's own schedules (`origin` is refused), and a
+  fired run carries the user's authority because the user typed the instructions. Run ids in the
+  history are plain text, so the history outlives a deleted run.
+- *Delivery (FR-187).* A schedule with delivery targets expects a message: every target (or the
+  one `output.ref` names) must return a receipt. `failed` and `cancelled` runs are not delivered; a
+  run with a missing artifact still delivers its message; `inapp` and `os` share one
+  notification; `output_missing` raises an `error` notification. The `schedule.report` tool lets a
+  scheduled run say that its notify condition did not hold; the fire then ends `no_news`, which
+  counts as verified. Webhooks are https only, with no credentials in the URL and no private or
+  local hosts; the connection is pinned to the checked address, redirects are not followed, and a
+  2xx answer within 15 s is the receipt. The JSON body is `{scheduleId, runId, fireId, title,
+  summary, firedAt, deliveredAt}`, sent with `x-nova-delivery`, `x-nova-timestamp` and
+  `x-nova-signature: sha256=HMAC(secret, "<ts>.<body>")`; each schedule has its own secret at
+  `secret://schedule/<id>/webhook`. Schedule changes are audited with kind `schedule`, webhook
+  calls with kind `network`.
+- *Code sessions (FR-061, FR-064, FR-065).* Each session has a shadow repository at
+  `<dataDir>/code/<id>/shadow.git` with `refs/nova/baseline` (the accepted state) and
+  `refs/nova/start` (the last committed state). It ignores system and global Git config and
+  neutralizes filters and line-ending conversion; protected paths, credential locations and
+  dependency caches are left out by pathspec, so an in-tree `.gitignore` negation cannot bring
+  them back. Renames are not detected: they show as a delete and an add. Each file has a review
+  round: decided hunks are kept until a fully decided file changes again; committed rows are
+  hidden. Changes refresh on `GET …/changes`, after each decision, at turn end and after every
+  tool call of the session that is not read-only; that call's id is recorded on the change. A
+  review covers all uncommitted session changes, accepted and pending. Change and comment paths
+  are relative to the session folder; symbol and ref paths in the API are relative to the
+  repository root. `repo.defaultBranch` comes from origin's HEAD, else `init.defaultBranch`, else
+  `main` or `master` when that branch exists.
+- *Commits (FR-070 partial, FR-211).* A commit stages the accepted content into the user's index
+  without touching the working tree, so pending hunks stay out. It refuses when the user has
+  other staged changes, on the default branch (`default_branch`), on a detached HEAD, and when
+  added lines hold a secret (`secrets_found`, masked). A new `nova/<slug>` branch is created
+  without a checkout, so no hooks run. Commit hooks run in the sandbox only when the repository
+  has hooks and the sandbox image has Git, with the repository writable and network off;
+  otherwise the Hub commits with hooks disabled and returns `hooksNote`. Nothing is ever pushed.
+  Nova's own Git calls point `core.hooksPath` at an empty folder for that call only, overriding a
+  user's setting without changing their config.
+- *Environments and modes (FR-062, FR-063).* M5 has one environment, the local Hub ("This Hub").
+  It is `ok` or `degraded` (no Git, or no sandbox), never `down`. A session is Blocked when its
+  environment is down or its folder is missing. Auto needs `review.model`; Bypass needs
+  `code.allowBypass` and a container or micro-VM substrate. A remembered or default mode that is
+  not available falls back to Manual; when an Auto or Bypass condition lapses later, the session
+  runs with Manual's axes and reports `permissionMode: 'manual'` to the gate. The last mode per
+  folder is kept in `code.folderModes`; Plan is never remembered.
+- *Session folders.* Refused: `/`, system folders, the home folder and its ancestors, the data
+  folder (inside it or around it), credential locations, and `.git`, `.nova` or `.agents`.
+- *Symbols, tests, terminal and review (FR-074, FR-066, FR-069).* The symbol index is a
+  pattern-based extractor kept in memory per session (16 indexes, 512 KiB per file, 20,000
+  files); references are a whole-word search. `test.run` waits up to 10 minutes, then stops the
+  suite. A session terminal is a workspace terminal rooted at the session folder (409
+  `sandbox_unavailable` without a sandbox). A code review uses the session's model, must answer
+  strict JSON and is retried once; findings are stored as diff comments with author `review`.
+- *Worktrees (FR-073).* A worktree lives at `<repo>/.nova/worktrees/<8 hex>` on `nova/<slug>`, at
+  most 15 per repository; at the cap creating one fails with `worktree_cap`. When the session's
+  thread is archived (checked on list and every 5 minutes) a clean worktree is removed and a dirty
+  one is kept.
+- *Auto-review (FR-085, ADR-061).* The reviewer is one model call with no tools, a JSON-schema
+  response format, 90 s per attempt and 3 attempts; a valid deny is not retried. With no tools
+  there is nothing for a sandbox to confine, so it does not run in one. Its prompt is Nova's own,
+  versioned `auto-review-1`, and it reads up to 10 of the user's instructions for the run and a
+  bounded summary of the turn. It runs after hooks, only for an allowed `pre_approvable` call under
+  `review`, and applies ask, handoff or deny through `tighten`. A failure, an answer outside the
+  schema or a missing `review.model` all deny, and the denial tells the model not to retry similar
+  actions. This supersedes ADR-090's "`review` with no reviewer configured asks every time": with
+  the Hub's default reviewer and no `review.model`, `review` denies. Code's Auto mode cannot be
+  picked without one, and the Hub refuses to create an autonomous run without one (`validation`,
+  `review_model_required`), which the New run dialog says first.
+  `review.started` and `review.completed` are emitted. The verdict is stored on the approval row;
+  **Allow once** on a reviewer card is an override. The audit entries `review.verdict` (model,
+  attempts, latency, fail-closed), `review.override` and `review.breaker` use the audit kind
+  `review`.
+- *Review breaker.* 3 denials in a row, or 10 in the last 50 reviews, counted per run (per thread
+  without a run), trip it: the call is denied and the turn stops, `review.breaker.tripped` is
+  emitted, the user is notified and the count starts over. The run pauses with `review_breaker`
+  and shows Blocked "Stopped by auto-review". Resuming resets the count. The count is kept in
+  memory only.
+- *Server-to-client requests (FR-188).* Request ids are UUIDv7. The first valid answer wins; a
+  later one gets 409 and an expired one 410; answering a request aimed at another device gets 403
+  `policy_denied`. Requests are validated per kind, sent by kind and target device, re-sent to a
+  client that reconnects, and answered by WebSocket `respond` frames or
+  `POST /requests/:id/respond`; the header `x-nova-client-session` names the client. With no
+  capable client connected the notification fallback is immediate, else it waits 2 minutes, once
+  per request. A cancelled request becomes `expired` with reason `cancelled`; `request.expired`
+  carries `timeout`, `cancelled` or `restart`. Pending approvals are listed as `approval` items and
+  answering one goes to the approvals decision; they get no `request.resolved`, because
+  `approval.decided` is the signal. `ask_user` waits up to `policy.approvalTimeoutMinutes` (24 h);
+  unanswered, it ends the turn with stop `approval_timeout`, which pauses the run; a cancelled turn
+  withdraws the question.
+- *Thread status (FR-215).* A status service derives the status of every thread, run and session:
+  needs input, then blocked, running and ready. Child threads count for needs input and running
+  only, three levels down. It recomputes on approval, request, turn, run, goal and Code events,
+  refreshes the parent and emits `thread.status.changed {ref, from, status, reason}`; the chat
+  loop no longer emits it.
+- *Compaction (FR-183).* A compaction is a message with role `summary` and one `compaction` part,
+  inserted just above the turn's user message; the originals stay stored, visible and searchable,
+  so no migration was needed. Summaries are plain text, not enveloped, and keep the taint of what
+  they summarize. Mid-turn and manual compactions also drop the current turn's earlier tool
+  results except the latest step's. Tools that `tool.search` loaded are unloaded at compaction.
+  Offline, or when a real model's summary request fails, the summary is extractive. The summary
+  request counts toward the turn's usage and bounds. Post-turn compaction runs while the thread is
+  still reserved: a send queues, and edit and regenerate answer 409.
+- *Instruction files (FR-185).* Discovery walks from the root marker down to the working directory
+  within the 32 KiB budget, truncates the file that overflows, drops later ones and warns
+  (`context.instructions.truncated`); symlinks may not leave the root. `<dataDir>/instructions.md`
+  is added as "User instructions". The working directory is the first tool root (for a chat in a
+  project with folders, the project's first folder; side and child threads use their top thread's).
+  The data folder is a ceiling, so the Nova workspace never picks up a repository's `AGENTS.md`
+  above it. Instruction files are trusted and do not taint the turn. There is no project-trust step
+  yet, so a folder the user added counts as trusted, as ADR-091 did for hooks; this amends ADR-083's
+  "A project is trusted once the user confirms it on first open" until that step exists.
+- *Exec sessions (FR-184).* A session belongs to its turn. When a non-chat turn ends normally, the
+  thread keeps it and a later turn may drive it. Sessions die on cancel or deny-and-stop,
+  `TurnStarter.cancel`, thread deletion, the end of a run or `DELETE /exec/sessions/:id`; at most
+  8 per thread. `exec.write` passes the gate on every call, as `contracts/ipc-channels.md`
+  requires; writing to another thread's session is refused (`session_denied`).
+- *Memory reads only what the user typed (FR-204, FR-189).* Consolidation reads Nova's replies and
+  the messages the user typed into a conversation (author `user`). Run objectives, schedule
+  fires, goal continuations, sub-agent tasks, hook continuations and Nova's own messages are
+  skipped, so text the user did not write never becomes a memory about the user.
+- *Documents (FR-219).* `document.create {kind, title, content}` and `document.read {path |
+  artifactId}` are built-in tools that run in the Hub process, not skills run through `exec.run`
+  in the sandbox (`docs/08` §1.1). They only turn validated data into a file or a file into text,
+  run no code and import nothing that reaches the network (a test enforces it), so the sandbox's
+  two guarantees hold anyway. DOCX, PPTX, XLSX and PDF are written and read with the existing zip
+  library and plain XML; no new dependency. PDFs use the PDF standard fonts, not embedded:
+  characters outside Western European text print as "?", and the tool counts them and suggests
+  DOCX. Previews are extracted on the Hub, never in the browser (`GET /artifacts/:id/preview`: 500
+  rows × 50 columns per sheet, 200,000 characters). Office files are artifacts of kind `file` with
+  the Office media type and PDFs of kind `pdf`; the title gets the extension. `document.read`
+  reads only inside the turn's folders, never the data folder, and returns untrusted content (at
+  most 40,000 characters, files up to 25 MB). Zip, deflate and XML limits stop a crafted file from
+  exhausting the Hub. Building and reading run on the Hub's main thread.
+- *Image generation (FR-030).* `image.generate {prompt, size?}` is listed only while a configured
+  model can make images: the first image model whose provider adapter has an images call, and
+  only local ones while cloud routing is off. No adapter has an images call yet, so the tool is
+  hidden. Images are saved as image artifacts. There is no editing and no setting to choose the
+  image model.
+- *Plugin drafts (FR-050).* `plugin.scaffold` writes `<dataDir>/plugins-drafts/<id>/` (default id
+  `local.<slug>`, replacing an earlier draft) and checks it with the installer's own loader; it
+  reports problems or warnings and keeps a failing draft. It never installs: the user installs it
+  from Settings → Plugins & skills → Install from a folder, through the normal preview and
+  sideload confirmation. An MCP server's env values may only reference the plugin's own secrets;
+  anything that looks like a credential is refused; an http or sse server's host becomes a
+  declared network permission.
+- *Diagnostics tests (FR-119).* `POST /diagnostics/test` tests a provider account (one 16-token
+  request held to that account, so no fallback answers for it), an MCP server (its status and last
+  tool list), the sandbox (runs `true` with no network), storage (write, read back, delete, an
+  integrity check and free space) or updates; each test has 30 s and is not audited. The audit
+  export (FR-104) was checked: the tool name is in `action`.
+- *Web client.* The Work UI renders only on Work routes and shares one global event stream. A Code
+  session shows its conversation beside its own Diff, Review, Terminal and File tabs, not layout
+  panes. **Apply fix** on a finding sends a diff comment at the finding's line when that file has a
+  change, else a message quoting the fix. The mode selector explains why a mode is unavailable;
+  the Hub enforces the same rules. **Go to the next item that needs input**
+  (`status.nextNeedsInput`, Ctrl/Cmd+Alt+A) clashes on Linux and Windows native shells with the
+  global **Attach frontmost window** key (`docs/04` §5): there the global key wins. Both can be
+  remapped; on macOS ⌘⌥A and ⌃⌥A differ. The palette commands `work.newRun`, `work.newSchedule`
+  and `work.scheduled` have no default key.
+- *Not in M5:* dictation (FR-216) needs a local speech-to-text engine, and Nova ships none (no
+  adapter has an audio endpoint, and browser speech recognition usually sends audio to a vendor);
+  realtime voice (FR-031) needs a realtime audio provider or a local speech pipeline with voice
+  detection; both wait for an audio stack. Image generation waits for a provider adapter with an
+  images call (`Provider.generateImage`), and the composer's image entry point waits with it. Also
+  not in M5: the PR flow and CI status (FR-070); the worktree registry routes, lease renewal and
+  expiry, handoff, `.worktreeinclude` and best-of-N; a way to reveal a schedule's webhook secret
+  (a rotate-and-show-once route), so receivers cannot verify signatures yet; the user's answer to
+  `ask_user` carrying their authority for the rest of the turn; enforcing a sub-agent's tool list
+  beyond the read-only profile; quiet hours for goal continuations; `review_marker` thread items;
+  the `diff` layout pane kind (still a placeholder); **Finish here** and **Duplicate run**;
+  tree-sitter (a pattern-based index instead); renames (shown as a delete and an add); agent-made
+  schedules and self-set wakes (`schedule.create`, `schedule.wake`, M6); Slack, Teams and email
+  delivery (M6 channels); environments other than the local Hub; budgets for Code sessions (each
+  turn keeps the 200-step backstop); and the full handshake of
+  `contracts/hub-api.md` (protocol negotiation, limits, `suppressEvents`).
 
 ## Defaults for common ambiguities
 

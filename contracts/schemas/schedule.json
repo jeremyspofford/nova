@@ -57,6 +57,7 @@
         }
       ]
     },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
     "timezone": { "type": "string", "description": "IANA timezone, e.g. America/Los_Angeles" },
     "startsAt": { "type": "string", "format": "date-time" },
     "endsAt": { "type": "string", "format": "date-time" },
@@ -99,6 +100,12 @@
       "description": "agent: created by an agent with schedule.create (FR-059); agent_self: a wake set with schedule.wake (FR-206)."
     },
     "wakeReason": { "type": "string", "maxLength": 500 },
+    "projectId": { "type": "string", "description": "The project the schedule's runs belong to." },
+    "autonomy": {
+      "enum": ["ask_first", "standard", "autonomous"],
+      "default": "standard",
+      "description": "Autonomy of the Work runs it starts."
+    },
     "enabled": { "type": "boolean", "default": true }
   },
   "anyOf": [{ "required": ["when"] }, { "required": ["id"] }],

@@ -13,13 +13,17 @@ Every listener requires a token or certificate; loopback is never treated as aut
 (FR-192, ADR-075). The only exceptions authenticate another way and say so below: Add Device
 (pairing code), the MCP event webhook (signature), the `novad` download route (static,
 signed artifacts only), the MCP OAuth callback (single-use state), Nova's OAuth client
-metadata document (public, no account data) and `/mcp` (a client token of its own).
+metadata document and `GET /api/v1/hello` (both public, no account data), and `/mcp` (a
+client token of its own).
 
-### Handshake
+### Handshake & streams
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/hello` | Capability handshake: client declares capabilities; Hub returns versions and features (§7) |
+| `GET` | `/api/v1/hello` | Public: `{name, version, apiVersions, features, setupRequired}`; no account data |
+| `POST` | `/api/v1/hello` | Capability handshake (§7), with a session. M5 ships the body `{capabilities: {serverRequests}}` (other fields are accepted and ignored) and the answer `{name, version, apiVersions, serverRequests, clientSessionId}`: `serverRequests` is the request kinds the Hub agrees to send this client (the known kinds it asked for, §5) and `clientSessionId` a new id the client names on its WebSocket (`?clientSessionId=`) and in the `x-nova-client-session` header. Client sessions live in Hub memory (the newest 1,000); the session's token is the client's device for `targetDeviceId`. The full §7 shape is a follow-up |
+| `GET` | `/api/v1/events/stream` | SSE stream of the signed-in account's events and account-less system events (§5), `request.created` included. Opens with `: connected`; with `Last-Event-ID` or `?after=` it first replays persisted events after that id, else live events only |
+| `GET` (WebSocket) | `/api/v1/ws?clientSessionId=` | The same events as `event` frames, plus server-to-client `request` frames for the kinds the handshake agreed, and `respond` frames from the client (§5). The session is checked before the upgrade (401 `token_required`) |
 
 ### Auth & devices
 
@@ -48,8 +52,8 @@ metadata document (public, no account data) and `/mcp` (a client token of its ow
 | `GET/POST` | `/api/v1/projects/:id/folders` | Local project folders as `ProjectFolderView` / bind one `{path, access: read\|write}` (201) (FR-035). The path is resolved to its real path (`~` is the Hub user's home). `policy_denied` `{reason: protected_folder}` for the filesystem root, the home folder or a folder containing it, the Hub data folder (inside, equal or containing) and credential locations; `validation` for a relative or missing path, a file, or a 21st folder (`{reason: too_many_folders}`); `conflict` for the same folder twice. Indexing runs in the background (`project.folder.indexed`): each text file becomes a source whose bytes stay in the folder. Symlinks are not followed; version-control, dependency and build folders, top-level `.gitignore` patterns, protected paths, binaries and files over 20 MB are skipped; at most 5,000 files. A bound folder is also a tool root for the project's chats, with `access` capped by the permission profile (FR-190) |
 | `POST` | `/api/v1/projects/:id/folders/:fid/reindex` | Index the folder again; returns it |
 | `DELETE` | `/api/v1/projects/:id/folders/:fid` | Unbind; its sources leave retrieval at once and the files on disk are untouched |
-| `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `projectId`, `cursor`, `limit`; pinned first, then most recent; side chats excluded) / create conversations (`temporary`, `memoryOptOut`, `projectId`). Shapes: `packages/shared/src/api.ts` |
-| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its active path, version info, citations and follow-up queue / rename, pin, archive, model, reasoning level, memory opt-out, project / soft delete; a temporary thread is purged (FR-027) |
+| `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `projectId`, `cursor`, `limit`; pinned first, then most recent; side chats excluded) / create conversations (`temporary`, `memoryOptOut`, `projectId`). Shapes: `packages/shared/src/api.ts`. Since M5 each listed `ThreadView` carries `derived` `{status: needs_input\|blocked\|running\|ready, reason}` (FR-215), counting its child threads |
+| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its active path, version info, citations and follow-up queue (its `thread.derived` filled as in the list; since M5 a user message Nova started has `provenance` `run\|schedule\|goal\|subagent\|system`, a compaction is a `summary` message with a `compaction` part, and a reply may carry a `notice` part) / rename, pin, archive, model, reasoning level, memory opt-out, project / soft delete; a temporary thread is purged (FR-027) |
 | `POST` | `/api/v1/threads/:id/messages` | Send a message: 202 `{disposition, turnId, userMessageId, assistantMessageId, queuePosition?}`; output arrives as events (§5). Body up to 30 MB with attachments, else 413. While a turn runs, `inputMode` (or the `general.followUp` setting) decides (FR-019): `steered` joins the running turn and is applied at the start of its next model step; `queued` is persisted and runs as the next turn, surviving a restart; its id becomes the `userMessageId` of the message it creates |
 | `GET` | `/api/v1/threads/:id/queue` | Queued follow-ups, oldest first |
 | `DELETE` | `/api/v1/threads/:id/queue/:queuedId` | Cancel a queued follow-up |
@@ -80,6 +84,8 @@ metadata document (public, no account data) and `/mcp` (a client token of its ow
 | `GET` | `/api/v1/files/raw?root=&path=` | The file's bytes, inert: `Content-Security-Policy: default-src 'none'; img-src data:; sandbox`, `nosniff`, `Content-Disposition: inline` |
 | `GET/POST` | `/api/v1/terminals` | This account's terminals as `TerminalView` / open one `{root?, threadId?, cols, rows}` (201) in the sandbox, with the thread's roots and permission profile (FR-006); `root` defaults to the first root. Without a sandbox: 409 `sandbox_unavailable`. At most 4 running per account (`conflict` `{reason: too_many_terminals}`). Terminals live in Hub memory only: one that no client has watched for 15 minutes is closed, and the last 256K characters of output are replayed to a viewer that reconnects. Commands typed in a terminal are confined by the sandbox and the profile, not checked one by one. Audited as `terminal.open` and `terminal.close` |
 | `DELETE` | `/api/v1/terminals/:id` | Close it (`terminal.exited` with `code: null`) |
+| `GET` | `/api/v1/exec/sessions?threadId=` | The agent's commands still running as interactive exec sessions (FR-184), for the terminal pane: `{items: ExecSessionView[]}` `{id, threadId, turnId, callId, cmd, cwd, startedAt, retained}` (`cmd` redacted, ≤ 500 characters; `retained` once its turn ended and the run kept it). Without `threadId`, every session of the account; another account's thread is `not_found`. Sessions live in Hub memory (8 per thread) |
+| `DELETE` | `/api/v1/exec/sessions/:id` | Kill one: `{ok: true}`, `exec.session.ended` with `reason: killed`, audited as `exec.session.kill`. An unknown session or another account's is `not_found` |
 | `GET` (WebSocket) | `/api/v1/terminals/:id/ws` | The terminal's stream (frames in §5). The session is checked before the upgrade (401 `token_required`); an unknown terminal closes the socket with 4404, an invalid id with 4400 |
 | `GET` | `/api/v1/library?kind=&q=&cursor=&limit=` | One paged list (FR-041), newest first, as `Page<LibraryItemView>`: `kind` is `artifact\|attachment\|source\|image\|file` (`file` = artifacts of kind `file`, `image` = image attachments) and `q` searches titles. Project-folder files, temporary chats and deleted chats are left out |
 
@@ -102,23 +108,31 @@ metadata document (public, no account data) and `/mcp` (a client token of its ow
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/v1/runs` | List/create work runs (with optional budgets and goal) |
-| `POST` | `/api/v1/runs/:id/{pause,resume,redirect,cancel}` | Control a run |
-| `POST` | `/api/v1/runs/:id/budget` | Extend a budget after a pause `{timeSeconds?,tokens?,costUsd?}` (FR-182) |
-| `GET/PUT/DELETE` | `/api/v1/runs/:id/goal` | Read, set or clear the run's goal ([`goal.json`](schemas/goal.json)) |
-| `GET/PUT/DELETE` | `/api/v1/agents/:id/goal` | Read, set or clear the agent's goal |
-| `GET` | `/api/v1/goals?status=` | List goals across runs and agents (FR-181) |
-| `GET/PATCH` | `/api/v1/goals/:id` | Read; edit objective or budgets (applies at the next turn) |
-| `POST` | `/api/v1/goals/:id/{pause,resume,complete}` | User status changes; `usage_limited`/`budget_limited` are never settable here |
-| `GET/POST` | `/api/v1/schedules` | Recurring tasks, agent schedules and self-set wakes ([`schedule.json`](schemas/schedule.json)) |
-| `PATCH/DELETE` | `/api/v1/schedules/:id` | Edit a schedule (`enabled: false` pauses it) or cancel it; proxied by the shell's `schedule.upsert` / `schedule.cancel` |
+| `GET/POST` | `/api/v1/runs` | List `?status=active\|all` (default `active`: planning, running, waiting for approval or paused), `projectId`, `cursor`, `limit` (≤ 200, default 50), newest change first: `{items: RunView[], nextCursor}` / create `{objective (≤ 8,000), title?, projectId?, autonomy?: ask_first\|standard\|autonomous, budgets?: {timeSeconds?, tokens?, costUsd?}, goal?: {objective, budgets?}, expectedOutput?: {kind: artifact\|message\|file, ref?}, model?, attachmentIds?, template?: deep_research}` (201 `RunView`). A run is a `work` thread plus its run; the user typed the objective, so it carries their authority (FR-189). It starts at once, except `ask_first`, which waits in `planning` until `start`. Defaults come from `runs.defaultBudgets` and `runs.autonomy`; budgets are bounded (time 60 s–7 days, tokens 1,000–100M, cost ≤ 100,000; `costUsd: null` means the provider spend cap). An autonomous run (given or by default) without `review.model` is `validation` `{field: autonomy, reason: review_model_required}`, since the auto-reviewer would deny every consequential action (FR-085). Audited as `run.create` (FR-051, FR-182, FR-220) |
+| `GET` | `/api/v1/runs/:id` | One `RunView` with plan, budgets and use, result and `derived` status; another account's run is `not_found` |
+| `POST` | `/api/v1/runs/:id/{pause,resume,cancel,start}` | Control a run; each returns the `RunView`. `start` begins a run waiting in `planning` (an ask-first plan, or a run proposed in a chat, FR-186) and gives its objective and plan the user's authority; `conflict` when it is not in `planning`. `pause` (reason `user`) is `conflict` once the run ended; `cancel` ends the run and its sub-agents (an ended run is left as it is). `resume` is `conflict` unless paused, and `budget_exhausted` `{bound}` while a budget that paused it is still used up. Audited as `run.<action>` |
+| `POST` | `/api/v1/runs/:id/redirect` | New instructions `{text}` (≤ 8,000) that steer the run (FR-019): a turn now, or after the running turn ends; a paused run resumes, except one a budget paused, which takes the text once the budget is extended. Audited as `run.redirect` with the text's hash only; `conflict` once the run ended |
+| `POST` | `/api/v1/runs/:id/budget` | Extend a budget `{timeSeconds?, tokens?, costUsd?, steps?: true}` (FR-182); at least one field. Each amount is added to the current bound (`{timeSeconds: 1800}` is 30 more minutes); `costUsd` does nothing while the run has no cost cap; `steps: true` allows one more turn after the 200-step backstop. A run that this bound paused resumes when it now fits (a goal budget still used up keeps it paused). Returns the `RunView`; `run.budget.extended`; audited as `run.budget.extend` |
+| `PUT` | `/api/v1/runs/:id/plan` | Replace the plan `{steps: [{title, detail?}]}` (1–50); the user wrote it, so it is approved. Returns the `RunView`; `run.plan.amended`; `conflict` once the run ended |
+| `GET` | `/api/v1/runs/:id/subagents` | `{items: SubagentView[]}` `{id, runId, threadId, role, objective, status: queued\|running\|done\|failed\|cancelled, result, createdAt, endedAt}` (FR-053) |
+| `GET` | `/api/v1/runs/:id/activity` | The run's trace, oldest first (FR-057): its thread's turns, tool calls, approvals and policy decisions merged with its plan, step, status, budget, sub-agent, goal and result events (`{items: ActivityItemView[]}`; run events have kind `notice`). Sub-agent threads are not included |
+| `GET/PUT/DELETE` | `/api/v1/runs/:id/goal` | Read (the open goal, else the latest; `null` when there is none) / set `{objective (≤ 4,000), budgets?: {timeSeconds?, tokens?, costUsd?}}`, which replaces an open goal's objective and budgets (`conflict` once the run ended) / clear the open goal (`{ok: true}`; its row is deleted, and a run that only waited on it finishes) ([`goal.json`](schemas/goal.json), FR-181). GET and PUT return `GoalView`. Audited as `goal.set` / `goal.clear` |
+| `GET/PUT/DELETE` | `/api/v1/agents/:id/goal` | Read, set or clear the agent's goal. Not in M5 (agents arrive in M6) |
+| `GET` | `/api/v1/goals?status=` | `{items: GoalView[]}` across runs (FR-181) |
+| `GET/PATCH` | `/api/v1/goals/:id` | Read; edit `{objective?, budgets?}` (applies at the next turn; audited as `goal.update`) |
+| `POST` | `/api/v1/goals/:id/{pause,resume,complete}` | User status changes; `usage_limited`/`budget_limited` are never settable here. A change the status does not allow does nothing. Resuming (or reopening a complete goal) while its budget is used up is `budget_exhausted` `{bound}`; reopening when the run has another open goal is `conflict`. Returns `GoalView`; audited as `goal.status` |
+| `GET/POST` | `/api/v1/schedules` | `{items: ScheduleView[]}` / create (201 `ScheduleView`) `{when: {cron}\|{rrule}\|{intervalSeconds}\|{at}, timezone, startsAt?, endsAt?, title?, instructions (≤ 8,000), notifyCondition?, deliveryTargets? (default `[{kind: inapp}]`, ≤ 10), output?, catchUp?: {policy?: once\|skip, lookbackSeconds?}, projectId?, autonomy?, enabled?}` ([`schedule.json`](schemas/schedule.json), FR-055). Each fire starts a Work run (origin `schedule`) whose objective is the instructions. The strict body has no `origin`: the API creates only the user's own schedules. A rule that fires more than once a minute, has no future fire, or uses `BYSETPOS`, `BYYEARDAY`, `BYWEEKNO` or `SECONDLY` is `validation` naming the field (`when.cron`, `when.rrule`, …). Audited as `schedule.create`; `schedule.created` |
+| `PATCH/DELETE` | `/api/v1/schedules/:id` | Edit the fields sent (`enabled: false` pauses it; resuming does not catch up the paused time; `nothing to update` is `validation`) / cancel it: `{ok: true}`, its history and webhook secret go, a run already going continues; proxied by the shell's `schedule.upsert` / `schedule.cancel`. Audited as `schedule.update` / `schedule.delete` |
+| `GET` | `/api/v1/schedules/:id/fires?limit=` | The schedule's history, newest first (`limit` 1–500, default 100): `{items: ScheduleFireView[]}` `{id, scheduleId, kind: fire\|catch_up\|skipped, window: {first, last, count}\|null, runId, outcome: done\|output_missing\|failed\|cancelled\|no_news\|null, firedAt}` (ADR-079) |
+| `POST` | `/api/v1/schedules/:id/run` | Run now, outside the rule (the next fire is unchanged): 201 `{runId}`; `schedule.fired` with `manual: true`; audited as `schedule.run_now`. `capability_missing` when Work runs are unavailable, `server_error` when the run could not start |
 | `GET/POST` | `/api/v1/agents` | Always-on agents |
-| `GET/POST` | `/api/v1/approvals` | List (`status=pending\|all`, `threadId`; a handed-off approval stays pending until marked done) / decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) without `decidedBy`/`decidedAt`, which the Hub sets. The first valid answer wins; a later one is `conflict`. A decision the tier does not offer is `validation`; `allow_always` while managed policy disables persistent grants is `policy_denied` (FR-100, FR-189) |
+| `GET/POST` | `/api/v1/approvals` | List (`status=pending\|all`, `threadId`; a handed-off approval stays pending until marked done) / decide approvals; a decision is an [`ApprovalDecision`](schemas/approval-decision.json) without `decidedBy`/`decidedAt`, which the Hub sets. The first valid answer wins; a later one is `conflict`. A decision the tier does not offer is `validation`; `allow_always` while managed policy disables persistent grants is `policy_denied` (FR-100, FR-189). Allow once on a card the auto-reviewer opened records `override` (audited as `review.override`, FR-085). M5 ships `ApprovalView` without the reviewer's verdict (stored in `docs/06` `approval.review_json`); showing it on the card is a follow-up |
 | `GET` | `/api/v1/approvals/:id` | One approval as shown on the card |
 | `POST` | `/api/v1/approvals/:id/handoff-done` | The user finished a handed-off step `{note?}`; the waiting turn resumes |
-| `GET` | `/api/v1/requests?status=pending` | Pending server-to-client requests for this client ([`server-request.json`](schemas/server-request.json)) |
-| `POST` | `/api/v1/requests/:id/respond` | Answer a request; first valid answer wins (§5) |
-| `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent, oldest first: turns, tool calls, approvals, policy decisions; `not_found` for another account's thread |
+| `GET` | `/api/v1/requests?status=pending\|all&threadId=` | Server-to-client requests ([`server-request.json`](schemas/server-request.json), FR-188), newest first: the pending ones (default) or the last 200 of any status, plus pending approvals as read-only `approval` items whose id is the approval id. `{items: ServerRequestView[]}`. With the `x-nova-client-session` header, requests aimed at another device are left out |
+| `GET` | `/api/v1/requests/:id` | One request, or a pending approval as an `approval` item; otherwise `not_found` |
+| `POST` | `/api/v1/requests/:id/respond` | Answer `{result}` (§5); returns the resolved `ServerRequestView`. The first valid answer wins: a later one is `conflict` with `details.resolution`; one after `expiresAt` is `request_expired` `{status, reason}`; one that does not fit the kind is `validation`; a request aimed at another device than the `x-nova-client-session` header names is `policy_denied`. An approval id takes an `ApprovalDecision` without `approvalId` and is decided by the approvals flow (no `request.resolved`; `approval.decided`). M5 ships `ServerRequestView.resolution` as `{by, at, result}`; the schema's `{result, resolvedBy, deviceId, resolvedAt}` is a follow-up |
+| `GET` | `/api/v1/activity?ref=` | Activity trace for a thread/run/agent, oldest first: turns, tool calls, approvals, policy decisions; `not_found` for another account's thread. M5 takes a thread id only (a run's trace is `GET /runs/:id/activity`, or this route with the run's thread) |
 | `GET` | `/api/v1/audit?kind=&threadId=&cursor=&limit=` | Audit entries, newest first, paged by sequence (FR-104) |
 | `GET` | `/api/v1/audit/verify` | Walk the hash chain; reports the first entry whose sequence, previous hash or hash does not match |
 | `GET` | `/api/v1/audit/export` | Audit log export (`application/x-ndjson`, redacted) |
@@ -168,15 +182,26 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/v1/code/sessions` | Code sessions |
-| `GET` | `/api/v1/code/sessions/:id/changes` | Diffs |
-| `POST` | `/api/v1/code/sessions/:id/{review,commit,pr}` | Review/commit/PR |
-| `POST` | `/api/v1/code/sessions/:id/handoff` | Move a session with its Git state to another device or environment `{to}` (FR-213) |
-| `GET` | `/api/v1/handoffs/:id` | Handoff status |
-| `GET` | `/api/v1/code/worktrees?deviceId=&repo=` | Worktree registry with leases (FR-073) |
-| `POST` | `/api/v1/code/worktrees` | Create a worktree and lease it to a session (max 15 per repo, else `conflict`) |
-| `POST` | `/api/v1/code/worktrees/:id/{renew,release}` | Renew or release the lease |
-| `DELETE` | `/api/v1/code/worktrees/:id` | Remove the worktree (Git hooks disabled, FR-211) |
+| `GET` | `/api/v1/environments` | Where Code sessions run (FR-062): `{items: EnvironmentView[]}` `{id, kind, label, status: ok\|degraded\|down\|unknown, detail, checkedAt}`. M5 has one built-in `local` environment per account (the Hub host): `ok`, or `degraded` without Git or a sandbox |
+| `GET/POST` | `/api/v1/code/sessions` | List `?archived=true\|false` (default `false`), newest change first: `{items: CodeSessionView[]}` / create `{folder, projectId?, environmentId?, permissionMode?, model?, title?, worktree?}` (201 `CodeSessionView`): a `code` thread bound to the folder (FR-061). `folder` is an absolute path on the Hub (`~` is the Hub user's home), resolved to its real path; a relative or missing path or a file is `validation` (`{reason: missing\|not_a_folder}`); the filesystem root, system folders, the home folder and its ancestors, the data folder (inside or around it), credential locations and `.git`, `.nova` or `.agents` are `policy_denied` `{reason: protected_folder}`. Without `permissionMode` the folder's remembered mode is used, else `code.permissionMode`, else Manual; one that cannot be used now falls back to Manual. A chosen mode that cannot be used is `validation` `{reason: mode_unavailable, mode}`: Auto needs `review.model`, Bypass needs `code.allowBypass` and a VM or container sandbox. `worktree: true` creates `<repo>/.nova/worktrees/<8 hex>` on `nova/<slug>` with Git hooks off and leases it to the session (FR-073): `validation` outside Git or before the first commit, `conflict` `{reason: worktree_cap}` at 15 per repo. An unknown model is `validation` `{reason: unknown_model}`. Audited as `code.session.created`; `code.session.created`, `worktree.leased` |
+| `GET/PATCH` | `/api/v1/code/sessions/:id` | One `CodeSessionView` (`repo` `{root, branch, head, dirty, defaultBranch}` when the folder is a Git repository; `defaultBranch` from origin's HEAD, else `init.defaultBranch`, else `main` or `master`) / change `{permissionMode?, title?, model?}`. A mode change is checked as on create, remembered for the folder (`code.folderModes`; Plan never is), audited as `code.mode.changed` and announced as `code.session.modeChanged`; every change emits `code.session.updated`. A session whose thread is archived or deleted is archived and releases its worktree (a clean one is removed) |
+| `GET` | `/api/v1/code/sessions/:id/changes` | The session's uncommitted changes, refreshed first (FR-064): `{items: CodeChangeView[]}` `{id, sessionId, path, kind: add\|modify\|delete\|rename, oldPath, additions, deletions, callId, state: pending\|accepted\|rejected\|partial, hunks, binary, createdAt}`. Paths are relative to the session folder. Changes are also refreshed after each decision, at the end of every turn and after every tool call of the session's thread that may write files (that call's id is `callId`). M5 never detects renames: a rename is a delete and an add |
+| `POST` | `/api/v1/code/sessions/:id/changes/:changeId/hunks` | Decide hunks `{decisions: [{hunkId, accept}]}` (1–1,000; a hunk id is `<oldStart>-<newStart>`). Accepting moves the hunk into the accepted baseline; rejecting reverts it in the work tree. Returns the `CodeChangeView`. A hunk that is no longer pending or no longer applies, or a file changed since it was shown, is `conflict` `{reason: stale_hunk}`; reload the changes. `code.change.applied` / `code.change.reverted`; a rejection is audited as `code.change.rejected` |
+| `POST` | `/api/v1/code/sessions/:id/changes/{accept,reject}` | Accept or reject everything pending `{changeIds?}` (all pending changes when omitted; an unknown id is `not_found`): `{items: CodeChangeView[]}` |
+| `GET/POST` | `/api/v1/code/sessions/:id/comments` | Diff comments, user comments and review findings (FR-065): `{items: DiffCommentView[]}` `{id, changeId, path, line, side: old\|new, body, resolved, author: user\|review, reviewId, submittedAt, createdAt}` / add a batch `{comments: [{changeId, line, side, body}] (1–200), submit?}` (201 `{items}`). `submit: true` sends every unsent user comment of the session to the agent as one turn, with the user's authority, and the agent revises the diff; `conflict` `{reason: turns_unavailable}` when no agent can take it. `code.diff.commented` per comment |
+| `POST` | `/api/v1/code/sessions/:id/comments/:commentId/resolve` | Mark a comment resolved; returns it |
+| `POST` | `/api/v1/code/sessions/:id/review` | Start a `/review` of all uncommitted session changes, accepted and pending (FR-069): 202 `CodeReviewView` `{id, sessionId, status: running, findings: [], createdAt}`. The session's model (else the default model) reviews the diff, at most 5 minutes; `validation` when there are no changes or no model. Findings are `{id, path, line, severity: info\|warn\|error, title, reasoning, fix}`; one on a changed file's line is also stored as a diff comment with `author: review`. M5 does not return the view's `model` and `error` yet. Audited as `code.review`; `code.review.completed` |
+| `GET` | `/api/v1/code/sessions/:id/reviews/:reviewId` | One `CodeReviewView` (`status: running\|done\|failed`) |
+| `POST` | `/api/v1/code/sessions/:id/commit` | Commit the accepted changes (`docs/10` §8) `{message (≤ 5,000), branch?, acceptPending?}`. `acceptPending` accepts what is still pending first. The accepted content is staged into the user's index without touching the work tree, so pending hunks stay out; `branch` creates a free `nova/<slug>` branch from it without a checkout. Commit hooks run in the sandbox (repo root writable, network off) when the repository has hooks and the sandbox has Git; otherwise the Hub commits with hooks off and says so. Nothing is ever pushed. Returns `CommitResult` `{sha, branch, files, hooksRan, hooksNote}`; audited as `code.commit`; `code.commit.created`, `code.session.updated`. Errors, after which the index and branch are put back: `validation` `{reason: nothing_accepted}`, `{reason: no_identity}` (Git has no author on the Hub) or a folder outside Git or a bad branch name; `policy_denied` `{reason: default_branch, branch}` (give `branch`) or `{reason: secrets_found, findings: [{path, line, rule, preview}]}` (previews masked); `conflict` `{reason: staged_changes}` (other changes are staged), `{reason: detached_head}`, `{reason: commit_failed, output}` or hooks that did not finish in time |
+| `GET` | `/api/v1/code/sessions/:id/symbols?q=&limit=` | Go to symbol (FR-074): `{items: CodeSymbolView[]}` `{name, kind, path, line, container}`, `limit` ≤ 200 (default 50). M5 indexes with a pattern-based extractor held in Hub memory (512 KiB per file, 20,000 files), not tree-sitter |
+| `GET` | `/api/v1/code/sessions/:id/refs?name=&limit=` | Lines that name a symbol: `{items: [{path, line, text}]}`, `limit` ≤ 200 (default 100). Symbol and ref paths are relative to the repository root (the session folder outside Git) |
+| `POST` | `/api/v1/code/sessions/:id/terminal` | Open a terminal in the session folder `{cols?, rows?}` (default 100 × 30): 201 `TerminalView` with the session's `threadId`; it streams on `/api/v1/terminals/:id/ws` and is listed by `GET /terminals`. 409 `sandbox_unavailable` without terminals |
+| `POST` | `/api/v1/code/sessions/:id/{pr,handoff}` | Open a pull request; move a session with its Git state to another device or environment `{to}` (FR-213). Not in M5 |
+| `GET` | `/api/v1/handoffs/:id` | Handoff status. Not in M5 |
+| `GET` | `/api/v1/code/worktrees?deviceId=&repo=` | Worktree registry with leases (FR-073). Not in M5: worktrees are created with a session (`worktree: true`) and released when it is archived |
+| `POST` | `/api/v1/code/worktrees` | Create a worktree and lease it to a session (max 15 per repo, else `conflict`). Not in M5 |
+| `POST` | `/api/v1/code/worktrees/:id/{renew,release}` | Renew or release the lease. Not in M5 |
+| `DELETE` | `/api/v1/code/worktrees/:id` | Remove the worktree (Git hooks disabled, FR-211). Not in M5 |
 | `GET/POST` | `/api/v1/mcp/servers` | MCP servers ([`mcp-config.json`](schemas/mcp-config.json)); env values go to the vault and only their names come back; for `sse`/`http` servers each env entry is sent as a header with `_` turned into `-`; names are unique per account (FR-042). `McpServerView` also carries `auth` (FR-047), `bundle` `{name, version, signature}` (FR-199), `connectedAt` and `restarts` (automatic restarts in the last 10 minutes, FR-043); a server that refuses an unauthenticated connection shows "needs authorization". M4 ships the request without the `oauth` and `auth` fields of `mcp-config.json` (OAuth is started per server below and asks for the scopes the resource advertises); the full shape is a follow-up |
 | `GET/PATCH/DELETE` | `/api/v1/mcp/servers/:id` | One server / change it (a sent `env` is the complete set: an empty value keeps the saved secret, a value replaces it, an omitted name is deleted; `secret://` values are refused) / remove it with its secrets and working directory. A plugin's server (`McpServerView.pluginId`) changes only through its plugin: PATCH and DELETE answer `conflict` `{reason: plugin_owned, pluginId}` |
 | `POST` | `/api/v1/mcp/servers/:id/restart` | Reconnect now and reset the restart backoff (`conflict` while disabled) (FR-043) |
@@ -203,6 +228,7 @@ The "reference past chats" toggle (FR-205) is the setting `memory.referencePastC
 | `GET` | `/api/v1/artifacts?threadId=` | A thread's artifacts (FR-038) |
 | `GET` | `/api/v1/artifacts/:id` | One artifact's metadata |
 | `GET` | `/api/v1/artifacts/:id/content` | Its bytes under a restrictive CSP: HTML only with `sandbox allow-scripts` (never same-origin), PDFs without a sandbox directive so the browser viewer works; `?version=N` serves an earlier version; `?v=` (a client cache-buster) is ignored |
+| `GET` | `/api/v1/artifacts/:id/preview?version=` | A document artifact's text, extracted on the Hub (FR-219): `{format: docx\|pptx\|xlsx\|pdf, title, blocks?, slides?, sheets?, pages?, readable, note, truncated}`, cut to 500 rows × 50 columns per sheet and 200,000 characters. Blocks are headings, paragraphs, lists and tables; slides carry their notes; `readable: false` with a `note` when the text cannot be read (a scan, unmapped fonts, encryption). An artifact that is not a document is `validation`; another account's is `not_found`. M5 has no shared type for it yet |
 | `GET` | `/api/v1/mentions?q=&threadId=` | `@`-mention candidates: files and folders under the thread's roots, MCP servers and tools (FR-022) |
 | `GET` | `/api/v1/ui/entry-points?kind=global\|thread\|file` | MCP Apps entry points as `UiEntryPointView` (FR-198): enabled plugins' `ui.entryPoints`, served by one of the plugin's own servers, and `ui://` resources that other servers' tools (`_meta.ui.resourceUri`) or resource lists declare (these open in a thread). Ids are stable 22-character hashes of owner, kind and resource. M4 does not fill `domains` yet |
 | `GET` | `/api/v1/ui/resource?entry=` | The entry's `ui://` resource, read through the MCP manager and served as `text/html` (≤ 5 MB) with `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:` plus the allowed domains and `frame-ancestors 'self'; base-uri 'none'; form-action 'none'`, `X-Frame-Options: SAMEORIGIN`, `Cross-Origin-Resource-Policy: same-origin` and an ETag (304 on `If-None-Match`). Allowed domains are the resource's `_meta.ui.csp` and the plugin's `permissions.ui`, intersected with its network permissions (a plugin's `permissions.network`, a bundle's install record or the server's `policy.network`; none otherwise): plain hosts only, `*.x` covers subdomains but not the apex, https by default. Resource domains extend script, style, img, font and media; frame domains `frame-src`; connect domains `connect-src`. A missing, failing or non-HTML resource is 404: a small HTML page when the request accepts `text/html`, else `not_found` |
@@ -245,6 +271,7 @@ gaps. Calls on behalf of a schedule, automation, agent or app are checked agains
 | `GET` | `/api/v1/diagnostics` | Health snapshot (providers, nodes, MCP servers, sandbox, secrets backend, encryption at rest, warnings, other probes) |
 | `GET` | `/api/v1/diagnostics/logs?level=&module=&since=&limit=` | Recent log entries from the in-memory ring (5,000), newest first; `level` means that level and above; redacted (FR-118) |
 | `GET` | `/api/v1/diagnostics/logs/export` | The same as `application/x-ndjson` |
+| `POST` | `/api/v1/diagnostics/test` | Test one component (FR-119) `{component: provider\|mcp\|sandbox\|storage\|update, ref?}`; `ref` is a provider account or MCP server id (all of them when omitted). Returns `{component, ref, status: ok\|warning\|error\|unavailable, detail, checks: [{name, ref, status, detail}], durationMs, testedAt}`; a failing component is a result, not an error. `provider` connects, lists the account's own models and sends one 16-token request held to that account (no fallback); `mcp` reports the connection and the server's last tool list; `sandbox` runs `true` with network off; `storage` writes, reads back and deletes a test file in the data folder, runs a SQLite integrity check and reports free space (`warning` under 1 GB); `update` is `unavailable` (no update channel yet). Each test stops after 30 s. Results are not audited. A bad body is `validation`, an unknown `ref` is `not_found`. M5 keeps the result type in the Hub; a shared type is a follow-up |
 
 ## 2. Hub ↔ Compute Node
 
@@ -338,9 +365,11 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
 - Reconnect resumes from the last event id; the Hub replays missed persisted events and
   re-sends every request that is still `pending`. Without a cursor (`Last-Event-ID` or
   `?after=`) a stream sends live events only, on `/api/v1/events/stream` as on a thread's stream.
+- The global streams (`/api/v1/events/stream`, `/api/v1/ws`) deliver only the signed-in
+  account's events and account-less system events; a thread's stream only that thread's.
 - **Notification opt-out**: a client lists event names it does not want in `/api/v1/hello`
   (`suppressEvents`); the Hub omits them from that client's streams. `request.*` events
-  cannot be suppressed.
+  cannot be suppressed. M5 does not apply `suppressEvents` yet.
 
 ### WebSocket upgrade checks
 
@@ -373,33 +402,64 @@ The shell never receives raw secrets; it requests scoped operations that `novad`
 
 The Hub asks connected clients questions over the stream they already hold: approvals,
 user input, MCP elicitations, client-side tools and credential refreshes
-([`server-request.json`](schemas/server-request.json)).
+([`server-request.json`](schemas/server-request.json)). Request ids are UUIDv7 (`0192f…`
+below).
 
-WebSocket frames:
+WebSocket frames on `/api/v1/ws?clientSessionId=`:
 
 ```json
+{ "type": "hello",   "version": "0.5.0" }
 { "type": "event",   "event": { "...": "EventEnvelope" } }
-{ "type": "request", "request": { "id": "req_…", "kind": "approval", "payload": { }, "expiresAt": "…" } }
-{ "type": "respond", "requestId": "req_…", "result": { "approvalId": "…", "decision": "allow_once" } }
-{ "type": "respond.ack", "requestId": "req_…", "status": "resolved | conflict | expired" }
+{ "type": "request", "request": { "id": "0192f…", "kind": "approval", "payload": { }, "expiresAt": "…" } }
+{ "type": "respond", "requestId": "0192f…", "result": { "decision": "allow_once" } }
+{ "type": "respond.ack", "requestId": "0192f…", "status": "resolved | conflict | expired" }
+{ "type": "error",   "requestId": "0192f…", "error": { "code": "validation", "message": "…" } }
+{ "type": "ping" }
+{ "type": "pong" }
 ```
 
+- The Hub sends `hello` when the socket opens, then `event` frames, and a `request` frame
+  (a `ServerRequestView`) for each request the client may answer. On attach it first re-sends
+  every pending request the client may answer, oldest first.
+- The client answers with `respond`. The Hub replies `respond.ack`: `resolved`, `conflict`
+  with the winning `resolution`, or `expired`; or an `error` frame for an answer that is not
+  valid. A `ping` gets a `pong`.
+
 Over SSE, requests arrive as `request.created` events and are answered with
-`POST /api/v1/requests/:id/respond {result}`.
+`POST /api/v1/requests/:id/respond {result}`; the client names itself with the
+`x-nova-client-session` header.
 
 Rules:
 
-1. A request goes only to clients that declared its kind in `/api/v1/hello`; a `client_tool`
-   request goes only to its `targetDeviceId`.
+1. A `request` frame goes only to WebSocket clients whose handshake agreed its kind; a request
+   with a `targetDeviceId` goes only to that device. Every SSE stream of the account gets
+   `request.created`. Pending approvals are pushed as `approval` requests (id = approval id,
+   payload `{approvalId, action, reason, tier, options, alwaysScopes, nativeClientOnly, risk?}`)
+   to clients that agreed `approval`; M5 sends no `review` in that payload yet.
 2. Each request has exactly one resolution. The first valid answer wins and every other
    client receives `request.resolved`; a later answer gets `409 conflict` with the winning
    resolution, and an answer after `expiresAt` gets `410 request_expired`.
-3. Answers are validated: approval results must be an `ApprovalDecision` allowed for the
-   tier (FR-189); `handoff_required` and `confirm_at_action` requests can be answered only
-   from an authenticated Nova client, never from a channel.
-4. When no capable client is connected, or the request is unanswered, the Hub sends a
-   notification (FR-060). At `expiresAt` the request becomes `expired` (`request.expired`);
-   an approval records the decision `timeout` and the run pauses (default 24 h).
+3. Answers are validated per kind: an approval result is an `ApprovalDecision` allowed for the
+   tier (FR-189), decided by the approvals flow; `user_input` takes `{text}` or `{choice}` (one
+   of `choices`; free text is refused when `allowFreeText` is false); `elicitation` takes
+   `{action: accept|decline|cancel, content?}` (content only with accept, checked against
+   `requestedSchema`); `client_tool` takes `{ok: true, output}` or
+   `{ok: false, error: {code?, message}}`; `credential_refresh` takes `{refreshed}`.
+   `handoff_required` and `confirm_at_action` requests (`nativeClientOnly`) can be answered
+   only from an authenticated Nova client, never from a channel. An answer to a request aimed
+   at another device is `403 policy_denied`.
+4. A request no WebSocket client can take is notified at once (FR-060); one that was
+   delivered and is still unanswered after 2 minutes is notified then; never more than once.
+   At `expiresAt` the request becomes `expired` (`request.expired` with `reason: timeout`);
+   an approval records the decision `timeout` and the run pauses (default 24 h). Cancelling
+   the turn expires its requests with `reason: cancelled`; requests a restart left pending
+   are expired at startup (`restart`).
+5. M5 asks `user_input` through the `ask_user` tool, offered in Work and Code threads only:
+   payload `{question, choices?, multiline?}`. It waits `policy.approvalTimeoutMinutes` (24 h
+   by default, 1 s to 7 days); the answer becomes the tool result, labelled as the user's.
+   Unanswered, the tool fails with `approval_timeout`, which ends the turn with that stop
+   reason and pauses the run. While a request waits, the thread is `waiting_input` (Needs
+   input) and the run's time budget does not run.
 
 ## 6. Error shape
 
@@ -420,7 +480,7 @@ Rules:
 | `hook_untrusted` | 409 | The hook's content hash changed or was never trusted |
 | `rate_limited` | 429 | Retry after `details.retryAfter` |
 | `over_budget` | 402 | Account or provider spend cap reached (FR-116) |
-| `budget_exhausted` | 409 | A run or goal budget, or the 200-step backstop, was reached; `details.bound` (FR-182) |
+| `budget_exhausted` | 409 | A run or goal budget, or the 200-step backstop, was reached; `details.bound` (FR-182). M5 answers it when a run or goal is resumed while that budget is still used up |
 | `goal_blocked` | 409 | The goal is `blocked`; `details.blocker` (FR-181) |
 | `request_expired` | 410 | The server request expired before this answer |
 | `capability_missing` | 400 | Feature, request kind or experimental field not negotiated (§7) |
@@ -429,7 +489,7 @@ Rules:
 | `firmware_disabled` | 403 | Firmware changes are off |
 | `oob_disabled` | 403 | Out-of-band module is off |
 | `validation` | 400 | Payload failed its schema or rule examples |
-| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap) |
+| `conflict` | 409 | State changed (request already resolved, stale hash, lease held, worktree cap); `details.reason` names it where there is one, e.g. `stale_hunk`, `staged_changes`, `detached_head`, `commit_failed`, `worktree_cap` |
 | `not_found` | 404 | No such resource |
 | `server_error` | 500 | Unexpected failure |
 
@@ -465,6 +525,9 @@ Rules:
   "clientSessionId": "…" }
 ```
 
+- M5 ships the smaller answer described in §1 (`{name, version, apiVersions, serverRequests,
+  clientSessionId}`) and does not negotiate protocol versions, features, limits or
+  `suppressEvents` yet.
 - The Hub picks the highest common protocol version; with none in common it answers
   `capability_missing` naming both sides' versions.
 - `features` lists feature flags with their stage (ADR-082). Experimental methods and fields

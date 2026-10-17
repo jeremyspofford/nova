@@ -3,7 +3,7 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M5 — Agent Runtime: Work & Code**
+Current milestone: **M6 — Agents, Computers & Channels**
 Last updated: 2026-10-17T18:00:00Z
 
 ## Phase status
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T18:00:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0, M1, M2, M3, M4 done |
+| Phase 2 — build | in_progress | 10bbcf4 | M0-M5 done |
 
 ## Milestone status
 
@@ -23,7 +23,7 @@ Last updated: 2026-10-17T18:00:00Z
 | M2 Providers/Projects/Memory | done | 2026-10-17 | 2026-10-17 | J1 + J2 green 3/3 in parallel (axe clean); `docs/demos/M2.md` |
 | M3 Tools/MCP/Policy | done | 2026-10-17 | 2026-10-17 | J1, J2, J3 green 3/3 in parallel (axe clean); `docs/demos/M3.md` |
 | M4 Plugins/Workspace/Profile | done | 2026-10-17 | 2026-10-17 | J1-J4 green 3/3 (axe clean); `docs/demos/M4.md` |
-| M5 Agent Runtime (Work & Code) | in_progress | 2026-10-17 | — | — |
+| M5 Agent Runtime (Work & Code) | done | 2026-10-17 | 2026-10-17 | J1-J6 green twice in a row (axe clean); `docs/demos/M5.md` |
 | M6 Agents/Computers/Channels | todo | — | — | — |
 | M6.5 Networking/Add Device | todo | — | — | — |
 | M7 Cloud/Sync/Multi-device | todo | — | — | — |
@@ -107,30 +107,30 @@ Last updated: 2026-10-17T18:00:00Z
 | T-M4-11 | M4 | FR-198 | done | 2c0fbf8 | web apps-bridge, apps-frame, apps-views, workspace-apps tests; mcp apps.test; hub mcp-apps.test | MCP Apps UI host (sandboxed iframes, bridge, CSP) |
 | T-M4-12 | M4 | FR-199 | done | 2c0fbf8 | mcp bundle.test; hub bundles.test | MCP bundle install (sideload confirmation, vault config) |
 | T-M4-13 | M4 | FR-200 | done | 2c0fbf8 | core import, import-formats tests; hub import.test; web import-settings.test | Import from other assistants (preview, dedupe, secret references) |
-| T-M4-09 | M4 | — | done | M4 docs commit | `scripts/e2e-docker.sh --repeat-each=3`: 18/18 (smoke, J1-J4) | E2E J4 |
-| T-M5-01 | M5 | FR-051 | todo | — | — | agentd worker pool + supervisor/orchestrator/executor |
-| T-M5-02 | M5 | FR-051, FR-131 | todo | — | — | Plans, autonomy levels, re-planning |
-| T-M5-03 | M5 | FR-053, FR-054 | todo | — | — | Background sub-agents + child threads |
-| T-M5-04 | M5 | FR-055 | todo | — | — | Scheduler (cron) + recurring tasks UI |
-| T-M5-05 | M5 | FR-057 | todo | — | — | Activity view + replay |
-| T-M5-06 | M5 | FR-058 | todo | — | — | Approvals for runs |
-| T-M5-07 | M5 | FR-061, FR-063 | todo | — | — | Code sessions + permission modes |
-| T-M5-08 | M5 | FR-064, FR-065 | todo | — | — | File edits + diff viewer + comments |
-| T-M5-09 | M5 | FR-066, FR-074 | todo | — | — | Terminal + repo index (tree-sitter) |
-| T-M5-10 | M5 | FR-069 | todo | — | — | `/review` findings card |
-| T-M5-11 | M5 | FR-119, FR-104 | todo | — | — | Diagnostics page; audit export |
-| T-M5-12 | M5 | FR-030, FR-031 | todo | — | — | Image generation; realtime voice |
-| T-M5-13 | M5 | FR-050 | todo | — | — | Plugin authoring from conversation |
-| T-M5-15 | M5 | FR-181, FR-182 | todo | — | — | Goals + budgeted execution + per-turn backstop |
-| T-M5-16 | M5 | FR-183 | todo | — | — | Compaction triggers + context tools |
-| T-M5-17 | M5 | FR-184 | todo | — | — | Interactive exec sessions |
-| T-M5-18 | M5 | FR-185 | todo | — | — | Instruction-file discovery |
-| T-M5-19 | M5 | FR-186, FR-215 | todo | — | — | Chat escalation to Work; thread status model |
-| T-M5-20 | M5 | FR-187, FR-188 | todo | — | — | Verified outcomes; server-to-client requests |
-| T-M5-21 | M5 | FR-085 | todo | — | — | Model-based auto-review (fail-closed, circuit breaker) |
-| T-M5-22 | M5 | FR-211 | todo | — | — | Hook-free app Git operations |
-| T-M5-23 | M5 | FR-216, FR-219, FR-220 | todo | — | — | Dictation; document outputs; deep research template |
-| T-M5-14 | M5 | — | todo | — | — | E2E J5, J6 |
+| T-M4-09 | M4 | — | done | e12aad0 | `scripts/e2e-docker.sh --repeat-each=3`: 18/18 (smoke, J1-J4) | E2E J4 |
+| T-M5-01 | M5 | FR-051 | done | 013ed1b | core runs-lifecycle, runs-loop tests; hub m5-integration.test | Run supervisor on the shared chat loop (TurnStarter/TurnExtension; ADR-076) |
+| T-M5-02 | M5 | FR-051, FR-131 | done | 013ed1b | core runs-lifecycle.test; web work-run.test | Plans, autonomy levels (ask_first/standard/autonomous), plan edits |
+| T-M5-03 | M5 | FR-053, FR-054 | done | 013ed1b | core runs-subagents.test; web work-run.test | Background sub-agents (task.*) + child threads, depth 1, limits |
+| T-M5-04 | M5 | FR-055 | done | 013ed1b | core scheduler-recurrence/service/delivery tests; hub schedules.test; web work-scheduled.test | Scheduler (cron, RRULE, interval, at; DST; catch-up) + Scheduled UI |
+| T-M5-05 | M5 | FR-057 | done | 013ed1b | hub runs.test (activity); web work-run.test (replay) | Activity view + replay |
+| T-M5-06 | M5 | FR-058 | done | 013ed1b | core runs-budgets.test (approval timeout pause) | Approvals for runs |
+| T-M5-07 | M5 | FR-061, FR-063 | done | 013ed1b | core code-sessions.test; core gate-m5-policy.test; web code-sessions.test | Code sessions + permission modes |
+| T-M5-08 | M5 | FR-064, FR-065 | done | 013ed1b | core code-changes.test; web code-diff.test | File edits as diffs (shadow repo) + diff viewer + comments + hunks |
+| T-M5-09 | M5 | FR-066, FR-074 | done | 013ed1b | core code-tools.test; web code-terminal.test | Terminal in the session folder + repo index (pattern-based; tree-sitter deferred) |
+| T-M5-10 | M5 | FR-069 | done | 013ed1b | core code-tools.test; web code-review.test | `/review` findings card |
+| T-M5-11 | M5 | FR-119, FR-104 | done | 013ed1b | hub diagnostics-m5.test; web diagnostics-m5.test | Diagnostics test actions; audit export verified |
+| T-M5-12 | M5 | FR-030, FR-031 | done | 013ed1b | core images-tool.test | Image generation (hidden until a provider has an images call); realtime voice deferred |
+| T-M5-13 | M5 | FR-050 | done | 013ed1b | core plugin-authoring.test | Plugin drafts from conversation (never auto-installed) |
+| T-M5-15 | M5 | FR-181, FR-182 | done | 013ed1b | core runs-goals, runs-budgets, loop-m5-extensions tests | Goals + budgeted execution + per-turn backstop |
+| T-M5-16 | M5 | FR-183 | done | 013ed1b | core context-compaction.test; web chat-followup.test | Compaction triggers + context tools |
+| T-M5-17 | M5 | FR-184 | done | 013ed1b | core exec-sessions.test; hub exec-sessions.test | Interactive exec sessions |
+| T-M5-18 | M5 | FR-185 | done | 013ed1b | core context-instructions.test | Instruction-file discovery |
+| T-M5-19 | M5 | FR-186, FR-215 | done | 013ed1b | core runs-escalation, status-thread tests; web work-chat, work-sidebar tests | Chat escalation to Work; thread status model |
+| T-M5-20 | M5 | FR-187, FR-188 | done | 013ed1b | core scheduler-delivery, requests-broker, requests-ask-tool tests; hub requests.test | Verified outcomes; server-to-client requests |
+| T-M5-21 | M5 | FR-085 | done | 013ed1b | core reviewer-model, reviewer-breaker, gate-m5-review tests | Model-based auto-review (fail-closed, circuit breaker) |
+| T-M5-22 | M5 | FR-211 | done | 013ed1b | core code-git.test (marker hook never runs) | Hook-free app Git operations |
+| T-M5-23 | M5 | FR-216, FR-219, FR-220 | done | 013ed1b | core documents-* tests; web documents-preview.test; core runs-escalation.test (deep research) | Document outputs; deep research template; dictation deferred |
+| T-M5-14 | M5 | — | done | cefed67 | `scripts/e2e-docker.sh --repeat-each=2`: 18/18 (smoke, J1-J6); J6 also with a Docker sandbox | E2E J5, J6 |
 | T-M6-01 | M6 | FR-079 | todo | — | — | Agent model + creation/onboarding + responsibilities |
 | T-M6-02 | M6 | FR-141, FR-142 | todo | — | — | `novad` supervisor + module sandbox + capability doc |
 | T-M6-03 | M6 | FR-107 | todo | — | — | Local sandbox (bwrap) + container + cloud stub |
@@ -246,13 +246,16 @@ Last updated: 2026-10-17T18:00:00Z
 - R-006: No Rust toolchain on the dev host. Mitigation: build and test `services/novad` in a `rust` container; CI runners have cargo.
 - R-007: Node built-in SQLite is still marked "active development". Mitigation: storage access goes through `packages/storage`, so the driver can be swapped (ADR-084).
 - R-008: The dev host lacks Chromium's system libraries and sudo. Mitigation: E2E runs in the official Playwright container (`scripts/e2e-docker.sh`); CI installs the libraries itself.
-- R-009: The web bundle's main chunk is 288 KB gzipped after M4 (202 KB after M2, 73 KB at M0); the terminal (xterm) is already a separate 83 KB chunk. Mitigation: split settings, projects, compare and the apps host into dynamic routes in M5; cold start is still under budget.
+- R-009: The web bundle's main chunk is 328 KB gzipped after M5 (288 KB after M4, 202 KB after M2, 73 KB at M0); the terminal (xterm) is a separate 83 KB chunk. Mitigation: split Work, Code, settings, projects, compare and the apps host into dynamic routes in M6; cold start is still under budget.
 - R-010: Provider request details (Anthropic adaptive thinking and summarized reasoning, OpenRouter reasoning options) are verified only against recorded fixtures. Mitigation: opt-in live smoke tests behind a key, before M10.
 - R-011: Tests are timing-sensitive when every package runs at once (each Vitest spawns a worker per core). Mitigation: `npm test` runs at most 4 packages at a time, async queries wait up to 5 s (`apps/web/test/setup.ts`), timing guards leave room for loaded runs, and racy fixtures were fixed at the cause; quarantine with a ledger task if one still flakes.
 - R-012: MCP stdio servers run as the Hub's user without a sandbox or egress proxy until M6 (FR-107, FR-193). Mitigation: only a signed-in owner can add one; secrets are passed by reference; every add and change is audited.
 - R-013: Effect inference for MCP and plugin tools can be over-strict (`list_orders` reads as a purchase and is never pre-approvable). Mitigation: it only ever tightens; a manifest-declared effect list arrives with plugins (M4).
 - R-014: The SQLite database is not encrypted at rest (`node:sqlite` has no encrypting storage layer). Mitigation: blobs are sealed, Diagnostics warns when the data directory is not on an encrypted volume; revisit in M9 (ADR-090).
 - R-015: Command hooks and terminals need the container sandbox; without docker or podman they fail closed (hooks block, terminals show unavailable). The Playwright container has no docker, so J4 checks hook trust states in the UI and leaves hook execution to unit tests; CI runners have docker. Mitigation: the bubblewrap sandbox in M6 (ADR-064).
+- R-016: Documents are built and read synchronously on the Hub's main thread (a 100k-row workbook takes about 1 s). Mitigation: caps on size; move to a worker thread if it matters (ADR-092).
+- R-017: Office files are validated structurally (zip parts, content types, relationships, XML), not opened in an office suite in tests. Mitigation: minimal parts; add a conversion check in CI before M10.
+- R-018: Auto-review's circuit breaker and `startTurn`'s queue live in memory: a Hub restart resets the breaker count and drops queued runtime starts (the areas recover their own state). Mitigation: documented in ADR-092; persist if it becomes a problem.
 
 ## Deferrals
 
@@ -264,15 +267,43 @@ Last updated: 2026-10-17T18:00:00Z
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
 | FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
 | FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M6 device tasks |
-| FR-100 (answer from a second client, server requests) | FR-188 server-to-client requests | T-M5 |
 | FR-185 (imported user instructions) | Import writes `<dataDir>/instructions.md`; the chat reads it with instruction-file discovery | T-M5 (FR-185) |
 | FR-011 (apply a custom palette) | Themes share and import in M4; applying a saved custom palette fully is not wired | T-M8 theming tasks |
 | FR-113 (public profile card, OIDC sign-in) | Not in M4 scope | T-M7 cloud tasks |
 | FR-115 (entitlements and limits), docs/14 §6 (spend caps, clear usage) | Usage insights only in M4 | T-M8 governance tasks |
 | FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M6 device tasks |
 | FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M6 (FR-107, FR-193) |
+| FR-216 (dictation), FR-031 (realtime voice) | Need a local speech engine or a realtime audio provider; Nova ships neither (assessment in ADR-092) | T-M9 or a voice milestone |
+| FR-030 (image generation visible) | Built and tested; hidden until a provider adapter has an images call (`Provider.generateImage`) | T-M7 provider tasks |
+| FR-070 (PR flow, CI status), FR-073 (worktree registry routes, leases, handoff, `.worktreeinclude`) | Commits stay local in M5; worktrees are created per session only | T-M7 code tasks |
+| FR-055 (webhook signing-secret reveal) | Secrets never appear in responses; a rotate-and-show-once route is needed | T-M6 channels |
+| FR-188 (`ask_user` answer authority) | The answer returns as an untrusted tool result; a loop hook to carry the user's authority is needed | T-M6 |
+| FR-053 (sub-agent tool allow-list) | Enforced only through the read-only profile | T-M6 |
+| FR-060 (quiet hours for goal continuations), FR-206 (self-set wakes), agent-made schedules | Agents arrive in M6 | T-M6 agents |
+| FR-074 (tree-sitter index; renames in diffs) | Pattern-based symbol index; renames show as delete + add | T-M9 |
 | FR-198 (allowed domains in the App frame header; Apps in the composer's + menu; `UiEntryPointView.domains`) | The frame, bridge, CSP and entry points ship; these surfaces do not | T-M8 extensibility tasks |
 | FR-200 (hooks from other plugin layouts) | Noted on the import item; not converted | T-M8 extensibility tasks |
+
+## Known gaps (code vs spec, M5)
+
+Found by the M5 docs review; each has a follow-up. Fixed during integration: tool listings per
+thread (`ask_user` only in Work/Code, `schedule.report` only in the fired run's thread), the
+tool's name (`ask_user`, as the contract), autonomous runs refused without a reviewer model,
+cross-account event replay, run ids on typed run turns, request audit and restart expiry,
+reviewer audit kind, review errors, the commit hook note, `nova://code/<id>`, the per-project
+`code.permissionMode`, the Bypass availability rule, and a queue-order race between a user's
+queued message and a runtime start.
+
+| Gap | Follow-up |
+| --- | --- |
+| Auto-review input lacks resource, taint, provenance and rules (docs/12 §6.1); a breaker trip shows Blocked, not Needs input | T-M6 review hardening |
+| Instruction files have no project trust check ("untrusted projects are skipped"); user-added folders count as trusted (ADR-092) | T-M6 project trust |
+| A session whose Auto/Bypass condition lapsed shows its stored mode while it runs as Manual | T-M6 code UI |
+| Code sessions carry no run budgets (docs/09 §2) | T-M6 |
+| Runs: goal continuations ignore quiet hours; the step limit does not set a goal `budget_limited`; persistent model errors fail instead of pausing; usage-limit retries use a fixed 15 min; a child's approval is not mirrored in the parent thread; `task.spawn` takes no budget cap; children's active time adds to the parent's time meter (parallel children use it up faster); researchers get the read-only profile only with an all-read-only tool list | T-M6 runtime hardening |
+| Schedule API body differs from `contracts/schemas/schedule.json` (`target`, `origin`, `wakeReason` arrive with agents; extra M5 fields) | T-M6 agents |
+| Requests: `request.created` reaches every stream (not only clients that declared the kind); resolution shape, `targetDeviceId: null`, id prefix and the full hello (protocol version, limits, `suppressEvents`) differ from contracts/hub-api.md §5 | T-M6 clients |
+| Images cannot be edited (FR-030); only `git.status`, `git.diff` and `git.log` exist among `git.*` tools | T-M7 |
 
 ## Milestone summaries
 
@@ -319,3 +350,24 @@ Last updated: 2026-10-17T18:00:00Z
   restart elsewhere); an app's own tool calls showed as the model's. Evidence: 2,217 unit and
   integration tests across 14 packages; smoke and J1-J4 green three times in a row. Risks added:
   R-015. Next: M5 (agent runtime: Work and Code).
+- **M5** (013ed1b and the M5 fix, e2e and docs commits): one runtime for every mode (ADR-076):
+  Work runs, Code sessions, schedules and goals start and shape turns of the chat loop through
+  TurnStarter and TurnExtension. Runs plan (three autonomy levels), act with approvals, pause on
+  budgets, the backstop, approval timeouts and errors, verify declared outputs, resume after a
+  restart, hold goals with the runtime-enforced blocked rule, spawn depth-1 sub-agents, start
+  from a chat and run deep research. Schedules evaluate cron, RRULE, intervals and one-shots in
+  their time zone across DST, catch up once, never double fire and count a job done only on a
+  delivery receipt. Code sessions capture every change through a shadow Git repository outside the
+  user's repo, with hunk review, comments, a structured review, hook-free Git, commits on
+  `nova/...` branches and a symbol index; permission modes and run autonomy set the gate's policy
+  and the tools' roots per thread; an auto-reviewer can only tighten and fails closed;
+  server-to-client requests, `ask_user` and a derived thread status reach the clients; the loop
+  compacts context, discovers instruction files and runs interactive exec sessions; documents are
+  written and read without new dependencies. Found and fixed in integration: event replay sent
+  other accounts' events; memory consolidation read text the user never typed; a Code session's
+  tools worked in the Nova workspace instead of its folder; a runtime start could jump a message
+  the user queued in the same millisecond; autonomous runs without a reviewer model would deny
+  every action silently; plus run ids on typed turns, request audit and expiry, scoped tool
+  listings and several UI corrections. Evidence: about 2,800 unit and integration tests across 14
+  packages; smoke and J1-J6 green twice in a row, J6 also with a Docker sandbox. Risks added:
+  R-016..R-018; known gaps listed above. Next: M6 (agents, computers and channels).

@@ -37,7 +37,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-027 | core conversation.test | web chat-temporary.test | J2 | temporary chats |
 | FR-028 | core suggestions.test | web chat-suggest-slash.test; web settings.test | — | suggested prompts |
 | FR-029 | core tools-web.test | hub tools.test | — | web search citations |
-| FR-030 | todo | todo | J5 | image gen |
+| FR-030 | core images-tool.test | — | — | image gen (hidden until a provider has an images call) |
 | FR-031 | todo | todo | — | voice |
 | FR-032 | core memory.test | hub conversation.test; web memory.test | J2 | memory |
 | FR-033 | core conversation.test | web chat-panels.test | — | branch tree |
@@ -57,31 +57,31 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-047 | mcp oauth.test; mcp oauth-service.test | hub oauth.test | — | connectors (OAuth PKCE) |
 | FR-048 | policy engine tests | hub policy.test; web tools-settings.test | J3 | per-tool defaults |
 | FR-049 | todo | todo | J10 | marketplace |
-| FR-050 | todo | todo | — | build plugin/skill |
-| FR-051 | todo | todo | J5 | work run |
-| FR-052 | todo | todo | J5 | continue when closed |
-| FR-053 | todo | todo | J5 | sub-agents |
-| FR-054 | todo | todo | J5 | child threads |
-| FR-055 | todo | todo | J5 | schedules |
+| FR-050 | core plugin-authoring.test | core plugin-authoring.test | — | build plugin/skill (drafts) |
+| FR-051 | core runs-lifecycle.test; core runs-loop.test | hub runs.test; hub m5-integration.test; web work-run.test | J5 | work run |
+| FR-052 | core runs-lifecycle.test (recover) | hub runs.test | J5 | continue when closed |
+| FR-053 | core runs-subagents.test | hub runs.test | J5 | sub-agents |
+| FR-054 | core runs-subagents.test | web work-run.test | J5 | child threads |
+| FR-055 | core scheduler-recurrence.test; core scheduler-service.test | hub schedules.test; hub m5-integration.test; web work-scheduled.test | J5 | schedules |
 | FR-056 | todo | todo | J7 | event triggers |
-| FR-057 | todo | todo | J5 | activity |
-| FR-058 | todo | todo | J5 | approvals |
-| FR-059 | todo | todo | J5 | work→code |
+| FR-057 | core runs-lifecycle.test (activity) | hub runs.test; web work-run.test | J5 | activity |
+| FR-058 | core runs-budgets.test (approval timeout) | core gate-m5-policy.test | J5 | approvals |
+| FR-059 | core runs-lifecycle.test (RunStarter) | — | — | work→code (stub: RunStarter) |
 | FR-060 | todo | todo | J7 | notification routing |
-| FR-061 | todo | todo | J6 | code session |
+| FR-061 | core code-sessions.test | hub code.test; hub m5-integration.test; web code-sessions.test | J6 | code session |
 | FR-062 | todo | todo | — | environments |
-| FR-063 | todo | todo | J6 | permission modes |
-| FR-064 | todo | todo | J6 | file edits |
-| FR-065 | todo | todo | J6 | diff review |
-| FR-066 | todo | todo | J6 | terminal |
+| FR-063 | core code-sessions.test (policy); core gate-m5-policy.test | hub policy-m5.test; web code-sessions.test | J6 | permission modes |
+| FR-064 | core code-changes.test | hub m5-integration.test; web code-diff.test | J6 | file edits |
+| FR-065 | core code-changes.test | web code-diff.test | J6 | diff review |
+| FR-066 | core code-sessions.test (terminal) | web code-terminal.test | J6 | terminal |
 | FR-067 | todo | todo | J6 | browser pane |
 | FR-068 | todo | todo | J6 | auto-verify |
-| FR-069 | todo | todo | J6 | code review |
+| FR-069 | core code-tools.test (review) | web code-review.test | J6 | code review |
 | FR-070 | todo | todo | J6 | PR flow |
 | FR-071 | todo | todo | J9 | cloud envs |
 | FR-072 | todo | todo | — | cross-session |
 | FR-073 | todo | todo | — | parallel worktrees |
-| FR-074 | todo | todo | J6 | repo index |
+| FR-074 | core code-tools.test (symbols) | web code-units.test | J6 | repo index (pattern-based) |
 | FR-075 | todo | todo | — | appshots |
 | FR-076 | todo | todo | — | visualizations |
 | FR-077 | todo | todo | J9 | mobile dispatch |
@@ -92,7 +92,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-082 | todo | todo | J7 | proactive research |
 | FR-083 | todo | todo | J7 | background threads |
 | FR-084 | todo | todo | J7 | custom rules |
-| FR-085 | todo | todo | J6 | auto-review (model reviewer, fails closed) |
+| FR-085 | core reviewer-model.test; core reviewer-breaker.test; core gate-m5-review.test | hub policy-m5.test | — | auto-review (model reviewer, fails closed) |
 | FR-086 | todo | todo | J8 | sign-in flow |
 | FR-087 | todo | todo | J7 | takeover |
 | FR-088 | todo | todo | J7 | channels |
@@ -111,7 +111,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-101 | secrets keychain.test; security scan.test | hub ops.test (vault, keychain select) | — | secrets |
 | FR-102 | todo | todo | J8 | egress control |
 | FR-103 | todo | todo | J8 | injection defense |
-| FR-104 | core audit.test | hub ops.test | J3 | audit log |
+| FR-104 | core audit.test | hub ops.test; hub diagnostics-m5.test (export) | J3 | audit log |
 | FR-105 | todo | todo | J10 | data controls |
 | FR-106 | todo | todo | J10 | managed policy |
 | FR-107 | todo | todo | J7 | sandboxing |
@@ -126,7 +126,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-116 | todo | todo | J10 | spend caps |
 | FR-117 | todo | todo | J10 | extension SDK |
 | FR-118 | telemetry ring.test | hub ops.test; web diagnostics-settings.test | — | logging |
-| FR-119 | todo | todo | J5 | diagnostics |
+| FR-119 | hub diagnostics-m5.test | web diagnostics-m5.test | — | diagnostics |
 | FR-120 | todo | todo | J11 | auto-update |
 | FR-121 | todo | todo | — | crash reporting |
 | FR-122 | todo | todo | — | performance budgets |
@@ -138,7 +138,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-128 | todo | todo | J9 | local fallback |
 | FR-129 | todo | todo | J9 | capability-gated offline replica |
 | FR-130 | todo | todo | — | hub failover (post-v1) |
-| FR-131 | todo | todo | J5 | reactive + proactive |
+| FR-131 | core scheduler-service.test | hub schedules.test | J5 | reactive + proactive |
 | FR-132 | todo | todo | J9 | add device via QR |
 | FR-133 | todo | todo | J9 | signed novad bootstrap |
 | FR-134 | todo | todo | J9 | trust paths |
@@ -188,14 +188,14 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-178 | todo | todo | — | skill authoring/generation |
 | FR-179 | todo | todo | — | HomeKit bridge |
 | FR-180 | todo | todo | — | Matter bridge |
-| FR-181 | todo | todo | J5 | goals: statuses, blocked-after-3, idle continuation |
-| FR-182 | todo | todo | J5 | budgets pause; per-turn backstop |
-| FR-183 | todo | todo | — | three compaction triggers |
-| FR-184 | todo | todo | J6 | interactive exec sessions |
-| FR-185 | todo | todo | J6 | instruction-file discovery + budget |
-| FR-186 | todo | todo | J5 | chat escalation to Work |
-| FR-187 | todo | todo | J5 | verified outcomes |
-| FR-188 | todo | todo | J3 | server-to-client requests |
+| FR-181 | core runs-goals.test | hub runs.test; web work-run.test | J5 | goals: statuses, blocked-after-3, idle continuation |
+| FR-182 | core runs-budgets.test; core loop-m5-extensions.test | hub runs.test; web work-run.test | J5 | budgets pause; per-turn backstop |
+| FR-183 | core context-compaction.test | web chat-followup.test | — | three compaction triggers |
+| FR-184 | core exec-sessions.test | hub exec-sessions.test; web code-terminal.test | J6 | interactive exec sessions |
+| FR-185 | core context-instructions.test | core context-instructions.test | J6 | instruction-file discovery + budget |
+| FR-186 | core runs-escalation.test | web work-chat.test | J5 | chat escalation to Work |
+| FR-187 | core runs-lifecycle.test; core scheduler-delivery.test | hub m5-integration.test | J5 | verified outcomes |
+| FR-188 | core requests-broker.test; core requests-ask-tool.test | hub requests.test; web work-chat.test | J3 | server-to-client requests |
 | FR-189 | policy engine tests (tiers, provenance) | core gate.test | J3 | confirmation tiers + intent provenance |
 | FR-190 | policy paths/profiles tests | core tools-fs.test | J3 | permission profiles + protected paths |
 | FR-191 | policy command tests | hub policy.test; web permissions-settings.test | J3 | command prefix rules + load-time examples |
@@ -218,16 +218,16 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-208 | todo | todo | — | page-registered tools |
 | FR-209 | todo | todo | — | local browser fallback |
 | FR-210 | todo | todo | J7 | novad staged writes + local MCP |
-| FR-211 | todo | todo | J6 | hook-free app git ops |
+| FR-211 | core code-git.test | core code-git.test (marker hook) | J6 | hook-free app git ops |
 | FR-212 | todo | todo | — | best-of-N attempts |
 | FR-213 | todo | todo | J9 | session handoff |
 | FR-214 | todo | todo | — | attach window |
-| FR-215 | todo | todo | J5 | thread status model |
+| FR-215 | core status-thread.test | hub m5-integration.test; web work-sidebar.test | J5 | thread status model |
 | FR-216 | todo | todo | — | dictation |
 | FR-217 | todo | todo | — | shared threads |
 | FR-218 | todo | todo | — | voice-call channel |
-| FR-219 | todo | todo | J5 | document outputs |
-| FR-220 | todo | todo | J5 | deep research run |
+| FR-219 | core documents-writers.test; core documents-readers.test | core documents-tools.test; web documents-preview.test | J5 | document outputs |
+| FR-220 | core runs-escalation.test (deep research) | web work-list.test | J5 | deep research run |
 | FR-221 | core presets.test | hub model-routes.test; web models-settings.test | J2 | model presets |
 | FR-222 | todo | todo | — | third-party app authorization |
 | FR-223 | todo | todo | — | opt-in OTLP export |

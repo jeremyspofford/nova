@@ -25,12 +25,14 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    │           ├──1:N── Source ──1:N── SourceChunk
    │           └──1:N── ProjectFolder ──1:N── ProjectFolderFile ──1:1── Source
    │
-   ├──1:N── Run (Work) ──1:N── RunStep ──1:N── SubAgent
+   ├──1:N── Run (Work) ──1:N── RunStep
+   │            ├──1:N── SubAgent
    │            ├──0:1── Goal (open)
-   │            ├──1:N── Schedule
    │            └──1:N── Trigger ──0:1── McpEventSubscription ──1:N── McpEventDelivery
+   ├──1:N── Schedule ──1:N── ScheduleFire  (each fire starts a Run)
    │
    ├──1:N── CodeSession ──1:N── CodeChange ──1:N── DiffComment
+   │            ├──1:N── CodeReview ──1:N── DiffComment (findings)
    │            ├──N:1── Environment
    │            ├──0:1── Worktree (lease)
    │            └──1:N── SessionHandoff
@@ -183,14 +185,17 @@ CREATE TABLE turn (                -- one trigger and everything the runtime did
   idx INTEGER NOT NULL,            -- order within the thread, from 0
   status TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|completed|interrupted|failed
   trigger TEXT NOT NULL DEFAULT 'user',       -- user|schedule|goal|hook|event|channel
-  trigger_ref TEXT,                -- schedule, goal, hook, trigger or channel_binding id
-  run_id TEXT REFERENCES run(id),
-  goal_id TEXT REFERENCES goal(id),
+  trigger_ref TEXT,                -- schedule, goal, hook, trigger or channel_binding id; M5 run
+                                   -- and sub-agent turns use trigger 'user' with the run id here
+  run_id TEXT REFERENCES run(id),  -- set on turns a run starts (M5); a turn the user types into a
+  goal_id TEXT REFERENCES goal(id), -- run thread has none yet
   execution_location TEXT NOT NULL, -- 'hub' | 'device:<id>' | 'environment:<id>'; fixed for the turn (FR-127)
   model_id TEXT, reasoning_level TEXT,
   step_count INTEGER NOT NULL DEFAULT 0 CHECK (step_count <= 200), -- model steps; backstop (FR-182)
   stop_reason TEXT,                -- end|budget|backstop|cancelled|approval_timeout|location_lost|error
-  usage_json TEXT,                 -- {inputTokens, outputTokens, cachedTokens, costUsd, timeSeconds}
+  usage_json TEXT,                 -- {inputTokens, outputTokens, cachedTokens, costUsd, timeSeconds};
+                                   -- since M5 timeSeconds is active time: waits for approvals and
+                                   -- for the user's answers are left out
   started_at TEXT NOT NULL, ended_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (thread_id, idx),
@@ -203,8 +208,8 @@ CREATE TABLE message (
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES thread(id),
   turn_id TEXT REFERENCES turn(id), -- NULL only for messages imported without turns (FR-200)
-  role TEXT NOT NULL,              -- system|user|assistant|tool|summary
-  author_kind TEXT,                -- user|agent|subagent|system
+  role TEXT NOT NULL,              -- system|user|assistant|tool|summary (summary: a compaction, below)
+  author_kind TEXT,                -- who wrote it (table below)
   provenance TEXT NOT NULL DEFAULT 'typed', -- typed|pasted|tool|channel|capture|import (FR-189)
   delivery TEXT,                   -- NULL|steer|queued: how a follow-up entered its turn (FR-019)
   parent_id TEXT,                  -- the message this one follows; siblings are versions (FR-020)
@@ -232,7 +237,7 @@ CREATE TABLE message_part (        -- the "items" of a turn
   type TEXT NOT NULL,              -- text|reasoning|tool_call|tool_result|image|file|artifact_ref|error|
                                    -- context (a resolved @-mention, FR-022)|
                                    -- plan|command_execution|file_change|mcp_tool_call|subagent_activity|
-                                   -- web_search|compaction|review_marker|hook_prompt
+                                   -- web_search|compaction|review_marker|hook_prompt|notice
   content TEXT,                    -- text or JSON (shape per type, below)
   ref_id TEXT,                     -- tool_call, code_change, subagent, hook or approval id
   mime TEXT, blob_path TEXT,
@@ -250,13 +255,43 @@ Item kinds added for the turn model (`content` is JSON unless noted):
 | `mcp_tool_call` | `{serverId, tool, callId, status}` | MCP tools (FR-042) |
 | `subagent_activity` | `{subagentId, threadId, role, status, summary?}` | `task.*` tools (`docs/09` §4) |
 | `web_search` | `{query, resultCount, citationIds[]}` | FR-029 |
-| `compaction` | `{trigger: pre_turn\|mid_turn\|post_turn\|manual, tokensBefore, tokensAfter, summary}` | FR-183 |
+| `compaction` | `{trigger: pre_turn\|mid_turn\|post_turn\|manual, tokensBefore, tokensAfter, summary, note, turnId, covered, elided[], taint[], hooks[], method: model\|extractive}` | FR-183 |
 | `review_marker` | `{phase: entered\|exited, kind: code_review\|auto_review, verdict?}` | FR-085, code review |
 | `hook_prompt` | `{hookId, event, addedContext}` (text spilled to `blob_path` when large) | FR-197 |
+| `notice` | `{code, message}`: something Nova tells the user about the turn, e.g. `instructions_truncated` | FR-185 |
+
+M5 writes `compaction` and `notice`. It does not write `plan` (a run's plan lives in `run_step`),
+`command_execution` (the tool card shows the command), `file_change`, `subagent_activity` or
+`review_marker` yet.
+
+**Compaction storage (FR-183).** A compaction needs no table of its own. It is a message with
+role `summary`, `author_kind = 'system'`, `provenance = 'tool'` and one `compaction` part (idx 0).
+It is inserted in the tree just above the turn's user message, and that message's versions are
+reparented under it, so every later context of the path starts from the summary. `covered`
+counts the messages it stands for. `elided` lists the earlier steps of the current turn whose
+tool results it dropped (mid-turn and manual compactions keep only the latest step's).
+The summary is plain text and keeps the `taint` of what it summarizes. The original messages
+stay stored, visible and searchable.
+
+`message.author_kind` says who wrote a message. Only text the signed-in user typed carries their
+authority (FR-189); every other user-role message gets `provenance = 'tool'`:
+
+| `author_kind` | Role | Written for |
+| --- | --- | --- |
+| `user` | user | the user's own message, typed in a Nova client |
+| `agent` | assistant | every model reply |
+| `hook` | user | a `stop` hook's continuation prompt (FR-197) |
+| `run` | user | a Work run's objective or Nova's continuation of a run (typed only when the user wrote or started it) |
+| `schedule` | user | a schedule's instructions on a scheduled run's first turn |
+| `goal` | user | a goal continuation (FR-181); never the user's authority |
+| `subagent` | user | a sub-agent's task, written by the parent model; never the user's authority |
+| `system` | summary | a compaction summary |
 
 Thread status (FR-215: Running, Needs input, Ready, Blocked) is **derived** from `thread.state`,
 open `turn` rows, pending `server_request` rows, `goal.status` and child runs (`docs/09` §9);
-it is not stored.
+it is not stored. M5 computes it in the Hub with precedence needs_input > blocked > running >
+ready (child threads count for needs_input and running only). The last value per thread is kept
+in memory only, to emit `thread.status.changed` when it changes.
 
 ```sql
 CREATE TABLE attachment (
@@ -335,7 +370,10 @@ CREATE TABLE approval (            -- ids of threads, turns, runs, calls and rul
   status TEXT NOT NULL DEFAULT 'pending', -- pending|decided|expired|cancelled; a hand-off stays
                                    -- pending (decision = 'handoff') until it is marked done
   tier TEXT,                       -- handoff_required|confirm_at_action|pre_approvable (FR-189)
-  review_json TEXT,                -- auto-review verdict, schema auto-review-verdict.json (FR-085)
+  review_json TEXT,                -- auto-review verdict, schema auto-review-verdict.json (FR-085):
+                                   -- {outcome, risk, userAuthorization, rationale}, written when the
+                                   -- reviewer's ask or handoff opens the card; rationale redacted,
+                                   -- ≤ 1,000 characters (M5 does not show it in ApprovalView yet)
   decision TEXT,                   -- allow_once|allow_session|allow_always|deny_continue|deny_stop|
                                    -- handoff|timeout (FR-100, ADR-060); schema approval-decision.json
   always_scope TEXT,               -- tool|prefix_rule|host; required for allow_always
@@ -463,24 +501,34 @@ CREATE UNIQUE INDEX idx_hook_key
 CREATE INDEX idx_hook_event ON hook(account_id, event);
 
 CREATE TABLE server_request (       -- Hub-to-client requests (FR-188); schema server-request.json
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,             -- uuidv7
   account_id TEXT NOT NULL REFERENCES account(id),
   kind TEXT NOT NULL,              -- approval|user_input|elicitation|client_tool|credential_refresh
   thread_id TEXT, turn_id TEXT, run_id TEXT, agent_id TEXT, call_id TEXT, -- correlation ids
+                                   -- (plain columns, no FKs: purges never block on a request)
   approval_id TEXT REFERENCES approval(id), -- kind = 'approval'
   target_device_id TEXT,           -- NULL = any authorized client; client_tool may name one
   payload_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending', -- pending|resolved|expired
   resolved_by TEXT,                -- user|hook:<id>
   resolved_by_device TEXT,
-  resolution_json TEXT,
-  notified_at TEXT,                -- fallback notification sent (FR-060)
-  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, resolved_at TEXT,
+  resolution_json TEXT,            -- the answer, redacted
+  expired_reason TEXT,             -- timeout|cancelled|restart: a cancelled request (its turn was
+                                   -- cancelled) and one a restart left pending end `expired` too
+  notified_at TEXT,                -- fallback notification sent (FR-060), once per request
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, resolved_at TEXT, -- resolved_at is also
+                                   -- set when a request expires
   CHECK (status <> 'resolved' OR (resolution_json IS NOT NULL AND resolved_at IS NOT NULL))
 );
 CREATE INDEX idx_server_request_pending ON server_request(account_id, expires_at)
   WHERE status = 'pending';
+CREATE INDEX idx_server_request_thread ON server_request(thread_id) -- derived status (FR-215)
+  WHERE status = 'pending';
 ```
+
+M5 writes no `approval` rows here: approvals keep their own table, and `GET /requests` lists
+pending approvals as read-only `approval` items read from `approval`. `agent_id` stays NULL
+until agents arrive (M6).
 
 ### audit & events
 
@@ -492,7 +540,8 @@ CREATE TABLE audit_event (          -- append-only: triggers refuse UPDATE and D
   actor TEXT NOT NULL,             -- user|agent:<id>|system (run and sub-agent ids go in run_id/detail);
                                    -- also mcp_client:<authorization id> and a hook id (M4)
   kind TEXT NOT NULL,              -- tool_call|approval|review|hook|fs|network|egress|auth|update|
-                                   -- policy|import|ambient|secret|settings|mcp|node|plugin|terminal
+                                   -- policy|import|ambient|secret|settings|mcp|node|plugin|terminal|
+                                   -- run|schedule|request|code (M5)
   thread_id TEXT, turn_id TEXT, run_id TEXT, agent_id TEXT, session_id TEXT,
   action TEXT NOT NULL, resource TEXT,
   input_hash TEXT, decision TEXT, result TEXT,
@@ -535,58 +584,94 @@ Audit actions added in M4 (`kind` / `action`; inputs are stored as a hash only):
 
 The `hook`, `plugin` and `terminal` kinds are reserved; M4 writes the kinds above.
 
+Audit actions added in M5 (`kind` / `action`; inputs are stored as a hash only):
+
+| Kind | Action | Resource | Written for |
+| --- | --- | --- | --- |
+| `run` | `run.create`, `run.start`, `run.pause`, `run.resume`, `run.redirect`, `run.cancel`, `run.budget.extend`, `run.plan.update` | `run:<id>` | Work run controls (FR-051, FR-182); `result` is the run status; `run.redirect` keeps only the input hash; `run.budget.extend` has `detail.by` |
+| `run` | `goal.set`, `goal.update`, `goal.clear`, `goal.status` | `goal:<id>` | goals (FR-181); `goal.status` has `detail {from, to}` |
+| `run`, `schedule` or `policy` | `turn.start` | `thread:<id>` | every turn a run, schedule, goal, sub-agent or hook starts: kind `run` when it belongs to a run, `schedule` for a schedule trigger, else `policy`; actor `user` or `system`; `decision` `user_instruction` or `no_authority`; detail `{trigger, triggerRef, runId, goalId, authorKind, messageId, source\|origin}` |
+| `schedule` | `schedule.create`, `schedule.update`, `schedule.delete` | `schedule:<id>` | schedule edits (FR-055); `detail.changed` on update |
+| `schedule` | `schedule.fire`, `schedule.run_now`, `schedule.skip` | `schedule:<id>` | a fire or catch-up (`result` is the run id), Run now, and missed fires recorded as skipped (ADR-079) |
+| `network` | `schedule.webhook` | the webhook host | a webhook delivery; `decision` `delivered\|failed` |
+| `code` | `code.session.created`, `code.mode.changed` | the session folder | Code sessions (FR-061, FR-063); `decision` is the mode |
+| `code` | `code.change.rejected` | the file's path | rejecting hunks rewrites the user's file (FR-064) |
+| `code` | `code.review` | the session folder | a `/review` run (FR-069): model, attempts and finding count |
+| `code` | `code.commit` | the session folder | a commit (`docs/10` §8): sha, branch, files, `hooksRan` |
+| `policy` | `review.verdict`, `review.override`, `review.breaker` | the call's path or host (`review.override`: the tool) | the auto-reviewer (FR-085): each verdict with model, attempts, latency and `failedClosed`; an Allow once over its verdict; a breaker trip |
+| `tool_call` | `exec.session.kill` | the session's folder | an exec session killed from the terminal pane (actor `user`), or ended with its run or a cancel (actor `system`) (FR-184); `result` `killed\|cancelled` |
+
+M5 writes the reviewer's entries with kind `policy`; kind `review` is reserved for them. The
+`request` kind is reserved: M5 writes no audit entry for server-to-client requests.
+
 ### work runs, goals, schedules, triggers
 
 ```sql
-CREATE TABLE run (
-  id TEXT PRIMARY KEY,
+CREATE TABLE run (                 -- a `work` thread plus this row; its turns run in the one chat
+  id TEXT PRIMARY KEY,             -- loop (ADR-076)
   account_id TEXT NOT NULL REFERENCES account(id),
   project_id TEXT REFERENCES project(id),
-  thread_id TEXT REFERENCES thread(id),
-  agent_id TEXT REFERENCES agent(id),
+  thread_id TEXT NOT NULL REFERENCES thread(id), -- one run per thread
+  agent_id TEXT,                   -- no FK until the agent table arrives (M6)
   parent_run_id TEXT REFERENCES run(id), -- delegation (FR-059); child consumption counts upward
   origin TEXT NOT NULL DEFAULT 'user',   -- user|schedule|trigger|chat_escalation|delegation|goal
+  origin_ref TEXT,                 -- the chat it escalated from (FR-186), the schedule or trigger
+  template TEXT,                   -- NULL|deep_research (FR-220)
   title TEXT NOT NULL, objective TEXT NOT NULL,
-  plan_json TEXT,
+  authority TEXT NOT NULL DEFAULT 'none', -- user|none: whose words the objective carries (FR-189);
+                                   -- `user` when the user typed it or started a proposed run
+  authority_source TEXT,           -- e.g. run:<id>, for the audit trail
+  model TEXT,
   status TEXT NOT NULL,            -- planning|running|waiting_approval|paused|done|output_missing|
                                    -- failed|cancelled
   pause_reason TEXT,               -- set while paused: user|budget_time|budget_tokens|budget_cost|
                                    -- backstop|usage_limit|approval_timeout|review_breaker|safety|
                                    -- error (model or tool failure, docs/09 §12)
-  autonomy TEXT NOT NULL DEFAULT 'standard',
+  status_detail TEXT,              -- why it paused or failed, in a sentence
+  autonomy TEXT NOT NULL DEFAULT 'standard', -- ask_first|standard|autonomous
+  plan_approved INTEGER NOT NULL DEFAULT 0, -- the user started the plan or wrote it
   -- budgets (FR-182, ADR-058); cost_budget_usd NULL = the provider spend cap (FR-116)
   time_budget_s INTEGER NOT NULL DEFAULT 3600,
   token_budget INTEGER NOT NULL DEFAULT 2000000,
   cost_budget_usd REAL,
-  time_used_s INTEGER NOT NULL DEFAULT 0,  -- wall clock while a turn runs; waits excluded
-  tokens_used INTEGER NOT NULL DEFAULT 0,  -- includes child runs
+  time_used_ms INTEGER NOT NULL DEFAULT 0, -- active time while a turn runs, in ms; waits excluded
+  tokens_used INTEGER NOT NULL DEFAULT 0,  -- includes child runs and sub-agents
   cost_used_usd REAL NOT NULL DEFAULT 0,
+  progress_note TEXT,              -- the progress summary of the last pause or turn
+  pending_json TEXT,               -- user redirects waiting for the running turn to end
+  error_count INTEGER NOT NULL DEFAULT 0, -- consecutive failed turns; the third fails the run
   expected_output_json TEXT,       -- declared output to verify (FR-187)
   output_verified_at TEXT,
-  result_summary TEXT, result_json TEXT,
+  result_summary TEXT, result_json TEXT, -- result_json: {summary, artifactIds, evidence}
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT,
   CHECK (status <> 'paused' OR pause_reason IS NOT NULL),
   CHECK (status <> 'done' OR expected_output_json IS NULL OR output_verified_at IS NOT NULL)
 );
+CREATE UNIQUE INDEX uq_run_thread ON run(thread_id);
 CREATE INDEX idx_run_status ON run(account_id, status, updated_at DESC);
+CREATE INDEX idx_run_parent ON run(parent_run_id) WHERE parent_run_id IS NOT NULL;
+-- The plan lives in run_step (no plan_json). Autonomy maps to an approval policy: ask_first →
+-- ask_always, standard → defaults, autonomous → review.
 
 CREATE TABLE goal (                 -- FR-181, docs/09 §2.1; schema goal.json
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES account(id),
   run_id TEXT REFERENCES run(id),
-  agent_id TEXT REFERENCES agent(id),
+  agent_id TEXT,                   -- no FK until the agent table arrives (M6)
   thread_id TEXT REFERENCES thread(id),  -- where continuation turns (trigger 'goal') run
-  objective TEXT NOT NULL CHECK (length(objective) <= 4000),
+  objective TEXT NOT NULL CHECK (length(objective) BETWEEN 1 AND 4000),
+  created_by TEXT NOT NULL DEFAULT 'user', -- user|agent (goal.set)
   status TEXT NOT NULL DEFAULT 'active', -- active|paused|blocked|usage_limited|budget_limited|complete
   status_set_by TEXT NOT NULL DEFAULT 'user', -- user|agent|system
   status_reason TEXT, progress_note TEXT, completion_summary TEXT,
   token_budget INTEGER, time_budget_s INTEGER, cost_budget_usd REAL, -- NULL = run/agent budgets
   tokens_used INTEGER NOT NULL DEFAULT 0,
-  time_used_s INTEGER NOT NULL DEFAULT 0,
+  time_used_ms INTEGER NOT NULL DEFAULT 0, -- in ms, like run.time_used_ms
   cost_used_usd REAL NOT NULL DEFAULT 0,
   blocker_key TEXT,                -- normalized key of the last reported blocker
   blocker_description TEXT,        -- the agent's description of it (goal.json blocker.description)
   blocker_count INTEGER NOT NULL DEFAULT 0, -- consecutive goal turns with that key; reset on resume
+  blocker_turn_id TEXT,            -- the last of those turns
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
   CHECK ((run_id IS NULL) <> (agent_id IS NULL)),
   CHECK (status NOT IN ('usage_limited','budget_limited') OR status_set_by = 'system'),
@@ -596,36 +681,57 @@ CREATE UNIQUE INDEX uq_goal_open_run ON goal(run_id)
   WHERE run_id IS NOT NULL AND status <> 'complete';
 CREATE UNIQUE INDEX uq_goal_open_agent ON goal(agent_id)
   WHERE agent_id IS NOT NULL AND status <> 'complete';
+CREATE INDEX idx_goal_account ON goal(account_id, status, updated_at DESC);
+-- Clearing a goal deletes its row.
 
-CREATE TABLE run_step (
+CREATE TABLE run_step (             -- the plan: steps the model proposes (plan.set) or the user edits
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES run(id),
-  idx INTEGER NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL,
-  detail_json TEXT, started_at TEXT, ended_at TEXT
+  idx INTEGER NOT NULL, title TEXT NOT NULL,
+  status TEXT NOT NULL,            -- pending|running|done|failed|skipped
+  detail_json TEXT, started_at TEXT, ended_at TEXT,
+  UNIQUE (run_id, idx)
 );
 
-CREATE TABLE subagent (
+CREATE TABLE subagent (             -- FR-053, FR-054: a child `work` thread under the run's thread
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES run(id),
-  thread_id TEXT REFERENCES thread(id),
-  role TEXT, status TEXT NOT NULL, result_json TEXT,
+  thread_id TEXT REFERENCES thread(id), -- NULL while queued behind the concurrency limit
+  role TEXT NOT NULL, objective TEXT NOT NULL,
+  tools_json TEXT,                 -- the allow-list the parent gave it, never wider than its own
+  status TEXT NOT NULL,            -- queued|running|done|failed|cancelled
+  inbox_json TEXT,                 -- task.message input waiting for the child's turn to end
+  result_json TEXT,                -- {summary}
   created_at TEXT NOT NULL, ended_at TEXT
 );
+CREATE INDEX idx_subagent_run ON subagent(run_id, created_at);
+CREATE UNIQUE INDEX uq_subagent_thread ON subagent(thread_id) WHERE thread_id IS NOT NULL;
+-- M5 enforces the allow-list only through the read-only profile (a child limited to reading
+-- tools runs with `read-only`).
 
 CREATE TABLE schedule (             -- FR-055, FR-206, ADR-079; schema schedule.json
-  id TEXT PRIMARY KEY, run_id TEXT REFERENCES run(id), agent_id TEXT REFERENCES agent(id),
-  cron TEXT, rrule TEXT, interval_seconds INTEGER,
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  project_id TEXT REFERENCES project(id), -- the project its runs belong to
+  run_id TEXT,                     -- the Work run it was made from ("schedule it"), if any
+  agent_id TEXT,                   -- no FK until the agent table arrives (M6)
+  title TEXT NOT NULL,             -- defaults to the start of the instructions
+  cron TEXT, rrule TEXT,
+  interval_seconds INTEGER CHECK (interval_seconds IS NULL OR interval_seconds >= 60),
   once_at TEXT,                    -- one-shot fire (self-set wakes, FR-206)
   timezone TEXT NOT NULL,          -- IANA; required by schedule.json
-  starts_at TEXT, ends_at TEXT,    -- starts_at is the RRULE DTSTART
-  instructions TEXT NOT NULL, notify_condition TEXT,
-  delivery_targets_json TEXT NOT NULL, -- JSON array of {kind: inapp|os|slack|teams|email|webhook, ref}
+  starts_at TEXT, ends_at TEXT,    -- starts_at is the RRULE DTSTART and the interval's anchor
+  instructions TEXT NOT NULL CHECK (length(instructions) BETWEEN 1 AND 8000),
+  notify_condition TEXT CHECK (notify_condition IS NULL OR length(notify_condition) <= 1000),
+  delivery_targets_json TEXT NOT NULL, -- JSON array of {kind: inapp|os|slack|teams|email|webhook, ref};
+                                   -- a webhook's signing secret is secret://schedule/<id>/webhook
   expected_output_json TEXT,       -- declared output (FR-187)
   catch_up_policy TEXT NOT NULL DEFAULT 'once',      -- once|skip
   catch_up_lookback_s INTEGER NOT NULL DEFAULT 604800, -- 7 days
+  autonomy TEXT NOT NULL DEFAULT 'standard', -- ask_first|standard|autonomous, for its runs
   origin TEXT NOT NULL DEFAULT 'user', -- user|agent (schedule.create, FR-059)|agent_self (wake)
   wake_reason TEXT,                -- agent_self only
   enabled INTEGER NOT NULL DEFAULT 1,
-  last_run_at TEXT, next_run_at TEXT,
-  last_outcome TEXT,               -- done|output_missing|failed|cancelled (run.completed status)
+  last_run_at TEXT, next_run_at TEXT, -- next_run_at: the next fire not yet handled
+  last_outcome TEXT,               -- done|output_missing|failed|cancelled|no_news
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   CHECK ((cron IS NOT NULL) + (rrule IS NOT NULL) + (interval_seconds IS NOT NULL)
          + (once_at IS NOT NULL) = 1),
@@ -633,6 +739,33 @@ CREATE TABLE schedule (             -- FR-055, FR-206, ADR-079; schema schedule.
          OR (agent_id IS NOT NULL AND once_at IS NOT NULL AND wake_reason IS NOT NULL))
 );
 CREATE INDEX idx_schedule_next ON schedule(next_run_at) WHERE enabled = 1;
+CREATE INDEX idx_schedule_account ON schedule(account_id, created_at);
+
+CREATE TABLE schedule_fire (        -- a schedule's history (ADR-079): fires, catch-ups, skips
+  id TEXT PRIMARY KEY,
+  schedule_id TEXT NOT NULL REFERENCES schedule(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES account(id),
+  kind TEXT NOT NULL,              -- fire|catch_up|skipped
+  due_at TEXT,                     -- the rule time it stands for (catch-up or skip: the last missed
+                                   -- time); NULL for Run now
+  window_first TEXT, window_last TEXT, window_count INTEGER, -- the missed window (catch_up, skipped)
+  run_id TEXT, thread_id TEXT,     -- plain TEXT: the history outlives a deleted run
+  notify INTEGER,                  -- the run's schedule.report: 1 deliver, 0 no news, NULL deliver
+  report_message TEXT,
+  receipts_json TEXT,              -- delivery results: [{kind, ref?, receipt, error?}]
+  outcome TEXT,                    -- done|output_missing|failed|cancelled|no_news; NULL while open
+  detail TEXT,                     -- why: no news, the delivery that failed, the error
+  fired_at TEXT NOT NULL, ended_at TEXT,
+  CHECK (kind = 'fire' OR (window_first IS NOT NULL AND window_last IS NOT NULL
+         AND window_count IS NOT NULL))
+);
+-- Claiming a fire inserts its row in the transaction that moves next_run_at; the unique index
+-- stops one rule time from firing twice, across restarts too.
+CREATE UNIQUE INDEX uq_schedule_fire_due ON schedule_fire(schedule_id, kind, due_at)
+  WHERE due_at IS NOT NULL;
+CREATE INDEX idx_schedule_fire_schedule ON schedule_fire(schedule_id, fired_at DESC);
+CREATE INDEX idx_schedule_fire_open ON schedule_fire(account_id, thread_id)
+  WHERE outcome IS NULL AND kind <> 'skipped';
 
 CREATE TABLE trigger (
   id TEXT PRIMARY KEY, schedule_id TEXT REFERENCES schedule(id), run_id TEXT REFERENCES run(id),
@@ -680,30 +813,41 @@ CREATE TABLE environment (
   device_id TEXT REFERENCES device(id), -- kind 'device' / 'ssh' with the novad helper (FR-062)
   label TEXT NOT NULL, config_json TEXT,
   repo_urls TEXT, setup_script TEXT,
-  status TEXT NOT NULL DEFAULT 'unknown', last_check_at TEXT,
+  status TEXT NOT NULL DEFAULT 'unknown', -- ok|degraded|down|unknown
+  status_detail TEXT,              -- why it is degraded or down (no Git, no sandbox)
+  last_check_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX idx_environment_local ON environment(account_id) WHERE kind = 'local';
+-- M5 has one built-in `local` environment per account (the Hub host); it is `ok` or `degraded`,
+-- never `down`. Other kinds arrive with FR-062.
 
 CREATE TABLE code_session (
   id TEXT PRIMARY KEY,
-  thread_id TEXT NOT NULL REFERENCES thread(id),  -- 1:1 with a code thread
+  account_id TEXT NOT NULL REFERENCES account(id),
+  thread_id TEXT NOT NULL UNIQUE REFERENCES thread(id), -- 1:1 with a code thread (title, model)
   environment_id TEXT REFERENCES environment(id),
+  folder_path TEXT NOT NULL,       -- canonical folder the user chose (the main checkout when the
+                                   -- session works in a worktree)
   project_folder_id TEXT REFERENCES project_folder(id),
   worktree_id TEXT REFERENCES worktree(id),
   branch TEXT,
   permission_mode TEXT NOT NULL DEFAULT 'manual', -- manual|accept_edits|plan|auto|bypass (presets, FR-063)
-  permission_profile_id TEXT REFERENCES permission_profile(id), -- FR-190
-  status TEXT NOT NULL DEFAULT 'idle',
+  permission_profile_id TEXT,      -- reserved for a custom profile; the mode sets the profile (FR-190)
+  status TEXT NOT NULL DEFAULT 'active', -- active|archived (its thread was archived or deleted)
   pull_request_url TEXT, ci_status TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE INDEX idx_code_session_account ON code_session(account_id, updated_at DESC);
+-- The mode last used in a folder is the `code.folderModes` setting (Plan is never saved).
 
 CREATE TABLE worktree (             -- worktree registry (FR-073); at most 15 active per repo
   id TEXT PRIMARY KEY,
-  device_id TEXT REFERENCES device(id), -- where the repo lives
-  name TEXT NOT NULL,               -- <id> shown in the worktree list
+  account_id TEXT NOT NULL REFERENCES account(id),
+  device_id TEXT REFERENCES device(id), -- where the repo lives; NULL = the Hub
+  name TEXT NOT NULL,               -- 8 hex characters, shown in the worktree list
   repo_path TEXT NOT NULL,         -- main checkout
-  path TEXT NOT NULL,              -- <repo>/.nova/worktrees/<id>
+  path TEXT NOT NULL,              -- <repo>/.nova/worktrees/<name>
   branch TEXT NOT NULL,            -- nova/<slug>
   source_branch TEXT NOT NULL,
   lease_session_id TEXT REFERENCES code_session(id),
@@ -713,6 +857,8 @@ CREATE TABLE worktree (             -- worktree registry (FR-073); at most 15 ac
   UNIQUE (device_id, path)
 );
 CREATE INDEX idx_worktree_repo ON worktree(device_id, repo_path, status);
+CREATE UNIQUE INDEX idx_worktree_hub_path ON worktree(path) WHERE device_id IS NULL;
+-- An archived session releases its lease: a clean worktree is removed, a dirty one is kept.
 
 CREATE TABLE session_handoff (      -- FR-213; recorded in the session history
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
@@ -724,20 +870,53 @@ CREATE TABLE session_handoff (      -- FR-213; recorded in the session history
   error TEXT, created_at TEXT NOT NULL, completed_at TEXT
 );
 
-CREATE TABLE code_change (
+CREATE TABLE code_change (          -- one changed file (FR-064, FR-065), relative to the session folder
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES code_session(id),
-  path TEXT NOT NULL, change_kind TEXT NOT NULL,  -- add|modify|delete|rename
-  old_path TEXT, additions INTEGER, deletions INTEGER,
-  patch_blob_path TEXT, applied INTEGER NOT NULL DEFAULT 0,
-  reviewed_at TEXT, created_at TEXT NOT NULL
+  path TEXT NOT NULL, change_kind TEXT NOT NULL,  -- add|modify|delete|rename (M5 never detects
+                                   -- renames: a delete plus an add)
+  old_path TEXT,
+  additions INTEGER NOT NULL DEFAULT 0, deletions INTEGER NOT NULL DEFAULT 0,
+  binary INTEGER NOT NULL DEFAULT 0,
+  pending INTEGER NOT NULL DEFAULT 0, -- 1 while it has undecided hunks
+  patch_blob_path TEXT,            -- the pending part (work tree against the accepted baseline),
+  patch_sha256 TEXT,               -- a unified patch at code/<sessionId>/patches/<id>.patch (§3)
+  decided_json TEXT NOT NULL DEFAULT '{"hunks":[],"file":null}', -- decided hunks of this round
+  state TEXT NOT NULL DEFAULT 'pending', -- pending|accepted|rejected|partial
+  call_id TEXT,                    -- the tool call that made it, when the agent did
+  applied INTEGER NOT NULL DEFAULT 0, -- 1 once committed (committed rows are hidden)
+  reviewed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX idx_code_change_path ON code_change(session_id, path);
 
-CREATE TABLE diff_comment (
+CREATE TABLE code_review (          -- a /review of the session's uncommitted changes (FR-069)
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES code_session(id),
+  status TEXT NOT NULL DEFAULT 'running', -- running|done|failed
+  model_id TEXT,
+  findings_json TEXT NOT NULL DEFAULT '[]', -- [{id, path, line, severity, title, reasoning, fix}]
+  attempts INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE INDEX idx_code_review_session ON code_review(session_id, created_at DESC);
+
+CREATE TABLE diff_comment (         -- a comment on a diff line (FR-065), by the user or a review
   id TEXT PRIMARY KEY, change_id TEXT NOT NULL REFERENCES code_change(id),
-  path TEXT, line INTEGER, side TEXT, body TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES code_session(id),
+  path TEXT, line INTEGER,
+  side TEXT,                       -- old|new
+  body TEXT NOT NULL,
+  author TEXT NOT NULL DEFAULT 'user', -- user|review (a finding of review_id)
+  review_id TEXT REFERENCES code_review(id),
+  submitted_at TEXT,               -- when a user comment was sent to the agent as one turn
   resolved INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
+CREATE INDEX idx_diff_comment_session ON diff_comment(session_id, created_at);
 ```
+
+Each Code session also keeps a shadow repository at `<dataDir>/code/<sessionId>/shadow.git`
+(§3) with two refs: `refs/nova/baseline` (the accepted state) and `refs/nova/start` (the last
+committed state). The pending diff is the work tree against the baseline. The symbol index
+(FR-074) lives in Hub memory per session; there is no symbols table in M5.
 
 ### agents & computers
 
@@ -865,6 +1044,8 @@ CREATE TABLE artifact (
   id TEXT PRIMARY KEY, thread_id TEXT REFERENCES thread(id),
   message_id TEXT REFERENCES message(id), run_id TEXT REFERENCES run(id),
   kind TEXT NOT NULL,                   -- markdown|code|html|image|svg|chart|pdf|docx|pptx|xlsx|site|canvas|file
+                                        -- (M5 saves DOCX, PPTX and XLSX as kind `file` with their
+                                        -- Office media type and the extension in the title, FR-219)
   title TEXT, blob_path TEXT, mime TEXT, sha256 TEXT, version INTEGER NOT NULL DEFAULT 1,
   live INTEGER NOT NULL DEFAULT 0, meta_json TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -882,7 +1063,9 @@ CREATE TABLE artifact_version (     -- every version of an artifact (FR-038); th
 
 CREATE TABLE usage_event (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  provider TEXT, model TEXT, thread_id TEXT, turn_id TEXT, run_id TEXT, goal_id TEXT,
+  provider TEXT, model TEXT, thread_id TEXT, turn_id TEXT,
+  run_id TEXT, goal_id TEXT,       -- copied from the turn (M5); a compaction summary request
+                                   -- is a usage_event of its turn
   input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER,
   cost_usd REAL, latency_ms INTEGER, created_at TEXT NOT NULL
 );
@@ -1062,7 +1245,7 @@ CREATE TABLE sync_state (
 ├── blobs/
 │   ├── attachments/<sha256>         # also the account avatar (account.avatar_path)
 │   ├── artifacts/<artifact-id>/v<N>/<file>
-│   ├── patches/<sha256>             # code changes and handoff patches (FR-213)
+│   ├── patches/<sha256>             # handoff patches (FR-213)
 │   ├── staged/<staged-write-id>     # two-phase device writes (FR-210)
 │   ├── snapshots/<computer-id>/<snapshot-id>.tar.zst
 │   ├── screenshots/<yyyymmdd>/<id>.png
@@ -1073,7 +1256,12 @@ CREATE TABLE sync_state (
 ├── mcp/<server-id>/                # an MCP server's working directory
 ├── mcp/bundles/<name>/<version>/   # unpacked MCP bundles; earlier versions are kept (FR-199)
 ├── hooks.json                      # the user's hooks file (FR-197)
-├── instructions.md                 # user instructions from an import (FR-200)
+├── instructions.md                 # user instructions (an import writes it, FR-200); every turn
+│                                   # reads it as "User instructions" (FR-185)
+├── code/<session-id>/shadow.git    # a Code session's shadow repository (refs/nova/baseline, start)
+├── code/<session-id>/patches/<change-id>.patch  # a change's pending part (FR-064)
+├── code/no-hooks/                  # the empty hooks folder Nova's own Git calls use (FR-211)
+├── plugins-drafts/<id>/            # plugin drafts written by plugin.scaffold (FR-050); never installed
 ├── import/<import-id>/             # staging copies of imported skills and plugins
 ├── workspace/hook-context/<thread-id>/  # hook context over 2,500 tokens
 ├── themes/<theme-id>.json
@@ -1092,7 +1280,8 @@ CREATE TABLE sync_state (
   rows enter the index only when certified and leave it when certification is revoked. A
   vector index over ambient text is optional (FR-153).
 - **Code index**: tree-sitter parse → symbols/references tables in a separate `code_cache.db`
-  per project (rebuildable, git-ignored, safe to delete).
+  per project (rebuildable, git-ignored, safe to delete). M5 ships a pattern-based symbol
+  extractor held in Hub memory per session instead (16 indexes, 512 KiB per file, 20,000 files).
 
 ## 5. Migration & retention policy
 
@@ -1128,7 +1317,8 @@ CREATE TABLE sync_state (
     `always_scope`; `confirm_at_action` actions are never stored as session or always
     grants; `handoff_required` actions end only as handoff, deny or timeout (FR-100, FR-189).
 11. A `server_request` has exactly one resolution: it moves once from `pending` to `resolved`
-    or `expired`; later answers are rejected (FR-188).
+    or `expired` (with `expired_reason` timeout, cancelled or restart); later answers are
+    rejected (FR-188).
 12. **Protected paths** (FR-190) are applied after every permission profile, command rule,
     grant and hook; none of them makes `.git`, `.nova`, `.agents`, the data directory,
     credential locations or shell startup files writable. No allow rule or grant removes the sandbox (ADR-059).
@@ -1145,6 +1335,8 @@ CREATE TABLE sync_state (
 18. A `memory_item` or `agent_memory` row with `origin_audience = 'private'` reaches a reply in
     a `shared` channel binding only after the policy check (default `ask` the owner; FR-088,
     ADR-070).
+19. A schedule never fires the same rule time twice, across restarts too: a fire is claimed by
+    inserting its `schedule_fire` row in the transaction that moves `next_run_at` (ADR-079).
 
 ## 7. Hub, devices & transports (added)
 

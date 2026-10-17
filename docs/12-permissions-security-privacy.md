@@ -97,6 +97,17 @@ The engine evaluates only the two axes; the preset name is recorded for display 
 Auto cannot be selected while no reviewer model is configured. Managed policy can remove
 presets (§10). `docs/10` §3 describes the user-facing behaviour of each mode.
 
+**Per-thread policy as shipped** (M5, ADR-092). Code sessions (the permission mode) and Work runs
+(the autonomy level) are per-thread policy sources. The first source that knows a thread wins.
+Its approval policy replaces the `tools.approvalPolicy` setting (Accept edits adds
+`autoAccept: ['file_edit']`), its profile replaces the one in the request, and its roots replace
+the settings' roots and project folders. The gate and the tool runtime read the same sources, so
+the roots a tool runs with are the roots the gate checked. A source that throws denies every
+call. The permission mode and the run id are recorded in the policy context and the audit
+detail. Bypass needs `code.allowBypass` (security-relevant) and a container or micro-VM
+substrate. When an Auto or Bypass condition lapses mid-session, the session runs with Manual's
+axes. A sub-agent whose tool list holds only reading tools runs under `read-only`.
+
 ### 2.2 Built-in safety, confirmation tiers and intent provenance (FR-189, ADR-062)
 
 Built-in safety is immutable and evaluated first. It has two parts.
@@ -146,6 +157,22 @@ else counts as a direct action:
   hook id as the turn's `trigger_ref`.
 - Calls from an external MCP client (origin `mcp_client`) and from hooks (origin `hook`) never
   carry a user instruction.
+
+**Turns Nova starts** (M5, ADR-092). Runs, schedules, goals, sub-agents and Code sessions start
+turns whose text is stored as a user-role message labelled with its author (`run`, `schedule`,
+`goal`, `subagent`, `system`), never as "You". Only text the user typed in a Nova client carries
+the user's authority: a run objective entered in New run, a schedule's instructions, a redirect,
+and the objective of a run proposed in a chat once the user presses **Start run**. A run the model
+escalates on its own (`auto`), a sub-agent's task, a goal continuation and Nova's own messages
+carry none and taint the turn; resuming or restarting a run keeps the authority it already had.
+Context a mode adds that did not come from the user, such as the chat excerpt of an escalated run,
+is wrapped as untrusted and taints the turn. The user's answer to `ask_user` comes back as an
+untrusted tool result: in M5 it does not carry their authority for the rest of the turn.
+
+**Memory reads only what the user typed** (M5, ADR-092). Memory consolidation reads Nova's replies
+and only the messages the user typed into a conversation. Run objectives, schedule fires, goal
+continuations, sub-agent tasks, hook continuations and Nova's own messages are skipped, so text the
+user did not write never becomes a memory about the user.
 
 ### 2.3 Evaluation order
 
@@ -442,6 +469,30 @@ every grant.
 
 The reviewer's policy prompt is Nova's own and is versioned with the eval set that measures it.
 
+**As shipped in M5** (ADR-092):
+
+- The reviewer is one model call to `review.model` (security-relevant, default none) with no
+  tools and a JSON-schema response format. With no tools it can read nothing beyond the context it
+  is given, so it does not run in a sandbox. Its prompt is versioned `auto-review-1`. It sees the
+  proposed action (tool, redacted arguments, effect classes, tier), up to 10 of the user's
+  instructions for the run and a bounded summary of the turn; the resource, the taint and the
+  rules that applied are not passed yet.
+- It runs after hooks, only for an allowed `pre_approvable` call under `review`, and applies its
+  ask, handoff or deny through `tighten`. 90 s per attempt, 3 attempts, no retry of a valid deny.
+- **No reviewer model denies.** The Hub always wires the reviewer, and with no `review.model` it
+  denies like a failed review. This replaces ADR-090's "asks every time". Auto cannot be picked
+  without a reviewer model, and the Hub refuses to create an autonomous Work run without one
+  (`validation`, `review_model_required`).
+- `review.started` and `review.completed` are emitted. The verdict is stored on the approval row;
+  **Allow once** on a reviewer card is recorded as an override. The audit actions
+  `review.verdict` (model, attempts, latency, fail-closed), `review.override` and
+  `review.breaker` use kind `policy` until a `review` kind exists.
+- The breaker counts per run (per thread without a run) and only in memory. When it trips the call
+  is denied, the turn stops, `review.breaker.tripped` is emitted and the user is notified; the run
+  pauses with `review_breaker` and shows **Blocked** "Stopped by auto-review" rather than Needs
+  input. Resuming resets the count.
+- Recall and benign-denial measurement (FR-224) is not in M5.
+
 ### 6.2 External agents (FR-194)
 
 - Content produced by other AI agents (email, chat, channels, pages, plugins, MCP servers,
@@ -470,6 +521,12 @@ The reviewer's policy prompt is Nova's own and is versioned with the eval set th
   failed `tool.pre` or `permission.request` hook blocks). MCP stdio servers, including those of
   plugins and bundles, are not sandboxed yet (M6); a bundle's confirmed permissions are recorded
   but do not yet confine its process.
+- *In M5* (ADR-092) `test.run`, a Code session's terminals and a repository's commit hooks also
+  run in that container, with network off for tests and hooks; without a container runtime they
+  fail closed, and a commit then runs on the Hub with hooks disabled. Document outputs
+  (`document.create`, `document.read`) run in the Hub process, not the sandbox: they only turn
+  validated data into a file or a file into text, run no code and import nothing that reaches the
+  network (a test enforces it). Nova's own Git calls never run repository hooks (FR-211).
 
 ### 7.1 Permission profiles (FR-190)
 
@@ -661,6 +718,16 @@ administrator can write it, or as a signed remote policy:
   external MCP client (`client.call`, with the client id), bundle installs and updates
   (`bundle.install`, `bundle.update`, with the signature status), OAuth (`oauth.start`,
   `oauth.connect`, `oauth.failed`, `oauth.revoke`) and import runs (`import.applied`).
+- M5 adds (ADR-092): run controls with kind `run` (`run.create`, `run.start`, `run.pause`,
+  `run.resume`, `run.redirect` as an input hash, `run.cancel`, `run.budget.extend`,
+  `run.plan.update`, and `goal.set`, `goal.update`, `goal.clear`, `goal.status`); schedules with
+  kind `schedule` (`schedule.create`, `schedule.update`, `schedule.delete`, `schedule.fire`,
+  `schedule.run_now`, `schedule.skip`) and webhook deliveries with kind `network`
+  (`schedule.webhook`, resource the host); turns Nova starts (`turn.start`, kind `run`,
+  `schedule` or `policy`, with the trigger, the author and whether the text carries the user's
+  authority); Code sessions with kind `code` (`code.session.created`, `code.mode.changed`,
+  `code.change.rejected`, `code.commit`, `code.review`); exec session kills (`exec.session.kill`);
+  and reviewer verdicts, overrides and breaker trips (kind `policy`, above).
 - Sensitive raw inputs can be recorded only if the user opts in; defaults store hashes.
 
 ## 12. Security testing (FR-123)
@@ -762,3 +829,9 @@ reversible; attempts to weaken guardrails are denied and logged high-severity.
   for the audit trail.
 - Listeners bind only to configured interfaces. A port conflict produces a diagnostic and a
   fallback port, never a silent exit (FR-225).
+- **Event streams and the handshake as shipped** (M5, ADR-092). The global event stream and the
+  WebSocket deliver only the signed-in account's events and account-less system events; Nova is
+  single-owner today, so this is defense in depth. `GET /api/v1/hello` stays public and says only
+  what a client needs before sign-in. Server-request kinds are negotiated by an authenticated
+  `POST /api/v1/hello`, whose `clientSessionId` the WebSocket names; an answer to a request
+  aimed at another device is refused with 403 `policy_denied`.

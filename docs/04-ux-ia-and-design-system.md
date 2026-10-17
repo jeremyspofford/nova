@@ -46,6 +46,10 @@ and browser), with a bottom panel for terminals (§4.3).
 
 Every thread, run, session and agent row carries a status chip (§1.1).
 
+**In M5** (ADR-092) the sidebar's Work entry lists the active runs with live status chips; the
+Work list (`/work`) shows every run and **Scheduled** (`/work/scheduled`) the schedules. Code mode
+(`/code`) lists the sessions.
+
 ### Mode definitions
 
 | Mode | Purpose | Primary objects | Key affordances |
@@ -78,6 +82,13 @@ Every thread, run, code session and agent shows exactly one status, derived by t
   quiet hours (FR-060); a change to Ready notifies only for work that ran in the background.
   OS notifications for `pre_approvable` approvals offer **Allow once** and **Deny and
   continue**; every other decision opens the card (§2.6).
+- **In M5** (ADR-092) the Hub's status service derives the chip for chats, runs and Code
+  sessions (`ThreadView.derived`, `RunView.derived`), and `thread.status.changed` keeps every chat
+  chip in the sidebar live, not only the open chat's. Chat, Work and Code lists sort Needs input,
+  Blocked, Running, Ready. A run waiting for Start shows Needs input; a run paused at a budget
+  shows Blocked "Budget reached", and one stopped by the review breaker Blocked "Stopped by
+  auto-review". **Go to the next item that needs input** (`status.nextNeedsInput`,
+  Ctrl/Cmd+Alt+A) cycles through chats and Work runs that wait on the user (§5).
 
 **Quick overlay (FR-008).** The tray/menu-bar overlay holds quick chat (text or voice) and the
 same status list:
@@ -121,6 +132,11 @@ A user message that a stop hook started (FR-197) is labelled **Hook** instead of
 carries provenance `hook`, is never shown as the user's instruction, and authorizes nothing
 (FR-189, ADR-091).
 
+In M5 (ADR-092) messages Nova starts are labelled by their author too: **Run objective**,
+**Schedule**, **Goal**, **Task** (a sub-agent's task) and **Nova**. A compaction shows as a
+collapsed summary just above the turn it was made for; the earlier messages stay visible and
+searchable.
+
 #### 2.2.1 Chat escalation to Work (FR-186)
 
 When a chat request needs multi-step tool work, the assistant offers an inline run instead of
@@ -143,6 +159,21 @@ The run keeps the chat's context and policy scope, its approvals appear inline i
 its result lands in the chat, and it is also listed under Work. In `auto` the card starts at
 once with Stop visible.
 
+**In M5** (ADR-092) the setting is Settings → General → **Work runs** → "Turn multi-step chat
+requests into runs" (`chat.escalation`). The model calls `work.start`; its tool card becomes a
+**run card**: proposed (the plan, the budget, **Start run** and **Dismiss**), running (live
+progress and **Stop**) and finished (the summary and **Open in Work**). The run itself works in
+its own Work thread, where its approvals appear; the run card links to it. The chat's last 10
+messages reach the run as untrusted context, and **Start run** gives the objective the user's
+authority. **Edit budget** and **Just answer** are not on the card in M5 (Dismiss leaves the run
+unstarted).
+
+A **question card** shows when a run or Code session calls `ask_user` (FR-188): the question,
+choice buttons and/or a text box, and after answering the answer itself. "This question was
+already answered on another device" (409) and "This question expired before your answer arrived"
+(410) replace the controls. A call that waits on an approval, or failed, keeps the normal tool
+card.
+
 ### 2.3 Delegate a Work run (FR-051…057)
 
 1. New Run → describe outcome + attach sources + choose autonomy level; optionally set a goal
@@ -158,6 +189,36 @@ once with Stop visible.
 
 Deep research (FR-220) is a run template on the New Run screen: the plan lists sub-questions,
 the run card shows sources gathered per sub-agent, and the result is a cited report artifact.
+
+**Work mode as shipped in M5** (ADR-092):
+
+- **Work list** (`/work`). Each run shows its status chip, title, project, last update and budget
+  use, Needs input first, with an All / Active filter and live updates. **New run** (also
+  `/work?new=1`) takes the objective (with a counter), an optional title, the template (Standard
+  run or Deep research), the project, the autonomy (Ask first, Standard, Autonomous), the budgets
+  (time in minutes, tokens, a cost limit; blank means the provider spend cap), and an optional goal
+  and expected output (an artifact, a delivered message or a file). Defaults come from Settings →
+  General → Work runs.
+- **Run page** (`/work/<id>`). The header shows the title, the chip and where the run came from
+  ("Started by you", "Started from a chat", "Started by a schedule", …), with **Pause**,
+  **Resume**, **Redirect…** and **Cancel run** (confirmed). Below it: the budget meters, the goal
+  panel, the plan card, the sub-agents with links to their threads, the result card with artifact
+  previews and evidence (or **Output missing** linking the trace), the run's conversation
+  (read-only, approvals inline; steer it with Redirect) and an **Activity** trace that opens step
+  by step and replays without running anything.
+- **Plan card.** Under Ask first the run proposes its plan and waits: **Edit plan**, then
+  **Approve and start**. A run proposed in a chat can be started here too.
+- **Scheduled** (`/work/scheduled`). Each schedule shows its next run, its last run and outcome
+  (Done, No news, Output missing, Failed, Skipped) and "Set by agent" when an agent made it.
+  **New schedule** (also `/work/scheduled?new=1`) offers daily, weekdays, weekly, every N minutes
+  or hours, once, and an advanced cron or RRULE field, in the browser's time zone by default; the
+  instructions, the notify condition, where to send results (in-app, OS notification, webhook), the
+  expected output, the catch-up policy ("Catch up once" or "Skip them") with its lookback, and the
+  project. Each schedule has **Run now**, **Edit**, **Pause** or **Resume**, **History** (fires,
+  catch-up windows and skips) and **Delete**. **Schedule it** on a finished run opens the form
+  filled in from that run (`?fromRun=<id>`).
+- **Not in M5:** "Duplicate run", sources per sub-agent on deep research runs, and attaching
+  sources to a new run.
 
 #### 2.3.1 Goal and budget header (FR-181, FR-182)
 
@@ -201,6 +262,15 @@ budget, and the actions the runtime allows (`docs/09` §2.1):
 - Agents show the same header for each responsibility's goal, plus "Next continuation after
   quiet hours (07:00)" when quiet hours defer idle continuation.
 
+**In M5** (ADR-092) the run page shows the meters live from `run.budget.usage`. At a bound the
+banner "Budget reached: <bound>" offers **Extend 30 min** (time) or **Extend 1M tokens** (tokens),
+and **Extend budget…**; after the 200-step backstop, "Step limit reached" offers **Continue**.
+Extending adds to the bound (30 more minutes, 1M more tokens); extending cost does nothing while the
+run has no cost cap. The goal panel sets, edits (with a 4,000-character counter), pauses, resumes,
+reopens, completes and clears the goal, and shows the blocker and the last progress note. **Finish
+here** and the "Steps this turn" meter are not in M5; Code sessions have no budgets or budget header
+yet.
+
 ### 2.4 Code session (FR-061…070)
 
 1. New Session → choose Environment (Local/Cloud/SSH/WSL/Container or a registered device),
@@ -215,6 +285,43 @@ budget, and the actions the runtime allows (`docs/09` §2.1):
 A write to a protected path (`.git`, `.nova`, `.agents`, credential locations) is shown as a
 denied tool card naming the path and FR-190; it never raises an approval card, because no
 decision can allow it.
+
+**Code mode as shipped in M5** (ADR-092):
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ← Sessions  Fix the parser   Running   ~/src/app · nova/fix-parser*      │
+│                                  [Go to symbol]  [Review]  [Commit…]     │
+├───────────────────────────────┬──────────────────────────────────────────┤
+│ Conversation                  │ [Diff (2)] [Review] [Terminal] [File]    │
+│ …messages, tool cards…        │  Changed files · Unified | Split         │
+│                               │  + added line                            │
+│ [Composer…]  [Mode: Accept ▾] │  − removed line      [Accept] [Reject]   │
+└───────────────────────────────┴──────────────────────────────────────────┘
+```
+
+- **Sessions** (`/code`). The list shows title, folder, branch (with an uncommitted-changes note),
+  mode, status chip and last update, Needs input first. **New session** (also `/code?new=1`)
+  takes a project folder or a folder path on the Hub, the environment ("This Hub"), the model, the
+  permission mode, an optional title and **Work in a new Git worktree**.
+- **Session** (`/code/<id>`). The header shows the folder, the branch, **Go to symbol**, **Review**
+  and **Commit…**. The conversation sits beside the session's own tabs, **Diff**, **Review**,
+  **Terminal** and **File**, which stay mounted while hidden; they are not layout panes. The mode
+  selector is in the composer; an unavailable mode stays listed, disabled, with the reason in its
+  label.
+- **Diff.** A file list, unified or split, lines marked + and − and spoken "Added" and "Removed",
+  changed words highlighted. Accept or reject a hunk, a file or everything (**Reject all** asks
+  first). Clicking a line number opens a comment box; comments collect as a batch and
+  Ctrl/Cmd+Enter sends them to the agent.
+- **Review.** The card groups findings by file with a severity icon and word; **Apply fix** sends
+  the fix to the agent. Findings also show in the diff.
+- **Commit…** suggests `nova/<slug>` when on the default branch and refuses the default branch
+  itself, can accept the pending changes first, shows the sha and branch, and says when the
+  repository's hooks did not run (only when it has hooks). There is no push or PR in M5.
+- **Terminal.** Session shells and the agent's exec sessions (with an "agent" chip, the call id
+  and **Kill**).
+- **Not in M5:** the Browser pane, PR and CI status, layouts per session, the `diff` layout pane
+  (still a placeholder) and `/review` as a composer command.
 
 ### 2.5 Agent setup and operation (FR-079…090)
 
@@ -574,6 +681,9 @@ Faster  ○────────●────────○  Smarter     [
   never captured, and redaction runs first. The attachment opens as a preview with separate
   image and text parts that can be removed before sending. Attached content is data, not an
   instruction (FR-189).
+- **Not in M5** (ADR-092): dictation (FR-216) and the voice session (FR-031) wait for a local
+  speech engine or a realtime audio provider, so the composer has no mic or waveform button yet.
+  The composer's **Generate image** entry point waits for a provider with an images call.
 
 ## 4. Design system
 
@@ -635,7 +745,8 @@ after a change; a value that does not parse falls back to the default for that m
 Pane kinds are `main` (exactly one per mode, never closed), `empty` (a new split until a kind is
 chosen), `editor`, `preview`, `terminal`, `diff` and `browser`; `file` applies to editor and
 preview panes. A layout holds at most 12 panes, 6 levels deep, and each share is at least 0.1.
-Named workspaces and layouts per session or project come later (ADR-091).
+Named workspaces and layouts per session or project come later (ADR-091). In M5 the `diff` pane
+kind is still a placeholder: a Code session shows its diff in its own Diff tab (§2.4, ADR-092).
 
 ### 4.4 Accessibility
 
@@ -687,6 +798,25 @@ M4 adds these commands to the palette (the id is what `keyboard.bindings` remaps
 In a browser tab Ctrl/Cmd+J, Ctrl+`, Ctrl+Shift+B and Ctrl+Shift+D are matched with Alt added,
 like the other keys the browser reserves.
 
+**M5 routes and commands** (ADR-092). New routes: `/work` (`?new=1` opens New run),
+`/work/<runId>`, `/work/scheduled` (`?new=1` opens New schedule, `?fromRun=<runId>` fills it from a
+finished run), `/code` (`?new=1` opens New session) and `/code/<sessionId>`. Settings gains the
+`code` section (Code: the default permission mode, the reviewer model and **Allow Bypass mode**),
+listed after Tools & MCP; General gains a **Work runs** group (§2.2.1, `docs/14`). New palette
+commands:
+
+| Command id | Title | Default key |
+| --- | --- | --- |
+| `status.nextNeedsInput` | Go to the next item that needs input (chats, then Work runs) | Ctrl+Alt+A / ⌘⌥A |
+| `work.newRun` | New run | — |
+| `work.newSchedule` | New schedule | — |
+| `work.scheduled` | Go to Scheduled | — |
+
+Ctrl/Cmd+Alt+A clashes on Linux and Windows native shells with the global **Attach frontmost
+window** key (Ctrl+Alt+A, below). There the global key wins; both can be remapped. On macOS the
+two differ (⌘⌥A and ⌃⌥A), and a browser tab has no global keys. "New run/session"
+(Ctrl+Shift+N) is not bound per mode yet; use the palette or the New buttons.
+
 ### 5.1 Deep links (FR-007)
 
 | Link (`nova://` or `web+nova://`) | Opens |
@@ -694,7 +824,7 @@ like the other keys the browser reserves.
 | `settings`, `settings/<section>` | `/settings/<section>` (unknown section → General) |
 | `chat`, `chat/<id>`, `chat/<id>?m=<messageId>` | the chat, at the message when given |
 | `projects`, `projects/<id>` (alias `project`) | the project list or one project |
-| `code`, `code/<id>` | Code mode (sessions arrive in M5) |
+| `code`, `code/<id>` | Code mode; in M5 `code/<id>` still opens the session list, not the session, and there is no `work` link yet |
 | `agent/<id>`, `agents` | Agents mode (agents arrive in M6) |
 | `theme?data=<base64>` | `/settings/appearance?theme=<data>`: the theme import, filled in; nothing is kept until the user saves it (FR-011). The data is at most 44,000 characters |
 

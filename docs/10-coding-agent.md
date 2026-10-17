@@ -24,6 +24,19 @@ Sessions run in parallel and are independently listed in the sidebar with the sh
 (Running, Needs input, Ready, Blocked; FR-215), unread indicators, and "Needs input" first
 (`Ctrl/Cmd+Alt+A`).
 
+*As shipped in M5 (ADR-092).* Code mode (`/code`) lists sessions with title, folder, branch (and
+an uncommitted-changes note), mode, status chip and last update, Needs input first. **New
+session** (also `/code?new=1`) takes a project folder or a folder path on the Hub, the
+environment, the model, the permission mode, an optional title and whether to use a worktree. A
+session is a thread with mode `code` plus a `code_session` row; it is Blocked when its
+environment is down or its folder is missing. Session folders refuse `/`, system folders, the
+home folder and its ancestors, the data folder (inside or around it), credential locations and
+`.git`, `.nova` or `.agents`. The session's turns run in the one chat loop (ADR-076); its tools
+and the gate both use the session folder as the root. Routes: `GET`/`POST /code/sessions`
+(`?archived=`), `GET`/`PATCH /code/sessions/:id`, and `GET /environments`. Code sessions have no
+time, token or cost budgets in M5; each turn keeps the 200-step backstop. Layouts per session,
+side questions and session handoff are not in M5.
+
 ## 2. Environments (FR-062)
 
 ```ts
@@ -55,6 +68,11 @@ interface Environment {
 **Saved environments**: each environment is created once, saved, reused across sessions,
 health-checked, and selectable per session. Cloud environments pin a machine image and setup
 script; rebuilds are explicit.
+
+*As shipped in M5 (ADR-092).* There is one environment, the local Hub ("This Hub"). Its health is
+`ok`, or `degraded` when Git or the sandbox is missing; it is never `down`. Exec tools, tests and
+terminals run in the container sandbox (ADR-090) with the session folder mounted. Device, cloud,
+SSH, WSL and container environments come later.
 
 ## 3. Permission modes (FR-063)
 
@@ -88,6 +106,19 @@ Rules:
   outside the project or session scope.
 - Every mode change is audited.
 
+*As shipped in M5 (ADR-092).* The mode selector sits in the session's composer; a refused change
+rolls back and says why. Unavailable modes stay listed, disabled, with the reason in their label:
+Auto needs a reviewer model (`review.model`), and Bypass needs `code.allowBypass` and a
+container or micro-VM substrate. A new session starts in the mode last used in its folder
+(`code.folderModes`), else `code.permissionMode`, else Manual; a remembered mode that is not
+available falls back to Manual, and Plan is never remembered. If an Auto or Bypass condition
+lapses during a session, its turns run with Manual's axes and the gate records
+`permissionMode: 'manual'`. In Plan mode the folder is a read-only root. The session's permission
+mode is a per-thread policy source: the gate and the tools read the same approval policy, profile
+and roots. Settings → Code holds the default mode, the reviewer model and **Allow Bypass mode**.
+Managed policy can lock these settings; removing single modes by policy comes with managed
+policy (M8).
+
 ## 4. Coding toolset
 
 | Tool | Purpose |
@@ -108,6 +139,16 @@ Rules:
 | `tool.search` | Find and load deferred MCP and plugin tools (FR-196) |
 | `context.remaining` / `context.fresh` | Check context left or start a fresh context (FR-183) |
 
+*As shipped in M5 (ADR-092).* A Code thread adds `git.status`, `git.diff`, `git.log`,
+`code.symbols`, `code.refs` (read-only) and `test.run` (runs commands, so it passes the gate like
+`exec.run`) to the built-ins; they are listed only in Code threads and refuse elsewhere. Branches
+and commits are the user's action from the session header, not agent tools. `test.run` detects the
+suite, runs it in the sandbox with network off, waits up to 10 minutes and then stops it; it
+reports `code.test.completed`. `code.symbols` and `code.refs` use a pattern-based index, not
+tree-sitter (§11). `ask_user` lets the agent ask the user a question (`docs/09` §9). Not in M5:
+`code.ast_query`, `devserver.*`, `browser.*`, `pr.create`, `pr.status`, `review.run` (the review
+is a button, §5), `appshot.capture`, and `task.spawn` with a worktree.
+
 ## 5. Diff & review flow (FR-064/065)
 
 - Every mutation is recorded as a `code_change` with a unified patch blob.
@@ -122,6 +163,38 @@ Rules:
   comments.
 - Review runs automatically before commit when configured.
 
+*As shipped in M5 (ADR-092).*
+
+- **Change capture.** Each session keeps a shadow repository at `<dataDir>/code/<id>/shadow.git`,
+  never inside the user's repository, with `refs/nova/baseline` (the accepted state) and
+  `refs/nova/start` (the last committed state). It ignores system and global Git config and
+  neutralizes filters and line-ending conversion; protected paths, credential locations and
+  dependency caches are left out by pathspec, so an in-tree `.gitignore` negation cannot bring
+  them back. There is one `code_change` row per path, holding its diff since the baseline.
+  Changes refresh when the diff is opened, after each decision, at turn end and after every tool
+  call of the session that is not read-only; that call's id is recorded on the change. Renames
+  show as a delete and an add. Change and comment paths are relative to the session folder.
+- **Decisions.** Hunks, files or everything can be accepted or rejected
+  (`POST …/changes/:changeId/hunks`, 409 `stale_hunk` when the file moved on;
+  `POST …/changes/accept|reject`); **Reject all** asks first. A rejected hunk is reverted in the
+  working tree. Each file has a review round: decided hunks are kept until a fully decided file
+  changes again. Partly accepted and binary files are marked.
+- **Diff pane.** A file list, a unified or split layout, lines marked with + and − and spoken as
+  "Added" and "Removed", and changed words highlighted inside a modified line. The diff reloads on
+  `code.*` events and after every turn of the session.
+- **Comments.** Clicking a line number opens a comment box. Comments collect as a batch and
+  Ctrl/Cmd+Enter submits them to the agent as one message (`POST …/comments` with `submit: true`;
+  409 when no agent can take them).
+- **Review.** The **Review** button (or **Review changes** in the Review tab) starts a review
+  (`POST …/review`, 202; `GET …/reviews/:reviewId`; `code.review.completed`). It covers all
+  uncommitted session changes, accepted and pending, and uses the session's model, which must
+  answer with a strict JSON list of findings; an invalid answer is retried once, then the review
+  fails. The card groups findings by file with a severity icon and word (error, warning, note).
+  Findings are stored as diff comments with author `review`, so they also show in the diff.
+  **Apply fix** sends a comment at the finding's line when that file has a change, else a message
+  quoting the fix. `/review` as a composer command, a review before every commit and
+  `review_marker` thread items are not in M5.
+
 ## 6. Terminal (FR-066)
 
 - xterm.js + node-pty bound to the session environment.
@@ -130,6 +203,14 @@ Rules:
 - Output is streamed to the model as a truncated, redacted tool result.
 - "Clear" (`Ctrl+L` / `Cmd+K`) and search; links are clickable; long output is virtualized.
 - Dangerous commands are matched against the policy engine before execution.
+
+*As shipped in M5 (ADR-092).* The session's Terminal tab opens shells through the workspace
+terminals (ADR-091): `POST /code/sessions/:id/terminal {cols, rows}` starts one in the sandbox at
+the session folder (409 `sandbox_unavailable` without a sandbox), streamed on
+`/terminals/:id/ws`. Commands typed there are confined by the sandbox, not checked one by one.
+The agent's exec sessions (FR-184) are listed with an "agent" chip, the tool call id and a
+**Kill** button (`GET /exec/sessions?threadId=`, `DELETE /exec/sessions/:id`). A running
+`test.run` is not listed there yet.
 
 ## 7. Browser pane & auto-verify (FR-067/068)
 
@@ -160,6 +241,27 @@ Rules:
 - Guards: never force-push protected branches; never push to a default branch without an
   explicit, typed confirmation; secrets are scanned before commit.
 
+*As shipped in M5 (ADR-092).*
+
+- **Hook-free Git.** Every Git call Nova makes for itself (status, diff, branch, update-index,
+  worktree add and remove, its own commits) points `core.hooksPath` at an empty folder for that
+  call only; a hooks path the user configured is overridden without changing their config.
+- **Commit.** **Commit…** in the session header (`POST /code/sessions/:id/commit`) commits what the
+  user accepted. On the default branch the dialog suggests `nova/<slug>` and refuses the default
+  branch itself (403 `default_branch`); a taken name gets a short suffix. Nova switches to the new
+  branch without a checkout, so no hooks run. The accepted content is staged into the user's index
+  without touching the working tree, so pending hunks stay out unless **Accept the pending changes
+  and include them** is ticked (it is by default); rejected changes are always left out. The commit
+  is refused when the user has other staged changes (409 `staged_changes`), on a detached HEAD (409
+  `detached_head`), when nothing is accepted (400 `nothing_accepted`), without a Git identity (400
+  `no_identity`) and when added lines hold a secret (403 `secrets_found`, masked). Commit hooks run
+  in the sandbox only when the repository has hooks and the sandbox image has Git, with the
+  repository writable and network off; otherwise the Hub commits with hooks disabled and the dialog
+  shows the Hub's note that they did not run (no note when the repository has no hooks). The result shows the sha and branch. The default branch comes from
+  origin's HEAD, else `init.defaultBranch`, else `main` or `master` when that branch exists.
+- **Not in M5.** Nothing is pushed. Opening a pull request, the PR link and CI status in the
+  header, and CI failures feeding back to the agent (FR-070) come later.
+
 ## 9. Parallel agents & worktrees (FR-073)
 
 - Independent tasks run in separate git worktrees (`<repo>/.nova/worktrees/<id>`, branch
@@ -183,6 +285,15 @@ Rules:
   worktrees. The user compares diffs and test results side by side and applies one; the other
   attempts are discarded on apply.
 
+*As shipped in M5 (ADR-092).* **Work in a new Git worktree** on New session creates
+`<repo>/.nova/worktrees/<8 hex>` on a new `nova/<slug>` branch from HEAD and leases it to the
+session. A repository holds at most 15; at the cap creation fails with `worktree_cap`, naming the
+unleased worktrees, and nothing is removed for the user. When the session's thread is archived
+(checked when sessions are listed and every 5 minutes) a clean worktree is removed and a dirty one
+is kept and released; `worktree.leased` and `worktree.released` are emitted. Not in M5: the
+worktree registry routes, lease renewal and expiry, handoff, `.worktreeinclude`, a cleanup
+setting, merging and best-of-N.
+
 ## 10. Cross-session operations (FR-072)
 
 - `sessions.list`, `sessions.message`, `sessions.archive` tools let an agent coordinate with
@@ -204,6 +315,15 @@ Rules:
   Project config cannot change the root markers or the budget. Conflicts between files are
   surfaced.
 - **Network**: denied by default; enabling is per-session and visible.
+
+*As shipped in M5 (ADR-092).* The symbol index is a pattern-based extractor kept in memory per
+session (up to 16 sessions, files up to 512 KiB, 20,000 files), refreshed lazily when files
+change; references are a whole-word search. **Go to symbol** in the session header is a
+combobox over `GET …/symbols?q=`; choosing a symbol opens the file in the editor at its line.
+`GET …/refs?name=` lists references. Symbol and ref paths are relative to the repository root.
+Instruction files are discovered from the session folder (`docs/09` §11); there is no
+project-trust step yet, so a folder the user added counts as trusted. The repo map, semantic
+search and mention chips for symbols are not in M5.
 
 ## 12. Cloud sessions (FR-071)
 

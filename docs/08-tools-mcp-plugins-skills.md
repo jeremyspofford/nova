@@ -112,6 +112,49 @@ skills (§4), not tools. They generate and read those formats with bundled libra
 `exec.run` in a sandbox with network `off`, and return files as artifacts with previews
 (`artifact.create`, FR-038).
 
+*As shipped in M5 (ADR-092).*
+
+- **Listings by thread.** Tools are listed per thread (`ToolListScope {threadId, mode}`). Work
+  runs get `plan.set`, `plan.update`, `run.complete`, `goal.get`, `goal.set`, `goal.update` and
+  `task.spawn`, `task.message`, `task.wait`, `task.list`, `task.cancel`; a sub-agent's thread gets
+  only `run.complete`. Chats get `work.start` while `chat.escalation` is not `off`. Code threads
+  get `git.status`, `git.diff`, `git.log`, `code.symbols`, `code.refs` and `test.run`
+  (`docs/10` §4). A scheduled run can call `schedule.report` to say its notify condition did not
+  hold. Every handler refuses calls outside its threads. The run tools change only Nova's own run
+  state, so the gate treats them as read-only. `schedule.create` and `schedule.wake` arrive with
+  agents (M6).
+- **Asking the user.** The question tool is `ask_user {question, choices?, multiline?}`. It is
+  listed only in Work runs and Code sessions and refuses in a chat, where the model asks in its
+  reply. It sends a server-to-client request
+  (FR-188) and waits up to `policy.approvalTimeoutMinutes`.
+- **Exec sessions.** `exec.sessions` sets the yield time (default 10 s) and the output cap
+  (default 10,000 tokens; the model can only lower it). At most 8 sessions per thread. A session
+  belongs to its turn; when a run's turn ends normally the thread keeps it, and a run's sessions
+  are killed when the run ends. `exec.write` passes the gate on every call, and writing to another
+  thread's session is refused (`session_denied`). `GET /exec/sessions?threadId=` lists them and
+  `DELETE /exec/sessions/:id` kills one.
+- **Document outputs (FR-219).** `document.create {kind: docx|pptx|xlsx|pdf, title, content,
+  artifactId?}` and `document.read {path | artifactId}` are built-in tools, not skills. They run
+  in the Hub process: they only turn validated data into a file or a file into text, run no code
+  and import nothing that reaches the network, so the sandbox's guarantees hold. Content is checked
+  per format and errors name the field (`content.sheets[0].name: …`). DOCX takes headings, bold
+  and italic runs, lists and tables on A4 or Letter; PPTX 16:9 slides with title, subtitle, nested
+  bullets and speaker notes; XLSX typed cells, a bold frozen header row and column widths; PDF
+  wrapped text, lists, tables that repeat their header and page numbers, in the PDF standard fonts
+  (not embedded): characters outside Western European text print as "?", and the tool says how
+  many and suggests DOCX. Office files are saved as artifacts of kind `file` with the Office media
+  type, PDFs as kind `pdf`, and the title gets the extension. `document.read` reads only inside the
+  turn's folders, never the data folder, returns untrusted text (at most 40,000 characters, files
+  up to 25 MB) and reads files Nova did not write; a scanned or encrypted PDF gets a "cannot read
+  this text" note. Previews are extracted on the Hub (`GET /artifacts/:id/preview`: 500 rows × 50
+  columns per sheet, 200,000 characters) and shown in chat and on a run's result card.
+- **Image generation (FR-030).** `image.generate {prompt, size?}` is listed only while a
+  configured model can make images: the first image model whose provider adapter has an images
+  call, and only local ones while `routing.allowCloud` is off. No adapter has an images call yet
+  (`Provider.generateImage` is the planned seam), so the tool is hidden everywhere. A generated
+  image is saved as an image artifact. Editing an image, a setting to choose the image model and
+  the composer's **Generate image** entry point are not in M5.
+
 ### 1.2 Tool result contract
 
 ```ts
@@ -744,6 +787,17 @@ skill. A plugin skill marks the turn as tainted. `allowed_tools` are never defer
 not yet narrow the tool set. No built-in skills ship yet.
 
 The **Build a skill/plugin** flow (FR-050) generates and validates these folders.
+
+*As shipped in M5 (ADR-092).* From a conversation, the model writes a plugin draft with
+`plugin.scaffold`. The draft goes to `<dataDir>/plugins-drafts/<id>/` (default id `local.<slug>`; a
+new draft with the same id replaces the old one) and is checked with the installer's own loader. The
+result gives the path and either the problems or the warnings; a draft that fails the check is kept
+and reported, not hidden. The tool never installs: it tells the user to install from Settings →
+Plugins & skills → Install from a folder, which goes through the normal preview and sideload
+confirmation (ADR-091). Writing a draft is a write action that passes the gate like any other; the
+draft itself is inert. An MCP server in the draft may use only references to the plugin's own
+secrets as env values; anything that looks like a credential is refused, and an http or sse server's
+host becomes a declared network permission. Generating skills on their own (FR-178) is not in M5.
 
 ### 4.1 Lifecycle hooks (FR-197, ADR-068)
 

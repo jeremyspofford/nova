@@ -11,6 +11,7 @@ small; large recordings go in the release assets, not the repo.
 | M2 | [Providers, local models and memory](M2.md) |
 | M3 | [Tools and approvals](M3.md) |
 | M4 | [Plugins, skills, hooks, MCP Apps, bundles, workspace and profile](M4.md) |
+| M5 | [Work runs, budgets, schedules, chat escalation and a Code session](M5.md) |
 
 ## Template
 

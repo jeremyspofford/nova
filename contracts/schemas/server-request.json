@@ -109,7 +109,11 @@
           "items": { "type": "string", "maxLength": 200 },
           "maxItems": 20
         },
-        "allowFreeText": { "type": "boolean", "default": true }
+        "allowFreeText": { "type": "boolean", "default": true },
+        "multiline": {
+          "type": "boolean",
+          "description": "The answer is long-form text: clients show a multi-line field."
+        }
       }
     },
     "elicitationPayload": {

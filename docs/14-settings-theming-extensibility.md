@@ -44,6 +44,31 @@ ignored, and Diagnostics shows a warning naming the key and the project.
 | **Sync** | enable, devices, passphrase, history/merge log, E2EE status |
 | **Advanced** | feature flags with their stage (ADR-082: `experimental` off and hidden outside developer mode, `beta` off and listed, `stable` on, `deprecated` still honoured with a warning, `removed` rejected at load), log level, developer mode, diagnostics, telemetry export over OTLP (endpoint, signals, include content; off by default, FR-223), reset |
 
+*As shipped in M5* (ADR-092): the Work keys live in Settings → General → **Work runs**, and the
+Code keys in a new Settings → **Code** section (`/settings/code`). Security-relevant keys resolve
+only from defaults, user global settings and managed policy; a managed value shows as locked.
+
+| Key | Default | Where | Notes |
+| --- | --- | --- | --- |
+| `runs.defaultBudgets` | `{timeSeconds: 3600, tokens: 2000000, costUsd: null}` | General → Work runs: "Time budget (minutes)", "Token budget", "Cost limit (US dollars)" | Budgets of a new run; a blank cost means the provider spend cap (FR-182) |
+| `runs.autonomy` | `standard` | General → Work runs: "Autonomy of new runs" | `ask_first`, `standard` or `autonomous` |
+| `chat.escalation` | `propose` | General → Work runs: "Turn multi-step chat requests into runs" | `propose`, `auto` or `off` (FR-186) |
+| `runs.subagents` | `{maxChildren: 6, maxConcurrent: 4}` | no page | Security-relevant; children per run (finished ones count) and running at once (FR-053) |
+| `code.permissionMode` | `manual` | Code: "Permission mode for new sessions" | `manual`, `accept_edits`, `auto` or `bypass`; Plan is per session only |
+| `code.folderModes` | `{}` | no page | The mode last used in each folder (at most 200); Plan is never remembered |
+| `code.allowBypass` | `false` | Code: "Allow Bypass mode" | Security-relevant; Bypass also needs a container or micro-VM substrate |
+| `review.model` | none | Code: "Reviewer model" | Security-relevant; the auto-reviewer's model. Auto mode needs it, and under `review` without it every consequential action is denied (FR-085) |
+| `context.compactThreshold` | `0.8` | no page | Share of the model limit that triggers compaction, 0.3 to 0.95, per project (FR-183) |
+| `instructions.files` | `{rootMarkers: ['.git'], fallbackNames: [], budgetBytes: 32768}` | no page | Security-relevant; instruction-file root markers, fallback names and budget (FR-185) |
+| `exec.sessions` | `{yieldMs: 10000, outputTokens: 10000}` | no page | Interactive exec yield time and output cap (FR-184) |
+
+`policy.approvalTimeoutMinutes` (24 h) also bounds how long a `ask_user` question waits. The
+default environment, auto-verify, review-before-commit, dev-server auto-start, worktree cleanup,
+the worktree include file, the worktree limit (fixed at 15) and the Work rows "max sub-agents" and
+"approval timeout" have no control in M5. `code.permissionMode` is not security-relevant as
+shipped, so a project value can set it, although §1 lists permission mode defaults among the keys
+a project cannot change.
+
 ### 1.2 Settings UI
 
 - Grouped left nav; search across all settings; each control has a label, description, and
