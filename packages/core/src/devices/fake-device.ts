@@ -37,6 +37,11 @@ export interface FakeDeviceOptions {
   modules?: string[];
   /** Report Wake-on-LAN with this MAC. */
   wakeMac?: string | null;
+  /**
+   * The physical LAN subnets (`192.168.1.0/24`) reported as `power.lan` with every heartbeat, as
+   * novad reports them with its power status (FR-138). Without it heartbeats carry no power.
+   */
+  lan?: string[];
   /** The pinned key update bundles must be signed with (raw Ed25519, base64url). */
   updateKey?: string | null;
   /** Commands; without it `exec` is refused like a device without a sandbox. */
@@ -100,6 +105,23 @@ class OpError extends Error {
 
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 const id = () => randomBytes(16).toString('hex');
+
+const ipv4Number = (ip: string) =>
+  ip.split('.').reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0);
+const ipv4Text = (n: number) => [24, 16, 8, 0].map((s) => (n >>> s) & 255).join('.');
+const prefixMask = (bits: number) => (bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0);
+
+/** `192.168.1.0/24` → `192.168.1.255`. */
+function ipv4Broadcast(network: string): string {
+  const [ip = '', bits = '32'] = network.split('/');
+  return ipv4Text((ipv4Number(ip) | ~prefixMask(Number(bits))) >>> 0);
+}
+
+function ipv4InSubnet(address: string, network: string): boolean {
+  const [ip = '', bits = '32'] = network.split('/');
+  const mask = prefixMask(Number(bits));
+  return (ipv4Number(address) & mask) >>> 0 === (ipv4Number(ip) & mask) >>> 0;
+}
 
 /** Unified line diff (LCS; fine for test-sized files). */
 export function fakeDeviceLineDiff(
@@ -177,6 +199,8 @@ export class FakeDevice {
     }
   >();
   readonly calls: { path: string; body: Record<string, unknown> }[] = [];
+  /** Wake packets sent for other devices as a Wake Helper (`POST /agent/v1/power/wake-other`). */
+  readonly wakes: { mac: string; broadcast: string; port: number }[] = [];
   readonly events: Record<string, unknown>[] = [];
   readonly modules: Map<
     string,
@@ -335,6 +359,7 @@ export class FakeDevice {
         modules: this.moduleReports(),
         events: this.events.splice(0),
         accessDecisions: decisions.map((d) => ({ ...d })),
+        ...(this.#opts.lan ? { power: this.#powerStatus() } : {}),
       },
       this.credential,
     );
@@ -506,14 +531,9 @@ export class FakeDevice {
         return { service: { name, kind: 'module', state: m.state } };
       }
       case 'power': {
+        if (parts[1] === 'wake-other') return this.#wakeOther(body);
         const action = body.action as string;
-        if (action === 'status')
-          return {
-            wakeable: Boolean(this.#opts.wakeMac),
-            macs: this.#opts.wakeMac ? [this.#opts.wakeMac] : [],
-            ac: true,
-            afterPowerLoss: 'unknown',
-          };
+        if (action === 'status') return this.#powerStatus();
         if (action === 'wol-plan')
           return {
             plan: [{ kind: 'command', argv: ['ethtool', '-s', 'eth0', 'wol', 'g'] }],
@@ -603,6 +623,77 @@ export class FakeDevice {
       default:
         throw new OpError(404, 'not_found', 'unknown management route');
     }
+  }
+
+  /** The power status novad reports (FR-144), with its LAN subnets when it has them (FR-138). */
+  #powerStatus(): Record<string, unknown> {
+    return {
+      wakeable: Boolean(this.#opts.wakeMac),
+      macs: this.#opts.wakeMac ? [this.#opts.wakeMac] : [],
+      ac: true,
+      afterPowerLoss: 'unknown',
+      ...(this.#opts.lan
+        ? {
+            lan: this.#opts.lan.map((network) => ({
+              interface: 'eth0',
+              network,
+              broadcast: ipv4Broadcast(network),
+            })),
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * Wake another device on this LAN, like novad's Wake Helper (FR-138): only with the
+   * wake-helper role; `{mac, broadcast?, port?}`, the broadcast address on one of its subnets
+   * (else every subnet's). Nothing is sent; the wake is recorded in `wakes`.
+   */
+  #wakeOther(body: Record<string, unknown>): unknown {
+    if (!this.roles.includes('wake-helper'))
+      throw new OpError(403, 'policy_denied', 'this device does not have the wake-helper role', {
+        reason: 'not_wake_helper',
+      });
+    const mac = typeof body.mac === 'string' ? body.mac : '';
+    if (!/^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$/i.test(mac) || /^(ff[:-]?){5}ff$/i.test(mac))
+      throw new OpError(400, 'validation', 'mac must be a unicast MAC address');
+    const port =
+      body.port === undefined || body.port === null || body.port === 9
+        ? 9
+        : body.port === 7
+          ? 7
+          : null;
+    if (port === null) throw new OpError(400, 'validation', 'port must be 9 or 7');
+    const subnets = (this.#opts.lan ?? []).map((network) => ({
+      network,
+      broadcast: ipv4Broadcast(network),
+    }));
+    if (!subnets.length)
+      throw new OpError(
+        409,
+        'conflict',
+        'this device has no LAN interface to send a wake packet on',
+        {
+          reason: 'no_lan',
+        },
+      );
+    const given = typeof body.broadcast === 'string' ? body.broadcast : null;
+    const targets = given
+      ? subnets.some((s) => ipv4InSubnet(given, s.network))
+        ? [given]
+        : []
+      : subnets.map((s) => s.broadcast);
+    if (!targets.length)
+      throw new OpError(403, 'policy_denied', `${given} is not on one of this device's subnets`, {
+        reason: 'not_on_lan',
+      });
+    for (const broadcast of targets) this.wakes.push({ mac: mac.toLowerCase(), broadcast, port });
+    return {
+      sent: true,
+      mac: mac.toLowerCase(),
+      port,
+      targets: targets.map((broadcast) => ({ broadcast, interface: 'eth0' })),
+    };
   }
 
   /** Processes kept on the device: the injected `exec` runs them; output is kept for reads. */

@@ -58,6 +58,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # J8.5 runs the real novad and the Hub serves it to `novad install` (e2e/support/m65.ts).
+      - run: cargo build --release --manifest-path services/novad/Cargo.toml
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
         env:
