@@ -251,7 +251,7 @@ export const SETTINGS = {
   'workspace.layout': def({
     key: 'workspace.layout',
     schema: z.record(z.string().max(20), z.unknown()),
-    default: {} as Record<string, unknown>,
+    default: {},
     description:
       'Pane layout per mode (panes, sizes, order, maximized), restored on start (FR-005).',
   }),
