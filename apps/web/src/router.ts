@@ -8,15 +8,19 @@ export type Mode = (typeof MODES)[number];
 
 export const SETTINGS_SECTIONS = [
   'general',
+  'profile',
   'accounts',
   'models',
   'memory',
   'tools',
+  'plugins',
+  'clients',
   'permissions',
   'notifications',
   'devices',
   'appearance',
   'keyboard',
+  'import',
   'diagnostics',
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -26,6 +30,7 @@ export type Route =
   | { name: 'mode'; mode: Exclude<Mode, 'chat'> }
   | { name: 'settings'; section: SettingsSection }
   | { name: 'projects'; projectId: string | null }
+  | { name: 'library' }
   | { name: 'open'; target: string }
   | { name: 'onboarding' };
 
@@ -41,6 +46,7 @@ export function parseRoute(pathname: string, search = ''): Route {
   }
   if (head === 'onboarding') return { name: 'onboarding' };
   if (head === 'projects') return { name: 'projects', projectId: arg ?? null };
+  if (head === 'library') return { name: 'library' };
   if (head === 'open')
     return { name: 'open', target: new URLSearchParams(search).get('url') ?? '' };
   const messageId = new URLSearchParams(search).get('m');

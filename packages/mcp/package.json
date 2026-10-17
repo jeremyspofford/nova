@@ -17,7 +17,8 @@
     "@nova/providers": "^0.0.0",
     "@nova/security": "^0.0.0",
     "@nova/shared": "^0.0.0",
-    "@nova/telemetry": "^0.0.0"
+    "@nova/telemetry": "^0.0.0",
+    "fflate": "0.8.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/server": "2.3.1"

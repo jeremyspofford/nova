@@ -35,6 +35,7 @@ import {
 } from '../router.ts';
 import { deepLinkPath } from '../deeplinks.ts';
 import { NotificationsBell } from '../notifications/Bell.tsx';
+import { LibraryView } from '../library/LibraryView.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
 import { useSettings } from '../settings.tsx';
@@ -508,7 +509,9 @@ export function Workspace({
         ? 'Setup'
         : route.name === 'projects'
           ? 'Projects'
-          : MODE_INFO[mode ?? lastMode].label;
+          : route.name === 'library'
+            ? 'Library'
+            : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -618,6 +621,7 @@ export function Workspace({
             />
           ) : null}
           {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
+          {route.name === 'library' ? <LibraryView /> : null}
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
           ) : null}

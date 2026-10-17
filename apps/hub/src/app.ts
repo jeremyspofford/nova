@@ -44,6 +44,12 @@ import { EventStore } from './event-store.ts';
 import { registerMemoryRoutes } from './memory-routes.ts';
 import { registerModelRoutes } from './model-routes.ts';
 import { setupConsolidation } from './consolidation.ts';
+import { setupHooks } from './hooks.ts';
+import { setupMcpApps } from './mcp-apps.ts';
+import { setupMcpServer } from './mcp-server.ts';
+import { setupPlugins } from './plugins.ts';
+import { setupProfile } from './profile.ts';
+import { setupWorkspace } from './workspace.ts';
 import { DiagnosticsRegistry, type HubContext } from './hub-context.ts';
 import { setupMcp } from './mcp.ts';
 import { registerNodeRoutes } from './node-routes.ts';
@@ -200,18 +206,48 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   const mcp = await setupMcp({ ...ctx, audit: ops.audit });
   // Each MCP server's default approval feeds the gate's per-server defaults (FR-048).
   policy.useServerDefaults((_accountId, serverId) => Promise.resolve(mcp.serverDefault(serverId)));
+  // M4: plugins (skills, their MCP servers and permissions) and hooks come before the tools,
+  // whose chat loop uses them.
+  const plugins = await setupPlugins({ ...ctx, audit: ops.audit, mcp });
+  const hooks = await setupHooks({ ...ctx, audit: ops.audit });
   const tools = await setupTools({
     ...ctx,
     gate: policy.gate,
-    sources: [mcp.source],
+    sources: [mcp.source, plugins.skills.tools],
     audit: ops.audit,
     notifier: ops.notifier,
+    hooks: hooks.dispatcher,
+    skills: plugins.skills,
+    pluginPermissions: plugins.permissions,
   });
   // The gate previews and classifies with the tools' own descriptors and the sandbox in use.
   policy.useToolCatalog(tools.catalog);
   policy.useSubstrate(() => tools.substrate());
+  hooks.useSandbox(tools.sandbox);
+  hooks.useMcp(mcp.manager);
   const consolidation = await setupConsolidation({ ...ctx, memory });
-  const areas = [tools, consolidation, mcp, policy, ops];
+  const mcpServer = await setupMcpServer({ ...ctx, audit: ops.audit, gate: policy.gate, tools });
+  const mcpApps = await setupMcpApps({ ...ctx, mcp });
+  const workspace = await setupWorkspace({
+    ...ctx,
+    audit: ops.audit,
+    gate: policy.gate,
+    sandbox: () => tools.sandbox,
+  });
+  const profile = await setupProfile({ ...ctx, audit: ops.audit, mcp, plugins });
+  const areas = [
+    profile,
+    workspace,
+    mcpApps,
+    mcpServer,
+    tools,
+    hooks,
+    plugins,
+    consolidation,
+    mcp,
+    policy,
+    ops,
+  ];
 
   const chat = new ChatService({
     db,

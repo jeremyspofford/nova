@@ -16,3 +16,4 @@ export * from './approvals/index.ts';
 export * from './ops/index.ts';
 export * from './consolidation.ts';
 export * from './history.ts';
+export * from './extensions/index.ts';

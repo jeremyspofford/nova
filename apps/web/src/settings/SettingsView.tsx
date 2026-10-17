@@ -4,7 +4,11 @@ import { AccountsPage } from './AccountsPage.tsx';
 import { AppearancePage } from './AppearancePage.tsx';
 import { GeneralPage } from './GeneralPage.tsx';
 import { DevicesPage } from './DevicesPage.tsx';
+import { ClientsPage } from './ClientsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
+import { ImportPage } from './ImportPage.tsx';
+import { PluginsPage } from './PluginsPage.tsx';
+import { ProfilePage } from './ProfilePage.tsx';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { PermissionsPage } from './PermissionsPage.tsx';
 import { ToolsPage } from './ToolsPage.tsx';
@@ -14,15 +18,19 @@ import { ModelsPage } from './ModelsPage.tsx';
 
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
+  profile: 'Profile & usage',
   accounts: 'Accounts',
   models: 'Models',
   memory: 'Memory',
   tools: 'Tools & MCP',
+  plugins: 'Plugins & skills',
+  clients: 'Apps & clients',
   permissions: 'Permissions',
   notifications: 'Notifications',
   devices: 'Devices',
   appearance: 'Appearance',
   keyboard: 'Keyboard',
+  import: 'Import',
   diagnostics: 'Diagnostics',
 };
 
@@ -63,7 +71,11 @@ export function SettingsView({
         ) : null}
         {section === 'models' ? <ModelsPage /> : null}
         {section === 'memory' ? <MemoryPage /> : null}
+        {section === 'profile' ? <ProfilePage /> : null}
         {section === 'tools' ? <ToolsPage /> : null}
+        {section === 'plugins' ? <PluginsPage /> : null}
+        {section === 'clients' ? <ClientsPage /> : null}
+        {section === 'import' ? <ImportPage /> : null}
         {section === 'permissions' ? <PermissionsPage /> : null}
         {section === 'notifications' ? <NotificationsPage /> : null}
         {section === 'diagnostics' ? <DiagnosticsPage /> : null}

@@ -2,6 +2,35 @@
 // session lives in an HttpOnly cookie, so the UI never sees or stores a credential (FR-125).
 import type { z } from 'zod';
 import type {
+  AccountView,
+  AppAuthorizationCreated,
+  AppAuthorizationView,
+  BundlePreview,
+  CatalogEntryView,
+  CatalogView,
+  createAppAuthorizationSchema,
+  createSkillSchema,
+  createTerminalSchema,
+  FileContentView,
+  FileEntryView,
+  HookView,
+  ImportPreview,
+  ImportRecordView,
+  ImportResult,
+  installBundleSchema,
+  installPluginSchema,
+  LibraryItemView,
+  PluginPreview,
+  PluginView,
+  pluginSourceSchema,
+  ProjectFolderView,
+  SkillDetail,
+  SkillView,
+  SlashCommandView,
+  TerminalView,
+  UiEntryPointView,
+  updateProfileSchema,
+  UsageSummary,
   ActivityItemView,
   ApprovalView,
   ArtifactView,
@@ -62,6 +91,14 @@ export type AddSourceRequest = z.input<typeof addSourceSchema>;
 export type CreateMemoryRequest = z.input<typeof createMemorySchema>;
 export type UpdateMemoryRequest = z.input<typeof updateMemorySchema>;
 export type ImportMemoryRequest = z.input<typeof importMemorySchema>;
+
+export type PluginSourceRequest = z.input<typeof pluginSourceSchema>;
+export type InstallPluginRequest = z.input<typeof installPluginSchema>;
+export type CreateSkillRequest = z.input<typeof createSkillSchema>;
+export type CreateAppAuthorizationRequest = z.input<typeof createAppAuthorizationSchema>;
+export type InstallBundleRequest = z.input<typeof installBundleSchema>;
+export type CreateTerminalRequest = z.input<typeof createTerminalSchema>;
+export type UpdateProfileRequest = z.input<typeof updateProfileSchema>;
 
 export interface CreatePolicyRuleRequest {
   scopeKind: PolicyRuleView['scopeKind'];
@@ -390,6 +427,90 @@ export function createApi(fetchImpl: Fetch = (...a) => fetch(...a)) {
         `${V1}/memory/topics`,
         { topic, preference },
       ),
+
+    // M4: plugins, skills, hooks, clients, bundles, OAuth, MCP Apps, workspace, profile, import
+    listPlugins: () => call<{ items: PluginView[] }>('GET', `${V1}/plugins`),
+    previewPlugin: (source: PluginSourceRequest) =>
+      call<PluginPreview>('POST', `${V1}/plugins/preview`, { source }),
+    installPlugin: (body: InstallPluginRequest) => call<PluginView>('POST', `${V1}/plugins`, body),
+    updatePlugin: (id: string, body: { enabled: boolean }) =>
+      call<PluginView>('PATCH', `${V1}/plugins/${enc(id)}`, body),
+    uninstallPlugin: (id: string) => call<{ ok: true }>('DELETE', `${V1}/plugins/${enc(id)}`),
+    listCatalogs: () => call<{ items: CatalogView[] }>('GET', `${V1}/plugins/catalogs`),
+    searchCatalog: (q = '') =>
+      call<{ items: CatalogEntryView[] }>('GET', `${V1}/plugins/catalog${query({ q })}`),
+    listSkills: (q: { projectId?: string } = {}) =>
+      call<{ items: SkillView[] }>('GET', `${V1}/skills${query({ ...q })}`),
+    getSkill: (id: string) => call<SkillDetail>('GET', `${V1}/skills/${enc(id)}`),
+    createSkill: (body: CreateSkillRequest) => call<SkillView>('POST', `${V1}/skills`, body),
+    updateSkill: (id: string, body: { enabled: boolean }) =>
+      call<SkillView>('PATCH', `${V1}/skills/${enc(id)}`, body),
+    deleteSkill: (id: string) => call<{ ok: true }>('DELETE', `${V1}/skills/${enc(id)}`),
+    slashCommands: (q: { projectId?: string } = {}) =>
+      call<{ items: SlashCommandView[] }>('GET', `${V1}/slash-commands${query({ ...q })}`),
+    listHooks: () => call<{ items: HookView[] }>('GET', `${V1}/hooks`),
+    updateHook: (id: string, body: { enabled: boolean }) =>
+      call<HookView>('PATCH', `${V1}/hooks/${enc(id)}`, body),
+    trustHook: (id: string, contentHash: string) =>
+      call<HookView>('POST', `${V1}/hooks/${enc(id)}/trust`, { contentHash }),
+    untrustHook: (id: string) => call<HookView>('POST', `${V1}/hooks/${enc(id)}/untrust`),
+    listAppAuthorizations: () =>
+      call<{ items: AppAuthorizationView[] }>('GET', `${V1}/app-authorizations`),
+    createAppAuthorization: (body: CreateAppAuthorizationRequest) =>
+      call<AppAuthorizationCreated>('POST', `${V1}/app-authorizations`, body),
+    revokeAppAuthorization: (id: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/app-authorizations/${enc(id)}`),
+    previewBundle: (file: { name: string; data: string }) =>
+      call<BundlePreview>('POST', `${V1}/mcp/bundles/preview`, file),
+    installBundle: (body: InstallBundleRequest) =>
+      call<McpServerView>('POST', `${V1}/mcp/bundles/install`, body),
+    startMcpOAuth: (id: string) =>
+      call<{ authorizeUrl: string }>('POST', `${V1}/mcp/servers/${enc(id)}/oauth/start`),
+    revokeMcpOAuth: (id: string) =>
+      call<McpServerView>('DELETE', `${V1}/mcp/servers/${enc(id)}/oauth`),
+    uiEntryPoints: (kind?: UiEntryPointView['kind']) =>
+      call<{ items: UiEntryPointView[] }>('GET', `${V1}/ui/entry-points${query({ kind })}`),
+    uiResourceUrl: (entryId: string) => `${V1}/ui/resource${query({ entry: entryId })}`,
+    fileRoots: (q: { threadId?: string; projectId?: string } = {}) =>
+      call<{ items: { path: string; label: string; access: 'read' | 'write' }[] }>(
+        'GET',
+        `${V1}/files/roots${query({ ...q })}`,
+      ),
+    listFiles: (root: string, path = '') =>
+      call<{ items: FileEntryView[] }>('GET', `${V1}/files/list${query({ root, path })}`),
+    readFile: (root: string, path: string) =>
+      call<FileContentView>('GET', `${V1}/files/content${query({ root, path })}`),
+    rawFileUrl: (root: string, path: string) => `${V1}/files/raw${query({ root, path })}`,
+    saveFile: (body: { root: string; path: string; text: string; baseSha256: string | null }) =>
+      call<FileContentView>('PUT', `${V1}/files/content`, body),
+    createTerminal: (body: CreateTerminalRequest = {}) =>
+      call<TerminalView>('POST', `${V1}/terminals`, body),
+    listTerminals: () => call<{ items: TerminalView[] }>('GET', `${V1}/terminals`),
+    closeTerminal: (id: string) => call<{ ok: true }>('DELETE', `${V1}/terminals/${enc(id)}`),
+    terminalSocketUrl: (id: string) => `${V1}/terminals/${enc(id)}/ws`,
+    library: (q: { kind?: string; q?: string; cursor?: string; limit?: number } = {}) =>
+      call<Page<LibraryItemView>>('GET', `${V1}/library${query({ ...q })}`),
+    listProjectFolders: (projectId: string) =>
+      call<{ items: ProjectFolderView[] }>('GET', `${V1}/projects/${enc(projectId)}/folders`),
+    addProjectFolder: (projectId: string, body: { path: string; access?: 'read' | 'write' }) =>
+      call<ProjectFolderView>('POST', `${V1}/projects/${enc(projectId)}/folders`, body),
+    removeProjectFolder: (projectId: string, folderId: string) =>
+      call<{ ok: true }>('DELETE', `${V1}/projects/${enc(projectId)}/folders/${enc(folderId)}`),
+    getAccount: () => call<AccountView>('GET', `${V1}/account`),
+    updateProfile: (body: UpdateProfileRequest) =>
+      call<AccountView>('PATCH', `${V1}/account`, body),
+    avatarUrl: () => `${V1}/account/avatar`,
+    usage: (q: { from?: string; to?: string } = {}) =>
+      call<UsageSummary>('GET', `${V1}/usage${query({ ...q })}`),
+    setActiveProvider: (id: string) =>
+      call<ProviderAccountView>('PATCH', `${V1}/providers/${enc(id)}`, { active: true }),
+    importPreview: (body: { paths: string[]; kinds: string[] }) =>
+      call<ImportPreview>('POST', `${V1}/import/preview`, body),
+    importApply: (previewId: string, items: string[]) =>
+      call<ImportResult>('POST', `${V1}/import/apply`, { previewId, items }),
+    importRecords: () => call<{ items: ImportRecordView[] }>('GET', `${V1}/import/records`),
+    suggestions: (threadId: string) =>
+      call<{ items: string[] }>('GET', `${V1}/threads/${enc(threadId)}/suggestions`),
 
     // attachments (FR-021)
     attachmentUrl: (id: string) => `${V1}/attachments/${enc(id)}`,

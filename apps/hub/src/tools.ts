@@ -8,6 +8,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { idSchema, type ToolDescriptor } from '@nova/shared';
 import {
+  type HookDispatcher,
+  type PluginPermissionSource,
+  type SkillCatalogProvider,
   ArtifactService,
   ToolRegistry,
   ToolRuntime,
@@ -39,6 +42,8 @@ export interface ToolsArea extends HubArea {
   catalog: (accountId: string, name: string) => Promise<ToolDescriptor | null>;
   /** The sandbox substrate in use, null without one (the `full` profile needs one). */
   substrate: () => SandboxClient['substrate'];
+  /** The sandbox itself, shared with hooks and terminals (M4). */
+  sandbox: SandboxClient;
 }
 
 export interface ToolsDeps {
@@ -54,6 +59,10 @@ export interface ToolsDeps {
   web?: Omit<WebToolOptions, 'searxngUrl'>;
   /** How long POST /tools/:name/invoke waits for a call (and its approval): 60 s. */
   invokeWaitMs?: number;
+  /** M4: lifecycle hooks, the skill catalog and plugin permissions (wired by the loop). */
+  hooks?: HookDispatcher;
+  skills?: SkillCatalogProvider;
+  pluginPermissions?: PluginPermissionSource;
 }
 
 /** Content endpoint policy: nothing loads or runs, even when opened directly (FR-038). */
@@ -134,6 +143,7 @@ export function setupTools(ctx: HubContext & ToolsDeps): Promise<ToolsArea> {
     artifacts,
     catalog: async (accountId, name) => (await registry.find(accountId, name))?.descriptor ?? null,
     substrate: () => sandbox.substrate,
+    sandbox,
     register(app: FastifyInstance) {
       app.get('/api/v1/tools', async (req) => {
         const accountId = await ctx.accountOf(req);

@@ -248,6 +248,50 @@ export const SETTINGS = {
     default: { approval: true, completion: true, error: true, attention: true, system: true },
     description: 'Which notification categories are shown and sent to the OS (FR-013).',
   }),
+  'workspace.layout': def({
+    key: 'workspace.layout',
+    schema: z.record(z.string().max(20), z.unknown()),
+    default: {} as Record<string, unknown>,
+    description:
+      'Pane layout per mode (panes, sizes, order, maximized), restored on start (FR-005).',
+  }),
+  'chat.suggestions': def({
+    key: 'chat.suggestions',
+    schema: z.boolean(),
+    default: true,
+    description: 'Show suggested follow-up prompts in an empty composer (FR-028).',
+  }),
+  'appearance.customThemes': def({
+    key: 'appearance.customThemes',
+    schema: z.array(z.record(z.string(), z.unknown())).max(50),
+    default: [] as Record<string, unknown>[],
+    description:
+      'Imported themes (contracts/schemas/theme.json), available in Appearance (FR-011).',
+  }),
+  'plugins.catalogs': def({
+    key: 'plugins.catalogs',
+    schema: z
+      .array(
+        z.object({
+          id: z.string().regex(/^[a-z0-9-]{1,40}$/),
+          name: z.string().min(1).max(100),
+          location: z.string().min(1).max(1000),
+        }),
+      )
+      .max(20),
+    default: [] as { id: string; name: string; location: string }[],
+    security: true,
+    description:
+      'Plugin catalogs: a folder on the Hub, an https URL or a Git URL (FR-045, FR-049).',
+  }),
+  'mcpServer.enabled': def({
+    key: 'mcpServer.enabled',
+    schema: z.boolean(),
+    default: false,
+    security: true,
+    description:
+      "Nova's own MCP server for external clients; off until a client is added (FR-044).",
+  }),
   'privacy.telemetry': def({
     key: 'privacy.telemetry',
     schema: z.boolean(),

@@ -13,6 +13,8 @@
     "test": "vitest run --coverage"
   },
   "dependencies": {
+    "@nova/contracts": "^0.0.0",
+    "@nova/policy": "^0.0.0",
     "@nova/providers": "^0.0.0",
     "@nova/secrets": "^0.0.0",
     "@nova/security": "^0.0.0",
@@ -20,9 +22,8 @@
     "@nova/storage": "^0.0.0",
     "@nova/telemetry": "^0.0.0",
     "drizzle-orm": "0.45.4",
-    "zod": "4.6.7",
-    "@nova/contracts": "^0.0.0",
-    "@nova/policy": "^0.0.0"
+    "fflate": "0.8.3",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@nova/compute": "^0.0.0"

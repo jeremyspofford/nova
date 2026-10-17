@@ -10,3 +10,8 @@ export * from './schema/policy.ts';
 export * from './schema/mcp.ts';
 export * from './schema/ops.ts';
 export * from './schema/consolidation.ts';
+export * from './schema/plugins.ts';
+export * from './schema/hooks.ts';
+export * from './schema/apps.ts';
+export * from './schema/workspace.ts';
+export * from './schema/profile.ts';

@@ -857,6 +857,13 @@ export type McpStatus = 'disabled' | 'starting' | 'connected' | 'error' | 'stopp
 
 export interface McpServerView {
   id: string;
+  /** How the server authenticates (FR-047), for http/sse servers. */
+  auth?: McpAuthView;
+  /** Installed from a bundle (FR-199): its signature state. */
+  bundle?: { name: string; version: string; signature: 'verified' | 'unverified' } | null;
+  /** When the current connection was made, and automatic restarts in the last 10 minutes (FR-043). */
+  connectedAt?: string | null;
+  restarts?: number;
   name: string;
   transport: McpTransport;
   command: string | null;
@@ -1064,3 +1071,493 @@ export const memoryTopicSchema = z.object({
   topic: z.string().trim().min(1).max(100),
   preference: z.enum(['more', 'less', 'default']),
 });
+
+// ==== M4: plugins, skills, hooks, Nova's MCP server, bundles, MCP Apps, workspace, profile ======
+
+// ---- plugins (FR-045; contracts/schemas/plugin-manifest.json) ---------------------------------
+
+export type PluginSource = 'local' | 'catalog' | 'git';
+
+export interface PluginView {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  author: string | null;
+  source: PluginSource;
+  /** Where it came from: a folder, a catalog id or a Git URL. */
+  origin: string;
+  enabled: boolean;
+  /** Signed by a trusted publisher (N3); local plugins are unverified. */
+  verified: boolean;
+  /** The manifest's `permissions` block as confirmed at install. */
+  permissions: Record<string, unknown>;
+  components: {
+    skills: number;
+    commands: number;
+    agents: number;
+    hooks: number;
+    mcpServers: number;
+    uiEntryPoints: number;
+  };
+  status: 'ok' | 'needs_trust' | 'disabled' | 'error';
+  error: string | null;
+  installedAt: string;
+  updatedAt: string;
+}
+
+/** What installing would do, shown before anything is installed (FR-045, FR-197). */
+export interface PluginPreview {
+  previewId: string;
+  manifest: Record<string, unknown>;
+  permissions: Record<string, unknown>;
+  hooks: HookView[];
+  mcpServers: {
+    name: string;
+    transport: McpTransport;
+    command: string | null;
+    url: string | null;
+  }[];
+  skills: { name: string; description: string }[];
+  verified: boolean;
+  warnings: string[];
+  /** Set when a plugin with this id is installed: the update replaces it. */
+  replaces: { version: string } | null;
+}
+
+export const pluginSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('path'), path: z.string().min(1).max(1000) }),
+  z.object({
+    kind: z.literal('catalog'),
+    catalogId: z.string().min(1).max(200),
+    pluginId: z.string().min(1).max(200),
+    version: z.string().max(50).optional(),
+  }),
+  z.object({
+    kind: z.literal('git'),
+    url: z.string().url().max(1000),
+    ref: z.string().max(200).optional(),
+  }),
+]);
+
+export const installPluginSchema = z.object({
+  previewId: idSchema,
+  enable: z.boolean().default(true),
+  /** Hooks to trust now, by id with the hash shown in the preview (FR-197). */
+  trustHooks: z
+    .array(z.object({ id: z.string().max(300), contentHash: z.string().max(200) }))
+    .max(50)
+    .optional(),
+});
+
+export interface CatalogView {
+  id: string;
+  name: string;
+  /** A folder on the Hub, an https URL or a Git URL (docs/14 §5). */
+  location: string;
+  kind: 'local' | 'url' | 'git';
+}
+
+export interface CatalogEntryView {
+  catalogId: string;
+  pluginId: string;
+  name: string;
+  version: string;
+  description: string | null;
+  verified: boolean;
+  installedVersion: string | null;
+}
+
+// ---- skills and slash commands (FR-046) ---------------------------------------------------------
+
+export type SkillSource = 'builtin' | 'user' | 'project' | 'plugin' | 'managed' | 'import';
+
+export interface SkillView {
+  /** `skill:<source or pluginId>:<name>`. */
+  id: string;
+  name: string;
+  description: string;
+  whenToUse: string | null;
+  allowedTools: string[];
+  modelHint: string | null;
+  source: SkillSource;
+  pluginId: string | null;
+  projectId: string | null;
+  enabled: boolean;
+  /** Another skill with the same name wins by precedence (managed > project > user > plugin > built-in). */
+  shadowedBy: string | null;
+  updatedAt: string;
+}
+
+export interface SkillDetail extends SkillView {
+  body: string;
+  files: string[];
+}
+
+export const createSkillSchema = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  description: z.string().min(1).max(1024),
+  whenToUse: z.string().max(1024).optional(),
+  allowedTools: z.array(z.string().max(200)).max(50).optional(),
+  body: z.string().min(1).max(200_000),
+  projectId: idSchema.optional(),
+});
+
+/** A `/name` the composer can complete: a skill or a plugin command (FR-046). */
+export interface SlashCommandView {
+  name: string;
+  description: string;
+  skillId: string;
+  source: SkillSource;
+  pluginId: string | null;
+}
+
+// ---- hooks (FR-197; contracts/schemas/hook-config.json) --------------------------------------
+
+export type HookEvent =
+  | 'session.start'
+  | 'session.end'
+  | 'prompt.submit'
+  | 'tool.pre'
+  | 'permission.request'
+  | 'tool.post'
+  | 'compact.pre'
+  | 'compact.post'
+  | 'subagent.start'
+  | 'subagent.stop'
+  | 'stop'
+  | 'interrupt';
+
+export interface HookView {
+  id: string;
+  source: 'managed' | 'user' | 'project' | 'plugin' | 'extension';
+  pluginId: string | null;
+  event: HookEvent;
+  matcher: string | null;
+  /** `command` with its argv, or `mcp_tool` with its tool name. */
+  handler: { type: 'command'; command: string[] } | { type: 'mcp_tool'; tool: string };
+  timeoutMs: number;
+  contentHash: string;
+  status: 'trusted' | 'needs_trust' | 'disabled' | 'revoked';
+  enabled: boolean;
+  lastRun: {
+    at: string;
+    effect: 'none' | 'context' | 'decision' | 'continue' | 'blocked' | 'error';
+  } | null;
+}
+
+export const trustHookSchema = z.object({ contentHash: z.string().min(1).max(200) });
+
+// ---- Nova's MCP server and app authorizations (FR-044, FR-192, FR-222) -------------------------
+
+export interface AppAuthorizationView {
+  id: string;
+  kind: 'mcp_client' | 'app';
+  clientName: string;
+  scopes: {
+    /** Tool names the client may call, or `*` for every allowed tool. */
+    tools: string[] | '*';
+    projects: string[] | '*';
+    threads: 'none' | 'read' | 'read_write';
+    mode: 'read_only' | 'run_allowed';
+  };
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export const createAppAuthorizationSchema = z.object({
+  kind: z.literal('mcp_client'),
+  clientName: z.string().trim().min(1).max(100),
+  scopes: z.object({
+    tools: z.union([z.literal('*'), z.array(z.string().max(200)).max(200)]),
+    projects: z.union([z.literal('*'), z.array(idSchema).max(200)]),
+    threads: z.enum(['none', 'read', 'read_write']),
+    mode: z.enum(['read_only', 'run_allowed']),
+  }),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+});
+
+export interface AppAuthorizationCreated {
+  authorization: AppAuthorizationView;
+  /** Shown once; Nova keeps only its hash. */
+  token: string;
+  /** The URL external clients use (streamable HTTP). */
+  endpoint: string;
+}
+
+// ---- MCP bundles (FR-199; contracts/schemas/mcp-bundle-manifest.json) --------------------------
+
+export interface BundleConfigField {
+  key: string;
+  type: 'string' | 'number' | 'boolean' | 'directory' | 'file';
+  title: string;
+  description: string | null;
+  required: boolean;
+  sensitive: boolean;
+  multiple: boolean;
+  default: unknown;
+}
+
+export interface BundlePreview {
+  previewId: string;
+  name: string;
+  displayName: string | null;
+  version: string;
+  description: string;
+  author: string | null;
+  serverType: 'node' | 'python' | 'uv' | 'binary';
+  signature: 'verified' | 'unverified';
+  /** Proposed permissions (network hosts, filesystem access) the user confirms. */
+  permissions: { network: string[]; fs: 'none' | 'read' | 'project' };
+  userConfig: BundleConfigField[];
+  tools: { name: string; description: string | null }[];
+  warnings: string[];
+}
+
+export const installBundleSchema = z.object({
+  previewId: idSchema,
+  permissions: z.object({
+    network: z.array(z.string().max(253)).max(50),
+    fs: z.enum(['none', 'read', 'project']),
+  }),
+  userConfig: z.record(z.string(), z.unknown()).default({}),
+  confirmSideload: z.boolean().optional(),
+});
+
+// ---- connectors and OAuth (FR-047) ------------------------------------------------------------
+
+export interface McpAuthView {
+  kind: 'none' | 'api_key' | 'oauth';
+  status: 'connected' | 'needs_auth' | 'expired' | 'error';
+  expiresAt: string | null;
+  scopes: string[];
+}
+
+// ---- MCP Apps (FR-198) --------------------------------------------------------------------------
+
+export interface UiEntryPointView {
+  id: string;
+  kind: 'global' | 'thread' | 'file';
+  title: string;
+  serverId: string;
+  pluginId: string | null;
+  /** The `ui://` resource. */
+  resource: string;
+  /** File extensions, for file entry points. */
+  extensions: string[];
+}
+
+// ---- workspace: files, terminal, layout, library (FR-005, FR-006, FR-039, FR-041) ------------
+
+export interface FileEntryView {
+  /** Path relative to the root. */
+  path: string;
+  name: string;
+  kind: 'file' | 'dir';
+  size: number | null;
+  mime: string | null;
+  modifiedAt: string | null;
+}
+
+export interface FileContentView {
+  root: string;
+  path: string;
+  mime: string;
+  size: number;
+  /** For text files; binary files are fetched from `/files/raw`. */
+  text: string | null;
+  /** Pass back on save; a changed file is refused with `conflict`. */
+  sha256: string;
+  readOnly: boolean;
+}
+
+export const saveFileSchema = z.object({
+  root: z.string().min(1).max(1000),
+  path: z.string().min(1).max(1000),
+  text: z.string().max(5_000_000),
+  baseSha256: z.string().max(100).nullable(),
+});
+
+export interface TerminalView {
+  id: string;
+  threadId: string | null;
+  cwd: string;
+  status: 'running' | 'exited';
+  exitCode: number | null;
+  createdAt: string;
+}
+
+export const createTerminalSchema = z.object({
+  root: z.string().max(1000).optional(),
+  threadId: idSchema.optional(),
+  cols: z.number().int().min(10).max(500).default(100),
+  rows: z.number().int().min(5).max(200).default(30),
+});
+
+export type LibraryKind = 'artifact' | 'attachment' | 'source' | 'image' | 'file';
+
+export interface LibraryItemView {
+  kind: LibraryKind;
+  id: string;
+  title: string;
+  mime: string | null;
+  size: number | null;
+  threadId: string | null;
+  projectId: string | null;
+  /** Where it opens in the app. */
+  href: string;
+  createdAt: string;
+}
+
+// ---- local project folders (FR-035) -----------------------------------------------------------
+
+export interface ProjectFolderView {
+  id: string;
+  projectId: string;
+  path: string;
+  access: 'read' | 'write';
+  status: 'indexing' | 'ready' | 'error';
+  fileCount: number;
+  error: string | null;
+  indexedAt: string | null;
+}
+
+export const addProjectFolderSchema = z.object({
+  path: z.string().min(1).max(1000),
+  access: z.enum(['read', 'write']).default('read'),
+});
+
+// ---- profile, usage and accounts (FR-113, FR-114, FR-115) -------------------------------------
+
+export interface AccountView {
+  accountId: string;
+  displayName: string | null;
+  username: string | null;
+  /** Fetched from `/account/avatar`; null without one. */
+  hasAvatar: boolean;
+  createdAt: string;
+}
+
+export const updateProfileSchema = z
+  .object({
+    displayName: z.string().trim().max(100).nullable().optional(),
+    username: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9_-]{1,31}$/)
+      .nullable()
+      .optional(),
+    /** A PNG, JPEG or WebP data as base64 (≤ 2 MB), or null to remove it. */
+    avatar: z
+      .object({
+        mime: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+        data: z.string().max(3_000_000),
+      })
+      .nullable()
+      .optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+
+export interface UsageSummary {
+  from: string;
+  to: string;
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    costUsd: number;
+    turns: number;
+  };
+  byModel: {
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    turns: number;
+  }[];
+  byProject: {
+    projectId: string | null;
+    name: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+  }[];
+  byDay: { day: string; inputTokens: number; outputTokens: number; costUsd: number }[];
+  activeDays: number;
+  /** Consecutive active days ending today. */
+  streak: number;
+  longestTurn: { threadId: string; turnId: string; seconds: number } | null;
+}
+
+// ---- import from other assistants (FR-200) ----------------------------------------------------
+
+export type ImportKind =
+  | 'instructions'
+  | 'skills'
+  | 'commands'
+  | 'plugins'
+  | 'mcp_servers'
+  | 'projects'
+  | 'memories'
+  | 'chats';
+
+export const importPreviewSchema = z.object({
+  /** Folders or files on the Hub to scan. */
+  paths: z.array(z.string().min(1).max(1000)).min(1).max(20),
+  kinds: z
+    .array(
+      z.enum([
+        'instructions',
+        'skills',
+        'commands',
+        'plugins',
+        'mcp_servers',
+        'projects',
+        'memories',
+        'chats',
+      ]),
+    )
+    .min(1),
+});
+
+export interface ImportItemView {
+  id: string;
+  kind: ImportKind;
+  name: string;
+  sourcePath: string;
+  /** What it becomes in Nova, e.g. "skill review-pr" or "MCP server github (disabled)". */
+  target: string;
+  sha256: string;
+  status: 'new' | 'duplicate' | 'conflict' | 'unsupported';
+  /** Secrets found, masked; they move to the vault on apply. */
+  maskedSecrets: string[];
+  note: string | null;
+}
+
+export interface ImportPreview {
+  previewId: string;
+  items: ImportItemView[];
+}
+
+export const importApplySchema = z.object({
+  previewId: idSchema,
+  items: z.array(z.string().max(200)).min(1).max(1000),
+});
+
+export interface ImportResult {
+  importId: string;
+  imported: number;
+  duplicates: number;
+  disabled: number;
+  secretsMigrated: number;
+}
+
+export interface ImportRecordView {
+  id: string;
+  kind: ImportKind;
+  sourcePath: string;
+  sha256: string;
+  target: string;
+  createdAt: string;
+}

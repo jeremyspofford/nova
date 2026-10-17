@@ -101,6 +101,9 @@ describe('Projects list and New project (FR-034)', () => {
   it('reports a failed list load and retries', async () => {
     const hub = createHub();
     await renderApp({ hub, path: '/chat' });
+    // The sidebar's recent projects load at start; let that call happen before the failure is
+    // armed, or it would take the failure meant for the Projects page.
+    await waitFor(() => expect(hub.api.listProjects).toHaveBeenCalled());
     hub.state.failNext.listProjects = fail('Hub busy');
     await userEvent.click(screen.getByRole('link', { name: 'Projects' }));
     expect(await screen.findByText('Hub busy')).toBeTruthy();

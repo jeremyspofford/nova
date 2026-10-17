@@ -19,6 +19,7 @@ import { ApiError, type Api } from '../src/api.ts';
 import { CommandRegistry } from '../src/commands.ts';
 import type { EventSourceLike } from '../src/sse.ts';
 import { m3Impl, m3State, type M3State } from './fakes-m3.ts';
+import { m4Impl, m4State, type M4State } from './fakes-m4.ts';
 import { workspaceImpl, workspaceState, type WorkspaceState } from './fakes-workspace.ts';
 
 let seq = 0;
@@ -106,6 +107,8 @@ export interface HubState {
   workspace: WorkspaceState;
   /** Approvals, policy, tools, MCP, notifications, audit, artifacts (test/fakes-m3.ts). */
   m3: M3State;
+  /** Plugins, skills, hooks, clients, workspace, profile and import (test/fakes-m4.ts). */
+  m4: M4State;
 }
 
 export const DONE_ONBOARDING = { step: 'done', completed: true, skipped: false };
@@ -126,6 +129,7 @@ export function createHub(init: Partial<HubState> = {}) {
     paths: new Map(),
     workspace: workspaceState(),
     m3: m3State(),
+    m4: m4State(),
     ...init,
   };
 
@@ -472,6 +476,16 @@ export function createHub(init: Partial<HubState> = {}) {
     },
     ...workspaceImpl(state.workspace, { id, ts: () => ts(), maybeFail }),
     ...m3Impl(state.m3, { id, ts: () => ts(), maybeFail }),
+    ...m4Impl(state.m4, {
+      id,
+      ts: () => ts(),
+      maybeFail,
+      providers: () => state.providers,
+      setProviders: (p) => {
+        state.providers = p;
+      },
+      mcpServers: () => state.m3.mcpServers,
+    }),
     attachmentUrl: (aid) => `/api/v1/attachments/${aid}`,
     fetchAttachment: async () => new Blob(['file-bytes'], { type: 'text/plain' }),
     threadStreamUrl: (tid) => `/api/v1/threads/${tid}/stream`,
