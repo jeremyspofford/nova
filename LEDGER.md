@@ -3,8 +3,8 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M6.5 — Networking, Transports & Add Device**
-Last updated: 2026-10-17T19:30:00Z
+Current milestone: **M7 — Cloud, Sync, Multi-Device & Mobile**
+Last updated: 2026-10-17T22:30:00Z
 
 ## Phase status
 
@@ -12,7 +12,7 @@ Last updated: 2026-10-17T19:30:00Z
 | --- | --- | --- | --- |
 | Phase 0 — reconcile external findings | done | c63b82d | `docs/external/RECONCILIATION.md` (141 capabilities); `node scripts/check-spec.mjs` |
 | Phase 1 — finish the specification | done | 2868ce3 | topic docs + contracts updated; `node scripts/check-spec.mjs`; all schemas compile (Ajv 2020) |
-| Phase 2 — build | in_progress | 10bbcf4 | M0-M6 done |
+| Phase 2 — build | in_progress | 10bbcf4 | M0-M6.5 done |
 
 ## Milestone status
 
@@ -25,7 +25,7 @@ Last updated: 2026-10-17T19:30:00Z
 | M4 Plugins/Workspace/Profile | done | 2026-10-17 | 2026-10-17 | J1-J4 green 3/3 (axe clean); `docs/demos/M4.md` |
 | M5 Agent Runtime (Work & Code) | done | 2026-10-17 | 2026-10-17 | J1-J6 green twice in a row (axe clean); `docs/demos/M5.md` |
 | M6 Agents/Computers/Channels | done | 2026-10-17 | 2026-10-17 | J1-J8 green (17/17, axe clean), J7 and J8 three runs in a row; `docs/demos/M6.md` |
-| M6.5 Networking/Add Device | todo | — | — | — |
+| M6.5 Networking/Add Device | done | 2026-10-17 | 2026-10-17 | J1-J8.5 green (21/21, axe clean), J8.5 three runs in a row; `docs/demos/M6.5.md` |
 | M7 Cloud/Sync/Multi-device | todo | — | — | — |
 | M7.5 Boot/Power/Firmware | todo | — | — | — |
 | M8 Extensibility/Governance | todo | — | — | — |
@@ -173,16 +173,18 @@ Last updated: 2026-10-17T19:30:00Z
 | T-M6-18 | M6 | FR-207, FR-209, FR-208 | todo | — | — | Computer-use control tiers; local browser fallback; page tools |
 | T-M6-19 | M6 | FR-210 | todo | — | — | `novad` staged writes + local MCP pass-through |
 | T-M6-14 | M6 | — | todo | — | — | E2E J7, J8 |
-| T-M65-01 | M6.5 | FR-132 | todo | — | — | Add-Device flow (QR/short code, roles/scopes, approval) |
-| T-M65-02 | M6.5 | FR-133 | todo | — | — | Hub-served signed `novad` builds + bootstrap command |
-| T-M65-03 | M6.5 | FR-135 | todo | — | — | Transport abstraction + LAN/mDNS + endpoint health |
-| T-M65-04 | M6.5 | FR-135 | todo | — | — | Mesh adapters (Headscale/Tailscale/NetBird/WireGuard) |
-| T-M65-05 | M6.5 | FR-137 | todo | — | — | Relay client + E2E sealing |
-| T-M65-06 | M6.5 | FR-134 | todo | — | — | Trust paths (local CA / Mesh certs / pinning) |
-| T-M65-07 | M6.5 | FR-136, FR-139 | todo | — | — | Network Setup assistant + reachability tests + rollback |
-| T-M65-08 | M6.5 | FR-138 | todo | — | — | Wake Helper role |
-| T-M65-09 | M6.5 | FR-140 | todo | — | — | Device management UI |
-| T-M65-10 | M6.5 | — | todo | — | — | E2E J9 (device add) |
+| T-M65-01 | M6.5 | FR-132 | done | e8441eb | core pairing, pairing-binding; hub add-device, m65-integration (real novad); web devices-add, join-*; J8.5 | Add Device v2: QR and short code (one use, 5 min, rate-limited), commit-then-reveal confirmation signed by the Hub, owner types the code the device shows; grants bound to the device key |
+| T-M65-02 | M6.5 | FR-133 | done | e8441eb | hub agent-dist, agent-dist-novad (real binary); Rust install tests (143) | Signed manifest (Hub identity, domain-tagged), dist route, one-line command (code on stdin), `novad install` checks pin, signature and its own SHA-256 before writing anything |
+| T-M65-03 | M6.5 | FR-135 | done | e8441eb | core network-endpoints, network-mdns; shared network (selectEndpoint); hub network; J8.5 | Endpoints per transport with real reachability checks (only healthy ones advertised), LAN and mDNS, fallback order, transport event log |
+| T-M65-04 | M6.5 | FR-135, FR-136 | done | e8441eb | core network-mesh (fake CLIs); hub network-setup; J8.5 | Mesh adapters (Headscale, Tailscale, NetBird, WireGuard), ufw, package installs; argv only, fixed system PATH |
+| T-M65-05 | M6.5 | FR-137 | done | e8441eb | relay (98% lines), relay-service, core relayhub; hub relay, relay-integration; J8.5 | Sealed envelopes (XChaCha20-Poly1305, X25519 bound to Ed25519), segmenting, acks, keepalive; self-hostable Relay with global caps; Hub connector, pairing, API tunnel; push and channel relay are M7 |
+| T-M65-06 | M6.5 | FR-134 | done | e8441eb | core trust, trust-x509; hub trust, trust-main (real HTTPS) | Hub identity (never silently replaced), local CA with name constraints, TLS leaf with renewal, device certificates, mesh certificates by SNI, pinning statement with a nonce |
+| T-M65-07 | M6.5 | FR-136, FR-139 | done | e8441eb | core network-setup, network-changes; hub network, network-setup; web netsurface-*; J8.5 | Network Setup assistant: detect, plan, consent per exact step, apply, verify, automatic rollback, lock-out guard; diagnostics; one-click rollback |
+| T-M65-08 | M6.5 | FR-138 | done | e8441eb | core network-wake; hub network-wake; Rust wake-other; J8.5 | Wake Helper role: helper chosen by reported subnet, Hub fallback on its own LAN, rate-limited and audited with `via` |
+| T-M65-09 | M6.5 | FR-140 | done | e8441eb | web devices-add, devices-manage, netsurface-*; J8.5 | Devices for every kind, scopes, wake, revoke; the Network surface (overview, setup, trust, Relay, wake helpers) |
+| T-M65-10 | M6.5 | — | done | eb95271 | `scripts/e2e-docker.sh`: 21/21; J8.5 three runs in a row | E2E J8.5 (Add Device & transports) |
+| T-M65-11 | M6.5 | — | done | e8441eb | regression tests per finding (review probes ported) | Two security reviews (18 and 6 findings, two high: confirmation brute force on the path, silent identity replacement), all fixed |
+| T-M65-12 | M6.5 | — | done | e8441eb | `node scripts/check-spec.mjs` | Contracts, topic docs, ADR-094, demo, test manifest |
 | T-M7-01 | M7 | FR-108, FR-071 | todo | — | — | Cloud runner integration + environments |
 | T-M7-02 | M7 | FR-109 | todo | — | — | E2E sync: keys, device linking, merge log |
 | T-M7-03 | M7 | FR-129, FR-128 | todo | — | — | Offline replica (capability-gated) + local fallback |
@@ -283,6 +285,11 @@ Last updated: 2026-10-17T19:30:00Z
 - R-020: Protected locations in sandboxes are mounted only where they exist when a command starts and on the path from a root to the working folder; a credential folder elsewhere in a granted folder stays visible to that command (Hub and `novad`). Mitigation: file tools refuse them at any depth; revisit with a full walk or landlock in M9.
 - R-021: The dev-server bridge port listens on 127.0.0.1 without a token, so any local process on the Hub machine can reach a running dev server (as with a native dev server). Mitigation: loopback only; closed with the server; documented in docs/12 §8.
 - R-022: `novad` uses bearer tokens over plain LAN HTTP until M6.5 (as compute nodes, ADR-089). Mitigation: per-device credentials, hashed; signed capability documents and updates; the Mesh in M6.5.
+- R-023: `novad` has no TLS client: install and enrollment run over plain LAN HTTP. The pin, the signed manifest and the v2 commit-reveal give integrity, but codes and tokens are readable on the LAN. Mitigation: one-use, short-lived codes; owner approval; the Mesh; a TLS client in M7.
+- R-024: Relay sessions have no forward secrecy (static per-pairing keys from X25519): a later leak of either side's Relay key exposes recorded traffic of that pairing. Mitigation: re-pairing rotates the keys; the Relay sees only ciphertext; a ratchet in M9.
+- R-025: Phones cannot join a Hub that serves plain HTTP at a network address (no secure context, so no Web Crypto); the trust mode defaults to `none`. Mitigation: the join page says so, Add a device warns the owner; onboarding (H1) should offer the Hub local CA; the native app and Relay pairing in M7.
+- R-026: Add Device sessions are full owner sessions; device scopes are stored but not enforced. Mitigation: every join needs the owner's approval with the device's code; one-click revoke ends the session and blocks the key; scoped sessions in M7.
+- R-027: Mesh adapters were exercised only against fake CLIs, and network setup runs as the Hub's user (no elevation). Mitigation: off-by-default host-changes setting, consent per exact step, automatic rollback, lock-out guard; manual runs against real meshes in M9/M10.
 
 ## Deferrals
 
@@ -290,15 +297,15 @@ Last updated: 2026-10-17T19:30:00Z
 | --- | --- | --- |
 | FR-130 | Hub failover is post-v1 (ADR-035) | — |
 | FR-040 (non-text sources) | Text types only; PDF and office documents need extraction (M4 previews PDFs in the file viewer but indexes neither) | T-M9 (document extraction) |
-| FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN until the Mesh (ADR-089) | T-M6.5 networking tasks |
+| FR-126 (mTLS, VRAM, quiet hours, `/node/v1/services/*`) | Bearer tokens over LAN; M6.5 issues device certificates but nothing checks them yet (ADR-089, ADR-094) | T-M7 (mTLS) |
 | docs/07 §9 concurrency limits | Global and per-provider semaphores are not enforced yet | T-M9 performance tasks |
 | FR-149 (database and backups at rest, sealed mode) | No encrypting SQLite layer; backups and sealed mode not yet | T-M9 hardening tasks |
-| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M6.5 device tasks |
+| FR-042 (`deviceId` server field; `oauth`/`auth` in the shared server schema) | OAuth works for remote servers (M4); device-hosted servers come with devices | T-M7 device tasks |
 | FR-185 (imported user instructions) | Import writes `<dataDir>/instructions.md`; the chat reads it with instruction-file discovery | T-M5 (FR-185) |
 | FR-011 (apply a custom palette) | Themes share and import in M4; applying a saved custom palette fully is not wired | T-M8 theming tasks |
 | FR-113 (public profile card, OIDC sign-in) | Not in M4 scope | T-M7 cloud tasks |
 | FR-115 (entitlements and limits), docs/14 §6 (spend caps, clear usage) | Usage insights only in M4 | T-M8 governance tasks |
-| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M6.5 device tasks |
+| FR-044 (`nova mcp stdio` launcher; resources and prompts on Nova's server) | Streamable HTTP with tools only in M4 | T-M7 device tasks |
 | FR-199 (bundle servers in the sandbox) | Bundle servers run like other MCP stdio servers (R-012); confirmed permissions are recorded | T-M9 (MCP stdio servers in the sandbox and egress proxy) |
 | FR-216 (dictation), FR-031 (realtime voice) | Need a local speech engine or a realtime audio provider; Nova ships neither (assessment in ADR-092) | T-M9 or a voice milestone |
 | FR-030 (image generation visible) | Built and tested; hidden until a provider adapter has an images call (`Provider.generateImage`) | T-M7 provider tasks |
@@ -343,18 +350,42 @@ shared channels, an unsigned webhook event id, and container environments outsid
 
 | Gap | Follow-up |
 | --- | --- |
-| `novad` modules for compute, browser, screen and capture are placeholders; modules run as `novad`'s user; no macOS or Windows sandbox; install and uninstall | T-M6.5 device tasks |
-| Local browser fallback (FR-209): the consent flow refuses until a device offers a browser module; the extension bridge (FR-096) | T-M6.5 |
+| `novad` modules for compute, browser, screen and capture are placeholders; modules run as `novad`'s user; no macOS or Windows sandbox; install and uninstall | T-M7 device tasks (install shipped in M6.5) |
+| Local browser fallback (FR-209): the consent flow refuses until a device offers a browser module; the extension bridge (FR-096) | T-M7 |
 | SSH environments have no transport bound; WSL answers `not_windows` everywhere; remote sessions have no Hub-side diff, review or commit | T-M7 code tasks |
 | Code: handoff, three-way merge, best-of-N, cloud environments; delegating from an agent to a Code session | T-M7 |
 | Browser: console and network capture, hover, element screenshots, restart after a crash, per-scope site levels; `GET /browser/actions` lists oldest first | T-M7 browser tasks |
 | Channels: email adapter, Telegram adapter, Slack interactive buttons; refresh route for MCP subscriptions; a test-notification route; a channel message log route | T-M7 channels |
 | Egress: SOCKS5; the browser ignores scope policies; `web.fetch` and MCP stdio servers bypass the proxy (R-012); compressed bodies are not scanned for credentials | T-M9 hardening |
 | Agents: goal retry after a usage limit; `thread.status.changed` for agents; plugins per agent | T-M7 |
-| Screen: the real desktop through `novad`; purchase classification of screen actions; browser takeover input not in `screen_action` | T-M6.5, T-M9 |
+| Screen: the real desktop through `novad`; purchase classification of screen actions; browser takeover input not in `screen_action` | T-M7, T-M9 |
 | Spaces and sites: reorder and delete pages in the UI; change a site's source in the UI; remote hosting targets | T-M8 |
-| Devices UI: no QR code for Add a device; no routes for managed services, available updates, owner overrides | T-M6.5 Add Device |
+| Devices UI: no routes for managed services, available updates, owner overrides (the QR code shipped in M6.5) | T-M7.5 |
 | A device-file commit's approval card shows the staged id, not the diff (the diff is on the device page) | T-M7 |
+
+## Known gaps (code vs spec, M6.5)
+
+Found by the security reviews and J8.5; fixed during the milestone: a man in the middle could
+brute-force the 6-digit confirmation (now commit-then-reveal, Hub-signed); a missing vault key
+silently created a new Hub identity and CA; devices could claim roles the owner did not approve;
+anyone could burn every open pairing; a failed Headscale policy read became allow-all; one-word
+machine names widened the CA's name constraints; failed undos and hung commands in network setup;
+loopback trusted by the lock-out guard; the probe dropped the system roots and trusted a Hub that
+sent no fingerprint; wake rate limits and broadcast addresses; the Relay trusting client ids it
+assigns, the tunnel path allowlist bypassed with encoded dot segments, unbounded Relay queues,
+spoofable forwarded addresses, and the stream floor saved after delivery; the phone join page
+blaming the Hub on plain HTTP, settings not following the Relay switch, the Relay advertised only
+at the next check, a turned-off transport logged as a failure, and `novad install` giving up after
+two minutes.
+
+| Gap | Follow-up |
+| --- | --- |
+| No shipped client pairs through the Relay or uses `selectEndpoint` (the web join page joins directly; `@nova/relay` is the library); push (APNs/FCM) is a mock; channel relay answers 501 | T-M7 mobile and Relay tasks |
+| A Hub cannot register with a private Relay (no setting for the registration token); two tabs on one paired record get replies only on the newest connection; push registration accepts any token | T-M7 |
+| Device scopes are not enforced; `GET /api/v1/session` has no `deviceId`; device certificates are issued but not checked (no mTLS yet) | T-M7 |
+| Identity and CA rotation, device certificate renewal, `ca.mobileconfig`; mDNS name-conflict probing; IPv6 Wake-on-LAN from the Hub | T-M9 |
+| `novad` on Windows (key generation reads `/dev/urandom`) and macOS services are untested; no elevation for network setup commands | T-M10 packaging |
+| Diagnostics problems are free text; the diagnostics `mesh` and `relay` fields are untyped | T-M7 |
 
 ## Milestone summaries
 
@@ -439,3 +470,16 @@ shared channels, an unsigned webhook event id, and container environments outsid
   integration tests across 15 packages and 120 Rust tests; smoke and J1-J8 green (17/17), J7 and
   J8 three runs in a row. Risks added: R-019..R-022. Next: M6.5 (networking, transports and Add
   Device).
+- **M6.5** (e8441eb, eb95271): Add Device for headless computers, phones and browsers with a QR
+  code or short code and a commit-then-reveal confirmation the Hub signs, approved by the owner
+  typing the code the device shows; signed `novad` builds and a one-line install that checks the
+  Hub's pinned identity, the manifest signature and its own hash before writing anything; Hub
+  identity, a local CA with name constraints, HTTPS, mesh certificates and native-shell pinning;
+  transports with real reachability checks (only healthy endpoints advertised), mDNS, a fallback
+  log and diagnostics; mesh adapters and a Network Setup assistant with consent per step,
+  automatic rollback and a lock-out guard; a content-blind, self-hostable Relay with sealed
+  envelopes, pairing and an API tunnel; the Wake Helper role; the Devices and Network surfaces.
+  Two security reviews (24 findings, two high) and J8.5 (five bugs) were fixed before the
+  milestone closed. Evidence: unit and integration tests in all 16 workspaces, 143 Rust tests, the
+  real `novad` joining the wired Hub, smoke and J1-J8.5 green (21/21), J8.5 three runs in a row.
+  Risks added: R-023..R-027. Next: M7 (cloud, sync, multi-device and mobile).
