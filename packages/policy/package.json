@@ -1,0 +1,15 @@
+{
+  "name": "@nova/policy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The policy engine: deterministic allow / ask / handoff / deny decisions for every action.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  }
+}

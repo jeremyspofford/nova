@@ -1,0 +1,19 @@
+{
+  "name": "@nova/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Loads and compiles the JSON Schemas in contracts/schemas (the interface source of truth).",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}

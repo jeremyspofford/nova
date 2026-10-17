@@ -1,0 +1,18 @@
+[package]
+name = "novad"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Nova device agent: supervisor for signed, sandboxed modules (docs/23)."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

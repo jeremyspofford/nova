@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+coverage
+.turbo
+services/novad/target
+docs
+contracts/*.md
+*.md
+LICENSE
+package-lock.json
+contracts

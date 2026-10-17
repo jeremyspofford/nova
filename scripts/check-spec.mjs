@@ -38,9 +38,11 @@ for (const [id, ms] of frDefs) {
   const placed = indexPlacement.get(id) ?? [];
   if (placed.length === 0) fail(`docs/17: ${id} missing from the milestone index`);
   else if (placed.length > 1) fail(`docs/17: ${id} placed in ${placed.join(', ')}`);
-  else if (placed[0] !== ms) fail(`docs/17: ${id} indexed under ${placed[0]} but docs/03 says ${ms}`);
+  else if (placed[0] !== ms)
+    fail(`docs/17: ${id} indexed under ${placed[0]} but docs/03 says ${ms}`);
 }
-for (const id of indexPlacement.keys()) if (!frDefs.has(id)) fail(`docs/17: ${id} not defined in docs/03`);
+for (const id of indexPlacement.keys())
+  if (!frDefs.has(id)) fail(`docs/17: ${id} not defined in docs/03`);
 
 const manifestRows = new Map();
 for (const line of read('tests/manifest.md').split('\n')) {
@@ -51,7 +53,8 @@ for (const id of frDefs.keys()) {
   const n = manifestRows.get(id) ?? 0;
   if (n !== 1) fail(`tests/manifest.md: ${id} has ${n} rows (expected 1)`);
 }
-for (const id of manifestRows.keys()) if (!frDefs.has(id)) fail(`tests/manifest.md: ${id} not defined in docs/03`);
+for (const id of manifestRows.keys())
+  if (!frDefs.has(id)) fail(`tests/manifest.md: ${id} not defined in docs/03`);
 
 // 2. JSON schemas parse.
 const schemaDir = 'contracts/schemas';
@@ -68,7 +71,8 @@ for (const f of readdirSync(join(root, schemaDir)).filter((f) => f.endsWith('.js
 const mdFiles = [];
 const walk = (dir) => {
   for (const name of readdirSync(join(root, dir))) {
-    if (['node_modules', '.git', 'build', 'dist', 'private', '.claude', '.turbo'].includes(name)) continue;
+    if (['node_modules', '.git', 'build', 'dist', 'private', '.claude', '.turbo'].includes(name))
+      continue;
     const rel = dir === '.' ? name : `${dir}/${name}`;
     const st = statSync(join(root, rel));
     if (st.isDirectory()) walk(rel);
@@ -107,7 +111,9 @@ function loadBannedNames() {
   const names = ['screenpipe', 'Screenpipe', 'screenpi.pe'];
   const candidates = [join(root, 'docs/external/private/banned-names.txt')];
   try {
-    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: root }).toString().trim();
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: root })
+      .toString()
+      .trim();
     candidates.push(join(resolve(root, common), '..', 'docs/external/private/banned-names.txt'));
   } catch {
     // not a git checkout
@@ -119,7 +125,8 @@ function loadBannedNames() {
       if (name) names.push(name);
     }
   }
-  for (const n of (process.env.SPEC_BANNED_NAMES ?? '').split(',')) if (n.trim()) names.push(n.trim());
+  for (const n of (process.env.SPEC_BANNED_NAMES ?? '').split(','))
+    if (n.trim()) names.push(n.trim());
   return names;
 }
 

@@ -1,0 +1,177 @@
+/* Nova design tokens (docs/14 §2.1). Color tokens are set at runtime by applyTheme(); the values
+   below are the dark theme so first paint matches the default. Geometry, type and motion tokens
+   are theme-independent. */
+:root {
+  --u-bg: #0e0f12;
+  --u-surface: #16181d;
+  --u-surface-2: #1d2026;
+  --u-border: #2a2e37;
+  --u-text: #e8eaf0;
+  --u-text-muted: #a3aab8;
+  --u-accent: #7d98ff;
+  --u-accent-contrast: #0b0d12;
+  --u-success: #4cc764;
+  --u-warn: #e3b341;
+  --u-danger: #ff7b72;
+  --u-info: #79b8ff;
+  --u-focus: #9cb2ff;
+
+  --u-radius-sm: 6px;
+  --u-radius-md: 10px;
+  --u-radius-lg: 16px;
+  --u-radius-xl: 24px;
+  --u-space-1: 4px;
+  --u-space-2: 8px;
+  --u-space-3: 12px;
+  --u-space-4: 16px;
+  --u-space-6: 24px;
+
+  --u-font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --u-font-code: 'JetBrains Mono', ui-monospace, monospace;
+  --u-text-xs: 12px;
+  --u-text-sm: 13px;
+  --u-text-md: 14px;
+  --u-text-lg: 16px;
+  --u-text-xl: 20px;
+  --u-font-scale: 1;
+
+  --u-dur-fast: 120ms;
+  --u-dur: 180ms;
+  --u-dur-slow: 240ms;
+  --u-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --u-z-base: 0;
+  --u-z-sticky: 10;
+  --u-z-overlay: 100;
+  --u-z-modal: 1000;
+  --u-z-toast: 2000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --u-dur-fast: 0ms;
+    --u-dur: 0ms;
+    --u-dur-slow: 0ms;
+  }
+}
+
+.nv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--u-space-2);
+  min-height: 32px;
+  padding: 0 var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface-2);
+  color: var(--u-text);
+  font: inherit;
+  font-size: calc(var(--u-text-md) * var(--u-font-scale));
+  cursor: pointer;
+  transition: background var(--u-dur-fast) var(--u-ease);
+}
+.nv-btn:hover:not(:disabled) {
+  border-color: var(--u-text-muted);
+}
+.nv-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.nv-btn[data-variant='primary'] {
+  background: var(--u-accent);
+  border-color: var(--u-accent);
+  color: var(--u-accent-contrast);
+}
+.nv-btn[data-variant='danger'] {
+  background: var(--u-danger);
+  border-color: var(--u-danger);
+  color: var(--u-bg);
+}
+.nv-btn[data-variant='ghost'] {
+  background: transparent;
+  border-color: transparent;
+}
+.nv-btn[data-size='icon'] {
+  width: 32px;
+  padding: 0;
+}
+
+.nv-input {
+  min-height: 32px;
+  padding: 0 var(--u-space-3);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+  color: var(--u-text);
+  font: inherit;
+  font-size: calc(var(--u-text-md) * var(--u-font-scale));
+}
+.nv-input[aria-invalid='true'] {
+  border-color: var(--u-danger);
+}
+.nv-field {
+  display: grid;
+  gap: var(--u-space-1);
+}
+.nv-field-label {
+  font-size: var(--u-text-sm);
+  color: var(--u-text);
+}
+.nv-field-hint {
+  font-size: var(--u-text-xs);
+  color: var(--u-text-muted);
+}
+.nv-field-error {
+  font-size: var(--u-text-xs);
+  color: var(--u-danger);
+}
+
+.nv-kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  padding: 0 var(--u-space-1);
+  border: 1px solid var(--u-border);
+  border-bottom-width: 2px;
+  border-radius: var(--u-radius-sm);
+  background: var(--u-surface);
+  color: var(--u-text-muted);
+  font-family: var(--u-font-code);
+  font-size: var(--u-text-xs);
+  text-align: center;
+}
+
+.nv-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--u-border);
+  border-radius: 999px;
+  background: var(--u-surface-2);
+  cursor: pointer;
+}
+.nv-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--u-text-muted);
+  transition: transform var(--u-dur-fast) var(--u-ease);
+}
+.nv-switch[aria-checked='true'] {
+  background: var(--u-accent);
+  border-color: var(--u-accent);
+}
+.nv-switch[aria-checked='true']::after {
+  transform: translateX(16px);
+  background: var(--u-accent-contrast);
+}
+
+:where(.nv-btn, .nv-input, .nv-switch):focus-visible {
+  outline: 2px solid var(--u-focus);
+  outline-offset: 2px;
+}

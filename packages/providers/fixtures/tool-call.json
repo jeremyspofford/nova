@@ -1,0 +1,17 @@
+[
+  {
+    "when": "summarize",
+    "steps": [
+      { "type": "tool_call_start", "index": 0, "id": "call_1", "name": "fs.read" },
+      { "type": "tool_call_delta", "index": 0, "argsDelta": "{\"path\":" },
+      { "type": "tool_call_delta", "index": 0, "argsDelta": "\"README.md\"}" },
+      { "type": "tool_call_end", "index": 0, "args": { "path": "README.md" } },
+      { "type": "stop", "reason": "tool_calls" }
+    ],
+    "once": true
+  },
+  {
+    "when": "summarize",
+    "steps": [{ "textChunks": ["The file ", "describes ", "Nova."] }]
+  }
+]
