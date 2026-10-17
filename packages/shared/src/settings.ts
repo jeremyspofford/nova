@@ -210,6 +210,25 @@ export const SETTINGS = {
     description:
       'Above this many tools or schema tokens, MCP and plugin tools are deferred (FR-196).',
   }),
+  'policy.allowPersistentGrants': def({
+    key: 'policy.allowPersistentGrants',
+    schema: z.boolean(),
+    default: true,
+    security: true,
+    description:
+      'Whether approvals may offer "Always allow"; managed policy can turn it off (FR-100).',
+  }),
+  'policy.approvalTimeoutMinutes': def({
+    key: 'policy.approvalTimeoutMinutes',
+    schema: z
+      .number()
+      .int()
+      .min(1)
+      .max(7 * 24 * 60),
+    default: 24 * 60,
+    security: true,
+    description: 'How long an approval waits before it is recorded as timed out (FR-100).',
+  }),
   'search.searxngUrl': def({
     key: 'search.searxngUrl',
     schema: z.string().url().max(500).nullable(),
