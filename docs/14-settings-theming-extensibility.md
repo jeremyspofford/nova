@@ -88,7 +88,7 @@ key (defaults, user global settings and managed policy only).
 | `computers.limits` | `{cpus: 2, memoryMb: 2048, wallClockSeconds: 300}` | yes | Limits of every command on a computer (CPU 0.25 to 64, memory 256 MB to 256 GB, wall clock 10 s to 1 day; `docs/11` §8) |
 | `computers.microVm` | `{enabled: false, runner: null}` | yes | Micro-VM sandboxes (FR-195): off; they need a KVM runner on the Hub. M6 ships a stub |
 | `browser.persistCookies` | `false` | yes | Keep the agent browser's cookies (its sign-ins) between sessions (FR-096) |
-| `browser.allowLocalSites` | `false` | yes | Let the agent browser open local and private-network addresses (`docs/12` §8); a Code session's granted dev server opens without it |
+| `browser.allowLocalSites` | `false` | yes | Let the agent browser open local and private-network addresses of sites allowed by exact name (never through a wildcard; `docs/12` §8); a Code session's granted dev server opens without it |
 | `browser.devProtocol` | `true` | yes | Allow developer-protocol mode to be turned on per site; off means no site can use it (FR-094) |
 | `browser.maxConcurrent` | `2` | no | Agent browsers open at once (1 to 8; `docs/11` §8) |
 | `browser.screenshotRetentionDays` | `30` | no | How long browser before/after screenshots are kept (swept every 6 hours) |

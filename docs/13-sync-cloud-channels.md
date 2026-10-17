@@ -137,8 +137,9 @@ mailbox connector exists, and Telegram, voice and SMS are not built.
 - **Private to shared.** Before a reply or `channel.send` goes to a shared binding, the check
   (`channels.privateToShared`, default `ask`) looks for private content: until exact provenance is
   wired it compares word sequences and numbers with private memory items, the agent's private
-  notes, private and in-app binding threads and the owner's 20 most recent chats, ignoring text the
-  channel already said. Asking the owner is a server request ("Share" / "Do not share"); a failed
+  notes, and what people said in private and in-app binding threads and the owner's 20 most recent
+  chats (not the agent's own wording there), ignoring text the channel already said before this
+  reply (the reply's own turn never counts as already said). Asking the owner is a server request ("Share" / "Do not share"); a failed
   check counts as private, and a withheld reply becomes "I can't share that here." A notification
   copy cannot ask first, so a shared binding gets one only when `channels.privateToShared` is
   `allow`; otherwise the copy is recorded failed with the reason "withheld: …".

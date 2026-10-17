@@ -353,6 +353,11 @@ and network capture, hover, element screenshots, restart after a crash, the exte
 and the local browser fallback (§4.6: no tool calls it in M6, and it refuses with the reason until a
 device offers a browser module).
 
+With `browser.allowLocalSites` on, the agent browser may open a site on the local network (a
+test site, a router page) when the owner allowed that site by its exact name: the browser's proxy
+session lists those names in `localHosts`, and the proxy lets them resolve to private or loopback
+addresses. A wildcard site never does, and every other private address stays blocked.
+
 ## 5. Screen / computer use (FR-093, FR-207)
 
 - `screen.observe` returns a screenshot + accessibility tree (UI Automation on Windows, the

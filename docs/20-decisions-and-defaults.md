@@ -1257,8 +1257,12 @@ amends ADR-063 and two bullets of ADR-083; extends ADR-089's transport to `novad
   the code, not the action. Slack interactive buttons are not built.
 - *Private to shared (docs/13 §4).* Until exact provenance is wired (`originOf` is not), the check
   compares word sequences and numbers in the reply against private memory items, the agent's
-  private notes, private and in-app binding threads and the owner's 20 most recent chats; text the
-  shared channel already said does not count. It fails closed: a check error counts as private, no
+  private notes, and what people said in private and in-app binding threads and the owner's 20
+  most recent chats (the agent's own stock wording would look private everywhere); text the shared
+  channel already said before the reply does not count, and the reply's own turn never does (it is
+  stored before the check). With `browser.allowLocalSites`, sites the owner allowed by exact name
+  may be on the local network (the browser's proxy session lists them in `localHosts`); wildcards
+  never open private addresses, and other private addresses need a dev-server grant. It fails closed: a check error counts as private, no
   question channel denies, and a withheld reply becomes "I can't share that here." A notification
   copy cannot ask, so it goes to a shared channel only when `channels.privateToShared` is `allow`;
   otherwise it is recorded failed with the reason "withheld: …".

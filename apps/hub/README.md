@@ -110,4 +110,5 @@ fallback.
 More options: `NOVA_SECRETS=keychain|vault`, `NOVA_TLS_CERT` / `NOVA_TLS_KEY` (HTTPS),
 `NOVA_SANDBOX=auto|docker|podman|bwrap|microvm|off` (M6 adds bubblewrap and the micro-VM stub; `auto`
 tries a container engine, then bubblewrap), `NOVA_SANDBOX_IMAGE` (terminals and command hooks run in
-this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`.
+this image; the sample plugin's hook needs Node in it), `NOVA_DETECT_URLS`, `NOVA_SLACK_API_BASE`
+(a Slack-compatible API address instead of Slack's own: a test double or a proxy).
