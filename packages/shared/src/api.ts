@@ -90,6 +90,19 @@ export const REASONING_LEVELS = [
 ] as const;
 export const reasoningLevelSchema = z.enum(REASONING_LEVELS);
 
+// ---- account ------------------------------------------------------------------------------------
+
+export const updateAccountSchema = z
+  .object({
+    /** An empty or blank name clears it. */
+    displayName: z.string().max(100).optional(),
+    /** Avatars arrive later; `null` clears one. */
+    avatar: z.null().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update');
+export type UpdateAccountRequest = z.infer<typeof updateAccountSchema>;
+
 // ---- threads & messages (FR-017, FR-018, FR-021) ----------------------------------------------
 
 export const THREAD_MODES = ['chat', 'work', 'code', 'agent'] as const;

@@ -14,13 +14,22 @@ import {
   httpStatusFor,
   isNovaError,
   resolveAll,
+  resolveSetting,
   uuidv7,
-  type EventEnvelope,
   type SettingLayers,
 } from '@nova/shared';
+import {
+  ChatService,
+  ProviderRegistry,
+  ThreadService,
+  type ChatServiceOptions,
+  type ProviderFactory,
+} from '@nova/core';
+import { MemorySecretStore, type SecretStore } from '@nova/secrets';
 import { schema, type NovaDatabase } from '@nova/storage';
 import type { Logger } from '@nova/telemetry';
 import { AuthService, type Principal } from './auth.ts';
+import { openStream, registerChatRoutes } from './chat-routes.ts';
 import type { HubConfig } from './config.ts';
 import { EventStore } from './event-store.ts';
 
@@ -40,12 +49,22 @@ export interface HubDeps {
   events?: EventStore;
   /** Managed-policy settings layer (docs/12 §10); empty until M8. */
   managedSettings?: () => Record<string, unknown>;
+  /** Credential store (FR-101). Defaults to an in-memory store; `main.ts` passes the vault. */
+  secrets?: SecretStore;
+  /** Where blobs live (docs/06 §3); defaults to `config.dataDir`. */
+  dataDir?: string;
+  /** Override provider construction (tests use scripted mock providers). */
+  providerFactory?: ProviderFactory;
+  chat?: Pick<ChatServiceOptions, 'flushIntervalMs' | 'deltaIntervalMs' | 'systemPrompt'>;
 }
 
 export interface Hub {
   app: FastifyInstance;
   auth: AuthService;
   events: EventStore;
+  registry: ProviderRegistry;
+  threads: ThreadService;
+  chat: ChatService;
 }
 
 const CSP = [
@@ -65,13 +84,60 @@ const CSP = [
 
 export async function buildHub(deps: HubDeps): Promise<Hub> {
   const { config, db, log } = deps;
+  async function loadLayers(projectId?: string): Promise<SettingLayers> {
+    const rows = await db.orm.select().from(schema.setting);
+    const global: Record<string, unknown> = {};
+    const project: Record<string, unknown> = {};
+    for (const r of rows) {
+      if (r.scopeKind === 'global') global[r.key] = JSON.parse(r.valueJson) as unknown;
+      if (r.scopeKind === 'project' && r.scopeRef === projectId)
+        project[r.key] = JSON.parse(r.valueJson) as unknown;
+    }
+    return { global, project, managed: deps.managedSettings?.() ?? {} };
+  }
   const auth = deps.auth ?? new AuthService(db);
   const events = deps.events ?? new EventStore(db);
+  const dataDir = deps.dataDir ?? config.dataDir;
+  const registry = new ProviderRegistry({
+    db,
+    secrets: deps.secrets ?? new MemorySecretStore(),
+    log: log.child('providers'),
+    ...(deps.providerFactory ? { factory: deps.providerFactory } : {}),
+  });
+  const threads = new ThreadService({
+    db,
+    registry,
+    defaultModel: async () => resolveSetting('chat.defaultModel', await loadLayers()).value,
+  });
+  const chat = new ChatService({
+    db,
+    registry,
+    threads,
+    events,
+    dataDir,
+    log: log.child('chat'),
+    ...deps.chat,
+  });
   const app = Fastify({
     logger: false,
     bodyLimit: 1024 * 1024,
     genReqId: () => uuidv7(),
     trustProxy: false,
+  });
+
+  // Open event streams are ended before the server closes, and running turns are cancelled and
+  // saved before the database goes away (FR-018).
+  const streams = new Set<() => void>();
+  const trackStream = (end: () => void) => {
+    streams.add(end);
+    return () => streams.delete(end);
+  };
+  app.addHook('preClose', (done) => {
+    for (const end of [...streams]) end();
+    done();
+  });
+  app.addHook('onClose', async () => {
+    await chat.shutdown();
   });
 
   await app.register(fastifyCookie);
@@ -145,6 +211,8 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   app.post('/api/v1/auth/setup', async (req, reply) => {
     const body = setupBody.parse(req.body);
     const { session, accountId } = await auth.redeemSetupCode(body.code, body.displayName);
+    // Local-first: a fresh owner can chat offline at once with the mock provider.
+    await registry.ensureDefaultProvider(accountId);
     void reply.setCookie(SESSION_COOKIE, session, {
       httpOnly: true,
       sameSite: 'strict',
@@ -175,17 +243,6 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
   });
 
   // ---- settings (docs/14 §1) --------------------------------------------------------------
-  const loadLayers = async (projectId?: string): Promise<SettingLayers> => {
-    const rows = await db.orm.select().from(schema.setting);
-    const global: Record<string, unknown> = {};
-    const project: Record<string, unknown> = {};
-    for (const r of rows) {
-      if (r.scopeKind === 'global') global[r.key] = JSON.parse(r.valueJson) as unknown;
-      if (r.scopeKind === 'project' && r.scopeRef === projectId)
-        project[r.key] = JSON.parse(r.valueJson) as unknown;
-    }
-    return { global, project, managed: deps.managedSettings?.() ?? {} };
-  };
 
   app.get('/api/v1/settings', async (req) => {
     requireAuth(req);
@@ -262,29 +319,27 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
       (req.headers['last-event-id'] as string | undefined) ??
       (req.query as { after?: string }).after ??
       null;
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    const send = (e: EventEnvelope) =>
-      reply.raw.write(`id: ${e.id}\nevent: ${e.name}\ndata: ${JSON.stringify(e)}\n\n`);
-    const queued: EventEnvelope[] = [];
-    let replaying = true;
-    const off = events.bus.subscribe('*', (e) => (replaying ? queued.push(e) : send(e)));
-    const replay = await events.since(lastId, 500);
-    const seen = new Set(replay.map((e) => e.id));
-    for (const e of replay) send(e);
-    for (const e of queued) if (!seen.has(e.id)) send(e);
-    replaying = false;
-    const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
-    req.raw.on('close', () => {
-      clearInterval(ping);
-      off();
-    });
-    return reply;
+    return openStream(
+      req,
+      reply,
+      { events, trackStream },
+      () => true,
+      async (send) => {
+        for (const e of await events.since(lastId, 500)) send(e);
+      },
+    );
   });
+
+  // ---- chat (M1) --------------------------------------------------------------------------
+  const accountOf = async (req: FastifyRequest): Promise<string> => {
+    const p = requireAuth(req);
+    if (p.accountId) return p.accountId;
+    // Device-scoped tokens carry no account; a single-owner Hub acts for its owner.
+    const owner = await auth.ownerAccount();
+    if (!owner) throw new NovaError('auth_missing', 'the Hub has no owner account yet');
+    return owner.id;
+  };
+  registerChatRoutes(app, { db, dataDir, events, registry, threads, chat, accountOf, trackStream });
 
   void app.register((scoped, _opts, done) => {
     scoped.get('/api/v1/ws', { websocket: true }, (socket, req) => {
@@ -341,7 +396,7 @@ export async function buildHub(deps: HubDeps): Promise<Hub> {
     log.warn('web UI not built; serving the API only', { webDir: config.webDir });
   }
 
-  return { app, auth, events };
+  return { app, auth, events, registry, threads, chat };
 }
 
 async function authenticate(req: FastifyRequest, auth: AuthService): Promise<Principal | null> {

@@ -96,7 +96,7 @@ export interface KbdProps {
 
 export function Kbd({ keys }: KbdProps) {
   return (
-    <span aria-label={keys.join(' plus ')}>
+    <span className="nv-kbds" aria-label={keys.join(' plus ')}>
       {keys.map((k, i) => (
         <span key={`${k}-${i}`}>
           {i > 0 ? <span aria-hidden="true">+</span> : null}

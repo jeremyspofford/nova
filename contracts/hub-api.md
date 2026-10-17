@@ -40,14 +40,26 @@ signed artifacts only).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET/POST` | `/api/v1/projects` | List/create projects (`memoryScope: shared\|project_only`, fixed at creation, FR-205) |
-| `GET/POST` | `/api/v1/threads` | List/create conversations |
-| `POST` | `/api/v1/threads/:id/messages` | Send a message; steers or queues per the thread setting while a turn runs (FR-019); response is a stream |
+| `GET/POST` | `/api/v1/threads` | List (`mode`, `archived`, `q`, `cursor`, `limit`; pinned first, then most recent) / create conversations. Shapes: `packages/shared/src/api.ts` |
+| `GET/PATCH/DELETE` | `/api/v1/threads/:id` | Thread with its messages / rename, pin, archive, model, reasoning level / soft delete |
+| `POST` | `/api/v1/threads/:id/messages` | Send a message (202 with `{turnId, userMessageId, assistantMessageId}`); output arrives as events (§5). Body up to 30 MB with attachments, else 413. Steers or queues per the thread setting while a turn runs (FR-019); until M2, a second send during a turn is 409 `conflict` |
 | `GET` | `/api/v1/threads/:id/turns` | Turns with their items (`docs/06` §2), paged |
-| `GET` | `/api/v1/threads/:id/stream` | WebSocket/SSE stream of events and server requests (§5) |
+| `GET` | `/api/v1/threads/:id/stream` | SSE stream of this thread's events and server requests (§5). Opens with a `: connected` comment. With `Last-Event-ID` or `?after=` it first replays persisted events after that id (ids compare as UUIDv7, so an ephemeral id works); without a cursor it sends live events only, so clients load the thread first and refetch on `chat.message.completed` |
 | `POST` | `/api/v1/threads/:id/cancel` | Cancel generation; the turn ends `interrupted` |
 | `POST` | `/api/v1/threads/:id/handoff` | Move a chat to another device or environment (FR-213) |
 | `GET/POST` | `/api/v1/files` | List/upload files (projects, artifacts, window-capture attachments, FR-214) |
-| `GET` | `/api/v1/search?q=` | Hybrid search (FTS + vector) |
+| `GET` | `/api/v1/search?q=` | Search message text, newest first; snippets mark matches with `<mark>…</mark>` and are otherwise plain text; temporary and deleted threads excluded (vector ranking joins in M2) |
+| `GET` | `/api/v1/attachments/:id` | Attachment bytes with their type; `Content-Disposition: attachment` except images |
+
+### Providers, models, account (M1)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET/POST` | `/api/v1/providers` | List / add provider accounts. `apiKey` is write-only: stored in the secret vault, never returned; the database holds only a `secret://` reference (FR-101) |
+| `DELETE` | `/api/v1/providers/:id` | Remove an account and its secret |
+| `POST` | `/api/v1/providers/:id/test` | Connect and list models; returns `{ok, detail?, models?}` and never fails the request for a bad key |
+| `GET` | `/api/v1/models` | Models of all active accounts as `{ref: "<accountId>/<modelId>", label, reasoning, ...}` |
+| `PATCH` | `/api/v1/account` | Update the display name |
 
 ### Tasks, goals, agents, approvals, requests
 

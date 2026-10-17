@@ -485,6 +485,11 @@ entry (or equivalent) with variants and a screenshot test.
 
 ## 5. Keyboard map (defaults; all remappable)
 
+In a browser tab, combinations the browser reserves (for example Ctrl+N and Ctrl+1..4) are shown
+and matched with Alt added; the installed PWA and native shells use the keys below (ADR-088).
+The web UI's routes are `/chat`, `/chat/<id>`, `/settings/<section>` and `/onboarding`; deep
+links (`nova://…`, FR-007) map onto them.
+
 | Action | Linux/Win | macOS |
 | --- | --- | --- |
 | Command palette | Ctrl+K / Ctrl+Shift+P | ⌘K / ⌘⇧P |

@@ -3,7 +3,7 @@
 > **This is the single source of truth for build progress.** The build agent keeps it current
 > before and after every task (`AGENTS.md` §4). Task IDs come from `docs/29-task-breakdown.md`.
 
-Current milestone: **M1 — Chat MVP + Shell**
+Current milestone: **M2 — Multi-Provider, Projects, Memory & Search**
 Last updated: 2026-10-17T06:10:00Z
 
 ## Phase status
@@ -19,7 +19,7 @@ Last updated: 2026-10-17T06:10:00Z
 | Milestone | Status | Started | Completed | Evidence |
 | --- | --- | --- | --- | --- |
 | M0 Foundation | done | 2026-10-17 | 2026-10-17 | 10bbcf4; `docs/demos/M0.md`; Playwright smoke J0 green |
-| M1 Chat MVP | in_progress | 2026-10-17 | — | — |
+| M1 Chat MVP | done | 2026-10-17 | 2026-10-17 | J1 green 3/3 (axe clean, cold start < 3 s); `docs/demos/M1.md` |
 | M2 Providers/Projects/Memory | todo | — | — | — |
 | M3 Tools/MCP/Policy | todo | — | — | — |
 | M4 Plugins/Workspace/Profile | todo | — | — | — |
@@ -56,16 +56,16 @@ Last updated: 2026-10-17T06:10:00Z
 | T-M0-12 | M0 | — | done | 10bbcf4 | this ledger; `docs/adr/` | `LEDGER.md` seeded from this document; ADR directory |
 | T-M0-13 | M0 | FR-141 | done | 10bbcf4 | `node scripts/cargo.mjs test` (6 tests); capability doc validates against schema | `services/novad` supervisor skeleton (Rust) + service install |
 | T-M0-14 | M0 | — | done | 10bbcf4 | `node scripts/check-spec.mjs` in CI | `scripts/check-spec.mjs` wired into CI (FR sync, schemas, links, names) |
-| T-M1-01 | M1 | FR-001, FR-002, FR-003 | in_progress | — | — | Hub-served UI shell: sidebar, mode tabs, command palette |
-| T-M1-02 | M1 | FR-004 | in_progress | — | — | Shortcut registry + defaults |
-| T-M1-03 | M1 | FR-017 | in_progress | — | — | Chat CRUD (create/rename/pin/archive/delete/search) |
-| T-M1-04 | M1 | FR-018 | in_progress | — | — | Streaming send/stop with partial retention |
-| T-M1-05 | M1 | FR-021 | in_progress | — | — | Composer + attachments (images/files) + markdown |
-| T-M1-06 | M1 | FR-014 | in_progress | — | — | Onboarding wizard (one provider + mock) |
-| T-M1-07 | M1 | FR-015 | in_progress | — | — | Accessibility baseline + focus management |
-| T-M1-08 | M1 | — | in_progress | — | — | OpenAI-compatible + Mock provider adapters; usage accounting stub |
-| T-M1-09 | M1 | FR-017 | in_progress | — | — | Persistence across restart; chat search |
-| T-M1-10 | M1 | FR-125 | in_progress | — | — | E2E J1 |
+| T-M1-01 | M1 | FR-001, FR-002, FR-003 | done | (M1 commit) | `apps/web` shell tests; J1 | Hub-served UI shell: sidebar, mode tabs, command palette |
+| T-M1-02 | M1 | FR-004 | done | (M1 commit) | `apps/web` keys tests; Settings → Keyboard | Shortcut registry + defaults |
+| T-M1-03 | M1 | FR-017 | done | (M1 commit) | `packages/core` threads tests; hub chat routes | Chat CRUD (create/rename/pin/archive/delete/search) |
+| T-M1-04 | M1 | FR-018 | done | (M1 commit) | core chat tests; J1 stop step | Streaming send/stop with partial retention |
+| T-M1-05 | M1 | FR-021 | done | (M1 commit) | composer + attachment tests | Composer + attachments (images/files) + markdown |
+| T-M1-06 | M1 | FR-014 | done | (M1 commit) | onboarding tests; J1 step 1 | Onboarding wizard (one provider + mock) |
+| T-M1-07 | M1 | FR-015 | done | (M1 commit) | axe on chat + settings in J1 | Accessibility baseline + focus management |
+| T-M1-08 | M1 | — | done | (M1 commit) | `packages/providers` 34 tests (fake server) | OpenAI-compatible + Mock provider adapters; usage accounting stub |
+| T-M1-09 | M1 | FR-017 | done | (M1 commit) | J1 restart + search steps | Persistence across restart; chat search |
+| T-M1-10 | M1 | FR-125 | done | (M1 commit) | `e2e/j1-first-chat.spec.ts` 3/3 | E2E J1 |
 | T-M2-01 | M2 | FR-023 | todo | — | — | Anthropic + OpenAI adapters with tool normalization |
 | T-M2-02 | M2 | FR-024 | todo | — | — | Virtual models, routing/fallback, circuit breaker, retries |
 | T-M2-03 | M2 | FR-126, FR-127 | todo | — | — | Compute node registration + routing order |

@@ -96,6 +96,7 @@ silently.
 | ADR-085 | Running TypeScript | **Node type stripping** for server code; Vite bundles only the web UI |
 | ADR-086 | CI Node version | **Node 24 LTS** (supersedes the Node 22 part of ADR-025) |
 | ADR-087 | Styling | **Token CSS + component classes**, no utility framework (supersedes ADR-004) |
+| ADR-088 | M1 implementation choices | Search index, reasoning levels, cut-off replies, offline mock provider, browser-tab shortcuts |
 
 ## Details & rationale
 
@@ -459,6 +460,26 @@ with CSS that reads only the design tokens (`packages/ui/src/tokens.css`) plus s
 classes; no utility-CSS framework. *Why:* the token layer already gives theming, the UI stays
 small (the M0 shell is 73 KB gzipped), and a test can enforce "no hard-coded colors" by scanning
 component sources. Revisit if UI velocity suffers.
+
+**ADR-088 — M1 implementation choices.**
+- *Search index.* Full-text search indexes a `message_search` copy of non-empty text parts with
+  an integer key, kept in step by triggers, because FTS rowids pointing straight at
+  `message_part` could be renumbered by `VACUUM`. Snippets mark matches with `<mark>`; clients
+  render everything else as plain text.
+- *Reasoning levels* are stored per thread and turn in M1 and are sent to providers from M2,
+  when the per-provider mapping (`docs/07` §6) lands.
+- *Cut-off replies.* A reply stopped by the output-token limit is an `incomplete` message on a
+  `completed` turn; a provider error stores an `error` part, fails the turn and sets the
+  thread's state to `error` until the next send.
+- *Offline first.* When an account has never had a provider, the Hub creates a "Mock (offline)"
+  provider so a fresh install works with no network; it is never recreated after the user
+  deletes it. Crash recovery marks streaming messages `incomplete` and open turns `interrupted`
+  with stop reason `error`.
+- *Shortcuts in a browser tab.* Keys the browser keeps for itself (Ctrl+N, Ctrl+1–4) are shown and
+  matched as Alt variants in a tab; the installed PWA and native shells use the documented keys.
+  Remaps are stored once, platform-neutral, using `mod`.
+- *Streams.* A client follows the open thread's stream; other threads refresh their status when
+  the list is reloaded. `chat.delta` is coalesced to at most 60 events per second.
 
 ## Defaults for common ambiguities
 

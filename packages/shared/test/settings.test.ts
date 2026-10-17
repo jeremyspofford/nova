@@ -87,3 +87,13 @@ describe('checkSettingWrite', () => {
     });
   });
 });
+
+describe('setting value types', () => {
+  it('keeps enum settings as literal unions', () => {
+    const r = resolveSetting('appearance.theme', {});
+    // Compile-time check: assigning a non-member must be a type error.
+    // @ts-expect-error 'neon' is not a theme
+    const bad: typeof r.value = 'neon';
+    expect([r.value, bad]).toEqual(['system', 'neon']);
+  });
+});

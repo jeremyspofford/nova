@@ -39,14 +39,14 @@ Rules:
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `chat.message.created` | yes | `{threadId,messageId,turnId,role}` |
-| `chat.delta` | no | `StreamEvent` (text/reasoning/tool deltas) |
+| `chat.message.created` | yes | `{threadId,messageId,turnId,role,status}` (`complete` for the user message, `streaming` for the assistant) |
+| `chat.delta` | no | `{threadId,messageId,type: text_delta\|reasoning_delta,text}` (`ChatDeltaPayload` in `packages/shared/src/api.ts`); at most 60 per second per stream |
 | `chat.message.completed` | yes | `{threadId,messageId,status,usage}` |
 | `chat.message.updated` | yes | `{threadId,messageId,reason}` |
 | `chat.branch.created` | yes | `{threadId,parentId,fromMessageId}` |
 | `chat.search.indexed` | yes | `{threadId,count}` |
 | `turn.started` | yes | `{threadId,turnId,idx,trigger: user\|schedule\|goal\|hook\|event\|channel,executionLocation}` |
-| `turn.completed` | yes | `{threadId,turnId,status: completed\|failed,stopReason,steps,usage}` |
+| `turn.completed` | yes | `{threadId,turnId,status: completed\|failed,stopReason,steps,usage}`; `usage` is `{inputTokens,outputTokens,cachedTokens,costUsd,timeSeconds}` |
 | `turn.interrupted` | yes | `{threadId,turnId,stopReason: cancelled\|budget\|backstop\|approval_timeout\|location_lost,steps,usage}` |
 | `compaction.completed` | yes | `{threadId,turnId,itemId,trigger: pre_turn\|mid_turn\|post_turn\|manual,tokensBefore,tokensAfter}` (FR-183) |
 | `thread.status.changed` | yes | `{ref:{kind: thread\|run\|session\|agent,id},from,status: running\|needs_input\|ready\|blocked}` (FR-215) |

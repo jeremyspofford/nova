@@ -3,6 +3,7 @@
 //   node apps/hub/src/main.ts [--port N] [--host H] [--data-dir D]   start the Hub
 //   node apps/hub/src/main.ts code [--data-dir D]                     print a new setup code
 import { join } from 'node:path';
+import { FileVault } from '@nova/secrets';
 import { migrate, openDatabase } from '@nova/storage';
 import { Logger, RotatingFileSink, stderrSink } from '@nova/telemetry';
 import { buildHub } from './app.ts';
@@ -22,7 +23,17 @@ export async function start(
   if (result.applied.length)
     log.info('database migrated', { from: result.from, to: result.to, backup: result.backupPath });
 
-  const { app, auth } = await buildHub({ config, db, log });
+  // Credentials live in the encrypted vault, never in the database (FR-101, docs/12 §5).
+  const secrets = new FileVault(join(config.dataDir, 'secrets.vault'), {
+    kind: 'keyfile',
+    path: join(config.dataDir, 'vault.key'),
+  });
+  const { app, auth, chat, registry } = await buildHub({ config, db, log, secrets });
+  // A crash may have left replies mid-stream: keep their text, mark them incomplete (FR-018).
+  const recovered = await chat.recoverOnStartup();
+  if (recovered.messages || recovered.turns) log.warn('recovered interrupted turns', recovered);
+  const owner = await auth.ownerAccount();
+  if (owner) await registry.ensureDefaultProvider(owner.id);
   const port = await listenWithFallback(app, config, log);
   const url = `http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${port}`;
   log.info('hub listening', { url, dataDir: config.dataDir, version: config.version });

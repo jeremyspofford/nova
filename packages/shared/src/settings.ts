@@ -13,7 +13,11 @@ export interface SettingDefinition<T = unknown> {
   description: string;
 }
 
-function def<T>(d: SettingDefinition<T>): SettingDefinition<T> {
+// Infer the value type from the schema only (NoInfer on the default), so enum settings keep
+// their literal union instead of widening to `string`.
+function def<T>(
+  d: Omit<SettingDefinition<T>, 'default'> & { default: NoInfer<T> },
+): SettingDefinition<T> {
   return d;
 }
 
