@@ -66,17 +66,17 @@ Last updated: 2026-10-17T08:40:00Z
 | T-M1-08 | M1 | — | done | ba340d5 | `packages/providers` 34 tests (fake server) | OpenAI-compatible + Mock provider adapters; usage accounting stub |
 | T-M1-09 | M1 | FR-017 | done | ba340d5 | J1 restart + search steps | Persistence across restart; chat search |
 | T-M1-10 | M1 | FR-125 | done | ba340d5 | `e2e/j1-first-chat.spec.ts` 3/3 | E2E J1 |
-| T-M2-01 | M2 | FR-023 | done | (M2 commit) | `packages/providers` 156 tests (conformance × 6 kinds); J2 on a fake Anthropic server | Anthropic + OpenAI adapters with tool normalization |
-| T-M2-02 | M2 | FR-024 | done | (M2 commit) | `packages/core` router/breaker/retry tests; hub model-routes | Virtual models, routing/fallback, circuit breaker, retries |
-| T-M2-03 | M2 | FR-126, FR-127 | done | (M2 commit) | core nodes tests; `services/compute` 40 tests; hub node-routes (real node end to end) | Compute node registration + routing order |
-| T-M2-04 | M2 | FR-034, FR-040 | done | (M2 commit) | core projects tests; hub conversation tests; web projects tests | Projects (instructions, sources, per-project chats) |
-| T-M2-05 | M2 | FR-032 | done | (M2 commit) | core memory tests; web memory tests; J2 step 4 | Memory extraction + Memory panel + per-chat opt-out |
-| T-M2-06 | M2 | FR-025 | done | (M2 commit) | storage search tests; web chat-find tests; J2 step 5 | Cross-chat search + in-chat find |
-| T-M2-07 | M2 | FR-019, FR-020 | done | (M2 commit) | core conversation tests; web chat-followup/chat-actions; J2 step 5 | Steer/queue setting; edit/regenerate/branch |
-| T-M2-08 | M2 | FR-026, FR-027, FR-033 | done | (M2 commit) | core conversation tests; web chat-panels/chat-temporary; J2 step 4 | Side chat; temporary chats; branch tree |
-| T-M2-09 | M2 | FR-007 | done | (M2 commit) | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
-| T-M2-11 | M2 | FR-221 | done | (M2 commit) | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
-| T-M2-10 | M2 | — | done | (M2 commit) | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
+| T-M2-01 | M2 | FR-023 | done | 01c0e89 | `packages/providers` 156 tests (conformance × 6 kinds); J2 on a fake Anthropic server | Anthropic + OpenAI adapters with tool normalization |
+| T-M2-02 | M2 | FR-024 | done | 01c0e89 | `packages/core` router/breaker/retry tests; hub model-routes | Virtual models, routing/fallback, circuit breaker, retries |
+| T-M2-03 | M2 | FR-126, FR-127 | done | 01c0e89 | core nodes tests; `services/compute` 40 tests; hub node-routes (real node end to end) | Compute node registration + routing order |
+| T-M2-04 | M2 | FR-034, FR-040 | done | 01c0e89 | core projects tests; hub conversation tests; web projects tests | Projects (instructions, sources, per-project chats) |
+| T-M2-05 | M2 | FR-032 | done | 01c0e89 | core memory tests; web memory tests; J2 step 4 | Memory extraction + Memory panel + per-chat opt-out |
+| T-M2-06 | M2 | FR-025 | done | 01c0e89 | storage search tests; web chat-find tests; J2 step 5 | Cross-chat search + in-chat find |
+| T-M2-07 | M2 | FR-019, FR-020 | done | 01c0e89 | core conversation tests; web chat-followup/chat-actions; J2 step 5 | Steer/queue setting; edit/regenerate/branch |
+| T-M2-08 | M2 | FR-026, FR-027, FR-033 | done | 01c0e89 | core conversation tests; web chat-panels/chat-temporary; J2 step 4 | Side chat; temporary chats; branch tree |
+| T-M2-09 | M2 | FR-007 | done | 01c0e89 | web deeplinks tests (`web+nova` handler in the manifest) | Deep links |
+| T-M2-11 | M2 | FR-221 | done | 01c0e89 | core presets tests; web models-settings tests; J2 step 3 | Model presets (Faster ↔ Smarter) over virtual models |
+| T-M2-10 | M2 | — | done | 01c0e89 | `e2e/j2-providers-memory.spec.ts`, 3/3 with J1 in parallel | E2E J2 |
 | T-M3-01 | M3 | — | todo | — | — | Tool registry + built-in read/write/search/exec |
 | T-M3-02 | M3 | FR-042, FR-043 | todo | — | — | MCP client (stdio/http) + health/restart |
 | T-M3-03 | M3 | FR-099 | todo | — | — | Policy engine complete (allow/ask/handoff/deny) + reasons |
@@ -265,7 +265,7 @@ Last updated: 2026-10-17T08:40:00Z
   with migrations and backups, policy engine skeleton, contracts harness, `novad` skeleton, CI.
 - **M1** (ba340d5): chat MVP: onboarding, streaming with stop, attachments, search, settings,
   themes and keyboard map; J1 green with axe checks and a cold start under 3 s.
-- **M2** (M2 commit): Anthropic, OpenRouter and llama.cpp adapters behind one conformance suite;
+- **M2** (01c0e89): Anthropic, OpenRouter and llama.cpp adapters behind one conformance suite;
   one router for every turn with presets (Faster / Balanced / Smarter), fallback and retries
   before output, a circuit breaker and `routing.allowCloud`; compute nodes (`@nova/compute`) that
   enroll with a one-use token and signed capability documents; steer and queue follow-ups,
