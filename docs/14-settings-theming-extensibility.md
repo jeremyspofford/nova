@@ -142,3 +142,15 @@ variables may override only in developer mode.
   longest task, per-project breakdown, cache savings.
 - Spend caps per provider with warnings at 80% and a hard stop at 100% (configurable).
 - All insights are computed from `usage_event`; a "clear usage data" action exists.
+
+## 7. New settings sections (added)
+
+| Section | Keys |
+| --- | --- |
+| **Devices** | registered devices/nodes, roles, scopes, wake, revoke, per-device overrides |
+| **Network** | transports (LAN/Lattice/Relay), trust mode, certs, egress, wake helpers, diagnostics |
+| **Ambient** | enable screen/mic/system-audio, quality, OCR/STT backends, cloud option, exclusions, retention, pause hotkey |
+| **Automations** | list, enable/disable, dry-run, logs, versions, default approval rules |
+| **Smart Home** | integrations (HA/MQTT/vendor), areas/rooms, scenes, allowed entity classes |
+| **Learning** | memory review, skill proposals, optimization proposals, tuning bounds, self-modification guardrail (on by default), kill switch |
+| **Catalog** | catalog URLs (public + tailnet + local), trusted publishers, allowed types, sideloading |

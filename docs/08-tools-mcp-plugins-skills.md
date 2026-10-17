@@ -210,7 +210,7 @@ Result: `allow | ask | handoff | deny` + a human-readable reason (FR-099/100).
 
 ## 7. Catalog & marketplace (FR-049)
 
-- **Remote catalog** (`https://catalog.nova.example/v1/index.json`) signed by the app
+- **Remote catalog** (`https://catalog.arialabs.ai/v1/index.json`) signed by the app
   publisher's key; supports plugin/skill/theme entries with versions, checksums, and
   compatibility.
 - **Local catalog**: a directory in settings for offline/sideload installs.

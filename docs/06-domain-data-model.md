@@ -551,3 +551,59 @@ CREATE TABLE firmware_change (
 Invariants: a `device` certificate is unique; a `device_capability` exists for every active
 compute node; `firmware_change` requires an `approval` before `applied`; `wake_request`
 requires an active `wake-helper` device on the same LAN.
+
+## 8. Automations, smart home & ambient (added)
+
+```sql
+CREATE TABLE automation (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+  name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  current_version INTEGER NOT NULL DEFAULT 1,
+  definition TEXT NOT NULL,            -- JSON: triggers/conditions/actions
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+CREATE TABLE automation_version (
+  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES automation(id),
+  version INTEGER NOT NULL, definition TEXT NOT NULL,
+  created_by TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE automation_run (
+  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES automation(id),
+  trigger_kind TEXT NOT NULL, status TEXT NOT NULL,
+  steps TEXT,                          -- JSON step results
+  started_at TEXT NOT NULL, ended_at TEXT, error TEXT
+);
+
+CREATE TABLE smart_area (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT
+);
+
+CREATE TABLE smart_entity (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+  integration TEXT NOT NULL,           -- ha|mqtt|matter|vendor
+  external_id TEXT NOT NULL, type TEXT NOT NULL,   -- light|switch|sensor|climate|lock|...
+  area_id TEXT REFERENCES smart_area(id), name TEXT,
+  state TEXT, attributes TEXT,         -- JSON
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE smart_scene (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, actions TEXT NOT NULL
+);
+
+CREATE TABLE ambient_record (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT,
+  ts TEXT NOT NULL, duration_ms INTEGER,
+  source TEXT NOT NULL,                -- screen|mic|system-audio
+  app_id TEXT, window_title TEXT, url TEXT, monitor INTEGER,
+  text TEXT, segments TEXT,            -- OCR / transcript
+  blob_ref TEXT, redactions TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_ambient_ts ON ambient_record(account_id, ts DESC);
+```
+
+Invariants: an `automation_run` always references a version; smart entities mirror external
+state and are never the source of truth; ambient records are encrypted and pruned by retention.

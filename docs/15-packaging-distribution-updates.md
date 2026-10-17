@@ -94,3 +94,16 @@ Windows: %APPDATA%\Nova\  and  %LOCALAPPDATA%\Nova\
 - Uninstall removes the app; user data remains unless the user chooses to delete it.
 - An in-app "Delete all data" performs the FR-105 flow.
 - A `--purge` uninstall option (documented) removes config, data, cache, and keychain entries.
+
+## 10. Hub, novad, catalog & domain packaging (added)
+
+| Artifact | Formats | Notes |
+| --- | --- | --- |
+| **Hub** | Container image, systemd unit, macOS launchd, Windows service | Default install on the supported-minimum mini PC |
+| **novad** | Signed per-OS/arch static binaries + module bundles | Served by the Hub at `/api/v1/agent/dist/` |
+| **Clients** | PWA (served by Hub) + signed desktop installers; mobile later | Same UI, thin shells |
+| **Relay / Catalog / Sync** | Container images | Default host `arialabs.ai`; fully self-hostable |
+
+Domain defaults (all configurable): catalog `catalog.arialabs.ai`, relay `wss://relay.arialabs.ai`,
+sync `sync.arialabs.ai`. Standard TLS certificates for the public endpoints; the same services
+are also reachable on the tailnet. Signing keys live in CI/hardware tokens, never in the repo.

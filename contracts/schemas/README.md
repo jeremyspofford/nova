@@ -10,6 +10,9 @@ mirror the Zod schemas in `packages/shared`; CI verifies they stay in sync.
 | [`plugin-manifest.json`](plugin-manifest.json) | Plugin `.nova-plugin/plugin.json` |
 | [`mcp-config.json`](mcp-config.json) | MCP server configuration |
 | [`device-capability.json`](device-capability.json) | Device capability document reported by `novad` |
+| [`automation.json`](automation.json) | Automation definition (triggers/conditions/actions) |
+| [`ambient-record.json`](ambient-record.json) | Normalized ambient capture record |
+| [`smart-home-entity.json`](smart-home-entity.json) | Normalized smart-home entity |
 | [`theme.json`](theme.json) | Theme file |
 | [`tool-descriptor.json`](tool-descriptor.json) | Registered tool metadata |
 | [`schedule.json`](schedule.json) | Recurring task definition |

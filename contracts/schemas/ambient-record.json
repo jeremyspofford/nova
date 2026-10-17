@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/ambient-record.json",
+  "title": "AmbientRecord",
+  "type": "object",
+  "required": ["id", "accountId", "ts", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "accountId": { "type": "string" },
+    "deviceId": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "source": { "enum": ["screen", "mic", "system-audio"] },
+    "app": {
+      "type": "object",
+      "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+    },
+    "window": {
+      "type": "object",
+      "properties": { "title": { "type": "string" }, "url": { "type": "string" } }
+    },
+    "monitor": { "type": "integer" },
+    "text": { "type": "string" },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "startMs": { "type": "integer" },
+          "endMs": { "type": "integer" },
+          "text": { "type": "string" },
+          "speaker": { "type": "string" }
+        }
+      }
+    },
+    "blobRef": { "type": "string" },
+    "encrypted": { "type": "boolean", "default": true },
+    "redactions": { "type": "array", "items": { "type": "string" } }
+  }
+}

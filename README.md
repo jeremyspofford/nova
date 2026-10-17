@@ -66,6 +66,8 @@ new decisions in an ADR and continue.
 | 25 | [`25-automation-and-smart-home.md`](docs/25-automation-and-smart-home.md) | Automation engine + smart-home integrations |
 | 26 | [`26-extensions-and-community.md`](docs/26-extensions-and-community.md) | Community marketplace: MCP, connectors, plugins, skills |
 | 27 | [`27-learning-and-self-improvement.md`](docs/27-learning-and-self-improvement.md) | Learning levels, self-modification guardrails, eval gates |
+| 28 | [`28-glossary.md`](docs/28-glossary.md) | Canonical terms and naming rules |
+| 29 | [`29-task-breakdown.md`](docs/29-task-breakdown.md) | Starter task list per milestone |
 | — | [`contracts/`](contracts/README.md) | Hub API, IPC, events, REST API, JSON schemas |
 
 ## Repository conventions

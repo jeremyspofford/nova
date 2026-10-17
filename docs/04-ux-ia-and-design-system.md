@@ -200,3 +200,29 @@ Every surface must handle: **empty**, **loading** (skeleton), **streaming/partia
 - A 3-step "your first run" tutorial that actually executes a harmless task (e.g., summarize
   a bundled sample doc) and ends with a visible artifact.
 - A safety primer: what approval cards look like, how to stop an agent, where the audit log is.
+
+## 9. Hub-served UI & new surfaces
+
+The UI is a web app served by the Hub; clients are browsers/PWA and native shells. New
+top-level surfaces in the sidebar:
+
+| Surface | Purpose |
+| --- | --- |
+| **Devices** | Devices/compute nodes; capabilities, health, reachability; add/wake/revoke |
+| **Network** | Transports (LAN/Lattice/Relay), trust/certs, egress, wake helpers, diagnostics |
+| **Ambient** | Capture timeline (screen/audio), search, filters, privacy controls |
+| **Automations** | Trigger→condition→action editor, dry-run, logs, versions |
+| **Smart Home** | Entities by area, scenes, natural-language control |
+| **Learning** | “What Nova learned”: memory, skills, tuning, code changes, rollback |
+
+New flows:
+
+1. **Add a Device** — choose role + scopes, show QR/short code, approve on the Hub, success screen.
+2. **Network setup** — detect state, configure a transport, test reachability, rollback.
+3. **Ambient timeline** — day view with thumbnails/waveform; search; pause; forget.
+4. **Automation editor** — pick triggers/conditions/actions; test; enable; view logs.
+5. **Smart-home control** — areas/scenes, device state, command history.
+6. **Learning review** — approve/decline skills and optimizations; rollback; kill switch.
+
+The same UI is responsive: phone/tablet use a bottom nav and single column; desktop uses the
+sidebar + inspector layout.

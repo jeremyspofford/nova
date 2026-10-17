@@ -200,7 +200,7 @@ Wake-on-LAN magic packets only cross a single LAN segment. To wake a sleeping de
   "transports": {
     "lan": { "enabled": true, "mdns": true },
     "lattice": { "enabled": true, "provider": "headscale", "controlUrl": "https://headscale.lan" },
-    "relay":   { "enabled": true, "url": "wss://relay.example", "selfHosted": true },
+    "relay":   { "enabled": true, "url": "wss://relay.arialabs.ai", "selfHosted": true },
     "directPublic": { "enabled": false }
   },
   "trust": { "mode": "local-ca", "latticeCerts": true, "pinNativeShells": true },

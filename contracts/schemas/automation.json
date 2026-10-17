@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arialabs.ai/schemas/automation.json",
+  "title": "Automation",
+  "type": "object",
+  "required": ["id", "name", "enabled", "currentVersion", "definition"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string", "maxLength": 200 },
+    "enabled": { "type": "boolean", "default": true },
+    "currentVersion": { "type": "integer", "minimum": 1 },
+    "definition": { "$ref": "#/$defs/definition" }
+  },
+  "$defs": {
+    "trigger": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["time", "event", "device_state", "ambient", "location", "manual"] },
+        "cron": { "type": "string" },
+        "intervalSeconds": { "type": "integer", "minimum": 60 },
+        "event": { "type": "string" },
+        "entity": { "type": "string" },
+        "phrase": { "type": "string" },
+        "geofence": { "type": "string" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["device_state", "time_window", "presence", "expression"] },
+        "entity": { "type": "string" },
+        "is": { "type": "string" },
+        "expression": { "type": "string" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["smarthome", "agent_run", "tool", "message", "script", "notify", "webhook"] },
+        "service": { "type": "string" },
+        "target": { "type": "string" },
+        "objective": { "type": "string" },
+        "tool": { "type": "string" },
+        "args": { "type": "object" },
+        "channel": { "type": "string" },
+        "text": { "type": "string" },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "required": ["triggers", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "triggers": { "type": "array", "items": { "$ref": "#/$defs/trigger" }, "minItems": 1 },
+        "conditions": { "type": "array", "items": { "$ref": "#/$defs/condition" } },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" }, "minItems": 1 },
+        "mode": { "enum": ["single", "restart", "queued", "parallel"], "default": "single" }
+      }
+    }
+  }
+}

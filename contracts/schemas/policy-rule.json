@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nova.dev/schemas/policy-rule.json",
+  "$id": "https://arialabs.ai/schemas/policy-rule.json",
   "title": "PolicyRule",
   "type": "object",
   "required": ["id", "scope", "match", "effect", "enabled"],

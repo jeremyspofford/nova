@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nova.dev/schemas/plugin-manifest.json",
+  "$id": "https://arialabs.ai/schemas/plugin-manifest.json",
   "title": "PluginManifest",
   "type": "object",
   "required": ["schemaVersion", "id", "name", "version", "permissions"],

@@ -131,3 +131,19 @@ user can choose more or less detail; secrets and file contents are never include
 | Cloud runner down | Runs queue or fall back to local with a warning |
 | Push unavailable | In-app notifications still work; polling fallback |
 | Device key revoked | Other devices stop decrypting that device's payloads; re-link required |
+
+## 10. Domain, catalog & hosted services
+
+Default hosted endpoints for `arialabs.ai` (all configurable and self-hostable):
+
+| Service | Default URL | Notes |
+| --- | --- | --- |
+| Catalog | `https://catalog.arialabs.ai` | Public index; also on the tailnet |
+| Relay | `wss://relay.arialabs.ai` | Content-blind, end-to-end encrypted |
+| Sync | `https://sync.arialabs.ai` | Optional; ciphertext only |
+| Auth | `https://auth.arialabs.ai` | Optional OIDC |
+| Cloud runner | `https://runner.arialabs.ai` | Optional |
+
+The catalog is also reachable at `https://catalog.<tailnet>.ts.net` for Lattice-only access.
+Clients try catalog URLs in order; every entry is signature-verified. Self-hosting replaces any
+of these by changing the configured URL.

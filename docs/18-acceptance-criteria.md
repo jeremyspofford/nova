@@ -129,3 +129,19 @@ And in `LEDGER.md`:
 - status table with commit SHAs,
 - the golden journey result,
 - any deferrals with rationale and a linked follow-up task.
+
+## 7. Capability-track acceptance (N1–N4)
+
+- **N1 Ambient Memory** — capture off by default; enabling shows the indicator; a search returns
+  screen and audio matches; exclusions and “forget last N minutes” work; a capture containing an
+  injection payload never causes an action.
+- **N2 Automations & Smart Home** — a scheduled automation runs an agent and controls a mock
+  entity; a lock/garage action requires approval; dry-run produces no side effects; a failed
+  action rolls back where compensation exists; optional HomeKit bridge.
+- **N3 Extensions & Community** — install a signed MCP server + plugin; an added permission on
+  update forces re-confirmation; unsigned/sideloaded entries warn; the fleet kill switch
+  disables an extension; the catalog is reachable via public domain and tailnet.
+- **N4 Learning & Self-Improvement** — memory learning is reviewable/reversible; a skill
+  proposal requires approval; an optimization is backed by eval evidence and rollback; an
+  attempt to modify the policy engine is denied and logged high-severity; the kill switch halts
+  proposals.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nova.dev/schemas/event-envelope.json",
+  "$id": "https://arialabs.ai/schemas/event-envelope.json",
   "title": "EventEnvelope",
   "type": "object",
   "required": ["id", "name", "schemaVersion", "ts", "actor", "payload"],

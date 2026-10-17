@@ -110,3 +110,21 @@ distributable by a single party under permissive terms.
 - [ ] Data flows documented if new (update `docs/13` data map).
 - [ ] Safety defaults preserved (fail closed).
 - [ ] Attribution added for any new third-party asset.
+
+## 11. Additional legal considerations (added)
+
+- **Ambient recording.** Screen/audio capture is subject to local wiretap and recording-consent
+  laws (some jurisdictions require all-party consent). Capture is off by default, visible, and
+  user-controlled; the app shows a consent notice at enable time and documents that the user is
+  responsible for lawful use. No covert capture, ever.
+- **Smart home & physical actions.** Commands that affect locks, alarms, or safety systems are
+  approval-gated; the app disclaims liability for automation outcomes and documents supported
+  devices.
+- **Community content.** The catalog operates a notice-and-takedown process, publisher key
+  revocation, and abuse reporting; it does not endorse third-party extensions. Contributors
+  warrant they have rights to their code and assets.
+- **Self-improvement & autonomy.** Learning and self-modification are transparent, auditable,
+  reversible, and gated; the product does not claim autonomous legal agency, and users remain
+  responsible for consequential actions.
+- **Domain & branding.** `arialabs.ai` and Nova branding belong to the project owner;
+  third-party product names remain excluded per §1.

@@ -199,3 +199,21 @@ warning.
 - On detected compromise: notify the user, disable the affected integration, rotate the
   relevant secret, and write a high-severity audit event.
 - Crash/security reports are opt-in and scrubbed; the user previews the payload.
+
+## 14. New capability security (added)
+
+**Ambient capture.** Off by default; per-source toggles; sensitive-app/site exclusions on by
+default; on-device redaction; captures are untrusted input and can never directly trigger a
+consequential action; cloud OCR/STT only if enabled per source and logged.
+
+**Automations & smart home.** Physical-world actions (locks, alarms, garage, thermostats) are
+high-risk and require approval or an explicit scoped standing rule; rate limits and loop
+prevention; integration credentials in the keychain; managed policy can disable classes.
+
+**Community extensions.** Signed catalogs/bundles, runtime permission enforcement,
+dependency/secret scanning, report/takedown, and a fleet-wide kill switch (`docs/26` §5).
+
+**Learning & self-improvement.** Guardrails on by default; the agent may not modify policy,
+safety, permissions, audit, signing, or the self-improvement gates unless an administrator
+explicitly disables the guardrail (audited). L4 changes are sandboxed, tested, staged, and
+reversible; attempts to weaken guardrails are denied and logged high-severity.

@@ -1,8 +1,18 @@
 # REST APIs (Optional Server Components)
 
 These APIs exist only for optional cloud features (sync, relay, catalog, cloud runner). The
-desktop app never requires them. All endpoints are versioned under `/v1` and authenticated
-with a device/account token. **The server is content-blind for user content.**
+Hub never requires them. All endpoints are versioned under `/v1` and authenticated with a
+device/account token. **The server is content-blind for user content.**
+
+Default hosted endpoints (all configurable / self-hostable):
+
+| Service | Default |
+| --- | --- |
+| Catalog | `https://catalog.arialabs.ai` (also `https://catalog.<tailnet>.ts.net`) |
+| Relay | `wss://relay.arialabs.ai` |
+| Sync | `https://sync.arialabs.ai` |
+| Auth | `https://auth.arialabs.ai` |
+| Cloud runner | `https://runner.arialabs.ai` |
 
 ## 1. Auth
 

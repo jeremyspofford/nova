@@ -17,8 +17,13 @@ Windows builds green behind feature flags/CI.
 
 1. `README.md`
 2. `AGENTS.md` — your operating rules; follow them exactly
-3. `docs/00-product-brief.md` through `docs/20-decisions-and-defaults.md`
-4. `contracts/README.md` and every file in `contracts/`
+3. `docs/00-product-brief.md` through `docs/29-task-breakdown.md`
+4. `contracts/README.md`, `contracts/hub-api.md`, and every file in `contracts/`
+
+**Architecture:** Nova is a hub-and-spoke, multi-device system (`docs/21`–`docs/23`). The Hub
+owns canonical state and serves the web UI; clients are thin; compute nodes supply inference;
+`novad` runs on devices. Domain: **arialabs.ai** (catalog at `catalog.arialabs.ai`, relay at
+`relay.arialabs.ai`). Do not hard-code the domain — make it configurable with these defaults.
 
 **Then build, continuously and autonomously:**
 
@@ -53,8 +58,8 @@ Windows builds green behind feature flags/CI.
 
 **Start now** by:
 1. Reading the documents above.
-2. Creating `LEDGER.md` with the full M0–M10 task breakdown derived from
-   `docs/17-roadmap-and-milestones.md`.
+2. Creating `LEDGER.md` with the full task breakdown from `docs/29-task-breakdown.md`
+   (milestones defined in `docs/17-roadmap-and-milestones.md`).
 3. Scaffolding the monorepo exactly as specified in
    `docs/05-system-architecture.md`, and committing M0.
 

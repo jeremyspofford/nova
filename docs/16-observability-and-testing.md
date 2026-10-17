@@ -126,3 +126,16 @@ A milestone is test-complete when:
 - No P0/P1 bug is open; no unwaivered security or accessibility failure.
 - Performance budgets for touched surfaces are met.
 - Coverage floors (`AGENTS.md` §6) are upheld.
+
+## 11. Tests for the new tracks (added)
+
+| Track | Required tests |
+| --- | --- |
+| **Hub/devices (M6.5)** | Add-device handshake (approve/deny/expire); transport fallback LAN→Lattice→Relay; network setup rollback; reachability gating |
+| **novad** | capability schema validation; module sandbox violations denied; WoL path; signed update + rollback |
+| **Firmware** | disabled by default returns 403; with toggle on, apply requires approval; snapshot+rollback; audit entry |
+| **Ambient (N1)** | off by default; exclusions enforced; redaction; “forget last N minutes”; injection payload never triggers an action |
+| **Automations (N2)** | dry-run has no side effects; loop prevention; physical-action approval; compensation/rollback |
+| **Smart home (N2)** | mock HA/MQTT entity state + commands; scene apply; natural-language mapping |
+| **Community (N3)** | signature verification; permission diff on update; undeclared egress blocked; kill switch |
+| **Self-improvement (N4)** | guardrail on by default; attempt to edit policy denied + high-severity audit; L2 optimization requires eval evidence; kill switch halts proposals |
