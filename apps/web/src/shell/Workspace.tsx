@@ -35,6 +35,7 @@ import {
 } from '../router.ts';
 import { deepLinkPath } from '../deeplinks.ts';
 import { NotificationsBell } from '../notifications/Bell.tsx';
+import { AppsView, ThreadApps } from '../apps/AppsView.tsx';
 import { LibraryView } from '../library/LibraryView.tsx';
 import { ProjectsView } from '../projects/ProjectsView.tsx';
 import { useServices } from '../services.tsx';
@@ -511,7 +512,9 @@ export function Workspace({
           ? 'Projects'
           : route.name === 'library'
             ? 'Library'
-            : MODE_INFO[mode ?? lastMode].label;
+            : route.name === 'apps'
+              ? 'Apps'
+              : MODE_INFO[mode ?? lastMode].label;
 
   return (
     <div
@@ -622,6 +625,7 @@ export function Workspace({
           ) : null}
           {route.name === 'projects' ? <ProjectsView projectId={route.projectId} /> : null}
           {route.name === 'library' ? <LibraryView /> : null}
+          {route.name === 'apps' ? <AppsView entryId={route.entryId} /> : null}
           {route.name === 'onboarding' ? (
             <Onboarding displayName={displayName} onDisplayName={onDisplayName} />
           ) : null}
@@ -677,6 +681,11 @@ export function Workspace({
                 id: 'branches',
                 label: 'Branches',
                 panel: <BranchesPanel threadId={chatThreadId} />,
+              },
+              {
+                id: 'apps',
+                label: 'Apps',
+                panel: <ThreadApps threadId={chatThreadId} />,
               },
             ]}
           />

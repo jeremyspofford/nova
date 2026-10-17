@@ -166,6 +166,34 @@ export function Sidebar({
             ))}
           </ul>
         ) : null}
+        <a
+          href="/library"
+          className="mode-link"
+          aria-current={route.name === 'library' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/library');
+            onNavigated();
+          }}
+        >
+          <Icon name="file" />
+          <span className="mode-label">Library</span>
+        </a>
+        <a
+          href="/apps"
+          className="mode-link"
+          aria-current={route.name === 'apps' ? 'page' : undefined}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            navigate('/apps');
+            onNavigated();
+          }}
+        >
+          <Icon name="server" />
+          <span className="mode-label">Apps</span>
+        </a>
       </div>
       <div className="sidebar-bottom">
         <a
