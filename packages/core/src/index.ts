@@ -17,3 +17,7 @@ export * from './ops/index.ts';
 export * from './consolidation.ts';
 export * from './history.ts';
 export * from './extensions/index.ts';
+export * from './plugins/index.ts';
+export * from './hooks/index.ts';
+export * from './workspace/index.ts';
+export * from './profile/index.ts';
