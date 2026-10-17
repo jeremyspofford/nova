@@ -38,7 +38,7 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 **Goal:** A working single-provider chat with the core shell.
 
 **Deliverables**
-- Sidebar + mode tabs (Chat/Work/Code/Dots placeholders) + command palette + shortcut
+- Sidebar + mode tabs (Chat/Work/Code/Agents placeholders) + command palette + shortcut
   registry (FR-001/002/003/004).
 - Conversation engine: create/rename/pin/archive/delete/search chats; streaming; stop
   (FR-017/018).
@@ -113,7 +113,7 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
   theme import/export (FR-011); suggested prompts (FR-028).
 - Local projects bound to folders (FR-035); Library view (FR-041).
 - Profile + usage insights (FR-113/114/115).
-- Unison-as-MCP-server with consent (FR-044).
+- Nova-as-MCP-server with consent (FR-044).
 
 **Exit criteria**
 - Install a sample plugin; its skill runs; permissions enforced (undeclared host blocked).
@@ -148,31 +148,31 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 
 ---
 
-## M6 — Dots, Computers & Channels
+## M6 — Agents, Computers & Channels
 
 **Goal:** Always-on agents that work beyond a single session.
 
 **Deliverables**
-- Dot model + creation/onboarding + responsibilities (FR-079).
+- Agent model + creation/onboarding + responsibilities (FR-079).
 - Computer abstraction: local sandbox (bwrap), local container, cloud stub (FR-080/081/107).
 - Browser controller + computer use + takeover + sign-in flow + appshots (FR-092…098,
   FR-086/087).
 - Proactive research (read-only) + background threads (FR-082/083).
 - Custom rules + auto-review (FR-084/085); Activity + stop/pause (FR-090).
 - Event triggers (FR-056); channels: Slack + Teams + webhook (FR-088); notification routing
-  (FR-060); Dot memory (FR-089).
+  (FR-060); Agent memory (FR-089).
 - Spaces/Pages + Sites (FR-036/037); visualizations (FR-076).
 - Egress control (FR-102) + injection defense (FR-103).
 - Pets + theming polish (FR-012).
 
 **Exit criteria**
-- Create a Dot on the mock cloud computer; it performs read-only proactive research.
-- Connect Slack (mock server); message the Dot; a rule forces an approval; answering from
+- Create a Agent on the mock cloud computer; it performs read-only proactive research.
+- Connect Slack (mock server); message the Agent; a rule forces an approval; answering from
   Slack proceeds; context shared.
 - Browser tool navigates a local test site, screenshots, and is blocked from an unlisted host.
 - Injection payload in page content does not cause an unapproved action (security test).
 
-**Demo:** Dot books a meeting flow on a mock calendar, asking for approval to send.
+**Demo:** Agent books a meeting flow on a mock calendar, asking for approval to send.
 
 ---
 
@@ -203,7 +203,7 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 **Goal:** Customization, governance, and accessibility maturity.
 
 **Deliverables**
-- Extension SDK + `unison dev/validate/pack` + docs + template (FR-117).
+- Extension SDK + `nova dev/validate/pack` + docs + template (FR-117).
 - Marketplace with signatures + permission diffs (FR-049 complete).
 - Managed policy file + precedence UI (FR-106); data export/delete + retention (FR-105);
   spend caps (FR-116); crash reporting opt-in (FR-121).
@@ -261,7 +261,7 @@ Each milestone lists: **goal · deliverables · FR coverage · exit criteria · 
 ```
 M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M4 ─▶ M5 ─▶ M6 ─▶ M7 ─▶ M8 ─▶ M9 ─▶ M10
                          └──────────────▶ (M5 Code depends on M3 tools/policy)
-                                        (M6 Dots depends on M5 runtime + M3 policy)
+                                        (M6 Agents depends on M5 runtime + M3 policy)
 ```
 
 All milestones are serial at the dependency level; within a milestone, tasks may proceed in

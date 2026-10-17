@@ -3,10 +3,10 @@
 The renderer runs with `contextIsolation: true`, `sandbox: true`, and **no Node integration**.
 It talks to the main process through a `contextBridge` surface generated from this contract.
 
-## API surface (preload `window.unison`)
+## API surface (preload `window.nova`)
 
 ```ts
-interface UnisonAPI {
+interface NovaAPI {
   invoke<C extends Channel>(channel: C, payload: Payload<C>): Promise<Result<C>>;
   subscribe<E extends EventName>(event: E, handler: (payload: EventPayload<E>) => void): Unsubscribe;
   stream<C extends StreamChannel>(channel: C, payload: Payload<C>, on: StreamHandlers): Cancel;
@@ -71,14 +71,14 @@ interface UnisonAPI {
 
 | Channel | Payload | Result |
 | --- | --- | --- |
-| `run.create` | `{title,objective,projectId?,autonomy?,dotId?}` | `Run` |
+| `run.create` | `{title,objective,projectId?,autonomy?,agentId?}` | `Run` |
 | `run.get` | `{id}` | `RunWithSteps` |
-| `run.list` | `{status?,dotId?,limit?,cursor?}` | `Page<Run>` |
+| `run.list` | `{status?,agentId?,limit?,cursor?}` | `Page<Run>` |
 | `run.pause` | `{id}` | `Run` |
 | `run.resume` | `{id}` | `Run` |
 | `run.redirect` | `{id,instruction}` | `Run` |
 | `run.cancel` | `{id}` | `Run` |
-| `schedule.list` | `{dotId?}` | `Schedule[]` |
+| `schedule.list` | `{agentId?}` | `Schedule[]` |
 | `schedule.upsert` | `ScheduleInput` | `Schedule` |
 | `schedule.cancel` | `{id}` | `{ok:true}` |
 | `activity.list` | `{refKind,refId,limit?,cursor?}` | `Page<ActivityEntry>` |
@@ -102,18 +102,18 @@ interface UnisonAPI {
 | `devserver.list` | `{sessionId}` | `DevServer[]` |
 | `devserver.start`/`.stop`/`.stopAll` | `{sessionId,id?}` | `DevServer` |
 
-### dots, computers, channels
+### agents, computers, channels
 
 | Channel | Payload | Result |
 | --- | --- | --- |
-| `dot.create` | `{name,avatarPath?,responsibilities}` | `Dot` |
-| `dot.get` / `dot.list` / `dot.update` / `dot.delete` | — | `Dot` / `Dot[]` |
-| `dot.pause` / `dot.resume` | `{id}` | `Dot` |
-| `dot.rules.list` / `.upsert` / `.delete` | — | `DotRule` |
-| `dot.memory.list` / `.forget` | — | `DotMemory[]` |
+| `agent.create` | `{name,avatarPath?,responsibilities}` | `Agent` |
+| `agent.get` / `agent.list` / `agent.update` / `agent.delete` | — | `Agent` / `Agent[]` |
+| `agent.pause` / `agent.resume` | `{id}` | `Agent` |
+| `agent.rules.list` / `.upsert` / `.delete` | — | `AgentRule` |
+| `agent.memory.list` / `.forget` | — | `AgentMemory[]` |
 | `computer.get` | `{id}` | `ComputerStatus` |
-| `computer.connectLocal` | `{dotId}` | `ComputerStatus` |
-| `computer.disconnectLocal` | `{dotId}` | `{ok:true}` |
+| `computer.connectLocal` | `{agentId}` | `ComputerStatus` |
+| `computer.disconnectLocal` | `{agentId}` | `{ok:true}` |
 | `computer.snapshot` / `.restore` | `{id, snapshotId?}` | `SnapshotRef` |
 | `computer.takeover` / `.returnControl` | `{id}` | `{ok:true}` |
 | `channel.list` / `.add` / `.remove` / `.test` | — | `ChannelBinding` |

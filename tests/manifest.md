@@ -86,7 +86,7 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-076 | todo | todo | — | visualizations |
 | FR-077 | todo | todo | J9 | mobile dispatch |
 | FR-078 | todo | todo | — | SSH persistence |
-| FR-079 | todo | todo | J7 | dot creation |
+| FR-079 | todo | todo | J7 | agent creation |
 | FR-080 | todo | todo | J7 | cloud computer |
 | FR-081 | todo | todo | J7 | connect computer |
 | FR-082 | todo | todo | J7 | proactive research |
@@ -96,9 +96,9 @@ Legend: `U` unit · `I` integration · `E` E2E journey (see `docs/18` §3) · `�
 | FR-086 | todo | todo | J8 | sign-in flow |
 | FR-087 | todo | todo | J7 | takeover |
 | FR-088 | todo | todo | J7 | channels |
-| FR-089 | todo | todo | J7 | dot memory |
-| FR-090 | todo | todo | J7 | dot activity/stop |
-| FR-091 | todo | todo | — | specialist dots |
+| FR-089 | todo | todo | J7 | agent memory |
+| FR-090 | todo | todo | J7 | agent activity/stop |
+| FR-091 | todo | todo | — | specialist agents |
 | FR-092 | todo | todo | J8 | browser tool |
 | FR-093 | todo | todo | J8 | computer use |
 | FR-094 | todo | todo | J8 | allow/block lists |

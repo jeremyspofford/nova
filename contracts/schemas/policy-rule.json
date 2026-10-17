@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/policy-rule.json",
+  "$id": "https://nova.dev/schemas/policy-rule.json",
   "title": "PolicyRule",
   "type": "object",
   "required": ["id", "scope", "match", "effect", "enabled"],
@@ -15,7 +15,7 @@
       "required": ["kind"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "enum": ["global", "project", "thread", "run", "session", "dot", "tool", "plugin", "site"] },
+        "kind": { "enum": ["global", "project", "thread", "run", "session", "agent", "tool", "plugin", "site"] },
         "ref": { "type": "string" }
       }
     },

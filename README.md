@@ -1,15 +1,19 @@
-# Unison Desktop — Build Spec Bundle
+# Nova — Build Spec Bundle
 
-**Working title:** Unison (rename freely; branding is configuration, not code).
-**Goal:** Build one customizable, cross-platform desktop application that unifies the
-best capabilities of four AI products into a single, coherent workspace:
+**Working title:** Nova (rename freely; branding is configuration, not code).
+**Goal:** Build one customizable, multi-device application that unifies conversational AI,
+long-running work agents, always-on agents, and an autonomous coding agent into a single,
+coherent workspace, using a hub-and-spoke architecture that targets local models first and
+cloud models optionally.
 
-| Source product | What we take |
+Capability areas in scope:
+
+| Area | What we build |
 | --- | --- |
-| **Claude Desktop** (Chat / Cowork / Code tabs) | Chat + artifacts, long-running agentic "Cowork"/Work mode, Code sessions with diff review, browser pane, permission modes, skills, connectors, plugins, scheduled tasks, computer use, cloud/SSH/WSL environments |
-| **OpenAI ChatGPT Desktop** | Conversation UX, projects, memory, voice, image generation, plugins/skills, "Work" delegated tasks, sites/artifacts viewer, command palette, pets, themable appearance, usage/profile insights |
-| **OpenAI Codex** | Coding agent (cloud + local + IDE/CLI parity), parallel agents, cloud environments, PR review, code review, plugins, browser/computer tools, appshots, visualizations, scheduled tasks, long-running work |
-| **OpenAI Dots** | Always-on personal agents with their own cloud computer + browser, proactive research, background delegation, schedulers/event triggers, custom rules, activity view, approvals, multi-channel messaging (Slack/Teams/…), specialist agents |
+| Collaboration & chat | Conversation UX, artifacts, long-running agentic work, plugins/skills, connectors |
+| Coding agent | Repo-aware coding, parallel agents, cloud/local environments, diff review, PR flow |
+| Always-on agents | Persistent agents with their own computer, proactive research, schedulers, approvals, multi-channel reach |
+| Hub & multi-device | A hub that hosts the app/UI and coordinates compute nodes, clients, sync, and remote access |
 
 This directory is **not the application**. It is the *complete, self-contained specification*
 that another autonomous coding agent can execute continuously, milestone by milestone,
@@ -36,7 +40,7 @@ new decisions in an ADR and continue.
 | --- | --- | --- |
 | 00 | [`00-product-brief.md`](docs/00-product-brief.md) | Vision, personas, principles, non-goals, success metrics |
 | 01 | [`01-reverse-engineering-method.md`](docs/01-reverse-engineering-method.md) | REA methodology, clean-room rules, evidence format |
-| 02 | [`02-feature-inventory.md`](docs/02-feature-inventory.md) | Feature inventory extracted from all four products |
+| 02 | [`02-feature-inventory.md`](docs/02-feature-inventory.md) | Inventory of target capabilities, translated into requirements |
 | 03 | [`03-functional-requirements.md`](docs/03-functional-requirements.md) | Numbered, testable requirements (FR-*) |
 | 04 | [`04-ux-ia-and-design-system.md`](docs/04-ux-ia-and-design-system.md) | Information architecture, navigation, design system |
 | 05 | [`05-system-architecture.md`](docs/05-system-architecture.md) | Processes, stack, monorepo layout, IPC, sandboxing |

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/event-envelope.json",
+  "$id": "https://nova.dev/schemas/event-envelope.json",
   "title": "EventEnvelope",
   "type": "object",
   "required": ["id", "name", "schemaVersion", "ts", "actor", "payload"],
@@ -11,7 +11,7 @@
     "schemaVersion": { "type": "integer", "minimum": 1 },
     "ts": { "type": "string", "format": "date-time" },
     "accountId": { "type": "string" },
-    "actor": { "type": "string", "pattern": "^(user|system|agent:.+|dot:.+)$" },
+    "actor": { "type": "string", "pattern": "^(user|system|agent:.+|agent:.+)$" },
     "correlation": {
       "type": "object",
       "additionalProperties": false,
@@ -19,7 +19,7 @@
         "threadId": { "type": "string" },
         "runId": { "type": "string" },
         "sessionId": { "type": "string" },
-        "dotId": { "type": "string" },
+        "agentId": { "type": "string" },
         "callId": { "type": "string" }
       }
     },

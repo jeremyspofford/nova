@@ -4,17 +4,17 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  Title bar:  [⌘K command]   [mode tabs: Chat · Work · Code · Dots]   [acct]  │
+│  Title bar:  [⌘K command]   [mode tabs: Chat · Work · Code · Agents]   [acct]  │
 ├───────────────┬──────────────────────────────────────────────┬───────────────┤
 │  Sidebar      │  Main workspace                              │  Inspector    │
 │               │                                              │  (context)    │
 │  + New        │   ┌────────────────────────────────────┐     │               │
-│  Search…      │   │  Thread / Session / Dot / Run      │     │  Artifacts    │
+│  Search…      │   │  Thread / Session / Agent / Run      │     │  Artifacts    │
 │  ─ Projects   │   │  …messages, tool cards, diffs…     │     │  Files        │
 │  ─ Chats      │   │                                    │     │  Sources      │
 │  ─ Work runs  │   └────────────────────────────────────┘     │  Activity     │
 │  ─ Code       │   ┌────────────────────────────────────┐     │  Permissions  │
-│  ─ Dots       │   │  Composer (model, tools, attach)   │     │  Memory       │
+│  ─ Agents       │   │  Composer (model, tools, attach)   │     │  Memory       │
 │  ─ Library    │   └────────────────────────────────────┘     │               │
 │  ─ Activity   │                                              │               │
 │  ─ Settings   │                                              │               │
@@ -26,12 +26,12 @@ workspace can split into multiple panes (chat + diff + browser + terminal + edit
 
 ### Primary navigation (sidebar)
 
-1. **New** (context-aware: new chat / run / session / dot)
+1. **New** (context-aware: new chat / run / session / agent)
 2. **Search** (global: chats, runs, files, artifacts, commands)
 3. **Chat** — threads, grouped by project/recent
 4. **Work** — runs (active, scheduled, completed)
 5. **Code** — sessions (active, archived), grouped by project
-6. **Dots** — always-on agents
+6. **Agents** — always-on agents
 7. **Projects** — cross-cutting containers
 8. **Library** — artifacts/files/images
 9. **Activity** — global audit/notification stream
@@ -45,7 +45,7 @@ workspace can split into multiple panes (chat + diff + browser + terminal + edit
 | **Chat** | Talk, explore, create | Thread | Streaming, attachments, artifacts, voice, memory |
 | **Work** | Delegate multi-step tasks | Run | Plan, tools, sub-agents, schedules, approvals, activity |
 | **Code** | Software engineering | Session | Env, permission mode, diffs, terminal, browser, PRs |
-| **Dots** | Always-on agents | Dot | Computer, channels, rules, proactive research, background threads |
+| **Agents** | Always-on agents | Agent | Computer, channels, rules, proactive research, background threads |
 
 ## 2. Key user flows
 
@@ -87,15 +87,15 @@ workspace can split into multiple panes (chat + diff + browser + terminal + edit
 6. Commit/branch/PR from the session header; CI status streams in.
 7. Panes can be arranged; layout is remembered per session and per project.
 
-### 2.5 Dot setup and operation (FR-079…090)
+### 2.5 Agent setup and operation (FR-079…090)
 
-1. Create Dot → name, avatar, responsibility, connect plugins.
-2. Dot introduces itself; proposes a first task from available context.
+1. Create Agent → name, avatar, responsibility, connect plugins.
+2. Agent introduces itself; proposes a first task from available context.
 3. Connect the user's computer (optional) or rely on the cloud computer.
 4. Custom Rules configured under Settings → Personalization → Permissions.
-5. Dot works in background; the **Activity** tab shows all work; approvals appear inline and
+5. Agent works in background; the **Activity** tab shows all work; approvals appear inline and
    as notifications.
-6. Message the Dot from in-app or a channel; context is shared.
+6. Message the Agent from in-app or a channel; context is shared.
 
 ### 2.6 Approve an action (FR-058/100)
 
@@ -114,7 +114,7 @@ workspace can split into multiple panes (chat + diff + browser + terminal + edit
 
 - Multiline, auto-growing, Enter sends (configurable), Shift+Enter newline.
 - Left cluster: attach (+), `@`mention, slash-command, tools toggle, voice.
-- Right cluster: model picker, reasoning level, autonomy/permission mode (Code/Work/Dots),
+- Right cluster: model picker, reasoning level, autonomy/permission mode (Code/Work/Agents),
   send/stop.
 - Drag-drop files; paste images; `@` menu is fuzzy and grouped.
 - Shows token/cost estimate on hover (opt-in).

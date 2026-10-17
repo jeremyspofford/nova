@@ -1,6 +1,6 @@
 # 09 — Agent Runtime, Tasks & Scheduler
 
-The agent runtime powers **Work** runs and **Dots**. Chat uses a lightweight subset (single
+The agent runtime powers **Work** runs and **Agents**. Chat uses a lightweight subset (single
 turn + tools). Code uses the same runtime with a coding toolset and environment binding.
 
 ## 1. Runtime model
@@ -14,11 +14,11 @@ turn + tools). Code uses the same runtime with a coding toolset and environment 
         ┌───────────────────┼───────────────────┬─────────────────┐
         ▼                   ▼                   ▼                 ▼
    Supervisors       Orchestrator        Executors          Scheduler
-   (one per run/dot)  (planning,          (tool + model      (cron + event
+   (one per run/agent)  (planning,          (tool + model      (cron + event
                        delegation)         loop)              triggers)
 ```
 
-- **Supervisor** — one per Run/Dot; owns lifecycle, persistence, cancellation, approvals.
+- **Supervisor** — one per Run/Agent; owns lifecycle, persistence, cancellation, approvals.
 - **Orchestrator** — turns an objective into a plan, delegates to sub-agents, aggregates.
 - **Executor** — the model/tool loop for a single thread (bounded iterations, budget).
 - **Scheduler** — fires cron and event triggers, dedupes, and starts runs.
@@ -89,12 +89,12 @@ interface ScheduleSpec {
   instructions: string;          // what to check/update
   notifyCondition?: string;      // "only if a deadline is at risk"
   deliveryTargets: DeliveryTarget[]; // {kind:'inapp'|'os'|'slack'|'email'|'teams', ref}
-  target: { kind: 'run' } | { kind: 'dot'; dotId: string };
+  target: { kind: 'run' } | { kind: 'agent'; agentId: string };
 }
 ```
 
 - Cron evaluated in the user's timezone; DST handled by the scheduler (see §7).
-- Each firing creates a Run (or wakes the Dot) with the schedule's instructions.
+- Each firing creates a Run (or wakes the Agent) with the schedule's instructions.
 - Results are delivered per `deliveryTargets`; a run with no delivery silently logs unless it
   has news, per `notifyCondition`.
 - Users can list/edit/pause/cancel; the UI shows next/last run.
@@ -104,18 +104,18 @@ interface ScheduleSpec {
 - Kinds: `webhook` (a local HTTP endpoint with a token), `slack` (message/mention/channel),
   `email` (label/filter), `fs_change` (path watcher), `connector_event` (polling adapters).
 - Each trigger has a `dedupe_key` (e.g., event id) to prevent double-firing.
-- Triggers can start a full Run or send a message to a Dot.
+- Triggers can start a full Run or send a message to a Agent.
 - All trigger payloads are treated as untrusted input.
 
-## 8. Dots (always-on agents)
+## 8. Agents (always-on agents)
 
-A Dot is a long-lived supervisor with:
+A Agent is a long-lived supervisor with:
 
-- **Responsibilities** (`dot_responsibility`) — ongoing goals.
+- **Responsibilities** (`agent_responsibility`) — ongoing goals.
 - **A cloud computer** — persistent environment + browser sessions (FR-080).
 - **Optional connected user computer** — one at a time (FR-081).
-- **Rules** (`dot_rule`) — act / act-on-request / ask / handoff (FR-084).
-- **Memory** (`dot_memory`) — notes and learned preferences (FR-089).
+- **Rules** (`agent_rule`) — act / act-on-request / ask / handoff (FR-084).
+- **Memory** (`agent_memory`) — notes and learned preferences (FR-089).
 - **Channels** — in-app, Slack, Teams, email, webhooks (FR-088).
 - **Schedules & triggers** — proactive work.
 
@@ -124,18 +124,18 @@ A Dot is a long-lived supervisor with:
 - Runs on a low-frequency cadence (default: hourly, configurable) and after relevant events.
 - Uses a **read-only tool policy**: cannot send messages, modify app content, or control the
   browser/computer.
-- Produces candidate "findings"; the Dot decides whether to surface, and any follow-up action
+- Produces candidate "findings"; the Agent decides whether to surface, and any follow-up action
   goes through normal policy.
-- Users can disable proactive research per Dot.
+- Users can disable proactive research per Agent.
 
 ### Background threads
 
-The Dot can fan out work into cloud threads that appear in the sidebar, while keeping the
+The Agent can fan out work into cloud threads that appear in the sidebar, while keeping the
 main conversation responsive. It coordinates their results and can message the user.
 
 ## 9. Activity & audit
 
-- **Activity view** per run/dot: chronological steps, tool calls (collapsible I/O), diffs,
+- **Activity view** per run/agent: chronological steps, tool calls (collapsible I/O), diffs,
   approvals, and result; click any step to see raw inputs, outputs, and screenshots.
 - Every step also writes an `audit_event` with a hash chain (FR-104).
 - Runs are replayable in "dry-run" mode for review (no side effects).
@@ -148,7 +148,7 @@ main conversation responsive. It coordinates their results and can message the u
 | --- | --- | --- |
 | Code permission mode | Code sessions | Manual/Accept edits/Plan/Auto/Bypass |
 | Run autonomy | Work runs | ask-first / standard / autonomous |
-| Dot custom rules | Dots | act / act-on-request / ask / handoff |
+| Agent custom rules | Agents | act / act-on-request / ask / handoff |
 | Global policy rules | Everything | allow/ask/handoff/deny with scopes |
 | Built-in safety | Everything | non-overridable (secrets, purchases, CAPTCHA, password change) |
 
@@ -158,7 +158,7 @@ Approvals always override autonomy: an `ask` decision pauses the run regardless 
 
 Order (stable prefix for caching):
 
-1. System prompt (Unison identity + safety + output rules)
+1. System prompt (Nova identity + safety + output rules)
 2. Tool schemas (sorted deterministically)
 3. Skill instructions (active skills)
 4. Memory (pinned first, then retrieved by relevance within budget)

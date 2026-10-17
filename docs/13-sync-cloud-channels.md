@@ -8,7 +8,7 @@ and local tools. Cloud is an accelerator and a bridge, never a requirement.
 | Component | Purpose | Data at rest |
 | --- | --- | --- |
 | **Cloud runner** | Execute Code/Work runs on managed environments | Session workdir + snapshot (encrypted) |
-| **Dot computer** | Persistent always-on environment | Workdir + browser profile + snapshots |
+| **Agent computer** | Persistent always-on environment | Workdir + browser profile + snapshots |
 | **Relay** | Channel + mobile dispatch bridge, push notifications | Transient routing only; message content E2E-encrypted |
 | **Sync service** | Encrypted replication between the user's devices | Opaque ciphertext only |
 | **Catalog** | Plugin/skill/theme marketplace | Public, signed metadata |
@@ -56,7 +56,7 @@ not plaintext user content. Self-hosting the runner/relay/sync is P2 using the s
 
 ## 4. Channels (FR-110)
 
-A channel maps an external conversation to a Unison thread (usually a Dot's thread).
+A channel maps an external conversation to a Nova thread (usually a Agent's thread).
 
 | Channel | Inbound | Outbound | Auth |
 | --- | --- | --- | --- |
@@ -70,23 +70,23 @@ A channel maps an external conversation to a Unison thread (usually a Dot's thre
 
 Design rules:
 
-- **Context is shared**: a message from any channel lands in the same thread, so the Dot keeps
+- **Context is shared**: a message from any channel lands in the same thread, so the Agent keeps
   full context.
-- **Identity mapping**: each external user maps to a Unison identity/permission scope; unknown
+- **Identity mapping**: each external user maps to a Nova identity/permission scope; unknown
   users are ignored unless explicitly allowed.
 - **Approvals** can be delivered and answered from a channel with the same four options;
   sensitive approvals require the desktop app.
 - **Untrusted**: all channel content is treated as untrusted input (FR-103).
 - **Rate limits and loop prevention**: per-channel caps; agent replies do not re-trigger
   themselves.
-- **Privacy**: channels are opt-in per Dot; a channel can be disconnected instantly.
+- **Privacy**: channels are opt-in per Agent; a channel can be disconnected instantly.
 
 ## 5. Mobile dispatch & notifications (FR-111)
 
 - The relay exposes a minimal authenticated endpoint + push notifications (APNs/FCM) for
   status, approvals, and results.
 - From a phone: start a task, answer an approval, view a diff summary; full editing is desktop.
-- Deep links: `unison://run/<id>`, `unison://code/<id>`, `unison://approval/<id>` open the
+- Deep links: `nova://run/<id>`, `nova://code/<id>`, `nova://approval/<id>` open the
   desktop app, or a read-only web view when the desktop is unavailable.
 - The relay never sees plaintext content; notifications carry only ids and redacted titles.
 
@@ -105,7 +105,7 @@ user can choose more or less detail; secrets and file contents are never include
 
 - Default is a **local account** with no server dependency.
 - Optional **OIDC** sign-in for teams; the local account links to the OIDC identity.
-- Multiple provider accounts are supported independently of the Unison account.
+- Multiple provider accounts are supported independently of the Nova account.
 - Entitlements (plan, limits, model access) are cached and refreshed; lack of entitlement
   degrades gracefully with a clear message.
 

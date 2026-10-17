@@ -19,7 +19,7 @@ variables may override only in developer mode.
 | **Chat** | default reasoning, citations, memory on/off, temporary-chat TTL, suggested prompts |
 | **Work** | default autonomy, max sub-agents, run budget, approval timeout |
 | **Code** | default permission mode, default environment, auto-verify, review-before-commit, dev-server auto-start, worktree cleanup |
-| **Dots** | proactive research toggle/frequency, default rules, connected computer, channels |
+| **Agents** | proactive research toggle/frequency, default rules, connected computer, channels |
 | **Memory** | retention, extraction on/off, embedding provider, review frequency |
 | **Tools & MCP** | server list, per-tool defaults, timeouts, plugin permissions |
 | **Network** | egress allowlist, proxy, private-IP access, dev-server ports |
@@ -73,7 +73,7 @@ variables may override only in developer mode.
 ```
 
 - Built-ins: `system`, `light`, `dark`, `high-contrast-light`, `high-contrast-dark`.
-- Import/export/copy; share via `unison://theme?data=<base64>`.
+- Import/export/copy; share via `nova://theme?data=<base64>`.
 - Themes are validated against the token schema; unknown tokens are ignored, missing tokens
   fall back to the active base theme.
 - **No hard-coded colors** in components; a lint rule enforces token usage.
@@ -99,14 +99,14 @@ variables may override only in developer mode.
 
 | Point | API |
 | --- | --- |
-| Commands | `unison.commands.register({id,title,run})` |
-| Panels | `unison.panels.register({id,title,mount})` (sandboxed webview) |
-| Tools | `unison.tools.register({name,schema,handler})` |
-| Themes | `unison.themes.register(theme)` |
-| Keybindings | `unison.keybindings.register(binding)` |
-| Events | `unison.events.on('thread.message'\|'run.end'\|'tool.call'\|…)` |
-| Context menus | `unison.menus.register({where,items})` |
-| Status bar | `unison.status.addItem({id,text,onClick})` |
+| Commands | `nova.commands.register({id,title,run})` |
+| Panels | `nova.panels.register({id,title,mount})` (sandboxed webview) |
+| Tools | `nova.tools.register({name,schema,handler})` |
+| Themes | `nova.themes.register(theme)` |
+| Keybindings | `nova.keybindings.register(binding)` |
+| Events | `nova.events.on('thread.message'\|'run.end'\|'tool.call'\|…)` |
+| Context menus | `nova.menus.register({where,items})` |
+| Status bar | `nova.status.addItem({id,text,onClick})` |
 
 ### 4.2 Sandbox & permissions
 
@@ -115,15 +115,15 @@ variables may override only in developer mode.
 - UI extensions render in an isolated iframe/webview with a typed `postMessage` bridge; no
   direct DOM access to the host.
 - Tool/command handlers run in a worker with the same policy engine; they are auditable.
-- API is versioned (`unison.api = 1`); breaking changes require a new major version and a
+- API is versioned (`nova.api = 1`); breaking changes require a new major version and a
   compatibility shim for one release cycle.
 
 ### 4.3 SDK packaging
 
-- `@unison/sdk` npm package (types + client), a template repo, and a local `unison dev`
+- `@nova/sdk` npm package (types + client), a template repo, and a local `nova dev`
   command for hot-reload.
-- `unison validate <path>` checks manifest, schema, permissions, and signature.
-- `unison pack` produces a signed `.unisonx` bundle.
+- `nova validate <path>` checks manifest, schema, permissions, and signature.
+- `nova pack` produces a signed `.novax` bundle.
 
 ## 5. Marketplace (FR-049)
 

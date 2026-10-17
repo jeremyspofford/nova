@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/tool-descriptor.json",
+  "$id": "https://nova.dev/schemas/tool-descriptor.json",
   "title": "ToolDescriptor",
   "type": "object",
   "required": ["name", "title", "description", "source", "inputSchema"],

@@ -5,7 +5,7 @@ autonomously** without human intervention while remaining safe, reversible, and 
 
 ## 1. Mission
 
-Build **Unison Desktop**, a customizable cross-platform desktop application that unifies
+Build **Nova**, a customizable cross-platform desktop application that unifies
 conversational AI, long-running work agents, always-on personal agents, and a coding agent
 into one product, per the spec in `docs/` and `contracts/`.
 

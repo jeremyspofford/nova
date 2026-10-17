@@ -78,7 +78,7 @@ rea/
 │   │   └── src/renderer/        # React app (routes = modes)
 │   └── web-relay/               # optional channels/mobile relay (Node)
 ├── packages/
-│   ├── core/                    # domain logic: threads, messages, projects, runs, dots
+│   ├── core/                    # domain logic: threads, messages, projects, runs, agents
 │   ├── agent/                   # planner, executor, tool registry, memory
 │   ├── providers/               # provider adapters + streaming normalization
 │   ├── mcp/                     # MCP client/server wrappers
@@ -127,7 +127,7 @@ Policy Engine ──allow──▶ Sandbox Broker ──▶ Local sandbox (bwrap
 - **Local sandbox** is the default for tool execution: no network by default, scoped FS
   (project dir RW, temp RW, everything else RO/deny), resource limits, no host env leakage.
 - **Container/VM** for heavier or untrusted work; network policy applies.
-- **Cloud runner** for always-on Dots and cloud Code sessions; state persisted as a snapshot
+- **Cloud runner** for always-on Agents and cloud Code sessions; state persisted as a snapshot
   (tarball of the workdir) plus event log.
 
 All three expose the same `Computer` interface (see `contracts/`): `fs.*`, `exec`, `browser.*`,

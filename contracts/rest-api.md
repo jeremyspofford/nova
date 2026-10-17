@@ -51,7 +51,7 @@ public key is registered at link time.
 | --- | --- | --- |
 | `GET` | `/v1/catalog/index` | Signed index of plugins/skills/themes/pets/MCP servers |
 | `GET` | `/v1/catalog/items/:id` | Item metadata + versions + permissions |
-| `GET` | `/v1/catalog/items/:id/:version/download` | Signed artifact (`.unisonx`) |
+| `GET` | `/v1/catalog/items/:id/:version/download` | Signed artifact (`.novax`) |
 | `GET` | `/v1/catalog/keys` | Publisher public keys for signature verification |
 
 - The index and every artifact are signed; the app verifies before install.

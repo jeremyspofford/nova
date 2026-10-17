@@ -24,9 +24,9 @@ Location: `packages/policy`. Pure, deterministic, unit-testable.
 
 ```ts
 interface PolicyContext {
-  actor: 'user' | { kind: 'agent'|'dot'; id: string };
-  scope: { kind: 'global'|'project'|'thread'|'run'|'session'|'dot'; ref?: string };
-  mode?: 'chat'|'work'|'code'|'dot';
+  actor: 'user' | { kind: 'agent'|'agent'; id: string };
+  scope: { kind: 'global'|'project'|'thread'|'run'|'session'|'agent'; ref?: string };
+  mode?: 'chat'|'work'|'code'|'agent';
   autonomy?: 'ask_first'|'standard'|'autonomous';
   permissionMode?: 'manual'|'accept_edits'|'plan'|'auto'|'bypass';
   tool: ToolDescriptor;              // name, source, annotations
@@ -72,7 +72,7 @@ Rule shape:
 
 ```jsonc
 {
-  "scope": { "kind": "dot", "ref": "<dotId>" },
+  "scope": { "kind": "agent", "ref": "<agentId>" },
   "match": {
     "tool": ["email.send", "slack.post"],
     "resource": { "host": "*.customer.com" },
@@ -144,7 +144,7 @@ using a saved login).
   be sent.
 - **No training on user data**, ever; stated in-product.
 - Retention defaults in `docs/06` §5; user-configurable; pruning never deletes pinned items.
-- Export: `.unison` archive + JSONL audit export.
+- Export: `.nova` archive + JSONL audit export.
 - Delete: soft-delete → 30-day recovery → hard delete; "delete everything" requires typed
   confirmation and purges keychain entries, blobs, and sync copies.
 - Third-party request minimization: redact IP by default where the provider allows; document

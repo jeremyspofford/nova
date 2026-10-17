@@ -22,9 +22,9 @@ Account ──1:N── ProviderAccount ──1:N── ModelPref
    ├──1:N── CodeSession ──1:N── CodeChange ──1:N── DiffHunk
    │            └──1:1── Environment
    │
-   ├──1:N── Dot ──1:N── DotResponsibility
-   │            ├──1:N── DotRule
-   │            ├──1:N── DotMemory
+   ├──1:N── Agent ──1:N── AgentResponsibility
+   │            ├──1:N── AgentRule
+   │            ├──1:N── AgentMemory
    │            ├──1:N── ChannelBinding
    │            └──1:1── Computer ──1:N── ComputerSnapshot
    │
@@ -107,7 +107,7 @@ CREATE TABLE thread (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES account(id),
   project_id TEXT REFERENCES project(id),
-  mode TEXT NOT NULL,              -- 'chat' | 'work' | 'code' | 'dot'
+  mode TEXT NOT NULL,              -- 'chat' | 'work' | 'code' | 'agent'
   title TEXT,
   parent_thread_id TEXT REFERENCES thread(id),  -- branching / side chat
   branch_from_message_id TEXT,
@@ -117,7 +117,7 @@ CREATE TABLE thread (
   archived INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'idle', -- idle|streaming|waiting_approval|error
-  metadata TEXT,                   -- JSON (env, cwd, session opts, dot id, ...)
+  metadata TEXT,                   -- JSON (env, cwd, session opts, agent id, ...)
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
 CREATE INDEX idx_thread_account_mode ON thread(account_id, mode, updated_at DESC);
@@ -183,7 +183,7 @@ CREATE TABLE approval (
   id TEXT PRIMARY KEY,
   tool_call_id TEXT REFERENCES tool_call(id),
   run_id TEXT REFERENCES run(id),
-  dot_id TEXT REFERENCES dot(id),
+  agent_id TEXT REFERENCES agent(id),
   requested_action TEXT NOT NULL,
   reason TEXT, scope TEXT, risk TEXT,
   decision TEXT,                   -- allow_once|allow_always|deny|handoff
@@ -195,7 +195,7 @@ CREATE TABLE approval (
 CREATE TABLE policy_rule (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES account(id),
-  scope_kind TEXT NOT NULL,        -- global|project|thread|run|dot|tool|plugin|site
+  scope_kind TEXT NOT NULL,        -- global|project|thread|run|agent|tool|plugin|site
   scope_ref TEXT,
   action_match TEXT NOT NULL,      -- JSON matcher (tool, resource pattern, effect)
   effect TEXT NOT NULL,            -- allow|ask|handoff|deny
@@ -212,9 +212,9 @@ CREATE TABLE permission_grant (     -- remembered approvals
 CREATE TABLE audit_event (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES account(id),
-  actor TEXT NOT NULL,             -- user|agent:<id>|dot:<id>|system
+  actor TEXT NOT NULL,             -- user|agent:<id>|agent:<id>|system
   kind TEXT NOT NULL,              -- tool_call|approval|fs|network|auth|update|policy
-  thread_id TEXT, run_id TEXT, dot_id TEXT, session_id TEXT,
+  thread_id TEXT, run_id TEXT, agent_id TEXT, session_id TEXT,
   action TEXT NOT NULL, resource TEXT,
   input_hash TEXT, decision TEXT, result TEXT,
   detail_json TEXT,
@@ -232,7 +232,7 @@ CREATE TABLE run (
   account_id TEXT NOT NULL REFERENCES account(id),
   project_id TEXT REFERENCES project(id),
   thread_id TEXT REFERENCES thread(id),
-  dot_id TEXT REFERENCES dot(id),
+  agent_id TEXT REFERENCES agent(id),
   title TEXT NOT NULL, objective TEXT NOT NULL,
   plan_json TEXT, status TEXT NOT NULL,  -- planning|running|waiting_approval|paused|done|failed|cancelled
   autonomy TEXT NOT NULL DEFAULT 'standard',
@@ -255,7 +255,7 @@ CREATE TABLE subagent (
 );
 
 CREATE TABLE schedule (
-  id TEXT PRIMARY KEY, run_id TEXT REFERENCES run(id), dot_id TEXT REFERENCES dot(id),
+  id TEXT PRIMARY KEY, run_id TEXT REFERENCES run(id), agent_id TEXT REFERENCES agent(id),
   cron TEXT, interval_seconds INTEGER, timezone TEXT NOT NULL DEFAULT 'UTC',
   starts_at TEXT, ends_at TEXT,
   instructions TEXT, notify_condition TEXT, delivery_target TEXT,
@@ -311,10 +311,10 @@ CREATE TABLE diff_comment (
 );
 ```
 
-### dots & computers
+### agents & computers
 
 ```sql
-CREATE TABLE dot (
+CREATE TABLE agent (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id),
   name TEXT NOT NULL, avatar_path TEXT, persona TEXT,
   status TEXT NOT NULL DEFAULT 'active',   -- active|paused|provisioning|error
@@ -323,14 +323,14 @@ CREATE TABLE dot (
   metadata TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
-CREATE TABLE dot_responsibility (
-  id TEXT PRIMARY KEY, dot_id TEXT NOT NULL REFERENCES dot(id),
+CREATE TABLE agent_responsibility (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agent(id),
   title TEXT NOT NULL, instructions TEXT, status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
-CREATE TABLE dot_rule (                 -- FR-084
-  id TEXT PRIMARY KEY, dot_id TEXT NOT NULL REFERENCES dot(id),
+CREATE TABLE agent_rule (                 -- FR-084
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agent(id),
   description TEXT NOT NULL,
   matcher_json TEXT NOT NULL,           -- action/resource matcher
   effect TEXT NOT NULL,                 -- act|act_on_request|ask|handoff
@@ -338,15 +338,15 @@ CREATE TABLE dot_rule (                 -- FR-084
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
-CREATE TABLE dot_memory (
-  id TEXT PRIMARY KEY, dot_id TEXT NOT NULL REFERENCES dot(id),
+CREATE TABLE agent_memory (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agent(id),
   kind TEXT NOT NULL,                   -- note|fact|preference|observation
   content TEXT NOT NULL, source_thread_id TEXT, pinned INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
 CREATE TABLE channel_binding (
-  id TEXT PRIMARY KEY, dot_id TEXT REFERENCES dot(id), account_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY, agent_id TEXT REFERENCES agent(id), account_id TEXT NOT NULL,
   kind TEXT NOT NULL,                   -- slack|teams|telegram|email|webhook
   external_ref TEXT NOT NULL,           -- channel/user id
   config_json TEXT, secret_ref TEXT, enabled INTEGER NOT NULL DEFAULT 1,
@@ -372,7 +372,7 @@ CREATE TABLE computer_snapshot (
 ```sql
 CREATE TABLE memory_item (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-  scope_kind TEXT NOT NULL,             -- global|project|thread|dot
+  scope_kind TEXT NOT NULL,             -- global|project|thread|agent
   scope_ref TEXT,
   content TEXT NOT NULL, kind TEXT, confidence REAL,
   source_message_id TEXT, pinned INTEGER NOT NULL DEFAULT 0,
@@ -453,9 +453,9 @@ CREATE TABLE sync_state (
 ## 3. Blob storage layout
 
 ```
-<appData>/unison/
-├── unison.db               # SQLite
-├── unison.db-wal
+<appData>/nova/
+├── nova.db               # SQLite
+├── nova.db-wal
 ├── blobs/
 │   ├── attachments/<sha256>
 │   ├── artifacts/<artifact-id>/v<N>/<file>
@@ -484,7 +484,7 @@ CREATE TABLE sync_state (
 - Retention defaults: messages forever; tool results 90 days unless pinned; screenshots 30
   days; logs 14 days; snapshots until deleted or 30 days. All configurable; user can disable
   pruning.
-- Export: a single `.unison` archive (SQLite + blobs + manifest) plus a JSONL audit export.
+- Export: a single `.nova` archive (SQLite + blobs + manifest) plus a JSONL audit export.
 - Delete: cascading soft-delete then hard-delete job with a 30-day recovery window.
 
 ## 6. Invariants
@@ -495,4 +495,4 @@ CREATE TABLE sync_state (
 4. `audit_event.hash` chains to `prev_hash`; verification tool included.
 5. Deleting a `thread` cascades to messages/parts/attachments/artifacts but preserves
    `audit_event` (tombstoned via `thread_id`).
-6. A `dot` always has exactly one cloud `computer`.
+6. A `agent` always has exactly one cloud `computer`.

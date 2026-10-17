@@ -3,7 +3,7 @@
 ## 1. Logging & tracing
 
 - **Structured JSON logs** with levels (`trace|debug|info|warn|error`), module, and correlation
-  ids (thread/run/session/dot, request id).
+  ids (thread/run/session/agent, request id).
 - Default level `info`; developer mode enables `debug`; `trace` is opt-in per module.
 - **Redaction is applied at the logging boundary** (never trust call sites): provider keys,
   tokens, cookies, `Authorization` headers, connection strings, and user-defined patterns.
@@ -51,7 +51,7 @@ Golden journeys, one per milestone, at minimum:
 3. Install plugin/MCP → run a tool → approve → see audit entry.
 4. Code session → edit → diff review → comment → run tests → commit.
 5. Work run → plan → sub-agent → approval → result; schedule a recurrence.
-6. Dot → connect channel → proactive finding → custom rule → activity review.
+6. Agent → connect channel → proactive finding → custom rule → activity review.
 7. Sync two profiles → edit on one → observe on the other.
 8. Update flow → backup → migrate → rollback.
 

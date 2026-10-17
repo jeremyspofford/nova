@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/schedule.json",
+  "$id": "https://nova.dev/schemas/schedule.json",
   "title": "Schedule",
   "type": "object",
   "required": ["instructions", "timezone", "deliveryTargets"],
@@ -12,8 +12,8 @@
       "required": ["kind"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "enum": ["run", "dot"] },
-        "dotId": { "type": "string" }
+        "kind": { "enum": ["run", "agent"] },
+        "agentId": { "type": "string" }
       }
     },
     "when": {

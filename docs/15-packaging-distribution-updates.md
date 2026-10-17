@@ -50,9 +50,9 @@ procedure exists.
 ## 5. First-run & data locations
 
 ```
-Linux:   ~/.config/Unison/            (config), ~/.local/share/Unison/ (data), ~/.cache/Unison/
-macOS:   ~/Library/Application Support/Unison/
-Windows: %APPDATA%\Unison\  and  %LOCALAPPDATA%\Unison\
+Linux:   ~/.config/Nova/            (config), ~/.local/share/Nova/ (data), ~/.cache/Nova/
+macOS:   ~/Library/Application Support/Nova/
+Windows: %APPDATA%\Nova\  and  %LOCALAPPDATA%\Nova\
 ```
 
 - Portable mode: a `--portable` flag keeps all data next to the binary (no keychain; uses the

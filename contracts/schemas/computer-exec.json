@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/computer-exec.json",
+  "$id": "https://nova.dev/schemas/computer-exec.json",
   "title": "ComputerExec",
   "$defs": {
     "request": {

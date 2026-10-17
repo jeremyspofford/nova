@@ -1,6 +1,6 @@
 # 11 — Computers & Browser Automation
 
-Agents need a place to act. Unison provides a **Computer** abstraction with three
+Agents need a place to act. Nova provides a **Computer** abstraction with three
 implementations behind one interface: cloud sandbox, local container/VM, and the user's own
 machine (scoped). Browser and screen control are exposed as tools over this substrate.
 
@@ -49,7 +49,7 @@ cloud and local, so tools and tests are substrate-agnostic.
 
 ### 2.1 Cloud sandbox
 
-- Managed VM/container per Dot or per cloud Code session.
+- Managed VM/container per Agent or per cloud Code session.
 - Persistent workdir + installed software + browser profile, snapshotted automatically before
   risky operations.
 - Works while the user's devices are off (FR-080).
@@ -64,7 +64,7 @@ cloud and local, so tools and tests are substrate-agnostic.
 
 ### 2.3 Local host (scoped)
 
-- Used by Code mode "Local" and by a Dot's optional "connected computer" (FR-081).
+- Used by Code mode "Local" and by a Agent's optional "connected computer" (FR-081).
 - Enforced by an OS sandbox: Linux **bubblewrap** (or containers), macOS **seatbelt**,
   Windows **AppContainer/Job Objects**.
 - Default FS scope: project root RW, temp RW, everything else read-only/denied.
@@ -144,7 +144,7 @@ when possible, and are subject to retention policy.
 ## 7. Network policy
 
 - **Deny by default** for agent execution.
-- Grants are per-scope: `run`, `session`, `dot`, `plugin`, `mcp-server`.
+- Grants are per-scope: `run`, `session`, `agent`, `plugin`, `mcp-server`.
 - A user-visible list of allowed destinations; requests to new destinations trigger an
   approval (if the mode allows) or a denial.
 - A local HTTP(S) proxy enforces the list, performs DNS pinning, strips tracking headers, and
@@ -172,7 +172,7 @@ with user approval.
   `blobs/`; screenshots default to 30-day retention.
 - Credentials go only to the keychain/vault; the vault is never mounted into a sandbox.
 - Snapshot contents are encrypted at rest when sync is enabled.
-- Deleting a Dot/computer purges its snapshots and profiles after a confirmation.
+- Deleting a Agent/computer purges its snapshots and profiles after a confirmation.
 
 ## 10. Failure & safety
 

@@ -54,7 +54,7 @@ Every finding is recorded as an **Evidence Record** (ER) in the ledger. Required
 
 ```yaml
 id: ER-0042
-product: Claude Desktop            # Claude Desktop | ChatGPT | Codex | Dots
+target: APP-1                     # opaque target id; identities live in the private evidence ledger
 version: "0.x.y (build 1234)"      # as observed; "documented" if no binary
 date: 2026-10-16
 area: Code / permission modes
@@ -62,11 +62,11 @@ claim: >
   Code sessions expose five permission modes: Manual, Accept edits, Plan, Auto, Bypass.
 evidence:
   - type: documentation
-    ref: https://code.claude.com/docs/en/desktop#choose-a-permission-mode
+    ref: private-evidence://APP-1/permission-modes-doc
   - type: ui_observation
-    ref: artifacts/evidence/claude-code-permission-modes.png
+    ref: artifacts/evidence/app1-code-permission-modes.png
   - type: runtime_capture
-    ref: artifacts/evidence/claude-ipc-permission-select.json
+    ref: artifacts/evidence/app1-ipc-permission-select.json
 confidence: high                     # high | medium | low
 limits: >
   Bypass availability depends on plan and admin policy; behavior may differ by version.
@@ -100,13 +100,13 @@ Confidence levels:
 4. Define **interfaces** in `contracts/` before implementation.
 5. Implement **original** code that satisfies the requirement.
 
-No requirement may reference a source product's internal identifier, class name, or asset.
+No requirement may reference a reference application's internal identifier, class name, or asset.
 
 ## 6. Coverage matrix
 
 Track which source areas have been analyzed. `○` not started, `◐` in progress, `●` done.
 
-| Area | Claude Desktop | ChatGPT | Codex | Dots |
+| Area | App A | App B | App C | App D |
 | --- | --- | --- | --- | --- |
 | Conversation UX | ● | ● | ● | ● |
 | Projects/memory | ● | ● | ● | ● |

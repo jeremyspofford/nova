@@ -1,8 +1,8 @@
 # 10 — Coding Agent (Code Mode)
 
 Code mode is an agentic software-engineering surface built on the same runtime as Work, with
-a coding toolset and an environment binding. It covers the union of Claude Desktop's Code tab
-and OpenAI Codex.
+a coding toolset and an environment binding. It covers repo-aware editing, diff review,
+terminal execution, browser verification, and cloud/local/remote environments.
 
 ## 1. Session model (FR-061)
 
@@ -102,7 +102,7 @@ Rules:
 
 - A tabbed embedded browser (clean profile) opens `localhost` dev servers and external sites.
 - `devserver` detects common frameworks (Vite, Next, CRA, Django, Rails, Go, custom via
-  `.unison/launch.json`) and starts/stops them; a header menu can stop all.
+  `.nova/launch.json`) and starts/stops them; a header menu can stop all.
 - Auto-verify after edits (default on): the agent screenshots, inspects the DOM, clicks, and
   fills forms to confirm the change; failures feed back into the loop.
 - External sites require per-site approval and are subject to a domain allowlist and safety
@@ -113,7 +113,7 @@ Rules:
 
 ## 8. Git & PR flow (FR-070)
 
-- The agent can create a branch named `unison/<slug>-<shortid>`, commit with a clear message,
+- The agent can create a branch named `nova/<slug>-<shortid>`, commit with a clear message,
   and open a PR via a connected Git host (GitHub first; GitLab/Gitea P1).
 - The session header shows the PR link and CI status (queued/running/passed/failed) with
   checks; clicking opens the checks or the review.
@@ -123,7 +123,7 @@ Rules:
 
 ## 9. Parallel agents & worktrees (FR-073)
 
-- Independent tasks run in separate git worktrees (`<repo>/.unison/worktrees/<id>`), each with
+- Independent tasks run in separate git worktrees (`<repo>/.nova/worktrees/<id>`), each with
   its own session and environment binding.
 - The parent session can spawn workers via `task.spawn(role='coder', worktree=true)`.
 - Merging: the agent proposes an integration order; conflicts are surfaced in the Diff pane
@@ -143,8 +143,8 @@ Rules:
   the indexer and injected within a token budget.
 - **File reads** are on-demand and cached; large files are chunked with line-aware summaries.
 - **@-mentions** add files/folders/symbols; the composer shows mention chips.
-- **Rules files**: the agent reads `AGENTS.md`, `CLAUDE.md`-style project instructions, and
-  `.unison/instructions.md` if present, and surfaces conflicts.
+- **Rules files**: the agent reads `AGENTS.md`, any project instruction file, and
+  `.nova/instructions.md` if present, and surfaces conflicts.
 - **Network**: denied by default; enabling is per-session and visible.
 
 ## 12. Cloud sessions (FR-071)
@@ -160,7 +160,7 @@ Rules:
 
 - A lightweight relay allows starting a task or approving an action from a phone.
 - The phone shows run status and diffs; approvals support the same four decisions.
-- Deep links (`unison://code/<id>`) open the desktop app to the exact session.
+- Deep links (`nova://code/<id>`) open the desktop app to the exact session.
 
 ## 14. Failure & recovery
 

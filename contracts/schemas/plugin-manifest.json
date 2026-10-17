@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/plugin-manifest.json",
+  "$id": "https://nova.dev/schemas/plugin-manifest.json",
   "title": "PluginManifest",
   "type": "object",
   "required": ["schemaVersion", "id", "name", "version", "permissions"],
@@ -21,7 +21,7 @@
     "engines": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "unison": { "type": "string" } }
+      "properties": { "nova": { "type": "string" } }
     },
     "permissions": {
       "type": "object",

@@ -12,16 +12,16 @@ tests in `docs/16`.
 | ID | Pri | Ms | Requirement / Acceptance |
 | --- | --- | --- | --- |
 | FR-001 | P0 | M1 | The app opens to a single window with a persistent left sidebar and a main content area. A11y: sidebar is keyboard navigable. |
-| FR-002 | P0 | M1 | Top-level modes **Chat**, **Work**, **Code**, **Dots** are switchable via sidebar and `Ctrl/Cmd+1..4`. Switching preserves per-mode state. |
+| FR-002 | P0 | M1 | Top-level modes **Chat**, **Work**, **Code**, **Agents** are switchable via sidebar and `Ctrl/Cmd+1..4`. Switching preserves per-mode state. |
 | FR-003 | P0 | M1 | A command palette (`Ctrl/Cmd+K` and `Ctrl/Cmd+Shift+P`) lists all registered commands; fuzzy search; shows shortcuts; executes on Enter. |
 | FR-004 | P0 | M1 | A global shortcut registry supports defaults and user remapping, persisted per OS, with keystroke-based lookup. |
 | FR-005 | P1 | M4 | The workspace supports multi-pane layouts (chat, diff, browser, terminal, editor, preview) that can be resized, reordered, maximized, and reset. |
 | FR-006 | P1 | M4 | Code mode has a collapsible bottom panel and integrated terminal (`Ctrl/Cmd+J`, `` Ctrl+` ``). |
-| FR-007 | P1 | M2 | Deep links `unison://settings`, `unison://chat/<id>`, `unison://code/<id>`, `unison://dot/<id>` open the app and route correctly on all platforms. |
+| FR-007 | P1 | M2 | Deep links `nova://settings`, `nova://chat/<id>`, `nova://code/<id>`, `nova://agent/<id>` open the app and route correctly on all platforms. |
 | FR-008 | P2 | M7 | System tray/menu-bar icon with quick chat, new task, and quit. Global hotkey opens/focuses the app. |
 | FR-009 | P2 | M7 | Multiple windows are supported; any thread/panel can be detached. |
 | FR-010 | P0 | M1 | Appearance settings: base theme (light/dark/system), accent, background, foreground, UI font, code font, font size. Persisted and applied live. |
-| FR-011 | P1 | M4 | Themes can be exported/imported as JSON and shared via a `unison://theme?data=` link. |
+| FR-011 | P1 | M4 | Themes can be exported/imported as JSON and shared via a `nova://theme?data=` link. |
 | FR-012 | P2 | M6 | Optional animated companions ("pets") can be enabled/disabled and themed; they never block input and respect reduced-motion. |
 | FR-013 | P0 | M3 | Notification center for run completion, approvals, and attention; per-category toggles and OS notification permission handling. |
 | FR-014 | P0 | M1 | First-run onboarding: choose provider(s), connect auth, set name/avatar, optionally connect a tool, run a sample task. Skippable, resumable. |
@@ -69,7 +69,7 @@ tests in `docs/16`.
 | --- | --- | --- | --- |
 | FR-042 | P0 | M3 | MCP client: add/remove/enable MCP servers (stdio, SSE, streamable HTTP); list tools/resources/prompts; invoke with timeout, cancellation, and error surfacing. |
 | FR-043 | P0 | M3 | MCP server health: connection status, restart, logs, and per-server enable toggle in a diagnostics view. |
-| FR-044 | P1 | M4 | Unison exposes its own MCP server so external agents can read projects/threads and run allowed tools, gated by explicit user consent. |
+| FR-044 | P1 | M4 | Nova exposes its own MCP server so external agents can read projects/threads and run allowed tools, gated by explicit user consent. |
 | FR-045 | P0 | M4 | Plugins bundle skills + MCP servers + optional declarative UI; install from marketplace or local path; version + update + uninstall. |
 | FR-046 | P0 | M4 | Skills are reusable instruction bundles with optional scripts/templates; invocable via slash command and auto-selectable by the model. |
 | FR-047 | P1 | M4 | Connectors authenticate via OAuth2/PKCE or API key, store tokens in the keychain, refresh automatically, and expose revoke. |
@@ -115,22 +115,22 @@ tests in `docs/16`.
 | FR-077 | P2 | M7 | Mobile dispatch: start or approve a code task from a phone via the relay, then review on desktop. |
 | FR-078 | P1 | M6 | SSH sessions keep running while the app is disconnected, subject to credential validity; reattach shows buffered output. |
 
-## G. Dots (always-on agents)
+## G. Agents (always-on agents)
 
 | ID | Pri | Ms | Requirement / Acceptance |
 | --- | --- | --- | --- |
-| FR-079 | P0 | M6 | Create a Dot with name, avatar, instructions, and one or more responsibilities; edit later. Multiple responsibilities are tracked separately. |
-| FR-080 | P0 | M6 | A Dot has a persistent cloud computer (files, installed software, browser sessions) that survives restarts of the app. |
-| FR-081 | P1 | M6 | The user can connect their own computer (one at a time) to give the Dot access to local files/code/apps; connection is explicit and revocable. |
-| FR-082 | P0 | M6 | Proactive research: using only read-only tools, the Dot surfaces helpful findings; any resulting action goes through policy. |
-| FR-083 | P0 | M6 | Background agents + cloud threads: a Dot can fan out work and keep conversing; threads appear in the sidebar. |
+| FR-079 | P0 | M6 | Create a Agent with name, avatar, instructions, and one or more responsibilities; edit later. Multiple responsibilities are tracked separately. |
+| FR-080 | P0 | M6 | A Agent has a persistent cloud computer (files, installed software, browser sessions) that survives restarts of the app. |
+| FR-081 | P1 | M6 | The user can connect their own computer (one at a time) to give the Agent access to local files/code/apps; connection is explicit and revocable. |
+| FR-082 | P0 | M6 | Proactive research: using only read-only tools, the Agent surfaces helpful findings; any resulting action goes through policy. |
+| FR-083 | P0 | M6 | Background agents + cloud threads: a Agent can fan out work and keep conversing; threads appear in the sidebar. |
 | FR-084 | P0 | M6 | Custom rules with scopes: *take action without asking*, *take action when you say so*, *ask before taking action*, *hand off to you*. Rules are editable/deletable and previewable. |
 | FR-085 | P0 | M6 | Auto-review evaluates each consequential action against instructions, rules, and safety, deciding proceed / ask / hand-off. Sensitive actions always hand off. |
 | FR-086 | P1 | M6 | Private sign-in: a secure form (never into model context) collects credentials for a site; optional "save to passwords"; sessions vs saved logins are distinct. |
-| FR-087 | P0 | M6 | Inspect the Dot's computer; take over keyboard/mouse; return control. Takeover is logged. |
-| FR-088 | P1 | M6 | Channels: message a Dot from in-app, Slack, and Teams (and webhooks/email); conversation context is shared across channels. |
-| FR-089 | P1 | M6 | Dot memory: durable notes plus conversation memory, both user-visible and editable; user can forget items. |
-| FR-090 | P0 | M6 | Activity view for a Dot, including background work; user can redirect or stop work at any time; safety monitoring can auto-pause. |
+| FR-087 | P0 | M6 | Inspect the Agent's computer; take over keyboard/mouse; return control. Takeover is logged. |
+| FR-088 | P1 | M6 | Channels: message a Agent from in-app, Slack, and Teams (and webhooks/email); conversation context is shared across channels. |
+| FR-089 | P1 | M6 | Agent memory: durable notes plus conversation memory, both user-visible and editable; user can forget items. |
+| FR-090 | P0 | M6 | Activity view for a Agent, including background work; user can redirect or stop work at any time; safety monitoring can auto-pause. |
 | FR-091 | P2 | M7 | Specialist/team agents: an admin can provision an agent with its own identity and scoped credentials and assign responsibilities. |
 
 ## H. Computer & browser automation

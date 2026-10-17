@@ -7,7 +7,7 @@ mirror the Zod schemas in `packages/shared`; CI verifies they stay in sync.
 | --- | --- |
 | [`event-envelope.json`](event-envelope.json) | Every event |
 | [`policy-rule.json`](policy-rule.json) | Policy / custom rule |
-| [`plugin-manifest.json`](plugin-manifest.json) | Plugin `.unison-plugin/plugin.json` |
+| [`plugin-manifest.json`](plugin-manifest.json) | Plugin `.nova-plugin/plugin.json` |
 | [`mcp-config.json`](mcp-config.json) | MCP server configuration |
 | [`theme.json`](theme.json) | Theme file |
 | [`tool-descriptor.json`](tool-descriptor.json) | Registered tool metadata |

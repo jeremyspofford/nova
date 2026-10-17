@@ -12,9 +12,10 @@ lawful and ethical, and that the build agent must follow.
    and mascots must be original or permissively licensed. Do not extract assets from any
    third-party app.
 3. **No trademarks or trade dress.** Do not use the names, logos, or distinctive visual
-   identity of Claude/Anthropic, ChatGPT/OpenAI, Codex, or Dots for our product or in a way
-   that implies affiliation. Product names appear only in internal spec documents as
-   references. The app name "Unison" is a working title and is not affiliated with any of them.
+   identity of any third-party product for our product or in any way that implies
+   affiliation. The app name "Nova" is a working title and is not affiliated with any
+   third party. Reference applications are tracked by opaque IDs (`APP-1`…) in the private
+   evidence ledger, never by name in the shipped spec.
 4. **Behavior is not copyrightable; expression is.** Matching functional behavior (e.g.,
    "permission modes include Manual/Accept edits/Plan/Auto/Bypass") is fine. Copying the exact
    text of dialogs, docs, or marketing is not.

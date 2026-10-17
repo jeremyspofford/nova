@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://unison.dev/schemas/theme.json",
+  "$id": "https://nova.dev/schemas/theme.json",
   "title": "Theme",
   "type": "object",
   "required": ["schemaVersion", "id", "name", "variant", "tokens"],

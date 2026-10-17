@@ -12,8 +12,8 @@ Events are the backbone of the UI, Activity view, and audit. Every event is pers
   "schemaVersion": 1,
   "ts": "2026-10-16T19:49:00.123Z",
   "accountId": "0192f...",
-  "correlation": { "threadId": "...", "runId": "...", "sessionId": "...", "dotId": "..." },
-  "actor": "user | agent:<id> | dot:<id> | system",
+  "correlation": { "threadId": "...", "runId": "...", "sessionId": "...", "agentId": "..." },
+  "actor": "user | agent:<id> | agent:<id> | system",
   "payload": { }
 }
 ```
@@ -82,13 +82,13 @@ Rules:
 | `code.pr.ci.changed` | yes | `{sessionId,status,checks[]}` |
 | `devserver.started` / `.stopped` | yes | `{sessionId,id,url?}` |
 
-### dots, computers, browser
+### agents, computers, browser
 
 | Name | Persisted | Payload |
 | --- | --- | --- |
-| `dot.created` / `.updated` / `.paused` / `.resumed` | yes | `{dotId}` |
-| `dot.research.finding` | yes | `{dotId,findingId,summary}` |
-| `dot.rule.changed` | yes | `{dotId,ruleId}` |
+| `agent.created` / `.updated` / `.paused` / `.resumed` | yes | `{agentId}` |
+| `agent.research.finding` | yes | `{agentId,findingId,summary}` |
+| `agent.rule.changed` | yes | `{agentId,ruleId}` |
 | `computer.state.changed` | yes | `{computerId,from,to}` |
 | `computer.takeover.started` / `.ended` | yes | `{computerId,actor}` |
 | `browser.navigated` | yes | `{computerId,url,allowed}` |

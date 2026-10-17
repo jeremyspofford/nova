@@ -2,37 +2,37 @@
 
 ## 1. Vision
 
-**Unison Desktop** is a single, customizable desktop workspace where a person talks to AI,
+**Nova** is a single, customizable desktop workspace where a person talks to AI,
 delegates long-running work, runs an always-on personal agent, and drives a software
 coding agent — with any model provider, any tool, and any theme, all on their own machine.
 
-The four source products each solve part of the problem:
+Four capability sets, usually split across separate products, are unified here:
 
-- **Claude Desktop** solved *deep, trustworthy collaboration* (chat, artifacts, long agentic
-  work, code sessions, permission modes, clean browser pane).
-- **ChatGPT Desktop** solved *everyday ubiquity* (conversation UX, projects, memory, voice,
-  plugins, appearance/pets, usage insights).
-- **Codex** solved *autonomous software work* (cloud environments, parallel agents, PR
-  review, computer/browser verification).
-- **Dots** solved *delegation of ongoing responsibility* (always-on agents with their own
-  computer, proactive research, schedulers, custom rules, multi-channel presence).
+- **Deep collaboration** — chat, artifacts, long agentic work, code sessions, permission
+  modes, and a clean browser pane.
+- **Everyday ubiquity** — conversation UX, projects, memory, voice, plugins, appearance and
+  personalization, usage insights.
+- **Autonomous software work** — cloud environments, parallel agents, PR review, and
+  computer/browser verification.
+- **Delegated, ongoing responsibility** — always-on agents with their own computer, proactive
+  research, schedulers, custom rules, and multi-channel presence.
 
-Unison merges these into one app with a shared core so the user learns one product, keeps
-one memory, and connects one set of tools.
+Nova unifies these on one shared core so the user learns one product, keeps one memory, and
+connects one set of tools.
 
 ## 2. Target users
 
 | Persona | Needs | Primary surfaces |
 | --- | --- | --- |
-| **Alex — knowledge worker** | Draft, research, summarize; delegate recurring work; keep projects organized | Chat, Work, Dots, Projects, Voice |
+| **Alex — knowledge worker** | Draft, research, summarize; delegate recurring work; keep projects organized | Chat, Work, Agents, Projects, Voice |
 | **Priya — software engineer** | Drive an agent across repos, review diffs, run tests, ship PRs, use multiple models | Code, Terminal, Diff, Browser pane |
 | **Marcus — power user / tinkerer** | Customize everything: themes, pets, keybindings, plugins, local models, extensions | Settings, Extensibility SDK |
-| **Dana — analyst** | Long-running data/doc work in a sandbox, scheduled reports, approvals | Work, Dots, Artifacts, Scheduler |
+| **Dana — analyst** | Long-running data/doc work in a sandbox, scheduled reports, approvals | Work, Agents, Artifacts, Scheduler |
 | **Sam — privacy-conscious user** | Local-first storage, E2E sync, bring-your-own-key, no mandatory cloud | All modes, Security settings |
 
 ## 3. Product principles
 
-1. **One workspace, four modes.** Chat, Work (agents), Code, and Dots share one core,
+1. **One workspace, four modes.** Chat, Work, Code, and Agents share one core,
    one memory, one tool registry, and one permissions model.
 2. **Provider-agnostic.** Anthropic, OpenAI, Google, Mistral, OpenRouter, and local
    (llama.cpp/Ollama) models are first-class. No lock-in; user brings keys or OAuth.
@@ -52,7 +52,7 @@ one memory, and connects one set of tools.
 ### In scope
 
 - Cross-platform desktop app: **Linux (primary), macOS, Windows**.
-- Four modes: **Chat**, **Work**, **Code**, **Dots**, plus shared **Projects**, **Library**,
+- Four modes: **Chat**, **Work**, **Code**, **Agents**, plus shared **Projects**, **Library**,
   **Activity**, **Settings**, and **Marketplace**.
 - Multi-provider model layer with streaming, tool calling, reasoning levels, and local models.
 - MCP client + server; plugin and skill system.
@@ -90,13 +90,13 @@ one memory, and connects one set of tools.
 
 ## 6. Terminology
 
-- **Mode** — top-level product surface: Chat, Work, Code, Dots.
+- **Mode** — top-level product surface: Chat, Work, Code, Agents.
 - **Thread** — a conversation; may belong to a Project.
 - **Project** — a container of threads, instruction, sources, and (optionally) local folders.
 - **Agent** — a configured actor with instructions, tools, permissions, and a runtime.
-- **Work run** — a delegated agentic task (ChatGPT Work / Cowork-like).
+- **Work run** — a delegated, multi-step agentic task.
 - **Code session** — a coding task bound to an environment + folder/repo.
-- **Dot** — an always-on agent with its own computer, schedules, channels, and memory.
+- **Agent** — an always-on agent with its own computer, schedules, channels, and memory.
 - **Computer** — an execution environment for agents: cloud sandbox, local container/VM, or
   the user's own machine.
 - **Tool** — a callable capability (built-in, MCP, or plugin-provided).

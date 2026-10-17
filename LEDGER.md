@@ -17,7 +17,7 @@ Last updated: _not started_
 | M3 Tools/MCP/Policy | todo | — | — | — |
 | M4 Plugins/Workspace/Profile | todo | — | — | — |
 | M5 Agent Runtime (Work & Code) | todo | — | — | — |
-| M6 Dots/Computers/Channels | todo | — | — | — |
+| M6 Agents/Computers/Channels | todo | — | — | — |
 | M7 Cloud/Sync/Multi-device | todo | — | — | — |
 | M8 Extensibility/Governance | todo | — | — | — |
 | M9 Hardening/Security/Perf | todo | — | — | — |

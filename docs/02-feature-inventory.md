@@ -1,10 +1,12 @@
-# 02 — Feature Inventory (Extracted from Source Products)
+# 02 — Feature Inventory
 
-This inventory captures the functional surface observed/documented in the four source
-products, translated into vendor-neutral capability statements. Each item is a candidate
-requirement refined in `docs/03-functional-requirements.md`.
+This inventory captures the target functional surface, translated into vendor-neutral
+capability statements. Each item is a candidate requirement refined in
+`docs/03-functional-requirements.md`.
 
-Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Dots.
+Legend: `[C]`, `[G]`, `[X]`, `[D]` are opaque codes for four external reference
+applications analyzed for this spec. Their identities are tracked in the private evidence
+ledger and are intentionally not named here.
 
 ---
 
@@ -12,7 +14,7 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 
 | ID | Capability | Source |
 | --- | --- | --- |
-| INV-A01 | Tabbed top-level modes (Chat / Work-Cowork / Code) within one window | C, G |
+| INV-A01 | Tabbed top-level modes (Chat / Work-Work / Code) within one window | C, G |
 | INV-A02 | Sidebar listing threads/sessions, grouped by project, with search, pin, archive, unread | C, G, X |
 | INV-A03 | Command palette (`Cmd/Ctrl+K`) with fuzzy actions and navigation | G, X |
 | INV-A04 | Keyboard shortcut system with remapping and keystroke search | G, X |
@@ -66,7 +68,7 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 | ID | Capability | Source |
 | --- | --- | --- |
 | INV-D01 | MCP client: register/launch local + remote MCP servers; tools/resources/prompts | all |
-| INV-D02 | MCP server: expose Unison capabilities to external agents | C |
+| INV-D02 | MCP server: expose Nova capabilities to external agents | C |
 | INV-D03 | Plugins bundling skills + MCP servers + optional UI; marketplace install | all |
 | INV-D04 | Skills: reusable instruction bundles, slash-invoked or auto-selected | C, G |
 | INV-D05 | Connectors: OAuth/API-key integrations (GitHub, Slack, Linear, Google, …) | C, G |
@@ -88,7 +90,7 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 | INV-E06 | Event-triggered work (e.g., new Slack message/bug report) | D, X |
 | INV-E07 | Activity view: progress, files, results, requests for input | D, G |
 | INV-E08 | Approvals and hand-offs for consequential actions | C, D |
-| INV-E09 | Delegation to coding agent (Codex) and vice versa | G, D, X |
+| INV-E09 | Delegation between the work runtime and the coding agent, in both directions | G, D, X |
 | INV-E10 | Notifications routing (chat, OS, channel) based on rules | G, D |
 
 ## F. Code mode (software engineering agent)
@@ -114,7 +116,7 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 | INV-F17 | SSH session persists while disconnected (subject to auth) | C |
 | INV-F18 | iOS simulator pane (macOS only) | C |
 
-## G. Dots / always-on agents
+## G. Always-on agents
 
 | ID | Capability | Source |
 | --- | --- | --- |
@@ -127,7 +129,7 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 | INV-G07 | Auto-review of actions vs instructions/rules/safety | D |
 | INV-G08 | Private sign-in flow; save to passwords; sessions vs saved logins | D |
 | INV-G09 | Inspect computer; takeover / return control | D |
-| INV-G10 | Channels: ChatGPT app, Slack, Teams, (texting); context carries across | D |
+| INV-G10 | Channels: in-app, Slack, Teams, (texting); context carries across | D |
 | INV-G11 | Specialist/enterprise agents with own identity, credentials, access | D |
 | INV-G12 | Notes-to-self and memory between sessions; user controls | D |
 | INV-G13 | Activity view incl. background work; redirect | D, G |
@@ -195,11 +197,11 @@ Legend: `[C]` Claude Desktop · `[G]` ChatGPT Desktop · `[X]` Codex · `[D]` Do
 
 ## Vendor-neutral synthesis
 
-The four products share a common spine that becomes Unison's core:
+The four products share a common spine that becomes Nova's core:
 
 1. **A conversation engine** with streaming, tools, and artifacts.
 2. **A context layer** (projects, memory, files, connectors).
-3. **A tool/agent runtime** that can run once (Work), continuously (Dots), or on code (Code).
+3. **A tool/agent runtime** that can run once (Work), continuously (Agents), or on code (Code).
 4. **A policy/permission layer** governing every action.
 5. **A computer/browser substrate** for autonomous work.
 6. **A shell** that makes it all fast, themable, and keyboard-driven.

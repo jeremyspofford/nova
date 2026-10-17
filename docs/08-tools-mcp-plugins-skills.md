@@ -26,7 +26,7 @@ interface ToolDefinition {
 }
 
 interface ToolContext {
-  threadId?: string; runId?: string; dotId?: string; sessionId?: string;
+  threadId?: string; runId?: string; agentId?: string; sessionId?: string;
   cwd?: string;                  // sandbox working directory
   policy: PolicyEngine;
   sandbox: SandboxClient;
@@ -88,9 +88,9 @@ labeled **untrusted** when fed back to the model (injection defense, FR-103).
 
 ### 2.2 MCP server (FR-044)
 
-Unison can expose itself over MCP with **explicit consent** and a scoped token:
+Nova can expose itself over MCP with **explicit consent** and a scoped token:
 
-- Tools: `unison.listProjects`, `unison.getThread`, `unison.search`, `unison.runTool` (allowlisted).
+- Tools: `nova.listProjects`, `nova.getThread`, `nova.search`, `nova.runTool` (allowlisted).
 - Resources: project files (read-only), thread transcripts (chosen scope).
 - Prompts: reusable skills exposed as MCP prompts.
 - Every external call is audited and subject to the policy engine, as if made by a plugin.
@@ -112,7 +112,7 @@ Unison can expose itself over MCP with **explicit consent** and a scoped token:
 
 ## 3. Plugins
 
-### 3.1 Manifest (`.unison-plugin/plugin.json`)
+### 3.1 Manifest (`.nova-plugin/plugin.json`)
 
 ```json
 {
@@ -123,7 +123,7 @@ Unison can expose itself over MCP with **explicit consent** and a scoped token:
   "description": "Lint, test, and changelog helpers",
   "author": { "name": "Example", "url": "https://example.com" },
   "license": "MIT",
-  "engines": { "unison": ">=0.5.0" },
+  "engines": { "nova": ">=0.5.0" },
   "permissions": {
     "network": ["api.github.com"],
     "fs": ["${project}"],
@@ -204,13 +204,13 @@ Every tool definition declares annotations; the policy engine combines:
 3. User custom rules (per scope).
 4. Per-tool defaults.
 5. Per-plugin/MCP-server permissions.
-6. Session/run autonomy level (Code permission mode; Dot rules).
+6. Session/run autonomy level (Code permission mode; Agent rules).
 
 Result: `allow | ask | handoff | deny` + a human-readable reason (FR-099/100).
 
 ## 7. Catalog & marketplace (FR-049)
 
-- **Remote catalog** (`https://catalog.unison.example/v1/index.json`) signed by the app
+- **Remote catalog** (`https://catalog.nova.example/v1/index.json`) signed by the app
   publisher's key; supports plugin/skill/theme entries with versions, checksums, and
   compatibility.
 - **Local catalog**: a directory in settings for offline/sideload installs.

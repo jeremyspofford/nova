@@ -116,7 +116,7 @@ vendor errors to `AgentError`; map usage/cost; honor `signal`; emit normalized e
 
 Levels map to provider-specific settings:
 
-| Unison level | Anthropic | OpenAI | Gemini | Local |
+| Nova level | Anthropic | OpenAI | Gemini | Local |
 | --- | --- | --- | --- | --- |
 | off | thinking disabled | reasoning_effort none | thinking off | off |
 | minimal/low/medium/high | budget tokens scaled | low/medium/high | budget scaled | n/a |
